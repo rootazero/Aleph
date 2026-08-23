@@ -574,10 +574,20 @@ impl AgentHarness {
                     break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                 }
                 Err(e) => {
-                    // Any other error path collapses to "Cancelled" for the
-                    // outer outcome (see Err branch below). Recording it here
-                    // keeps `terminate_reason` consistent with the trace.
-                    self.set_terminate_reason(TerminateReason::Cancelled);
+                    // Only a genuine cancel records `Cancelled`. The blanket
+                    // overwrite that used to stand here erased causes the loop
+                    // had already recorded — most visibly
+                    // `ReactiveCompactExhausted`, whose sole producer
+                    // (`RescueHost::mark_rescue_exhausted`) sets it and then
+                    // returns the very error that lands in this arm. That
+                    // variant exists so an exhausted compact-and-retry stops
+                    // leaking out as an anonymous `HarnessError::Llm`; setting
+                    // it and overwriting it three frames later undid the wiring
+                    // its own doc points at, and every other error path was
+                    // being told to call itself a user cancellation.
+                    if matches!(e, HarnessError::Cancelled) {
+                        self.set_terminate_reason(TerminateReason::Cancelled);
+                    }
                     break Err(e);
                 }
                 Ok(TurnStep {
@@ -761,7 +771,21 @@ impl AgentHarness {
                     // assistant message and so escape a naive "user after last
                     // assistant" test. Purely positional (R10-safe) and bounded
                     // so a pathological appender cannot spin forever.
-                    if followup_continuations < Self::MAX_FOLLOWUP_CONTINUATIONS
+                    //
+                    // `!self.hit_limit()` is what separates "the model chose to
+                    // stop" from "the harness was forced to stop". A `Done`
+                    // carrying `hit_limit` comes from the verifier `Halt` path
+                    // in `run_turn_internal`, whose `TerminateReason::StopHookHalt`
+                    // is documented as "the loop ends immediately … a permanent
+                    // stop signal from policy". Without this clause a steering
+                    // message that happened to land during the halted turn
+                    // resumed the loop anyway — the policy gate held or not
+                    // depending purely on message timing, and the terminate
+                    // reason kept saying `StopHookHalt` while further turns ran.
+                    // Cheap atomic first so the common path never pays the
+                    // seq-ranged store read.
+                    if !self.hit_limit()
+                        && followup_continuations < Self::MAX_FOLLOWUP_CONTINUATIONS
                         && self.has_unanswered_user_message(&current_session).await
                     {
                         followup_continuations = followup_continuations.saturating_add(1);
@@ -865,14 +889,27 @@ impl AgentHarness {
                     error = %e,
                     "harness session ended in error",
                 );
-                #[allow(clippy::match_same_arms)]
-                let session_outcome = match error_class {
-                    crate::error::ErrorClass::Recoverable
-                    | crate::error::ErrorClass::Transient
-                    | crate::error::ErrorClass::Fixable
-                    | crate::error::ErrorClass::Unexpected => {
-                        crate::harness::trace::LoopTraceSessionOutcome::Cancelled
-                    }
+                // A harness error is not a cancellation. Only
+                // `HarnessError::Cancelled` — the cooperative abort token — is;
+                // a provider auth failure, a session-store write error, an
+                // output-guardrail block and an exhausted reactive compaction
+                // are failures. The previous shape computed `error_class` and
+                // then fanned all four of its variants into `Cancelled`, so
+                // every trace surface rendered a dead run as
+                // `AgentTracePresentationStatus::Info` labelled "cancelled" —
+                // softer than a `HitLimit` cap, and indistinguishable from the
+                // user pressing stop. The session log has always told the two
+                // apart (`RunOutcome::Errored` vs `Cancelled`, set in
+                // `harness_bridge::runner_impl` right before this event is
+                // emitted); this makes the trace projection agree with the log
+                // instead of contradicting it. `error_class` stays a log field:
+                // all four of its classes mean "this run failed" to a trace
+                // reader, and a match that fans four arms into one value is a
+                // classification that was never made.
+                let session_outcome = if matches!(e, HarnessError::Cancelled) {
+                    crate::harness::trace::LoopTraceSessionOutcome::Cancelled
+                } else {
+                    crate::harness::trace::LoopTraceSessionOutcome::Failed
                 };
                 self.emit(|| crate::harness::trace::LoopTraceEvent::SessionCompleted {
                     outcome: session_outcome,

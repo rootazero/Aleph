@@ -238,6 +238,7 @@ impl From<LoopTraceSessionOutcome> for aleph_protocol::AgentTraceSessionOutcome 
             LoopTraceSessionOutcome::Completed => Self::Completed,
             LoopTraceSessionOutcome::HitLimit => Self::HitLimit,
             LoopTraceSessionOutcome::Cancelled => Self::Cancelled,
+            LoopTraceSessionOutcome::Failed => Self::Failed,
         }
     }
 }

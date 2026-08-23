@@ -302,6 +302,20 @@ pub enum AgentTraceSessionOutcome {
     Completed,
     HitLimit,
     Cancelled,
+    /// The run ended on a harness error that was not the cancel token — a
+    /// provider failure, a session-store write error, a guardrail block, an
+    /// exhausted reactive compaction. The wire twin of
+    /// `LoopTraceSessionOutcome::Failed`; before it existed every one of those
+    /// was sent as [`Self::Cancelled`], so a dead run rendered as a neutral
+    /// "cancelled" on every trace surface.
+    ///
+    /// Wire note: this variant is emitted by servers from the release that
+    /// added it onward. A client older than that server cannot deserialize it
+    /// (the enum is a plain externally-tagged serde enum, not
+    /// `#[non_exhaustive]`), which is in-policy here because the three shipped
+    /// products are built and released from one `VERSION` tag — but it is the
+    /// reason a variant must not be added to this enum casually.
+    Failed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

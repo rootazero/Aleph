@@ -940,3 +940,313 @@ async fn session_completed_and_turn_metrics_carry_total_tokens() {
         "TurnCompleted metrics.total_tokens should be the turn's usage sum",
     );
 }
+
+// ---------------------------------------------------------------------------
+// A harness error is not a cancellation
+// ---------------------------------------------------------------------------
+
+/// Provider whose every call fails with a non-cancel error.
+struct FailingProvider;
+impl AiProvider for FailingProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            Err(crate::error::AlephError::authentication(
+                "test-provider",
+                "bad key",
+            ))
+        })
+    }
+    fn name(&self) -> &str {
+        "failing"
+    }
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
+/// A provider failure is a failure, not a user cancellation.
+///
+/// The exit arm used to compute `HarnessError::class()` and then fan all four
+/// `ErrorClass` variants into `LoopTraceSessionOutcome::Cancelled`, so an auth
+/// failure, a session-store write error and an exhausted reactive compaction
+/// all reached every trace surface as
+/// `AgentTracePresentationStatus::Info` labelled "cancelled" — softer than the
+/// `Failed` a mere `HitLimit` cap renders as, and indistinguishable from the
+/// user pressing stop. The session log has always told them apart
+/// (`RunOutcome::Errored`); this pins the trace projection to agree with it.
+#[tokio::test]
+async fn a_provider_failure_is_traced_as_failed_not_cancelled() {
+    let (sink, events) = RecordingTraceSink::new();
+    let provider: Arc<dyn AiProvider> = Arc::new(FailingProvider);
+    let (session, sid) = fresh_session("trace-failed").await;
+    let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
+
+    let mut deps = minimal_deps(session, tools, provider);
+    deps.trace_sink = Some(sink);
+    let harness = AgentHarness::new(deps);
+
+    let mut cb = NoopHarnessCallback;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let result = harness.run(&sid, &mut cb, &cancel).await;
+    assert!(result.is_err(), "the run must surface the provider error");
+
+    let captured = events.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let outcome = captured
+        .iter()
+        .rev()
+        .find_map(|e| match e {
+            LoopTraceEvent::SessionCompleted { outcome, .. } => Some(*outcome),
+            _ => None,
+        })
+        .expect("SessionCompleted must be emitted");
+    assert_eq!(
+        outcome,
+        crate::harness::trace::LoopTraceSessionOutcome::Failed,
+        "a provider error must trace as Failed, never as Cancelled",
+    );
+}
+
+/// The other half of the same predicate: a genuine cooperative cancel must
+/// still read as `Cancelled`. Without this the fix above could have been
+/// "rename Cancelled to Failed", which is the same lie pointing the other way.
+#[tokio::test]
+async fn a_real_cancel_is_still_traced_as_cancelled() {
+    let (sink, events) = RecordingTraceSink::new();
+    let provider: Arc<dyn AiProvider> = Arc::new(HangingProvider);
+    let (session, sid) = fresh_session("trace-cancelled").await;
+    let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
+
+    let mut deps = minimal_deps(session, tools, provider);
+    deps.trace_sink = Some(sink);
+    let harness = AgentHarness::new(deps);
+
+    let mut cb = NoopHarnessCallback;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    cancel.cancel();
+    let result = harness.run(&sid, &mut cb, &cancel).await;
+    assert!(
+        matches!(result, Err(HarnessError::Cancelled)),
+        "expected Cancelled, got {result:?}"
+    );
+
+    let captured = events.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let outcome = captured
+        .iter()
+        .rev()
+        .find_map(|e| match e {
+            LoopTraceEvent::SessionCompleted { outcome, .. } => Some(*outcome),
+            _ => None,
+        })
+        .expect("SessionCompleted must be emitted");
+    assert_eq!(
+        outcome,
+        crate::harness::trace::LoopTraceSessionOutcome::Cancelled,
+        "a cancel token firing must still trace as Cancelled",
+    );
+}
+
+/// The error arm must not clobber a cause the loop already recorded.
+///
+/// Production sequence: `rescue::try_reactive_compact_and_retry` exhausts its
+/// one-shot slot, calls `RescueHost::mark_rescue_exhausted` (which records
+/// `TerminateReason::ReactiveCompactExhausted`) and returns the wrapped error —
+/// which lands in exactly the arm this test drives. The blanket
+/// `set_terminate_reason(Cancelled)` that used to sit there overwrote the
+/// reason three frames after it was set, so the variant whose own doc says it
+/// exists "so the `CompactAndRetry` path stops leaking into
+/// `HarnessError::Llm`" never survived to a reader. The test records the
+/// reason the same way the rescue host does, then makes the turn fail.
+#[tokio::test]
+async fn the_error_arm_preserves_a_terminate_reason_the_loop_already_recorded() {
+    let (sink, events) = RecordingTraceSink::new();
+    let provider: Arc<dyn AiProvider> = Arc::new(FailingProvider);
+    let (session, sid) = fresh_session("trace-keeps-reason").await;
+    let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
+
+    let mut deps = minimal_deps(session, tools, provider);
+    deps.trace_sink = Some(sink);
+    let harness = AgentHarness::new(deps);
+
+    // Same call the rescue host makes on exhaustion.
+    crate::context::compact::rescue::RescueHost::mark_rescue_exhausted(&harness);
+
+    let mut cb = NoopHarnessCallback;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let _ = harness.run(&sid, &mut cb, &cancel).await;
+
+    assert_eq!(
+        harness.terminate_reason(),
+        crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
+        "the recorded cause must survive the error exit",
+    );
+    let captured = events.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let reason = captured
+        .iter()
+        .rev()
+        .find_map(|e| match e {
+            LoopTraceEvent::SessionCompleted {
+                terminate_reason, ..
+            } => terminate_reason.clone(),
+            _ => None,
+        })
+        .expect("SessionCompleted must carry a terminate_reason");
+    assert_eq!(
+        reason,
+        crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
+        "the trace payload must carry the real cause, not `cancelled`",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A policy Halt is final — a late user message must not resume it
+// ---------------------------------------------------------------------------
+
+/// Verifier that halts every turn. `VerifierVerdict::Halt`'s own doc: "the
+/// harness MUST exit immediately with `TerminateReason::StopHookHalt`".
+struct AlwaysHaltVerifier;
+#[async_trait::async_trait]
+impl crate::verification::TurnVerifier for AlwaysHaltVerifier {
+    async fn verify(
+        &self,
+        _ctx: &crate::verification::TurnVerifyContext<'_>,
+        _cancel: &tokio_util::sync::CancellationToken,
+    ) -> crate::verification::VerifierVerdict {
+        crate::verification::VerifierVerdict::Halt {
+            reason: "policy stop".into(),
+        }
+    }
+}
+
+/// Provider that appends a genuine (non-synthetic) user message to the session
+/// while its own call is "in flight", then answers. That is the exact race
+/// `has_unanswered_user_message` exists to catch: the message lands at a seq
+/// past the turn's prompt watermark, so the model never saw it.
+struct InjectsSteeringProvider {
+    session: Arc<dyn crate::session::service::SessionService>,
+    sid: crate::session::service::SessionId,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl AiProvider for InjectsSteeringProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = self
+                .session
+                .emit_event(
+                    &self.sid,
+                    SessionEvent::UserMessage {
+                        turn_id: uuid::Uuid::new_v4(),
+                        content: MessageContent {
+                            text: "actually, also do this".into(),
+                            blocks: vec![],
+                            thinking: None,
+                            thinking_signature: None,
+                        },
+                        at: now_ms(),
+                        synthetic: false,
+                        author_user_id: None,
+                    },
+                )
+                .await;
+            Ok(ProviderResponse::text_only("ok".into()))
+        })
+    }
+    fn name(&self) -> &str {
+        "injects-steering"
+    }
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
+fn halt_harness(
+    session: Arc<dyn crate::session::service::SessionService>,
+    sid: &crate::session::service::SessionId,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+    halting: bool,
+) -> AgentHarness {
+    let provider: Arc<dyn AiProvider> = Arc::new(InjectsSteeringProvider {
+        session: session.clone(),
+        sid: sid.clone(),
+        calls,
+    });
+    let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
+    let mut deps = minimal_deps(session, tools, provider);
+    if halting {
+        deps.verifier_chain = Some(Arc::new(
+            crate::verification::VerifierChain::builder()
+                .with(Arc::new(AlwaysHaltVerifier))
+                .build(),
+        ));
+    }
+    // Bound the control case: without the halt the follow-up continuation is
+    // supposed to keep going, and this test must not depend on
+    // MAX_FOLLOWUP_CONTINUATIONS to stop it.
+    deps.max_iterations = Some(4);
+    AgentHarness::new(deps)
+}
+
+/// Control: the mechanism really does produce a follow-up continuation.
+///
+/// Without this the Halt assertion below could pass for the wrong reason (no
+/// unanswered message was ever detected), which is the failure mode a
+/// prose-only ruling has and a test is supposed to remove.
+#[tokio::test]
+async fn a_late_user_message_does_resume_a_model_chosen_stop() {
+    let (session, sid) = fresh_session("halt-control").await;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let harness = halt_harness(session, &sid, calls.clone(), false);
+
+    let mut cb = NoopHarnessCallback;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let _ = harness.run(&sid, &mut cb, &cancel).await;
+
+    assert!(
+        calls.load(std::sync::atomic::Ordering::SeqCst) > 1,
+        "a model-chosen Done with a late user message must continue the loop; \
+         got {} LLM call(s)",
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+    );
+}
+
+/// A verifier `Halt` is a policy stop, and policy does not depend on whether a
+/// steering message happened to land during the halted turn.
+///
+/// The `Done` the Halt path returns carries `hit_limit`, but the follow-up
+/// continuation used to test only "is there an unanswered user message?" — so
+/// the same run either honoured `StopHookHalt` or resumed straight through it
+/// depending purely on message timing, while `terminate_reason` kept saying
+/// `StopHookHalt` for however many turns followed.
+#[tokio::test]
+async fn a_policy_halt_is_not_resumed_by_a_late_user_message() {
+    let (session, sid) = fresh_session("halt-final").await;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let harness = halt_harness(session, &sid, calls.clone(), true);
+
+    let mut cb = NoopHarnessCallback;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let _ = harness.run(&sid, &mut cb, &cancel).await;
+
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the halted turn is the only turn; a late user message must not \
+         resume a policy stop",
+    );
+    assert!(
+        matches!(
+            harness.terminate_reason(),
+            crate::orchestrator::dispatch::TerminateReason::StopHookHalt { .. }
+        ),
+        "the run must end on StopHookHalt, got {:?}",
+        harness.terminate_reason(),
+    );
+}

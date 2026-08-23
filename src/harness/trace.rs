@@ -226,6 +226,15 @@ pub enum LoopTraceSessionOutcome {
     Completed,
     HitLimit,
     Cancelled,
+    /// The loop exited on a [`crate::harness::trait_def::HarnessError`] that
+    /// was NOT the cooperative cancel token: a provider failure, a
+    /// session-store write error, an output-guardrail block, an exhausted
+    /// reactive compaction. Distinct from [`Self::Cancelled`], which means the
+    /// user (or the run's owner) asked it to stop, and from
+    /// [`Self::HitLimit`], which means a cap fired on a run that was otherwise
+    /// healthy. Mirrors `RunOutcome::Errored`, the value the session log has
+    /// always recorded for exactly this case.
+    Failed,
 }
 
 /// Metrics captured at the end of a turn

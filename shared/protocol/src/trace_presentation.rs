@@ -93,6 +93,8 @@ pub struct AgentTracePresentationLabels {
     pub session_completed_ok: String,
     pub session_hit_limit: String,
     pub session_cancelled: String,
+    /// Label for a run that died on a harness error (not a cancel, not a cap).
+    pub session_failed: String,
 }
 
 impl AgentTracePresentationLabels {
@@ -120,6 +122,7 @@ impl AgentTracePresentationLabels {
             session_completed_ok: "completed".into(),
             session_hit_limit: "hit limit".into(),
             session_cancelled: "cancelled".into(),
+            session_failed: "failed".into(),
         }
     }
 
@@ -147,6 +150,7 @@ impl AgentTracePresentationLabels {
             AgentTraceSessionOutcome::Completed => &self.session_completed_ok,
             AgentTraceSessionOutcome::HitLimit => &self.session_hit_limit,
             AgentTraceSessionOutcome::Cancelled => &self.session_cancelled,
+            AgentTraceSessionOutcome::Failed => &self.session_failed,
         }
     }
 }
@@ -340,6 +344,7 @@ pub fn present_agent_trace_event(
                 AgentTraceSessionOutcome::Completed => AgentTracePresentationStatus::Success,
                 AgentTraceSessionOutcome::HitLimit => AgentTracePresentationStatus::Failed,
                 AgentTraceSessionOutcome::Cancelled => AgentTracePresentationStatus::Info,
+                AgentTraceSessionOutcome::Failed => AgentTracePresentationStatus::Failed,
             };
             let tail = final_text
                 .as_deref()
