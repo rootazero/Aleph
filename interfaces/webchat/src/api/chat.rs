@@ -1,6 +1,7 @@
 //! Chat API — wraps chat.send / chat.abort / chat.history / chat.clear RPC methods.
 
 use crate::context::DashboardState;
+use aleph_protocol::queue::PendingRun;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cell::RefCell;
@@ -124,11 +125,20 @@ pub struct ContextEstimateResponse {
 /// `None` means the session has no list, which is different from "we did not
 /// look": a core that predates the field also sends nothing, and that reads the
 /// same, which is why the caller applies it only when present.
+///
+/// `pending` is the wait lane's authoritative half — the same fact
+/// `StreamEvent::RunQueued` carries, for a client that attached after those
+/// frames fired. A live client learns it is queued from the stream; a client
+/// that attaches mid-wait — a refresh, a second tab, a second device, a room
+/// teammate — never received those frames, so this snapshot is the only place
+/// the fact survives for it. Absent (a core that predates the field) and
+/// empty (nothing waiting) both mean "no queue to show".
 #[derive(Debug, Clone)]
 pub struct SessionHistory {
     pub messages: Vec<ChatMessage>,
     pub active_run: Option<String>,
     pub plan: Option<aleph_protocol::plan::PlanSnapshot>,
+    pub pending: Vec<PendingRun>,
 }
 
 /// A file attachment to send with a chat message.
@@ -157,6 +167,30 @@ pub struct ChatAttachment {
 fn parse_history_plan(result: &Value) -> Option<aleph_protocol::plan::PlanSnapshot> {
     let raw = result.get("plan").filter(|v| !v.is_null())?;
     serde_json::from_value(raw.clone()).ok()
+}
+
+/// Read the wait lane off a `chat.history` response.
+///
+/// Free function so the skew and malformed cases are testable without a live
+/// socket — same shape as `parse_history_plan` next door. Absent reads as
+/// empty: a core that predates the field and an idle session are
+/// indistinguishable here, and both mean "no queue to show".
+///
+/// Each item is deserialized into the shared protocol type rather than
+/// hand-read key by key. That is the whole point of the type being shared: a
+/// field renamed on the server changes this side's parse at the same time,
+/// instead of leaving a client that reads an empty queue and says nothing.
+/// An item that fails to deserialize is dropped, not fatal — one malformed
+/// entry must not hide the rest of the lane.
+#[must_use]
+pub fn parse_history_pending(result: &Value) -> Vec<PendingRun> {
+    let Some(items) = result.get("pending").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|v| serde_json::from_value::<PendingRun>(v.clone()).ok())
+        .collect()
 }
 
 pub struct ChatApi;
@@ -294,6 +328,7 @@ impl ChatApi {
                 .and_then(|v| v.as_str())
                 .map(str::to_owned),
             plan: parse_history_plan(&result),
+            pending: parse_history_pending(&result),
         })
     }
 
@@ -386,6 +421,48 @@ mod tests {
         assert!(parse_history_plan(&serde_json::json!({"messages": []})).is_none());
         assert!(parse_history_plan(&serde_json::json!({"plan": null})).is_none());
         assert!(parse_history_plan(&serde_json::json!({"plan": {"items": "nope"}})).is_none());
+    }
+
+    /// A client that attaches mid-wait never received the `RunQueued` frames —
+    /// they fired before its socket existed. Without the snapshot it paints
+    /// "thinking" over a queue it cannot see.
+    #[test]
+    fn pending_is_read_off_the_history_response() {
+        let raw = serde_json::json!({
+            "messages": [],
+            "active_run": null,
+            "pending": [
+                {"run_id": "run-a", "ahead": 0},
+                {"run_id": "run-b", "ahead": 1},
+            ]
+        });
+        let pending = parse_history_pending(&raw);
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending[1].run_id, "run-b");
+        assert_eq!(pending[1].ahead, 1);
+    }
+
+    /// The shape is `aleph_protocol::queue::PendingRun`, the same type the
+    /// server serializes — not a Panel-local copy of its field names. That is
+    /// what makes a server-side rename a compile error here instead of a
+    /// client that silently reads an empty queue. Asserting it by round-trip
+    /// keeps the check on the type rather than on a literal key list.
+    #[test]
+    fn the_shape_is_the_shared_protocol_type() {
+        let one = aleph_protocol::queue::PendingRun {
+            run_id: "run-a".to_string(),
+            ahead: 2,
+        };
+        let raw = serde_json::json!({ "pending": [serde_json::to_value(&one).unwrap()] });
+        assert_eq!(parse_history_pending(&raw), vec![one]);
+    }
+
+    /// Absent against a core that predates the field, and absent when nothing
+    /// is waiting. Both mean "no queue to show", so neither may error.
+    #[test]
+    fn a_missing_or_malformed_pending_array_reads_as_empty() {
+        assert!(parse_history_pending(&serde_json::json!({"messages": []})).is_empty());
+        assert!(parse_history_pending(&serde_json::json!({"pending": "nonsense"})).is_empty());
     }
 
     #[test]

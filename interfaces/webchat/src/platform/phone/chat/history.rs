@@ -110,12 +110,15 @@ pub fn PhoneChatHistory() -> impl IntoView {
         chat.apply_session_knobs(row.knobs());
         // The phone shell mounts no `ChatSidebar`, so it registers no
         // conversations in `SessionMap` and has nothing to bind a live run to
-        // — the returned run id is discarded rather than followed. Deliberate:
-        // joining a turn needs a `ConvId` this surface never creates.
+        // — the returned run id (and wait-lane snapshot) is discarded rather
+        // than followed. Deliberate: joining a turn needs a `ConvId` this
+        // surface never creates, so there is nothing to restore the queued
+        // phase onto either.
         let locale = i18n.get_locale_untracked();
         let key = row.key.clone();
         spawn_local(async move {
-            let _live = hydrate_session_history(dash, chat, Some(workspace), key, locale).await;
+            let _snapshot =
+                hydrate_session_history(dash, chat, Some(workspace), key, locale).await;
         });
         navigate("/", NavigateOptions::default());
     };
