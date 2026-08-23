@@ -198,21 +198,13 @@ async fn window_frame(
         .screen()
         .ok_or_else(|| "no screen capability on this platform".to_string())?;
 
-    let windows = screen
-        .window_list()
-        .await
-        .map_err(|e| format!("window_list failed: {e}"))?;
-    let window = windows
-        .iter()
-        .find(|w| w.id == window_id)
-        .ok_or_else(|| format!("no window with id {window_id} is open"))?;
-    // `BoundingBox` is Copy, so this reads the frame out of the borrowed entry.
-    let frame = window.bounds.ok_or_else(|| {
-        format!(
-            "window {window_id} reports no bounds on this platform, so a window-space \
-             coordinate cannot be mapped back to the screen"
-        )
-    })?;
+    let resolved = super::window_lookup::ResolvedWindow::lookup(
+        screen,
+        window_id,
+        "a window-space coordinate cannot be mapped back to the screen",
+    )
+    .await?;
+    let frame = resolved.frame;
 
     // The scale only matters when the caller sent raw capture pixels (no
     // coord_factors). An unknown display is not a reason to refuse — 1.0 is the

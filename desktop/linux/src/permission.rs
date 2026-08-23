@@ -248,7 +248,14 @@ fn microphone_present() -> bool {
 async fn in_group(group: &str) -> bool {
     #[cfg(target_os = "linux")]
     {
-        match tokio::process::Command::new("id").arg("-nG").output().await {
+        let mut cmd = tokio::process::Command::new("id");
+        cmd.arg("-nG");
+        match aleph_desktop::script_exec::output_capped(
+            cmd,
+            aleph_desktop::script_exec::DESKTOP_QUERY_TIMEOUT,
+        )
+        .await
+        {
             Ok(out) if out.status.success() => {
                 groups_contain(&String::from_utf8_lossy(&out.stdout), group)
             }

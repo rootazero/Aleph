@@ -126,6 +126,24 @@ fn choose_rail(
     }
 }
 
+/// Parse the shared `press_action` argument into a [`PressAction`].
+///
+/// Single source for both `key_button` and `mouse_button` — they used to each
+/// accept a different dialect (keys took `down`/`up` aliases, the mouse did
+/// not), so the same word was accepted on one verb and rejected on the other.
+fn parse_press_action(
+    raw: Option<&str>,
+) -> std::result::Result<aleph_desktop::PressAction, String> {
+    match raw {
+        Some("press") | Some("down") => Ok(aleph_desktop::PressAction::Press),
+        Some("release") | Some("up") => Ok(aleph_desktop::PressAction::Release),
+        Some("click") | None => Ok(aleph_desktop::PressAction::Click),
+        Some(other) => Err(format!(
+            "Invalid press_action '{other}'. Use 'press'/'down', 'release'/'up', or 'click'."
+        )),
+    }
+}
+
 /// Resolve an app name / executable / bundle id against the running-app list.
 ///
 /// String matching, not semantics: an exact (case-insensitive) hit on either
@@ -170,6 +188,48 @@ fn match_running_app<'a>(
     }
 }
 
+/// Poll the running-app list until `bundle_id` shows up or the deadline hits.
+///
+/// `restart_app` is the one place this is used: both dispatch paths report
+/// success on *dispatch*, and "the OS accepted the request" is not "the app
+/// is back". Three answers, honestly separated: `Some(true)` = observed
+/// running, `Some(false)` = deadline hit with no sighting, `None` = the
+/// platform cannot list apps (verification impossible, not failed).
+async fn verify_app_running(
+    system: &dyn aleph_desktop::SystemCapability,
+    bundle_id: &str,
+) -> Option<bool> {
+    const DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+    const POLL: std::time::Duration = std::time::Duration::from_millis(500);
+    verify_app_running_within(system, bundle_id, DEADLINE, POLL).await
+}
+
+/// The poll loop behind [`verify_app_running`], with the timing as parameters
+/// so a test does not have to wait out the real deadline.
+async fn verify_app_running_within(
+    system: &dyn aleph_desktop::SystemCapability,
+    bundle_id: &str,
+    deadline: std::time::Duration,
+    poll: std::time::Duration,
+) -> Option<bool> {
+    let start = std::time::Instant::now();
+    let mut ever_listed = false;
+    loop {
+        if let Ok(apps) = system.list_running_apps().await {
+            ever_listed = true;
+            if match_running_app(&apps, bundle_id).is_ok() {
+                return Some(true);
+            }
+        }
+        // A listing failure is not a verdict; the deadline below is.
+        if start.elapsed() >= deadline {
+            // "never managed to list" is unknown, not absent.
+            return if ever_listed { Some(false) } else { None };
+        }
+        tokio::time::sleep(poll).await;
+    }
+}
+
 /// The process this action is aimed at, if the caller named one.
 ///
 /// Three ways to say the same thing, in order of directness: an explicit `pid`,
@@ -206,20 +266,8 @@ async fn resolve_target_pid(
     }
 
     if let Some(window_id) = args.window_id.map(u64::from) {
-        let windows = screen
-            .window_list()
-            .await
-            .map_err(|e| format!("cannot resolve window {window_id} to a process: {e}"))?;
-        let window = windows
-            .iter()
-            .find(|w| w.id == window_id)
-            .ok_or_else(|| format!("no window with id {window_id} is open"))?;
-        return i32::try_from(window.pid).map(Some).map_err(|_| {
-            format!(
-                "window {window_id} has a pid ({}) outside the addressable range",
-                window.pid
-            )
-        });
+        let info = super::window_lookup::lookup_window(screen, window_id).await?;
+        return super::window_lookup::pid_of(&info).map(Some);
     }
 
     Ok(None)
@@ -1114,17 +1162,13 @@ impl super::DesktopTool {
                         message: Some("key_button requires 'keys' array".to_string()),
                     }));
                 }
-                let action = match args.press_action.as_deref() {
-                    Some("press") | Some("down") => aleph_desktop::PressAction::Press,
-                    Some("release") | Some("up") => aleph_desktop::PressAction::Release,
-                    Some("click") | None => aleph_desktop::PressAction::Click,
-                    Some(other) => {
+                let action = match parse_press_action(args.press_action.as_deref()) {
+                    Ok(action) => action,
+                    Err(message) => {
                         return Ok(Some(DesktopOutput {
                             success: false,
                             data: None,
-                            message: Some(format!(
-                                "Invalid press_action '{other}'. Use 'press'/'down', 'release'/'up', or 'click'."
-                            )),
+                            message: Some(message),
                         }))
                     }
                 };
@@ -1609,17 +1653,13 @@ impl super::DesktopTool {
                     Err(out) => return Ok(Some(out)),
                 };
                 let button = to_desktop_button(args.button.as_ref());
-                let press_action = match args.press_action.as_deref() {
-                    Some("press") => aleph_desktop::PressAction::Press,
-                    Some("release") => aleph_desktop::PressAction::Release,
-                    Some("click") | None => aleph_desktop::PressAction::Click,
-                    Some(other) => {
+                let press_action = match parse_press_action(args.press_action.as_deref()) {
+                    Ok(action) => action,
+                    Err(message) => {
                         return Ok(Some(DesktopOutput {
                             success: false,
                             data: None,
-                            message: Some(format!(
-                            "Invalid press_action '{other}'. Use 'press', 'release', or 'click'."
-                        )),
+                            message: Some(message),
                         }))
                     }
                 };
@@ -1731,13 +1771,33 @@ impl super::DesktopTool {
                 // screen sequence only when no system capability is wired.
                 if let Some(system) = platform.system() {
                     return Ok(Some(match system.restart_app(bundle_id).await {
-                        Ok(()) => DesktopOutput {
-                            success: true,
-                            data: Some(
-                                serde_json::json!({"restarted": true, "bundle_id": bundle_id}),
-                            ),
-                            message: None,
-                        },
+                        Ok(()) => {
+                            // Dispatch succeeded; now say whether the app
+                            // actually came back, instead of letting "Ok(())"
+                            // stand in for it.
+                            let verified = verify_app_running(system, bundle_id).await;
+                            let message = match verified {
+                                Some(true) => None,
+                                Some(false) => Some(format!(
+                                    "restart of '{bundle_id}' was dispatched, but the app did \
+                                     not reappear in the running list within 10s — check \
+                                     whether it crashed on launch"
+                                )),
+                                None => Some(format!(
+                                    "restart of '{bundle_id}' was dispatched; this platform \
+                                     cannot list running apps, so its return is unverified"
+                                )),
+                            };
+                            DesktopOutput {
+                                success: true,
+                                data: Some(serde_json::json!({
+                                    "restarted": true,
+                                    "bundle_id": bundle_id,
+                                    "verified": verified,
+                                })),
+                                message,
+                            }
+                        }
                         Err(e) => DesktopOutput {
                             success: false,
                             data: None,
@@ -2115,6 +2175,119 @@ mod tests {
 
     fn args(value: serde_json::Value) -> DesktopArgs {
         serde_json::from_value(value).expect("valid DesktopArgs")
+    }
+
+    // ── verify_app_running_within ────────────────────────────────────────────
+
+    /// Scripted replies for `list_running_apps` (`DesktopError` is not
+    /// `Clone`, so the failure is a unit variant materialised per call).
+    #[derive(Clone)]
+    enum ListReply {
+        Apps(Vec<AppInfo>),
+        Fail,
+    }
+
+    /// A `SystemCapability` whose `list_running_apps` answers from a script:
+    /// each call takes the next queued reply, and the last one repeats.
+    struct ScriptedSystem {
+        script: std::sync::Mutex<std::collections::VecDeque<ListReply>>,
+    }
+
+    impl ScriptedSystem {
+        fn answering(script: Vec<ListReply>) -> Self {
+            Self {
+                script: std::sync::Mutex::new(script.into()),
+            }
+        }
+    }
+
+    fn running_app(name: &str) -> AppInfo {
+        AppInfo {
+            name: name.to_string(),
+            bundle_id: format!("com.example.{name}"),
+            pid: Some(42),
+            is_active: false,
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl aleph_desktop::SystemCapability for ScriptedSystem {
+        async fn launch_app(&self, _app: &str) -> aleph_desktop::Result<()> {
+            Ok(())
+        }
+        async fn quit_app(&self, _app: &str) -> aleph_desktop::Result<()> {
+            Ok(())
+        }
+        async fn list_running_apps(&self) -> aleph_desktop::Result<Vec<AppInfo>> {
+            let mut script = self.script.lock().expect("script lock");
+            let reply = if script.len() > 1 {
+                script.pop_front().expect("len checked")
+            } else {
+                script.front().cloned().unwrap_or(ListReply::Apps(vec![]))
+            };
+            match reply {
+                ListReply::Apps(apps) => Ok(apps),
+                ListReply::Fail => Err(aleph_desktop::DesktopError::InputFailed(
+                    "compositor gone".to_string(),
+                )),
+            }
+        }
+        async fn send_notification(&self, _t: &str, _b: &str) -> aleph_desktop::Result<()> {
+            Ok(())
+        }
+        async fn clipboard_read(
+            &self,
+        ) -> aleph_desktop::Result<aleph_desktop::system_types::ClipboardContent> {
+            unimplemented!("not needed by verify_app_running")
+        }
+        async fn clipboard_write(&self, _t: &str) -> aleph_desktop::Result<()> {
+            unimplemented!("not needed by verify_app_running")
+        }
+        async fn system_info(&self) -> aleph_desktop::Result<aleph_desktop::system_types::SystemInfo> {
+            unimplemented!("not needed by verify_app_running")
+        }
+    }
+
+    #[tokio::test]
+    async fn restart_verification_reports_running_once_the_app_appears() {
+        let system = ScriptedSystem::answering(vec![
+            ListReply::Apps(vec![]),                   // not yet back
+            ListReply::Apps(vec![running_app("Safari")]), // back
+        ]);
+        let verdict = verify_app_running_within(
+            &system,
+            "com.example.Safari",
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_millis(1),
+        )
+        .await;
+        assert_eq!(verdict, Some(true));
+    }
+
+    #[tokio::test]
+    async fn restart_verification_reports_absent_when_the_list_never_shows_it() {
+        let system = ScriptedSystem::answering(vec![ListReply::Apps(vec![])]);
+        let verdict = verify_app_running_within(
+            &system,
+            "com.example.Safari",
+            std::time::Duration::from_millis(5),
+            std::time::Duration::from_millis(1),
+        )
+        .await;
+        assert_eq!(verdict, Some(false));
+    }
+
+    #[tokio::test]
+    async fn restart_verification_reports_unknown_when_listing_never_works() {
+        let system = ScriptedSystem::answering(vec![ListReply::Fail]);
+        let verdict = verify_app_running_within(
+            &system,
+            "com.example.Safari",
+            std::time::Duration::from_millis(5),
+            std::time::Duration::from_millis(1),
+        )
+        .await;
+        assert_eq!(verdict, None);
     }
 
     #[test]

@@ -635,25 +635,16 @@ async fn resolve_window(
     screen: &dyn aleph_desktop::ScreenCapability,
     window_id: u64,
 ) -> std::result::Result<TargetWindow, String> {
-    let windows = screen
-        .window_list()
-        .await
-        .map_err(|e| format!("window_list failed: {e}"))?;
-    let window = windows
-        .iter()
-        .find(|w| w.id == window_id)
-        .ok_or_else(|| format!("no window with id {window_id} is open"))?;
-    let frame = window.bounds.ok_or_else(|| {
-        format!(
-            "window {window_id} reports no bounds on this platform, so its marks cannot be placed"
-        )
-    })?;
-    let pid = i32::try_from(window.pid)
-        .map_err(|_| format!("window {window_id} has a pid outside the addressable range"))?;
+    let resolved = super::window_lookup::ResolvedWindow::lookup(
+        screen,
+        window_id,
+        "its marks cannot be placed",
+    )
+    .await?;
     Ok(TargetWindow {
-        id: window_id,
-        pid,
-        frame,
+        id: resolved.id,
+        pid: resolved.pid,
+        frame: resolved.frame,
     })
 }
 

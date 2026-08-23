@@ -3,6 +3,7 @@
 
 mod action_script;
 mod ax;
+mod ax_compress;
 mod coord_resolve;
 mod focus_gate;
 mod gui_locate;
@@ -19,6 +20,7 @@ mod types;
 mod verify_state;
 mod vision_bridge;
 mod wait_visual;
+mod window_lookup;
 
 #[cfg(test)]
 mod tests;
@@ -689,7 +691,7 @@ Actions:
 - drag: Drag from (start_x, start_y) to (end_x, end_y). Optional duration_ms for animation.
 - hover: Move mouse to (x, y) without clicking.
 - cursor_position: Get current mouse cursor position.
-- mouse_button: Press/release mouse at (x, y). Requires press_action (press/release/click).
+- mouse_button: Press/release mouse at (x, y). press_action: press/down, release/up, or click (default).
 - type_text: Type text at the current keyboard focus. Blind by nature — the keystrokes go wherever focus actually is — so it is pre-flighted against the accessibility layer: it refuses when nothing is focused, or when the focused element reports that it takes no typed value, and tells you what to do instead (click the input, or use set_value). Typing into a secure/password field is always refused. If the app's accessibility tree lies (canvas, terminal, some Electron shells), pass force:true to type anyway — force does not lift the password refusal. Where no accessibility layer is available the pre-flight is skipped entirely.
 - key_combo: Press key combination, e.g. keys=["cmd","c"].
 - key_button: Hold or release a key/chord without auto-releasing — keys=["cmd"] plus press_action="press" (hold down) then later press_action="release". Distinct from key_combo, which presses and releases atomically. Useful for drag-with-modifier or chorded shortcuts. Send the matching release on the same target you pressed against: a key held in one app is only let up in that app.
