@@ -48,6 +48,13 @@ pub enum NoteManageAction {
     Query,
     /// List all notes, optionally filtered by category.
     List,
+    /// Read one note **by address** — its full markdown body, untruncated by
+    /// ranking. `query` is a survey (ranked, and every hit's body is cut at
+    /// 4,000 chars); `get` is an address. Anything that rewrites a note's body
+    /// must read it through here first, because `update` replaces the body
+    /// wholesale and a body reconstructed from a truncated search hit silently
+    /// loses everything past the cut.
+    Get,
     /// Delete a note file and remove it from the index.
     Delete,
     /// Rename a note (change its filename/title) and rewrite every inbound
@@ -73,12 +80,14 @@ pub struct NoteManageArgs {
     /// Note category: preference, plan, learning, project, personal, tool,
     /// lesson, goal-lessons, skill, reference, feedback, transcript, query,
     /// contradiction, other, or the subagent-* family.
-    /// Required for create/update/append/delete; optional filter for list.
+    /// Required for create/update/append/delete; optional filter for list;
+    /// optional for get (omit it and the filename is resolved through the
+    /// index — a name held by two categories is refused, not guessed).
     #[serde(default)]
     pub category: Option<String>,
 
     /// Note filename in kebab-case or title-case, without the `.md` suffix.
-    /// Required for create, update, append (as target), delete.
+    /// Required for create, update, append (as target), delete, get.
     #[serde(default)]
     pub filename: Option<String>,
 

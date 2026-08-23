@@ -3,6 +3,7 @@
 use super::helpers::{bound_chars, scan_note_for_threats, validate_category};
 use super::*;
 use crate::error::AlephError;
+use crate::memory::notes::store::NoteStore as _;
 
 #[test]
 fn validate_category_accepts_contradiction() {
@@ -805,5 +806,199 @@ async fn the_evolution_view_shows_why_a_distilled_lesson_was_dropped() {
         content.contains("bash-quoting"),
         "an applied action must be visible too, so the ledger is not read as \
          a failure-only list: {content}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `get` — reading one note by address
+// ---------------------------------------------------------------------------
+
+/// The defect this action exists for, stated as a test.
+///
+/// `update` replaces a note's body wholesale. Before `get`, the only
+/// body-returning read was `query`, which caps every hit at 4,000 chars — so a
+/// model asked to edit a long note could only ever see its first 4,000 chars,
+/// and writing back what it saw silently dropped the rest. The assertion is not
+/// "get returns something"; it is that `get` returns bytes `query` does not.
+#[tokio::test]
+async fn get_returns_the_whole_note_where_query_truncates_it() {
+    let (_dir, tool) = mk_tool();
+    // 5,000 chars of body: past `query`'s per-hit cap, inside `get`'s.
+    let mut body = String::from("needle-at-the-top\n");
+    body.push_str(&"filler ".repeat(700));
+    body.push_str("\nneedle-at-the-bottom");
+    assert!(body.chars().count() > 4_000);
+
+    tool.call(create_args("long-note", &body)).await.unwrap();
+
+    let queried = tool
+        .call(NoteManageArgs {
+            action: NoteManageAction::Query,
+            query: Some("needle-at-the-top".into()),
+            ..blank_args()
+        })
+        .await
+        .unwrap();
+    let query_content = queried.content.unwrap_or_default();
+    assert!(
+        !query_content.contains("needle-at-the-bottom"),
+        "premise of this test: query must truncate a >4k note, otherwise it is \
+         asserting nothing"
+    );
+
+    let got = tool
+        .call(NoteManageArgs {
+            action: NoteManageAction::Get,
+            category: Some("learning".into()),
+            filename: Some("long-note".into()),
+            ..blank_args()
+        })
+        .await
+        .unwrap();
+    let content = got.content.expect("get must return content");
+    assert!(
+        content.contains("needle-at-the-bottom"),
+        "get must return the tail query cut off"
+    );
+    assert_eq!(got.note_path.as_deref(), Some("learning/long-note"));
+}
+
+/// A read is not a write receipt. `destination` is the field the model reads to
+/// tell the user "it is filed at X"; stamping one on a read is how a model
+/// acknowledges a save that never happened.
+#[tokio::test]
+async fn get_returns_no_write_receipt() {
+    let (_dir, tool) = mk_tool();
+    tool.call(create_args("some-note", "body")).await.unwrap();
+    let got = tool
+        .call(NoteManageArgs {
+            action: NoteManageAction::Get,
+            category: Some("learning".into()),
+            filename: Some("some-note".into()),
+            ..blank_args()
+        })
+        .await
+        .unwrap();
+    assert!(
+        got.destination.is_none(),
+        "`destination` is a write receipt; a read must not carry one"
+    );
+}
+
+/// Category-less `get` resolves through the index — and refuses when the name
+/// is held by two categories. Handing the wrong note to a caller that is about
+/// to `update` (wholesale replace) is worse than making it name the category.
+/// Same never-guess rule the wikilink resolver applies to ambiguous tiers.
+#[tokio::test]
+async fn get_without_category_resolves_uniquely_and_refuses_ambiguity() {
+    let (_dir, tool) = mk_tool();
+    tool.call(create_args("only-here", "alpha")).await.unwrap();
+
+    let got = tool
+        .call(NoteManageArgs {
+            action: NoteManageAction::Get,
+            filename: Some("only-here".into()),
+            ..blank_args()
+        })
+        .await
+        .unwrap();
+    assert_eq!(got.note_path.as_deref(), Some("learning/only-here"));
+
+    // Same filename in a second category.
+    tool.call(NoteManageArgs {
+        category: Some("reference".into()),
+        ..create_args("only-here", "beta")
+    })
+    .await
+    .unwrap();
+
+    let err = tool
+        .call(NoteManageArgs {
+            action: NoteManageAction::Get,
+            filename: Some("only-here".into()),
+            ..blank_args()
+        })
+        .await
+        .expect_err("an ambiguous address must refuse, not pick a side");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("learning/only-here") && msg.contains("reference/only-here"),
+        "the refusal must name both candidates so the caller can disambiguate: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn get_reports_a_missing_note_instead_of_inventing_one() {
+    let (_dir, tool) = mk_tool();
+    let err = tool
+        .call(NoteManageArgs {
+            action: NoteManageAction::Get,
+            category: Some("learning".into()),
+            filename: Some("never-written".into()),
+            ..blank_args()
+        })
+        .await
+        .expect_err("missing note must error");
+    assert!(err.to_string().contains("never-written"));
+}
+
+/// A note the model keeps opening must not age as never-used: `NoteDecay`
+/// scores on recall signals, so an addressed read that records nothing would
+/// let the vault archive exactly the notes being worked on.
+#[tokio::test]
+async fn get_records_a_recall_signal() {
+    let (_dir, tool) = mk_tool();
+    tool.call(create_args("hot-note", "body")).await.unwrap();
+
+    let store = tool.indexer.store();
+    let before = store
+        .recall_signals_last_hit("main", "learning/hot-note")
+        .await
+        .unwrap();
+    assert!(before.is_none(), "premise: no signal before the read");
+
+    tool.call(NoteManageArgs {
+        action: NoteManageAction::Get,
+        category: Some("learning".into()),
+        filename: Some("hot-note".into()),
+        ..blank_args()
+    })
+    .await
+    .unwrap();
+
+    let after = store
+        .recall_signals_last_hit("main", "learning/hot-note")
+        .await
+        .unwrap();
+    assert!(
+        after.is_some(),
+        "an addressed read is the strongest explicit look-up there is; it must \
+         accrue a recall signal or decay ages the note as never-used"
+    );
+}
+
+/// The tool's own prose must not point at a capability that does not exist.
+/// `query`'s overflow line used to say "read them individually" while no action
+/// could do that; the description now tells the model to `get` before `update`,
+/// and that instruction is the only thing standing between a long note and a
+/// truncated rewrite.
+#[test]
+fn description_tells_the_model_to_get_before_it_updates() {
+    let d = <NoteManageTool as AlephTool>::DESCRIPTION;
+    assert!(
+        d.contains("`get`"),
+        "the action must be advertised or the model will keep rewriting from search hits"
+    );
+    assert!(
+        d.contains("ALWAYS `get` the note first"),
+        "the ordering instruction is the point, not the mere existence of the \
+         action: an advertised `get` the model does not reach for before an \
+         `update` leaves the truncated-rewrite defect exactly where it was"
+    );
+    assert!(
+        d.contains("4,000 chars"),
+        "and the instruction needs its reason — a model told to `get` first \
+         without being told that `query` truncates will drop the step the \
+         moment the search hit looks complete"
     );
 }

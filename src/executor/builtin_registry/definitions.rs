@@ -2199,9 +2199,7 @@ mod tests {
     /// landed after the previous ceiling (`agent_identity`, `goal`, the
     /// `mcp_*` family, `subagent` etc.) and the `desktop` family grew with
     /// the `ax_query_*` / `ax_snapshot` / `gui_locate` / `set_of_marks`
-    /// additions. The 1 KiB of headroom above the current measured value
-    /// gives a small buffer so the ratchet doesn't trip on the next
-    /// adjacent PR.
+    /// additions.
     /// Against the three questions: (1) runtime facts — the new tools
     /// each describe behavior the schema cannot carry (e.g.
     /// `agent_identity` distinguishes "self" from "persona" callers,
@@ -2214,7 +2212,29 @@ mod tests {
     /// tool has a real consumer in the registry (the registry schema
     /// byte total is the union of every tool the daemon can advertise,
     /// so any active tool is a live consumer).
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 107_528;
+    ///
+    /// 2026-08-23 (measured, **lowered** from 107_528): 107_528 → 106_944 B.
+    /// A lowering needs no three-question answer — the answer is owed by
+    /// whoever spends, not by whoever gives back. What is worth recording is
+    /// *why* the previous number was not the measured one: it was set at
+    /// `measured + 1 KiB` with the reason "gives a small buffer so the ratchet
+    /// doesn't trip on the next adjacent PR", and that sentence and "this is a
+    /// hard cap" cannot both be true. A ceiling above the measured value has
+    /// already issued the difference; the health of a ratchet is not whether it
+    /// has ever fired but how far it sits from what it measures. So it now sits
+    /// on the measurement, and every future raise has to say what it bought.
+    ///
+    /// What this measurement includes over the last one: `note_manage` grew by
+    /// ~440 B to advertise the `get` action and to tell the model to `get`
+    /// before it `update`s. Against the three questions: (1) a runtime fact the
+    /// schema cannot carry — that `query` truncates each hit at 4,000 chars
+    /// while `update` replaces a body wholesale is a relationship *between two
+    /// actions*, and no single argument field owns it; (2) a stronger model
+    /// cannot guess it, and guessing wrong is the expensive direction — it
+    /// silently rewrites a long note from a truncated read, which is the exact
+    /// data loss the action exists to prevent; (3) the consumer is
+    /// `note_manage` itself, shipped and dispatched.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 106_944;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
