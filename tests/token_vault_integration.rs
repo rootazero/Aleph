@@ -631,11 +631,24 @@ fn many_entries_performance() {
         assert_eq!(s.expose(), format!("perf_val_{:03}", i));
     }
 
+    // The budget is deliberately an order of magnitude above the work, because
+    // a wall clock on a shared CI runner measures the runner. Same suite, same
+    // week, three Windows runs: 1.27s, 3.18s, 10.01s — an 8x spread with no
+    // code change between them (the two slow ones were a test-only commit and
+    // a CI-config commit). At `< 2s` that made this a coin flip that lost three
+    // times in a row and took main's CI red with it.
+    //
+    // What the assertion is worth keeping for is a pathological regression —
+    // an accidental O(n^2) re-encrypt, a per-entry KDF — which shows up as
+    // orders of magnitude, not as 5% over. 60s catches that and cannot be
+    // tripped by a busy runner. Real timing belongs in the Benchmark job, which
+    // this repo already has; a guard that misfires is worse than no guard,
+    // because it gets cited as evidence.
     let elapsed = start.elapsed();
     assert!(
-        elapsed.as_secs() < 2,
-        "100-entry store+reset+verify took {:?}, expected < 2s",
-        elapsed
+        elapsed.as_secs() < 60,
+        "100-entry store+reset+verify took {elapsed:?}; that is not slow-runner \
+         variance, it is a regression in the bulk path"
     );
 }
 

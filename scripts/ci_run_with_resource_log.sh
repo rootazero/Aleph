@@ -20,24 +20,36 @@ set -euo pipefail
 
 INTERVAL="${CI_RESOURCE_LOG_INTERVAL:-15}"
 
+# A unit is only ever attached to something that is actually a number.
+# Windows git-bash *does* have /proc/meminfo, but with no MemAvailable line —
+# so the first version of this printed `mem_avail=MiB`: a well-formed reading
+# with no number in it. That is worse than saying nothing, because it reads as
+# data. Anything non-numeric becomes `n/a`, which is a reading a human can act
+# on ("this platform cannot answer") rather than one they have to decode.
+with_unit() {
+  case "$1" in
+    '' | *[!0-9]*) printf 'n/a' ;;
+    *) printf '%sMiB' "$1" ;;
+  esac
+}
+
 sample() {
-  local mem disk
+  local mem='' disk=''
   if [ -r /proc/meminfo ]; then
     # MemAvailable, not MemFree: the kernel's own estimate of what a new
     # allocation can actually get, which is the number that predicts an OOM.
-    mem="$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo)MiB"
+    # Absent on MSYS2, which is why with_unit has to validate rather than trust.
+    mem="$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo)"
   elif command -v vm_stat >/dev/null 2>&1; then
     mem="$(vm_stat | awk '
       /page size of/ {ps = $8}
       /Pages free/ {gsub(/\./, "", $3); f = $3}
       /Pages inactive/ {gsub(/\./, "", $3); i = $3}
-      END {if (ps) printf "%dMiB", (f + i) * ps / 1048576; else print "n/a"}')"
-  else
-    mem="n/a"
+      END {if (ps) printf "%d", (f + i) * ps / 1048576}')"
   fi
-  disk="$(df -Pk . 2>/dev/null | awk 'NR==2 {printf "%dMiB", $4/1024}')"
+  disk="$(df -Pk . 2>/dev/null | awk 'NR==2 {printf "%d", $4/1024}')"
   printf '[res] %s mem_avail=%s disk_avail=%s\n' \
-    "$(date -u +%H:%M:%S)" "${mem:-n/a}" "${disk:-n/a}"
+    "$(date -u +%H:%M:%S)" "$(with_unit "$mem")" "$(with_unit "$disk")"
 }
 
 sample
