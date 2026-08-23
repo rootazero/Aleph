@@ -494,7 +494,33 @@ impl InboundMessageRouter {
                     let mut attempt = || {
                         execution_adapter.execute(request.clone(), agent.clone(), emitter.clone())
                     };
-                    deliver_with_ticket(ticket, busy_cfg, &mut attempt).await
+                    // Same frame from the channel arrival path. It goes on the
+                    // WS bus, NOT back to Telegram/Slack: a Panel watching the
+                    // shared session should see a queued message from a
+                    // channel, while the channel itself gets no "you are in
+                    // line" chatter. `OriginFanoutEmitter` only fans out final
+                    // answers, so skeleton events never reach a channel.
+                    let queued_emitter = emitter.clone();
+                    let queued_run_id = run_id.clone();
+                    let queued_session = request.session_key.to_key_string();
+                    let mut report = move |ahead: u16| {
+                        let emitter = queued_emitter.clone();
+                        let run_id = queued_run_id.clone();
+                        let session_key = queued_session.clone();
+                        async move {
+                            if let Err(e) = emitter
+                                .emit(crate::gateway::StreamEvent::RunQueued {
+                                    run_id,
+                                    session_key,
+                                    ahead,
+                                })
+                                .await
+                            {
+                                tracing::debug!("failed to emit RunQueued: {e}");
+                            }
+                        }
+                    };
+                    deliver_with_ticket(ticket, busy_cfg, &mut attempt, &mut report).await
                 }
             };
 

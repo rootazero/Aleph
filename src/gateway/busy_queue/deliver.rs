@@ -80,18 +80,39 @@ impl DeliveryOutcome {
 /// The guard is RAII: dropped on every exit path — including a panic inside
 /// `attempt` — so a dead waiter can never leave a corpse ticket wedging the
 /// lane.
-pub async fn deliver_with_ticket<F, Fut>(
+///
+/// # Reporting position
+///
+/// `report` is called with `ahead` **only when it changes**, from the point
+/// just before this loop parks. That point — not the "not front" branch — is
+/// deliberate: a front ticket refused for steering backpressure is waiting
+/// too, and it is the one wait that had no representation anywhere.
+///
+/// It is `async` and awaited inline rather than a sync callback that spawns:
+/// `ahead` decreases monotonically, and a spawn abandons ordering, so two
+/// rapid updates could land inverted and flicker the number a user is
+/// reading. Awaiting inline is in-order by construction and mirrors how
+/// `attempt` is already threaded through.
+///
+/// An idle session never reaches the report point: it is front, `attempt`
+/// does not refuse, and the function returns first. Conversations that never
+/// wait therefore gain no frames at all.
+pub async fn deliver_with_ticket<F, Fut, R, RFut>(
     ticket: TicketGuard,
     cfg: BusyQueueConfig,
     attempt: &mut F,
+    report: &mut R,
 ) -> DeliveryOutcome
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<(), ExecutionError>>,
+    R: FnMut(u16) -> RFut,
+    RFut: Future<Output = ()>,
 {
     let deadline = Instant::now() + Duration::from_secs(cfg.max_wait_secs);
     let fallback = Duration::from_secs(cfg.wake_fallback_secs);
     let mut announced_busy = false;
+    let mut last_reported: Option<u16> = None;
 
     loop {
         // Arm the wake BEFORE inspecting lane state. `Notified` registers on
@@ -142,6 +163,14 @@ where
             }
         }
 
+        // Still waiting — either behind someone, or front and refused for
+        // backpressure. Both are waits; only the number changing is news.
+        let ahead = ticket.ahead();
+        if last_reported != Some(ahead) {
+            last_reported = Some(ahead);
+            report(ahead).await;
+        }
+
         // Park until the lane says something changed. The fallback tick only
         // bounds the damage of a signal we could never have observed (e.g. a
         // release that raced a lane the guard had not yet created) — the lane
@@ -187,7 +216,10 @@ mod tests {
     {
         match register(session_key, cfg.max_per_session, run_id) {
             None => DeliveryOutcome::Rejected,
-            Some(ticket) => deliver_with_ticket(ticket, cfg, &mut attempt).await,
+            Some(ticket) => {
+                let mut noop = |_: u16| async {};
+                deliver_with_ticket(ticket, cfg, &mut attempt, &mut noop).await
+            }
         }
     }
 
@@ -495,5 +527,137 @@ mod tests {
         })
         .await;
         assert!(matches!(outcome, DeliveryOutcome::TimedOut));
+    }
+
+    /// Mirrors [`deliver`], but threads the position reporter the wait loop
+    /// hands `RunQueued` through. A separate helper so the tests above stay
+    /// exactly as they were.
+    async fn deliver_reporting<F, Fut>(
+        session_key: &str,
+        run_id: &str,
+        cfg: BusyQueueConfig,
+        mut attempt: F,
+        sink: Arc<tokio::sync::Mutex<Vec<u16>>>,
+    ) -> DeliveryOutcome
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<(), ExecutionError>>,
+    {
+        let mut report = move |ahead: u16| {
+            let sink = Arc::clone(&sink);
+            async move {
+                sink.lock().await.push(ahead);
+            }
+        };
+        match register(session_key, cfg.max_per_session, run_id) {
+            None => DeliveryOutcome::Rejected,
+            Some(ticket) => deliver_with_ticket(ticket, cfg, &mut attempt, &mut report).await,
+        }
+    }
+
+    /// The common path must stay silent: an idle session takes the front of
+    /// the lane and runs, so a conversation that never waited gains no new
+    /// frames at all. This is the ceiling on this feature's regression risk,
+    /// so it is asserted directly rather than inferred.
+    #[tokio::test]
+    async fn an_idle_session_reports_no_position_at_all() {
+        let sink = Arc::new(tokio::sync::Mutex::new(Vec::<u16>::new()));
+        let outcome = deliver_reporting(
+            "bqd-report-idle",
+            "run-idle",
+            cfg(4),
+            || async { Ok(()) },
+            Arc::clone(&sink),
+        )
+        .await;
+
+        assert!(matches!(outcome, DeliveryOutcome::Executed(Ok(()))));
+        assert!(
+            sink.lock().await.is_empty(),
+            "a conversation that never waited must gain no RunQueued frames"
+        );
+    }
+
+    /// A front ticket refused for steering backpressure IS waiting, and it is
+    /// the one wait with no representation anywhere before this. Reporting
+    /// only from the "not front" branch would miss it entirely.
+    #[tokio::test]
+    async fn a_front_ticket_deferred_for_backpressure_still_reports() {
+        let s = "bqd-report-deferred";
+        let sink = Arc::new(tokio::sync::Mutex::new(Vec::<u16>::new()));
+        let attempts = Arc::new(AtomicUsize::new(0));
+
+        let waker = {
+            let attempts = Arc::clone(&attempts);
+            tokio::spawn(async move {
+                while attempts.load(Ordering::SeqCst) == 0 {
+                    tokio::task::yield_now().await;
+                }
+                // Let the loop reach its park, then wake it for the retry.
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                notify_slot_free(s);
+            })
+        };
+
+        let seen = Arc::clone(&attempts);
+        let outcome = deliver_reporting(
+            s,
+            "run-a",
+            cfg(4),
+            move || {
+                let seen = Arc::clone(&seen);
+                async move {
+                    // Refuse the first attempt (backpressure), pass the retry.
+                    if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                        Err(ExecutionError::AgentBusy("a".to_string()))
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+            Arc::clone(&sink),
+        )
+        .await;
+        waker.await.expect("waker task");
+
+        assert!(matches!(outcome, DeliveryOutcome::Executed(Ok(()))));
+        assert_eq!(
+            *sink.lock().await,
+            vec![0u16],
+            "front-but-deferred reports ahead=0 — nobody ahead, but not started"
+        );
+    }
+
+    /// Position is news only when it changes. The fallback tick re-runs this
+    /// loop on a cadence, so re-sending an unchanged number would turn a
+    /// bounded signal into a per-session heartbeat.
+    #[tokio::test]
+    async fn an_unchanged_position_is_not_reported_twice() {
+        let s = "bqd-report-dedup";
+        let front = register(s, 8, "run-front").expect("lane accepts the first message");
+        let sink = Arc::new(tokio::sync::Mutex::new(Vec::<u16>::new()));
+
+        let waker = tokio::spawn(async move {
+            // Two spurious wakes with no lane movement between them.
+            for _ in 0..2 {
+                tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+                notify_slot_free(s);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+            // Now the position really changes — and the waiter becomes front,
+            // so it runs instead of reporting 0.
+            drop(front);
+        });
+
+        let outcome =
+            deliver_reporting(s, "run-b", cfg(8), || async { Ok(()) }, Arc::clone(&sink)).await;
+        waker.await.expect("waker task");
+
+        assert!(matches!(outcome, DeliveryOutcome::Executed(Ok(()))));
+        assert_eq!(
+            *sink.lock().await,
+            vec![1u16],
+            "ahead=1 is news once; repeating it on every wake makes this a heartbeat"
+        );
     }
 }
