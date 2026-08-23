@@ -412,3 +412,14 @@ jobs:
         run: cargo check -p aleph-desktop-shell
       - name: Clippy
         run: cargo clippy -p aleph-desktop-shell -- -D warnings
+
+      # The release builds BOTH shell variants; this job checked only the
+      # default one, so every file behind `#![cfg(not(feature =
+      # "embedded-core"))]` — the whole panel-only connect-setup module —
+      # was compiled for the first time by the release itself. It broke
+      # there (mdns-sd 0.20 yields `ScopedIp`, not `IpAddr`) with no gate
+      # in front of it. Check the variant the release actually ships.
+      - name: Check (panel-only / lite variant)
+        run: cargo check -p aleph-desktop-shell --no-default-features
+      - name: Clippy (panel-only / lite variant)
+        run: cargo clippy -p aleph-desktop-shell --no-default-features -- -D warnings

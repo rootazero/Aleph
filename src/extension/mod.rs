@@ -1560,6 +1560,10 @@ mod tests {
     /// `load_all` and this fails by name.
     #[tokio::test]
     async fn a_disabled_plugin_stays_inactive_across_a_fresh_load() {
+        // `Config::load()` writes a default config when none exists, so an
+        // un-isolated run of this test targets the real `~/.aleph/config.toml`
+        // — invisible on a developer box that already has one, fatal on CI.
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
         write_project_plugin(tmp.path(), "quiet-plugin");
         let (manager, cfg_path) = isolated_manager(tmp.path()).await;
@@ -1603,6 +1607,10 @@ mod tests {
     /// `set_plugin_enabled(id, true)` flip a status pointing at nothing.
     #[tokio::test]
     async fn re_enabling_needs_no_reload() {
+        // `Config::load()` writes a default config when none exists, so an
+        // un-isolated run of this test targets the real `~/.aleph/config.toml`
+        // — invisible on a developer box that already has one, fatal on CI.
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
         write_project_plugin(tmp.path(), "wakeable");
         let (manager, cfg_path) = isolated_manager(tmp.path()).await;
@@ -1649,6 +1657,10 @@ mod tests {
     /// ignored — the operator's intent predates this change.
     #[tokio::test]
     async fn a_legacy_disabled_marker_is_migrated_then_removed() {
+        // `Config::load()` writes a default config when none exists, so an
+        // un-isolated run of this test targets the real `~/.aleph/config.toml`
+        // — invisible on a developer box that already has one, fatal on CI.
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
         write_project_plugin(tmp.path(), "old-timer");
         let marker = tmp.path().join("plugins/old-timer/.disabled");

@@ -67,7 +67,10 @@ pub fn discover() -> Vec<String> {
     while let Ok(event) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
         if let ServiceEvent::ServiceResolved(info) = event {
             for addr in info.get_addresses() {
-                found.push(format_service_url(*addr, info.get_port()));
+                // `get_addresses()` yields `ScopedIp` (mdns-sd carries an IPv6
+                // scope id alongside the address); the origin string only ever
+                // needed the bare address.
+                found.push(format_service_url(addr.to_ip_addr(), info.get_port()));
             }
         }
         if Instant::now() >= deadline {

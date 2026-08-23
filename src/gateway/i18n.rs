@@ -1040,19 +1040,59 @@ mod tests {
             "scan read nothing; the split point moved"
         );
 
+        // Whitespace-insensitive by construction. These arm heads used to sit
+        // on one line and this guard searched for that exact line; a routine
+        // `cargo fmt` wrapped them across five lines and the literal silently
+        // stopped matching. Reading tokens instead of layout means the next
+        // reformat cannot blind it, and each body is bounded by the arm's own
+        // closing brace rather than by a fixed indent or a line count.
+        let flat: String = src.split_whitespace().collect::<Vec<_>>().join("");
+        let bytes = flat.as_bytes();
+
         let mut checked = 0;
-        for (locale_tag, needle) in [
-            ("Zh", "Limit::Total, reset_ms }), Locale::Zh) => {"),
-            ("En", "Limit::Total, reset_ms }), Locale::En) => {"),
-        ] {
-            let start = src
-                .find(needle)
-                .unwrap_or_else(|| panic!("{locale_tag} Limit::Total receipt arm not found"));
-            let body_start = start + needle.len();
-            let rel_end = src[body_start..]
-                .find("\n        }")
-                .expect("arm body has a closing brace at the arm's own indent");
-            let body = &src[body_start..body_start + rel_end];
+        for (locale_tag, locale_pat) in [("Zh", "Locale::Zh"), ("En", "Locale::En")] {
+            let mut body = None;
+            let mut cursor = 0usize;
+            while let Some(rel) = flat[cursor..].find("ReceiptKind::SpendExhausted{") {
+                let head_start = cursor + rel;
+                let rel_arrow = flat[head_start..]
+                    .find("=>{")
+                    .expect("a match arm head always reaches its own `=> {`");
+                let head = &flat[head_start..head_start + rel_arrow];
+                cursor = head_start + rel_arrow + "=>{".len();
+                // A real arm head is ~100 chars. Anything longer means this
+                // occurrence was a construction site and the `=>{` we found
+                // belongs to some later arm, so its text proves nothing.
+                if head.len() > 200 || !head.contains("Limit::Total") || !head.contains(locale_pat)
+                {
+                    continue;
+                }
+                // Every brace in these bodies is balanced (`{}` placeholders
+                // included), so depth returns to zero exactly at the arm's own
+                // terminus — the unit's syntactic end, not a guessed window.
+                let mut depth = 1usize;
+                let mut i = cursor;
+                while i < bytes.len() && depth > 0 {
+                    match bytes[i] {
+                        b'{' => depth += 1,
+                        b'}' => depth -= 1,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                assert_eq!(depth, 0, "{locale_tag} Limit::Total arm body never closes");
+                // `i - 1` indexes the closing `}`; an ASCII byte can never be
+                // the interior of a multi-byte char, so this stays on a
+                // boundary even though the Zh body is not ASCII.
+                body = Some(&flat[cursor..i - 1]);
+                break;
+            }
+            let body =
+                body.unwrap_or_else(|| panic!("{locale_tag} Limit::Total receipt arm not found"));
+            assert!(
+                !body.is_empty(),
+                "{locale_tag} Limit::Total arm body scanned empty; the bound moved"
+            );
             assert!(
                 !body.contains('$'),
                 "{locale_tag} Limit::Total arm must never render a dollar figure:\n{body}"
