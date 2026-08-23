@@ -174,28 +174,6 @@ pub trait EventEmitter: Send + Sync {
         }
     }
 
-    /// Emit run error
-    async fn emit_run_error(&self, run_id: &str, error: &str, error_code: Option<&str>) {
-        let seq = self.next_seq();
-        if let Err(e) = self
-            .emit(StreamEvent::RunError {
-                run_id: run_id.to_string(),
-                seq,
-                error: error.to_string(),
-                error_code: error_code.map(|s| s.to_string()),
-                // This helper only ever knows a run id, and every caller of it
-                // is post-admission — the run's own `RunAccepted` already
-                // seeded the delivery filter. Only a producer whose run never
-                // reached the engine has to name its session; see
-                // `busy_queue::spawn_queued_run`.
-                session_key: None,
-            })
-            .await
-        {
-            tracing::warn!(run_id, error = %e, "failed to emit RunError stream event");
-        }
-    }
-
     /// Emit a provider-retry status update (transient failure, retrying).
     async fn emit_run_retrying(
         &self,
