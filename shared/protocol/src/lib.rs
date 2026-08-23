@@ -32,6 +32,7 @@ pub mod paths;
 pub mod plan;
 pub mod plugins;
 pub mod providers;
+pub mod queue;
 pub mod session_thread;
 pub mod spend;
 pub mod subagent_tree;

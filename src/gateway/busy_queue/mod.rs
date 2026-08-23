@@ -520,6 +520,33 @@ pub fn snapshot() -> BusyQueueSnapshot {
     }
 }
 
+pub use aleph_protocol::queue::PendingRun;
+
+/// Messages still waiting on `session_key`, in lane order.
+///
+/// Cancelled tickets are neither listed nor counted, matching [`snapshot`]'s
+/// `total_waiting` contract and [`TicketGuard::ahead`].
+#[must_use]
+pub fn pending_for(session_key: &str) -> Vec<PendingRun> {
+    let map = lock();
+    let Some(lane) = map.get(session_key) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut ahead = 0u16;
+    for t in &lane.tickets {
+        if t.cancelled {
+            continue;
+        }
+        out.push(PendingRun {
+            run_id: t.run_id.clone(),
+            ahead,
+        });
+        ahead = ahead.saturating_add(1);
+    }
+    out
+}
+
 /// Observability view of the wait lanes. See [`snapshot`].
 #[derive(Debug, Clone, Default)]
 pub struct BusyQueueSnapshot {
@@ -1319,5 +1346,39 @@ mod tests {
             "an unrelated mark must not disturb the lane"
         );
         assert_eq!(purge(s), 1, "and must not silently drop the ticket");
+    }
+
+    /// The durable half of `RunQueued`. A client that attaches mid-wait never saw
+    /// the frame — it fired before the socket existed — so the snapshot it
+    /// already fetches has to carry the same fact.
+    #[test]
+    fn pending_for_lists_live_waiters_in_lane_order() {
+        let s = "sess-pending";
+        let a = register(s, CAP, "run-a").expect("a");
+        let b = register(s, CAP, "run-b").expect("b");
+        let c = register(s, CAP, "run-c").expect("c");
+
+        let pending = pending_for(s);
+        assert_eq!(
+            pending
+                .iter()
+                .map(|p| (p.run_id.as_str(), p.ahead))
+                .collect::<Vec<_>>(),
+            vec![("run-a", 0), ("run-b", 1), ("run-c", 2)]
+        );
+
+        assert!(cancel_queued_run("run-b"));
+        let pending = pending_for(s);
+        assert_eq!(
+            pending
+                .iter()
+                .map(|p| (p.run_id.as_str(), p.ahead))
+                .collect::<Vec<_>>(),
+            vec![("run-a", 0), ("run-c", 1)],
+            "a cancelled waiter is neither listed nor counted"
+        );
+
+        assert!(pending_for("sess-that-never-existed").is_empty());
+        drop((a, b, c));
     }
 }

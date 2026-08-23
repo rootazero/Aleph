@@ -522,6 +522,13 @@ pub async fn handle_history(
             // the token counter restarting at zero, the model caption naming
             // the default the session had overridden.
             let session_snapshot = crate::gateway::session_snapshot::snapshot_from_metadata(&meta);
+            // The lane's waiting messages, by the SAME canonical key and at
+            // the same post-gate position as `active_run` and `plan` above,
+            // and for the same reason: they are one snapshot with the
+            // transcript. A client that attached mid-wait never saw the
+            // `RunQueued` frames — they fired before its socket existed — so
+            // without this it paints "thinking" over a queue it cannot see.
+            let pending = crate::gateway::busy_queue::pending_for(&canonical);
             JsonRpcResponse::success(
                 request.id,
                 json!({
@@ -529,6 +536,7 @@ pub async fn handle_history(
                     "messages": chat_messages,
                     "count": count,
                     "active_run": active_run,
+                    "pending": pending,
                     "plan": plan,
                     "session": session_snapshot,
                 }),
