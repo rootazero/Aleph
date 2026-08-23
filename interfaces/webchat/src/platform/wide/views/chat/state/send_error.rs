@@ -45,6 +45,22 @@ pub enum ChatSendErrorCode {
     SpendExhausted,
 }
 
+impl ChatSendErrorCode {
+    /// Whether a surface should present this code as a soft warning instead
+    /// of a hard failure — non-danger styling, and a `status` (polite) live
+    /// region rather than `alert` (assertive).
+    ///
+    /// `PromptReview` is a soft server warning by definition. `Cancelled` is
+    /// not a failure at all — it is the user's own Stop — and this variant's
+    /// own doc above says surfaces must not raise an error banner for it,
+    /// since the stopped bubble already says so; painting it danger-red
+    /// contradicted that on every Stop.
+    #[must_use]
+    pub const fn is_warning(self) -> bool {
+        matches!(self, Self::PromptReview | Self::Cancelled)
+    }
+}
+
 /// Structured chat send error — preferred over the legacy bare
 /// `error_message` string. Both are populated in lock-step so existing
 /// readers keep working unchanged.
@@ -218,5 +234,27 @@ mod tests {
             "the server named a bucket; guessing a different one from the text \
              is exactly the defect this replaces"
         );
+    }
+
+    /// The user's own Stop must never select the danger presentation — the
+    /// stopped bubble already says the run ended, and a red alert banner on
+    /// top of it contradicts this variant's own doc.
+    #[test]
+    fn cancelled_does_not_select_the_danger_presentation() {
+        assert!(
+            ChatSendErrorCode::Cancelled.is_warning(),
+            "CANCELLED must render with the warning treatment, not the danger one"
+        );
+    }
+
+    /// The existing warning bucket must keep its treatment, and an actual
+    /// failure must still be presented as one — `is_warning` is a real
+    /// partition, not a constant.
+    #[test]
+    fn only_prompt_review_and_cancelled_are_warnings() {
+        assert!(ChatSendErrorCode::PromptReview.is_warning());
+        assert!(!ChatSendErrorCode::Auth.is_warning());
+        assert!(!ChatSendErrorCode::CloudSendFailed.is_warning());
+        assert!(!ChatSendErrorCode::Unknown.is_warning());
     }
 }

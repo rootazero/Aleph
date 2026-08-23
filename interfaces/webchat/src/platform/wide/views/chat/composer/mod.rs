@@ -1537,14 +1537,22 @@ fn SendErrorBanner() -> impl IntoView {
             {move || {
                 let err = chat.send_error.get();
                 err.map(|e| {
-                    let is_warning = matches!(e.code, ChatSendErrorCode::PromptReview);
+                    // Severity is per-code, not just PromptReview — see
+                    // `ChatSendErrorCode::is_warning`'s doc for why `Cancelled`
+                    // (the user's own Stop) joins it: painting it danger-red
+                    // here contradicted that variant's own doc on every Stop.
+                    let is_warning = e.code.is_warning();
                     let class_str = if is_warning {
                         "mx-1 mb-1 px-3 py-2 rounded-lg border text-sm bg-warning-subtle border-warning/30 text-warning"
                     } else {
                         "mx-1 mb-1 px-3 py-2 rounded-lg border text-sm bg-danger-subtle border-danger/30 text-danger"
                     };
+                    // `alert` (assertive live region) fits an actual failure;
+                    // a warning is informational, so it gets the same `status`
+                    // (polite) role the voice-notice banner above already uses.
+                    let role_str = if is_warning { "status" } else { "alert" };
                     view! {
-                        <div class=class_str role="alert">
+                        <div class=class_str role=role_str>
                             <div class="flex items-start gap-2">
                                 <span class="font-mono text-[10px] uppercase tracking-wider opacity-70 shrink-0 pt-0.5">
                                     {format!("{:?}", e.code).to_lowercase()}
