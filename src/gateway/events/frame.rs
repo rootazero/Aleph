@@ -26,6 +26,11 @@ pub enum GatewayEventFrame {
         session_key: String,
         accepted_at: String,
     },
+    RunQueued {
+        run_id: String,
+        session_key: String,
+        ahead: u16,
+    },
     Reasoning {
         run_id: String,
         seq: u64,
@@ -495,6 +500,15 @@ impl From<StreamEvent> for GatewayEventFrame {
                 session_key,
                 accepted_at,
             },
+            StreamEvent::RunQueued {
+                run_id,
+                session_key,
+                ahead,
+            } => Self::RunQueued {
+                run_id,
+                session_key,
+                ahead,
+            },
             StreamEvent::Reasoning {
                 run_id,
                 seq,
@@ -689,6 +703,7 @@ impl GatewayEventFrame {
     pub fn topic_name(&self) -> String {
         match self {
             Self::RunAccepted { .. } => "run.accepted",
+            Self::RunQueued { .. } => "run.queued",
             Self::Reasoning { .. } => "agent.reasoning",
             Self::ToolStart { .. } => "agent.tool.start",
             Self::ToolUpdate { .. } => "agent.tool.update",
@@ -746,6 +761,7 @@ impl GatewayEventFrame {
     pub const fn stream_method(&self) -> Option<&'static str> {
         match self {
             Self::RunAccepted { .. } => Some("stream.run_accepted"),
+            Self::RunQueued { .. } => Some("stream.run_queued"),
             Self::Reasoning { .. } => Some("stream.reasoning"),
             Self::ToolStart { .. } => Some("stream.tool_start"),
             Self::ToolUpdate { .. } => Some("stream.tool_update"),
@@ -873,6 +889,36 @@ mod tests {
         assert_eq!(v["seq"], 42);
         assert_eq!(v["running"][0], "agent:main|conv-1");
         assert_eq!(v["running"][1], "agent:main|conv-2");
+    }
+
+    /// A new variant that nobody gives a `stream_method` arm falls into the
+    /// catch-all `_ => None` and is silently unroutable — it is built,
+    /// converted, and then dropped before any client sees it. That failure is
+    /// not a compile error, so it needs this.
+    #[test]
+    fn run_queued_has_a_wire_method_and_survives_conversion() {
+        let frame = GatewayEventFrame::from(StreamEvent::RunQueued {
+            run_id: "run-1".to_string(),
+            session_key: "agent/main".to_string(),
+            ahead: 2,
+        });
+        assert_eq!(frame.stream_method(), Some("stream.run_queued"));
+
+        let GatewayEventFrame::RunQueued {
+            run_id,
+            session_key,
+            ahead,
+        } = frame
+        else {
+            panic!("conversion dropped the variant");
+        };
+        assert_eq!(run_id, "run-1");
+        assert_eq!(ahead, 2);
+        assert_eq!(
+            session_key, "agent/main",
+            "the frame must name its session: it is the FIRST frame of a run, \
+             so nothing has seeded the run→session index yet"
+        );
     }
 }
 

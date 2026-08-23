@@ -176,6 +176,10 @@ impl EventEmitter for SseEventEmitter {
             StreamEvent::ToolUpdate { .. } => None,
             StreamEvent::AgentTrace { .. } => None,
             StreamEvent::RunAccepted { .. } => None,
+            // The OpenAI Chat Completions wire format has no queueing
+            // concept, and this task only makes the frame representable —
+            // Task 3 wires an actual producer.
+            StreamEvent::RunQueued { .. } => None,
             StreamEvent::AskUser { .. } => None,
             StreamEvent::UncertaintySignal { .. } => None,
             StreamEvent::ModelResolved { .. } => None,

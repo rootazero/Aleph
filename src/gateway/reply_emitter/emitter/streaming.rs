@@ -703,7 +703,10 @@ impl EventEmitter for ReplyEmitter {
             // Other events are not routed to channels. RunRetrying is a
             // transient Panel status line; channels already signal liveness
             // via typing indicators and would render it as message spam.
+            // RunQueued is the same kind of transient status — a channel has
+            // no lane concept to report on, and Task 3 wires its consumers.
             StreamEvent::RunAccepted { .. }
+            | StreamEvent::RunQueued { .. }
             | StreamEvent::ToolUpdate { .. }
             | StreamEvent::AgentTrace { .. }
             | StreamEvent::UncertaintySignal { .. }

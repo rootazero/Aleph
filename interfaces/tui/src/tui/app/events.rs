@@ -292,6 +292,13 @@ impl AppState {
                 Action::None
             }
 
+            // Wire representation only as of this change — no gateway path
+            // emits it yet (that lands separately), and this screen has
+            // nothing to render for "waiting" until that producer exists.
+            // Exhaustiveness still requires an arm the moment the variant
+            // exists, per `run_scoped_id`'s doc above.
+            StreamEvent::RunQueued { .. } => Action::None,
+
             StreamEvent::AgentTrace { event, .. } => {
                 self.current_run_uses_agent_trace = true;
                 self.apply_agent_trace_event(&event)

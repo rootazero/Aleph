@@ -239,6 +239,7 @@ impl EventEmitter for RedactingEmitter {
             // the `AskUser` question (authored by the model as a question to a
             // human, and delivered by its own bus path, not this emitter).
             other @ (StreamEvent::RunAccepted { .. }
+            | StreamEvent::RunQueued { .. }
             | StreamEvent::AgentTrace { .. }
             | StreamEvent::ContextGauge { .. }
             | StreamEvent::AskUser { .. }

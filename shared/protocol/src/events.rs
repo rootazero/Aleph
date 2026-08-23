@@ -18,6 +18,20 @@ pub enum StreamEvent {
         accepted_at: String,
     },
 
+    /// The run joined its session's wait lane and has not been admitted yet.
+    ///
+    /// Terminal clients decode this enum, so a `stream.*` method without a
+    /// variant here is a silent drop at `shared/client/src/connection.rs` for
+    /// every one of them — the census in `gateway::events::frame_census`
+    /// exists because that happened before.
+    RunQueued {
+        run_id: String,
+        session_key: String,
+        /// How many messages ahead of this one may still run. `0` means
+        /// "nobody ahead, but not started yet".
+        ahead: u16,
+    },
+
     /// Reasoning/thinking process update
     Reasoning {
         run_id: String,
@@ -652,6 +666,7 @@ impl StreamEvent {
     pub fn run_id(&self) -> &str {
         match self {
             Self::RunAccepted { run_id, .. }
+            | Self::RunQueued { run_id, .. }
             | Self::Reasoning { run_id, .. }
             | Self::ToolStart { run_id, .. }
             | Self::ToolUpdate { run_id, .. }
