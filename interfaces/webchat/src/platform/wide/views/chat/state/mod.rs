@@ -2954,7 +2954,7 @@ mod queue_tests {
         // they describe stops holding in the browser — this repo's recurring
         // shape, where the guard asserted the call and not the effect. A source
         // assertion is the only handle a host test has on a Leptos view.
-        let src = include_str!("messages.rs");
+        let src = include_str!("../messages.rs");
         let body = src
             .split("fn QueuedGhosts()")
             .nth(1)
