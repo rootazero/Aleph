@@ -6,7 +6,7 @@ use crate::config::Config;
 use crate::error::{AlephError, Result};
 use std::fs;
 use std::path::Path;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 /// Refuse to let a unit test persist onto the developer's real config file.
 ///
@@ -457,7 +457,7 @@ impl Config {
                 let mut perms = metadata.permissions();
                 perms.set_mode(0o600);
                 if let Err(e) = fs::set_permissions(path, perms) {
-                    warn!("Failed to set config file permissions: {}", e);
+                    tracing::warn!("Failed to set config file permissions: {}", e);
                 }
             }
         }
