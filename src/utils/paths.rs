@@ -1180,6 +1180,268 @@ mod tests {
         );
     }
 
+    /// Every `build.rs` in the workspace, paired with its contents. Found by
+    /// walking, never listed: a fifth build script added tomorrow inherits the
+    /// guard below without anyone remembering to tell it.
+    fn all_build_scripts() -> Vec<(String, String)> {
+        fn walk(dir: &std::path::Path, depth: usize, out: &mut Vec<PathBuf>) {
+            if depth > 3 {
+                return;
+            }
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if path.is_dir() {
+                    // target/ holds cargo's own copies of nothing we author.
+                    if name.starts_with('.') || name == "target" || name == "node_modules" {
+                        continue;
+                    }
+                    walk(&path, depth + 1, out);
+                } else if name == "build.rs" {
+                    out.push(path);
+                }
+            }
+        }
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        walk(root, 0, &mut files);
+        // A scan that stopped finding build scripts and a repo with no
+        // offenders read exactly alike in the report; say which one this is.
+        assert!(
+            files.len() >= 4,
+            "walk found {} build scripts, and this workspace has at least 4 — \
+             the scan is no longer looking where they live, so its green means \
+             nothing",
+            files.len()
+        );
+
+        files
+            .into_iter()
+            .filter_map(|file| {
+                let rel = file
+                    .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                    .unwrap_or(&file)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                std::fs::read_to_string(&file).ok().map(|text| (rel, text))
+            })
+            .collect()
+    }
+
+    /// The statement beginning at `lines[i]` — through the first line holding
+    /// a `;`. The window ends at the unit's own syntactic end rather than
+    /// after a fixed number of lines or characters, because a window sized by
+    /// anything else eventually reads into whatever happens to sit beside it
+    /// and then reports on its neighbour.
+    fn statement_at(lines: &[&str], i: usize) -> String {
+        let mut stmt = String::new();
+        for line in &lines[i..] {
+            stmt.push_str(line);
+            stmt.push('\n');
+            if line.contains(';') {
+                break;
+            }
+        }
+        stmt
+    }
+
+    fn is_ident_byte(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_'
+    }
+
+    /// Whether `text` names `ident` as a whole identifier — `plist` must not
+    /// match inside `plist_dir`.
+    fn mentions_ident(text: &str, ident: &str) -> bool {
+        let bytes = text.as_bytes();
+        let mut from = 0;
+        while let Some(pos) = text[from..].find(ident) {
+            let start = from + pos;
+            let end = start + ident.len();
+            let clean_before = start == 0 || !is_ident_byte(bytes[start - 1]);
+            let clean_after = end == bytes.len() || !is_ident_byte(bytes[end]);
+            if clean_before && clean_after {
+                return true;
+            }
+            from = end;
+        }
+        false
+    }
+
+    /// The name a `let` binding introduces, if this line is one.
+    fn let_binding(line: &str) -> Option<&str> {
+        let rest = line.trim_start().strip_prefix("let ")?;
+        let rest = rest.strip_prefix("mut ").unwrap_or(rest);
+        let name = rest
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .next()?;
+        (!name.is_empty()).then_some(name)
+    }
+
+    /// Names carrying a value derived from `CARGO_MANIFEST_DIR`, followed
+    /// transitively through `let` bindings in the same file.
+    ///
+    /// Seeded from the source rather than chased back from the sink: the
+    /// invariant is "this value must not reach a link-arg", and a taint set is
+    /// the shape of that sentence.
+    fn manifest_dir_tainted(text: &str) -> std::collections::BTreeSet<String> {
+        let lines: Vec<&str> = text.lines().collect();
+        let mut tainted = std::collections::BTreeSet::new();
+        for _ in 0..8 {
+            let before = tainted.len();
+            for (i, line) in lines.iter().enumerate() {
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("//") || trimmed.starts_with('*') {
+                    continue;
+                }
+                let Some(name) = let_binding(line) else {
+                    continue;
+                };
+                if tainted.contains(name) {
+                    continue;
+                }
+                let stmt = statement_at(&lines, i);
+                let carries = stmt.contains("CARGO_MANIFEST_DIR")
+                    || tainted.iter().any(|t: &String| mentions_ident(&stmt, t));
+                if carries {
+                    tainted.insert(name.to_string());
+                }
+            }
+            if tainted.len() == before {
+                break;
+            }
+        }
+        tainted
+    }
+
+    /// Link-arg emissions in `text` whose value comes from the source tree.
+    fn link_args_naming_the_source_tree(text: &str) -> Vec<String> {
+        let lines: Vec<&str> = text.lines().collect();
+        let tainted = manifest_dir_tainted(text);
+        let mut out = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//")
+                || trimmed.starts_with('*')
+                || !line.contains("rustc-link-arg")
+            {
+                continue;
+            }
+            let stmt = statement_at(&lines, i);
+            if stmt.contains("CARGO_MANIFEST_DIR")
+                || tainted.iter().any(|t: &String| mentions_ident(&stmt, t))
+            {
+                out.push(format!("L{}: {}", i + 1, stmt.trim().replace('\n', " ")));
+            }
+        }
+        out
+    }
+
+    /// A `cargo:rustc-link-arg` is **cached**: cargo records the line in the
+    /// build script's `output` file and replays it on every later build whose
+    /// fingerprint is fresh — that is, on every build where the script itself
+    /// does not run. A path it names therefore must not be able to outlive
+    /// what it points at, and no `exists()` check written inside the build
+    /// script can enforce that: the failing case is by definition the one
+    /// where none of that code executes.
+    ///
+    /// `build.rs` emitted `{CARGO_MANIFEST_DIR}/src/bin/aleph-server/Info.plist`
+    /// for the macOS `__info_plist` section. The cache lives in `target/`, the
+    /// plist lived in the source tree, and those two lifetimes are unrelated:
+    /// removing the checkout — a `git worktree remove` sharing this target
+    /// dir, a moved or renamed clone — left the replayed link-arg naming a
+    /// path that was gone, so `aleph-server` failed to **link** with an ld
+    /// error mentioning no `.rs` file at all, on a tree the reader had not
+    /// touched. `cargo test --lib` links no binary and stayed green, so it
+    /// surfaced on `--test '*'` as a red belonging to nobody's change.
+    ///
+    /// The fix stages the file into `OUT_DIR`, which shares the cache's own
+    /// lifetime. The regression is one perfectly reasonable-looking `format!`
+    /// away and has no runtime signal, which is why it is guarded here rather
+    /// than described in a comment.
+    ///
+    /// Boundary, stated: the taint follows `let` bindings inside one file. A
+    /// manifest-rooted path that reaches a link-arg through a function call is
+    /// still invisible to it.
+    #[test]
+    fn no_link_arg_names_a_path_in_the_source_tree() {
+        let mut offenders: Vec<String> = Vec::new();
+        for (rel, text) in all_build_scripts() {
+            for site in link_args_naming_the_source_tree(&text) {
+                offenders.push(format!("{rel}:{site}"));
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these bake a source-tree path into a link-arg that cargo caches and \
+             replays without re-running the build script, so deleting or moving the \
+             checkout makes the binary fail to LINK with an error naming no source \
+             file. Stage the file into OUT_DIR and link that instead:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
+    /// The guard, falsified: it has to go red on the shape that shipped, and
+    /// stay green on the one that replaced it. A guard nobody has broken on
+    /// purpose is only a guard nobody has broken on purpose.
+    #[test]
+    fn link_arg_guard_sees_the_shape_that_shipped() {
+        let shipped = r#"
+            let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+            let plist = format!("{manifest_dir}/src/bin/aleph-server/Info.plist");
+            println!(
+                "cargo:rustc-link-arg-bin=aleph-server=-Wl,-sectcreate,__TEXT,__info_plist,{plist}"
+            );
+        "#;
+        let staged = r#"
+            let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+            let out_dir = std::env::var("OUT_DIR").unwrap();
+            let source = std::path::Path::new(&manifest_dir).join("src/bin/x/Info.plist");
+            let staged = std::path::Path::new(&out_dir).join("x-Info.plist");
+            std::fs::copy(&source, &staged).unwrap();
+            println!(
+                "cargo:rustc-link-arg-bin=aleph-server=-Wl,-sectcreate,__TEXT,__info_plist,{}",
+                staged.display()
+            );
+        "#;
+        // The one-liner the widening exists for: no intermediate binding at all.
+        let inline = r#"
+            let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+            println!("cargo:rustc-link-arg=-Wl,-force_load,{manifest_dir}/lib/libx.a");
+        "#;
+
+        assert!(
+            !link_args_naming_the_source_tree(shipped).is_empty(),
+            "the guard walked past the exact emission that broke the build"
+        );
+        assert!(
+            !link_args_naming_the_source_tree(inline).is_empty(),
+            "the guard only sees the value when it passes through a named binding"
+        );
+        assert!(
+            link_args_naming_the_source_tree(staged).is_empty(),
+            "the guard reds the OUT_DIR-staged form it is supposed to be asking for: {:?}",
+            link_args_naming_the_source_tree(staged)
+        );
+        // Text-blind to comments — this defect is discussed by name, in this
+        // very file and in build.rs, using the spelling it hunts.
+        assert!(link_args_naming_the_source_tree(
+            "// println!(\"cargo:rustc-link-arg={CARGO_MANIFEST_DIR}/x\");"
+        )
+        .is_empty());
+        // And a link-arg carrying no path at all is not an offender.
+        assert!(link_args_naming_the_source_tree(
+            "let manifest_dir = env!(\"CARGO_MANIFEST_DIR\");\n\
+             println!(\"cargo:rustc-link-arg=-lz\");"
+        )
+        .is_empty());
+    }
+
     /// The guard's predicate itself: it must see the spellings the line-level
     /// version walked past, which is the whole reason for the widening. The
     /// second case is cron's, where the two halves sat in different functions.
