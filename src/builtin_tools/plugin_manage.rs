@@ -647,6 +647,11 @@ mod tests {
     /// has to say which argument is missing.
     #[test]
     fn marketplace_add_without_a_source_says_which_argument_is_missing() {
+        // `marketplace` reads the config before it validates `source`, and
+        // `Config::load()` writes a default when none exists — so on a machine
+        // with no `~/.aleph/config.toml` (every CI runner) this targets the
+        // real file. Passes on any box that already has one; fails on CI.
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let err = PluginManageTool::marketplace(PluginManageArgs {
             action: PluginAction::MarketplaceAdd,
             name: None,
