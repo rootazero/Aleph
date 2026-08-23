@@ -680,7 +680,11 @@ fn resolve_target(
         // opens that session — where `hydrate_and_follow` binds the run if it
         // is still going, and the terminal `run.session_updated` re-hydrates
         // if it is not.
-        "run_accepted" => sessions
+        // `run_queued` joins this arm because it is now a run's FIRST frame:
+        // it can arrive before this client has any route for the run, and it
+        // carries the same `session_key`. Every LATER frame still routes by
+        // `route_lookup` alone — only the first one has nothing to look up.
+        "run_accepted" | "run_queued" => sessions
             .route_lookup(run_id)
             .or_else(|| session_key.and_then(|sk| sessions.conv_for_session_key(sk)))
             .or_else(|| {
@@ -706,7 +710,8 @@ fn resolve_target(
     }?;
     // Only bind here when the send path hasn't already (route absent) — binding
     // twice would double-count `running` and leave a phantom dot.
-    if event_type == "run_accepted" && sessions.route_lookup(run_id).is_none() {
+    if matches!(event_type, "run_accepted" | "run_queued") && sessions.route_lookup(run_id).is_none()
+    {
         sessions.bind_run(run_id, conv, session_key);
     }
     let target = sessions.chat_for(conv, singleton);
@@ -923,6 +928,23 @@ pub fn subscribe_run_events(
         };
 
         match event_type {
+            "run_queued" => {
+                // Backfill the key exactly like `run_accepted` does, for the
+                // same reason: a brand-new conversation learns its
+                // server-assigned key from whichever of the two arrives first,
+                // and for a queued run that is this one.
+                if let Some(sk) = data.get("session_key").and_then(|s| s.as_str()) {
+                    if chat.session_key.get_untracked().is_none() {
+                        chat.session_key.set(Some(sk.to_string()));
+                    }
+                }
+                let ahead = data
+                    .get("ahead")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                chat.start_assistant_message(run_id);
+                chat.mark_queued(run_id, u16::try_from(ahead).unwrap_or(u16::MAX));
+            }
             "run_accepted" => {
                 // BACKFILL, not assignment. A brand-new conversation learns
                 // its server-assigned key here (the send path routed the run
@@ -939,6 +961,12 @@ pub fn subscribe_run_events(
                     }
                 }
                 chat.start_assistant_message(run_id);
+                // Admission is the edge that ends the wait, and it cannot ride
+                // on `start_assistant_message`: that early-returns once the
+                // run's bubble exists, and the queued frame has already
+                // created it. Without this the phase reads "queued" until the
+                // first `turn_started` or token — the whole of model latency.
+                chat.mark_admitted(run_id);
             }
             "reasoning" => {
                 if let Some(content) = data.get("content").and_then(|c| c.as_str()) {
@@ -1103,7 +1131,11 @@ pub fn subscribe_run_events(
                     .get("error")
                     .and_then(|e| e.as_str())
                     .unwrap_or("Unknown error");
-                chat.fail_run(run_id, error);
+                // The server already classified this failure and named the
+                // bucket. Dropping the code here is what made Stop, a rejected
+                // queued message, and an expired key all render as UNKNOWN.
+                let error_code = data.get("error_code").and_then(|c| c.as_str());
+                chat.fail_run(run_id, error, error_code);
                 // `RunError` carries no summary, so there is nothing to
                 // reconcile against — but the run is over, so any row still
                 // `running` must stop pulsing (and stop ticking).
@@ -1866,6 +1898,79 @@ mod projection_tests {
         sessions2.activate(singleton2, conv);
         assert!(
             resolve_target(&sessions2, singleton2, "run_accepted", "run-legacy", None).is_some(),
+        );
+    }
+
+    /// `run_queued` is now a run's FIRST frame, so it needs the same
+    /// three-step resolution `run_accepted` has: route, then the session key
+    /// the frame carries, then the foreground only when nothing proves it
+    /// belongs elsewhere. Without this it falls through to `route_lookup`,
+    /// finds nothing, and a queued run is invisible even in the tab that
+    /// started it.
+    #[test]
+    fn run_queued_resolves_like_run_accepted() {
+        let owner = Owner::new();
+        owner.set();
+        let sessions = crate::state::sessions::SessionMap::new();
+        let singleton = ChatState::new();
+        let a = sessions.open_conversation("agent-a", "A");
+        sessions.activate(singleton, a);
+
+        assert!(
+            resolve_target(&sessions, singleton, "run_queued", "run-a", Some("sk-a")).is_some(),
+            "a queued run must reach the conversation that started it"
+        );
+    }
+
+    /// A queued frame for a session this client can prove belongs elsewhere is
+    /// dropped, not painted into whatever the viewer happens to be reading —
+    /// the same defect the unconditional `run_accepted` fallback caused.
+    #[test]
+    fn run_queued_for_a_foreign_session_is_dropped() {
+        let owner = Owner::new();
+        owner.set();
+        let sessions = crate::state::sessions::SessionMap::new();
+        let singleton = ChatState::new();
+
+        let reading = sessions.open_conversation("agent-a", "reading");
+        let other = sessions.open_conversation("agent-b", "other");
+        // Both addressable AND both activated at least once — activation is
+        // what materialises a conversation's background `ChatState`, and
+        // without it `chat_for` has nothing to hand back.
+        sessions.activate(singleton, other);
+        sessions.set_session_key(other, "sk-other");
+        sessions.activate(singleton, reading);
+        sessions.set_session_key(reading, "sk-reading");
+
+        assert!(
+            resolve_target(
+                &sessions,
+                singleton,
+                "run_queued",
+                "run-x",
+                Some("sk-somebody-else"),
+            )
+            .is_none(),
+            "a queued run whose session is open in no tab must be dropped"
+        );
+    }
+
+    /// The server already classified this failure and named the bucket.
+    /// Passing only the prose is what left Stop rendering as an UNKNOWN error
+    /// banner.
+    #[test]
+    fn run_error_forwards_the_servers_error_code() {
+        use crate::views::chat::state::ChatSendErrorCode;
+
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("run-a");
+        chat.fail_run("run-a", "task cancelled", Some("CANCELLED"));
+
+        assert_eq!(
+            chat.send_error.get_untracked().map(|e| e.code),
+            Some(ChatSendErrorCode::Cancelled)
         );
     }
 }

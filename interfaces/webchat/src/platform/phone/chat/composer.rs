@@ -61,12 +61,22 @@ pub fn PhoneComposer() -> impl IntoView {
     // suppression has to swap with the conversation the way the queue does.
     let user_interrupted = chat.stop_suppresses_next_drain;
 
-    // True while a run is in flight (including waiting in the session's lane)
-    // → the composer shows Queue/Force/Stop. Collapses what used to be two
-    // half-predicates (an inline phase set, backstopped by an `active_run_id`
-    // check that happened to cover the phases the set forgot) into the one
-    // this crate has no compiler-enforced way to keep in sync by hand.
-    let running = move || chat.phase.get().is_busy();
+    // True while a run is in flight (including waiting in the session's
+    // lane) → the composer shows Queue/Force/Stop. Two arms, both load-
+    // bearing:
+    //   * `is_busy()` covers the phases — including `Queued`, which is why
+    //     the hand-written `Thinking | Streaming` list this used to be had
+    //     to go (see `ChatPhase::is_busy`'s doc and the source-level guard
+    //     in `run_phase.rs`).
+    //   * `active_run_id.get().is_some()` covers the case where `phase`
+    //     reads `Error` while a run is still in flight server-side:
+    //     `ChatState::set_send_error` is NOT run-scoped (unlike
+    //     `fail_run`), so `flush_queue`'s steer-send failing on a transient
+    //     error flips `phase` to `Error` without touching `active_run_id`.
+    //     Without this arm, a tap on Send during that window would fire a
+    //     second concurrent `ChatApi::send` against the still-active run.
+    let running =
+        move || chat.phase.get().is_busy() || chat.active_run_id.get().is_some();
 
     // A draft is text OR staged files. Attachments-only used to be
     // unsendable here: the guard was text-only, so a photo with no caption

@@ -1479,7 +1479,15 @@ impl ChatState {
     }
 
     /// Mark current run as errored.
-    pub fn fail_run(&self, run_id: &str, error: &str) {
+    ///
+    /// `error_code` is the server's own classification of the failure
+    /// (`aleph_protocol::receipt::ReceiptCode`, carried on the wire as
+    /// `run_error.error_code`) — prefer it over re-deriving a bucket from the
+    /// rendered message, which is what left Stop, a rejected queued message,
+    /// and an expired key all rendering as an UNKNOWN banner. `None` is only
+    /// for a core that predates the field or a transport-layer failure raised
+    /// before any run exists.
+    pub fn fail_run(&self, run_id: &str, error: &str, error_code: Option<&str>) {
         let target_id = format!("assistant-{run_id}");
         self.messages.update(|msgs| {
             if let Some(msg) = msgs.iter_mut().rev().find(|m| m.id == target_id) {
@@ -1502,7 +1510,7 @@ impl ChatState {
             self.phase.set(ChatPhase::Error);
             self.clear_provider_retry();
         }
-        let structured = ChatSendError::classify(error);
+        let structured = ChatSendError::from_wire_code(error_code, error);
         self.error_message.set(Some(structured.message.clone()));
         self.send_error.set(Some(structured));
     }
@@ -2161,7 +2169,7 @@ mod step_tests {
             attempt: 3,
             max_attempts: 3,
         });
-        chat.fail_run("r1", "provider 302ai transient: Request timed out");
+        chat.fail_run("r1", "provider 302ai transient: Request timed out", None);
         assert!(
             chat.provider_retry.with_untracked(|n| n.is_none()),
             "run settled — retry notice must clear"
@@ -2631,6 +2639,36 @@ mod step_tests {
         chat.mark_admitted("run-b");
         assert_eq!(chat.phase.get_untracked(), ChatPhase::Queued { ahead: 1 });
     }
+
+    /// Pins the fact `platform::phone::chat::composer`'s `running` predicate
+    /// depends on: unlike `fail_run`, `set_send_error` is NOT scoped to a run
+    /// id — it flips `phase` to `Error` unconditionally and leaves
+    /// `active_run_id` exactly as it was. That is why the phone composer's
+    /// busy check cannot rely on `phase.is_busy()` alone (`Error` reads
+    /// `false`) and must also check `active_run_id.get().is_some()` — a
+    /// `flush_queue` steer-send failing on a transient error while the real
+    /// run is still streaming must not read as idle. If this test ever goes
+    /// red, `set_send_error` became run-scoped and the second arm in
+    /// `composer.rs` can be reconsidered — by a person reading this failure,
+    /// not by someone "simplifying" a line they assume is dead weight.
+    #[test]
+    fn set_send_error_flips_phase_without_touching_the_active_run() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("run-a");
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Thinking);
+
+        chat.set_send_error(ChatSendError::new(ChatSendErrorCode::CloudSendFailed, "boom"));
+
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Error);
+        assert_eq!(
+            chat.active_run_id.get_untracked().as_deref(),
+            Some("run-a"),
+            "set_send_error must not clear active_run_id — the run it \
+             failed to steer into is still in flight server-side"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2691,7 +2729,7 @@ mod queue_tests {
 
         // A second run id the Panel is holding — queued in the gateway's wait
         // lane — fails (purged by a Stop, rejected by a full lane, timed out).
-        chat.fail_run("queued", "queue full");
+        chat.fail_run("queued", "queue full", None);
 
         assert_eq!(
             chat.active_run_id.get_untracked().as_deref(),
@@ -2704,7 +2742,7 @@ mod queue_tests {
         );
 
         // The live run's own failure does tear it down.
-        chat.fail_run("live", "provider unreachable");
+        chat.fail_run("live", "provider unreachable", None);
         assert!(chat.active_run_id.get_untracked().is_none());
     }
 
