@@ -7,6 +7,9 @@ use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 use shared_ui_logic::state::merge_recalled_draft;
 
+mod send_error;
+pub use send_error::{ChatSendError, ChatSendErrorCode};
+
 /// File staged for upload as part of the next outbound message.
 ///
 /// Lives on `ChatState` so both the composer's paperclip input AND the
@@ -73,90 +76,6 @@ pub fn queue_preview_label(entry: &QueuedPrompt) -> String {
 #[must_use]
 pub fn queue_row_key(idx: usize, entry: &QueuedPrompt) -> String {
     format!("{idx}:{}", entry.text)
-}
-
-/// Stable, machine-readable code for a chat send / delivery failure.
-///
-/// Mirrors openhuman's `chatSendError.ts` taxonomy so analytics and tests
-/// can branch on a small fixed set instead of substring-matching messages.
-/// New variants only — never rename or repurpose existing ones (wire-stable).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChatSendErrorCode {
-    /// WebSocket dropped or never established.
-    SocketDisconnected,
-    /// Cloud provider rejected the send (HTTP error, rate limit, etc.).
-    CloudSendFailed,
-    /// Server-side safety pipeline blocked the prompt.
-    PromptBlocked,
-    /// Server flagged the prompt for review (soft warning).
-    PromptReview,
-    /// Usage limit / quota reached.
-    UsageLimitReached,
-    /// Run aborted due to a safety timeout.
-    SafetyTimeout,
-    /// The composer refused the send before it left the client — the input is
-    /// not supported on this surface (e.g. attachments in team group chat).
-    /// Distinct from the server-side codes above: nothing was transmitted, and
-    /// the user can fix it and retry immediately.
-    Unsupported,
-    /// Catch-all for unmapped errors. Use the message field for context.
-    Unknown,
-}
-
-/// Structured chat send error — preferred over the legacy bare
-/// `error_message` string. Both are populated in lock-step so existing
-/// readers keep working unchanged.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChatSendError {
-    pub code: ChatSendErrorCode,
-    pub message: String,
-}
-
-impl ChatSendError {
-    pub fn new(code: ChatSendErrorCode, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-        }
-    }
-
-    /// Heuristic classifier — maps an opaque error string to a code so the
-    /// existing `ChatApi::send` error path can produce structured errors
-    /// without a wire-format change. Order matters (most specific first).
-    pub fn classify(msg: impl Into<String>) -> Self {
-        let message = msg.into();
-        let l = message.to_lowercase();
-        let code =
-            if l.contains("disconnect") || l.contains("not connected") || l.contains("websocket") {
-                ChatSendErrorCode::SocketDisconnected
-            } else if l.contains("prompt_blocked") || l.contains("prompt injection") {
-                ChatSendErrorCode::PromptBlocked
-            } else if l.contains("prompt_review") {
-                ChatSendErrorCode::PromptReview
-            } else if l.contains("usage limit") || l.contains("quota") || l.contains("rate limit") {
-                ChatSendErrorCode::UsageLimitReached
-            } else if l.contains("safety timeout")
-                || l.contains("turn timeout")
-                || l.contains("stalled after")
-            {
-                // Harness-side watchdogs (TerminateReason::TurnTimeout /
-                // StallTimeout humanized text) — the run itself was killed.
-                ChatSendErrorCode::SafetyTimeout
-            } else if l.contains("timed out")
-                || l.contains("cloud")
-                || l.contains("http")
-                || l.contains("provider")
-            {
-                // "Request timed out" comes from the provider transport
-                // (connect/TTFB/stream-idle), not the harness — an upstream
-                // delivery failure, so it belongs with CloudSendFailed.
-                ChatSendErrorCode::CloudSendFailed
-            } else {
-                ChatSendErrorCode::Unknown
-            };
-        Self { code, message }
-    }
 }
 
 /// Transient provider-retry status for the active run.
