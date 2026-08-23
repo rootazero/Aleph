@@ -116,7 +116,10 @@ mod tests {
     fn nested_wrapper_chain_collapses_in_one_pass() {
         let mut root = node(
             "AXWindow",
-            vec![node("AXGroup", vec![node("AXUnknown", vec![node("AXButton", vec![])])])],
+            vec![node(
+                "AXGroup",
+                vec![node("AXUnknown", vec![node("AXButton", vec![])])],
+            )],
         );
         let elided = elide_wrapper_nodes(&mut root);
         assert_eq!(elided, 2);

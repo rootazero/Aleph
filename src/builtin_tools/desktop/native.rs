@@ -2243,7 +2243,9 @@ mod tests {
         async fn clipboard_write(&self, _t: &str) -> aleph_desktop::Result<()> {
             unimplemented!("not needed by verify_app_running")
         }
-        async fn system_info(&self) -> aleph_desktop::Result<aleph_desktop::system_types::SystemInfo> {
+        async fn system_info(
+            &self,
+        ) -> aleph_desktop::Result<aleph_desktop::system_types::SystemInfo> {
             unimplemented!("not needed by verify_app_running")
         }
     }
@@ -2251,7 +2253,7 @@ mod tests {
     #[tokio::test]
     async fn restart_verification_reports_running_once_the_app_appears() {
         let system = ScriptedSystem::answering(vec![
-            ListReply::Apps(vec![]),                   // not yet back
+            ListReply::Apps(vec![]),                      // not yet back
             ListReply::Apps(vec![running_app("Safari")]), // back
         ]);
         let verdict = verify_app_running_within(
