@@ -929,6 +929,19 @@ mod tests {
             "PROVIDERS_UNREACHABLE",
             "wire code is client-visible API"
         );
+        // The five below, plus the two above, are pinned literally rather
+        // than derived: `protocol_code()`'s match is a bijection onto
+        // `ReceiptCode`, so the set-based coverage test below
+        // (`every_protocol_receipt_code_is_produced_by_some_kind`) cannot
+        // catch two arms being SWAPPED — the image set is unchanged and
+        // every other test in the repo still passes. A frozen wire contract
+        // is exactly where a literal is correct; see `code()`'s own doc
+        // ("these strings are API — do not rename").
+        assert_eq!(ReceiptKind::Timeout.code(), "TIMEOUT");
+        assert_eq!(ReceiptKind::Cancelled.code(), "CANCELLED");
+        assert_eq!(ReceiptKind::AgentBusy.code(), "AGENT_BUSY");
+        assert_eq!(ReceiptKind::RateLimited.code(), "RATE_LIMITED");
+        assert_eq!(ReceiptKind::Failed.code(), "FAILED");
     }
 
     /// The wording is chosen by `Limit`'s shape, not by who is asking:
