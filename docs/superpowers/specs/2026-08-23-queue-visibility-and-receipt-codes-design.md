@@ -187,9 +187,9 @@ if last_reported != Some(ahead) {
 pub enum ChatPhase { Idle, Thinking, Streaming, Error, Queued { ahead: u16 } }
 ```
 
-仍是 `Copy`/`PartialEq`/`Eq`。`state.rs` 之外只有 **5 个文件**读 `ChatPhase::`（`messages.rs` / `reasoning.rs` / `composer/mod.rs` / `phone/chat/composer.rs` / `team_events.rs`，共 12 个站点），`state.rs` 内部 10 个。穷尽 match 会**逐个逼它们回答「Queued 算不算 busy」**——手机端 `composer.rs:66` 的 `matches!(…, Thinking | Streaming)` 就是这么白拿到这个能力的。
+仍是 `Copy`/`PartialEq`/`Eq`。⚠️ **这里最初想按穷尽 `match` 设计，核实后发现前提不成立**：全 crate 只有 **12 个**读写站点（7 写 + 5 读），且**没有一处是穷尽 `match`**——每个读者都是 `==`、`matches!`，或干脆丢弃返回值。这意味着**加一个变体不是编译错误**：手机端 `composer.rs:66` 的 `matches!(…, Thinking | Streaming)` 正是这样漏掉 `Queued` 的——写下那天完全正确，`Queued` 这个第三种忙态出现的那一刻起悄悄错了，代价是排队期间手机 composer 又肯发一次。
 
-这是「守卫要从拥有事实的类型派生」的同一形状：**加变体是编译错误，不是一条要记得改的清单。**
+真正让"是不是 busy"只有一处答案的，不是编译器而是**一个谓词 + 一条源码级守卫**：`ChatPhase::is_busy()`（`matches!(self, Queued{..} | Thinking | Streaming)`）是唯一允许判定忙态的地方，所有 surface 都必须问它；守卫 `no_surface_enumerates_the_busy_phases_by_hand` 按**规则而非名单**抓违规——一行 `matches!(` 里出现两个及以上 `ChatPhase::` 就判定为内联忙态集合，唯一豁免的正是 `is_busy` 自身，单变体的 `matches!`（问"是不是这一个特定阶段"，`==` 对 `Queued { .. }` 表达不了这一问）不算违规。**加一个变体不会让编译器点名任何读者**——读者要不要跟上新变体，靠这条守卫在下次改动时抓，不是靠类型系统。
 
 渲染：占位气泡文案「排队中 · 前面还有 N 条」。
 
