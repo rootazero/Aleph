@@ -72,12 +72,75 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # Both caps sit at job level, not on one step, because the step that was
+    # dying is not the step that had them. `CARGO_PROFILE_TEST_DEBUG` was set
+    # only on "Run integration tests" — but on ubuntu this job never reached it
+    # and never even reached alephcore: 1008 `Compiling` lines, all of them
+    # dependencies, then seven silent minutes and exit 143. Dependencies build
+    # under the *dev* profile even during `cargo test` (only the local package's
+    # test targets use `test`), so the existing cap could not touch them; with
+    # no `[profile.dev]` in Cargo.toml they were carrying full debuginfo. Line
+    # tables are what a panic backtrace reads, so failures stay diagnosable —
+    # the measurement behind that flag is in the integration-test comment below.
+    #
+    # Measured on the first green ubuntu run (28 min, 16909 + 537 lib/sandbox
+    # tests and all 134 integration binaries, where it previously died at ~15
+    # min having produced nothing):
+    #
+    #   memory  low-water 723 MiB, with six consecutive samples under 1.3 GB
+    #   disk    98 GB free throughout the compile; 41 GB at its lowest, which
+    #           is in the integration step, not here
+    #
+    # So it was memory, and only memory — the disk reclaim below bought nothing
+    # for *this* failure (it is still worth keeping: the integration step spends
+    # ~57 GB, so without it that step would bottom out near 16 GB).
+    #
+    # Dropping dependencies to `debug: 0` was then tried and measured to change
+    # nothing: floor 708 MiB against 723, and 29m09s against 28m00s. So the low
+    # point is not debuginfo — the win was full -> line-tables, and what remains
+    # there is the compiler's own working set. It is back at `line-tables-only`,
+    # because `0` bought no memory and no time while costing line numbers in
+    # dependency frames.
+    #
+    # That leaves ~710 MiB of headroom on a 16 GB runner, reproducible across
+    # two runs. Thin, so parallelism is capped below — see the step.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+
+      # The measured constraint, and the only lever left that moves it. The
+      # floor sat at ~710 MiB across two runs with the debuginfo caps in place,
+      # which is ~4% of the runner — reproducible rather than a coin flip, but
+      # one added dependency from being negative again. `-j3` trades roughly a
+      # quarter of the dependency phase's parallelism for that margin.
+      #
+      # Written as a step and not a matrix expression on purpose: an expression
+      # would have to name a number for macOS and Windows too, and those pass
+      # today on runners with different core counts. This touches Linux only.
+      #
+      # If the sampler shows this bought little, the reading to compare is the
+      # low-water line in this job's log, not the wall clock.
+      - name: Cap build parallelism (Linux)
+        if: runner.os == 'Linux'
+        run: echo "CARGO_BUILD_JOBS=3" >> "$GITHUB_ENV"
+
+      # ~25 GB of preinstalled SDKs this repo never touches. Disk turned out not
+      # to be the constraint here at all (98 GB free through the compile), but
+      # the integration step spends ~57 GB, so this is what keeps *that* step
+      # off the floor.
+      - name: Reclaim runner disk (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+                      /opt/hostedtoolcache/CodeQL || true
+          df -h /
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
@@ -98,8 +161,14 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install protoc
 
+      # Wrapped, because this is the step that dies on ubuntu and exit 143 is
+      # not a diagnosis: the runner is terminated, so nothing can be read
+      # afterwards. The wrapper prints free memory and free disk alongside the
+      # build, so the last lines before the death name the resource. It is
+      # instrumentation only — it changes nothing about what is built.
       - name: Run tests
-        run: cargo test -p alephcore --lib
+        shell: bash
+        run: bash scripts/ci_run_with_resource_log.sh cargo test -p alephcore --lib
         env:
           PROPTEST_CASES: 1024
 
@@ -183,9 +252,8 @@ jobs:
         run: Get-PSDrive -PSProvider FileSystem
 
       - name: Run integration tests
-        env:
-          CARGO_PROFILE_TEST_DEBUG: line-tables-only
-        run: cargo test -p alephcore --features test-helpers --test '*'
+        shell: bash
+        run: bash scripts/ci_run_with_resource_log.sh cargo test -p alephcore --features test-helpers --test '*'
 
       # `always()`, or the reading dies with the failure it exists to explain.
       - name: Disk after integration tests
@@ -360,10 +428,25 @@ jobs:
             libx11-dev libxrandr-dev libxi-dev libxtst-dev \
             libssl-dev libwayland-dev libpipewire-0.3-dev libdbus-1-dev \
             libdrm-dev libgbm-dev libegl-dev libxdo-dev clang libclang-dev
+
+      # Non-gating, but it dies with the identical signature as Test (ubuntu)
+      # — same point in the dependency graph, within a minute, on a separate
+      # runner — so it is a second, free reading of the same question.
+      - name: Reclaim runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+                      /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
       - name: Run loom tests
-        run: cargo test --features loom --lib
+        shell: bash
+        run: bash scripts/ci_run_with_resource_log.sh cargo test --features loom --lib
         env:
           LOOM_MAX_PREEMPTIONS: 3
+          CARGO_BUILD_JOBS: "3"
+          CARGO_PROFILE_DEV_DEBUG: line-tables-only
+          CARGO_PROFILE_TEST_DEBUG: line-tables-only
         timeout-minutes: 30
 
   desktop-shell:

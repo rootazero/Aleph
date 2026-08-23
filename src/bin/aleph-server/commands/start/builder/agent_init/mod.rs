@@ -1174,20 +1174,38 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // registry's MediaPipeline — otherwise `audio_transcribe` and
             // attachment transcription can disagree about whether transcription
             // exists at all, which is the state this replaced.
-            let transcription: Option<Box<dyn TranscriptionService>> =
+            let resolved_transcription =
                 alephcore::media::transcription_service(&app_config.generation, &|name: &str| {
                     shared_token_mgr
                         .get_secret(&format!("gen:{name}"))
                         .ok()
                         .flatten()
                         .map(|secret| secret.expose().to_string())
-                })
-                .map(|resolved| {
+                });
+            let transcription: Option<Box<dyn TranscriptionService>> = match resolved_transcription
+            {
+                Ok(Some(resolved)) => {
                     if !daemon {
                         println!("  MediaProcessor: {}", resolved.label);
                     }
-                    resolved.service
-                });
+                    Some(resolved.service)
+                }
+                Ok(None) => None,
+                // A refused provider is not an absent one. Say which entry and
+                // which setting, then start without transcription: this call
+                // used to panic, which turned one bad config line into a daemon
+                // that would not boot at all.
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        "transcription provider refused; starting without transcription"
+                    );
+                    if !daemon {
+                        eprintln!("  MediaProcessor: DISABLED - {e}");
+                    }
+                    None
+                }
+            };
 
             // Build the VisionPipeline so the image-attachment fallback in
             // MediaProcessor::describe_image_fallback actually fires for

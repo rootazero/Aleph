@@ -60,10 +60,46 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         let manifest_dir =
             std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo");
-        let plist = format!("{manifest_dir}/src/bin/aleph-server/Info.plist");
+        let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR is set by cargo");
+        let source = std::path::Path::new(&manifest_dir).join("src/bin/aleph-server/Info.plist");
+        // The link-arg is CACHED: cargo records this line in
+        // `target/<profile>/build/alephcore-<hash>/output` and replays it on every
+        // later build whose fingerprint is fresh — i.e. on every build where THIS
+        // SCRIPT DOES NOT RUN. So the path we emit must not be allowed to outlive
+        // what it names, and no `exists()` check written here can save it: the
+        // failing case is by definition the one where none of this code executes.
+        //
+        // Emitting `{manifest_dir}/src/bin/...` did exactly that. The cache lives in
+        // target/, the plist lived in the source tree, and those two lifetimes are
+        // independent: delete the checkout (a `git worktree remove` sharing this
+        // target dir, a moved or renamed clone) and the replayed link-arg keeps
+        // naming a path that is gone. `aleph-server` then fails to LINK, with an ld
+        // error that mentions no .rs file at all, on a tree the reader never touched.
+        // (`cargo test --lib` links no bin and stays green, so it surfaces first on
+        // `--test '*'`; `touch build.rs` "fixes" it only by forcing a rerun.)
+        //
+        // Staging a copy into OUT_DIR removes the possibility rather than checking
+        // for it: OUT_DIR sits in the same unit directory as the cached `output`
+        // file, so the named file and the cache naming it are created together,
+        // invalidated together, and removed together by `cargo clean`. The bytes —
+        // and therefore the __info_plist section and the identity codesign adopts
+        // from it — are identical.
+        let staged = std::path::Path::new(&out_dir).join("aleph-server-Info.plist");
         println!("cargo:rerun-if-changed=src/bin/aleph-server/Info.plist");
+        // A genuinely missing/unreadable source plist is a DIFFERENT failure from the
+        // one above, and one this script can still catch — because it only happens
+        // when the script runs. Fail here, named and with a source location, instead
+        // of handing the linker a path to nothing and reproducing the illegible error.
+        if let Err(e) = std::fs::copy(&source, &staged) {
+            panic!(
+                "failed to stage {} into OUT_DIR as {}: {e}",
+                source.display(),
+                staged.display()
+            );
+        }
         println!(
-            "cargo:rustc-link-arg-bin=aleph-server=-Wl,-sectcreate,__TEXT,__info_plist,{plist}"
+            "cargo:rustc-link-arg-bin=aleph-server=-Wl,-sectcreate,__TEXT,__info_plist,{}",
+            staged.display()
         );
     }
 

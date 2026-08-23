@@ -245,7 +245,36 @@ impl SessionKey {
         task_id: impl Into<String>,
     ) -> Self {
         let task_type = normalize_agent_id(&task_type.into());
+        // On the `if`, not on the `panic!`: an attribute applied directly to a
+        // macro invocation is ignored ("the built-in attribute `expect` will be
+        // ignored"), so writing it there suppresses nothing while looking like
+        // it does.
+        #[expect(
+            clippy::panic,
+            reason = "unreachable by construction; see the comment below and the \
+                      parse-ordering test that pins it"
+        )]
         if matches!(task_type.as_str(), "peer" | "dm" | "ephemeral") {
+            // Unreachable, and deliberately still a panic. Every production
+            // caller passes a compile-time constant ("cron", "heartbeat",
+            // "a2a", TEAM_TASK_TASK_TYPE, TEAM_CHAT_TASK_TYPE); the one caller
+            // that passes a runtime value (`builtin_tools::sessions::send_tool`)
+            // rebuilds a key that came out of `parse`, and `parse_rest` matches
+            // the reserved markers *before* its `[task_type, task_id]`
+            // catch-all, so a parsed Task cannot carry one. That ordering is
+            // the load-bearing fact, and it is pinned by
+            // `parse_never_yields_a_task_whose_type_is_a_reserved_marker` below
+            // — reorder those arms and the test goes red, rather than a crafted
+            // session key reaching here.
+            //
+            // Returning `Result` instead would put a `?` on ~15 infallible call
+            // sites to describe a state none of them can produce; sanitizing
+            // the value instead would ship the ambiguity silently, which is the
+            // failure this exists to prevent.
+            //
+            // `expect` rather than `allow` on purpose: it retires itself. If
+            // the panic ever goes away, `unfulfilled_lint_expectations` fails
+            // the Lint job instead of leaving a permit behind.
             // rust-doctor-disable-next-line panic-in-library
             panic!("reserved task_type `{task_type}` would produce an ambiguous session key");
         }
@@ -588,6 +617,11 @@ impl SessionKey {
             // Main{main_key:"dm"} — leaking that DM into the agent's main
             // session. Rejecting them here forces the no-epoch fall-through in
             // `parse`, which matches the correct `["dm", peer_id]` arm.
+            [task_type, task_id] if false => Some(Self::Task {
+                agent_id: agent_id.to_string(),
+                task_type: task_type.to_string(),
+                task_id: task_id.to_string(),
+            }),
             [main_key] if !matches!(*main_key, "peer" | "dm" | "ephemeral") => Some(Self::Main {
                 agent_id: agent_id.to_string(),
                 main_key: main_key.to_string(),
@@ -732,6 +766,53 @@ mod tests {
         assert_ne!(
             key.base_key_pattern(),
             SessionKey::main("main").to_key_string()
+        );
+    }
+
+    /// `SessionKey::task` panics on a reserved `task_type`, and the one caller
+    /// that feeds it a runtime value rebuilds a key that came out of `parse`.
+    /// That round-trip is safe only because `parse_rest` matches the reserved
+    /// markers before its `[task_type, task_id]` catch-all — an ordering
+    /// nothing asserted until now. Move those arms below the catch-all and this
+    /// goes red, instead of a crafted session key turning into a panic.
+    #[test]
+    fn parse_never_yields_a_task_whose_type_is_a_reserved_marker() {
+        const RESERVED: [&str; 3] = ["peer", "dm", "ephemeral"];
+        let mut checked = 0;
+        for marker in RESERVED {
+            for key in [
+                // Two-segment rest: the shape the catch-all would swallow.
+                format!("agent:main:{marker}:x"),
+                // ...and with a trailing `sN`, which `strip_epoch` rewrites.
+                format!("agent:main:{marker}:s7"),
+                // Three-segment rest, reached via the channel-qualified arms.
+                format!("agent:main:chan:{marker}:x"),
+            ] {
+                for (via, parsed) in [
+                    ("parse", SessionKey::parse(&key)),
+                    // `from_key_string` adds the legacy fallback; same invariant.
+                    ("from_key_string", SessionKey::from_key_string(&key)),
+                ] {
+                    checked += 1;
+                    let offending = match &parsed {
+                        Some(SessionKey::Task { task_type, .. })
+                            if RESERVED.contains(&task_type.as_str()) =>
+                        {
+                            Some(task_type.clone())
+                        }
+                        _ => None,
+                    };
+                    assert!(
+                        offending.is_none(),
+                        "{via}({key:?}) produced a Task with reserved task_type {offending:?}; \
+                         round-tripping it through SessionKey::task would panic"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            checked, 18,
+            "expected 3 markers x 3 shapes x 2 entry points"
         );
     }
 

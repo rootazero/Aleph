@@ -45,6 +45,7 @@ pub use policy::MediaPolicy;
 pub use processors::{AudioMediaProvider, ImageMediaProvider, TextDocumentProvider};
 pub use provider::MediaProvider;
 pub use resolve::{transcription_service, ResolvedTranscription};
+pub use transcription::{TranscriptionConfigError, TranscriptionResult, TranscriptionService};
 pub use types::{
     AudioFormat, DocFormat, MediaImageFormat, MediaInput, MediaOutput, MediaType, VideoFormat,
 };
