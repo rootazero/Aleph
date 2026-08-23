@@ -1421,15 +1421,32 @@ impl BuiltinToolRegistry {
 /// `None` when no config handle is available (registry built standalone, as in
 /// tests) or when nothing is configured — the pipeline then registers no audio
 /// provider, and the tool says so instead of pretending.
+///
+/// A provider that is configured but *refused* also lands on `None` here, and
+/// that is a known narrowing: the media pipeline has no slot for "configured
+/// and rejected", so `audio_transcribe` reports the same absence it reports for
+/// an unconfigured host. The refusal is not swallowed — it is logged by name,
+/// with the entry and the setting — but the tool face cannot yet repeat it.
+/// Widening that needs a rejection slot on `MediaPipeline`, which has no other
+/// consumer today.
 async fn resolve_transcription(
     config: &BuiltinToolConfig,
 ) -> Option<crate::media::ResolvedTranscription> {
     let cfg = config.config.as_ref()?;
     let generation = cfg.read().await.generation.clone();
     let vault = config.shared_token_manager.clone();
-    crate::media::transcription_service(&generation, &move |name: &str| {
+    match crate::media::transcription_service(&generation, &move |name: &str| {
         let vault = vault.as_ref()?;
         let secret = vault.get_secret(&format!("gen:{name}")).ok()??;
         Some(secret.expose().to_string())
-    })
+    }) {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                "audio_transcribe: transcription provider refused; registering no audio backend"
+            );
+            None
+        }
+    }
 }

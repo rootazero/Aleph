@@ -13,7 +13,7 @@
 
 use crate::config::types::voice_local::LOCAL_PROVIDER_TYPE;
 use crate::config::{GenerationConfig, GenerationProviderConfig};
-use crate::media::transcription::TranscriptionService;
+use crate::media::transcription::{TranscriptionConfigError, TranscriptionService};
 
 /// A resolved transcription backend plus a label for startup logging.
 pub struct ResolvedTranscription {
@@ -29,11 +29,17 @@ pub struct ResolvedTranscription {
 ///
 /// `vault_lookup` is called with the provider name and should return the
 /// secret stored under `gen:<name>`.
-#[must_use]
+///
+/// # Errors
+/// `Err` means a provider *is* configured and was refused (see
+/// [`TranscriptionConfigError`]) — distinct from `Ok(None)`, which means
+/// nothing is configured. Callers must keep those apart: reporting a rejection
+/// as absence hands the operator the one answer that cannot lead them to the
+/// setting they need to fix.
 pub fn transcription_service(
     gen: &GenerationConfig,
     vault_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Option<ResolvedTranscription> {
+) -> Result<Option<ResolvedTranscription>, TranscriptionConfigError> {
     // BYO local endpoints commonly run unauthenticated — an empty key is valid
     // for them (no Authorization header), so the presence walk must not skip
     // the entry.
@@ -49,42 +55,52 @@ pub fn transcription_service(
         vault_lookup(name).filter(|v| !v.is_empty())
     };
 
-    let (key, pcfg) = gen
+    // The entry's *name* rides along with its config: it is the only thing a
+    // rejection can point at, and neither the key nor the URL carries it.
+    let picked = gen
         .default_transcription_provider
         .as_ref()
         .and_then(|name| {
             gen.transcription_providers
                 .get(name)
                 .filter(|pcfg| pcfg.enabled)
-                .and_then(|pcfg| resolve_key(name, pcfg).map(|key| (key, pcfg)))
+                .and_then(|pcfg| resolve_key(name, pcfg).map(|key| (name.clone(), key, pcfg)))
         })
         .or_else(|| {
             gen.transcription_providers.iter().find_map(|(name, pcfg)| {
                 if pcfg.enabled {
-                    resolve_key(name, pcfg).map(|key| (key, pcfg))
+                    resolve_key(name, pcfg).map(|key| (name.clone(), key, pcfg))
                 } else {
                     None
                 }
             })
-        })?;
+        });
+    let Some((name, key, pcfg)) = picked else {
+        return Ok(None);
+    };
 
     if pcfg.provider_type == LOCAL_PROVIDER_TYPE {
         // BYO endpoint: connection values live on the entry itself.
-        Some(ResolvedTranscription {
+        Ok(Some(ResolvedTranscription {
             service: Box::new(
                 crate::gateway::voice::local_provider::LocalTranscription::from_config(pcfg),
             ),
             label: "local voice transcription enabled (BYO endpoint)",
-        })
+        }))
     } else {
-        Some(ResolvedTranscription {
-            service: Box::new(crate::media::whisper::WhisperTranscription::new(
-                key,
-                pcfg.base_url.clone(),
-                pcfg.models.first().cloned(),
-            )),
+        // Deliberately no fall-through to the next enabled entry: silently
+        // running on a backend the operator did not name is a worse answer than
+        // saying which one was refused.
+        let whisper = crate::media::whisper::WhisperTranscription::new(
+            &name,
+            key,
+            pcfg.base_url.clone(),
+            pcfg.models.first().cloned(),
+        )?;
+        Ok(Some(ResolvedTranscription {
+            service: Box::new(whisper),
             label: "Whisper transcription enabled (from transcription provider)",
-        })
+        }))
     }
 }
 
@@ -104,7 +120,9 @@ mod tests {
     #[test]
     fn none_when_nothing_configured() {
         let gen = GenerationConfig::default();
-        assert!(transcription_service(&gen, &|_| None).is_none());
+        assert!(transcription_service(&gen, &|_| None)
+            .expect("no provider is not a rejection")
+            .is_none());
     }
 
     /// Disabled entries are not a backend, however complete they look.
@@ -113,7 +131,9 @@ mod tests {
         let mut gen = GenerationConfig::default();
         gen.transcription_providers
             .insert("openai".into(), provider("openai", false, Some("sk-x")));
-        assert!(transcription_service(&gen, &|_| None).is_none());
+        assert!(transcription_service(&gen, &|_| None)
+            .expect("a disabled entry is not a rejection")
+            .is_none());
     }
 
     /// `api_key` is `#[serde(skip)]`, so a configured provider looks keyless
@@ -124,10 +144,13 @@ mod tests {
         let mut gen = GenerationConfig::default();
         gen.transcription_providers
             .insert("openai".into(), provider("openai", true, None));
-        assert!(transcription_service(&gen, &|_| None).is_none());
+        assert!(transcription_service(&gen, &|_| None)
+            .expect("a keyless entry is not a rejection")
+            .is_none());
         let resolved = transcription_service(&gen, &|name| {
             (name == "openai").then(|| "sk-from-vault".to_string())
         })
+        .expect("a valid endpoint is not rejected")
         .expect("vault key resolves the provider");
         assert!(resolved.label.contains("Whisper"));
     }
@@ -138,7 +161,9 @@ mod tests {
         let mut gen = GenerationConfig::default();
         gen.transcription_providers
             .insert("local".into(), provider(LOCAL_PROVIDER_TYPE, true, None));
-        let resolved = transcription_service(&gen, &|_| None).expect("local resolves");
+        let resolved = transcription_service(&gen, &|_| None)
+            .expect("not rejected")
+            .expect("local resolves");
         assert!(resolved.label.contains("BYO"));
     }
 
@@ -150,7 +175,46 @@ mod tests {
         gen.transcription_providers
             .insert("byo".into(), provider(LOCAL_PROVIDER_TYPE, true, None));
         gen.default_transcription_provider = Some("byo".into());
-        let resolved = transcription_service(&gen, &|_| None).expect("resolves");
+        let resolved = transcription_service(&gen, &|_| None)
+            .expect("not rejected")
+            .expect("resolves");
         assert!(resolved.label.contains("BYO"));
+    }
+
+    /// The whole point of the `Result`: a configured-but-refused entry must not
+    /// come back as `Ok(None)`. That reading is what sends an operator looking
+    /// for a provider they already added, and it is the shape this replaced —
+    /// except the old shape did not return at all, it aborted the process.
+    #[test]
+    fn a_refused_endpoint_is_a_rejection_not_an_absence() {
+        let mut gen = GenerationConfig::default();
+        let mut pcfg = provider("openai", true, Some("sk-x"));
+        pcfg.base_url = Some("http://whisper.example.com/v1".into());
+        gen.transcription_providers.insert("openai".into(), pcfg);
+
+        let Err(err) = transcription_service(&gen, &|_| None) else {
+            panic!("a plain-HTTP non-loopback endpoint must be refused");
+        };
+        assert_eq!(err.provider, "openai");
+        assert_eq!(err.field, "base_url");
+    }
+
+    /// A refused entry does not hand the turn to whatever else happens to be
+    /// enabled: running on a backend the operator did not name is a quieter
+    /// failure than saying which one was refused.
+    #[test]
+    fn a_refused_named_default_does_not_fall_through_to_another_entry() {
+        let mut gen = GenerationConfig::default();
+        let mut bad = provider("openai", true, Some("sk-x"));
+        bad.base_url = Some("http://whisper.example.com/v1".into());
+        gen.transcription_providers.insert("openai".into(), bad);
+        gen.transcription_providers
+            .insert("byo".into(), provider(LOCAL_PROVIDER_TYPE, true, None));
+        gen.default_transcription_provider = Some("openai".into());
+
+        let Err(err) = transcription_service(&gen, &|_| None) else {
+            panic!("a plain-HTTP non-loopback endpoint must be refused");
+        };
+        assert_eq!(err.provider, "openai");
     }
 }
