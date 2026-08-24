@@ -17,6 +17,7 @@ pub mod stages;
 pub mod strategy;
 pub mod validation;
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::config::types::memory::MemoryDecayPolicy;
 use crate::config::{DreamingConfig as ConfigDreamingConfig, MemoryConfig};
 use crate::error::AlephError;
@@ -30,7 +31,7 @@ use crate::routing::DEFAULT_AGENT_ID;
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicBool, AtomicI64, Ordering};
 use chrono::{Local, NaiveTime, TimeZone};
-use once_cell::sync::{Lazy, OnceCell};
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -458,7 +459,33 @@ const RECALL_SIGNAL_RETENTION_DAYS: u32 = 90;
 
 static LAST_ACTIVITY_TS: Lazy<AtomicI64> = Lazy::new(|| AtomicI64::new(now_timestamp()));
 
-static DREAM_DAEMON: OnceCell<Arc<DreamDaemon>> = OnceCell::new();
+/// `IndistinguishableDefault`, derived from the reader that exists to answer an
+/// operator question: [`daemon_status`] returns `None`, and its own doc
+/// instructs every caller to render that as **"not running"**, never as an
+/// error — "an install with dreaming off is healthy, not broken."
+///
+/// That instruction is right and it is also the defect. `daemon_status` is the
+/// zero-side-effect answer to *"why didn't dreaming run tonight?"*, and with
+/// this handle uninstalled it answers "because dreaming is not running" — the
+/// same words it gives a machine whose operator deliberately set
+/// `[memory.dreaming] enabled = false`. The second reader, [`try_run_now`], is
+/// honest by contrast ("DreamDaemon not initialized"), but it is the admin RPC,
+/// not the surface anyone reads first.
+static DREAM_DAEMON: CapabilitySlot<Arc<DreamDaemon>> = CapabilitySlot::new(
+    "memory/dream-daemon",
+    MissingSemantics::IndistinguishableDefault {
+        reads_as: "\"dreaming is not running\" -- word for word what an install \
+                   with [memory.dreaming] disabled reports",
+    },
+);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn dream_daemon_slot() -> &'static dyn SlotStatus {
+    &DREAM_DAEMON
+}
 
 pub(crate) fn now_timestamp() -> i64 {
     SystemTime::now()
@@ -678,7 +705,7 @@ pub fn ensure_dream_daemon_with_orientation(
     };
 
     // rust-doctor-disable-next-line excessive-clone
-    if DREAM_DAEMON.set(daemon.clone()).is_ok() {
+    if DREAM_DAEMON.install(daemon.clone()) {
         daemon.start_background_task_with_handle(handle);
         info!("DreamDaemon background task started");
     }
