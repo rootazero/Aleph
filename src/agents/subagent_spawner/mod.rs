@@ -118,6 +118,16 @@ pub struct SpawnerBase {
     /// per-run calibration and circuit-breaker counters that must not be shared
     /// between the parent and a child (nor between two concurrent children).
     pub context_budget_config: Option<crate::context::budget::ContextBudgetConfig>,
+    /// The parent runner's per-run budget refiner, used to re-key the child's
+    /// **prompt** budget onto the model it will actually run on (`resolved_
+    /// model` below) exactly as the main loop re-keys its own every run.
+    /// `None` (tests / legacy callers) keeps the chain-minimum derivation.
+    pub context_budget_refiner:
+        Option<crate::orchestrator::deps_builder::ContextBudgetRefiner>,
+    /// The parent runner's configured per-provider context-window override,
+    /// fed to [`Self::context_budget_refiner`] exactly as the main loop feeds
+    /// its own refinement.
+    pub primary_context_window: Option<u32>,
     /// The parent runner's cheap-tier summarization provider. Handed to the
     /// child's `ContextCompactor` so its side-channel summarization bills the
     /// operator's flash sibling, not the main reasoning model. `None` keeps the
@@ -513,7 +523,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         //     copy. Pure function of `req` / `base`, so the move is safe.
         //
         //     `PromptBuilder::with_agent` pulls in the AgentRoleLayer;
-        //     `build_system_prompt(&[])` is fine — tool schemas are delivered
+        //     `build_system_prompt_parts(&[])` is fine — tool schemas are delivered
         //     via native tool_use, not the prompt. The descended `child_chain`
         //     is passed in so `ChainContextLayer` can tell the spawned agent it
         //     is nested and how much delegation budget remains.
@@ -525,8 +535,37 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             .context_budget_config
             .as_ref()
             .map_or_else(crate::thinker::prompt_budget::TokenBudget::default, |cfg| {
-                crate::thinker::prompt_budget::TokenBudget::from_context_window(cfg.token_budget)
+                // Re-key the chain-minimum budget onto the model this child
+                // will actually run on — the same refinement the main loop
+                // applies (runner_impl), so a child pinned to a narrow model
+                // no longer inherits the wider chain budget. Unknown models
+                // and missing refiners fall back to `cfg` unchanged (the
+                // refiner's own conservative default).
+                let refined = match (&base.context_budget_refiner, &resolved_model) {
+                    (Some(refiner), Some(model)) => refiner.refine_for_serving_model(
+                        cfg,
+                        model,
+                        base.provider.name(),
+                        base.primary_context_window,
+                    ),
+                    _ => cfg.clone(),
+                };
+                crate::thinker::prompt_budget::TokenBudget::from_context_window(
+                    refined.token_budget,
+                )
             });
+        // Seed the prompt token gate from the cross-run calibration
+        // carry-over under the child's own model — the same factor the main
+        // loop seeds its prompt gate with, so a model whose tokenizer the
+        // char-ratio heuristic misjudges gets a gate calibrated to it here
+        // too. Unknown / never-observed models stay at factor 1.0.
+        let token_budget = match resolved_model
+            .as_deref()
+            .and_then(crate::orchestrator::harness_bridge::seeded_calibration_for_model)
+        {
+            Some(factor) => token_budget.with_estimate_factor(factor),
+            None => token_budget,
+        };
         let mut builder = PromptBuilder::new(PromptConfig {
             token_budget,
             ..PromptConfig::default()

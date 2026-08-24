@@ -174,6 +174,12 @@ pub struct AgentRuntime {
     /// `SpawnerBase` so each spawned child builds its own budget + compactor +
     /// preflight pipeline instead of running context-unmanaged.
     context_budget_config: Option<crate::context::budget::ContextBudgetConfig>,
+    /// The parent runner's per-run budget refiner + window override, threaded
+    /// into `SpawnerBase` so each child's **prompt** budget is re-keyed onto
+    /// the model the child will actually run on.
+    context_budget_refiner: Option<crate::orchestrator::deps_builder::ContextBudgetRefiner>,
+    /// See [`Self::context_budget_refiner`] — travels with it.
+    primary_context_window: Option<u32>,
     /// The parent runner's cheap-tier summarizer, threaded into `SpawnerBase`
     /// so each child's compactor bills its side-channel to the flash sibling
     /// the operator already configured, not the main reasoning model.
@@ -214,6 +220,8 @@ impl AgentRuntime {
             default_max_iterations: None,
             parallel_tool_concurrency: None,
             context_budget_config: None,
+            context_budget_refiner: None,
+            primary_context_window: None,
             cheap_summary_provider: None,
         }
     }
@@ -242,6 +250,20 @@ impl AgentRuntime {
         cfg: crate::context::budget::ContextBudgetConfig,
     ) -> Self {
         self.context_budget_config = Some(cfg);
+        self
+    }
+
+    /// Wire the parent runner's per-run budget refiner + window override so
+    /// every spawned child's prompt budget is sized to the model IT will run
+    /// on, exactly as the main loop sizes its own.
+    #[must_use]
+    pub fn with_context_budget_refinement(
+        mut self,
+        refiner: crate::orchestrator::deps_builder::ContextBudgetRefiner,
+        primary_context_window: Option<u32>,
+    ) -> Self {
+        self.context_budget_refiner = Some(refiner);
+        self.primary_context_window = primary_context_window;
         self
     }
 
@@ -568,6 +590,8 @@ impl AgentRuntime {
             // managed on the same terms (the spawner builds its own instances).
             // rust-doctor-disable-next-line excessive-clone
             context_budget_config: self.context_budget_config.clone(),
+            context_budget_refiner: self.context_budget_refiner.clone(),
+            primary_context_window: self.primary_context_window,
             cheap_summary_provider: self.cheap_summary_provider.clone(),
         };
         let req = SpawnRequest {

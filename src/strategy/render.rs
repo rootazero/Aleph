@@ -65,21 +65,47 @@ pub fn render_strategy_summary(s: &Strategy) -> String {
 /// read head. Deliberately omits the objective (StandingGoalLayer already
 /// re-injects that every turn — restating it here would cause reminder-blindness)
 /// and the phases.
+///
+/// **Bounded on purpose.** Guardrails are free text (LLM-authored at `plan`,
+/// user-editable) and `StrategyPointerLayer` only passes this render through —
+/// it sits in `prompt_contract::CONDITIONALLY_SILENT`, so the per-layer byte
+/// ratchet measures it as 0 B no matter how large the list gets. The bound
+/// lives here, in the producer: at most [`GUARDRAIL_PROMPT_MAX_ITEMS`] lines
+/// of [`GUARDRAIL_PROMPT_MAX_CHARS`] chars each, with an elision footer naming
+/// the hidden count so a capped list never reads as complete.
 #[must_use]
 pub fn render_guardrails_only(s: &Strategy) -> String {
     let mut out = String::new();
+    let mut shown = 0usize;
+    let mut hidden = 0usize;
     for g in &s.guardrails {
         let g = g.trim();
         if g.is_empty() {
             continue;
         }
+        if shown >= GUARDRAIL_PROMPT_MAX_ITEMS {
+            hidden += 1;
+            continue;
+        }
+        shown += 1;
         out.push_str("- ");
-        out.push_str(g);
+        out.push_str(&crate::utils::text_format::truncate_reserving(
+            g,
+            GUARDRAIL_PROMPT_MAX_CHARS,
+            "…",
+        ));
         out.push('\n');
+    }
+    if hidden > 0 {
+        out.push_str(&format!("- … ({hidden} more guardrails elided)\n"));
     }
     out.truncate(out.trim_end().len());
     out
 }
+
+/// Prompt-side ceilings for [`render_guardrails_only`] — see its doc.
+const GUARDRAIL_PROMPT_MAX_ITEMS: usize = 10;
+const GUARDRAIL_PROMPT_MAX_CHARS: usize = 300;
 
 /// Workflow per-node global frame: the run-global objective + cross-cutting
 /// guardrails ONLY. Drops the coarse phase list — in a heterogeneous DAG the

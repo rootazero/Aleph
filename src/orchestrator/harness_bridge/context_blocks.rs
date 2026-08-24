@@ -110,7 +110,13 @@ pub async fn active_timer_loop(session_key: &str) -> Option<String> {
     // `stable_summary`, not `human_summary`: this lands in the system prompt,
     // which must not carry wall-clock-derived bytes. The live countdown rides
     // the transient tail instead — see `live_deadline_status`.
-    Some(format!("{} ({})", state.prompt, state.stable_summary()))
+    //
+    // `state.prompt` is the user's watch instruction — free text, potentially
+    // long — and `TimerLoopLayer` only passes this string through (it sits in
+    // `prompt_contract::CONDITIONALLY_SILENT`, so the per-layer ratchet reads
+    // 0 B for it). The bound therefore lives here, in the producer.
+    let prompt = crate::utils::text_format::truncate_reserving(state.prompt.trim(), 400, "…");
+    Some(format!("{} ({})", prompt, state.stable_summary()))
 }
 
 /// Fetch the session's welded Strategy for the prompt weld. Returns the
@@ -272,13 +278,23 @@ pub(crate) fn render_goal_summary(goal: &crate::goal::Goal) -> String {
         goal.waiting_on_task.as_deref(),
         goal.waiting_until_ms.is_some(),
     ) {
-        (Some(task_id), _) => format!(", parked (waiting on task '{task_id}')"),
+        (Some(task_id), _) => format!(
+            ", parked (waiting on task '{}')",
+            crate::utils::text_format::truncate_reserving(task_id, 100, "…")
+        ),
         (None, true) => ", parked (waiting)".to_string(),
         (None, false) => String::new(),
     };
+    // `objective` is user-authored free text and this render lands in the
+    // per-turn DYNAMIC system block via `StandingGoalLayer` — a pass-through
+    // layer in `prompt_contract::CONDITIONALLY_SILENT`, so the per-layer byte
+    // ratchet measures it as 0 B and the bound must live here, in the
+    // producer (the same rule `render_progress_bounded` documents). 400
+    // chars mirrors `PROMPT_PLAN_LIMITS.max_objective_chars`.
+    let objective = crate::utils::text_format::truncate_reserving(goal.objective.trim(), 400, "…");
     format!(
         "{} (status=active{budget}{deadline}{pursuit}{parked})",
-        goal.objective
+        objective
     )
 }
 

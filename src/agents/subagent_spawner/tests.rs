@@ -247,6 +247,8 @@ mod tests {
             // mechanics, and a wired compactor would put a side-channel LLM
             // call behind the scripted provider.
             context_budget_config: None,
+            context_budget_refiner: None,
+            primary_context_window: None,
             cheap_summary_provider: None,
         }
     }

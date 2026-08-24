@@ -23,22 +23,35 @@ pub const DEFAULT_PROMPT_CHARS: usize = 80_000;
 /// prompt grow unbounded.
 pub const MAX_PROMPT_CHARS: usize = 480_000;
 
+/// Scale a window (tokens) into a clamped budget: `window × multiplier`,
+/// clamped into `[floor, ceil]`. Single skeleton behind
+/// [`window_char_budget`] (multiplier = `fraction × prose ratio`) and
+/// `window_token_budget` (multiplier = `fraction`), so the f64 precision cap
+/// and clamp discipline live in exactly one place. `floor` pins each legacy
+/// fixed cap as a lower bound and must not exceed `ceil` (callers pass
+/// compile-time constants that satisfy this).
+#[must_use]
+fn scale_window_to_budget(window_tokens: u64, multiplier: f64, floor: usize, ceil: usize) -> usize {
+    const MAX_PRECISE_F64: u64 = 1u64 << 53;
+    let capped = window_tokens.min(MAX_PRECISE_F64);
+    ((capped as f64 * multiplier) as usize).clamp(floor, ceil)
+}
+
 /// Scale a character budget to a model context window: take `fraction` of the
 /// window (in tokens), widen tokens→chars via the crate-wide prose ratio
 /// ([`pressure::DEFAULT_PROSE_RATIO`](crate::context::budget::pressure::DEFAULT_PROSE_RATIO)),
 /// then clamp into `[floor, ceil]`. Single source of the "size a char cap to
 /// the window" math shared by the system-prompt budget
 /// ([`TokenBudget::from_context_window`]) and the identity / extra-file caps,
-/// so the three stay consistent. `floor` pins each legacy fixed cap as a lower
-/// bound and must not exceed `ceil` (callers pass compile-time constants that
-/// satisfy this).
+/// so the three stay consistent.
 #[must_use]
 pub fn window_char_budget(window_tokens: u64, fraction: f64, floor: usize, ceil: usize) -> usize {
-    const MAX_PRECISE_F64: u64 = 1u64 << 53;
-    let capped = window_tokens.min(MAX_PRECISE_F64);
-    let scaled_chars =
-        capped as f64 * fraction * crate::context::budget::pressure::DEFAULT_PROSE_RATIO;
-    (scaled_chars as usize).clamp(floor, ceil)
+    scale_window_to_budget(
+        window_tokens,
+        fraction * crate::context::budget::pressure::DEFAULT_PROSE_RATIO,
+        floor,
+        ceil,
+    )
 }
 
 /// Budget configuration for system prompt assembly.
@@ -50,6 +63,13 @@ pub struct TokenBudget {
     /// Warning mode for truncation events.
     pub truncation_warning: TruncationWarning,
     pub max_total_tokens: Option<usize>,
+    /// Cross-run calibrated estimator factor (`observed / estimated`), seeded
+    /// from the same per-model carry-over the history-side `ContextBudget`
+    /// seeds from, so the token hard gate below judges the prompt with the
+    /// accuracy the EWMA calibration converged to instead of the raw
+    /// char-ratio heuristic. `1.0` (the default) is byte-identical to the
+    /// uncalibrated path.
+    pub estimate_factor: f64,
 }
 
 impl Default for TokenBudget {
@@ -58,6 +78,7 @@ impl Default for TokenBudget {
             max_total_chars: DEFAULT_PROMPT_CHARS,
             truncation_warning: TruncationWarning::default(),
             max_total_tokens: None,
+            estimate_factor: 1.0,
         }
     }
 }
@@ -90,15 +111,37 @@ impl TokenBudget {
             ..Self::default()
         }
     }
+
+    /// Attach the cross-run calibrated estimator factor (see
+    /// [`Self::estimate_factor`]). Clamped to the same band
+    /// `ContextBudget::observe_actual_usage` clamps live observations to, so
+    /// a degenerate carry-over cannot whipsaw the gate.
+    #[must_use]
+    pub fn with_estimate_factor(mut self, factor: f64) -> Self {
+        if factor.is_finite() {
+            self.estimate_factor = factor.clamp(
+                crate::context::budget::CALIBRATION_MIN,
+                crate::context::budget::CALIBRATION_MAX,
+            );
+        }
+        self
+    }
 }
 
 const DEFAULT_PROMPT_TOKENS: usize = 20_000;
 const MAX_PROMPT_TOKENS: usize = 120_000;
 
 fn window_token_budget(window_tokens: u64, fraction: f64, floor: usize, ceil: usize) -> usize {
-    const MAX_PRECISE_F64: u64 = 1u64 << 53;
-    let capped = window_tokens.min(MAX_PRECISE_F64);
-    ((capped as f64 * fraction) as usize).clamp(floor, ceil)
+    scale_window_to_budget(window_tokens, fraction, floor, ceil)
+}
+
+/// Content-aware token estimate scaled by the budget's calibration factor
+/// (see [`TokenBudget::estimate_factor`]). The single funnel every gate in
+/// this module measures through, so a seeded factor applies uniformly to the
+/// fast path and the binary search.
+fn estimate_with_factor(content: &str, factor: f64) -> usize {
+    (crate::context::budget::pressure::estimate_tokens_smart(content) as f64 * factor).round()
+        as usize
 }
 
 /// Warning mode for truncation events.
@@ -186,6 +229,14 @@ pub fn truncate_with_head_tail(
     result
 }
 
+/// Headroom the char gate reserves for the model-visible truncation notice
+/// when warnings are enabled, so appending the notice cannot push the
+/// assembled prompt back over the char budget. Bound to the notice's actual
+/// rendered length by `notice_fits_within_reserve` below — this used to be a
+/// bare `400` with nothing tying it to the template, so a longer notice edit
+/// would have silently eroded the budget it protects.
+pub(crate) const TRUNCATION_NOTICE_RESERVE: usize = 400;
+
 /// Render a model-visible truncation notice for the assembled system prompt.
 ///
 /// Activates the [`TruncationWarning`] policy (previously declared but never
@@ -219,93 +270,73 @@ pub fn render_truncation_notice(mode: TruncationWarning, saved_chars: usize) -> 
     ))
 }
 
-/// Fit the dynamic system-prompt suffix within the total budget, protecting
-/// the stable prefix as a non-negotiable floor.
-///
-/// The stable prefix (persona / tools / security) is never touched: that keeps
-/// the persona+tooling floor intact (hermes parity) and, crucially, preserves
-/// Anthropic's prefix cache — the cache breakpoint sits exactly at the
-/// stable/dynamic boundary, so trimming only the `cache: false` suffix leaves
-/// the cached prefix byte-stable. Only the dynamic suffix (memory, session,
-/// runtime hints) is head/tail truncated via [`truncate_with_head_tail`], with
-/// a model-visible [`render_truncation_notice`] appended when content is cut.
-///
 /// Returns `dynamic` unchanged when the assembled prompt is already within
-/// budget — the overwhelming common case, so this is a no-op (and byte-stable)
-/// for normal-sized prompts.
+/// budget — the overwhelming common case, so this is a no-op (byte-stable,
+/// zero-copy: the input is returned, never cloned) for normal-sized prompts.
 ///
-/// `stable_len` is the stable prefix's **character** count (the budget is in
-/// characters), so callers pass `stable.chars().count()`. All measurement here
-/// is character-based to match [`truncate_with_head_tail`] — a CJK glyph counts
+/// `stable` is the stable prefix, protected as a non-negotiable floor; only
+/// the dynamic suffix is head/tail truncated. All measurement here is
+/// character-based to match [`truncate_with_head_tail`] — a CJK glyph counts
 /// once, not thrice.
-#[must_use]
-pub fn fit_dynamic_suffix(stable_len: usize, dynamic: String, budget: &TokenBudget) -> String {
-    fit_dynamic_suffix_impl(None, stable_len, dynamic, budget)
-}
-
 #[must_use]
 pub(crate) fn fit_dynamic_suffix_with_content(
     stable: &str,
     dynamic: String,
     budget: &TokenBudget,
 ) -> String {
-    fit_dynamic_suffix_impl(Some(stable), stable.chars().count(), dynamic, budget)
-}
-
-fn fit_dynamic_suffix_impl(
-    stable: Option<&str>,
-    stable_len: usize,
-    dynamic: String,
-    budget: &TokenBudget,
-) -> String {
     let original_chars = dynamic.chars().count();
-    let char_limit = budget.max_total_chars.saturating_sub(stable_len);
-    let notice_reserve = usize::from(budget.truncation_warning != TruncationWarning::Off) * 400;
+    let char_limit = budget.max_total_chars.saturating_sub(stable.chars().count());
+    let notice_reserve =
+        usize::from(budget.truncation_warning != TruncationWarning::Off)
+            * TRUNCATION_NOTICE_RESERVE;
     let mut upper = original_chars;
     if char_limit < original_chars {
         upper = char_limit.saturating_sub(notice_reserve);
     }
 
-    let mut trimmed = if upper < original_chars {
-        truncate_with_head_tail(&dynamic, upper, 0.6, 0.3)
-    } else {
-        dynamic.clone()
-    };
-
-    let token_cap = budget.max_total_tokens;
-    if let (Some(stable), Some(token_cap)) = (stable, token_cap) {
-        let mut combined = String::with_capacity(stable.len() + trimmed.len());
-        combined.push_str(stable);
-        combined.push_str(&trimmed);
-        let already_fits =
-            crate::context::budget::pressure::estimate_tokens_smart(&combined) <= token_cap;
-        if !already_fits {
-            upper = upper.min(trimmed.chars().count());
-            let mut low = 0usize;
-            let mut high = upper.saturating_add(1);
-            while low + 1 < high {
-                let middle = low + (high - low) / 2;
-                let candidate = truncate_with_head_tail(&dynamic, middle, 0.6, 0.3);
-                let saved = original_chars.saturating_sub(candidate.chars().count());
-                let notice = render_truncation_notice(budget.truncation_warning, saved);
-                let mut candidate_prompt = String::with_capacity(
-                    stable.len() + candidate.len() + notice.as_ref().map_or(0, String::len),
-                );
-                candidate_prompt.push_str(stable);
-                candidate_prompt.push_str(&candidate);
-                if let Some(notice) = notice {
-                    candidate_prompt.push_str(&notice);
-                }
-                if crate::context::budget::pressure::estimate_tokens_smart(&candidate_prompt)
-                    <= token_cap
-                {
-                    low = middle;
-                } else {
-                    high = middle;
-                }
+    // Fast path: within the char budget — the overwhelming common case.
+    // Returns the input unmoved (no clone); only the token hard gate can
+    // still force trimming from here.
+    if upper >= original_chars {
+        if let Some(token_cap) = budget.max_total_tokens {
+            let mut combined = String::with_capacity(stable.len() + dynamic.len());
+            combined.push_str(stable);
+            combined.push_str(&dynamic);
+            if estimate_with_factor(&combined, budget.estimate_factor) <= token_cap {
+                return dynamic;
             }
-            trimmed = truncate_with_head_tail(&dynamic, low, 0.6, 0.3);
+        } else {
+            return dynamic;
         }
+    }
+
+    // Slow path: the char gate and/or the token gate bites.
+    let mut trimmed = truncate_with_head_tail(&dynamic, upper, 0.6, 0.3);
+
+    if let Some(token_cap) = budget.max_total_tokens {
+        upper = upper.min(trimmed.chars().count());
+        let mut low = 0usize;
+        let mut high = upper.saturating_add(1);
+        while low + 1 < high {
+            let middle = low + (high - low) / 2;
+            let candidate = truncate_with_head_tail(&dynamic, middle, 0.6, 0.3);
+            let saved = original_chars.saturating_sub(candidate.chars().count());
+            let notice = render_truncation_notice(budget.truncation_warning, saved);
+            let mut candidate_prompt = String::with_capacity(
+                stable.len() + candidate.len() + notice.as_ref().map_or(0, String::len),
+            );
+            candidate_prompt.push_str(stable);
+            candidate_prompt.push_str(&candidate);
+            if let Some(notice) = notice {
+                candidate_prompt.push_str(&notice);
+            }
+            if estimate_with_factor(&candidate_prompt, budget.estimate_factor) <= token_cap {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        trimmed = truncate_with_head_tail(&dynamic, low, 0.6, 0.3);
     }
 
     let saved = original_chars.saturating_sub(trimmed.chars().count());
@@ -389,6 +420,7 @@ mod tests {
             max_total_chars: 10_000,
             max_total_tokens: Some(100),
             truncation_warning: TruncationWarning::Off,
+            ..TokenBudget::default()
         };
         let stable = "stable prefix";
         let dynamic = "中文内容".repeat(1_000);
@@ -525,6 +557,65 @@ mod tests {
     }
 
     #[test]
+    fn estimate_factor_tightens_token_gate() {
+        // A converged calibration factor scales the estimate the token gate
+        // judges: factor 2.0 must trim a prompt the raw estimate passed.
+        let budget = TokenBudget {
+            max_total_chars: 100_000,
+            max_total_tokens: Some(1_000),
+            truncation_warning: TruncationWarning::Off,
+            ..TokenBudget::default()
+        };
+        let stable = "stable prefix ";
+        let dynamic = "ab cd ef gh ".repeat(233); // ~2.8k chars ≈ 800 tokens at the prose ratio
+        let uncalibrated = fit_dynamic_suffix_with_content(stable, dynamic.clone(), &budget);
+        assert_eq!(
+            uncalibrated, dynamic,
+            "raw estimate (~800 tokens) must pass the 1,000-token gate"
+        );
+        let calibrated =
+            fit_dynamic_suffix_with_content(stable, dynamic, &budget.with_estimate_factor(2.0));
+        assert!(
+            calibrated.len() < uncalibrated.len(),
+            "a 2.0 estimate factor must force the gate to trim"
+        );
+    }
+
+    #[test]
+    fn estimate_factor_clamps_to_shared_band() {
+        // Non-finite seeds are ignored; finite ones clamp to the same band
+        // `ContextBudget::observe_actual_usage` clamps live observations to.
+        assert_eq!(
+            TokenBudget::default().with_estimate_factor(f64::NAN).estimate_factor,
+            1.0
+        );
+        assert_eq!(
+            TokenBudget::default().with_estimate_factor(100.0).estimate_factor,
+            crate::context::budget::CALIBRATION_MAX
+        );
+        assert_eq!(
+            TokenBudget::default().with_estimate_factor(0.01).estimate_factor,
+            crate::context::budget::CALIBRATION_MIN
+        );
+    }
+
+    #[test]
+    fn notice_fits_within_reserve() {
+        // The char gate reserves TRUNCATION_NOTICE_RESERVE for the notice;
+        // the longest notice the renderer can produce for any in-budget trim
+        // must fit inside it, or appending the notice silently erodes the
+        // budget. saved_chars is bounded by MAX_PROMPT_CHARS and
+        // approx_tokens adds at most the same digit count.
+        let notice = render_truncation_notice(TruncationWarning::Always, MAX_PROMPT_CHARS)
+            .expect("notice rendered");
+        assert!(
+            notice.len() <= TRUNCATION_NOTICE_RESERVE,
+            "notice ({} B) outgrew its reserve ({TRUNCATION_NOTICE_RESERVE} B) — raise the const, not the template",
+            notice.len()
+        );
+    }
+
+    #[test]
     fn notice_reports_saved_chars_in_system_reminder() {
         let notice = render_truncation_notice(TruncationWarning::Once, 4096)
             .expect("notice rendered when content trimmed");
@@ -544,7 +635,8 @@ mod tests {
         // Common path: assembled prompt within budget → suffix untouched.
         let budget = TokenBudget::default();
         let dynamic = "session context".to_string();
-        let out = fit_dynamic_suffix(1000, dynamic.clone(), &budget);
+        let stable = "S".repeat(1000);
+        let out = fit_dynamic_suffix_with_content(&stable, dynamic.clone(), &budget);
         assert_eq!(
             out, dynamic,
             "under-budget suffix must pass through unchanged"
@@ -558,16 +650,16 @@ mod tests {
             ..TokenBudget::default()
         };
         // Stable prefix is a protected floor of 500 chars; dynamic is huge.
-        let stable_len = 500;
+        let stable = "S".repeat(500);
         let dynamic = "D".repeat(50_000);
-        let out = fit_dynamic_suffix(stable_len, dynamic, &budget);
+        let out = fit_dynamic_suffix_with_content(&stable, dynamic, &budget);
         // Suffix shrank well below its original size...
         assert!(out.len() < 50_000);
         // ...and the model is told it happened.
         assert!(out.contains("<system-reminder>"));
         assert!(out.contains("trimmed"));
         // Total (stable + trimmed suffix) stays in the neighbourhood of budget.
-        assert!(stable_len + out.len() <= budget.max_total_chars + 600);
+        assert!(stable.len() + out.len() <= budget.max_total_chars + 600);
     }
 
     #[test]
@@ -577,7 +669,8 @@ mod tests {
             truncation_warning: TruncationWarning::Off,
             ..TokenBudget::default()
         };
-        let out = fit_dynamic_suffix(200, "D".repeat(40_000), &budget);
+        let stable = "S".repeat(200);
+        let out = fit_dynamic_suffix_with_content(&stable, "D".repeat(40_000), &budget);
         assert!(out.len() < 40_000, "still trims to protect the budget");
         assert!(
             !out.contains("<system-reminder>"),
@@ -593,7 +686,8 @@ mod tests {
             max_total_chars: 100,
             ..TokenBudget::default()
         };
-        let out = fit_dynamic_suffix(5000, "D".repeat(2000), &budget);
+        let stable = "S".repeat(5000);
+        let out = fit_dynamic_suffix_with_content(&stable, "D".repeat(2000), &budget);
         assert!(out.contains("<system-reminder>"));
     }
 }

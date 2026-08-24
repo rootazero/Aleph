@@ -71,6 +71,21 @@ impl HarnessRunner for AgentHarnessRunner {
         self.context_budget_config.clone()
     }
 
+    /// Hand the spawner the SAME per-run refiner this runner re-keys its own
+    /// prompt budget with, so a child pinned to a narrow model gets a prompt
+    /// budget sized to ITS window, not the chain minimum's.
+    fn context_budget_refiner(
+        &self,
+    ) -> Option<crate::orchestrator::deps_builder::ContextBudgetRefiner> {
+        self.context_budget_refiner.clone()
+    }
+
+    /// Hand the spawner the SAME window override this runner feeds its own
+    /// refinement, so parent and child resolve windows identically.
+    fn primary_context_window(&self) -> Option<u32> {
+        self.primary_context_window
+    }
+
     /// Hand the spawner the SAME cheap-tier summarizer this runner routes its
     /// own compaction to, so a child's compactor is tiered on the same terms.
     fn cheap_summary_provider(&self) -> Option<Arc<dyn AiProvider>> {
@@ -425,6 +440,10 @@ impl HarnessRunner for AgentHarnessRunner {
             )
         });
         let prompt_token_budget = refined_context_budget.as_ref().map(|cfg| cfg.token_budget);
+        // Seed the prompt-side token gate from the same calibration carry-over
+        // the history budget seeds from below, so both sides estimate with the
+        // accuracy the EWMA converged to under this model's tokenizer.
+        let prompt_estimate_factor = calibration_seed_for_model(&CALIBRATION_CARRYOVER, &gauge_model);
 
         // Run-start recall (ONCE, pre-loop) → fenced String for the builder;
         // also backfills routing_attribution.task_emb for the observer (symmetry).
@@ -460,6 +479,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 routing_text,
                 has_session_summaries,
                 prompt_token_budget,
+                prompt_estimate_factor,
                 &envelope,
             )
             .await
@@ -1147,6 +1167,30 @@ impl HarnessRunner for AgentHarnessRunner {
             let provider = self.default_provider.current();
             let sandbox: std::sync::Arc<dyn crate::sandbox::Sandbox> =
                 std::sync::Arc::new(crate::sandbox::NoopSandbox);
+            // Same per-model refinement `run` applies above, so the overhead
+            // estimate is produced under the prompt budget the real turn will
+            // use — a `None` here used to mean the fixed
+            // `TokenBudget::default()` (80k chars, no token gate), which could
+            // disagree with the serving model's refined budget.
+            let serving_provider = provider
+                .serving_provider_hint()
+                .map_or_else(|| provider.name().to_string(), std::borrow::Cow::into_owned);
+            let prompt_token_budget = self.context_budget_config.as_ref().map(|base| {
+                self.context_budget_refiner.as_ref().map_or_else(
+                    || base.clone(),
+                    |refiner| {
+                        refiner.refine_for_serving_model(
+                            base,
+                            &model,
+                            &serving_provider,
+                            self.primary_context_window,
+                        )
+                    },
+                )
+            });
+            let prompt_token_budget = prompt_token_budget.as_ref().map(|cfg| cfg.token_budget);
+            let prompt_estimate_factor =
+                calibration_seed_for_model(&CALIBRATION_CARRYOVER, &model);
             let system_prompt = self
                 .build_system_prompt(
                     &agent_id,
@@ -1161,7 +1205,8 @@ impl HarnessRunner for AgentHarnessRunner {
                     // Static overhead estimate: no real history, so no session
                     // summaries — keeps the cached estimate stable.
                     false,
-                    None,
+                    prompt_token_budget,
+                    prompt_estimate_factor,
                     // Empty envelope on the estimate path: an approval / usage-mode
                     // line or a run-specific cwd here would pollute the cached
                     // per-(agent, model) overhead with another run's facts.
@@ -1235,13 +1280,52 @@ fn calibration_seed_for_model(
 /// Store the factor a completed run converged to, keyed by `model`. Overwrites
 /// whatever model held the slot before (single-slot: the next run on THIS
 /// model seeds from it; any other model misses and starts uncalibrated).
+///
+/// Also the drift-alarm funnel: every converged factor passes through here,
+/// so the band-edge check lives here rather than in any observer. The alarm
+/// is edge-triggered — it fires when THIS model's factor crosses out of the
+/// band, stays quiet while it keeps storing out-of-band factors, and re-arms
+/// when a run converges back inside (or the slot changes model).
 fn store_calibration_carryover(
     slot: &crate::sync_primitives::Mutex<Option<(String, f64)>>,
     model: &str,
     factor: f64,
 ) {
     let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+    let was_outside = matches!(
+        guard.as_ref(),
+        Some((m, f)) if m == model && !(CALIBRATION_DRIFT_LOW..=CALIBRATION_DRIFT_HIGH).contains(f)
+    );
+    let now_outside = !(CALIBRATION_DRIFT_LOW..=CALIBRATION_DRIFT_HIGH).contains(&factor);
+    if now_outside && !was_outside {
+        tracing::warn!(
+            model = %model,
+            factor,
+            band_low = CALIBRATION_DRIFT_LOW,
+            band_high = CALIBRATION_DRIFT_HIGH,
+            "token estimator drift: converged calibration factor left the healthy band — \
+             every char-based token estimate for this model (prompt budget gates included) \
+             is being corrected by this factor; check the model's tokenizer or content mix"
+        );
+    }
     *guard = Some((model.to_string(), factor));
+}
+
+/// Healthy band for the converged estimator-calibration factor. Inside it the
+/// char-ratio estimator is doing its job; outside it every char-based token
+/// figure this process produces is off by more than ~a third and an operator
+/// should know which model did that. Deliberately wider than the EWMA's
+/// single-observation clamp — the alarm is about the CONVERGED factor.
+const CALIBRATION_DRIFT_LOW: f64 = 0.75;
+const CALIBRATION_DRIFT_HIGH: f64 = 1.35;
+
+/// Read the process-wide calibration carry-over for `model` — the prompt-side
+/// twin of the history-side seed applied at run setup. The prompt token hard
+/// gate (`thinker::prompt_budget`) and the subagent spawner seed their
+/// estimate factor from the same slot, so both sides judge tokens with the
+/// accuracy the EWMA converged to under the same tokenizer.
+pub(crate) fn seeded_calibration_for_model(model: &str) -> Option<f64> {
+    calibration_seed_for_model(&CALIBRATION_CARRYOVER, model)
 }
 
 /// The one place that says which model directive wins.

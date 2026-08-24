@@ -47,9 +47,10 @@ const CALIBRATION_ALPHA: f64 = 0.3;
 /// Clamp band for a single observation's correction factor. A char-ratio
 /// estimate is rarely off by more than ~2× either way; values outside this band
 /// signal noise (a mid-flight resend, a degenerate provider usage report) and
-/// are clamped rather than allowed to whipsaw the budget.
-const CALIBRATION_MIN: f64 = 0.25;
-const CALIBRATION_MAX: f64 = 4.0;
+/// are clamped rather than allowed to whipsaw the budget. `pub(crate)` so the
+/// prompt-side gate (`thinker::prompt_budget`) seeds from the same band.
+pub(crate) const CALIBRATION_MIN: f64 = 0.25;
+pub(crate) const CALIBRATION_MAX: f64 = 4.0;
 /// Width of the "preventive band" sitting just below the warning threshold.
 /// Inside `[warning - PREVENTIVE_BAND_WIDTH, warning)` the deterministic
 /// preflight cheap passes are allowed to fire; below it they are a no-op.
