@@ -6,6 +6,7 @@
 //! in reasoning, never enter `src/harness/` (keeps R10).
 
 pub mod member_prompt;
+pub mod speaker;
 pub mod targets;
 pub mod transcript;
 
@@ -98,6 +99,7 @@ use crate::gateway::event_emitter::team_fanout::{
 use crate::gateway::event_emitter::{CollectingEventEmitter, EventEmitter};
 use crate::gateway::execution_engine::{ExecutionError, RunRequest};
 use crate::gateway::reply_emitter::extract_final_response;
+use crate::gateway::security::SecurityStore;
 use crate::routing::session_key::SessionKey;
 use crate::sync_primitives::{Arc, Mutex};
 use crate::teams::messages::{MessageStore, MessageType, NewMessage};
@@ -321,6 +323,11 @@ pub struct GroupChatBroadcaster {
     /// Operator-tunable storm-prevention guards (§4.5). `Default` reproduces the
     /// historical hardcoded caps, so an unconfigured deployment is unchanged.
     config: BroadcastConfig,
+    /// User-identity store, for resolving human transcript rows' `author_user_id`
+    /// to a display name (`speaker::resolve_labels`, spec §6.2 humanization).
+    /// `None` degrades every human row's label to its raw user id — never blocks
+    /// or fails a run over a display-name lookup (P7).
+    security_store: Option<Arc<SecurityStore>>,
 }
 
 impl GroupChatBroadcaster {
@@ -332,6 +339,7 @@ impl GroupChatBroadcaster {
         planner_provider: Option<Arc<dyn crate::providers::AiProvider>>,
         coord_task_store: Option<Arc<dyn CoordTaskStore>>,
         config: BroadcastConfig,
+        security_store: Option<Arc<SecurityStore>>,
     ) -> Self {
         Self {
             ctx,
@@ -340,6 +348,7 @@ impl GroupChatBroadcaster {
             planner_provider,
             coord_task_store,
             config,
+            security_store,
         }
     }
 
@@ -686,15 +695,34 @@ impl GroupChatBroadcaster {
             }
         }
 
-        // Pull latest transcript (including the just-arrived message) and format it
-        let history = self
+        // Pull latest transcript (including the just-arrived message) and format it.
+        // Human rows are all stored under `RESERVED_USER_HANDLE` regardless of who
+        // actually spoke (the real speaker lives in `author_user_id`), so `from_agent`
+        // alone cannot tell Alice from Bob — resolve each row's speaker label through
+        // the single derivation in `speaker` (spec §6.2 humanization) before formatting.
+        let raw = self
             .msg_store
             .list_team_messages(&team_id, 200)
             .await
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let labels = speaker::resolve_labels(self.security_store.as_ref(), &raw);
+        // `labels`' keys are already exactly the thread's distinct human authors
+        // (`resolve_labels` builds them from this same `raw` history), and its
+        // values already carry the store's degrade-to-raw-id fallback — so the
+        // human roster is just those entries, formatted and sorted by user id
+        // for a deterministic prompt (sorting by the resolved label would let a
+        // display-name rename reshuffle the roster's order for no reason).
+        let mut human_ids: Vec<&String> = labels.keys().collect();
+        human_ids.sort();
+        let human_roster: String = human_ids
             .into_iter()
-            .map(|m| (m.from_agent, m.content))
-            .collect::<Vec<_>>();
+            .map(|uid| format!("{}(human)", labels[uid]))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let history: Vec<(String, String)> = raw
+            .into_iter()
+            .map(|m| (speaker::speaker_label(&m, &labels), m.content))
+            .collect();
         let transcript =
             transcript::format_transcript(&history, self.config.transcript_token_budget);
 
@@ -704,6 +732,7 @@ impl GroupChatBroadcaster {
             &agent_id,
             &role,
             &roster_label,
+            &human_roster,
             &transcript,
             is_leader,
             &team_name,

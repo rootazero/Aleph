@@ -107,9 +107,16 @@ pub struct ResolvedTargets {
 ///
 /// This is the multi-human activation gate's mention lexer — the ONLY one.
 /// It reuses [`extract_mentions`] + [`MENTION_ALL`] and means exactly what
-/// [`resolve_targets`]'s mention arm means (roster-filtered, reserved-handle
-/// dropped), so a message that would resolve to at least one dispatch target
-/// under `resolve_targets` is exactly a message this returns `true` for.
+/// [`resolve_targets`]'s MENTION ARM means (roster-filtered, reserved-handle
+/// dropped): a message that resolves to a non-empty target set THROUGH THAT
+/// ARM is exactly a message this returns `true` for. This is deliberately
+/// NOT full equivalence with "`resolve_targets` yields a non-empty target
+/// set" — `resolve_targets` also has a leader-fallback arm that yields a
+/// non-empty target set for a message with no mention at all, and this
+/// function correctly returns `false` for that case. That gap is not a bug
+/// to close: it IS the observe gate (spec §6.2) — an unaddressed message in
+/// a multi-human thread must NOT count as an activation mention, or every
+/// message would activate the roster and there would be no observe mode.
 /// Never re-derive the `@` grammar at a second call site — see the module
 /// doc on [`extract_mentions`] for the full grammar (fenced code, inline
 /// code, backslash escapes, email addresses).

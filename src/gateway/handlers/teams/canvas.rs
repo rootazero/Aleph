@@ -157,16 +157,12 @@ pub async fn handle_chat_send(
     // Real-time fan-out to the OTHER humans in the thread — both modes emit
     // this; an observed message is still live-visible to the room, it just
     // does not mint a run. `display_name` is UI sugar (never persisted): a
-    // failed/missing user lookup falls back to the raw id, same as every
-    // other display-name resolution in this crate.
-    let display_name: Option<String> = author.as_ref().map(|uid| {
-        security_store
-            .get_user(uid)
-            .ok()
-            .flatten()
-            .map(|u| u.display_name)
-            .unwrap_or_else(|| uid.clone())
-    });
+    // failed/missing user lookup falls back to the raw id, via the single
+    // derivation `speaker::resolve_display_name` (same degradation contract
+    // `speaker::resolve_labels` gives the transcript rendering below).
+    let display_name: Option<String> = author
+        .as_ref()
+        .map(|uid| crate::teams::broadcast::speaker::resolve_display_name(&security_store, uid));
     crate::gateway::event_emitter::team_fanout::publish_team_event(
         &params.team_id,
         "message",
@@ -234,6 +230,7 @@ pub async fn handle_chat_send(
         team_planner_provider,
         coord_task_store,
         broadcast_cfg,
+        Some(Arc::clone(&security_store)),
     );
     // The minted run_id is the fan-out TREE identity. Register the tree
     // BEFORE spawning the dispatch (and before this RPC returns), so the id
