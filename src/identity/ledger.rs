@@ -41,13 +41,13 @@
 //! the outcome instead of assuming it.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
 
 use tokio::sync::{mpsc, oneshot};
 
 use super::keystore::{AgentIdentityRow, AgentKeystore, KeyError};
 use super::record::{LedgerRecord, NewRecord};
 use super::verify::{verify_chain, ChainReport};
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
 
 /// Buffered appends before producers start waiting. Sized like the audit
@@ -382,8 +382,53 @@ pub enum LedgerCommandError {
     Key(#[from] KeyError),
 }
 
-static LEDGER: OnceLock<Arc<AgentLedger>> = OnceLock::new();
-static WRITER: OnceLock<mpsc::Sender<LedgerJob>> = OnceLock::new();
+/// `IndistinguishableDefault`, derived from every reader: this handle is used
+/// as an EXISTENCE ORACLE, never for its value.
+/// `tools::scoped::ledger::ledger_intent` opens with a bare
+/// `crate::identity::global()?;`, `record_allowlist_refusal` and
+/// `sandbox::exec_approval::gate::record_gate_decision` both open with
+/// `if crate::identity::global().is_none() { return; }`. So an uninstalled
+/// ledger does not fail a call — it makes every tool call, every approval
+/// decision and every refusal go unrecorded, and the chain that results
+/// verifies clean.
+///
+/// That is precisely the third case this module's own header does not cover:
+/// it distinguishes "the ledger looks quiet" from "the ledger stopped working"
+/// via [`AgentLedger::lost`], and an uninstalled ledger reads as the FORMER
+/// with `lost` at zero, because nothing ever failed — nothing was ever tried.
+static LEDGER: CapabilitySlot<Arc<AgentLedger>> = CapabilitySlot::new(
+    "identity/ledger",
+    MissingSemantics::IndistinguishableDefault {
+        reads_as: "an empty ledger that verifies clean -- every tool call, \
+                   approval and refusal went unrecorded, and `lost` reads 0",
+    },
+);
+
+/// `FailsClosed`: the reader that decides this is [`submit`], which answers
+/// `LedgerCommandError::NotInstalled` — an error whose own text names the
+/// missing input and where it comes from ("It is installed by
+/// `aleph-server start`"). [`flush`] answers `false`, and [`record`] returns
+/// silently, but `record`'s production callers all stand behind [`LEDGER`]'s
+/// oracle above, so `record`'s silent arm is not the one an operator meets.
+///
+/// The two are installed together in one act by [`install`], so their absence
+/// is always jointly observed; they are two slots because they are two
+/// handles, and Task 11's roster counts handles.
+static WRITER: CapabilitySlot<mpsc::Sender<LedgerJob>> =
+    CapabilitySlot::new("identity/ledger-writer", MissingSemantics::FailsClosed);
+
+/// The handles above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn ledger_slot() -> &'static dyn SlotStatus {
+    &LEDGER
+}
+
+#[allow(dead_code)]
+pub(crate) fn writer_slot() -> &'static dyn SlotStatus {
+    &WRITER
+}
 
 /// Install the process-wide ledger and start its writer task.
 ///
@@ -396,7 +441,7 @@ pub fn install(ledger: Arc<AgentLedger>) -> Option<tokio::task::JoinHandle<()>> 
         return None;
     }
     let (tx, mut rx) = mpsc::channel::<LedgerJob>(LEDGER_QUEUE);
-    if LEDGER.set(ledger.clone()).is_err() || WRITER.set(tx).is_err() {
+    if !LEDGER.install(ledger.clone()) || !WRITER.install(tx) {
         return None;
     }
     Some(tokio::spawn(async move {
