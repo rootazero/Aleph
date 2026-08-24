@@ -8,6 +8,15 @@ DerivedData/
 # so committing it would leak the secret. Regenerate locally via ./generate.sh.
 *.xcodeproj/
 
+# The app's Info.plist is GENERATED the same way: xcodegen writes it from the
+# `info:` block in project.yml on every generate, resolving
+# CFBundleShortVersionString from the repo's VERSION file and CFBundleVersion
+# from the clock. Tracking the output meant (a) every ./generate.sh dirtied the
+# tree, and (b) the committed copy was a second, always-stale statement of the
+# version — VERSION is the single source (see CLAUDE.md, 版本管理). project.yml
+# is the source, this file is the build output. Regenerate via ./generate.sh.
+AlephPaneliOS/Resources/Info.plist
+
 # Screenshots / scratch
 *.png
 # ...but DO track app-icon / asset-catalog images (real source assets)

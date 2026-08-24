@@ -36,6 +36,10 @@ targets:
     sources:
       - AlephPaneliOS
     info:
+      # GENERATED OUTPUT — xcodegen rewrites this file on every `generate`, so it
+      # is gitignored (see .gitignore). The properties below are the source; edit
+      # them here, never the plist. Version strings resolve from the repo's
+      # VERSION file via ./generate.sh (dev) / ./release-testflight.sh (upload).
       path: AlephPaneliOS/Resources/Info.plist
       properties:
         CFBundleDisplayName: Aleph Panel
