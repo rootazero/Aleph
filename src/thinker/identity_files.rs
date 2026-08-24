@@ -285,6 +285,33 @@ pub struct IdentityWriteOutcome {
     pub backup_path: Option<PathBuf>,
 }
 
+/// Validate the write path *before* any filesystem side effect, returning the
+/// single error message the caller should surface. Centralised so the sync
+/// `write_identity_file` and the async `write_identity_file_async` cannot
+/// disagree on what counts as a refused write — a previous shape had two
+/// copies of this check (one returning `Err(String)`, one returning
+/// `ToolError`) and they drifted on the MEMORY.md priority ordering.
+fn validate_identity_write(file_name: &str, content: &str) -> Result<(), String> {
+    // MEMORY.md is owned entirely by the curated-memory module, not by the
+    // identity-file path. It is not one of IDENTITY_FILE_NAMES, so this guard
+    // must run BEFORE validate_file_name — otherwise the generic "Invalid
+    // file name" error would shadow this actionable deprecation message.
+    // The name list and the wording live in `config::agent_manager` so this
+    // surface cannot drift from `agents.files.set` / `write_identity_file`.
+    if crate::config::agent_manager::is_curated_owned(file_name) {
+        return Err(crate::config::agent_manager::curated_owned_reason(
+            file_name,
+        ));
+    }
+    validate_identity_file_name(file_name)?;
+    if content.len() > MAX_IDENTITY_FILE_SIZE {
+        return Err(format!(
+            "Content exceeds maximum size limit of {MAX_IDENTITY_FILE_SIZE} bytes"
+        ));
+    }
+    Ok(())
+}
+
 /// Write `content` to `<agent_dir>/<file_name>`, validating the name, enforcing
 /// the size cap, creating the directory, and snapshotting any prior version
 /// first. Curated-memory-owned names (`MEMORY.md`) are rejected via the single
@@ -300,26 +327,68 @@ pub fn write_identity_file(
     file_name: &str,
     content: &str,
 ) -> Result<IdentityWriteOutcome, String> {
-    if crate::config::agent_manager::is_curated_owned(file_name) {
-        return Err(crate::config::agent_manager::curated_owned_reason(
-            file_name,
-        ));
-    }
-    validate_identity_file_name(file_name)?;
-
-    if content.len() > MAX_IDENTITY_FILE_SIZE {
-        return Err(format!(
-            "Content exceeds maximum size limit of {MAX_IDENTITY_FILE_SIZE} bytes"
-        ));
-    }
+    validate_identity_write(file_name, content)?;
 
     std::fs::create_dir_all(agent_dir)
         .map_err(|e| format!("Failed to create agent directory: {e}"))?;
 
     let path = agent_dir.join(file_name);
-    let backup_path = backup_identity_file(agent_dir, file_name, &path);
+    // Snapshotting uses blocking I/O — push it onto the blocking pool so a
+    // large prior file (up to 1 MB) doesn't stall the runtime. The follow-up
+    // `std::fs::write` stays on the current thread because by then the
+    // blocking work is done and the write itself is on the agent's hot path.
+    let backup_path = tokio::task::block_in_place(|| backup_identity_file(agent_dir, file_name, &path));
 
     std::fs::write(&path, content).map_err(|e| format!("Failed to write {file_name}: {e}"))?;
+
+    Ok(IdentityWriteOutcome {
+        bytes_written: content.len(),
+        backup_path,
+    })
+}
+
+/// Async counterpart to [`write_identity_file`] used by the `self_config`
+/// tool (which is reached from an async tool runtime) and by the
+/// `identity.*` RPC handlers (which are async and have a runtime already).
+///
+/// The two paths used to be separate hand-rolled re-implementations — the
+/// tool re-derived `is_curated_owned` + `validate_identity_file_name` +
+/// 1 MB cap + `create_dir_all` + backup + write because the sync helper
+/// above blocked the runtime. The duplication let the MEMORY.md deprecation
+/// message drift and the size cap drift (`MAX_FILE_CONTENT_SIZE` was a
+/// local constant in `self_config.rs` with the same value but no shared
+/// test). They now share [`validate_identity_write`] and the file-write
+/// body, so a future drift would have to land twice.
+pub async fn write_identity_file_async(
+    agent_dir: &Path,
+    file_name: &str,
+    content: &str,
+) -> Result<IdentityWriteOutcome, String> {
+    validate_identity_write(file_name, content)?;
+
+    tokio::fs::create_dir_all(agent_dir)
+        .await
+        .map_err(|e| format!("Failed to create agent directory: {e}"))?;
+
+    let path = agent_dir.join(file_name);
+    let agent_dir = agent_dir.to_path_buf();
+    let path_for_backup = path.clone();
+    // Backup is the blocking leg (std::fs::copy + chrono timestamp). The
+    // shape of the result is preserved — None on any failure, mirroring the
+    // sync helper's best-effort contract. The closure is `move`, so the
+    // `&str` argument must be owned (`String`) to satisfy `'static`. We
+    // clone up front so the error message below can still name the file.
+    let file_name_owned = file_name.to_string();
+    let backup_path = tokio::task::spawn_blocking(move || {
+        backup_identity_file(&agent_dir, &file_name_owned, &path_for_backup)
+    })
+    .await
+    .ok()
+    .flatten();
+
+    tokio::fs::write(&path, content)
+        .await
+        .map_err(|e| format!("Failed to write {file_name}: {e}"))?;
 
     Ok(IdentityWriteOutcome {
         bytes_written: content.len(),
@@ -332,6 +401,67 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn write_identity_file_async_round_trips_through_disk() {
+        // Mirror of `write_then_load_round_trips_through_disk` for the async
+        // helper. Both helpers share `validate_identity_write`, so a drift
+        // in either side (e.g. one tightening the size cap the other missed)
+        // would show up here as well. The shared `MAX_IDENTITY_FILE_SIZE`
+        // constant is also exercised through both paths in the oversize
+        // test below.
+        let dir = TempDir::new().unwrap();
+        let initial = write_identity_file_async(dir.path(), "SOUL.md", "async v1")
+            .await
+            .expect("initial async write");
+        assert!(initial.backup_path.is_none());
+
+        let files_v1 = IdentityFiles::load(dir.path(), &IdentityFilesConfig::default());
+        assert_eq!(files_v1.get("SOUL.md"), Some("async v1"));
+
+        let second = write_identity_file_async(dir.path(), "SOUL.md", "async v2")
+            .await
+            .expect("second async write");
+        assert!(second.backup_path.is_some(), "overwrite must snapshot");
+
+        let files_v2 = IdentityFiles::load(dir.path(), &IdentityFilesConfig::default());
+        assert_eq!(
+            files_v2.get("SOUL.md"),
+            Some("async v2"),
+            "async loader must observe the most recent write"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_identity_file_async_rejects_memory_md_with_curated_message() {
+        // The shared `validate_identity_write` must surface the curated-owned
+        // error BEFORE the generic "Invalid file name" — both the sync and
+        // async helpers depend on this ordering, and the action message is
+        // what the model reads to route to the `remember` tool.
+        let dir = TempDir::new().unwrap();
+        let err = write_identity_file_async(dir.path(), "MEMORY.md", "anything")
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("remember"),
+            "curated-owned message must lead: {err}"
+        );
+        assert!(!dir.path().join("MEMORY.md").exists());
+    }
+
+    #[tokio::test]
+    async fn write_identity_file_async_rejects_oversize_with_size_message() {
+        // Pin the shared cap for the async helper — guards against a future
+        // refactor that tightens one helper and forgets the other.
+        let dir = TempDir::new().unwrap();
+        let oversize = "x".repeat(MAX_IDENTITY_FILE_SIZE + 1);
+        let err = write_identity_file_async(dir.path(), "SOUL.md", &oversize)
+            .await
+            .unwrap_err();
+        assert!(err.contains("exceeds maximum size"), "msg was: {err}");
+        assert!(!dir.path().join("SOUL.md").exists());
+        assert!(!dir.path().join("backups").exists());
+    }
 
     #[test]
     fn write_then_load_round_trips_through_disk() {

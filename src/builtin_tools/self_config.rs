@@ -15,7 +15,9 @@ use crate::config::patcher::{get_nested_value, ConfigPatcher, PatchRequest};
 use crate::config::Config;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
-use crate::thinker::identity_files::{backup_identity_file, validate_identity_file_name};
+use crate::thinker::identity_files::{
+    validate_identity_file_name, write_identity_file_async, IdentityWriteOutcome,
+};
 use crate::tools::AlephTool;
 
 use super::error::ToolError;
@@ -24,8 +26,12 @@ use super::error::ToolError;
 // Constants
 // =============================================================================
 
-/// Maximum size for identity file content (1 MB)
-const MAX_FILE_CONTENT_SIZE: usize = 1024 * 1024;
+/// Maximum size for identity file content — the cap now lives at
+/// `thinker::identity_files::MAX_IDENTITY_FILE_SIZE`. This re-export exists
+/// only because the test below builds an oversize payload by adding 1 to the
+/// cap; pulling it through the lib keeps the test honest when the cap moves.
+#[cfg(test)]
+const MAX_FILE_CONTENT_SIZE: usize = crate::thinker::identity_files::MAX_IDENTITY_FILE_SIZE;
 
 /// Broadcast hook fired after a successful tool-driven config change
 /// (`update_config` / `rollback_config`) so connected Panels refetch.
@@ -267,76 +273,49 @@ impl SelfConfigTool {
     }
 
     async fn write_file(&self, file_name: &str, content: &str) -> Result<SelfConfigOutput> {
-        // MEMORY.md is owned entirely by the curated-memory module, not by the
-        // identity-file path. It is not one of IDENTITY_FILE_NAMES, so this guard
-        // must run BEFORE validate_file_name — otherwise the generic "Invalid
-        // file name" error would shadow this actionable deprecation message.
-        // The name list and the wording live in `config::agent_manager` so this
-        // surface cannot drift from `agents.files.set` / `write_identity_file`.
-        if crate::config::agent_manager::is_curated_owned(file_name) {
-            return Err(
-                ToolError::Execution(crate::config::agent_manager::curated_owned_reason(
-                    file_name,
-                ))
-                .into(),
-            );
-        }
-
-        validate_identity_file_name(file_name).map_err(ToolError::InvalidArgs)?;
-
-        if content.len() > MAX_FILE_CONTENT_SIZE {
-            return Ok(SelfConfigOutput {
-                success: false,
-                message: format!(
-                    "Content exceeds maximum size limit of {MAX_FILE_CONTENT_SIZE} bytes"
-                ),
-                data: None,
-                preview_message: None,
-            });
-        }
-
-        if let Err(e) = tokio::fs::create_dir_all(&self.agent_dir).await {
-            return Ok(SelfConfigOutput {
-                success: false,
-                message: format!("Failed to create agent directory: {e}"),
-                data: None,
-                preview_message: None,
-            });
-        }
-
-        let path = self.agent_dir.join(file_name);
-
-        // Identity files get the same overwrite protection as config.toml
-        // (which snapshots via ConfigPatcher): a destructive LLM rewrite of
-        // SOUL.md must always be recoverable. Best-effort — a failed backup
-        // never blocks the write itself.
-        let backup = backup_identity_file(&self.agent_dir, file_name, &path);
-
-        match tokio::fs::write(&path, content).await {
-            Ok(()) => {
-                let bytes = content.len();
-                let backup_note = backup
+        // Delegate to the shared async writer so the tool surface cannot drift
+        // from `identity.set` / `identity.clear` (and so the MEMORY.md
+        // deprecation, 1 MB cap, and backup ordering live in one place).
+        // The shared helper returns an `Err(String)`; we map it back to the
+        // tool's split contract: validation / size failures are operator
+        // mistakes and stay `Err(ToolError)` so the model rewrites the call;
+        // filesystem failures are surfaced as `success: false` with the
+        // human-readable message so the runtime can route them.
+        match write_identity_file_async(&self.agent_dir, file_name, content).await {
+            Ok(IdentityWriteOutcome {
+                bytes_written,
+                backup_path,
+            }) => {
+                let backup_note = backup_path
                     .as_ref()
                     .map(|p| format!(" Previous version backed up to {}.", p.display()))
                     .unwrap_or_default();
                 Ok(SelfConfigOutput {
                     success: true,
                     message: format!(
-                        "Written {bytes} bytes to {file_name}. Changes will take effect on the next turn.{backup_note}"
+                        "Written {bytes_written} bytes to {file_name}. \
+                         Changes will take effect on the next turn.{backup_note}"
                     ),
                     data: Some(serde_json::json!({
-                        "bytes_written": bytes,
-                        "backup_path": backup.map(|p| p.display().to_string()),
+                        "bytes_written": bytes_written,
+                        "backup_path": backup_path.map(|p| p.display().to_string()),
                     })),
                     preview_message: None,
                 })
             }
-            Err(e) => Ok(SelfConfigOutput {
-                success: false,
-                message: format!("Failed to write {file_name}: {e}"),
-                data: None,
-                preview_message: None,
-            }),
+            // Curator-owned (MEMORY.md) is an actionable operator mistake —
+            // the model should re-route to the `remember` tool, so we raise
+            // the underlying message as a ToolError. The shared helper
+            // embeds the same wording `identity.set` reports, so the model
+            // sees a single canonical "use the `remember` tool" message
+            // whichever entry point it picks.
+            Err(e) if crate::config::agent_manager::is_curated_owned(file_name) => {
+                Err(ToolError::Execution(e).into())
+            }
+            // Validation / oversize — operator mistake on the request shape.
+            // The shared helper already produced the right human-readable
+            // string; surface it as a ToolError so the model can retry.
+            Err(e) => Err(ToolError::InvalidArgs(e).into()),
         }
     }
 
@@ -1038,14 +1017,14 @@ mod tests {
         // enforces (and that the RPC handler now classifies as
         // INVALID_PARAMS). The cap is also tested at the library surface
         // and at the RPC handler — this is the third leg of the triangle.
-        // Oversize content is an operator mistake, so the tool reports it
-        // as `success: false` with a human message instead of returning an
-        // `Err(ToolError)` — the model is expected to retry with a smaller
+        // Oversize content is an operator mistake, so the tool raises a
+        // `ToolError::InvalidArgs` carrying the same wording the shared
+        // helper produced — the model is expected to retry with a smaller
         // payload, and a non-actionable error would only waste a turn.
         let tmp = TempDir::new().unwrap();
         let tool = tool_with_dir(tmp.path());
         let oversize = "x".repeat(super::MAX_FILE_CONTENT_SIZE + 1);
-        let result = AlephTool::call(
+        let err = AlephTool::call(
             &tool,
             SelfConfigArgs::WriteFile {
                 file_name: "SOUL.md".to_string(),
@@ -1053,12 +1032,11 @@ mod tests {
             },
         )
         .await
-        .unwrap();
-        assert!(!result.success, "oversize write must report failure");
+        .unwrap_err();
+        let msg = err.to_string();
         assert!(
-            result.message.contains("exceeds maximum size"),
-            "size error must be human-readable, got: {}",
-            result.message
+            msg.contains("exceeds maximum size"),
+            "size error must be human-readable, got: {msg}"
         );
         assert!(!tmp.path().join("SOUL.md").exists());
         assert!(

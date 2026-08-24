@@ -31,7 +31,7 @@ use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, IN
 use crate::sync_primitives::Arc;
 use crate::thinker::identity_files::{
     backup_identity_file, list_identity_file_status, validate_identity_file_name,
-    write_identity_file,
+    write_identity_file_async,
 };
 use crate::thinker::identity_profile::AgentIdentityProfile;
 use crate::thinker::soul::SoulManifest;
@@ -194,7 +194,7 @@ pub async fn handle_set(request: JsonRpcRequest, ctx: SharedIdentityCtx) -> Json
     };
 
     let file_name = set.file_name.as_deref().unwrap_or(DEFAULT_IDENTITY_FILE);
-    match write_identity_file(&agent_dir, file_name, &set.content) {
+    match write_identity_file_async(&agent_dir, file_name, &set.content).await {
         Ok(outcome) => JsonRpcResponse::success(
             request.id,
             json!({
