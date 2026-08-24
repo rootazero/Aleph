@@ -384,6 +384,25 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         self.session_run_registry.run_id_for(session_key)
     }
 
+    /// How long `run_id` has been running, on the monotonic clock.
+    ///
+    /// Read from `ActiveRun::admitted_at` rather than `started_at` — see
+    /// [`ExecutionAdapter::run_elapsed_ms`](crate::gateway::execution_adapter::ExecutionAdapter::run_elapsed_ms)
+    /// for why the wall clock is the wrong reading to take here.
+    ///
+    /// Resolved from `active_runs` and not from the session registry: the
+    /// registry answers "which run", it holds no timing at all. A run that has
+    /// already left this map answers `None`, which is the same "I cannot tell"
+    /// a caller gets from an adapter with no run table.
+    pub async fn run_elapsed_ms(&self, run_id: &str) -> Option<u64> {
+        let runs = self.active_runs.read().await;
+        let elapsed = runs.get(run_id)?.admitted_at.elapsed().as_millis();
+        // Saturating rather than truncating: a run older than 584 million
+        // years is not a reading anybody should render, but wrapping it into
+        // a small number would render it as "just started".
+        Some(u64::try_from(elapsed).unwrap_or(u64::MAX))
+    }
+
     /// Set the media processor for multimodal attachment handling.
     #[must_use]
     pub fn with_media_processor(

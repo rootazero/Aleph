@@ -69,4 +69,8 @@ where
     fn active_run_for_session(&self, session_key: &str) -> Option<String> {
         Self::active_run_for_session(self, session_key)
     }
+
+    async fn run_elapsed_ms(&self, run_id: &str) -> Option<u64> {
+        Self::run_elapsed_ms(self, run_id).await
+    }
 }

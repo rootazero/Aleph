@@ -28,21 +28,25 @@ use crate::gateway::source_census::production_prefix;
 
 /// `stream.*` methods with no `StreamEvent` twin, on purpose.
 ///
-/// All three carry session-list state that only the Panel has a surface for —
-/// sidebar rows (`session_updated`), the running-run dot
-/// (`running_set_changed`), and another room member's message echo
-/// (`session_user_message`). A terminal client attached to one conversation has
-/// nowhere to put any of them.
+/// Both carry session-LIST state that only the Panel has a surface for —
+/// sidebar rows (`session_updated`) and the running-run dot
+/// (`running_set_changed`). A terminal client is attached to one conversation
+/// and holds no list for either to update.
+///
+/// `session_user_message` sat here under that same sentence and it did not
+/// hold. That frame is about ONE session, and a terminal attached to that
+/// session has exactly the surface for it: its transcript. Exempting it meant a
+/// TUI in a shared room rendered a peer's answer with no question above it —
+/// the identical defect the Panel closed for itself, on a client that had the
+/// place to put the row all along. The lesson is the shape of the argument:
+/// "a terminal has nowhere to put it" is true of a LIST and false of a ROW, and
+/// one sentence exempted both.
 ///
 /// This list may only shrink without a deliberate edit: the census asserts it
 /// names exactly the un-twinned methods, so an entry that acquires a twin goes
 /// red as stale, and a NEW un-twinned frame cannot join it silently — someone
 /// has to type the name here and say why.
-const PANEL_ONLY_STREAM_METHODS: &[&str] = &[
-    "running_set_changed",
-    "session_updated",
-    "session_user_message",
-];
+const PANEL_ONLY_STREAM_METHODS: &[&str] = &["running_set_changed", "session_updated"];
 
 /// `(variant, method suffix)` for every `Some("stream.…")` arm of
 /// `GatewayEventFrame::stream_method`.

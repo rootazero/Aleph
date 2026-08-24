@@ -2336,6 +2336,15 @@ fn the_streamed_flag_is_cleared_when_the_next_run_is_accepted() {
 // Joining a running session, and not stealing somebody else's turn
 // ---------------------------------------------------------------------------
 
+/// `chat.history`'s answer for a live run with no age reported — the shape an
+/// older gateway sends, and the one most of these tests care about.
+fn joined(run_id: &str) -> ActiveRunJoin {
+    ActiveRunJoin {
+        run_id: run_id.to_string(),
+        elapsed_ms: None,
+    }
+}
+
 /// Before the server has answered "what is running here", an unheard-of run id
 /// is kept — the posture this screen has always had, and the one an older
 /// gateway (no `active_run` field) leaves it in.
@@ -2367,7 +2376,7 @@ fn a_run_that_started_before_this_screen_connected_is_dropped_once_reconciled() 
 #[test]
 fn attaching_to_a_running_session_adopts_its_run() {
     let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
-    state.adopt_active_run(Some("run-live".into()));
+    state.adopt_active_run(Some(joined("run-live")));
 
     assert_eq!(state.current_run.as_deref(), Some("run-live"));
     assert!(
@@ -2379,12 +2388,63 @@ fn attaching_to_a_running_session_adopts_its_run() {
     assert!(!state.frame_belongs_here("run-elsewhere"));
 }
 
+/// The elapsed timer reports the TURN's age, not this screen's attachment.
+///
+/// Joining a turn already four minutes deep used to start the indicator at
+/// zero, and nothing on screen said the number was a floor. The server sends a
+/// duration (never a start stamp — a client cannot subtract a timestamp
+/// without first answering "whose clock"), so this back-dates by it.
+#[test]
+fn an_adopted_run_is_back_dated_by_the_age_the_server_reported() {
+    let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
+    state.adopt_active_run(Some(ActiveRunJoin {
+        run_id: "run-live".into(),
+        elapsed_ms: Some(240_000),
+    }));
+
+    let started = state.run_started_at.expect("a joined run is timed");
+    assert!(
+        started.elapsed() >= Duration::from_secs(239),
+        "the indicator must read the turn's age, not the age of this join"
+    );
+}
+
+/// No age reported — an older gateway, or a run that left the engine's table
+/// between the handler's two lookups — falls back to counting from the join.
+/// That is a floor, and it is what this path always did; the one reading that
+/// would be a lie is claiming the turn started now.
+#[test]
+fn an_adopted_run_without_an_age_counts_from_the_join() {
+    let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
+    state.adopt_active_run(Some(joined("run-live")));
+
+    let started = state.run_started_at.expect("a joined run is timed");
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+/// An absurd reading must not take the client down. `Instant::now()` minus a
+/// duration reaching past the start of the monotonic clock panics, and this
+/// number arrives off a wire.
+#[test]
+fn an_impossible_age_falls_back_instead_of_panicking() {
+    let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
+    state.adopt_active_run(Some(ActiveRunJoin {
+        run_id: "run-live".into(),
+        elapsed_ms: Some(u64::MAX),
+    }));
+
+    assert!(
+        state.run_started_at.is_some(),
+        "the indicator still has to come on"
+    );
+}
+
 /// The adopted run is recorded by home session, so a `/session` switch away and
 /// back behaves like any other run: dropped while elsewhere, kept on return.
 #[test]
 fn an_adopted_run_follows_its_home_session_across_switches() {
     let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
-    state.adopt_active_run(Some("run-live".into()));
+    state.adopt_active_run(Some(joined("run-live")));
 
     state.switch_session("agent:main:main:s2");
     assert!(
@@ -2407,7 +2467,7 @@ fn an_adopted_run_follows_its_home_session_across_switches() {
 #[test]
 fn the_screens_own_run_survives_fifo_eviction() {
     let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
-    state.adopt_active_run(Some("run-live".into()));
+    state.adopt_active_run(Some(joined("run-live")));
 
     for i in 0..(super::events::RUN_SESSION_CAP + 8) {
         state.handle_gateway_event(StreamEvent::RunAccepted {
@@ -2448,4 +2508,231 @@ fn a_foreign_run_is_still_learned_after_reconciling() {
     // Learned, not merely dropped: switching to its home session picks it up.
     state.switch_session("agent:main:main:s2");
     assert!(state.frame_belongs_here("run-elsewhere"));
+}
+
+// ---------------------------------------------------------------------------
+// A room peer's message
+// ---------------------------------------------------------------------------
+
+/// One `stream.session_user_message` frame, addressed to `session_key`.
+fn peer_row(session_key: &str, author: &str, content: &str) -> StreamEvent {
+    StreamEvent::SessionUserMessage {
+        session_key: session_key.to_string(),
+        author_user_id: author.to_string(),
+        content: content.to_string(),
+        timestamp: "2026-08-23T10:00:00Z".to_string(),
+        seq: 7,
+    }
+}
+
+fn user_rows(state: &AppState) -> Vec<&str> {
+    state
+        .messages
+        .iter()
+        .filter_map(|m| match m {
+            ChatMessage::User { content, .. } => Some(content.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A teammate's message in a shared room becomes a row here.
+///
+/// Without it this screen watched a peer's answer stream in with no question
+/// above it: `RunAccepted` for their run carries THIS session's key, so the
+/// cross-session guard admits every frame of it, while the row behind it only
+/// arrived on the next attach — this client never re-hydrates mid-session.
+#[test]
+fn a_room_peers_message_becomes_a_user_row() {
+    let mut state = AppState::new("agent:main:room:s1".into(), "m".into());
+    state.my_user_id = Some("u-me".into());
+
+    state.handle_gateway_event(peer_row("agent:main:room:s1", "u-peer", "did you deploy?"));
+
+    assert_eq!(user_rows(&state), vec!["did you deploy?"]);
+}
+
+/// The viewer's own message is already on screen, optimistically. Echoing it
+/// would render it twice with nothing to clean the duplicate up.
+#[test]
+fn my_own_message_is_not_echoed_back_onto_the_screen() {
+    let mut state = AppState::new("agent:main:room:s1".into(), "m".into());
+    state.my_user_id = Some("u-me".into());
+
+    state.handle_gateway_event(peer_row("agent:main:room:s1", "u-me", "mine"));
+
+    assert!(user_rows(&state).is_empty());
+}
+
+/// Not knowing who I am is not evidence that somebody else typed it. An older
+/// gateway, a failed `users.me`, or a caller with no principal record all land
+/// here, and all of them must leave this exactly as it was before the frame
+/// existed — the row still arrives on the next attach.
+#[test]
+fn an_unknown_own_identity_disables_the_echo_rather_than_guessing() {
+    let mut state = AppState::new("agent:main:room:s1".into(), "m".into());
+    state.my_user_id = None;
+
+    state.handle_gateway_event(peer_row("agent:main:room:s1", "u-peer", "hello"));
+
+    assert!(user_rows(&state).is_empty());
+}
+
+/// A row for another conversation is dropped, the same way a foreign run's
+/// frames are: this screen holds one transcript and no session list to file it
+/// under.
+#[test]
+fn a_peer_message_for_another_session_is_dropped() {
+    let mut state = AppState::new("agent:main:room:s1".into(), "m".into());
+    state.my_user_id = Some("u-me".into());
+
+    state.handle_gateway_event(peer_row("agent:main:room:s2", "u-peer", "elsewhere"));
+
+    assert!(user_rows(&state).is_empty());
+}
+
+/// The peer's run may have opened its assistant bubble before the row arrives.
+/// A question rendered under its own answer reads as a reply to it, so the row
+/// goes above the one message still being written — and only that one.
+#[test]
+fn a_peer_message_lands_above_an_answer_already_streaming() {
+    let mut state = AppState::new("agent:main:room:s1".into(), "m".into());
+    state.my_user_id = Some("u-me".into());
+    state.messages.clear();
+    state.messages.push(ChatMessage::Assistant {
+        content: "settled turn".into(),
+        tools: Vec::new(),
+        reasoning: None,
+        is_streaming: false,
+    });
+    state.messages.push(ChatMessage::Assistant {
+        content: "answering".into(),
+        tools: Vec::new(),
+        reasoning: None,
+        is_streaming: true,
+    });
+
+    state.handle_gateway_event(peer_row("agent:main:room:s1", "u-peer", "the question"));
+
+    let shapes: Vec<&str> = state
+        .messages
+        .iter()
+        .map(|m| match m {
+            ChatMessage::User { .. } => "user",
+            ChatMessage::Assistant { is_streaming, .. } => {
+                if *is_streaming {
+                    "streaming"
+                } else {
+                    "assistant"
+                }
+            }
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(shapes, vec!["assistant", "user", "streaming"]);
+}
+
+/// Session-keyed and run-less by construction: the run that produced the row is
+/// somebody else's. If it ever carried a run id the cross-session guard would
+/// drop the frame before this arm ran — which is the shape that kept this frame
+/// exempted from the typed clients in the first place.
+#[test]
+fn a_peer_message_carries_no_run_id_for_the_guard_to_reject() {
+    let event = peer_row("agent:main:room:s1", "u-peer", "x");
+    assert_eq!(event.run_id(), "");
+}
+
+// ---------------------------------------------------------------------------
+// Losing the connection, and coming back
+// ---------------------------------------------------------------------------
+
+/// The reconciliation baseline belonged to the connection that just died.
+///
+/// This is the whole reason a reconnect has to be visible to this screen. Left
+/// armed, the guard goes on answering "not mine" about run ids it has never
+/// heard of — on the strength of an answer from a server it is no longer
+/// talking to, and against runs whose `RunAccepted` it could not have seen
+/// because it was offline when they started.
+#[test]
+fn losing_the_connection_disarms_the_cross_session_guard() {
+    let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
+    state.adopt_active_run(None);
+    assert!(
+        !state.frame_belongs_here("run-elsewhere"),
+        "reconciled: an unheard-of id is somebody else's"
+    );
+
+    state.on_disconnected();
+
+    assert!(
+        state.frame_belongs_here("run-elsewhere"),
+        "after a drop this screen cannot tell, and cannot-tell must mean keep"
+    );
+}
+
+/// A turn that was in flight when the socket died is not reported as over.
+/// This client stopped hearing it; that is not the same as it stopping.
+#[test]
+fn losing_the_connection_does_not_end_the_run_it_was_watching() {
+    let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
+    state.adopt_active_run(Some(joined("run-live")));
+
+    state.on_disconnected();
+
+    assert_eq!(state.current_run.as_deref(), Some("run-live"));
+    assert!(
+        state.run_started_at.is_some(),
+        "the working indicator must stay on: the turn is probably still going"
+    );
+    assert!(!state.is_connected, "the status dot must report the truth");
+}
+
+/// A reattach disarms the reconciliation baseline and forgets the run it
+/// believed was in flight — and leaves the transcript alone.
+///
+/// The transcript is swapped by `attach_session(.., AttachMode::Replace)` once
+/// the server's copy has arrived. Clearing it here instead would mean a
+/// `chat.history` that fails on a freshly-restored connection leaves the user
+/// on a blank screen, which is worse than the stale transcript it replaced.
+#[test]
+fn beginning_a_reattach_resets_the_run_but_not_the_transcript() {
+    let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
+    state.adopt_active_run(Some(joined("run-live")));
+    state.messages.push(ChatMessage::User {
+        content: "from before the drop".into(),
+        timestamp: row_timestamp(None),
+    });
+    let before = state.messages.len();
+
+    state.begin_reattach();
+
+    assert_eq!(
+        state.messages.len(),
+        before,
+        "the fetch has not happened yet — nothing may be thrown away on its behalf"
+    );
+    assert_eq!(state.current_run, None);
+    assert!(
+        state.frame_belongs_here("run-elsewhere"),
+        "nothing has been asked about this session yet — the guard must be disarmed \
+         until the attach answers"
+    );
+}
+
+/// Unlike `switch_session`, a reattach keeps the `/btw` overlay: the side
+/// thread belongs to the SAME conversation, which has not changed, and its
+/// derived key is still addressable server-side.
+#[test]
+fn beginning_a_reattach_keeps_the_side_question() {
+    let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
+    state.btw.begin("what does this flag do?".into());
+    state.btw.claim_run("run-side".into());
+
+    state.begin_reattach();
+
+    assert_eq!(
+        state.btw.active_run_id(),
+        Some("run-side"),
+        "the side question outlives a reconnect on the same conversation"
+    );
 }
