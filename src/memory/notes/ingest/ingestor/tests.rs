@@ -74,6 +74,7 @@ async fn plan_parses_valid_json() {
         .into(),
     ));
     let ing = DefaultCompoundIngestor {
+        tx_residue_gc_seconds: 3600,
         // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
@@ -104,6 +105,7 @@ async fn plan_returns_empty_on_invalid_json() {
     let (dir, backend, indexer) = mk().await;
     let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new("not json".into()));
     let ing = DefaultCompoundIngestor {
+        tx_residue_gc_seconds: 3600,
         // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
@@ -134,6 +136,7 @@ async fn plan_filters_invalid_ops() {
             {"kind":"append","note_path":"learning/y","new_facts":["f"],"new_links":[]}
         ]}"#.into()));
     let ing = DefaultCompoundIngestor {
+        tx_residue_gc_seconds: 3600,
         // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
@@ -187,6 +190,7 @@ async fn plan_keeps_seed_create_when_all_link_tokens_hallucinated() {
         .into(),
     ));
     let ing = DefaultCompoundIngestor {
+        tx_residue_gc_seconds: 3600,
         // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
@@ -230,6 +234,7 @@ async fn plan_resolves_reference_token_to_canonical_path() {
         .into(),
     ));
     let ing = DefaultCompoundIngestor {
+        tx_residue_gc_seconds: 3600,
         // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
@@ -282,6 +287,7 @@ async fn plan_drops_op_with_hallucinated_token() {
         .into(),
     ));
     let ing = DefaultCompoundIngestor {
+        tx_residue_gc_seconds: 3600,
         // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
@@ -525,6 +531,7 @@ async fn ingest_batch_refreshes_index_md_at_tail() {
         .into(),
     ));
     let ing = DefaultCompoundIngestor {
+        tx_residue_gc_seconds: 3600,
         // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
@@ -554,6 +561,86 @@ async fn ingest_batch_refreshes_index_md_at_tail() {
     assert!(
         body.contains("preference"),
         "index.md must list the touched 'preference' category; got:\n{body}"
+    );
+}
+
+/// Boot is not the only moment residue can appear, so it cannot be the only
+/// moment it is collected. All three `CompoundApplyTx` cleanup sites `warn!`
+/// and leave the tree when `remove_dir_all` fails, and that process keeps
+/// running — on a resident daemon "the next boot" bounds nothing.
+///
+/// This asserts at the real seam (`ingest_batch`, not the sweep function) for
+/// the reason the wire was missing in the first place: `sweep_tx_residue` had
+/// passing tests of its own the whole time it had exactly one caller. The live
+/// sibling is in the same test because the ingest-time caller is the one that
+/// genuinely races a concurrent apply — the age ceiling is load-bearing here in
+/// a way it never was at boot.
+#[tokio::test]
+async fn an_apply_clears_abandoned_staging_trees_before_staging_its_own() {
+    // rust-doctor-disable-next-line unwrap-in-production
+    let dir = tempfile::tempdir().unwrap();
+    let memory_dir = dir.path().join("note");
+    // rust-doctor-disable-next-line unwrap-in-production
+    let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+    // rust-doctor-disable-next-line excessive-clone
+    let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), backend.clone()));
+
+    let tx_root = memory_dir
+        .join("default")
+        .join(crate::memory::notes::ingest::TX_DIR);
+    let dead = tx_root.join("dead-tx");
+    let live = tx_root.join("live-tx");
+    // rust-doctor-disable-next-line unwrap-in-production
+    std::fs::create_dir_all(dead.join("preference")).unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
+    std::fs::create_dir_all(live.join("preference")).unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
+    std::fs::write(dead.join("preference/a.md"), "staged by a process that died").unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
+    std::fs::write(live.join("preference/b.md"), "staged by a sibling still working").unwrap();
+    let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7_200);
+    filetime::set_file_mtime(&dead, filetime::FileTime::from_system_time(two_hours_ago))
+        // rust-doctor-disable-next-line unwrap-in-production
+        .unwrap();
+
+    let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new(
+        r#"{"ops":[
+            {"kind":"create","note_path":"preference/editor","title":"editor",
+             "summary":"prefers vim","facts":["uses vim"],
+             "links":[],"tags":["tool"]}
+        ]}"#
+        .into(),
+    ));
+    let ing = DefaultCompoundIngestor {
+        tx_residue_gc_seconds: 3_600,
+        // rust-doctor-disable-next-line excessive-clone
+        store: backend.clone(),
+        indexer,
+        provider,
+        embedder: Arc::new(MockEmbeddingProvider::new(1024, "mock")),
+        orientation: None,
+        // rust-doctor-disable-next-line excessive-clone
+        memory_dir: memory_dir.clone(),
+        budget: RelatedBudget::default(),
+        embedding_manager: None,
+        gate: None,
+    };
+
+    let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
+    // rust-doctor-disable-next-line unwrap-in-production
+    let report = ing.ingest_batch("default", vec![raw], None).await.unwrap();
+    assert_eq!(report.created, 1, "the apply itself must still succeed");
+
+    assert!(
+        !dead.exists(),
+        "a staging tree older than the ceiling is residue; only an apply or a \
+         boot ever looks at this directory, and on a resident daemon the apply \
+         is the one that comes"
+    );
+    assert!(
+        live.exists(),
+        "a tree younger than the ceiling may belong to a concurrent apply still \
+         staging into it; deleting it would corrupt that apply"
     );
 }
 
@@ -597,6 +684,7 @@ async fn ingest_batch_degrades_when_embedding_fails() {
         .into(),
     ));
     let ing = DefaultCompoundIngestor {
+        tx_residue_gc_seconds: 3600,
         // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
@@ -650,6 +738,7 @@ async fn ingest_batch_pushes_and_flushes_embedding() {
         .into(),
     ));
     let ing = DefaultCompoundIngestor {
+        tx_residue_gc_seconds: 3600,
         // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
@@ -704,6 +793,7 @@ async fn end_to_end_append_on_existing() {
         .into(),
     ));
     let ing_seed = DefaultCompoundIngestor {
+        tx_residue_gc_seconds: 3600,
         // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         // rust-doctor-disable-next-line excessive-clone
@@ -739,6 +829,7 @@ async fn end_to_end_append_on_existing() {
         .into(),
     ));
     let ing2 = DefaultCompoundIngestor {
+        tx_residue_gc_seconds: 3600,
         // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         // rust-doctor-disable-next-line excessive-clone
@@ -826,6 +917,7 @@ async fn dedup_redirects_near_duplicate_create_to_append() {
 
     let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new("{}".into()));
     let ing = DefaultCompoundIngestor {
+        tx_residue_gc_seconds: 3600,
         // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
@@ -893,6 +985,7 @@ async fn dedup_disabled_keeps_create_unchanged() {
 
     let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new("{}".into()));
     let ing = DefaultCompoundIngestor {
+        tx_residue_gc_seconds: 3600,
         // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
@@ -947,6 +1040,7 @@ async fn dedup_never_self_redirects() {
 
     let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new("{}".into()));
     let ing = DefaultCompoundIngestor {
+        tx_residue_gc_seconds: 3600,
         // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
@@ -1012,6 +1106,7 @@ async fn run_dedup_tier(seed_vec: Vec<f32>, budget: RelatedBudget) -> Vec<PageOp
         .unwrap();
     let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new("{}".into()));
     let ing = DefaultCompoundIngestor {
+        tx_residue_gc_seconds: 3600,
         // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
@@ -1135,6 +1230,7 @@ fn mk_ingestor(
     // rust-doctor-disable-next-line excessive-clone
     let indexer = Arc::new(NoteIndexer::new(dir.path().join("note"), backend.clone()));
     let ing = DefaultCompoundIngestor {
+        tx_residue_gc_seconds: 3600,
         store: backend,
         indexer,
         provider: Arc::new(RecordingMockProvider::new(canned.into())),
@@ -1297,6 +1393,7 @@ async fn enforce_link_contract_links_via_keywords_when_related_empty() {
         .into(),
     ));
     let ing = DefaultCompoundIngestor {
+        tx_residue_gc_seconds: 3600,
         // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,

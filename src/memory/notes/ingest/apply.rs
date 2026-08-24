@@ -30,19 +30,32 @@ pub const TX_DIR: &str = ".tx";
 /// successful commit, a rollback, and the `Drop` impl that covers cancellation
 /// — and all three run *inside the process that created the tree*. Kill the
 /// server between staging and commit (`kill -9`, OOM, power loss) and the tree
-/// survives every one of them, permanently: nothing else in the repo so much as
-/// names `.tx`. The residue is a full copy of every note the batch was about to
-/// write, sitting inside the vault the product tells the user to open in
-/// Obsidian, and it accumulates one tree per unlucky death forever.
+/// survives every one of them, permanently. The residue is a full copy of every
+/// note the batch was about to write, sitting inside the vault the product
+/// tells the user to open in Obsidian, and it accumulates one tree per unlucky
+/// death forever.
+///
+/// **Two callers, because residue outlives its owner in two ways.**
+/// `full_rebuild_all` sweeps at boot, which covers the dead process — boot is
+/// the first thing that happens after it. It does *not* cover the second way:
+/// all three cleanup sites above `warn!` and leave the tree when
+/// `remove_dir_all` itself fails, and that process keeps running.
+/// `aleph-server` is a resident daemon, so "the next boot" is not a bound on
+/// anything. `DefaultCompoundIngestor::try_apply` therefore sweeps before
+/// staging its own tree — it wraps the only production `CompoundApplyTx::new`,
+/// so "every tree we create first clears the abandoned ones beside it" holds
+/// for the whole directory. Whichever comes first — the next apply in this
+/// corpus or the next boot — collects the residue.
 ///
 /// **Why an age threshold rather than "delete everything".** A live transaction
-/// owns its tree while it works, and this sweep can run alongside one (boot
-/// races nothing today, but a future nightly caller would). `older_than_secs`
-/// is the width of the window a transaction is allowed to take; an apply
-/// finishes in milliseconds, so the default hour is three orders of magnitude
-/// of headroom. A tree whose mtime cannot be read is **left alone** — "I could
-/// not look" is not evidence of "it is abandoned", and the other branch
-/// deletes. Same rule the vault watcher applies to its own stat failures.
+/// owns its tree while it works, and the ingest-time caller genuinely runs
+/// beside one: two concurrent applies on the same corpus each sweep the other's
+/// directory. `older_than_secs` is the width of the window a transaction is
+/// allowed to take; an apply finishes in milliseconds, so the default hour is
+/// three orders of magnitude of headroom. A tree whose mtime cannot be read is
+/// **left alone** — "I could not look" is not evidence of "it is abandoned",
+/// and the other branch deletes. Same rule the vault watcher applies to its own
+/// stat failures.
 ///
 /// Best-effort throughout: every failure is a named warning and the sweep
 /// continues, because a residue tree that survives one boot is a disk cost, and
@@ -1284,10 +1297,10 @@ mod residue_tests {
         filetime::set_file_mtime(path, filetime::FileTime::from_system_time(when)).unwrap();
     }
 
-    /// The defect: cleanup lives in commit, rollback and `Drop` — all three
-    /// inside the process that staged the tree. Kill that process and the tree
-    /// outlives every one of them, forever, because nothing else in the repo
-    /// even names `.tx`.
+    /// The defect this closed: cleanup lives in commit, rollback and `Drop` —
+    /// all three inside the process that staged the tree. Kill that process and
+    /// the tree outlives every one of them, and until this function existed
+    /// nothing else in the repo so much as named `.tx`.
     #[tokio::test]
     async fn an_abandoned_staging_tree_is_removed_and_a_live_one_is_not() {
         let dir = tempfile::tempdir().unwrap();
@@ -1313,7 +1326,7 @@ mod residue_tests {
 
     /// No `.tx` directory is the normal state for an agent that has never died
     /// mid-ingest. It must be silent, not an error and not a warning: this runs
-    /// once per corpus on every boot.
+    /// once per corpus on every boot *and* once before every apply.
     #[tokio::test]
     async fn a_corpus_that_never_staged_anything_sweeps_to_zero() {
         let dir = tempfile::tempdir().unwrap();
@@ -1336,10 +1349,6 @@ mod residue_tests {
         assert!(stray.exists());
     }
 
-    /// The staging root the constructor composes and the one the sweep walks
-    /// must be the same directory. Two literals is how a sweeper ends up
-    /// cleaning a path nothing writes to — reporting zero forever while the
-    /// residue piles up next door.
     /// The staging root the constructor composes and the one the sweep walks
     /// must be the same directory. Two literals is how a sweeper ends up
     /// cleaning a path nothing writes to — reporting zero forever while the

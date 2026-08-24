@@ -38,6 +38,27 @@ pub enum ProvenanceOrigin {
     Legacy,
 }
 
+impl ProvenanceOrigin {
+    /// The one word this origin is spelled with — in the inline
+    /// `<!-- origin: ... -->` marker that is the source of truth, and in the
+    /// `notes_provenance.origin` column that indexes it.
+    ///
+    /// It lives on the type because both of those are consumers. It used to
+    /// live next to the SQLite writer, whose doc said it "mirrors the literals
+    /// parsed by `extract_provenance_markers`" — a mirror is what you call a
+    /// second copy while it still agrees.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::RawSource => "raw_source",
+            Self::PriorNote => "prior_note",
+            Self::Inferred => "inferred",
+            Self::System => "system",
+            Self::Legacy => "legacy",
+        }
+    }
+}
+
 /// Per-fact provenance metadata extracted from inline HTML comments.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FactProvenance {

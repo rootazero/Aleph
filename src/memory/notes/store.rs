@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 
 use crate::error::AlephError;
-use crate::memory::notes::{FactProvenance, KnowledgeNote};
+use crate::memory::notes::KnowledgeNote;
 
 /// One row from `notes_review_queue` — async LLM review pending decision.
 #[derive(Debug, Clone)]
@@ -659,33 +659,20 @@ pub trait NoteStore: Send + Sync {
     }
 
     // -----------------------------------------------------------------
-    // Phase C2.9.2 governance: per-fact provenance + async review queue.
+    // Phase C2.9.2 governance: provenance reads + async review queue.
     // Default impls return empty/no-op so existing test mocks keep
     // compiling; the real bodies live on `SqliteMemoryBackend`.
+    //
+    // Per-*fact* provenance is deliberately not readable here. Its two
+    // methods (`upsert_provenance` / `get_provenance`) shipped with zero
+    // callers and were removed on 2026-08-23: the write was a byte-for-byte
+    // copy of the loop already inlined in `index_note`, and the read asked a
+    // question the note itself answers better — the table holds no fact text,
+    // so any caller wanting both would pair text from the file with
+    // provenance from the index. `notes_provenance` is read on the *reverse*
+    // axis instead, inside `notes_citing`, which is the one thing no single
+    // file can answer.
     // -----------------------------------------------------------------
-
-    /// Replace stored provenance rows for `(agent_id, note_path)` with `provs`,
-    /// one row per fact in declaration order.
-    async fn upsert_provenance(
-        &self,
-        agent_id: &str,
-        note_path: &str,
-        provs: &[FactProvenance],
-    ) -> Result<(), AlephError> {
-        let _ = (agent_id, note_path, provs);
-        Ok(())
-    }
-
-    /// Read all stored provenance rows for `(agent_id, note_path)`, ordered by
-    /// `fact_idx` ascending.
-    async fn get_provenance(
-        &self,
-        agent_id: &str,
-        note_path: &str,
-    ) -> Result<Vec<FactProvenance>, AlephError> {
-        let _ = (agent_id, note_path);
-        Ok(Vec::new())
-    }
 
     /// Source refs (raw-memory ids or prior-note paths) a note was distilled
     /// from — forward provenance. Default: empty.
@@ -698,7 +685,19 @@ pub trait NoteStore: Send + Sync {
     }
 
     /// Reverse provenance: note paths that cite a given source ref (raw id or
-    /// note path). Backed by `idx_notes_sources_ref`. Default: empty.
+    /// note path), deduped and ordered by path.
+    ///
+    /// Both citation levels count. `notes_sources` records note-level citation
+    /// (the `source_notes` frontmatter list); `notes_provenance` records
+    /// fact-level citation (an inline `<!-- src: ... -->` marker on one line).
+    /// Neither contains the other — a note can quote a raw in a single fact
+    /// without that raw reaching its frontmatter — so a reader of only the
+    /// first reports "not cited" for a note that visibly quotes the row. The
+    /// raw-retention invariant in `RAW_MEMORY.md` ("never delete a row while
+    /// this is non-empty") is stated against the union, and is only true of it.
+    ///
+    /// Backed by `idx_notes_sources_ref` and `idx_prov_agent_source`.
+    /// Default: empty.
     async fn notes_citing(
         &self,
         _agent_id: &str,

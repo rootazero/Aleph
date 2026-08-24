@@ -925,6 +925,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                             orientation: orientation.clone(),
                             memory_dir: note_dir.clone(),
                             budget,
+                            // Same ceiling the boot sweep uses. The ingest-time
+                            // caller is what covers a *live* process whose
+                            // `remove_dir_all` failed — boot only catches what a
+                            // dead one left behind, and this daemon is resident.
+                            tx_residue_gc_seconds: cfg.tx_residue_gc_seconds,
                             // B5.2 closed: the manager is hoisted above and
                             // lives as long as the ingestor, so the ingest
                             // tail pushes each touched note into the pending

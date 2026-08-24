@@ -16,6 +16,44 @@ mod tests {
         assert_eq!(provs[4].origin, types::ProvenanceOrigin::Legacy);
     }
 
+    /// `ProvenanceOrigin::as_str` is what the `notes_provenance.origin` column
+    /// is written with, and this parser is what reads the marker the column
+    /// indexes. They must spell the same five words.
+    ///
+    /// The encoding used to live beside the SQLite writer, guarded by a
+    /// round-trip through a private inverse in the same file — which proved
+    /// the two halves of that pair agreed with *each other* and said nothing
+    /// about the contract the doc actually claimed ("mirrors the literals
+    /// parsed by `extract_provenance_markers`"). Those literals are in this
+    /// module, so only a check that runs both directions can see them drift.
+    ///
+    /// It goes through the real parser rather than `PROVENANCE_RE`: a word the
+    /// regex accepts but the match arm maps to a different variant would pass
+    /// a regex-only check while a note and its indexed row disagreed about
+    /// where the same fact came from.
+    #[test]
+    fn every_origin_encodes_to_a_word_the_marker_parser_maps_back() {
+        for o in [
+            types::ProvenanceOrigin::RawSource,
+            types::ProvenanceOrigin::PriorNote,
+            types::ProvenanceOrigin::Inferred,
+            types::ProvenanceOrigin::System,
+            types::ProvenanceOrigin::Legacy,
+        ] {
+            let word = o.as_str();
+            let body = format!("- a claim <!-- origin: {word}, inferred: false -->");
+            let facts = parsing::extract_facts(&body);
+            assert_eq!(facts.len(), 1, "self-guard: the fixture must be one fact");
+            let parsed = parsing::extract_provenance_markers(&body, &facts);
+            assert_eq!(
+                parsed[0].origin, o,
+                "the origin column writes {word:?} for {o:?}, and the marker \
+                 parser reads {word:?} back as {:?}",
+                parsed[0].origin
+            );
+        }
+    }
+
     #[test]
     fn fts_body_strips_provenance_comments() {
         let n = KnowledgeNote::from_markdown("t",

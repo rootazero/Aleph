@@ -65,6 +65,7 @@ async fn compound_ingest_creates_and_links_pages() {
     ));
     let embedder: Arc<dyn EmbeddingProvider> = Arc::new(NoopEmbeddingProvider);
     let ing = DefaultCompoundIngestor {
+        tx_residue_gc_seconds: 3600,
         store: backend.clone(),
         indexer: indexer.clone(),
         provider,

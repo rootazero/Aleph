@@ -413,14 +413,16 @@ Both are materialized into SQLite tables `notes_sources` and `notes_provenance` 
 **L0 (Raw source):** `raw_memories` rows are the authoritative source. Read APIs:
 - `RawMemoryStore::get_raws_by_ids(ids)` — fetch raw rows by ID.
 - `RawMemoryStore::get_raws_by_session(session_id)` — fetch all raws in a session.
-- `NoteStore::notes_citing(raw_id)` — fetch all notes that reference a raw via `notes_sources` or `notes_provenance`.
+- `NoteStore::notes_citing(raw_id)` — every note that references a raw, from **both** tables: `notes_sources` (note-level, the `source_notes` frontmatter list) `UNION` `notes_provenance` (fact-level, an inline `<!-- src: ... -->` marker on one line). Neither contains the other — a note can quote a raw in a single fact without that raw reaching its frontmatter — and until 2026-08-23 the query read only the first, while this line, the trait doc, and the `RAW_MEMORY.md` retention invariant all already described the union.
 
 **Consumer:** The `memory_trace` builtin tool and the `memory.trace` gateway RPC expose the drill-down chain:
 - Kind `profile_section` → session IDs from `USER.md ## Sources`.
-- Kind `note` → `source_notes` list (L2→L1) and per-fact `fact_provenance`.
+- Kind `note` → `source_notes` list (L2→L1), plus a `facts[]` block: every fact of the note with its marker text stripped, its `origin` (`raw_source` / `prior_note` / `inferred` / `system` / `legacy`), its `inferred` flag and its `source_id`. This is the first structured read of that axis. The markers are written on every fact at ingest and stripped from every other rendering; the one other path that reaches a caller is `note_manage(action='get')`, which returns the raw file — capped, unstructured, and with nothing saying what the HTML comments mean.
 - Kind `raw` → raw-memory content from `raw_memories`.
 
 Missing or pruned raws are gracefully degraded with `pruned: true` marker; the chain never errors.
+
+**Where `facts[]` is read from.** The note markdown, not `notes_provenance`. The table is a projection of the same markers, rebuilt on every index pass, and it does not store fact text — so a reader wanting both would pair text from the file with provenance from the index and mis-attribute any fact whose note changed since. The table earns its place on the other axis only: the fact-level half of `notes_citing`, which no single file can answer. That is also why there is no `NoteStore::get_provenance` — a per-note forward read of the table was a second, weaker answer to a question the note itself answers, and it shipped with zero callers.
 
 ## 13. Subdocument Navigation
 

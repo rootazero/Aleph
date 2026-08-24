@@ -300,17 +300,40 @@ staging trees older than the ceiling and returns how many went.
 a non-zero count means a previous process died mid-ingest, and a count climbing
 across boots means something is killing the server during consolidation.
 
+**Boot alone was not enough (2026-08-23).** Residue outlives its owner in *two*
+ways, and the paragraph above only describes one. The other is in the three
+cleanup sites themselves: each of them `warn!`s and leaves the tree when
+`remove_dir_all` fails, and that process keeps running. `aleph-server` is a
+resident daemon, so "the next boot" bounds nothing — a transient filesystem
+error can leave a tree that outlives weeks of uptime.
+
+`DefaultCompoundIngestor::try_apply` therefore sweeps before staging a tree of
+its own. That is the seam because it wraps the only production
+`CompoundApplyTx::new`, so "every tree we create first clears the abandoned ones
+beside it" is a statement about the whole directory rather than about one
+caller. Whichever comes first — the next apply in this corpus or the next boot —
+collects the residue.
+
 Three decisions:
 
-- **Boot is the right time and a sufficient one.** Residue exists exactly
-  because a process died holding it, and this pass is the first thing that
-  happens afterwards.
+- **Boot is a right time, and the apply seam is the other one.** Residue exists
+  because a process died holding it (boot is the first thing that follows) *or*
+  because a live process could not delete it (the next apply is the first thing
+  that follows). A nightly dream stage was the obvious third candidate and was
+  not taken: it would need the cycle's own gates (idle, once-a-day, budget) to
+  fire, while the ingest seam runs exactly when the thing that creates residue
+  runs.
 - **Age threshold, not "delete everything under `.tx`".** A live transaction
   owns its tree while it works. `memory.compound_ingest.tx_residue_gc_seconds`
   (default 3,600) is the width of the window an apply may take; an apply takes
   milliseconds, so that is three orders of magnitude of headroom. The knob was
   written with this sweep in the original Spec-6 plan and then shipped for its
   whole life with **zero consumers** — a user-visible setting that did nothing.
+  The ceiling stopped being theoretical once the ingest caller landed: two
+  concurrent applies on one corpus each sweep the other's directory, so it is
+  now what keeps a sweep from deleting a sibling's staged work. Both callers
+  take it as an argument rather than reading config, because a sweep whose
+  policy is implicit is a sweep nobody can turn down.
 - **A tree whose mtime cannot be read is left alone.** "I could not look" is not
   evidence of "it is abandoned", and the other branch deletes — the same rule
   the vault watcher applies to its own stat failures (§6.4).

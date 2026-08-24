@@ -261,6 +261,26 @@ Private helpers
 
 **When high line count is acceptable**: When a file implements a well-defined interface (a trait or protocol) and the complexity comes from the depth of that implementation, not from breadth of concerns.
 
+**When the language sets the price** (`store_impl.rs`, 2,560 production lines).
+Rust requires one `impl Trait for Type` to be a single block, so a 53-method
+trait implementation cannot be split across files the way an inherent impl can.
+Every way of doing it anyway costs a layer that buys nothing on its own:
+
+- 53 delegating wrappers (`lock; call a free fn in a topic module`) — the SQL
+  becomes unit-testable against a bare `Connection`, at the price of a second
+  name for every method;
+- splitting `NoteStore` itself into `NoteIndexStore` / `NoteLinkStore` /
+  `NoteVectorStore` / `NoteGraphStore` / `NoteGovernanceStore` — architecturally
+  the right shape (P5, interface minimisation) and the only one with no wrapper
+  layer, but it touches 25 `dyn NoteStore` consumers and every test mock.
+
+Neither is a mechanical move, so neither belongs in a change whose point is that
+it changes no behaviour. **Recorded as a declared leftover on 2026-08-23**, with
+the sub-trait split as the preferred shape when it is taken. Compare
+`note_retrieval/`, split the same day for free: those are *inherent* methods, so
+the type simply gained more `impl` blocks and the only cost was `pub(super)`
+where a stage calls another stage.
+
 ---
 
 ## 7. Refactoring Backlog
@@ -279,6 +299,8 @@ Files identified for refactoring, ordered by priority. Each item links to the pa
 | File | Lines | Problem | Pattern |
 |------|-------|---------|---------|
 | `src/memory/context/mod.rs` | ~600 | Types now split across `context/` submodules | Pattern B (completed) |
+| `src/memory/note_retrieval/mod.rs` | 1808 → 81 | 880-line inherent impl + 875 lines of inline tests | Pattern A + `tests.rs` (completed 2026-08-23) |
+| `src/memory/store/sqlite/notes/store_impl.rs` | 2560 | One `impl NoteStore` block, 53 methods | **Blocked — see below** |
 | `src/browser/mod.rs` | 1459 | Two unrelated classes: `BrowserService` + `BrowserPool` | Pattern A + `pool.rs` |
 | `src/gateway/execution_engine.rs` | 1088 | Two engine implementations, state models mixed in | Pattern A + `types.rs` |
 

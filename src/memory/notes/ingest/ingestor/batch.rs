@@ -269,6 +269,31 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
         plan: &IngestPlan,
         batch_ids: &[String],
     ) -> Result<ApplyReport, ApplyError> {
+        // Clear abandoned sibling staging trees before adding one of our own.
+        //
+        // Boot is not a sufficient caller on its own. Residue outlives its
+        // process in two ways, not one: a `kill -9` between staging and commit
+        // (which boot does catch, because boot is the next thing that happens),
+        // and a `remove_dir_all` that *fails* while the process keeps running —
+        // all three cleanup sites in `CompoundApplyTx` log that failure and
+        // leave the tree. `aleph-server` is a resident daemon, so "the next
+        // boot" can be weeks of accumulation away.
+        //
+        // This is the seam because it is the only other place `.tx` is touched:
+        // `CompoundApplyTx::new` here is the single production writer of a
+        // staging tree, so "every tree we create first clears the abandoned
+        // ones beside it" is a statement about the whole directory. The age
+        // ceiling is what makes it safe to run next to a live sibling — an
+        // apply takes milliseconds and the default ceiling is an hour.
+        //
+        // A replan runs this twice; the second pass reads an empty directory.
+        crate::memory::notes::ingest::sweep_tx_residue(
+            &self.memory_dir,
+            agent_id,
+            self.tx_residue_gc_seconds,
+        )
+        .await;
+
         let mut tx = CompoundApplyTx::new(
             &self.indexer,
             &self.store,

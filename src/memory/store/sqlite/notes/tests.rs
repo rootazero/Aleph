@@ -1113,6 +1113,95 @@ mod tests {
         assert_eq!(citing, vec!["preference/typescript".to_string()]);
     }
 
+    /// A fact can quote a raw that never reaches the note's `source_notes`
+    /// list — that is the whole point of the inline `<!-- src: ... -->` marker,
+    /// which the ingest prompt asks the model to attach per line.
+    ///
+    /// `notes_citing` read `notes_sources` alone until 2026-08-23, so such a
+    /// note answered "does not cite this raw" while the marker was sitting in
+    /// it. Three documents already described the union — this trait's own doc,
+    /// `MEMORY_SYSTEM.md`, and the `RAW_MEMORY.md` retention invariant that
+    /// tells a future GC "do not delete a row while `notes_citing` is
+    /// non-empty". A GC honouring that against the narrower query would delete
+    /// exactly the rows the markers point at.
+    #[tokio::test]
+    async fn notes_citing_finds_a_raw_quoted_by_one_fact_and_not_by_the_note() {
+        use crate::memory::notes::{FactProvenance, ProvenanceOrigin};
+
+        let dir = tempfile::tempdir().unwrap();
+        let backend = SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap();
+        let note = KnowledgeNote {
+            title: "typescript".into(),
+            category: "preference".into(),
+            facts: vec!["prefers ts".into(), "quotes something".into()],
+            // Deliberately does NOT list `raw-fact-only`.
+            source_notes: vec!["raw-batch".into()],
+            fact_provenance: vec![
+                FactProvenance::default(),
+                FactProvenance {
+                    origin: ProvenanceOrigin::RawSource,
+                    source_id: Some("raw-fact-only".into()),
+                    inferred: false,
+                },
+            ],
+            ..Default::default()
+        };
+        backend
+            .index_note(&note, "default", "preference")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            backend.notes_citing("default", "raw-fact-only").await.unwrap(),
+            vec!["preference/typescript".to_string()],
+            "the note quotes this raw in a fact; only `notes_provenance` knows"
+        );
+        assert_eq!(
+            backend.notes_citing("default", "raw-batch").await.unwrap(),
+            vec!["preference/typescript".to_string()],
+            "the note-level citation must keep working"
+        );
+        assert!(
+            backend
+                .notes_citing("default", "raw-never-mentioned")
+                .await
+                .unwrap()
+                .is_empty(),
+            "self-guard: the union must not match everything"
+        );
+    }
+
+    /// A note that cites the same raw both ways is one row, not two — the
+    /// caller iterates this list issuing a DB read per entry.
+    #[tokio::test]
+    async fn notes_citing_dedups_a_note_that_cites_the_same_raw_at_both_levels() {
+        use crate::memory::notes::{FactProvenance, ProvenanceOrigin};
+
+        let dir = tempfile::tempdir().unwrap();
+        let backend = SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap();
+        let note = KnowledgeNote {
+            title: "typescript".into(),
+            category: "preference".into(),
+            facts: vec!["prefers ts".into()],
+            source_notes: vec!["raw-both".into()],
+            fact_provenance: vec![FactProvenance {
+                origin: ProvenanceOrigin::RawSource,
+                source_id: Some("raw-both".into()),
+                inferred: false,
+            }],
+            ..Default::default()
+        };
+        backend
+            .index_note(&note, "default", "preference")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            backend.notes_citing("default", "raw-both").await.unwrap(),
+            vec!["preference/typescript".to_string()]
+        );
+    }
+
     #[tokio::test]
     async fn get_graph_data_surfaces_edge_relation_kind() {
         let backend = make_backend();

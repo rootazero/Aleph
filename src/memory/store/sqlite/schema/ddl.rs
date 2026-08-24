@@ -229,6 +229,13 @@ CREATE TABLE IF NOT EXISTS notes_provenance (
 );
 CREATE INDEX IF NOT EXISTS idx_prov_path ON notes_provenance(agent_id, note_path);
 CREATE INDEX IF NOT EXISTS idx_prov_source ON notes_provenance(source_kind, source_id);
+-- The reverse lookup `notes_citing` actually issues: "which notes cite this
+-- source, in this corpus". `idx_prov_source` cannot serve it — its leading
+-- column is `source_kind`, and a caller holding a raw id does not know whether
+-- the citing marker recorded it as `raw`, as `note`, or (for a `src:` on an
+-- `inferred` fact) as NULL. Constraining the kind to make that index usable
+-- would be an enumeration that silently drops the third case.
+CREATE INDEX IF NOT EXISTS idx_prov_agent_source ON notes_provenance(agent_id, source_id);
 "#;
 
 pub const NOTES_REVIEW_QUEUE_DDL: &str = r#"

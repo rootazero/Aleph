@@ -672,6 +672,10 @@ pub async fn handle_trace(
             notes: Vec::new(),
             evidence: Vec::new(),
             write_decisions: Vec::new(),
+            // `facts` is `skip_serializing_if = "Vec::is_empty"`, so a refused
+            // partition and a note with nothing to show still serialize to the
+            // same bytes — the no-oracle contract this branch exists for.
+            facts: Vec::new(),
         };
         return JsonRpcResponse::success(
             request.id,
