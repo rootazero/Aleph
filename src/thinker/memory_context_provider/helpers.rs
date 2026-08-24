@@ -56,8 +56,8 @@ pub(crate) fn session_end_mcp_slot() -> &'static dyn SlotStatus {
 }
 
 /// Register a `MemoryContextProvider` for SessionEnd-triggered curated
-/// invalidation. Idempotent; subsequent calls are a no-op (returns the
-/// `Err(_)` from `OnceCell::set` silently).
+/// invalidation. Idempotent; subsequent calls are a no-op (the `false` from
+/// [`CapabilitySlot::install`] is discarded).
 pub fn register_session_end_mcp(mcp: Arc<super::MemoryContextProvider>) {
     let _ = SESSION_END_MCP.install(mcp);
 }
@@ -176,7 +176,7 @@ pub fn session_end_compression() -> Option<Arc<crate::memory::compression::Compr
 
 /// Process-wide opt-in flag for injecting last session's open loops into the
 /// next session's curated context (Batch 2 — `[memory.reflection]
-/// open_loop_inject_prompt`). Mirrors the `OnceCell` idiom above to avoid
+/// open_loop_inject_prompt`). Mirrors the capability-slot idiom above to avoid
 /// threading a bool through the `MemoryContextProvider` constructor and its
 /// callers. Set once at startup by `agent_init`; read in `capture_curated`.
 /// Unset (default) reads `false`, so the open-loops block is never injected

@@ -10,9 +10,16 @@ use super::ExtensionManager;
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
 
-/// `ConsumerDecides`, by weight of evidence: 27 production call sites across
-/// the two accessors (counted with `#[cfg(test)]` items stripped), each writing
-/// its own meaning for absence. `plugin_manage` answers a named
+/// `ConsumerDecides`, by weight of evidence: **22** production call sites, all
+/// through [`try_extension_manager`], each writing its own meaning for absence.
+///
+/// ⚠️ [`is_extension_manager_initialized`] contributes **0** of those: its only
+/// five callers live in `gateway/handlers/plugins/handlers/tests.rs`, a file
+/// declared `#[cfg(test)] mod tests;`. An earlier draft of this line said "27
+/// across the two accessors, counted with `#[cfg(test)]` items stripped" —
+/// 22 + 5, i.e. exactly the qualifier was the false part. A whole file gated by
+/// a `#[cfg(test)] mod NAME;` in its parent looks like ordinary source and
+/// never compiles into the shipped lib. `plugin_manage` answers a named
 /// error; `hooks_admin` and `handlers::services` answer their own refusals;
 /// `tools::usage::report` and `hub::reconcile` return early and report nothing
 /// missing. The sharpest is `hooks::executor`, where an early return means a

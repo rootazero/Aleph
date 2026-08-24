@@ -16,13 +16,13 @@ use crate::sync_primitives::Arc;
 /// (`constructor.rs`); `None` until then so tests / early-boot read as
 /// "no goal subsystem" and the prompt layer stays dormant.
 ///
-/// `ConsumerDecides`, and it is the shape by weight of evidence: 22 production
-/// call sites (counted with `#[cfg(test)]` items stripped), each writing its own
-/// meaning for `None` — the standing
-/// goal block silently vanishes from the prompt (`context_blocks.rs`), a loop
-/// tick's fire decision comes back absent (`execute.rs`), the budget gate stops
-/// gating (`goal_budget.rs`), and `users.update`'s deactivation freeze reports
-/// `goals: 0`, which reads as "this principal owned none".
+/// `ConsumerDecides`, and it is the shape by weight of evidence: **21**
+/// production call sites, each writing its own meaning for `None`. The
+/// standing goal block silently vanishes from the prompt
+/// (`context_blocks.rs`), a loop tick's fire decision comes back absent
+/// (`execute.rs`), the budget gate stops gating (`goal_budget.rs`), and
+/// `users.update`'s deactivation freeze reports `goals: 0`, which reads as
+/// "this principal owned none".
 static GLOBAL: CapabilitySlot<Arc<GoalStore>> =
     CapabilitySlot::new("goal/store", MissingSemantics::ConsumerDecides);
 

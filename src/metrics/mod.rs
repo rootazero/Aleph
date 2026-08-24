@@ -30,9 +30,14 @@ const DEFAULT_WARNING_MULTIPLIER: f64 = 2.0;
 /// Live metrics knobs sourced from `[policies.metrics]` at config load.
 ///
 /// `StageTimer` is created via ad-hoc static `start()` calls with no config in
-/// scope, so the policy is bound process-wide once (write-once `OnceLock`,
-/// mirroring `config::defaults_override`). Reads before init — early startup,
-/// unit tests — fall back to the compiled defaults.
+/// scope, so the policy is bound process-wide once (a write-once capability
+/// slot). Reads before init — early startup, unit tests — fall back to the
+/// compiled defaults via `unwrap_or_default()`.
+///
+/// It no longer "mirrors `config::defaults_override`": that handle's fallback
+/// was extracted into its own `EMPTY_DEFAULTS_OVERRIDE` static because its
+/// accessor used to latch, and this one never latched — `unwrap_or_default()`
+/// builds a fresh value per read. Same variant, different fallback shape.
 #[derive(Clone, Copy)]
 struct MetricsRuntime {
     warning_multiplier: f64,

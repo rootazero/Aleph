@@ -399,10 +399,16 @@ pub enum LedgerCommandError {
 /// already refuses rather than answering — *"the agent identity ledger is not
 /// installed in this process, so there is nothing to read. This is not an
 /// empty ledger — no records are being written at all."* Nothing else reads
-/// the chain for a health verdict (`verify_chain` has no caller outside this
-/// file, and `export`'s `failed_appends: ledger.lost()` already holds a
-/// ledger). So absence yields no legal-looking value anywhere: it is a dead
-/// feature that one reader names out loud and three do not.
+/// the chain for a health verdict. Enumerated rather than sampled, because
+/// that is a negative claim: `verify_chain` has no caller outside this file;
+/// `.lost()` has **five** production call sites across four files
+/// (`export.rs:457`, `bin/aleph-server/commands/identity.rs:453`,
+/// `builtin_tools/agent_identity.rs:215`, `:326`, `:352`) and every one of
+/// them already holds an `&AgentLedger` — the tool's three come from
+/// `Self::ledger()?`, which is this handle behind the named refusal above, and
+/// the CLI's builds its own with `open_ledger()`. So absence yields no
+/// legal-looking value anywhere: it is a dead feature that one reader names
+/// out loud and three do not.
 static LEDGER: CapabilitySlot<Arc<AgentLedger>> =
     CapabilitySlot::new("identity/ledger", MissingSemantics::FailsClosed);
 

@@ -373,7 +373,8 @@ impl RouteObservability {
 /// [`route_handle`](crate::providers::route_handle)'s global. Registered by
 /// the production boot path only (`orchestrator_init`), so library tests
 /// never see a populated global.
-/// `ConsumerDecides`: six production readers, each choosing differently.
+///
+/// `ConsumerDecides`: six production call sites, each choosing differently.
 /// `self_config`'s `route_status` drops the whole `data.runtime` object and the
 /// sentence that tells the model to read it — the same tool then says nothing
 /// about live health, so the model does exactly what that sentence warns

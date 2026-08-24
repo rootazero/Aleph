@@ -60,8 +60,8 @@ pub fn team_key(team_id: &str) -> String {
 /// (`constructor.rs`); `None` until then so tests / early-boot read as "no
 /// strategy subsystem" and the prompt layers stay dormant.
 ///
-/// `ConsumerDecides`, like its two siblings: 15 production call sites (counted
-/// with `#[cfg(test)]` items stripped), each deciding for itself. The welded strategy simply does not appear in the
+/// `ConsumerDecides`, like its two siblings: 15 production call sites, each
+/// deciding for itself. The welded strategy simply does not appear in the
 /// downstream prompt (`context_blocks.rs`, `teams::broadcast`), and
 /// `builtin_tools::goal` skips the mint step — a `/goal` flow then runs with no
 /// guardrails and reports success, because "no strategy subsystem" and "no
