@@ -302,6 +302,63 @@ impl RuntimeSecurityGuard {
             current_text = current_text.replace(*raw, value);
         }
 
+        // 5. Post-substitution leak re-scan.
+        //
+        // The earlier step-2 scan ran against the placeholder-bearing text, so
+        // a freshly resolved secret value (the common case — the placeholders
+        // reference API keys and tokens) was inserted into `current_text`
+        // AFTER every outbound leak/redact pass. The only thing that would
+        // catch an outbound that quotes the resolved secret back is a second
+        // scan against the substituted string. Without this pass a tool
+        // call that echoes the resolved value slips past both the exec and
+        // secret leak detectors.
+        if self.config.leak_detection && !ordered.is_empty() {
+            let exec_post_scan = {
+                let detector = self.exec_leak_detector.lock().await;
+                detector.scan_outbound(&current_text)
+            };
+            let secret_post_scan = {
+                let detector = self.secret_leak_detector.lock().await;
+                detector.scan_outbound(&current_text)
+            };
+            let post_has_blocks = exec_post_scan.has_blocks()
+                || matches!(secret_post_scan, LeakDecision::Block { .. });
+            if post_has_blocks {
+                let detail = format!(
+                    "outbound leak blocked post-substitution; \
+                     exec_findings={}, secret_block={}",
+                    exec_post_scan.findings.len(),
+                    matches!(secret_post_scan, LeakDecision::Block { .. }),
+                );
+                self.log_audit(
+                    &context,
+                    AuditEventType::ExecBlocked,
+                    AuditSeverity::Critical,
+                    detail,
+                );
+                return Ok(GuardResult::Blocked {
+                    reason: "Leak detector found sensitive data in resolved outbound content"
+                        .to_string(),
+                });
+            }
+            if exec_post_scan.has_redacts() {
+                current_text = {
+                    let detector = self.exec_leak_detector.lock().await;
+                    detector.redact(&current_text)
+                };
+                reasons.push(
+                    "Outbound leak detector redacted sensitive token after secret resolution"
+                        .to_string(),
+                );
+                self.log_audit(
+                    &context,
+                    AuditEventType::LeakWarning,
+                    AuditSeverity::Warn,
+                    "outbound leak detector redacted sensitive token post-substitution".to_string(),
+                );
+            }
+        }
+
         // Assemble final result
         if reasons.is_empty() && warnings.is_empty() {
             Ok(GuardResult::Clean { text: current_text })

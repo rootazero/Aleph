@@ -333,6 +333,11 @@ impl LeakDetector {
     /// text: the previous version hashed whitespace-split words verbatim, so
     /// the single most likely echo — `"Your API key is <SECRET>, stored."` —
     /// hashed `"<SECRET>,"` (trailing comma) and did not match.
+    ///
+    /// Every echoed occurrence is redacted: a response that returns multiple
+    /// distinct injected secrets (or the same secret echoed twice) returns
+    /// `Block` only once and *redacts every match* — a single-pass
+    /// `replace(matched, REDACTED_INJECTED)` would silently leak the second.
     #[must_use]
     pub fn scan_inbound(&self, content: &str) -> LeakDecision {
         let (found_labels, redacted) = self.scan_patterns(content);
@@ -344,10 +349,11 @@ impl LeakDetector {
             };
         }
 
-        if let Some(matched) = self.find_injected_substring(content) {
+        let matches = self.find_all_injected_substrings(content);
+        if !matches.is_empty() {
             return LeakDecision::Block {
                 reason: "Inbound response echoed an injected secret value".to_string(),
-                redacted_content: content.replace(matched, REDACTED_INJECTED),
+                redacted_content: redact_all_matches(content, &matches, REDACTED_INJECTED),
             };
         }
 
@@ -363,10 +369,32 @@ impl LeakDetector {
     /// window is skipped when the end offset is not a char boundary (a secret is
     /// matched at its own byte length, so its real occurrence always is one).
     fn find_injected_substring<'c>(&self, content: &'c str) -> Option<&'c str> {
+        self.find_all_injected_substrings(content)
+            .into_iter()
+            .next()
+    }
+
+    /// Every non-overlapping substring of `content` whose `(siphash, byte
+    /// length)` matches a registered secret, in left-to-right order.
+    ///
+    /// Two distinct injected secrets (or one echoed twice) must both surface
+    /// to the caller; a single-match API would let the second pass through
+    /// silently. The matcher walks each `(start, len)` pair exactly once
+    /// across all registered lengths, then dedupes overlapping windows by
+    /// keeping the lowest-start, highest-length match at each position.
+    fn find_all_injected_substrings<'c>(&self, content: &'c str) -> Vec<&'c str> {
         if self.injected_lens.is_empty() {
-            return None;
+            return Vec::new();
         }
-        for (&len, _) in self.injected_lens.iter() {
+        // Sort candidate lengths once so iteration is deterministic and the
+        // returned matches come out in left-to-right order regardless of
+        // LRU ordering. Length is ascending so longer windows shrink the
+        // available suffix rather than expanding it.
+        let mut lens: Vec<usize> = self.injected_lens.iter().map(|(&len, _)| len).collect();
+        lens.sort_unstable();
+
+        let mut matches: Vec<(usize, usize)> = Vec::new();
+        for &len in &lens {
             if len > content.len() {
                 continue;
             }
@@ -382,11 +410,30 @@ impl LeakDetector {
                 );
                 window.hash(&mut hasher);
                 if self.injected_hashes.contains(&hasher.finish()) {
-                    return Some(window);
+                    matches.push((start, end));
                 }
             }
         }
-        None
+        if matches.is_empty() {
+            return Vec::new();
+        }
+        // Sort by start, then collapse overlapping ranges: at each position
+        // keep the longest window (covers the most bytes), and skip any
+        // window that begins inside a kept range.
+        matches.sort_unstable_by_key(|&(start, end)| (start, std::cmp::Reverse(end - start)));
+        let mut non_overlapping: Vec<(usize, usize)> = Vec::with_capacity(matches.len());
+        let mut last_end = 0usize;
+        for (start, end) in matches {
+            if start < last_end {
+                continue;
+            }
+            last_end = end;
+            non_overlapping.push((start, end));
+        }
+        non_overlapping
+            .into_iter()
+            .map(|(start, end)| &content[start..end])
+            .collect()
     }
 }
 
@@ -394,6 +441,31 @@ impl Default for LeakDetector {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Replace every non-overlapping `match` span in `content` with `replacement`,
+/// preserving the surrounding bytes verbatim.
+///
+/// `matches` is a slice of `&str` whose offsets are taken relative to
+/// `content` and sorted by start position with no overlap (the contract
+/// `find_all_injected_substrings` already upholds). The output is built once
+/// into a single `String`, so this is O(content.len() + matches.len()) and
+/// never allocates per-match.
+fn redact_all_matches<'c>(content: &'c str, matches: &[&'c str], replacement: &str) -> String {
+    debug_assert!(
+        matches.windows(2).all(|w| w[0].as_ptr() as usize + w[0].len() <= w[1].as_ptr() as usize),
+        "matches must be non-overlapping and in start order"
+    );
+    let mut out = String::with_capacity(content.len());
+    let mut cursor = 0usize;
+    for m in matches {
+        let start = m.as_ptr() as usize - content.as_ptr() as usize;
+        out.push_str(&content[cursor..start]);
+        out.push_str(replacement);
+        cursor = start + m.len();
+    }
+    out.push_str(&content[cursor..]);
+    out
 }
 
 #[cfg(test)]

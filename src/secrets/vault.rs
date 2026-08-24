@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, info};
 
 use super::types::{EncryptedEntry, SecretError, VaultData};
@@ -15,6 +16,26 @@ use crate::utils::vault_io::VaultIo;
 
 /// Current vault format version.
 const VAULT_VERSION: u32 = 1;
+
+/// Maximum vault file size accepted on load.
+///
+/// `bincode 1.3`'s per-`Vec` length-prefix cap does not bound the total heap
+/// footprint of a deserialized file: thousands of `Vec<u8>` ciphertext fields
+/// at the legal cap each can collectively bind `n × BINCODE_MAX` bytes. This
+/// is the cheap outer bound that catches a malicious or corrupted vault before
+/// the deserializer is ever called. 16 MiB is roughly 4 000 entries of
+/// realistic 4 KiB ciphertext — well past any legitimate personal vault.
+const MAX_VAULT_BYTES: usize = 16 * 1024 * 1024;
+
+/// Process-local counter that disambiguates corrupt-backup filenames.
+///
+/// Two `open_or_backup` calls within the same wall-clock second previously
+/// both tried to rename onto `<path>.corrupt-<unix_ts>`, and `fs::rename`
+/// silently overwrites on Unix — destroying the first set of "unreadable but
+/// recoverable" bytes. The monotonic counter guarantees uniqueness even under
+/// rapid-fire restarts; the atomic ordering is sufficient because the only
+/// contract is "two concurrent callers see different values".
+static CORRUPT_BACKUP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Encrypted secret vault backed by a file.
 ///
@@ -35,9 +56,21 @@ impl SecretVault {
         let data = match io.read()? {
             Some(bytes) => {
                 debug!(path = %path.display(), "Loading existing vault");
-                let data: VaultData = bincode::deserialize(&bytes).map_err(|e| {
-                    SecretError::Serialization(format!("Failed to deserialize vault: {e}"))
-                })?;
+                // Reject oversized vaults before invoking the deserializer:
+                // bincode 1.3's per-Vec length-prefix cap does not bound the
+                // total heap footprint, and a crafted file can OOM the daemon.
+                if bytes.len() > MAX_VAULT_BYTES {
+                    return Err(SecretError::Serialization(format!(
+                        "Vault file exceeds maximum size ({} bytes): {} bytes",
+                        MAX_VAULT_BYTES,
+                        bytes.len()
+                    )));
+                }
+                let config = bincode::config::standard().with_limit(MAX_VAULT_BYTES as u64);
+                let (data, _consumed): (VaultData, usize) =
+                    bincode::serde::decode_from_slice(&bytes, config).map_err(|e| {
+                        SecretError::Serialization(format!("Failed to deserialize vault: {e}"))
+                    })?;
                 if data.version > VAULT_VERSION {
                     return Err(SecretError::Serialization(format!(
                         "Vault version {} is newer than supported version {}. Please upgrade Aleph.",
@@ -85,8 +118,16 @@ impl SecretVault {
             Ok(vault) => vault,
             Err(open_err) => {
                 if path.exists() {
+                    // Disambiguate the backup suffix so two recoveries within
+                    // the same wall-clock second don't race `fs::rename` and
+                    // silently clobber each other's preserved bytes.
+                    let counter = CORRUPT_BACKUP_COUNTER.fetch_add(1, Ordering::Relaxed);
                     let mut backup = path.clone().into_os_string();
-                    backup.push(format!(".corrupt-{}", chrono::Utc::now().timestamp()));
+                    backup.push(format!(
+                        ".corrupt-{}-{}",
+                        chrono::Utc::now().timestamp(),
+                        counter,
+                    ));
                     let backup = PathBuf::from(backup);
                     match std::fs::rename(&path, &backup) {
                         Ok(()) => tracing::error!(
