@@ -1478,7 +1478,7 @@ Assign each handle a `MissingSemantics` by asking *what a read observes when nob
 | `tools/result_store.rs::GLOBAL_STORE` | `tools/result-store` | `FailsClosed` |
 | `tools/turn_budget.rs::GLOBAL_BUDGET` | `tools/turn-budget` | `FailsOpen` |
 | `tools/in_flight.rs::GLOBAL_REGISTRY` | `tools/in-flight` | `ConsumerDecides` |
-| `tools/result_processing.rs::RESULT_BUDGET_CEILING` | `tools/result-budget-ceiling` | `IndistinguishableDefault { reads_as: "<compiled-in default ceiling>" }` |
+| `tools/result_processing.rs::RESULT_BUDGET_CEILING` | `tools/result-budget-ceiling` | `IndistinguishableDefault { reads_as: "<compiled-in default ceiling>" }` ⚠️ **PLACEHOLDER, WRONG IN SUBSTANCE — Task 8 found it names a different constant from what `result_budget_ceiling()` actually falls back to. Derive `reads_as` from the accessor's real fallback, never from this cell.** |
 
 ⚠️ Read each handle's current fallback before choosing. If a reader does `unwrap_or(DEFAULT)`, it is `IndistinguishableDefault` and `reads_as` must quote the actual default. If a *gate* reads it and skips its check on `None`, it is `FailsOpen`. Do not copy the table without checking — the table is a starting hypothesis, and the whole point of this round is that these two are indistinguishable from outside.
 
@@ -2457,7 +2457,7 @@ let Some(session_svc) = crate::session::service::global_session_service() else {
 - [ ] **Step 3: Run the affected suites plus the verification set**
 
 ```bash
-cargo test -p alephcore --lib tools::scoped builtin_tools::sessions gateway::execution_engine 2>&1 | tail -12
+cargo test -p alephcore --lib -- tools::scoped builtin_tools::sessions gateway::execution_engine 2>&1 | tail -12
 cargo test -p alephcore --lib --no-run
 cargo test -p alephcore --features test-helpers --test '*' --no-run
 cargo test -p aleph-panel --lib --no-run
