@@ -152,7 +152,7 @@ pub fn wrap_external_content(content: &str, source: ContentSource) -> String {
     // + fence-prefix escape the body sees, in that order.
     let source_label = {
         let raw = source.as_label();
-        let normalized = normalize_homoglyphs(raw);
+        let normalized = normalize_homoglyphs(&raw);
         let (stripped, _) = crate::security::unicode_guard::strip_invisible_chars(&normalized);
         stripped
             .replace("<<<EXTERNAL_", "<<<ESCAPED_EXTERNAL_")

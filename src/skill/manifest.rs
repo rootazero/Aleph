@@ -6,7 +6,7 @@ use crate::domain::skill::{
     EligibilitySpec, InstallKind, InstallSpec, InvocationPolicy, Os, PromptScope, SkillContent,
     SkillId, SkillManifest, SkillSource,
 };
-use crate::skill::guard::{install_allowed, scan_content, ThreatLevel, TrustLevel};
+use crate::skill::guard::{install_allowed, scan_content, TrustLevel};
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -198,8 +198,7 @@ fn trust_for_source(source: &SkillSource) -> TrustLevel {
         SkillSource::Bundled => TrustLevel::Trusted,
         SkillSource::Plugin(_)
         | SkillSource::Workspace
-        | SkillSource::Global
-        | SkillSource::Unknown => TrustLevel::Community,
+        | SkillSource::Global => TrustLevel::Community,
     }
 }
 

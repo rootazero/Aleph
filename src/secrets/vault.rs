@@ -66,9 +66,14 @@ impl SecretVault {
                         bytes.len()
                     )));
                 }
-                let config = bincode::config::standard().with_limit(MAX_VAULT_BYTES as u64);
-                let (data, _consumed): (VaultData, usize) =
-                    bincode::serde::decode_from_slice(&bytes, config).map_err(|e| {
+                // `bincode::config()` returns a `Config` (1.3 API); `.limit`
+                // caps per-Vec length-prefix decoding. The outer
+                // `bytes.len()` check above is the actual heap bound — the
+                // per-Vec limit is defense-in-depth.
+                let data: VaultData = bincode::config()
+                    .limit(MAX_VAULT_BYTES as u64)
+                    .deserialize(&bytes)
+                    .map_err(|e| {
                         SecretError::Serialization(format!("Failed to deserialize vault: {e}"))
                     })?;
                 if data.version > VAULT_VERSION {

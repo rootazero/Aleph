@@ -201,7 +201,7 @@ impl SessionActor {
                     while let Ok(cmd) = self.inbox.try_recv() {
                         match cmd {
                             ActorCommand::EmitEvent { event, reply } => {
-                                let mut seq = self.head_seq + 1;
+                                let seq = self.head_seq + 1;
                                 let at = now_ms();
                                 let append_result =
                                     self.store.append(&self.id, seq, &event, at).await;
