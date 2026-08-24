@@ -660,8 +660,21 @@ fn resolve_target(
         // 3. Last resort, the foreground conversation — but only when it
         //    cannot be shown to belong to a DIFFERENT session. A conversation
         //    with no key yet (opened but never sent in) still qualifies, which
-        //    is what keeps a legacy core and any surface that does not
-        //    register its conversations working exactly as before.
+        //    is what keeps a legacy core (whose frames carry no `session_key`)
+        //    working exactly as before.
+        //
+        //    Note what step 3 does NOT do: there is no arm here for a surface
+        //    that registers no conversation at all. It needs an `active_conv()`
+        //    like every other step, so such a surface resolves `None` for
+        //    EVERY frame and receives no live turn whatsoever — no assistant
+        //    bubble, no tool rows, no final answer, nothing logged. This
+        //    comment used to claim the opposite, and the phone was exactly that
+        //    surface for as long as it existed; the claim was the only thing a
+        //    grep for the defect found. Registration is now the surface's job
+        //    (`SessionMap::ensure_active` / `adopt_session`), pinned by
+        //    `a_surface_that_registers_no_conversation_receives_no_frame` below
+        //    and by `PhoneChat`'s own `the_phone_chat_router_registers_a_conversation`.
+
         //
         // Step 3 used to be unconditional, and that was the "two terminals
         // stepping on each other" defect: a foreign run's whole turn —
@@ -1482,8 +1495,52 @@ mod projection_tests {
         assert_eq!(usage.total_tokens, 55_000);
     }
 
+    /// A surface that registers no conversation receives no frame at all.
+    ///
+    /// This is the mechanism, stated so it cannot be "fixed" by a silent
+    /// fallback: with nothing in `SessionMap`, all three of `resolve_target`'s
+    /// steps come up empty and the dispatcher returns before touching
+    /// `ChatState`. No assistant bubble, no tool rows, no final answer, nothing
+    /// logged — which is precisely what the phone did for as long as it
+    /// existed, because `ChatSidebar` (the only thing in the crate that opened
+    /// a conversation) is mounted behind `not_phone`.
+    ///
+    /// The answer is registration at the surface — `SessionMap::ensure_active`
+    /// at mount, `adopt_session` when a session is picked — NOT a fourth step
+    /// here. A fallback that invents a target is the "foreground hijack"
+    /// defect this function was rewritten to remove: it would render a foreign
+    /// run's whole turn into whatever the viewer happens to be reading and send
+    /// their next message to somebody else's session.
+    #[test]
+    fn a_surface_that_registers_no_conversation_receives_no_frame() {
+        let owner = Owner::new();
+        owner.set();
+        let sessions = crate::state::sessions::SessionMap::new();
+        let singleton = ChatState::new();
+
+        for (kind, run, key) in [
+            ("run_accepted", "run-a", Some("sk-a")),
+            ("response_chunk", "run-a", None),
+            ("agent_trace", "run-a", None),
+            ("run_complete", "run-a", None),
+        ] {
+            assert!(
+                resolve_target(&sessions, singleton, kind, run, key).is_none(),
+                "{kind} resolved a target with no conversation registered"
+            );
+        }
+
+        // One `ensure_active` is the whole difference.
+        sessions.ensure_active(singleton, "agent-a", || "New chat".into());
+        assert!(
+            resolve_target(&sessions, singleton, "run_accepted", "run-a", Some("sk-a")).is_some(),
+            "a registered surface must be able to route its own turn"
+        );
+    }
+
     #[test]
     fn resolve_target_routes_background_run_to_registry() {
+
         let owner = Owner::new();
         owner.set();
         let sessions = crate::state::sessions::SessionMap::new();

@@ -4,6 +4,8 @@ pub mod hotkey;
 pub mod layout;
 pub mod memory;
 pub mod notifications;
+pub mod reattach;
+
 pub mod run_clock;
 pub mod sessions;
 pub mod typewriter;

@@ -56,7 +56,12 @@
 | 横切 | 房间开了之后所有人都看不见 / `projects.list` 列着但进不去 | Claimed Room Key Keeps Its Room Scope | `ProjectStore::project_for_session_key` ← `handlers/agent.rs::resolve_attribution` | ✅ (§5.22 round-4, 2026-08-13) |
 | 横切 | 浏览器工具全红 / PII 扫描 panic / 114 条测试在干净 checkout 上失败 | SSH-Key Rule Back-Reference (main P0) | `pii/rules/ssh_key.rs`（正则只匹 header，标签配对在 `detect`） | ✅ (§5.22 round-4, 2026-08-13) |
 | Panel | 打开一个正在跑的会话什么也不动 / 队友在跑我这边一片死寂 / 只能等它跑完 | Join A Live Turn | `handlers/chat.rs::handle_history`（`active_run`）+ `chat_sidebar.rs::hydrate_and_follow` | ✅ (§6.9, 2026-08-10) |
-| Panel | core 重启后红点不动了 / 重启后 Stop 键一直卡着 / 刷新页面才好 | Reconnect Baseline Rebase | `context.rs::connection_epoch` + `sessions.rs::{reset_running_baseline,settle_runs_absent_from}` | ✅ (§6.9, 2026-08-10) |
+| Panel | core 重启后红点不动了 / 重启后 Stop 键一直卡着 / 刷新页面才好 | Reconnect Baseline Rebase | `context.rs::connection_epoch` + `sessions.rs::{reset_running_baseline,settle_runs_absent_from}` + `state/reattach.rs`（app root，两个形态共用） | ✅ (§6.9, 2026-08-10 · root 化 round-2 2026-08-23) |
+| Panel | 手机上发了消息什么都不出来 / iOS Panel 只有我自己的气泡 / 退出去再进来才看到回答 | Phone Conversation Registration | `platform/phone/chat/mod.rs`（mount 时 `ensure_active`）+ `history.rs::adopt_session` + `composer.rs::bind_run` | ✅ (§6.9 round-2, 2026-08-23) |
+| Panel | 重连之后那一轮再也不动了 / 红点亮着但正文不更新 / core 重启后自动续跑的那轮看不见 | Rejoin A Live Turn On Reconnect | `sessions.rs::rejoin_target` + `state/reattach.rs` | ✅ (§6.9 round-2, 2026-08-23) |
+| TUI | TUI 里蹦出别的会话的输出 / 一启动就串台 | Cross-Session Frame Guard (reconciled) | `tui/app/events.rs::frame_belongs_here` + `app/mod.rs::session_reconciled` | ✅ (§6.9 round-2, 2026-08-23) |
+| TUI | TUI attach 上去停不掉正在跑的那一轮 / 状态栏说 idle 但它在跑 | Join A Live Turn (TUI) | `commands.rs::{active_run_from_history,attach_session}` + `events.rs::adopt_active_run` | ✅ (§6.9 round-2, 2026-08-23) |
+
 | Loop | 顺口一问 / 侧问 / btw / 跑着的时候插一句别打断这一轮 / 把刚才那个侧答案带回主对话 | `/btw` Side Questions (Derived Read-Only Side Session) | `aleph_protocol::btw::BtwTurn`（唯一解析器）+ `src/gateway/btw/`（`execution_session` 查询 / `side_key_for` / `seed/` / `promote.rs`）+ `execution_engine/slash_command.rs::stamp_btw`（唯一写者） | ✅ (§4.14, 2026-08-20；Panel 面刻意未接) |
 | Loop | 出错/被取消的那一轮别的端看不到 / 侧栏时间不更新 / channel 报错后 Panel 还是旧的 | Turn-End Announced On Both Arms | `execution_engine/engine.rs::announce_turn_end`（`Ok`/`Err` 共用 + 源码级 pin） | ✅ (§6.9, 2026-08-10) |
 | Loop | 定时任务不准时 / 一个慢任务把调度器冻住 / cron 说 running 其实没跑 / 少了好几次触发 | Cron Scheduler Non-Blocking Tick | `src/tasks/cron/service/timer.rs`（detached spawn + 跨 tick 信号量）+ `state.rs::last_tick_at_ms` | ✅ (§4.13c, 2026-08-09) |
@@ -1781,6 +1786,9 @@
 ---
 
 > **接续**：这一节讲的是 core **自己**怎么从崩溃里爬起来。客户端那一半——重连后如何把自己的视图重建到与服务端一致，以及一个崩溃前的 run 在 Panel 上永不结算的问题——在 [§6.9](#69-多端共享一条线程--重连与崩溃后的状态重建-multi-client-thread-sharing--post-reconnect-state-rebuild) ④。两节共用同一种姿态：**跨过崩溃边界的"未知"不写成"失败"**。
+>
+> ⚠️ **本节 ② 的按需恢复会用一个新 run id 重新触发那一轮**，所以客户端手里那条老 route 永远等不到终局帧，而新 run 的 `RunAccepted` 在客户端还没连回来的时候就已经播完了。**这两件事各需要一半修复，缺一半就只修好一个方向**：结算死的（§6.9 ④）与重接活的（§6.9 round-2 ②）——后者直到 2026-08-23 才有出口，在那之前红点亮着、服务端在流、而 Panel 的 transcript 一动不动直到那一轮结束。
+
 
 ### 4.13b 五维自主性加固 (Autonomy Hardening · 2026-08-08，三批)
 
@@ -2366,6 +2374,7 @@
     - **④ token 计数跨会话串味**——`switch_session` 清了七样东西，唯独没清 `total_tokens`（且它从 0 起，不从会话行读）。现清空并由快照填回。
     - **⑤ `/mode` `/think` `/memory-mode` 补齐 `/tier`**（一个 handler 管一族），状态栏显示四个 knob；**`/memory-mode` 不叫 `/memory`**——网关已拥有 `/memory <verb>` 命名空间，而本地命令**先解析且从不 fall through**，同名＝整族不可达。新增启动期 `shadowed_gateway_commands` 按网关真实清单报告遮蔽。
     - **⑥ 熵减**：删 `execute_tier`、删 uuid 键生成与 `uuid` 依赖。
+  - **多端共享一条线程 round-2（2026-08-23，详见 §6.9 round-2 ④）**：TUI 作为"第二个终端"抓到一对方向相反的缺陷，两半是同一个洞——`chat.history.active_run` 从来没有读者。**正向**：`attach_session` 渲染完就停，`current_run` 留空 ⇒ 状态栏报 idle、Esc/Ctrl-C 无物可取消，这一屏在看一个它结构上停不掉的回合（而"崩溃后 attach 上来看看"正是最常见的场景）；现 `adopt_active_run` 接上，elapsed **从加入那一刻**起算。**反向**：`frame_belongs_here` 对未学过的 run id 一律 `true`，而唯一的教学帧是那个 run 自己的 `RunAccepted` ⇒ **一个在别人回合进行中启动的终端**永远学不到它是外来的，别人的推理/工具行/正文全部渲染进本屏 transcript，零报错；现由 `session_reconciled` 收窄成"服务端答过之后才敢判外来"，`active_run_from_history` **三态**（缺席 ≠ null）。⚠️ 两件变异抓到的不能动：`RunAccepted` 显式豁免这道闸（否则教学帧被丢，此后再也学不到任何非自己发起的 run），以及活跃 run 要在查 `run_sessions`（FIFO 有界）之前先答。**`shared/client` 无自动重连**，所以对账只发生在 attach。
   - **cache 命中段（2026-07-17，§2.15 连线）**：状态栏新增 `cache N%` 段——`ProviderUsage` trace 事件此前被 `app/trace.rs` 显式丢弃（`=> {}`），现喂 `AppState.cache_stat`（last-call 口径 `read/(input+creation+read)`；只有报告过缓存活动的调用才更新，无缓存 provider 不显示），`widgets/status_bar.rs` 渲染（≥50% 常色/以下 warning）。命中率骤降＝前缀刚被打穿的实时症状。
 - **打磨话术**：「TUI 是 CLI（§5.11）的孪生瘦客户端（`interfaces/tui/`，**禁 alephcore**，只经 aleph-client/protocol 走 WS）。改事件循环 / 焦点分派 / RPC 调用点在 `mod.rs`；改'终端事件→内部事件'（含 `KeyEventKind::Press` 去重门、粘贴映射）在 `event.rs::map_event`（**单一收口，别在各 `handle_*_key` 里补过滤**）；改状态 / 滚动 / overlay 在 `app/mod.rs`；改'StreamEvent→状态'在 `app/events.rs`；改布局在 `render.rs`，改 markdown/换行在 `markdown.rs`（`wrap_line_spans` 已保样式，别退回 flatten）；改斜杠命令'本地 vs Gateway'分流在 `slash.rs::parse_input`。**症状定位**：Windows 每键两次＝`event.rs` 漏 `Press` 门；Home/PageUp 空屏＝`chat_area.rs` 漏钳 `scroll_offset`；宽行/代码块裁掉最新内容＝system/code 路径未预排（逻辑行≠物理行）；换行在 Windows 失效＝只认 Shift+Enter，要用 `\`+Enter / Ctrl+J；Esc 关掉 AskUser 后卡住＝Esc 不该关 dialog（孤立 park run）。**加本地斜杠命令**：`slash.rs` 加 `LocalCommand` 变体 + `parse_input` 分流 + `LOCAL_COMMAND_CATALOG` + `execute_local_command` 分支（`/sessions` 即范例：`sessions.list`/`chat.history` 都是既有 RPC，**别造新服务端方法**）。」
 
@@ -3076,12 +3085,15 @@
 
 ### 6.9 多端共享一条线程 · 重连与崩溃后的状态重建 (Multi-Client Thread Sharing & Post-Reconnect State Rebuild)
 
-- **口语关键词**：另一个标签页的回答跑到我这来了 / 我下一句发错会话了 / 房间里看不见队友在说话 / 打开一个正在跑的会话什么也不动 / core 重启后红点不动了 / 重启后 Stop 键一直卡着 / 出错的那一轮别的端看不到
+- **口语关键词**：另一个标签页的回答跑到我这来了 / 我下一句发错会话了 / 房间里看不见队友在说话 / 打开一个正在跑的会话什么也不动 / core 重启后红点不动了 / 重启后 Stop 键一直卡着 / 出错的那一轮别的端看不到 / **手机上发了消息什么都不出来** / **iOS Panel 只有我自己的气泡** / **手机上要退出去再进来才看到回答** / **重连之后那一轮再也不动了** / **TUI 里蹦出别的会话的输出** / **TUI attach 上去停不掉正在跑的那一轮**
+
 - **代码锚点**：
   - 服务端 — `src/gateway/execution_engine/engine.rs`（`announce_turn_end` 单一源 · `active_run_for_session`）、`session_run_registry.rs::run_id_for`、`execution_adapter.rs::active_run_for_session`（默认 `None`）、`handlers/agent.rs::AgentRunManager::active_run_for_session`、`handlers/chat.rs::handle_history`（响应新增 `active_run`）
-  - 客户端 — `platform/wide/views/chat/events.rs::resolve_target`（三步解析）、`state/sessions.rs`（`set_session_key` / `reset_running_baseline` / `settle_runs_absent_from`）、`components/chat_sidebar.rs`（`hydrate_and_follow` + 重连 Effect）、`context.rs::connection_epoch`、`views/chat/state.rs::settle_abandoned_run`
+  - 客户端（Panel）— `platform/wide/views/chat/events.rs::resolve_target`（三步解析）、`state/sessions.rs`（登记三写者 `adopt_session` / `start_new` / `ensure_active`；重连两半 `settle_runs_absent_from` / **`rejoin_target`**；`set_session_key` / `reset_running_baseline`）、**`state/reattach.rs::reattach_after_connect`（唯一的重连修复，挂 app root）**、`components/chat_sidebar.rs::hydrate_and_follow`、`context.rs::connection_epoch`、`views/chat/state.rs::settle_abandoned_run`、**`platform/phone/chat/{mod,history,composer,thread}.rs`（phone 的四个登记点）**
+  - 客户端（TUI）— `interfaces/tui/src/tui/app/events.rs`（`frame_belongs_here` 三答 · `adopt_active_run` · `RunAccepted` 豁免）、`app/mod.rs::session_reconciled`、`commands.rs::{active_run_from_history, attach_session}`
 - **职责**：让**同一条会话线程**同时被多个终端观看而不互相污染，并让任意一端在**重连 / core 重启**之后把自己的视图重建到与服务端一致。
-- **状态**：✅ 2026-08-10（对标 codex `thread-store/local/writer_lock.rs` 的"一个线程一个写者"与 pi `LiveSession.connections` + `ServerSnapshot.revision` 的"逐连接快照"）。
+- **状态**：✅ 2026-08-10（对标 codex `thread-store/local/writer_lock.rs` 的"一个线程一个写者"与 pi `LiveSession.connections` + `ServerSnapshot.revision` 的"逐连接快照"）· **round-2 ✅ 2026-08-23**（phone 从来收不到帧 / 重连只结算不重接 / TUI 未知 run 一律收下——见本节末尾）。
+
 - **对标结论（先说不抄什么）**：codex 的 writer lock 是**文件级跨进程**互斥，Aleph 的等价物更强且已在位——`SessionRunRegistry` 的 per-session claim（执行层）+ `SessionActor` 的单任务串行 append（存储层，且带 seq 冲突自愈重试），跨进程那一层由 `~/.aleph/data/aleph.lock` 单例覆盖。pi 的显式 `attach`/`detach` + `requireAttached` 也**不移植**：Aleph 的投递模型是 topic + 逐连接可见性投影，加一张 attach 表就是给同一个问题制造第二个真源。真正缺的是 pi 那个模型**顺带**提供的两样东西——**帧到对话的权威路由**，和**重连时的基线协商**。
 
 - **① 前台劫持（CRITICAL，修 bug）**——`resolve_target` 对一个本客户端**没有 route** 的 `run_accepted` 直接回退 `active_conv()`，然后 `bind_run` 把该 run 钉在**用户当前正在看的**对话上，紧接着的 `"run_accepted"` 臂再把 `chat.session_key` 覆写成那个外来 run 的 key。三段连起来的后果是：外来 run 的整段回合（推理 / 工具行 / 最终答案）渲染进一个毫不相干的对话，此后该 run 的**每一帧**都继续钉在那里，而用户**下一条消息发到了别人的会话**。触发面不是边缘——第二个 Panel 标签页、项目房间里的另一个成员、CLI/TUI、任何 channel、**每一次 cron tick** 都产生这样的帧，且它们本来就该被这个客户端收到（`RunAccepted` 是 `BySessionKey`，同一个用户/房间成员都在受众里）。
@@ -3101,13 +3113,41 @@
 - **⑤ 熵减**：删 `src/gateway/run_event_bus.rs`（887 行 · `ActiveRunHandle` / `wait_for_run_end` / 输入排队 / 取消信号，**全仓零生产消费者**，只在 `mod.rs` 里被 re-export）与 `src/gateway/hello_snapshot.rs`（130 行 · `HelloSnapshot` / `ConnectionLimits`，**零生产者**，从未被构造过）。共 **1017 行**。后者曾是本轮 ④ 的候选载体（它带 `server_id`），**判定 CUT 而非 CONNECT**：`connect` 响应已经在下发握手基线（`state_version` / `keepalive`），再加一个平行的快照结构就是第二个真源，而 ④ 的最终方案根本不需要服务端实例 id。`loom_concurrency.rs` 两条模型的 doc 指向被改指到仍然活着的宿主（`execution_engine::ActiveRun::next_seq` / `next_chunk`）。
 
 - **已知边界（本轮刻意未做）**：
-  - **phone 形态不参与**。`ChatSidebar` 在 phone 上不挂载（`app.rs` 的 `not_phone` 门），所以 `SessionMap` 在那里一个对话都没有，`resolve_target` 对 phone 的每一帧本来就返回 `None`——**这是预存缺陷，本轮既没修也没加重**（`hydrate_session_history` 在 phone 侧显式丢弃返回的 run id 并注明原因）。修它要给 phone 一条自己的会话登记路径，是独立一轮。
+  - ~~**phone 形态不参与**~~ —— **已修，round-2（2026-08-23），见下**。原文保留在 git 历史里；它把「每一帧都被丢弃」记成了"预存缺陷、独立一轮"，而那一轮里 iOS Panel 壳恒在 phone 带宽内，等于整条产品线没有流式。
   - **不做已流过部分的服务端缓冲**（见 ② 的"刻意不做"）。
-  - **对端发的那条用户消息没有实时回显**。wire 上没有 `stream.user_message`，`RunAccepted` 也只带 `{run_id, session_key, accepted_at}`——所以 A 在会话 S 发言时，**已经开着 S 的** B 会看到助手气泡开始流，却看不到那个提问，直到本轮结束。**已验证它在一轮之内自愈**：`drop(_run_slot)`（release → `RunningSetChanged`）排在 `announce_turn_end` **之前**，两帧同总线同 socket 有序，所以 B 处理 `run.session_updated` 时运行集里已经没有 S，`is_running_session_key` 为假 ⇒ 重新水化，问题与回答一起补齐。故这是**短暂的观感问题，不是数据丢失**。修它要么给热帧 `RunAccepted` 加 `input`、要么新增一个帧，两条都要处理"发送方自己别重复渲染"（`is_own_run` 已有），单独一轮更合适。
-  - **`chat.history` 的 `active_run` 只回 run id**，不回它已经跑了多久 / 到第几步。加字段容易，但每一个新字段都要回答"谁渲染它"——目前没有渲染者。
+  - ~~**对端发的那条用户消息没有实时回显**~~ —— **已由 `GatewayEventFrame::SessionUserMessage`（`stream.session_user_message`）关闭**，产地是 `session_projector` 的追加点（那条事实变成持久行的地方），Panel 侧 `events.rs` 判定是否渲染回声。**TUI/CLI 仍不消费**：该 method 记在 `PANEL_ONLY_STREAM_METHODS` 里（见 §5.19 ②），要接就得先给 `aleph_protocol::StreamEvent` 加变体。下面这段原文只作为该缺陷当时的形状留档——
+    **（历史原文）** wire 上没有 `stream.user_message`，`RunAccepted` 也只带 `{run_id, session_key, accepted_at}`——所以 A 在会话 S 发言时，**已经开着 S 的** B 会看到助手气泡开始流，却看不到那个提问，直到本轮结束。**已验证它在一轮之内自愈**：`drop(_run_slot)`（release → `RunningSetChanged`）排在 `announce_turn_end` **之前**，两帧同总线同 socket 有序，所以 B 处理 `run.session_updated` 时运行集里已经没有 S，`is_running_session_key` 为假 ⇒ 重新水化，问题与回答一起补齐。故这是**短暂的观感问题，不是数据丢失**。修它要么给热帧 `RunAccepted` 加 `input`、要么新增一个帧，两条都要处理"发送方自己别重复渲染"（`is_own_run` 已有），单独一轮更合适。
+  - **`chat.history` 的 `active_run` 只回 run id**，不回它已经跑了多久 / 到第几步。加字段容易，但每一个新字段都要回答"谁渲染它"。round-2 让 TUI 也成了消费者，于是"跑了多久"第一次有了两个想问的人（TUI 状态栏的 elapsed 现在是**从加入那一刻**起算，并在 `adopt_active_run` 的 doc 里写明了这一点）——**但仍然不加字段**：一个 `started_at` 要同时说清"服务端时钟还是客户端时钟"，而两端时钟偏移在跨机器的 Panel 上不是零。
+
 
 ---
 
+#### round-2（2026-08-23）：那套机件整个住在一个 `not_phone` 组件里 · 重连只结算不重接 · TUI 的未知 run 一律收下
+
+> 分支 `worktree-multiclient-crash-recovery`（b96059d02 panel + eef9f5da7 tui）。**零 `src/` 改动**——服务端该发的字段（`chat.history.active_run` / `RunningSetChanged` / `RunAccepted.session_key`）一直在发，本轮全部是客户端连线。对标 codex `app-server` 的 `SendThreadResumeResponse`（"原子地发历史 + 订阅"）与 pi 的 `revision` 基线；两者的**机制**都不移植（结论见上），移植的是它们暴露出的**两个问题**：加入一个正在跑的回合、以及重连时的基线协商——本轮补的是这两问在 Aleph 各个终端上**没有被回答到的那些面**。
+
+- **① 手机（含 iOS Panel 壳）收不到任何一帧（CRITICAL，修 bug）**——上面那条"已知边界"把它记成了预存缺陷，而它的真实规模是：`resolve_target` 三步全部需要 `SessionMap` 里有东西，而**全仓唯一开对话的代码是 `ChatSidebar`**，它挂在 `not_phone` 门后。于是 phone 的 `active_conv()` 恒 `None`，每一个 `run_accepted` 解析成 `None`、派发器在碰 `ChatState` 之前就 return：**没有助手气泡、没有工具行、没有最终答案、没有任何日志**。用户唯一能看到那一轮的方法是离开这个 surface 再回来（触发 `chat.history`）。`FormFactor::Phone` 是**视口带宽**，而 iOS Panel 壳（WKWebView）恒在带内 ⇒ **那条产品线从来没有流式过**。
+  修法是**登记**，不是给 `resolve_target` 加第四步——一个会凭空造出目标的兜底，正是这个函数被重写掉的"前台劫持"缺陷本身。phone 的三个手势各接一次共用写者：mount 时 `ensure_active`（**刻意在 mount 而不是首次发送时**：`activate` 会把目标对话的空快照恢复进 singleton，晚一步就会抹掉刚 push 的乐观用户气泡）、历史行点击 `adopt_session` + `hydrate_and_follow`、新对话 `start_new`；发送路径 `bind_run`。于是 §6.9 ①②④ 的全部机制在 phone 上**白继承**。
+  ⚠️ **`resolve_target` 第 3 步的注释是这个缺陷唯一的搜索命中**，它逐字写着"这让任何不注册对话的 surface 照常工作"——**那句话从写下之日起就是假的**（第 3 步自己也要 `active_conv()`）。同 CLAUDE.md §0「同一事实的两份表述，只改一份就是静默说谎」，只是这次两份表述里只剩下说谎的那一份。
+
+- **② 重连只给死的那一半修了出口（CRITICAL，修 bug）**——`settle_runs_absent_from` 结算服务端**不确认**的 route，而**服务端确认、这一端却没有 route** 的那一半没有任何出口：一个 core 重启后被 `resume_coordinator` 用**新 run id** 重新触发的回合、或一次跨过掉线的长 run，其 `RunAccepted` 这一端根本没收到 ⇒ 每一帧被丢；红点亮着、服务端在流、transcript 一动不动直到那一轮结束（`run.session_updated` 的重新水化对**正在跑**的会话是刻意抑制的，救不了）。新增 `SessionMap::rejoin_target`（活跃对话 + 服务端说它在跑 + 本端没有 route ⇒ 该重接），修复动作复用既有的 `hydrate_and_follow`。**这是 CLAUDE.md §0「一个子系统的负半边有出口，正半边没有，这个不对称本身就是缺陷」的又一实例。**
+
+- **③ 修复整段搬到 app root（`state/reattach.rs`）**——①②③连同基线复位本来都写在 `ChatSidebar` 的连接 `Effect` 里。现在**一次** `run_concurrency` 快照回答三个问题（复位基线 → seed → 结算死的 → 重接活的），两个形态共用一份。顺带熵减：`run_concurrency` 此前每次重连打**两次**、每条 `run.session_updated` 再打一次，而那些调用里的 seed 是 no-op（`seed_server_running` 只在基线为 0 时生效）。
+
+- **④ TUI：`frame_belongs_here` 对未知 run id 一律收下（修 bug）+ `active_run` 从来没有读者（连线）**——两半是同一个洞。
+  - **正向**：`attach_session` 渲染完 transcript 与设置快照就停了，`current_run` 留空 ⇒ 状态栏报 idle、工作指示器不转、Esc / Ctrl-C **无物可取消**：这一端在看一个它结构上停不掉的回合，而"崩溃后有人 attach 上来看看"恰恰是最常见的场景。现 `AppState::adopt_active_run` 接上（elapsed **从加入那一刻**起算，理由写在 doc 里）。
+  - **反向**：教 `run_sessions` 的唯一来源是那个 run 自己的 `RunAccepted`，所以**一个在别人回合进行中启动的终端**永远学不到那个 run 是外来的 ⇒ 它的推理 / 工具行 / 正文全部渲染进本屏 transcript，两边看起来都合理，零报错。现由 `AppState::session_reconciled` 把兜底从"一律保留"收窄成"**服务端答过之后**才敢判外来"；**`active_run_from_history` 的返回值是三态**，最外层那一层是承重的——把"字段缺席"读成"没有东西在跑"，等于对一个从没告诉过你任何事的服务器武装这道闸。
+  - ⚠️ **变异抓到的两件不能动的事**：`RunAccepted` 现在**显式豁免**这道闸（它自带 `session_key`、是唯一的教学帧；一旦闸能说"不是我的"，守它就等于把教学帧丢掉，此后这一屏再也学不到任何非自己发起的 run，连后来 `/session` 切到那个 run 真正的会话都认不出来）；以及**活跃 run 要在查 `run_sessions` 之前先答**（那张表 FIFO 有界，淘汰在"未知＝保留"的年代无害，在"未知＝丢弃"的年代会把用户正在看的那一轮静默踢出它自己的 transcript）。
+
+- **⑤ 熵减**：「复用或新开一个会话标签 + activate + 登记身份」这串手抄了**三份**（侧栏 `on_select_session` / 项目房间入口 / 手机历史——第三份整个登记半边都缺），「open + activate」手抄了**三份**；现收敛成 `SessionMap::{adopt_session, start_new, ensure_active}`，六个调用点。删掉 `chat_sidebar` 里的重连修复段与那次多余的 `run_concurrency`。
+
+- **守卫（全部变异证过 RED）**：`api::chat::tests::every_send_path_binds_its_run`（crate 级、**从发送点派生**而不是列举；对修复前的手机 composer 变红并**点名文件路径**——它是全仓唯一没有 `bind_run` 的发送路径，而四轮无人问过）· `a_surface_that_registers_no_conversation_receives_no_frame`（钉住机制，防止有人用一个静默兜底"修"它）· `the_phone_chat_router_registers_a_conversation` · `SessionMap` 五条（三个写者 + `rejoin_target` 两个方向，含崩溃形状：route 被结算后重新武装）· TUI 六条 + 解码器四条。
+
+- **本轮刻意未做**：**TUI/CLI 仍不消费 `stream.session_user_message`**（在 `PANEL_ONLY_STREAM_METHODS` 里，要接先给 `aleph_protocol::StreamEvent` 加变体）· **`shared/client` 没有自动重连**，所以 TUI 的对账只发生在 attach（启动 / `--continue` / `/session`），socket 掉了就是红点到退出为止——那是独立一轮，且它一旦做了，`session_reconciled` 需要在断线时复位。
+
+---
+
+### 6.10 白板画布 (Whiteboard Canvas · 2026-08-17，画廊入左栏轮同日)
 ### 6.10 白板画布 (Whiteboard Canvas · 2026-08-17，画廊入左栏轮同日)
 
 > 子系统参考（架构/数据模型/并发协议/安全边界/刻意不做清单的全文）在 [CANVAS.md](CANVAS.md)；spec 母本与逐条偏差记录在 `docs/superpowers/specs/2026-08-16-panel-canvas-whiteboard-design.md`。本节只做落点索引。

@@ -132,6 +132,34 @@ fn AppContent() -> impl IntoView {
         // Root-level subscription is app-lifetime; no on_cleanup needed.
     }
 
+    // Reconnect repair, at the root for the same reason the dispatcher above is:
+    // it belongs to the client, not to any one surface. It used to live inside
+    // `ChatSidebar`, which is mounted behind `not_phone` — so a phone (and the
+    // iOS Panel shell, which is always in the phone band) never re-based its
+    // running-set sequence after a core restart, never settled a run whose
+    // terminal frame it missed, and never re-joined the turn the server was
+    // still driving in front of it.
+    {
+        let ws = use_context::<WorkspaceState>();
+        let i18n = use_i18n();
+        Effect::new(move || {
+            // Tracked for the dependency, not the value: `connection_epoch`
+            // ticks once per successful handshake, so this re-runs even for a
+            // socket replaced without `is_connected` visibly flipping.
+            let _epoch = state.connection_epoch.get();
+            if !state.is_connected.get() {
+                return;
+            }
+            leptos::task::spawn_local(crate::state::reattach::reattach_after_connect(
+                state,
+                chat_state,
+                session_map,
+                ws,
+                i18n.get_locale_untracked(),
+            ));
+        });
+    }
+
     // Typewriter reveal clock — paces the Panel's streamed-text reveal at the
     // configured `behavior.typing_speed` (chars/sec). Provided here so the chat
     // view (reader) and the behavior settings page (writer-on-save) share one

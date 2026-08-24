@@ -12,6 +12,9 @@ use leptos::task::spawn_local;
 use leptos_router::hooks::use_location;
 
 use crate::context::DashboardState;
+use crate::i18n::{t_string, use_i18n};
+use crate::state::sessions::SessionMap;
+use crate::views::chat::ChatState;
 
 use self::history::PhoneChatHistory;
 use self::thread::PhoneChatThread;
@@ -24,6 +27,31 @@ use self::thread::PhoneChatThread;
 #[must_use]
 pub fn PhoneChat() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
+    let chat = expect_context::<ChatState>();
+    let sessions = expect_context::<SessionMap>();
+    let i18n = use_i18n();
+
+    // Register this surface's conversation in `SessionMap`.
+    //
+    // Subscribing to `stream.*` was only ever half of what it takes to see a
+    // turn. The other half is having a `ConvId` for `resolve_target` to resolve
+    // to: its three steps are route → frame's own `session_key` → foreground,
+    // and on phone all three were structurally empty because `ChatSidebar` —
+    // the only thing in the crate that ever opened a conversation — is mounted
+    // behind `not_phone`. Every `run_accepted` therefore returned `None` and
+    // the handler returned before touching anything, so a phone (and the iOS
+    // Panel shell, which is always in the phone band) rendered no assistant
+    // bubble, no tool rows and no final answer — the turn only appeared after
+    // leaving the surface and coming back, and nothing was logged anywhere.
+    //
+    // Done at mount rather than lazily on the first send: `activate` restores
+    // the incoming conversation's (empty) snapshot into the singleton, so
+    // creating the conversation after the optimistic user bubble is pushed
+    // would erase it. At mount the singleton is either untouched (cold boot) or
+    // the conversation already exists and this is a no-op.
+    sessions.ensure_active(chat, &chat.agent_id.get_untracked().unwrap_or_default(), || {
+        t_string!(i18n, chat.new_chat).to_string()
+    });
 
     // Ask the Gateway to forward stream.* once connected (poll up to ~5s).
     {
@@ -59,5 +87,30 @@ pub fn PhoneChat() -> impl IntoView {
         } else {
             view! { <PhoneChatThread/> }.into_any()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The phone chat router must register a conversation.
+    ///
+    /// Source-level because the property is about a component body no headless
+    /// test mounts, and because the failure it pins is invisible at runtime: a
+    /// surface with no `ConvId` still connects, still subscribes, still sends,
+    /// still shows the user's own bubble — it just never receives a frame,
+    /// because `resolve_target` has nothing to resolve to (see
+    /// `a_surface_that_registers_no_conversation_receives_no_frame`).
+    ///
+    /// The wide half needs no twin: `ChatSidebar` opens conversations from
+    /// three gestures and its absence is what this file compensates for.
+    #[test]
+    fn the_phone_chat_router_registers_a_conversation() {
+        let src = include_str!("mod.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+        assert!(
+            production.contains("ensure_active("),
+            "PhoneChat no longer registers a conversation — every stream frame \
+             this surface receives will be dropped, silently"
+        );
     }
 }

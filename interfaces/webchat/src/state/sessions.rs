@@ -126,6 +126,76 @@ impl SessionMap {
         id
     }
 
+    /// Open a brand-new conversation and focus it — the "new chat" gesture.
+    ///
+    /// One of three compositions of the primitives above that every chat
+    /// surface needs and that used to be hand-written at each of them. The wide
+    /// sidebar had three copies (agent auto-select, the ＋ button, the
+    /// agent-picker row); the phone had none at all, which is what left
+    /// [`Self::active`] permanently `None` there — see [`Self::ensure_active`].
+    pub fn start_new(
+        &self,
+        singleton: ChatState,
+        agent_id: &str,
+        label: impl Into<String>,
+    ) -> ConvId {
+        let conv = self.open_conversation(agent_id, label);
+        self.activate(singleton, conv);
+        conv
+    }
+
+    /// Focus the conversation showing `session_key`, opening one if no tab has
+    /// it yet, and give it a discoverable identity in the same breath.
+    ///
+    /// The reuse-or-open + activate + [`Self::set_session_key`] sequence was
+    /// written out three times (the sidebar's `on_select_session`, the project
+    /// room entry, and — with the registration half missing entirely — the
+    /// phone's history list). Missing that last line is not cosmetic: it is
+    /// what lets [`Self::conv_for_session_key`] answer at all, and every
+    /// decision that has to get from a backend session to an open tab reads
+    /// that map (routing a foreign run's frames, reusing a tab instead of
+    /// opening a duplicate, mirroring the server's topic onto the label).
+    ///
+    /// `label` is a closure so the caller's topic lookup is skipped entirely on
+    /// the common path where the tab already exists.
+    pub fn adopt_session(
+        &self,
+        singleton: ChatState,
+        agent_id: &str,
+        session_key: &str,
+        label: impl FnOnce() -> String,
+    ) -> ConvId {
+        let conv = self
+            .conv_for_session_key(session_key)
+            .unwrap_or_else(|| self.open_conversation(agent_id, label()));
+        self.activate(singleton, conv);
+        self.set_session_key(conv, session_key);
+        conv
+    }
+
+    /// The conversation this surface is showing, creating one on first use.
+    ///
+    /// A surface that registers no conversation has no [`Self::active`], and
+    /// `resolve_target`'s last step needs one: without it every `run_accepted`
+    /// resolves to `None` and that surface receives no live frame at all — no
+    /// assistant bubble, no tool rows, no final answer, and nothing logged
+    /// anywhere. That was the phone's state for as long as it has existed:
+    /// `ChatSidebar` is the only thing that ever opened a conversation and it
+    /// is mounted behind `not_phone`.
+    ///
+    /// Idempotent, so a send path may call it unconditionally.
+    pub fn ensure_active(
+        &self,
+        singleton: ChatState,
+        agent_id: &str,
+        label: impl FnOnce() -> String,
+    ) -> ConvId {
+        match self.active_conv() {
+            Some(conv) => conv,
+            None => self.start_new(singleton, agent_id, label()),
+        }
+    }
+
     /// Get (or create on first access) the persistent background `ChatState` for `conv`. Created under a disposable child Owner;
     /// once created it stays in `live` for reuse, never rebuilt on each switch (prevents per-switch leak).
     fn ensure_background(&self, conv: ConvId) -> ChatState {
@@ -427,6 +497,46 @@ impl SessionMap {
             self.settle_run(run);
         }
         doomed
+    }
+
+    /// The session this client is showing that the server reports as running
+    /// while this client holds no route for it — a turn to **re-join**.
+    ///
+    /// The mirror of [`Self::settle_runs_absent_from`], and the half that was
+    /// missing. A reconnect repaired only the negative direction: routes the
+    /// server no longer confirms were settled, so a dead run stopped holding
+    /// the composer on Stop. The positive direction had no exit at all — a run
+    /// the server IS driving on the conversation in front of the user, whose
+    /// `run_accepted` this client missed (it was offline; or the core restarted
+    /// and `resume_coordinator` re-triggered the run with a NEW id before any
+    /// client was back), has no route, so `resolve_target` drops every one of
+    /// its frames. The row's dot lights, the server streams the whole turn, and
+    /// the transcript does not move until the run ends. Re-hydrating on
+    /// `run.session_updated` cannot save it either: that path is deliberately
+    /// suppressed while the session is running.
+    ///
+    /// Scoped to the ACTIVE conversation because the repair it feeds
+    /// (`hydrate_and_follow`) writes into the singleton `ChatState`, which is
+    /// the active conversation's projection. A background conversation
+    /// re-hydrates when the user selects it, through that same call.
+    ///
+    /// Identity comes from [`Self::meta`], not from `ChatState::session_key`:
+    /// the map is what `conv_for_session_key` and the routing table already
+    /// read, so asking it keeps this from becoming a second answer to "which
+    /// session is this tab showing".
+    #[must_use]
+    pub fn rejoin_target(&self, live: &HashSet<String>) -> Option<String> {
+        let conv = self.active_conv()?;
+        let key = self.meta(conv)?.session_key?;
+        if !live.contains(&key) {
+            return None;
+        }
+        // Already following a run in this conversation: the route is the thing
+        // being re-established, so holding one IS the answer.
+        let followed = self
+            .route
+            .with_untracked(|routes| routes.values().any(|c| *c == conv));
+        (!followed).then_some(key)
     }
 
     /// Cold-load fallback seed (from `run_concurrency` RPC, no event seq).
@@ -823,4 +933,120 @@ mod tests {
             assert!(map.is_running_session_key("sess-newer"));
         });
     }
+
+    #[test]
+    fn ensure_active_creates_once_and_is_then_a_no_op() {
+        with_owner(|| {
+            let map = SessionMap::new();
+            let singleton = ChatState::new();
+            assert_eq!(
+                map.active_conv(),
+                None,
+                "a surface that has not registered has no conversation — which is \
+                 exactly why every frame used to be dropped on phone"
+            );
+
+            let first = map.ensure_active(singleton, "agent-a", || "New chat".into());
+            assert_eq!(map.active_conv(), Some(first));
+
+            // Idempotent: a send path may call it unconditionally, and calling
+            // it again must not swap the singleton for an empty conversation.
+            singleton.session_key.set(Some("sess-a".into()));
+            let second = map.ensure_active(singleton, "agent-a", || "New chat".into());
+            assert_eq!(second, first);
+            assert_eq!(singleton.session_key.get_untracked().as_deref(), Some("sess-a"));
+        });
+    }
+
+    #[test]
+    fn adopt_session_reuses_the_tab_and_always_registers_the_key() {
+        with_owner(|| {
+            let map = SessionMap::new();
+            let singleton = ChatState::new();
+
+            let mut labels_built = 0;
+            let first = map.adopt_session(singleton, "agent-a", "sess-a", || {
+                labels_built += 1;
+                "Topic A".into()
+            });
+            assert_eq!(labels_built, 1);
+            assert_eq!(map.active_conv(), Some(first));
+            // The half the phone was missing: without it `conv_for_session_key`
+            // cannot answer, and a run started on this session by anybody else
+            // has no tab to route to.
+            assert_eq!(map.conv_for_session_key("sess-a"), Some(first));
+
+            // Re-selecting the same session reuses the tab (A -> B -> A used to
+            // open three) and does not pay for the label lookup again.
+            let other = map.adopt_session(singleton, "agent-b", "sess-b", || "Topic B".into());
+            assert_ne!(other, first);
+            let again = map.adopt_session(singleton, "agent-a", "sess-a", || {
+                labels_built += 1;
+                "Topic A".into()
+            });
+            assert_eq!(again, first);
+            assert_eq!(labels_built, 1, "the label closure ran for a tab that already existed");
+            assert_eq!(map.active_conv(), Some(first));
+        });
+    }
+
+    #[test]
+    fn start_new_opens_and_focuses_without_disturbing_the_previous_tab() {
+        with_owner(|| {
+            let map = SessionMap::new();
+            let singleton = ChatState::new();
+            let a = map.adopt_session(singleton, "agent-a", "sess-a", || "A".into());
+            singleton.session_key.set(Some("sess-a".into()));
+
+            let fresh = map.start_new(singleton, "agent-a", "New chat");
+            assert_ne!(fresh, a);
+            assert_eq!(map.active_conv(), Some(fresh));
+            // The outgoing conversation kept its identity, so a run still
+            // finishing on it routes to it and not into the empty new chat.
+            assert_eq!(map.conv_for_session_key("sess-a"), Some(a));
+        });
+    }
+
+    /// `rejoin_target` is the positive half of the reconnect repair: the run
+    /// the server IS driving that this client cannot route.
+    #[test]
+    fn rejoin_target_names_only_a_live_session_this_client_cannot_route() {
+        with_owner(|| {
+            let map = SessionMap::new();
+            let singleton = ChatState::new();
+            let conv = map.adopt_session(singleton, "agent-a", "sess-a", || "A".into());
+
+            // Server says nothing is running -> nothing to join (the other
+            // direction is `settle_runs_absent_from`'s).
+            assert_eq!(map.rejoin_target(&HashSet::new()), None);
+
+            let live = HashSet::from(["sess-a".to_string()]);
+            assert_eq!(map.rejoin_target(&live).as_deref(), Some("sess-a"));
+
+            // Already following it: holding the route IS the answer, and
+            // re-hydrating would replace live tool rows with fallback bubbles.
+            map.bind_run("run-a", conv, Some("sess-a"));
+            assert_eq!(map.rejoin_target(&live), None);
+
+            // The route settling (a terminal frame, or the negative half of the
+            // repair) re-arms it — this is the crash-recovery shape: the core
+            // restarted and re-triggered the turn under a NEW run id.
+            map.settle_run("run-a");
+            assert_eq!(map.rejoin_target(&live).as_deref(), Some("sess-a"));
+        });
+    }
+
+    /// A conversation with no key is skipped, never joined: "I cannot tell"
+    /// must not read as "the server is running something here".
+    #[test]
+    fn rejoin_target_is_silent_for_a_conversation_with_no_session_key() {
+        with_owner(|| {
+            let map = SessionMap::new();
+            let singleton = ChatState::new();
+            map.start_new(singleton, "agent-a", "New chat");
+            let live = HashSet::from(["sess-a".to_string()]);
+            assert_eq!(map.rejoin_target(&live), None);
+        });
+    }
 }
+

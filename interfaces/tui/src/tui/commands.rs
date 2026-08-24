@@ -527,12 +527,46 @@ pub(super) async fn attach_session(state: &mut AppState, client: &AlephClient, k
                         .to_string(),
                 ),
             }
+
+            // Which run — if any — is in flight on this session right now.
+            //
+            // The field is always emitted by a core that has it (`null` when
+            // nothing is running), so its PRESENCE is the reconciliation
+            // signal and its value is the run to join; an older gateway omits
+            // it, and this screen then stays in the fail-open posture it has
+            // always had. Deliberately read from the same response as the
+            // transcript rather than through a second RPC: a client that holds
+            // the transcript but not the run (or the reverse) renders either a
+            // duplicated turn or a missing one.
+            if let Some(active) = active_run_from_history(&result) {
+                state.adopt_active_run(active);
+            }
+
             state.scroll_to_bottom();
+
         }
         Err(e) => state.add_system_message(format!("History error: {e}")),
     }
 }
 
+/// Which run `chat.history` reports in flight on this session — a THREE-way
+/// answer, and the outer layer is the load-bearing one.
+///
+/// - `None` — the field is absent. A gateway older than it; this screen has
+///   learned nothing and stays in its fail-open posture.
+/// - `Some(None)` — asked and answered: nothing is running here. That is what
+///   arms `AppState::session_reconciled`, and it is the common case.
+/// - `Some(Some(id))` — a turn to join.
+///
+/// Collapsing the outer two (reading absent as "nothing running") would arm the
+/// guard against a server that never told it anything, and this screen would
+/// then drop every frame of every run it did not personally start.
+fn active_run_from_history(result: &Value) -> Option<Option<String>> {
+    let value = result.get("active_run")?;
+    Some(value.as_str().filter(|s| !s.is_empty()).map(str::to_string))
+}
+
+/// Map one `chat.history` row (`{role, content, timestamp}`) into a `ChatMessage`.
 /// Map one `chat.history` row (`{role, content, timestamp}`) into a `ChatMessage`.
 fn history_message_from_json(v: &Value) -> Option<app::ChatMessage> {
     let role = v.get("role").and_then(Value::as_str).unwrap_or("");
@@ -1179,5 +1213,44 @@ mod tests {
             "the one resolver call belongs at the send chokepoint, found: {}",
             hits[0]
         );
+    }
+}
+
+#[cfg(test)]
+mod active_run_tests {
+    use super::active_run_from_history;
+    use serde_json::json;
+
+    /// "The server never told me" and "the server told me nothing is running"
+    /// are different answers, and only the second may arm the cross-session
+    /// guard. Reading the first as the second would make an old gateway look
+    /// like a quiet one, and this screen would silently drop every frame of
+    /// every run it did not start itself.
+    #[test]
+    fn an_absent_field_is_not_an_answer() {
+        assert_eq!(active_run_from_history(&json!({ "messages": [] })), None);
+    }
+
+    #[test]
+    fn null_means_nothing_is_running_here() {
+        assert_eq!(
+            active_run_from_history(&json!({ "active_run": serde_json::Value::Null })),
+            Some(None)
+        );
+    }
+
+    #[test]
+    fn a_run_id_is_the_turn_to_join() {
+        assert_eq!(
+            active_run_from_history(&json!({ "active_run": "run-7" })),
+            Some(Some("run-7".to_string()))
+        );
+    }
+
+    /// An empty string is not a run id. It reaches `adopt_active_run` as "we
+    /// asked, nothing is running" rather than as a run nothing can ever settle.
+    #[test]
+    fn an_empty_string_is_not_a_run() {
+        assert_eq!(active_run_from_history(&json!({ "active_run": "" })), Some(None));
     }
 }

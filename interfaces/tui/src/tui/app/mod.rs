@@ -671,7 +671,31 @@ pub struct AppState {
     /// to a busy install does not grow this without limit.
     run_sessions: std::collections::VecDeque<(String, String)>,
 
+    /// Whether the server has told this screen which run (if any) is in flight
+    /// on [`Self::session_key`].
+    ///
+    /// Set by `commands::attach_session` from `chat.history`'s `active_run`
+    /// field; cleared by [`Self::switch_session`], whose caller re-attaches
+    /// immediately after.
+    ///
+    /// It exists to make [`Self::frame_belongs_here`] able to say "not mine"
+    /// about a run id it has never heard of. That answer used to be
+    /// unavailable, so an unknown id was kept — and a client that STARTS while
+    /// another terminal is mid-turn on a different session never sees that
+    /// run's `RunAccepted` and therefore never learns it is foreign, so its
+    /// reasoning, tool rows and answer stream into whatever conversation this
+    /// screen is showing. Once the server has answered, the picture is
+    /// complete: this session's in-flight run (if any) is known by name, and
+    /// every run started on it afterwards announces itself with a
+    /// `RunAccepted` this connection receives. Anything else is somebody
+    /// else's.
+    ///
+    /// `false` until then, which reproduces the previous fail-open exactly —
+    /// including against a core too old to send the field at all.
+    session_reconciled: bool,
+
     // -- Run tracking --
+
     pub current_run: Option<String>,
     /// Wall-clock start of the active run (set on `RunAccepted`, cleared on any
     /// run-end). Drives the status-bar working indicator's elapsed timer.
@@ -784,6 +808,7 @@ impl AppState {
             cache_root_agent: None,
             is_connected: true,
             run_sessions: std::collections::VecDeque::new(),
+            session_reconciled: false,
 
             current_run: None,
             run_started_at: None,
@@ -1397,6 +1422,12 @@ impl AppState {
         self.run_started_at = None;
         self.current_run_uses_agent_trace = false;
         self.current_run_trace_summary_applied = false;
+        // Nothing has been asked about the INCOMING session yet. The caller
+        // attaches immediately after and sets this again; until it does,
+        // `frame_belongs_here` falls back to keeping unknown run ids, which is
+        // the safe direction while this screen genuinely cannot tell.
+        self.session_reconciled = false;
+
         // The side thread belongs to the conversation we just left, and it is
         // cleared rather than kept per-conversation. Two reasons, and the
         // second is the decisive one:
