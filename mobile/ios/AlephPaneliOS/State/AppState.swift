@@ -71,18 +71,37 @@ final class AppState: ObservableObject {
         case .failure(let error):
             screen = .pairing(message: Self.message(for: error))
         case .success(let target):
-            if await probe.probe(host: target.host, port: target.port) {
+            if await probe.probe(target) {
                 try? store.save(target.url)
                 screen = .connected(target.url)
             } else {
-                screen = .pairing(message: "\(target.host):\(target.port) is not reachable")
+                // `unreachableMessage` names the resolved origin and says what
+                // to change. The old wording was `host:port is not reachable`,
+                // which stated the failure and withheld every fact the user
+                // needed: which scheme was dialled, and that the way out of a
+                // reverse-proxy failure is to *remove* the port.
+                screen = .pairing(message: target.unreachableMessage)
             }
         }
     }
 
-    /// Reveal the pairing screen on demand (shake gesture / webview load failure).
+    /// Reveal the pairing screen on demand (shake gesture).
     func requestReconfigure(message: String? = nil) {
         screen = .pairing(message: message)
+    }
+
+    /// The webview failed to load a target the probe had just approved — a
+    /// server that died between the two, a TLS trust prompt the user declined,
+    /// or an ATS refusal.
+    ///
+    /// Distinct from ``requestReconfigure(message:)`` because a bare
+    /// `error.localizedDescription` is a system string with no subject: "The
+    /// operation couldn't be completed" says nothing about *which* address
+    /// failed, and this screen's whole job is to let the user fix the address.
+    /// The origin comes from the same accessor every other message uses, so all
+    /// three surfaces name the endpoint the same way.
+    func reportLoadFailure(url: URL, detail: String) {
+        screen = .pairing(message: "Could not load \(PairingTarget(url: url).origin) — \(detail)")
     }
 
     /// Raise a server-trust approval sheet (called from the webview's TLS hook).
@@ -105,10 +124,15 @@ final class AppState: ObservableObject {
     }
 
     private func connectOrPair(_ target: PairingTarget) async {
-        if await probe.probe(host: target.host, port: target.port) {
+        if await probe.probe(target) {
             screen = .connected(target.url)
         } else {
-            screen = .pairing(message: "Last server unreachable")
+            // Same sentence as a hand-typed failure, and for the same reason:
+            // the previous copy ("Last server unreachable") named nothing at
+            // all, so a user whose stored target carried a port they never
+            // typed had no way to see it — the field shows the address, never
+            // the resolved origin.
+            screen = .pairing(message: target.unreachableMessage)
         }
     }
 

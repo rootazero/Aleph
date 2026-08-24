@@ -11,7 +11,7 @@ struct ContentView: View {
             case .connected(let url):
                 PanelWebView(
                     url: url,
-                    onLoadFailure: { appState.requestReconfigure(message: $0) },
+                    onLoadFailure: { appState.reportLoadFailure(url: url, detail: $0) },
                     onCertPrompt: { appState.presentCertPrompt($0) }
                 )
                 .ignoresSafeArea()

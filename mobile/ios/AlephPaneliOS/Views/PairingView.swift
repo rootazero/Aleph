@@ -100,10 +100,16 @@ struct PairingView: View {
             .opacity(submitDisabled ? 0.5 : 1)
 
             if let message {
+                // Left-aligned, not centred: this is now a multi-sentence
+                // explanation (what was dialled, then what to change), and
+                // centred ragged text is materially harder to read than the
+                // one-line "not reachable" it replaced.
                 Text(message)
                     .font(.footnote)
                     .foregroundStyle(errorColor)
-                    .multilineTextAlignment(.center)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(28)

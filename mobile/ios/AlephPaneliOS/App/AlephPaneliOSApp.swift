@@ -7,7 +7,7 @@ import SwiftUI
 struct AlephPaneliOSApp: App {
     @StateObject private var appState = AppState(
         store: KeychainConnectionStore(),
-        probe: NWReachabilityProbe()
+        probe: GatewayReadyProbe()
     )
 
     var body: some Scene {

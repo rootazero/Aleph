@@ -4,7 +4,7 @@ import Foundation
 
 private struct StubProbe: ReachabilityProbing {
     let reachable: Bool
-    func probe(host: String, port: UInt16) async -> Bool { reachable }
+    func probe(_ target: PairingTarget) async -> Bool { reachable }
 }
 
 @MainActor
@@ -27,12 +27,20 @@ private struct StubProbe: ReachabilityProbing {
         #expect(state.screen == .connected(URL(string: "http://box.lan:9000")!))
     }
 
-    @Test("saved + unreachable falls to pairing with message")
+    /// A stored target that no longer answers must land on the pairing screen
+    /// with the origin spelled out. The old copy was "Last server unreachable",
+    /// which named nothing at all — and the one fact the user needed was the
+    /// port the shell had filled in, which the address field cannot show.
+    @Test("saved + unreachable falls to pairing naming the origin")
     func savedUnreachable() async {
         let store = InMemoryConnectionStore(URL(string: "http://box.lan:9000")!)
         let state = AppState(store: store, probe: StubProbe(reachable: false), envURL: { nil })
         await state.resolve()
-        #expect(state.screen == .pairing(message: "Last server unreachable"))
+        guard case .pairing(let message) = state.screen, let message else {
+            Issue.record("expected a pairing screen carrying a reason")
+            return
+        }
+        #expect(message.contains("http://box.lan:9000"), "got: \(message)")
     }
 
     @Test("no env, empty store → pairing(nil)")
@@ -47,8 +55,8 @@ private struct StubProbe: ReachabilityProbing {
         let store = InMemoryConnectionStore()
         let state = AppState(store: store, probe: StubProbe(reachable: true), envURL: { nil })
         await state.submit("192.168.1.5")
-        #expect(state.screen == .connected(URL(string: "https://192.168.1.5:18790")!))
-        #expect(store.load() == URL(string: "https://192.168.1.5:18790")!)
+        #expect(state.screen == .connected(URL(string: "http://192.168.1.5:18790")!))
+        #expect(store.load() == URL(string: "http://192.168.1.5:18790")!)
     }
 
     @Test("submit invalid stays on pairing with message")
@@ -62,11 +70,31 @@ private struct StubProbe: ReachabilityProbing {
         }
     }
 
-    @Test("submit valid + unreachable shows not-reachable")
+    @Test("submit valid + unreachable names the origin it dialled")
     func submitUnreachable() async {
         let state = AppState(store: InMemoryConnectionStore(), probe: StubProbe(reachable: false), envURL: { nil })
         await state.submit("box.lan:9000")
-        #expect(state.screen == .pairing(message: "box.lan:9000 is not reachable"))
+        guard case .pairing(let message) = state.screen, let message else {
+            Issue.record("expected a pairing screen carrying a reason")
+            return
+        }
+        #expect(message.contains("http://box.lan:9000"), "got: \(message)")
+    }
+
+    /// The exact reported failure, end to end through `AppState`: a user types a
+    /// bare `https://` domain fronted by a CDN. The shell must dial :443 and,
+    /// when that does not answer, tell them so — naming the origin rather than
+    /// a port they never wrote.
+    @Test("a typed https domain is dialled on 443, and said so when it fails")
+    func typedHttpsDomainReportsPort443() async {
+        let state = AppState(store: InMemoryConnectionStore(), probe: StubProbe(reachable: false), envURL: { nil })
+        await state.submit("https://aleph.example.com")
+        guard case .pairing(let message) = state.screen, let message else {
+            Issue.record("expected a pairing screen carrying a reason")
+            return
+        }
+        #expect(message.contains("https://aleph.example.com:443"), "got: \(message)")
+        #expect(!message.contains("18790"), "the listener port must not be dialled here: \(message)")
     }
 
     @Test("requestReconfigure switches to pairing")
