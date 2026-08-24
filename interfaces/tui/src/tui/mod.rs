@@ -44,7 +44,8 @@ use app::{Action, AppState, Focus};
 use commands::{
     attach_session, btw_abort_or_close, confirm_provider_pick, confirm_session_switch,
     dispatch_gateway_text, execute_local_command, fetch_gateway_commands, fetch_my_user_id,
-    refresh_picker_provider, send_to_agent, shadowed_gateway_commands, AttachMode,
+    reconcile_side_question, refresh_picker_provider, send_to_agent, shadowed_gateway_commands,
+    AttachMode,
 };
 use slash::ParsedInput;
 
@@ -356,6 +357,16 @@ async fn main_loop<'c>(
                         );
                         state.scroll_to_bottom();
                     }
+                    // The side thread is NOT covered by the reattach above.
+                    // `chat.history` answers for the conversation on screen; a
+                    // `/btw` run executes on a derived session this client
+                    // cannot name, so its terminal frame is the only thing that
+                    // ever settles the overlay — and that frame may have been
+                    // sent to the socket that just died. Outside the
+                    // `key.is_empty()` branch on purpose: a side question
+                    // implies a prior `agent.run`, but which conversation this
+                    // screen is on has no bearing on whether one is in flight.
+                    reconcile_side_question(state, client).await;
                 }
                 Err(e) => {
                     backoff = next_backoff(backoff);
@@ -733,5 +744,49 @@ mod reconnect_tests {
     fn the_wait_stops_growing_at_the_ceiling() {
         assert_eq!(next_backoff(Duration::from_secs(10)), Duration::from_secs(15));
         assert_eq!(next_backoff(Duration::from_secs(15)), Duration::from_secs(15));
+    }
+
+    /// The side-question repair is actually reached when a reconnect succeeds.
+    ///
+    /// `main_loop` owns a terminal and two channels, so this arm has no
+    /// in-process test — and the defect it closes is precisely a severed wire:
+    /// `reconcile_side_question` is fully implemented and fully tested on its
+    /// own, and an overlay that spins forever looks exactly the same whether
+    /// the repair is wrong or simply never called.
+    ///
+    /// Source-level because a runtime check cannot tell "never called" from
+    /// "called and found nothing to do". Comment lines are stripped first: a
+    /// comment naming the function must not satisfy a guard about calling it.
+    /// `\r` goes first because this repo is checked out CRLF on Windows, where
+    /// a separator anchored to a bare `\n` matches nothing and the scan reads
+    /// the whole file — its own test module included — as production code.
+    #[test]
+    fn a_successful_reconnect_reconciles_the_side_question() {
+        let src = include_str!("mod.rs").replace('\r', "");
+        let production = src.split("#[cfg(test)]").next().expect("split yields one");
+        let code: String = production
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Self-protection: these two bound the reconnect's success arm, and
+        // without them the search below would pass over an empty slice.
+        let start = code
+            .find("state.begin_reattach();")
+            .expect("the reconnect success arm must still reset the run state");
+        let end = code
+            .find("backoff = next_backoff(backoff);")
+            .expect("the reconnect failure arm must still back off");
+        assert!(start < end, "the two arms are no longer in that order");
+
+        assert!(
+            code[start..end].contains("reconcile_side_question(state, client)"),
+            "a reconnect must re-decide the side question's fate. `chat.history` \
+             answers only for the conversation on screen; a `/btw` run executes \
+             on a derived session this client cannot name, so without this call \
+             its overlay spins forever on a terminal frame that went to the dead \
+             socket."
+        );
     }
 }

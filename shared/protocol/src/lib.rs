@@ -57,7 +57,10 @@ pub use events::{
 pub use jsonrpc::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolCallContext, ToolCallParams, ToolCallResult,
 };
-pub use session_thread::{AgentRunAccepted, AgentRunRequest, SessionSnapshot};
+pub use session_thread::{
+    AgentRunAccepted, AgentRunRequest, AgentRunStatusReport, AgentRunStatusRequest, RunPhase,
+    SessionSnapshot,
+};
 pub use subagent_tree::{
     build_tree, NodeLifecycle, Rollup, SubagentNode, SubagentTreeEvent, TreeNode,
 };

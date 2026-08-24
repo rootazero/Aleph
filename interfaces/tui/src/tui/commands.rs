@@ -15,10 +15,11 @@ use aleph_protocol::providers::{
     ModelsRefreshResult, ModelsRefreshRow, RefreshOutcome,
 };
 use aleph_protocol::{
-    AgentRunAccepted, AgentRunRequest, AgentTraceReplay, AgentTraceTaskSummary, SessionSnapshot,
+    AgentRunAccepted, AgentRunRequest, AgentRunStatusReport, AgentRunStatusRequest,
+    AgentTraceReplay, AgentTraceTaskSummary, RunPhase, SessionSnapshot,
 };
 
-use aleph_client::AlephClient;
+use aleph_client::{AlephClient, CliError, CliResult};
 
 use super::app::{self, AppState};
 use super::command_tree;
@@ -126,6 +127,147 @@ pub(super) async fn dispatch_gateway_text(
             state.add_user_message(text.to_string());
             send_to_agent(state, client, text, err_label).await;
         }
+    }
+}
+
+/// What one `agent.status` answer means for a side question the overlay still
+/// believes is being answered.
+///
+/// Three outcomes, not two, and the third is the load-bearing one: "the server
+/// said it is over" and "I could not ask the server" are different facts, and
+/// folding the second into the first settles a question over a run that may be
+/// answering perfectly well on the other side of a socket that is still coming
+/// up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SideRunVerdict {
+    /// The gateway says it is still in flight. The spinner is honest and the
+    /// frames resume on the new socket — `EventVisibilityIndex` is
+    /// process-shared, so the run→session seed this run was given on the dead
+    /// connection is still there for the new one.
+    StillAnswering,
+    /// It ended in an error the gateway can name.
+    Failed(String),
+    /// It is no longer being answered here, for a reason that is not a failure.
+    Disconnected(String),
+    /// The question could not be put. Nothing is claimed and nothing settles;
+    /// the next successful reconnect asks again.
+    CouldNotAsk,
+}
+
+/// Read the server's answer about a side run.
+///
+/// Pure so the decision is reachable without a gateway — the same reason
+/// `apply_history` is split out from `attach_session`.
+///
+/// # `Err` is two different things
+///
+/// [`CliError::Rpc`] means the gateway **answered**, and today its only answer
+/// here is `Run not found`: this process has no record of the id. That covers a
+/// core that restarted under the client and a run addressed by someone who may
+/// not (deliberately the same response — see `caller_may_address_run`), and
+/// neither is a verdict about the work. It is still a settlement, because
+/// whatever became of that run, nothing is going to stream it to this client.
+///
+/// The note carries the server's own words rather than paraphrasing them. The
+/// sentence around them has to stay true of *any* refusal this method might
+/// grow, and "it did not report this run in flight" is the whole of what an
+/// error response establishes — "it has no record of it" is one specific
+/// reading, correct today and not this client's to assert.
+///
+/// Every other `CliError` is transport: the socket died again, the request timed
+/// out, the reply would not parse. Those say nothing at all about the run, and
+/// reading them as an ending is the "refusal read as absence" defect one layer
+/// down.
+fn side_run_verdict(answer: &CliResult<AgentRunStatusReport>) -> SideRunVerdict {
+    let report = match answer {
+        Ok(report) => report,
+        Err(CliError::Rpc { message, .. }) => {
+            return SideRunVerdict::Disconnected(format!(
+                "Disconnected while this was being answered, and the gateway did not report it \
+                 in flight (it said: {message}). Anything below arrived before the drop."
+            ))
+        }
+        Err(_) => return SideRunVerdict::CouldNotAsk,
+    };
+    match report.phase() {
+        RunPhase::Running => SideRunVerdict::StillAnswering,
+        RunPhase::Failed => SideRunVerdict::Failed(
+            report
+                .error
+                .clone()
+                .filter(|reason| !reason.trim().is_empty())
+                // A gateway that names the failure without saying why. Not
+                // guessed at: "it failed" is the whole of what was said.
+                .unwrap_or_else(|| "the gateway reported this run failed".to_string()),
+        ),
+        RunPhase::Completed => SideRunVerdict::Disconnected(
+            "Disconnected while this was being answered. The gateway reports the run finished; \
+             the text below is only what reached this client before the drop, and may not be \
+             the whole answer."
+                .to_string(),
+        ),
+        RunPhase::Cancelled => SideRunVerdict::Disconnected(
+            "Disconnected while this was being answered. The gateway reports the run was \
+             cancelled. Anything below arrived before the drop."
+                .to_string(),
+        ),
+        // Not folded in with `Running`: an unknown word read as "still going"
+        // is a spinner that never stops, and this client cannot recover from
+        // that. See `RunPhase::Unrecognized`.
+        RunPhase::Unrecognized => SideRunVerdict::Disconnected(
+            "Disconnected while this was being answered, and the gateway reports a state this \
+             client does not recognize. Anything below arrived before the drop."
+                .to_string(),
+        ),
+    }
+}
+
+/// Ask the server what became of the side question this overlay is still
+/// showing as unanswered, and stop the spinner unless it really is still going.
+///
+/// # Why the TUI needs its own path for this
+///
+/// A `/btw` run's terminal frame can be emitted while this client is offline,
+/// and frames sent to a dead socket are simply gone — so the overlay waits for
+/// a `RunComplete` that already happened, forever. The Panel repairs the
+/// equivalent from `stream.running_set_changed` / `gateway.metrics.
+/// run_concurrency`, but that set is keyed by **session** and is a Panel-only
+/// surface (`frame_census::PANEL_ONLY_STREAM_METHODS`); it could not answer for
+/// a side question anyway, because a side run executes on a derived session
+/// whose key is hashed server-side and which this client therefore cannot name.
+///
+/// The run id is the one handle it does hold, and `agent.status` is the one
+/// run-id-keyed read in the gateway. One round trip, and only when a side
+/// question is actually in flight.
+///
+/// # The window this does not close
+///
+/// A run that finishes *during* this round trip settles as
+/// [`BtwOutcome::Disconnected`], and the `RunComplete` that arrives a moment
+/// later — carrying the full answer — finds no active question and does
+/// nothing. Stated rather than hidden: the cost is the tail of one answer plus
+/// a word that is still true, over a window of one RPC, on a run that had to be
+/// alive at reconnect and dead a few milliseconds later. Closing it would mean
+/// letting a late terminal frame overwrite a settled exchange, which is the
+/// misattribution `for_active_run` exists to prevent.
+pub(super) async fn reconcile_side_question(state: &mut AppState, client: &AlephClient) {
+    let Some(run_id) = state.btw.active_run_id().map(str::to_string) else {
+        return;
+    };
+    let answer = client
+        .call::<_, AgentRunStatusReport>(
+            "agent.status",
+            Some(AgentRunStatusRequest {
+                run_id: run_id.clone(),
+            }),
+        )
+        .await;
+    match side_run_verdict(&answer) {
+        // Nothing is claimed on either: one is "it is still going", the other
+        // is "I do not know". Both leave the overlay as it is.
+        SideRunVerdict::StillAnswering | SideRunVerdict::CouldNotAsk => {}
+        SideRunVerdict::Failed(reason) => state.btw.fail_active(&run_id, reason),
+        SideRunVerdict::Disconnected(note) => state.btw.settle_disconnected(&run_id, note),
     }
 }
 
@@ -1451,5 +1593,155 @@ mod attach_mode_tests {
             body.contains("Ok(result) => apply_history(state, &result, mode)"),
             "the applier must be reached only from the success arm"
         );
+    }
+}
+
+#[cfg(test)]
+mod side_run_verdict_tests {
+    use super::{side_run_verdict, SideRunVerdict};
+    use aleph_client::CliError;
+    use aleph_protocol::AgentRunStatusReport;
+
+    /// Build the report the way the server does — from the contract type, not
+    /// from a JSON literal written here. A literal would only prove serde
+    /// round-trips its own bytes.
+    fn reported(status: &str, error: Option<&str>) -> Result<AgentRunStatusReport, CliError> {
+        Ok(AgentRunStatusReport {
+            run_id: "r-side".into(),
+            session_key: "agent:main:main:s1".into(),
+            status: status.into(),
+            elapsed_ms: 4_200,
+            error: error.map(str::to_string),
+        })
+    }
+
+    /// A side question that outlives a blip must not be torn down by the
+    /// repair. Its frames resume on the new socket, so settling it here would
+    /// throw away an answer that is still on its way.
+    #[test]
+    fn a_side_question_still_in_flight_is_left_alone() {
+        assert_eq!(
+            side_run_verdict(&reported(AgentRunStatusReport::RUNNING, None)),
+            SideRunVerdict::StillAnswering
+        );
+    }
+
+    /// The defect this whole path exists to close: the run ended while the
+    /// client was away, its terminal frame went to a dead socket, and the
+    /// overlay spun forever.
+    ///
+    /// It settles as `Disconnected`, never as answered — the frames emitted
+    /// during the outage are gone, so the text on file may be a prefix of the
+    /// real answer with no way to tell.
+    #[test]
+    fn a_run_that_finished_during_the_outage_settles_without_claiming_the_answer() {
+        let SideRunVerdict::Disconnected(note) =
+            side_run_verdict(&reported(AgentRunStatusReport::COMPLETED, None))
+        else {
+            panic!("a finished run must stop the spinner");
+        };
+        assert!(
+            note.contains("only what reached this client"),
+            "the user must be told the text may be partial: {note}"
+        );
+    }
+
+    /// A failure keeps the reason. The wire used to drop it, so a client told
+    /// `failed` had nothing to show but the word.
+    #[test]
+    fn a_failure_reaches_the_overlay_with_its_reason() {
+        assert_eq!(
+            side_run_verdict(&reported(
+                AgentRunStatusReport::FAILED,
+                Some("provider 429")
+            )),
+            SideRunVerdict::Failed("provider 429".into())
+        );
+    }
+
+    /// …and a gateway that names the failure without saying why gets a sentence
+    /// that claims no more than it was told. Not "unknown error", which reads
+    /// as a fact about the run rather than about what was said.
+    #[test]
+    fn a_reasonless_failure_does_not_invent_one() {
+        for blank in [None, Some(""), Some("   ")] {
+            let SideRunVerdict::Failed(reason) =
+                side_run_verdict(&reported(AgentRunStatusReport::FAILED, blank))
+            else {
+                panic!("a failed run must settle as failed");
+            };
+            assert_eq!(reason, "the gateway reported this run failed");
+        }
+    }
+
+    /// A cancel is not a failure and not an answer.
+    #[test]
+    fn a_cancelled_run_is_neither_failed_nor_answered() {
+        let verdict = side_run_verdict(&reported(AgentRunStatusReport::CANCELLED, None));
+        assert!(matches!(verdict, SideRunVerdict::Disconnected(ref n) if n.contains("cancelled")));
+    }
+
+    /// An older client against a newer gateway. Reading an unknown word as
+    /// "still going" is the one unrecoverable direction — the spinner would
+    /// never stop — so it settles.
+    #[test]
+    fn a_state_word_this_client_does_not_know_is_not_read_as_running() {
+        for unknown in ["", "paused", "queued"] {
+            let verdict = side_run_verdict(&reported(unknown, None));
+            assert_ne!(
+                verdict,
+                SideRunVerdict::StillAnswering,
+                "{unknown:?} must not hold the overlay open"
+            );
+            assert!(matches!(verdict, SideRunVerdict::Disconnected(_)));
+        }
+    }
+
+    /// The gateway answered, and its answer is that it has never heard of this
+    /// run — a core that restarted under the client. Not a verdict about the
+    /// work, but nothing is going to stream it here either, so the spinner
+    /// stops.
+    ///
+    /// The server's own words are carried through instead of paraphrased: the
+    /// sentence around them has to stay true of any refusal this method might
+    /// grow, and this client is not in a position to assert *why* a run is not
+    /// being reported.
+    #[test]
+    fn a_gateway_with_no_record_of_the_run_stops_the_spinner() {
+        let refused: Result<AgentRunStatusReport, CliError> = Err(CliError::Rpc {
+            code: -32602,
+            message: "Run not found".into(),
+        });
+        let SideRunVerdict::Disconnected(note) = side_run_verdict(&refused) else {
+            panic!("an answered refusal must stop the spinner");
+        };
+        assert!(
+            note.contains("Run not found"),
+            "the gateway's own words are what the user can act on: {note}"
+        );
+    }
+
+    /// "I could not ask" is not "it stopped".
+    ///
+    /// The socket can die again mid-repair, or the reply can time out. Settling
+    /// on those would file a question whose run is very likely answering
+    /// normally — and unlike the refusal above, asking again is free: the next
+    /// successful reconnect runs this same repair.
+    #[test]
+    fn a_question_that_could_not_be_put_settles_nothing() {
+        let transport = [
+            CliError::Disconnected("Connection closed by peer".into()),
+            CliError::Timeout("no response in 30s".into()),
+            CliError::Connection("broken pipe".into()),
+        ];
+        for e in transport {
+            let label = e.to_string();
+            let answer: Result<AgentRunStatusReport, CliError> = Err(e);
+            assert_eq!(
+                side_run_verdict(&answer),
+                SideRunVerdict::CouldNotAsk,
+                "{label} says nothing about the run"
+            );
+        }
     }
 }
