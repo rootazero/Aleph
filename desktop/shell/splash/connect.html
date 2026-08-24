@@ -103,7 +103,17 @@
       if (t && t !== 'local') document.getElementById('addr').value = t;
     }).catch(() => {});
 
-    // shell calls this to surface routing errors (mirrors window.__alephError)
+    // Why the shell sent us here, carried in the fragment by
+    // `connection::connect_page_url_with_error`. Read on load rather than
+    // pushed by a post-navigate eval(): that eval runs against the outgoing
+    // document, where `__alephError` does not exist yet, so the reason was
+    // silently dropped and the page appeared with no explanation at all.
+    {
+      const m = new URLSearchParams(location.hash.slice(1)).get('err');
+      if (m) err(m);
+    }
+
+    // Runtime push for an error raised while this page is already open.
     window.__alephError = (m) => err(m);
 
     // --- mDNS discovery (panel-only shell) ---------------------------------

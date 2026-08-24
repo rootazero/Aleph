@@ -551,8 +551,12 @@ mod tests {
 
     #[test]
     fn ws_url_https_remote_uses_wss_scheme() {
+        // A typed `https://host` carries the scheme's own port, so the
+        // notification bridge dials 443 — the same origin the webview loads.
+        // While this resolved to :18790 the bridge could never reach a
+        // reverse-proxied Gateway either.
         let t = crate::connection::ConnectionTarget::parse("https://gw.example.com").unwrap();
-        assert_eq!(ws_url(&t), "wss://gw.example.com:18790/ws");
+        assert_eq!(ws_url(&t), "wss://gw.example.com:443/ws");
     }
 
     #[test]

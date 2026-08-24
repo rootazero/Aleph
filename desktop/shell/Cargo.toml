@@ -41,6 +41,12 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "io-util"
 # feature `connect_async("wss://…")` fails outright, which used to kill desktop
 # notifications for every remote https Gateway.
 tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+# Same native-tls stack tokio-tungstenite already resolves (no new dependency in
+# the lock) — used by the connect-page reachability probe to speak HTTPS to an
+# `https://` Gateway. A plaintext probe of a TLS target gets no HTTP reply and
+# would report a healthy server as down.
+native-tls = "0.2"
+tokio-native-tls = "0.3"
 futures-util = "0.3"
 serde_json = { workspace = true }
 tracing = { workspace = true }
