@@ -54,6 +54,7 @@ pub use config::{
 
 pub use crate::tasks::shared::error::TaskError;
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
 use clock::{Clock, SystemClock};
 use service::ServiceState;
@@ -75,11 +76,42 @@ pub type SharedCronService = Arc<tokio::sync::Mutex<CronService>>;
 ///
 /// `None` until boot, so tests and early-boot read as "no cron subsystem" and
 /// the freeze skips the leg rather than failing.
-static GLOBAL_CRON: once_cell::sync::OnceCell<SharedCronService> = once_cell::sync::OnceCell::new();
+///
+/// `IndistinguishableDefault`, and this one came out OPPOSITE to the reflex
+/// reading, so the derivation is written down rather than the verdict.
+///
+/// The reflex answer is `FailsOpen` — both readers are enforcement paths for a
+/// walled principal, and a gate that stops gating is what that variant names.
+/// It is wrong, because the enforcement does not stop. `executor.rs`'s
+/// fire-time backstop reaches this handle only to make the disable DURABLE; the
+/// `return make_error_result(..)` that refuses the run sits outside the
+/// `if let Some(svc)`, so a walled owner's job is still refused at every fire
+/// with the handle absent.
+///
+/// What absence actually produces is a value: `users.update`'s deactivation
+/// freeze skips the cron leg and leaves `report.crons` at 0, which reads as
+/// "this principal owned no cron jobs" and is indistinguishable from the truth.
+/// The jobs stay enabled forever, retried and refused every tick, and the
+/// operator is told the freeze covered everything.
+static GLOBAL_CRON: CapabilitySlot<SharedCronService> = CapabilitySlot::new(
+    "cron/service",
+    MissingSemantics::IndistinguishableDefault {
+        reads_as: "\"this principal owns no cron jobs\" -- the deactivation \
+                   freeze skips the leg and reports crons: 0",
+    },
+);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn global_cron_slot() -> &'static dyn SlotStatus {
+    &GLOBAL_CRON
+}
 
 /// Install the global service at boot. Idempotent: a second call is ignored.
 pub fn init_global(service: SharedCronService) {
-    let _ = GLOBAL_CRON.set(service);
+    let _ = GLOBAL_CRON.install(service);
 }
 
 /// Read the global service, if initialized.
