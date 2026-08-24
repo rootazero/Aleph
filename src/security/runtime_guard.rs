@@ -564,22 +564,23 @@ mod tests {
         // placeholder-bearing text and only substituted afterwards,
         // so a `sk-…` value resolved at this step was added to the
         // outbound string AFTER every leak/redact pass.
-        use crate::secrets::leak_detector::is_block_class_secret;
+        struct PatternMatchingResolver;
+        #[async_trait::async_trait]
+        impl AsyncSecretResolver for PatternMatchingResolver {
+            async fn resolve(&self, _name: &str) -> Result<DecryptedSecret, SecretError> {
+                Ok(DecryptedSecret::new(
+                    "sk-ant-test12345678901234567890".to_string(),
+                ))
+            }
+        }
         let guard = RuntimeSecurityGuard::default_guard();
         let context = SecurityContext::default();
         let input = "Authorization: Bearer {{secret:test_key}}";
         let result = guard
-            .process_outbound(input, Some(&MockResolver), context)
+            .process_outbound(input, Some(&PatternMatchingResolver), context)
             .await
             .unwrap();
         assert!(matches!(result, GuardResult::Blocked { .. }));
-        // Sanity-check: the value the mock returns doesn't itself match
-        // a known pattern, so the post-substitution scan returning Allow
-        // for that case (test_outbound_resolves_placeholder) is the
-        // right shape. If you change the mock to a pattern-matching
-        // value, move this test to use that pattern and remove the
-        // Allow case from the other test.
-        assert!(!is_block_class_secret("test_secret_value_xyz"));
     }
 
     #[tokio::test]
