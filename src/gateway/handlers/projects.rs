@@ -82,9 +82,11 @@ use super::super::protocol::{
     RESOURCE_NOT_FOUND,
 };
 use super::parse_params;
+use crate::gateway::event_bus::GatewayEventBus;
+use crate::gateway::events::ChangeKind;
 use crate::gateway::security::store::{SecurityStore, UserRole, UserStatus};
 use crate::gateway::visibility;
-use crate::projects::{Project, ProjectError, ProjectStatus, ProjectStore};
+use crate::projects::{self, Project, ProjectError, ProjectStatus, ProjectStore};
 use crate::sync_primitives::Arc;
 
 /// Serializable view of a project room.
@@ -318,7 +320,11 @@ pub struct CreateParams {
 /// on — the new row is stamped with the caller instead, and the store puts the
 /// owner on the roster in the same call. Binding a workspace is a separate,
 /// owner-level operation.
-pub async fn handle_create(request: JsonRpcRequest, store: Arc<ProjectStore>) -> JsonRpcResponse {
+pub async fn handle_create(
+    request: JsonRpcRequest,
+    store: Arc<ProjectStore>,
+    event_bus: Arc<GatewayEventBus>,
+) -> JsonRpcResponse {
     let params: CreateParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
@@ -327,6 +333,7 @@ pub async fn handle_create(request: JsonRpcRequest, store: Arc<ProjectStore>) ->
     match store.create(&params.name, owner.as_deref(), None) {
         Ok(project) => {
             let members = store.members(&project.id).unwrap_or_default();
+            projects::events::publish_changed(&event_bus, &project.id, ChangeKind::Created, None);
             JsonRpcResponse::success(
                 request.id,
                 json!({ "project": ProjectView::render(project, members) }),
@@ -354,7 +361,11 @@ pub struct AddParams {
 ///
 /// Gated by [`require_directory_choice`]: the row this writes carries a
 /// `workspace_path`, which since P2 becomes a run's cwd.
-pub async fn handle_add(request: JsonRpcRequest, store: Arc<ProjectStore>) -> JsonRpcResponse {
+pub async fn handle_add(
+    request: JsonRpcRequest,
+    store: Arc<ProjectStore>,
+    event_bus: Arc<GatewayEventBus>,
+) -> JsonRpcResponse {
     let params: AddParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
@@ -366,6 +377,11 @@ pub async fn handle_add(request: JsonRpcRequest, store: Arc<ProjectStore>) -> Js
     match store.add(&path, params.name) {
         Ok(project) => {
             let members = store.members(&project.id).unwrap_or_default();
+            // `Updated`, not `Created`: `ProjectStore::add_for` can collapse
+            // onto an existing row for the same path (see its own doc) rather
+            // than insert a new one, so `Created` would overclaim on the
+            // common "re-add a folder already in the picker" path.
+            projects::events::publish_changed(&event_bus, &project.id, ChangeKind::Updated, None);
             JsonRpcResponse::success(
                 request.id,
                 json!({ "project": ProjectView::render(project, members) }),
@@ -390,6 +406,7 @@ pub struct CreateBlankParams {
 pub async fn handle_create_blank(
     request: JsonRpcRequest,
     store: Arc<ProjectStore>,
+    event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     let params: CreateBlankParams = match parse_params(&request) {
         Ok(p) => p,
@@ -402,6 +419,7 @@ pub async fn handle_create_blank(
     match store.create_blank(&parent, &params.name) {
         Ok(project) => {
             let members = store.members(&project.id).unwrap_or_default();
+            projects::events::publish_changed(&event_bus, &project.id, ChangeKind::Created, None);
             JsonRpcResponse::success(
                 request.id,
                 json!({ "project": ProjectView::render(project, members) }),
@@ -453,6 +471,7 @@ pub async fn handle_rename(
     request: JsonRpcRequest,
     store: Arc<ProjectStore>,
     users: Arc<SecurityStore>,
+    event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     let params: RenameParams = match parse_params(&request) {
         Ok(p) => p,
@@ -468,6 +487,7 @@ pub async fn handle_rename(
     match store.rename(&params.id, &params.name) {
         Ok(renamed) => {
             let members = store.members(&renamed.id).unwrap_or_default();
+            projects::events::publish_changed(&event_bus, &renamed.id, ChangeKind::Updated, None);
             JsonRpcResponse::success(
                 request.id,
                 json!({ "project": ProjectView::render(renamed, members) }),
@@ -492,6 +512,7 @@ pub async fn handle_archive(
     request: JsonRpcRequest,
     store: Arc<ProjectStore>,
     users: Arc<SecurityStore>,
+    event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     let params: ArchiveParams = match parse_params(&request) {
         Ok(p) => p,
@@ -505,10 +526,17 @@ pub async fn handle_archive(
         return denial;
     }
     match store.archive(&params.id) {
-        Ok(()) => JsonRpcResponse::success(
-            request.id,
-            json!({ "id": params.id, "status": ProjectStatus::Archived.as_str() }),
-        ),
+        Ok(()) => {
+            // `Updated`, not `Deleted`: archiving is reversible and keeps the
+            // roster (see this handler's own doc), matching `WorkspaceChanged`'s
+            // documented archive/restore convention — `Deleted` would be a
+            // claim a client could act on and be wrong about.
+            projects::events::publish_changed(&event_bus, &params.id, ChangeKind::Updated, None);
+            JsonRpcResponse::success(
+                request.id,
+                json!({ "id": params.id, "status": ProjectStatus::Archived.as_str() }),
+            )
+        }
         Err(e) => project_error_response(request.id, e),
     }
 }
@@ -544,6 +572,7 @@ pub async fn handle_bind_workspace(
     request: JsonRpcRequest,
     store: Arc<ProjectStore>,
     users: Arc<SecurityStore>,
+    event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     let params: BindWorkspaceParams = match parse_params(&request) {
         Ok(p) => p,
@@ -573,6 +602,7 @@ pub async fn handle_bind_workspace(
     match store.bind_workspace(&params.id, path.as_deref()) {
         Ok(bound) => {
             let members = store.members(&bound.id).unwrap_or_default();
+            projects::events::publish_changed(&event_bus, &bound.id, ChangeKind::Updated, None);
             JsonRpcResponse::success(
                 request.id,
                 json!({ "project": ProjectView::render(bound, members) }),
@@ -595,6 +625,7 @@ pub async fn handle_remove(
     request: JsonRpcRequest,
     store: Arc<ProjectStore>,
     users: Arc<SecurityStore>,
+    event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     let params: RemoveParams = match parse_params(&request) {
         Ok(p) => p,
@@ -608,7 +639,10 @@ pub async fn handle_remove(
         return denial;
     }
     match store.remove(&params.id) {
-        Ok(()) => JsonRpcResponse::success(request.id, json!({ "id": params.id, "removed": true })),
+        Ok(()) => {
+            projects::events::publish_changed(&event_bus, &params.id, ChangeKind::Deleted, None);
+            JsonRpcResponse::success(request.id, json!({ "id": params.id, "removed": true }))
+        }
         Err(e) => project_error_response(request.id, e),
     }
 }
@@ -708,6 +742,7 @@ pub async fn handle_member_add(
     request: JsonRpcRequest,
     store: Arc<ProjectStore>,
     users: Arc<SecurityStore>,
+    event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     let params: MemberParams = match parse_params(&request) {
         Ok(p) => p,
@@ -733,6 +768,12 @@ pub async fn handle_member_add(
                     format!("projects.member.add: {} → {}", params.user_id, params.id),
                 ));
             }
+            // No `affected_user`: the newly-added member is already on the
+            // roster by the time this publishes (`add_member` republishes
+            // inside its own write lock), so the ordinary roster-membership
+            // arm already admits them — unlike the removal below, there is
+            // no gap for the carve-out to close.
+            projects::events::publish_changed(&event_bus, &params.id, ChangeKind::Updated, None);
             member_list_response(request.id, &store, &params.id)
         }
         Err(e) => project_error_response(request.id, e),
@@ -743,6 +784,7 @@ pub async fn handle_member_remove(
     request: JsonRpcRequest,
     store: Arc<ProjectStore>,
     users: Arc<SecurityStore>,
+    event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     let params: MemberParams = match parse_params(&request) {
         Ok(p) => p,
@@ -777,6 +819,17 @@ pub async fn handle_member_remove(
                     format!("projects.member.remove: {} ← {}", params.user_id, params.id),
                 ));
             }
+            // `affected_user`: the roster projection no longer admits
+            // `params.user_id` by the time this publishes
+            // (`remove_member` republishes inside its own write lock), so
+            // without naming them here they would never learn they were
+            // dropped — see `ProjectsChanged::affected_user`'s doc.
+            projects::events::publish_changed(
+                &event_bus,
+                &params.id,
+                ChangeKind::Updated,
+                Some(&params.user_id),
+            );
             member_list_response(request.id, &store, &params.id)
         }
         Err(e) => project_error_response(request.id, e),
@@ -838,6 +891,7 @@ fn project_error_response(id: Option<serde_json::Value>, err: ProjectError) -> J
 mod tests {
     use super::*;
     use crate::gateway::caller_identity::CALLER_USER;
+    use crate::gateway::events::GatewayEventFrame;
     use crate::projects::roster::TEST_GUARD as ROSTER_TEST_GUARD;
     use rusqlite::Connection;
     use std::sync::MutexGuard;
@@ -877,6 +931,10 @@ mod tests {
     fn err_of(resp: &JsonRpcResponse) -> (i32, String) {
         let e = resp.error.as_ref().expect("expected an error response");
         (e.code, e.message.clone())
+    }
+
+    fn test_event_bus() -> Arc<GatewayEventBus> {
+        Arc::new(GatewayEventBus::new())
     }
 
     /// The no-oracle contract: a room that belongs to somebody else's roster
@@ -969,6 +1027,7 @@ mod tests {
                     ),
                     store.clone(),
                     users,
+                    test_event_bus(),
                 ),
             )
             .await;
@@ -997,6 +1056,7 @@ mod tests {
                     ),
                     store.clone(),
                     users.clone(),
+                    test_event_bus(),
                 ),
             )
             .await;
@@ -1015,6 +1075,7 @@ mod tests {
                     ),
                     store.clone(),
                     users.clone(),
+                    test_event_bus(),
                 ),
             )
             .await;
@@ -1032,6 +1093,7 @@ mod tests {
                     ),
                     store.clone(),
                     users,
+                    test_event_bus(),
                 ),
             )
             .await;
@@ -1058,6 +1120,7 @@ mod tests {
                         ),
                         store.clone(),
                         users.clone(),
+                        test_event_bus(),
                     ),
                 )
                 .await;
@@ -1085,6 +1148,7 @@ mod tests {
                     ),
                     store.clone(),
                     users,
+                    test_event_bus(),
                 ),
             )
             .await;
@@ -1100,6 +1164,85 @@ mod tests {
             )
             .await;
         assert_eq!(err_of(&bob_sees).0, RESOURCE_NOT_FOUND);
+    }
+
+    /// Task 6 (`projects.changed` push topic): removing a member must publish
+    /// a frame naming THAT user as `affected_user` — the roster projection no
+    /// longer admits them by the time this fires, so without the carve-out
+    /// their own client would never learn to drop the room from its list.
+    #[tokio::test]
+    async fn handle_member_remove_emits_projects_changed_naming_the_removed_user() {
+        let (store, users, project, _guard) = room();
+        let bus = test_event_bus();
+        let mut rx = bus.subscribe_typed();
+
+        let removed = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_member_remove(
+                    rpc(
+                        "projects.member.remove",
+                        json!({ "id": project.id, "user_id": "u-bob" }),
+                    ),
+                    store,
+                    users,
+                    Arc::clone(&bus),
+                ),
+            )
+            .await;
+        assert!(removed.error.is_none(), "{:?}", removed.error);
+
+        match rx.try_recv() {
+            Ok(GatewayEventFrame::ProjectsChanged {
+                project_id,
+                change,
+                affected_user,
+            }) => {
+                assert_eq!(project_id, project.id);
+                assert_eq!(change, ChangeKind::Updated);
+                assert_eq!(affected_user.as_deref(), Some("u-bob"));
+            }
+            other => panic!("expected a ProjectsChanged frame, got {other:?}"),
+        }
+    }
+
+    /// Every OTHER mutation leaves `affected_user` `None` — pinned on
+    /// `rename` as the representative case. `member_remove` above is the one
+    /// exception.
+    #[tokio::test]
+    async fn handle_rename_emits_projects_changed_with_no_affected_user() {
+        let (store, users, project, _guard) = room();
+        let bus = test_event_bus();
+        let mut rx = bus.subscribe_typed();
+
+        let renamed = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_rename(
+                    rpc(
+                        "projects.rename",
+                        json!({ "id": project.id, "name": "renamed" }),
+                    ),
+                    store,
+                    users,
+                    Arc::clone(&bus),
+                ),
+            )
+            .await;
+        assert!(renamed.error.is_none(), "{:?}", renamed.error);
+
+        match rx.try_recv() {
+            Ok(GatewayEventFrame::ProjectsChanged {
+                project_id,
+                change,
+                affected_user,
+            }) => {
+                assert_eq!(project_id, project.id);
+                assert_eq!(change, ChangeKind::Updated);
+                assert_eq!(affected_user, None);
+            }
+            other => panic!("expected a ProjectsChanged frame, got {other:?}"),
+        }
     }
 
     /// The roster is the visibility predicate, so an owner removed from it
@@ -1118,6 +1261,7 @@ mod tests {
                     ),
                     store.clone(),
                     users,
+                    test_event_bus(),
                 ),
             )
             .await;
@@ -1152,6 +1296,7 @@ mod tests {
                     rpc("projects.archive", json!({ "id": project.id })),
                     store.clone(),
                     users,
+                    test_event_bus(),
                 ),
             )
             .await;
@@ -1171,6 +1316,7 @@ mod tests {
                     rpc("projects.archive", json!({ "id": project.id })),
                     store.clone(),
                     users,
+                    test_event_bus(),
                 ),
             )
             .await;
@@ -1218,6 +1364,7 @@ mod tests {
             ),
             store.clone(),
             users,
+            test_event_bus(),
         )
         .await;
         assert!(renamed.error.is_none(), "{:?}", renamed.error);
@@ -1281,6 +1428,7 @@ mod tests {
                 ),
                 store.clone(),
                 users,
+                test_event_bus(),
             ),
         )
         .await;
@@ -1316,6 +1464,7 @@ mod tests {
                 ),
                 store.clone(),
                 users,
+                test_event_bus(),
             ),
         )
         .await;
@@ -1347,6 +1496,7 @@ mod tests {
                 ),
                 store.clone(),
                 users,
+                test_event_bus(),
             ),
         )
         .await;
@@ -1381,6 +1531,7 @@ mod tests {
                 ),
                 store.clone(),
                 users,
+                test_event_bus(),
             ),
         )
         .await;
@@ -1411,6 +1562,7 @@ mod tests {
                 ),
                 store,
                 users,
+                test_event_bus(),
             ),
         )
         .await;
@@ -1435,6 +1587,7 @@ mod tests {
             handle_add(
                 rpc("projects.add", json!({ "path": dir.display().to_string() })),
                 store.clone(),
+                test_event_bus(),
             ),
         )
         .await;
@@ -1453,6 +1606,7 @@ mod tests {
                     json!({ "parent": parent.path().display().to_string(), "name": "escalation" }),
                 ),
                 store.clone(),
+                test_event_bus(),
             ),
         )
         .await;
@@ -1483,6 +1637,7 @@ mod tests {
                     json!({ "path": a_real_dir().display().to_string() }),
                 ),
                 store,
+                test_event_bus(),
             ),
         )
         .await;

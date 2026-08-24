@@ -394,6 +394,42 @@ pub enum GatewayEventFrame {
         workspace_id: String,
         change: ChangeKind,
     },
+    /// Emitted whenever a project room's roster-visible state changes
+    /// (create / add / create_blank / rename / archive / bind_workspace /
+    /// remove / member add / member remove). Topic: `projects.changed`.
+    /// Mirrors `TeamChanged` — payload-minimal; the Panel re-fetches
+    /// `projects.list` (sidebar) and `projects.get` (an open room's page)
+    /// to refresh.
+    ///
+    /// Classified `ByProjectScope` in `event_visibility::session_identity_of`,
+    /// NOT `Global`: unlike `team.changed` (whose payload is inert — a team
+    /// id nobody outside its roster can act on), this frame's own existence
+    /// says "a room named `project_id` exists", and P2's whole predicate is
+    /// that membership decides visibility (`SECURITY.md`'s project-rooms
+    /// section: "Visibility is the roster, full stop"). A member-add or
+    /// member-remove frame doubles as roster content, so a stranger
+    /// receiving it would learn who is on a roster they cannot see.
+    ///
+    /// `Created` is used only where the store guarantees a genuinely NEW row
+    /// (`create`, `create_blank`); `add` can instead collapse onto an
+    /// existing row for the same path (`ProjectStore::add_for`'s "collapses
+    /// onto their existing row" doc), so it reports `Updated` rather than
+    /// overclaiming — the same reasoning `WorkspaceChanged`'s doc applies to
+    /// archive/restore.
+    ProjectsChanged {
+        project_id: String,
+        change: ChangeKind,
+        /// Set ONLY for a member-removal mutation, naming the user who was
+        /// just dropped from the roster. By the time this fires the roster
+        /// projection no longer admits them
+        /// (`ProjectStore::republish_roster_locked` runs inside the same
+        /// write lock as the delete), so without this the roster-scoped
+        /// classification below would never deliver them the one frame that
+        /// tells their own client to drop the room from its list. Every
+        /// other verb leaves this `None`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        affected_user: Option<String>,
+    },
     /// Core-decided R5 interrupt addressed to one or more delivery surfaces.
     /// Unlike the raw agent-lifecycle frames, the "is this worth interrupting
     /// the user" policy has already been applied by the core R5 router; the
@@ -740,6 +776,7 @@ impl GatewayEventFrame {
             Self::HeartbeatTaskChanged { .. } => "heartbeat.task.changed",
             Self::TeamChanged { .. } => "team.changed",
             Self::WorkspaceChanged { .. } => "workspace.changed",
+            Self::ProjectsChanged { .. } => "projects.changed",
             Self::SurfaceNotify { .. } => "surface.notify",
             Self::SurfaceApproval { .. } => "surface.approval",
             // The protocol const, not a second literal: the Panel subscribes

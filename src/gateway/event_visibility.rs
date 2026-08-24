@@ -241,6 +241,35 @@ pub enum SessionIdentity {
         owner: Option<String>,
         project: Option<String>,
     },
+    /// A project-room frame (`projects.changed`): attributable to a room's
+    /// ROSTER, not to any one session or owner — P2's whole predicate is
+    /// that membership decides visibility (`SECURITY.md`'s project-rooms
+    /// section: "Visibility is the roster, full stop"; `owner_user_id`
+    /// answers only owner-only VERBS, never "who can see this").
+    ///
+    /// The admit arm delegates to
+    /// [`crate::gateway::visibility::project_or_removal_visible_to`] — the
+    /// same [`crate::projects::roster::is_member`] call the RPC face
+    /// (`projects.list`'s `visibility::project_visible` filter) and the
+    /// partition/session twins reach, so this event face cannot drift from
+    /// them (§0 "一个动词有 N 个面时，谁能看要在每个面用同一个推导"). There
+    /// is deliberately NO admin/operator carve-out, unlike
+    /// [`Self::BySessionKeyOrAdmin`]: an operator who is not on a room's
+    /// roster cannot see that room's SESSIONS either
+    /// (`owner_and_scope_visible_to` has no admin arm for a `Project` scope),
+    /// and `canvas_visible_to`'s own doc states the general rule this
+    /// mirrors — "the answer to 'may this person read this person's work' is
+    /// not 'admins may read everything'". An operator who created the room
+    /// (the common case) is already on its roster from creation
+    /// (`ProjectStore::create` seats the owner), so they are admitted
+    /// through membership, not through role.
+    ByProjectScope {
+        project_id: String,
+        /// Mirrors `GatewayEventFrame::ProjectsChanged::affected_user`: set
+        /// only for a member-removal frame, naming the user the roster
+        /// predicate above can no longer admit.
+        affected_user: Option<String>,
+    },
     /// Unattributable to any one session — org-level infrastructure, or
     /// already covered by a different gate (see module doc).
     Global,
@@ -487,6 +516,17 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         aleph_protocol::canvas::TOPIC => SessionIdentity::ByCanvasScope {
             owner: str_field(data, "owner_user_id"),
             project: str_field(data, "project_id"),
+        },
+
+        // A project room's roster-visible state changed
+        // (`GatewayEventFrame::ProjectsChanged`). `project_id` is always
+        // present (it is the frame's own key, not an optional stamp); an
+        // absent one classifies as `ByProjectScope` with an empty id, which
+        // `project_or_removal_visible_to` denies to every scoped caller
+        // (fail closed on a malformed frame, matching every other arm here).
+        "projects.changed" => SessionIdentity::ByProjectScope {
+            project_id: str_field(data, "project_id").unwrap_or_default(),
+            affected_user: str_field(data, "affected_user"),
         },
 
         // --- TopicEvent-form frames with no session concept at all ---
@@ -781,6 +821,18 @@ impl EventVisibilityIndex {
                     caller_user,
                 )
             }
+            // Only delegation, same ruling as the canvas arm above: the
+            // roster predicate is the single authority for "who can see this
+            // room", and this event face must resolve it rather than
+            // re-derive membership here.
+            SessionIdentity::ByProjectScope {
+                project_id,
+                affected_user,
+            } => crate::gateway::visibility::project_or_removal_visible_to(
+                &project_id,
+                affected_user.as_deref(),
+                caller_user,
+            ),
         }
     }
 
@@ -2400,6 +2452,16 @@ mod tests {
                     owner: owner_user_id.clone(),
                     project: project_id.clone(),
                 },
+                // Roster-scoped; see the frame's own doc and
+                // `SessionIdentity::ByProjectScope`'s.
+                GatewayEventFrame::ProjectsChanged {
+                    project_id,
+                    affected_user,
+                    ..
+                } => SessionIdentity::ByProjectScope {
+                    project_id: project_id.clone(),
+                    affected_user: affected_user.clone(),
+                },
             }
         }
 
@@ -2646,6 +2708,20 @@ mod tests {
                 owner_user_id: None,
                 project_id: None,
             },
+            GatewayEventFrame::ProjectsChanged {
+                project_id: "p-room".into(),
+                change: ChangeKind::Updated,
+                affected_user: None,
+            },
+            // The member-removal shape: `affected_user` is skipped on the
+            // wire when absent, so this pins that the removed-user carve-out
+            // survives the same round trip the unstamped canvas sample
+            // above pins for its own optionals.
+            GatewayEventFrame::ProjectsChanged {
+                project_id: "p-room".into(),
+                change: ChangeKind::Updated,
+                affected_user: Some("u-mallory".into()),
+            },
         ];
 
         for frame in &samples {
@@ -2739,6 +2815,97 @@ mod tests {
                 )
                 .await,
             "no project link ⇒ no roster arm"
+        );
+    }
+
+    /// `GatewayEventFrame::ProjectsChanged`'s full delivery chain: a roster
+    /// member is admitted, a stranger is refused, an operator who is on
+    /// neither the roster nor named as `affected_user` is refused too (no
+    /// admin carve-out — mirrors the canvas test above and `SECURITY.md`'s
+    /// P2 ruling "Visibility is the roster, full stop"), and the ONE user
+    /// named in `affected_user` is admitted despite not being on the roster
+    /// — the member-removal frame reaching the person it just removed.
+    #[tokio::test]
+    async fn projects_changed_admits_roster_member_and_removed_user_and_refuses_stranger() {
+        let _guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::projects::roster::publish(crate::projects::roster::RosterSnapshot::from_pairs([(
+            "p-room".to_string(),
+            "u-alice".to_string(),
+        )]));
+
+        let (store, _temp) = test_store();
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+        let index = EventVisibilityIndex::new();
+
+        // The ordinary case (rename/archive/bind_workspace/…): no
+        // `affected_user`.
+        let frame = GatewayEventFrame::ProjectsChanged {
+            project_id: "p-room".into(),
+            change: ChangeKind::Updated,
+            affected_user: None,
+        };
+        let topic = frame.topic_name();
+        let data = serde_json::to_value(&frame).unwrap();
+
+        for (caller, role, admitted, why) in [
+            ("u-alice", "member", true, "a roster member"),
+            ("u-mallory", "member", false, "a stranger"),
+            (
+                "u-mallory",
+                "operator",
+                false,
+                "an operator who is neither on the roster nor the affected user \
+                 — there is no admin carve-out for a room's visibility",
+            ),
+        ] {
+            assert_eq!(
+                index
+                    .event_admits_for(&topic, Some(&data), Some(caller), Some(role), &store, None)
+                    .await,
+                admitted,
+                "{why} ({caller}/{role})"
+            );
+        }
+
+        // The member-removal case: `u-mallory` was just dropped from the
+        // roster (not published above, so the roster arm already refuses
+        // them) and is named as `affected_user`. They must still receive
+        // THIS frame so their own client learns to drop the room.
+        let removal = GatewayEventFrame::ProjectsChanged {
+            project_id: "p-room".into(),
+            change: ChangeKind::Updated,
+            affected_user: Some("u-mallory".into()),
+        };
+        let data = serde_json::to_value(&removal).unwrap();
+        assert!(
+            index
+                .event_admits_for(
+                    &topic,
+                    Some(&data),
+                    Some("u-mallory"),
+                    Some("member"),
+                    &store,
+                    None
+                )
+                .await,
+            "the removed member reads their own removal frame"
+        );
+        // A THIRD party who is neither on the roster nor the one named
+        // `affected_user` must not ride along on the removal frame.
+        assert!(
+            !index
+                .event_admits_for(
+                    &topic,
+                    Some(&data),
+                    Some("u-carol"),
+                    Some("member"),
+                    &store,
+                    None
+                )
+                .await,
+            "a bystander does not inherit the removed member's carve-out"
         );
     }
 

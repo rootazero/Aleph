@@ -179,6 +179,37 @@ fn ProjectRoomPage(project_id: String) -> impl IntoView {
     };
     Effect::new(move |_| refresh.run(()));
 
+    // `projects.changed` push topic (Task 6): a rename / archive /
+    // bind_workspace / roster change from another surface, or another
+    // member, refreshes this room's header AND settings tab — both read
+    // the same `project` signal `refresh` sets, `member_ids` included, so
+    // one re-fetch covers both. Filtered to THIS room: the event face is
+    // roster-gated (`event_visibility::ByProjectScope`), so every frame
+    // this client receives is one it may see, but a sibling room's rename
+    // must not re-render a page that is not showing it.
+    {
+        let filter_id = project_id.clone();
+        let subscription_id = dash.subscribe_events(move |event| {
+            if event.topic != "projects.changed" {
+                return;
+            }
+            if event.data.get("project_id").and_then(|v| v.as_str()) != Some(filter_id.as_str()) {
+                return;
+            }
+            refresh.run(());
+        });
+        spawn_local(async move {
+            if let Err(e) = dash.subscribe_topic("projects.changed").await {
+                web_sys::console::error_1(
+                    &format!("Failed to subscribe to projects.changed: {e}").into(),
+                );
+            }
+        });
+        on_cleanup(move || {
+            dash.unsubscribe_events(subscription_id);
+        });
+    }
+
     view! {
         <div class="flex-1 flex flex-col h-full overflow-hidden">
             <Show when=move || load_error.get().is_some()>

@@ -108,6 +108,10 @@ pub(in crate::commands::start) fn register_projects_handlers(
     server: &mut GatewayServer,
     project_store: &Arc<alephcore::projects::ProjectStore>,
     users_store: &Arc<alephcore::gateway::security::SecurityStore>,
+    // `projects.changed` push topic (Task 6): sidebar project list + an open
+    // room's page both re-fetch on it. The same bus every other
+    // `notify_*_changed` family (`teams.*`, `workspace.*`) publishes through.
+    event_bus: &Arc<alephcore::gateway::event_bus::GatewayEventBus>,
     daemon: bool,
 ) {
     use alephcore::gateway::handlers::projects as projects_handlers;
@@ -122,20 +126,23 @@ pub(in crate::commands::start) fn register_projects_handlers(
         server,
         "projects.add",
         projects_handlers::handle_add,
-        project_store
+        project_store,
+        event_bus
     );
     register_handler!(
         server,
         "projects.create_blank",
         projects_handlers::handle_create_blank,
-        project_store
+        project_store,
+        event_bus
     );
     register_handler!(
         server,
         "projects.remove",
         projects_handlers::handle_remove,
         project_store,
-        users_store
+        users_store,
+        event_bus
     );
     register_handler!(
         server,
@@ -153,42 +160,48 @@ pub(in crate::commands::start) fn register_projects_handlers(
         server,
         "projects.create",
         projects_handlers::handle_create,
-        project_store
+        project_store,
+        event_bus
     );
     register_handler!(
         server,
         "projects.rename",
         projects_handlers::handle_rename,
         project_store,
-        users_store
+        users_store,
+        event_bus
     );
     register_handler!(
         server,
         "projects.archive",
         projects_handlers::handle_archive,
         project_store,
-        users_store
+        users_store,
+        event_bus
     );
     register_handler!(
         server,
         "projects.bind_workspace",
         projects_handlers::handle_bind_workspace,
         project_store,
-        users_store
+        users_store,
+        event_bus
     );
     register_handler!(
         server,
         "projects.member.add",
         projects_handlers::handle_member_add,
         project_store,
-        users_store
+        users_store,
+        event_bus
     );
     register_handler!(
         server,
         "projects.member.remove",
         projects_handlers::handle_member_remove,
         project_store,
-        users_store
+        users_store,
+        event_bus
     );
     register_handler!(
         server,
