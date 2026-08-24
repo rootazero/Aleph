@@ -128,11 +128,15 @@ static PATTERN_SET: Lazy<RegexSet> = Lazy::new(|| {
 });
 
 /// Per-file byte cap for the install-time guard scan. Skill bodies are
-/// markdown + shell snippets well under 1 MiB; anything bigger is almost
+/// markdown + shell snippets well under 256 KiB; anything bigger is almost
 /// certainly a binary blob that the scanner has no business materializing
 /// into a `String` for regex matching. Prevents a malicious skill bundle
-/// from OOM-ing the scanner before any verdict is rendered.
-pub const MAX_SCAN_BYTES: u64 = 8 * 1024 * 1024;
+/// from OOM-ing the scanner before any verdict is rendered AND caps the
+/// ReDoS window: the prompt-injection regexes use star-quantified
+/// alternation groups whose worst-case backtracking cost scales with input
+/// length. 256 KiB matches the rest of the skill pipeline's typical sizes
+/// and keeps the backtracking cost bounded.
+pub const MAX_SCAN_BYTES: u64 = 256 * 1024;
 
 /// Scan one file's content. `file` is used only for finding labels.
 pub fn scan_content(file: &str, content: &[u8]) -> ScanVerdict {

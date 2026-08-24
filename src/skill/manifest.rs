@@ -13,6 +13,7 @@ use crate::domain::skill::{
 
 /// Errors that can occur while parsing a skill file.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum SkillParseError {
     /// I/O error when reading a file.
     Io(std::io::Error),
@@ -23,6 +24,14 @@ pub enum SkillParseError {
     /// The frontmatter `name` is empty or whitespace-only, so it cannot
     /// produce a usable skill id.
     EmptyName,
+    /// The file exceeds [`MAX_SKILL_FILE_BYTES`]. Checked before
+    /// `read_to_string` so a multi-GB payload cannot allocate the full
+    /// bytes only to be rejected.
+    FileTooLarge {
+        size: u64,
+        max: u64,
+        path: std::path::PathBuf,
+    },
 }
 
 impl std::fmt::Display for SkillParseError {
@@ -32,6 +41,13 @@ impl std::fmt::Display for SkillParseError {
             Self::NoFrontmatter => write!(f, "no YAML frontmatter found"),
             Self::Yaml(e) => write!(f, "YAML parse error: {e}"),
             Self::EmptyName => write!(f, "frontmatter `name` resolves to an empty skill id"),
+            Self::FileTooLarge { size, max, path } => write!(
+                f,
+                "SKILL.md exceeds maximum size ({} bytes): {} bytes ({})",
+                max,
+                size,
+                path.display()
+            ),
         }
     }
 }
@@ -41,7 +57,7 @@ impl std::error::Error for SkillParseError {
         match self {
             Self::Io(e) => Some(e),
             Self::Yaml(e) => Some(e),
-            Self::NoFrontmatter | Self::EmptyName => None,
+            Self::NoFrontmatter | Self::EmptyName | Self::FileTooLarge { .. } => None,
         }
     }
 }
@@ -142,12 +158,31 @@ struct RawInstallSpec {
 // Public API
 // ---------------------------------------------------------------------------
 
+/// Per-file byte cap for `parse_skill_file`. Skill bodies are markdown +
+/// shell snippets well under 1 MiB; anything bigger is either a binary blob
+/// or a malicious payload. Cap is applied BEFORE `read_to_string` so the
+/// scanner can't allocate the full bytes only to reject them. Also bounds
+/// the ReDoS / billion-laughs window for the subsequent `serde_yaml` pass,
+/// which has no explicit recursion limit and accepts arbitrary nested
+/// mappings + alias expansions.
+pub const MAX_SKILL_FILE_BYTES: u64 = 1024 * 1024;
+
 /// Parse a SKILL.md file from disk.
 pub fn parse_skill_file(
     path: impl AsRef<Path>,
     source: SkillSource,
 ) -> Result<SkillManifest, SkillParseError> {
-    let content = std::fs::read_to_string(path.as_ref())?;
+    let path_ref = path.as_ref();
+    if let Ok(meta) = std::fs::metadata(path_ref) {
+        if meta.len() > MAX_SKILL_FILE_BYTES {
+            return Err(SkillParseError::FileTooLarge {
+                size: meta.len(),
+                max: MAX_SKILL_FILE_BYTES,
+                path: path_ref.to_path_buf(),
+            });
+        }
+    }
+    let content = std::fs::read_to_string(path_ref)?;
     parse_skill_content(&content, source)
 }
 
