@@ -393,11 +393,7 @@ mod tests {
         let fake_src = include_str!("testkit.rs").replace('\r', "");
         // Only the production half of testkit.rs counts — a name mentioned in
         // this very test must not satisfy the census.
-        let fake_prod = fake_src
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap_or(&fake_src)
-            .to_string();
+        let fake_prod = crate::utils::source_scan::production_prefix(&fake_src);
 
         let methods: Vec<String> = trait_src
             .match_indices("async fn ")

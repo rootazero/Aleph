@@ -968,7 +968,7 @@ mod tests {
 
         let mut reaches_the_setter = 0usize;
         for (path, src) in SURFACES {
-            let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+            let production = crate::utils::source_scan::production_prefix(src);
             for field in ["next_job_id_on_success", "next_job_id_on_failure"] {
                 assert!(
                     !production.contains(&format!("{field} =")),

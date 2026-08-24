@@ -120,10 +120,7 @@ fn fork_kinds_track_the_prompt_builder() {
     // Production prefix only: the test module below constructs events of every
     // kind as fixtures, so scanning it would report the whole enum as
     // prompt-bearing and the guard would pass on anything.
-    let production = src
-        .split("#[cfg(test)]")
-        .next()
-        .expect("split always yields one element");
+    let production = crate::utils::source_scan::production_prefix(&src);
     assert!(
         production.len() < src.len(),
         "no `#[cfg(test)]` found in prompt.rs — the split did not remove the \

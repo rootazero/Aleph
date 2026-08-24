@@ -1049,15 +1049,9 @@ mod tests {
     #[test]
     fn no_limit_total_receipt_arm_formats_a_dollar_figure() {
         let full = include_str!("i18n.rs").replace('\r', "");
-        let production = full
-            .split("#[cfg(test)]")
-            .next()
-            .expect("this file always has a #[cfg(test)] boundary");
-        let src: String = production
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let src = crate::utils::source_scan::strip_comment_lines(
+            &crate::utils::source_scan::production_prefix(&full),
+        );
         assert!(
             !src.trim().is_empty(),
             "scan read nothing; the split point moved"

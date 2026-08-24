@@ -74,14 +74,9 @@ fn the_fallback_preset_honours_the_session_hint() {
 #[test]
 fn the_catalog_has_exactly_one_composer() {
     let src = include_str!("../loader.rs");
-    let production: String = src
-        .split("#[cfg(test)]")
-        .next()
-        .unwrap_or(src)
-        .lines()
-        .filter(|l| !l.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let production = crate::utils::source_scan::strip_comment_lines(
+        &crate::utils::source_scan::production_prefix(src),
+    );
     assert!(
         production.contains("pub async fn load_catalog"),
         "load_catalog is the single composer; it must live in loader.rs"
@@ -99,14 +94,9 @@ fn the_catalog_has_exactly_one_composer() {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let code: String = text
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap_or(&text)
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let code = crate::utils::source_scan::strip_comment_lines(
+            &crate::utils::source_scan::production_prefix(&text),
+        );
         if code.contains("merge_catalogs(") || code.contains("load_user_flows_from_dir(") {
             offenders.push(rel);
         }

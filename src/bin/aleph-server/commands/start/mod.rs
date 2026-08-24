@@ -3522,18 +3522,14 @@ mod tests {
     #[test]
     fn boot_installs_the_spend_policy_and_the_spend_ledger() {
         let src = include_str!("mod.rs").replace('\r', "");
-        let production = src.split("#[cfg(test)]").next().unwrap_or(&src);
+        let production = alephcore::utils::source_scan::production_prefix(&src);
         assert!(
             production.len() < src.len(),
             "the #[cfg(test)] split matched nothing — this test would be \
              reading its own source, and would trivially pass by finding \
              its own doc comment"
         );
-        let production: String = production
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let production = alephcore::utils::source_scan::strip_comment_lines(&production);
         for call in ["install_policy(", "install_ledger("] {
             assert!(
                 production.contains(call),

@@ -563,14 +563,8 @@ mod tests {
             ("start/helpers.rs", include_str!("helpers.rs")),
             ("start/mod.rs", include_str!("mod.rs")),
         ] {
-            // CRLF-safe: this repo's Windows checkout has `\r\n` line
-            // endings and `include_str!` hands over the raw bytes, so a
-            // separator anchored as "\n#[cfg(test)]" would match nothing,
-            // leave `production` as the whole file, and let this very test
-            // module's own mention of the identifier satisfy the assertion.
-            // Strip `\r` first and split on an unanchored needle.
             let src = raw.replace('\r', "");
-            let production = src.split("#[cfg(test)]").next().unwrap_or(&src);
+            let production = alephcore::utils::source_scan::production_prefix(&src);
             // Non-vacuity: prove the bound actually cut something off in the
             // file that HAS a test module, so the split is doing real work.
             if label.ends_with("helpers.rs") {

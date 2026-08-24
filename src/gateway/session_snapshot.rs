@@ -195,7 +195,7 @@ mod tests {
         let src = include_str!("session_snapshot.rs");
         // Strip the test module so the constants named in *these* assertions do
         // not satisfy the check by themselves.
-        let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let production = crate::utils::source_scan::production_prefix(src);
         for knob in [
             "MODE_SESSION_KEY",
             "EXEC_TIER_SESSION_KEY",

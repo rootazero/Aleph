@@ -820,12 +820,7 @@ mod tests {
             // matches nothing and the "production prefix" quietly becomes the
             // whole file — including every test that legitimately invents a
             // lane key.
-            let normalized = text.replace('\r', "");
-            let production = normalized
-                .split("#[cfg(test)]")
-                .next()
-                .unwrap_or_default()
-                .to_string();
+            let production = crate::utils::source_scan::production_prefix(&text);
             let rel = path
                 .strip_prefix(env!("CARGO_MANIFEST_DIR"))
                 .unwrap_or(&path)

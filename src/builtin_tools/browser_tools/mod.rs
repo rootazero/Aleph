@@ -999,11 +999,7 @@ mod approval_wiring_census {
     /// into the whole file and lets a test-module string literal satisfy the
     /// scan (CLAUDE.md §10 — this repo has shipped that bug twice).
     fn production_prefix(src: &str) -> String {
-        let normalized = src.replace('\r', "");
-        match normalized.find("#[cfg(test)]") {
-            Some(i) => normalized[..i].to_string(),
-            None => normalized,
-        }
+        crate::utils::source_scan::production_prefix(src)
     }
 
     /// The struct a file implements `AlephTool` for, e.g. `BrowserClickTool`.

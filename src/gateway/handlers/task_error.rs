@@ -115,7 +115,7 @@ mod tests {
         let mut checked = 0usize;
         for (path, src) in HANDLERS {
             let src = src.replace('\r', "");
-            let production = src.split("#[cfg(test)]").next().unwrap_or(&src);
+            let production = crate::utils::source_scan::production_prefix(&src);
             assert!(
                 production.contains("task_error::respond"),
                 "{path} no longer routes task-service failures through the one \
