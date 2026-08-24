@@ -7,7 +7,9 @@
 //! value" — §5.22 round-7 recorded the shape on `spend`: `spend.query` reports
 //! `configured: false`, which is a true statement about a box with no ceiling
 //! AND a true statement about a box that configured one whose handle was never
-//! installed. That round fixed two handles by hand. There are 46.
+//! installed. That round fixed two handles by hand. There are 47 — counted by
+//! the rule in `census`, not by hand, which is also where the two members an
+//! earlier hand count of "46" got wrong are named and explained.
 //!
 //! # The shape
 //!
