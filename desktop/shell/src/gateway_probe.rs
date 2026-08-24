@@ -180,6 +180,15 @@ fn origin(scheme: &str, host: &str, port: u16) -> String {
 
 /// The origin a target resolves to, for callers phrasing their own message
 /// (the supervisor's "lost contact" wording differs from a cold failure's).
+///
+/// **Mirrored on iOS.** `mobile/ios/…/Models/PairingTarget.swift` ports this
+/// rule verbatim and pins it with its own tests, because the two shells
+/// promise one onboarding format — an address that works on the desktop must
+/// work on the phone. That promise is written down only on the iOS side, and
+/// nothing here can fail when it is broken: the halves are built by different
+/// toolchains (`cargo` never compiles the Swift, `xcodebuild` never compiles
+/// this), so changing the rule below is green in CI while silently splitting
+/// the two shells apart. Change one, change both.
 pub fn target_origin(target: &connection::ConnectionTarget) -> String {
     let (scheme, host, port) = probe_endpoint(target);
     origin(&scheme, &host, port)
@@ -205,6 +214,15 @@ pub fn target_unreachable_message(target: &connection::ConnectionTarget) -> Stri
 /// what they expected.
 ///
 /// Pure so the wording is testable without a socket.
+///
+/// **Mirrored on iOS.** `mobile/ios/…/Models/PairingTarget.swift` ports this
+/// rule verbatim and pins it with its own tests, because the two shells
+/// promise one onboarding format — an address that works on the desktop must
+/// work on the phone. That promise is written down only on the iOS side, and
+/// nothing here can fail when it is broken: the halves are built by different
+/// toolchains (`cargo` never compiles the Swift, `xcodebuild` never compiles
+/// this), so changing the rule below is green in CI while silently splitting
+/// the two shells apart. Change one, change both.
 fn unreachable_message(scheme: &str, host: &str, port: u16) -> String {
     let hint = if scheme == "https" && port != 443 {
         // A non-default port under https is the reverse-proxy/CDN failure: the

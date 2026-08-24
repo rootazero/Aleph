@@ -216,6 +216,15 @@ impl ConnectionTarget {
 /// it — the rule only reinterprets *freshly typed* input.
 ///
 /// [`to_persisted`]: ConnectionTarget::to_persisted
+///
+/// **Mirrored on iOS.** `mobile/ios/…/Models/PairingTarget.swift` ports this
+/// rule verbatim and pins it with its own tests, because the two shells
+/// promise one onboarding format — an address that works on the desktop must
+/// work on the phone. That promise is written down only on the iOS side, and
+/// nothing here can fail when it is broken: the halves are built by different
+/// toolchains (`cargo` never compiles the Swift, `xcodebuild` never compiles
+/// this), so changing the rule below is green in CI while silently splitting
+/// the two shells apart. Change one, change both.
 fn default_port_for(raw: &str, scheme: &str) -> u16 {
     if !raw.contains("://") {
         return DEFAULT_PORT;
