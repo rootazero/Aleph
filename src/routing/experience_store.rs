@@ -82,11 +82,19 @@ impl RoutingExperienceStore {
             context_window: 0,
             created_at,
         };
-        self.backend
-            .record_routing_experience(&row, task_emb, dim)?;
-        self.backend
-            .prune_routing_experiences(agent_id, dim, DEFAULT_ROUTING_RETENTION_CAP)?;
-        Ok(())
+        let backend = Arc::clone(&self.backend);
+        let agent_id = row.agent_id.clone();
+        let task_emb = task_emb.to_vec();
+        // `rusqlite` is synchronous. Do not wrap these backend calls in the
+        // backend's connection helper: that helper holds the mutex while the
+        // closure runs, so a nested lock would deadlock. Own the blocking task.
+        tokio::task::spawn_blocking(move || {
+            backend.record_routing_experience(&row, &task_emb, dim)?;
+            backend.prune_routing_experiences(&agent_id, dim, DEFAULT_ROUTING_RETENTION_CAP)?;
+            Ok::<_, AlephError>(())
+        })
+        .await
+        .map_err(|e| AlephError::other(format!("routing record spawn_blocking join: {e}")))?
     }
 
     pub async fn recall(
@@ -96,8 +104,14 @@ impl RoutingExperienceStore {
         k: usize,
     ) -> Result<Vec<RoutingNeighbor>, AlephError> {
         let dim = self.embedder.dimensions() as u32;
-        self.backend
-            .recall_routing_experience(task_emb, dim, agent_id, k)
+        let backend = Arc::clone(&self.backend);
+        let agent_id = agent_id.to_string();
+        let task_emb = task_emb.to_vec();
+        tokio::task::spawn_blocking(move || {
+            backend.recall_routing_experience(&task_emb, dim, &agent_id, k)
+        })
+        .await
+        .map_err(|e| AlephError::other(format!("routing recall spawn_blocking join: {e}")))?
     }
 
     /// Per-(model, provider) lifetime aggregate for one agent (VESR v1.1 a).
@@ -106,8 +120,13 @@ impl RoutingExperienceStore {
         &self,
         agent_id: &str,
     ) -> Result<Vec<ModelAggregate>, AlephError> {
-        self.backend
-            .aggregate_routing_experiences_by_model(agent_id)
+        let backend = Arc::clone(&self.backend);
+        let agent_id = agent_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            backend.aggregate_routing_experiences_by_model(&agent_id)
+        })
+        .await
+        .map_err(|e| AlephError::other(format!("routing aggregate spawn_blocking join: {e}")))?
     }
 }
 

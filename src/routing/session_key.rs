@@ -6,6 +6,10 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+const MAX_SESSION_KEY_LENGTH: usize = 4096;
+const MAX_SESSION_KEY_PARTS: usize = 256;
+const MAX_SESSION_KEY_DEPTH: usize = 64;
+
 /// DM session isolation strategy
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -237,8 +241,8 @@ impl SessionKey {
     }
 
     /// Create a task session key. `task_type` is normalized and must not be a
-    /// reserved routing marker (`peer`, `dm`, `ephemeral`) to avoid serializing
-    /// an ambiguous key that would parse as a DM/Ephemeral instead.
+    /// reserved routing marker (`peer`, `dm`, `subagent`, `ephemeral`) to avoid
+    /// serializing an ambiguous key that would parse as another session kind.
     pub fn task(
         agent_id: impl Into<String>,
         task_type: impl Into<String>,
@@ -254,7 +258,7 @@ impl SessionKey {
             reason = "unreachable by construction; see the comment below and the \
                       parse-ordering test that pins it"
         )]
-        if matches!(task_type.as_str(), "peer" | "dm" | "ephemeral") {
+        if matches!(task_type.as_str(), "peer" | "dm" | "subagent" | "ephemeral") {
             // Unreachable, and deliberately still a panic. Every production
             // caller passes a compile-time constant ("cron", "heartbeat",
             // "a2a", TEAM_TASK_TASK_TYPE, TEAM_CHAT_TASK_TYPE); the one caller
@@ -476,6 +480,14 @@ impl SessionKey {
     /// that IDs which happen to be formatted like `"s1"` are not mis‑interpreted.
     #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
+        Self::parse_with_depth(s, 0)
+    }
+
+    fn parse_with_depth(s: &str, depth: usize) -> Option<Self> {
+        if depth > MAX_SESSION_KEY_DEPTH || !session_key_shape_bounded(s) {
+            return None;
+        }
+
         let s = s.trim();
         let parts: Vec<&str> = s.split(':').collect();
 
@@ -494,8 +506,11 @@ impl SessionKey {
         if let Some(pos) = parts.iter().rposition(|&p| p == "subagent") {
             if pos >= 2 && pos + 1 < parts.len() {
                 let parent_str = parts[..pos].join(":");
+                if parts[pos + 1].is_empty() {
+                    return None;
+                }
                 let subagent_id = parts[pos + 1].to_string();
-                if let Some(parent_key) = Self::parse(&parent_str) {
+                if let Some(parent_key) = Self::parse_with_depth(&parent_str, depth + 1) {
                     return Some(Self::Subagent {
                         parent_key: Box::new(parent_key),
                         subagent_id,
@@ -610,23 +625,25 @@ impl SessionKey {
             // Must come before the catch-all task pattern so that "main" is
             // not misinterpreted as a task_type.
             //
-            // Exclude the structural markers "peer"/"dm"/"ephemeral": these are
-            // the leading tokens of two-segment DM/ephemeral keys. Without this
-            // guard, parsing `agent:id:dm:s1` (a DM with peer_id "s1") would
-            // strip "s1" as an epoch and collapse the leading "dm" into a
-            // Main{main_key:"dm"} — leaking that DM into the agent's main
-            // session. Rejecting them here forces the no-epoch fall-through in
-            // `parse`, which matches the correct `["dm", peer_id]` arm.
-            [task_type, task_id] if false => Some(Self::Task {
-                agent_id: agent_id.to_string(),
-                task_type: task_type.to_string(),
-                task_id: task_id.to_string(),
-            }),
-            [main_key] if !matches!(*main_key, "peer" | "dm" | "ephemeral") => Some(Self::Main {
-                agent_id: agent_id.to_string(),
-                main_key: main_key.to_string(),
-                epoch,
-            }),
+            // Exclude the structural markers "peer"/"dm"/"subagent"/"ephemeral":
+            // these are the leading tokens of two-segment DM/subagent/ephemeral
+            // keys. Without this guard, parsing `agent:id:dm:s1` (a DM with
+            // peer_id "s1") would strip "s1" as an epoch and collapse the
+            // leading "dm" into a Main key — leaking that DM into the agent's
+            // main session. Rejecting reserved task types here forces the
+            // no-epoch fall-through in `parse`, which matches the concrete arm.
+            [task_type, task_id]
+                if matches!(*task_type, "peer" | "dm" | "subagent" | "ephemeral") =>
+            {
+                None
+            }
+            [main_key] if !matches!(*main_key, "peer" | "dm" | "subagent" | "ephemeral") => {
+                Some(Self::Main {
+                    agent_id: agent_id.to_string(),
+                    main_key: main_key.to_string(),
+                    epoch,
+                })
+            }
 
             [task_type, task_id] => Some(Self::Task {
                 agent_id: agent_id.to_string(),
@@ -647,6 +664,9 @@ impl SessionKey {
     /// Parse legacy format from gateway/router.rs for backward compatibility
     #[must_use]
     pub fn from_legacy(s: &str) -> Option<Self> {
+        if !session_key_shape_bounded(s) {
+            return None;
+        }
         let parts: Vec<&str> = s.split(':').collect();
 
         if parts.len() < 3 || !parts[0].eq_ignore_ascii_case("agent") {
@@ -670,6 +690,11 @@ impl SessionKey {
             _ => None,
         }
     }
+}
+
+fn session_key_shape_bounded(s: &str) -> bool {
+    s.len() <= MAX_SESSION_KEY_LENGTH
+        && s.bytes().filter(|byte| *byte == b':').count() <= MAX_SESSION_KEY_PARTS
 }
 
 /// Normalize agent ID: lowercase, alphanumeric + dash/underscore, max 64 chars
@@ -777,7 +802,7 @@ mod tests {
     /// goes red, instead of a crafted session key turning into a panic.
     #[test]
     fn parse_never_yields_a_task_whose_type_is_a_reserved_marker() {
-        const RESERVED: [&str; 3] = ["peer", "dm", "ephemeral"];
+        const RESERVED: [&str; 4] = ["peer", "dm", "subagent", "ephemeral"];
         let mut checked = 0;
         for marker in RESERVED {
             for key in [
@@ -811,8 +836,8 @@ mod tests {
             }
         }
         assert_eq!(
-            checked, 18,
-            "expected 3 markers x 3 shapes x 2 entry points"
+            checked, 24,
+            "expected 4 markers x 3 shapes x 2 entry points"
         );
     }
 
@@ -1000,6 +1025,19 @@ mod tests {
         assert!(SessionKey::parse("invalid").is_none());
         assert!(SessionKey::parse("agent:").is_none());
         assert!(SessionKey::parse("").is_none());
+    }
+
+    #[test]
+    fn test_parse_rejects_excessively_deep_or_large_keys() {
+        let too_deep = (0..=MAX_SESSION_KEY_DEPTH).fold("agent:main".to_string(), |key, _| {
+            format!("{key}:subagent:x")
+        });
+        assert!(SessionKey::parse(&too_deep).is_none());
+        assert!(SessionKey::from_key_string(&too_deep).is_none());
+
+        let too_long = "x".repeat(MAX_SESSION_KEY_LENGTH + 1);
+        assert!(SessionKey::parse(&too_long).is_none());
+        assert!(SessionKey::from_legacy(&too_long).is_none());
     }
 
     #[test]

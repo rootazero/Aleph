@@ -7,7 +7,7 @@
 //! filter), and fence-wraps via [`wrap_memory_context`]. Returns `None` on
 //! cold-start or empty recall — the caller skips injection.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::config::ProviderConfig;
@@ -44,14 +44,27 @@ pub fn provider_availability_from_config(
     providers: HashMap<String, ProviderConfig>,
     token_manager: Option<Arc<SharedTokenManager>>,
 ) -> ProviderAvailability {
+    // Do not retain the full `ProviderConfig` values (and their API keys) for
+    // the lifetime of the recall object. The gate only needs the normalized
+    // key-presence and provider-name facts; vault access remains on demand.
+    let configured_keys: HashMap<String, bool> = providers
+        .iter()
+        .map(|(provider, config)| {
+            (
+                provider.clone(),
+                config
+                    .api_key
+                    .as_ref()
+                    .is_some_and(|key| !key.trim().is_empty()),
+            )
+        })
+        .collect();
+    let known_provider_ids: HashSet<String> = configured_keys.keys().cloned().collect();
     Arc::new(move |provider: &str| {
         // An empty api key (`Some("")`) is a misconfiguration, not a live
         // credential — treat it exactly like a missing one so a recall block
         // never recommends a provider that would fail its first call.
-        let available = providers
-            .get(provider)
-            .and_then(|c| c.api_key.as_ref())
-            .is_some_and(|k| !k.trim().is_empty())
+        let available = configured_keys.get(provider).copied().unwrap_or(false)
             || match &token_manager {
                 Some(tm) => {
                     crate::gateway::handlers::resolve_vault_secret(&format!("ai:{provider}"), tm)
@@ -62,7 +75,7 @@ pub fn provider_availability_from_config(
         if available {
             return ProviderStatus::Available;
         }
-        if providers.contains_key(provider) {
+        if known_provider_ids.contains(provider) {
             ProviderStatus::Deconfigured
         } else {
             ProviderStatus::Unknown
@@ -95,7 +108,20 @@ impl RoutingRecall {
         // Embed once; backfill attribution so the observer attributes with the
         // SAME key recall queried with (§8 D6).
         let task_emb = self.store.embed_task(user_query).await?;
-        let _ = attribution.task_emb.set(task_emb.clone());
+        // The attribution is write-once. If another initialization won the
+        // race, use that same embedding for recall and recording; silently
+        // retaining a different embedding would make the observer persist
+        // the run under a key that was not queried.
+        let task_emb = match attribution.task_emb.set(task_emb.clone()) {
+            Ok(()) => task_emb,
+            Err(existing) => {
+                tracing::warn!(
+                    session_id = %attribution.session_id,
+                    "routing attribution already initialized; reusing its embedding"
+                );
+                existing
+            }
+        };
 
         let neighbors = self.store.recall(agent_id, &task_emb, self.k).await?;
         // v1.1 (a): per-model lifetime aggregate for THIS agent — task-agnostic,
@@ -266,7 +292,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_and_recall_share_one_embedding_key() {
+    async fn recall_reuses_an_existing_attribution_embedding() {
         let (_scratch, backend_inner) = temp_backend();
         let backend = Arc::new(backend_inner);
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(0.7) });
@@ -274,13 +300,13 @@ mod tests {
         let avail: ProviderAvailability = Arc::new(|_p: &str| ProviderStatus::Available);
         let recall = RoutingRecall::new(store.clone(), avail);
         let attribution = RoutingAttribution::new("s".into());
-        let _ = recall
+        attribution.task_emb.set(emb(0.1)).unwrap();
+        recall
             .build_routing_experience_message("same text", "a", &attribution)
             .await
             .unwrap();
         let recalled_key = attribution.task_emb.get().cloned().unwrap();
-        let direct = store.embed_task("same text").await.unwrap();
-        assert_eq!(recalled_key, direct); // observer attributes with the key recall queried with
+        assert_eq!(recalled_key, emb(0.1));
     }
 
     #[tokio::test]

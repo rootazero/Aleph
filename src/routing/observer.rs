@@ -1,4 +1,6 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+use tokio::sync::Semaphore;
 
 use crate::harness::trace::LoopTraceEvent;
 use crate::harness::TraceSink;
@@ -6,6 +8,13 @@ use crate::orchestrator::dispatch::{TerminateReason, TokenBreakdown, ToolInvocat
 
 use super::experience_store::{RoutingExperienceStore, RoutingOutcome};
 use super::RoutingAttribution;
+
+const MAX_IN_FLIGHT_ROUTING_RECORDS: usize = 8;
+static ROUTING_RECORD_SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+fn routing_record_slots() -> &'static Arc<Semaphore> {
+    ROUTING_RECORD_SLOTS.get_or_init(|| Arc::new(Semaphore::new(MAX_IN_FLIGHT_ROUTING_RECORDS)))
+}
 
 /// Stringify a `TerminateReason` verbatim (discriminant + embedded fields) via
 /// its own serde tagging — no collapse to success/failure (R7).
@@ -36,8 +45,9 @@ pub fn outcome_from_session_completed(
         token_breakdown: token_breakdown.clone().unwrap_or_default(),
         estimated_cost: None,
         duration_ms: duration_ms.unwrap_or(0),
-        tool_error_count: tool_timeline.iter().filter(|t| !t.success).count() as u32,
-        tool_call_total: tool_timeline.len() as u32,
+        tool_error_count: u32::try_from(tool_timeline.iter().filter(|t| !t.success).count())
+            .unwrap_or(u32::MAX),
+        tool_call_total: u32::try_from(tool_timeline.len()).unwrap_or(u32::MAX),
     }
 }
 
@@ -45,6 +55,7 @@ pub struct OutcomeObserver {
     inner: Arc<dyn TraceSink>,
     store: Arc<RoutingExperienceStore>,
     attribution: Arc<RoutingAttribution>,
+    record_slots: Arc<Semaphore>,
     model_id: String,
     provider_id: String,
     agent_id: String,
@@ -64,6 +75,7 @@ impl OutcomeObserver {
             inner,
             store,
             attribution,
+            record_slots: Arc::clone(routing_record_slots()),
             model_id,
             provider_id,
             agent_id,
@@ -124,23 +136,38 @@ impl TraceSink for OutcomeObserver {
                 crate::pricing::CostStatus::Unknown => None,
             };
             if let Some(task_emb) = self.attribution.task_emb.get().cloned() {
-                tracing::debug!(
-                    session_id = %self.attribution.session_id,
-                    model = %self.model_id,
-                    "recording routing experience"
-                );
-                tokio::spawn(Self::record_to_store(
-                    // rust-doctor-disable-next-line excessive-clone
-                    self.store.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    self.agent_id.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    self.model_id.clone(),
-                    // rust-doctor-disable-next-line excessive-clone
-                    self.provider_id.clone(),
-                    task_emb,
-                    outcome,
-                ));
+                match self.record_slots.clone().try_acquire_owned() {
+                    Ok(permit) => {
+                        tracing::debug!(
+                            session_id = %self.attribution.session_id,
+                            model = %self.model_id,
+                            "recording routing experience"
+                        );
+                        let record = Self::record_to_store(
+                            // rust-doctor-disable-next-line excessive-clone
+                            self.store.clone(),
+                            // rust-doctor-disable-next-line excessive-clone
+                            self.agent_id.clone(),
+                            // rust-doctor-disable-next-line excessive-clone
+                            self.model_id.clone(),
+                            // rust-doctor-disable-next-line excessive-clone
+                            self.provider_id.clone(),
+                            task_emb,
+                            outcome,
+                        );
+                        tokio::spawn(async move {
+                            // Hold the permit until the record future finishes.
+                            let _record_permit = permit;
+                            record.await;
+                        });
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            session_id = %self.attribution.session_id,
+                            "routing experience record dropped: concurrency limit reached"
+                        );
+                    }
+                }
             }
         }
         self.inner.on_trace(event); // MUST forward unchanged + non-blocking (trace_sink.rs:12-25)

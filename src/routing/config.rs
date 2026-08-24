@@ -102,59 +102,85 @@ pub struct PeerMatchConfig {
 #[must_use]
 pub fn binding_problems(bindings: &[RouteBinding]) -> Vec<String> {
     let mut out = Vec::new();
-    for (i, b) in bindings.iter().enumerate() {
-        let who = if b.agent_id.trim().is_empty() {
-            format!("[[bindings]] #{i}")
-        } else {
-            format!("[[bindings]] #{i} (agent_id = \"{}\")", b.agent_id)
-        };
-        if b.agent_id.trim().is_empty() {
-            out.push(format!(
-                "{who}: agent_id is empty — this binding routes to the default agent, \
-                 which is what happens with no binding at all"
-            ));
-        }
-        let r = &b.match_rule;
-        if let Some(peer) = &r.peer {
-            let kind = peer.kind.trim();
-            if !["dm", "group"].contains(&kind.to_ascii_lowercase().as_str()) {
-                out.push(format!(
-                    "{who}: match.peer.kind = \"{}\" is not one of dm|group — \
-                     this binding can never match",
-                    peer.kind
-                ));
-            }
-            if peer.id.trim().is_empty() {
-                out.push(format!(
-                    "{who}: match.peer.id is empty — this binding can never match"
-                ));
-            }
-        }
-        if let Some(acct) = r.account_id.as_deref().map(str::trim) {
-            if !acct.is_empty() && acct != "*" && acct != "default" {
-                out.push(format!(
-                    "{who}: match.account_id = \"{acct}\" is not fed by any channel — \
-                     the gateway always resolves account_id as \"default\" (multi-account \
-                     not yet wired inbound); this binding can never match real traffic"
-                ));
-            }
-        }
-        if r.channel.is_none()
-            && r.peer.is_none()
-            && r.guild_id.is_none()
-            && r.team_id.is_none()
-            && r.account_id
-                .as_deref()
-                .map(str::trim)
-                .is_none_or(|a| a == "*")
-        {
-            out.push(format!(
-                "{who}: matches every message on every channel — it shadows every \
-                 binding after it; put it last or give it a scope"
-            ));
-        }
+    for (i, binding) in bindings.iter().enumerate() {
+        out.extend(binding_problems_for(i, binding));
     }
     out
+}
+
+fn binding_problems_for(index: usize, binding: &RouteBinding) -> Vec<String> {
+    let who = if binding.agent_id.trim().is_empty() {
+        format!("[[bindings]] #{index}")
+    } else {
+        format!(
+            "[[bindings]] #{index} (agent_id = \"{}\")",
+            binding.agent_id
+        )
+    };
+    let mut out = Vec::new();
+    report_agent_problem(&who, binding, &mut out);
+    report_peer_problems(&who, &binding.match_rule.peer, &mut out);
+    report_account_problem(&who, &binding.match_rule.account_id, &mut out);
+    if is_unscoped(&binding.match_rule) {
+        out.push(format!(
+            "{who}: matches every message on every channel — it shadows every \
+             binding after it; put it last or give it a scope"
+        ));
+    }
+    out
+}
+
+fn report_agent_problem(who: &str, binding: &RouteBinding, out: &mut Vec<String>) {
+    if binding.agent_id.trim().is_empty() {
+        out.push(format!(
+            "{who}: agent_id is empty — this binding cannot name an agent and is \
+             ignored during priority selection; give it a non-empty target"
+        ));
+    }
+}
+
+fn report_peer_problems(who: &str, peer: &Option<PeerMatchConfig>, out: &mut Vec<String>) {
+    let Some(peer) = peer else {
+        return;
+    };
+    let kind = peer.kind.trim();
+    if !["dm", "group"].contains(&kind.to_ascii_lowercase().as_str()) {
+        out.push(format!(
+            "{who}: match.peer.kind = \"{}\" is not one of dm|group — \
+             this binding can never match",
+            peer.kind
+        ));
+    }
+    if peer.id.trim().is_empty() {
+        out.push(format!(
+            "{who}: match.peer.id is empty — this binding can never match"
+        ));
+    }
+}
+
+fn report_account_problem(who: &str, account_id: &Option<String>, out: &mut Vec<String>) {
+    let Some(account_id) = account_id.as_deref().map(str::trim) else {
+        return;
+    };
+    if !account_id.is_empty() && account_id != "*" && account_id != "default" {
+        out.push(format!(
+            "{who}: match.account_id = \"{account_id}\" is not fed by any channel — \
+             the gateway always resolves account_id as \"default\" (multi-account \
+             not yet wired inbound); this binding can never match real traffic"
+        ));
+    }
+}
+
+fn is_unscoped(rule: &MatchRule) -> bool {
+    rule.channel.is_none()
+        && rule.peer.is_none()
+        && rule.guild_id.is_none()
+        && rule.team_id.is_none()
+        && rule
+            .account_id
+            .as_deref()
+            .map(str::trim)
+            .is_none_or(|account_id| account_id == "*")
 }
 
 #[cfg(test)]
