@@ -281,6 +281,54 @@ mod tests {
         );
     }
 
+    /// C7 review, Important 1: the presence-only assertion above proves an
+    /// UNRESTRICTED caller sees their own row — it cannot prove a RESTRICTED
+    /// caller is refused someone else's, because `stamped_owner_visible`'s
+    /// `None => true` arm never runs for a scoped caller. This is the
+    /// negative twin, following `group_chat.rs::
+    /// list_hides_another_users_sessions_but_keeps_your_own`'s pattern: two
+    /// distinctly-owned rows, one restricted caller, assert both directions.
+    #[tokio::test]
+    async fn no_scope_filter_denies_another_owners_goal_to_a_restricted_caller() {
+        let store = install_goal_store();
+        let alice = crate::scope::ScopeAttribution::personal("u-alice-kanban-nofilter");
+        let bob = crate::scope::ScopeAttribution::personal("u-bob-kanban-nofilter");
+        store
+            .put(
+                &Goal::new("s-alice-kanban-nofilter", "objective", 0, 1_000)
+                    .with_owner_scope(Some(&alice)),
+            )
+            .unwrap();
+        store
+            .put(
+                &Goal::new("s-bob-kanban-nofilter", "objective", 0, 1_000)
+                    .with_owner_scope(Some(&bob)),
+            )
+            .unwrap();
+
+        let resp = crate::gateway::caller_identity::CALLER_USER
+            .scope(Some("u-bob-kanban-nofilter".to_string()), async {
+                handle_list(req("goal.list", None)).await
+            })
+            .await;
+
+        let body = resp.result.expect("success");
+        let ids: Vec<String> = body["goals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| g["session_id"].as_str().unwrap_or_default().to_string())
+            .collect();
+        assert!(
+            ids.contains(&"s-bob-kanban-nofilter".to_string()),
+            "bob must see his own goal: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"s-alice-kanban-nofilter".to_string()),
+            "bob must NOT see alice's goal via the unfiltered list: {ids:?}"
+        );
+    }
+
     #[tokio::test]
     async fn a_project_scope_query_from_a_non_member_gets_an_empty_set_not_an_error() {
         let store = install_goal_store();
@@ -376,6 +424,59 @@ mod tests {
         assert_eq!(loops.len(), 1);
         assert_eq!(loops[0]["session_id"], "s-loop-room");
         assert_eq!(loops[0]["status"], "active");
+    }
+
+    /// C7 review, Important 1: the loop twin of
+    /// `no_scope_filter_denies_another_owners_goal_to_a_restricted_caller`.
+    #[tokio::test]
+    async fn no_scope_filter_denies_another_owners_loop_to_a_restricted_caller() {
+        let reg = install_loop_registry();
+        let alice = ScopeAttribution::personal("u-alice-kanban-loop-nofilter");
+        let bob = ScopeAttribution::personal("u-bob-kanban-loop-nofilter");
+
+        let mut alice_st = LoopState::new(
+            "s-alice-kanban-loop-nofilter",
+            "watch it",
+            crate::looping::Cadence::Fixed {
+                interval_ms: 300_000,
+            },
+            1_000,
+        );
+        alice_st = alice_st.with_owner_scope(Some(&alice));
+        reg.put(alice_st);
+
+        let mut bob_st = LoopState::new(
+            "s-bob-kanban-loop-nofilter",
+            "watch it too",
+            crate::looping::Cadence::Fixed {
+                interval_ms: 300_000,
+            },
+            1_000,
+        );
+        bob_st = bob_st.with_owner_scope(Some(&bob));
+        reg.put(bob_st);
+
+        let resp = crate::gateway::caller_identity::CALLER_USER
+            .scope(Some("u-bob-kanban-loop-nofilter".to_string()), async {
+                handle_loop_list(req("loop.list", None)).await
+            })
+            .await;
+
+        let body = resp.result.expect("success");
+        let ids: Vec<String> = body["loops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l["session_id"].as_str().unwrap_or_default().to_string())
+            .collect();
+        assert!(
+            ids.contains(&"s-bob-kanban-loop-nofilter".to_string()),
+            "bob must see his own loop: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"s-alice-kanban-loop-nofilter".to_string()),
+            "bob must NOT see alice's loop via the unfiltered list: {ids:?}"
+        );
     }
 
     #[tokio::test]
