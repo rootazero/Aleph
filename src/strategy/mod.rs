@@ -12,8 +12,7 @@ pub use render::{render_guardrails_only, render_strategy_summary, render_workflo
 pub use store::StrategyStore;
 pub use types::Strategy;
 
-use once_cell::sync::OnceCell;
-
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
 
 /// Composite-key prefix for a `/goal`-flow strategy, keyed by session.
@@ -60,13 +59,29 @@ pub fn team_key(team_id: &str) -> String {
 /// Process-global strategy store. Initialized once at daemon boot
 /// (`constructor.rs`); `None` until then so tests / early-boot read as "no
 /// strategy subsystem" and the prompt layers stay dormant.
-static GLOBAL: OnceCell<Arc<StrategyStore>> = OnceCell::new();
+///
+/// `ConsumerDecides`, like its two siblings: eight production readers, each
+/// deciding for itself. The welded strategy simply does not appear in the
+/// downstream prompt (`context_blocks.rs`, `teams::broadcast`), and
+/// `builtin_tools::goal` skips the mint step — a `/goal` flow then runs with no
+/// guardrails and reports success, because "no strategy subsystem" and "no
+/// strategy for this session" are the same `None`.
+static GLOBAL: CapabilitySlot<Arc<StrategyStore>> =
+    CapabilitySlot::new("strategy/store", MissingSemantics::ConsumerDecides);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn global_slot() -> &'static dyn SlotStatus {
+    &GLOBAL
+}
 
 /// Install the global store at boot. Idempotent: a second call is ignored.
 /// Holds an `Arc` (mirroring `goal::init_global`) so the boot constructor, the
 /// `strategy` tool, and the lifecycle clears all share one store instance.
 pub fn init_global(store: Arc<StrategyStore>) {
-    let _ = GLOBAL.set(store);
+    let _ = GLOBAL.install(store);
 }
 
 /// Read the global store, if initialized (a cheap `Arc` clone).
@@ -78,7 +93,7 @@ pub fn global() -> Option<Arc<StrategyStore>> {
 /// Test-only override. In production `init_global` is the only writer.
 #[cfg(test)]
 pub fn set_global_for_test(store: Arc<StrategyStore>) {
-    let _ = GLOBAL.set(store);
+    let _ = GLOBAL.install(store);
 }
 
 #[cfg(test)]

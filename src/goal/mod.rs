@@ -9,17 +9,33 @@ pub mod types;
 pub use store::{ContinuationDecision, FieldUpdate, FireDecision, GoalStore, RearmDecision};
 pub use types::{GateOutcome, Goal, GoalStatus, PursuitMode};
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
-use once_cell::sync::OnceCell;
 
 /// Process-global goal store. Initialized once at daemon boot
 /// (`constructor.rs`); `None` until then so tests / early-boot read as
 /// "no goal subsystem" and the prompt layer stays dormant.
-static GLOBAL: OnceCell<Arc<GoalStore>> = OnceCell::new();
+///
+/// `ConsumerDecides`, and it is the shape by weight of evidence: eighteen
+/// production readers, each writing its own meaning for `None` — the standing
+/// goal block silently vanishes from the prompt (`context_blocks.rs`), a loop
+/// tick's fire decision comes back absent (`execute.rs`), the budget gate stops
+/// gating (`goal_budget.rs`), and `users.update`'s deactivation freeze reports
+/// `goals: 0`, which reads as "this principal owned none".
+static GLOBAL: CapabilitySlot<Arc<GoalStore>> =
+    CapabilitySlot::new("goal/store", MissingSemantics::ConsumerDecides);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn global_slot() -> &'static dyn SlotStatus {
+    &GLOBAL
+}
 
 /// Install the global store at boot. Idempotent: a second call is ignored.
 pub fn init_global(store: Arc<GoalStore>) {
-    let _ = GLOBAL.set(store);
+    let _ = GLOBAL.install(store);
 }
 
 /// Read the global store, if initialized.
@@ -30,7 +46,7 @@ pub fn global() -> Option<Arc<GoalStore>> {
 /// Test-only override. In production `init_global` is the only writer.
 #[cfg(test)]
 pub fn set_global_for_test(store: Arc<GoalStore>) {
-    let _ = GLOBAL.set(store);
+    let _ = GLOBAL.install(store);
 }
 
 #[cfg(test)]

@@ -10,8 +10,8 @@ pub mod types;
 
 pub use types::{Cadence, LoopState, LoopStatus};
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
-use once_cell::sync::OnceCell;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -549,11 +549,27 @@ impl LoopRegistry {
 /// Process-global registry. Initialized once at daemon boot
 /// (`constructor.rs`); `None` until then so tests / early-boot read as "no
 /// loop subsystem" and the continuation hook stays dormant.
-static GLOBAL: OnceCell<Arc<LoopRegistry>> = OnceCell::new();
+///
+/// `ConsumerDecides`, with the sharpest reader worth naming: `execute.rs`'s
+/// loop continuation does `crate::looping::global().is_some_and(|reg|
+/// reg.confirm_fire(..))`, so an uninstalled registry makes `confirmed` false
+/// and the tick is dropped with the log line *"loop: tick superseded during its
+/// delay (loop stopped or replaced)"* — a confident explanation of something
+/// that did not happen. The other ten readers each choose differently.
+static GLOBAL: CapabilitySlot<Arc<LoopRegistry>> =
+    CapabilitySlot::new("looping/registry", MissingSemantics::ConsumerDecides);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn global_slot() -> &'static dyn SlotStatus {
+    &GLOBAL
+}
 
 /// Install the global registry at boot. Idempotent.
 pub fn init_global(registry: Arc<LoopRegistry>) {
-    let _ = GLOBAL.set(registry);
+    let _ = GLOBAL.install(registry);
 }
 
 /// Read the global registry, if initialized.
