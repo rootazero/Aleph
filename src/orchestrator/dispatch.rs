@@ -706,6 +706,32 @@ pub trait HarnessRunner: Send + Sync {
         None
     }
 
+    /// The per-run budget refiner this runner applies to its OWN prompt /
+    /// history budgets (`runner_impl` re-keys the chain-minimum config onto
+    /// the serving model every run).
+    ///
+    /// Threaded into `SubagentTool` so a spawned child's **prompt** budget is
+    /// re-keyed onto the model the child will actually run on: the spawner
+    /// previously derived it straight from the chain-minimum `token_budget`,
+    /// so a child pinned to a narrow model inherited the wider chain budget —
+    /// its system prompt could grow past what its own window + the token hard
+    /// gate would have allowed on the main loop. Default `None` (mocks /
+    /// simple engine / `[context_budget]` disabled) keeps the unrefined
+    /// chain-minimum behaviour.
+    fn context_budget_refiner(
+        &self,
+    ) -> Option<crate::orchestrator::deps_builder::ContextBudgetRefiner> {
+        None
+    }
+
+    /// The runner's configured per-provider context-window override, handed
+    /// to [`Self::context_budget_refiner`]'s refinement exactly as the main
+    /// loop hands it to its own (same argument, same precedence over the
+    /// model catalog). Default `None` = catalog resolution only.
+    fn primary_context_window(&self) -> Option<u32> {
+        None
+    }
+
     /// The cheap-tier summarization provider this runner routes its OWN
     /// compaction side-channel to (`[context_budget] summary_model`, or the
     /// primary preset's declared `default_aux_model`).

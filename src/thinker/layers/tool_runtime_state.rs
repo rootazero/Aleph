@@ -65,12 +65,27 @@ impl PromptLayer for ToolRuntimeStateLayer {
             return;
         }
         output.push_str("<tool_runtime_state>\n");
-        for fragment in &ctx.runtime_state_blocks {
+        // Fragment count is producer-bounded only by the number of distinct
+        // unhealthy reasons, and this layer sits in
+        // `prompt_contract::CONDITIONALLY_SILENT` — the per-layer byte ratchet
+        // measures it as 0 B, so the render-side bound lives here: at most
+        // `MAX_FRAGMENTS` fragments, with an elision footer naming the hidden
+        // count so a capped render never reads as the whole picture.
+        for fragment in ctx.runtime_state_blocks.iter().take(MAX_FRAGMENTS) {
             output.push_str(&fragment.render_xml());
+        }
+        let hidden = ctx.runtime_state_blocks.len().saturating_sub(MAX_FRAGMENTS);
+        if hidden > 0 {
+            output.push_str(&format!(
+                "<unavailable count=\"{hidden}\" note=\"further unhealthy tools elided\"/>\n"
+            ));
         }
         output.push_str("</tool_runtime_state>\n\n");
     }
 }
+
+/// Render-side ceiling on fragments per injection — see `inject` above.
+const MAX_FRAGMENTS: usize = 20;
 
 #[cfg(test)]
 mod tests {

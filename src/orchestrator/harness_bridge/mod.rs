@@ -56,10 +56,15 @@ pub use context_blocks::{
     active_execution_plan, active_standing_goal, active_strategy, active_timer_loop,
     compute_runtime_state_blocks, live_deadline_status,
 };
+// Producer-side bound for `StandingGoalLayer`, asserted by
+// `thinker::prompt_contract::conditionally_silent_dynamic_layers_are_bounded`.
+#[cfg(test)]
+pub(crate) use context_blocks::render_goal_summary;
 // Crate-internal helpers tests reach via the parent path (`super::X`); keep
 // them addressable at the module root after the split.
 pub(crate) use behavior_resolve::resolve_behavior;
 pub(crate) use prompt_build::{agent_identity_dir_exists, last_user_query, resolve_max_iterations};
+pub(crate) use runner_impl::seeded_calibration_for_model;
 
 /// Concrete [`HarnessRunner`] that dispatches to the Phase 4 `AgentHarness`.
 pub struct AgentHarnessRunner {

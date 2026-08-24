@@ -76,13 +76,25 @@ than guessing.\n",
             // The recognizer was biased with this exact list; the model gets
             // it too, so a garbled domain word is repaired toward the
             // configured term instead of a plausible-sounding guess.
+            // Operator-configured free text, and this layer sits in
+            // `prompt_contract::CONDITIONALLY_SILENT` — the per-layer byte
+            // ratchet measures it as 0 B, so the bound lives here where the
+            // layer builds its own text.
+            let terms = crate::utils::text_format::truncate_reserving(
+                terms,
+                VOICE_VOCABULARY_MAX_CHARS,
+                "…",
+            );
             s.push_str("Domain vocabulary for this conversation: ");
-            s.push_str(terms);
+            s.push_str(&terms);
             s.push_str(". Prefer these exact terms when repairing misrecognized words.\n");
         }
     }
     s
 }
+
+/// Ceiling on the domain-vocabulary echo — see `build_voice_guidelines`.
+const VOICE_VOCABULARY_MAX_CHARS: usize = 500;
 
 impl PromptLayer for VoiceModeLayer {
     fn name(&self) -> &'static str {

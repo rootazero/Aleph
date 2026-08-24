@@ -1118,6 +1118,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 if let Some(cfg) = orchestrator.harness.context_budget_config() {
                     t = t.with_context_budget_config(cfg);
                 }
+                // ...and the per-run refiner + window override the main loop
+                // sizes its own prompt budget with, so a child pinned to a
+                // narrow model gets a prompt budget sized to ITS window
+                // rather than the chain minimum's.
+                if let Some(refiner) = orchestrator.harness.context_budget_refiner() {
+                    t = t.with_context_budget_refinement(
+                        refiner,
+                        orchestrator.harness.primary_context_window(),
+                    );
+                }
                 // ...and the flash-tier summarizer that config's compactor is
                 // meant to run on. Inheriting the budget without this gave the
                 // child a compactor that billed the main reasoning model for

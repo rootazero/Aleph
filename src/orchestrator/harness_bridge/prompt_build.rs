@@ -222,6 +222,10 @@ impl AgentHarnessRunner {
         routing_text: Option<String>,
         has_session_summaries: bool,
         prompt_token_budget: Option<u64>,
+        // Cross-run calibrated estimator factor for the serving model (the
+        // same carry-over the history-side budget seeds from). Applied to
+        // the prompt token hard gate; `None` = uncalibrated (factor 1.0).
+        prompt_estimate_factor: Option<f64>,
         envelope: &crate::thinker::TurnEnvelope,
     ) -> Option<(
         String,
@@ -532,6 +536,10 @@ impl AgentHarnessRunner {
             crate::thinker::prompt_budget::TokenBudget::default,
             crate::thinker::prompt_budget::TokenBudget::from_context_window,
         );
+        let token_budget = match prompt_estimate_factor {
+            Some(factor) => token_budget.with_estimate_factor(factor),
+            None => token_budget,
+        };
         // Tool-scoped skills (`PromptScope::Tool`) are filtered inside
         // `SkillInstructionsLayer` against the active tool names. The cached
         // prompt is assembled with an empty `tools` slice (native tool_use

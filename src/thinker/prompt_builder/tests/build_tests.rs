@@ -600,3 +600,58 @@ fn test_interactive_prompt_minimal_token_overhead() {
         "Missing role section"
     );
 }
+
+#[test]
+fn basic_path_strategy_weld_yields_to_resolved_context_strategy() {
+    // `append_basic_welds` must stay silent when `ResolvedContext.strategy` is
+    // set: `StrategyLayer` already renders the body there, and the weld used
+    // to state it a second time — the dedup previously rested on a doc
+    // comment telling callers to leave the field unset. The guard now lives
+    // in the weld itself, mirroring the Cached path (`cache.rs`).
+    use crate::thinker::context::ContextAggregator;
+    use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+    use crate::thinker::security_context::SecurityContext;
+
+    let interaction = InteractionManifest::new(InteractionParadigm::Background);
+    let security = SecurityContext::permissive();
+    let mut resolved = ContextAggregator::resolve(&interaction, &security);
+    resolved.strategy = Some("plan-then-act".to_string());
+
+    let builder = PromptBuilder::new(PromptConfig::default())
+        .with_resolved_context(resolved)
+        .with_strategy("plan-then-act".to_string());
+    let parts = builder.build_system_prompt_parts(&[]);
+    let prompt: String = parts.iter().map(|p| p.content.as_str()).collect();
+
+    let occurrences = prompt.matches("plan-then-act").count();
+    assert_eq!(
+        occurrences, 1,
+        "strategy body must be stated exactly once (layer OR weld, never both): {prompt}"
+    );
+}
+
+#[test]
+fn basic_path_strategy_weld_renders_when_resolved_context_has_no_strategy() {
+    // The legacy shape — caller hands a strategy body, resolved context
+    // carries none — must keep rendering exactly one copy via the weld.
+    use crate::thinker::context::ContextAggregator;
+    use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+    use crate::thinker::security_context::SecurityContext;
+
+    let interaction = InteractionManifest::new(InteractionParadigm::Background);
+    let security = SecurityContext::permissive();
+    let resolved = ContextAggregator::resolve(&interaction, &security);
+    assert!(resolved.strategy.is_none(), "fixture must start strategy-free");
+
+    let builder = PromptBuilder::new(PromptConfig::default())
+        .with_resolved_context(resolved)
+        .with_strategy("plan-then-act".to_string());
+    let parts = builder.build_system_prompt_parts(&[]);
+    let prompt: String = parts.iter().map(|p| p.content.as_str()).collect();
+
+    let occurrences = prompt.matches("plan-then-act").count();
+    assert_eq!(
+        occurrences, 1,
+        "strategy weld must render when the layer has nothing to say: {prompt}"
+    );
+}
