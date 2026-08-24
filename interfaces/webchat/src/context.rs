@@ -458,7 +458,7 @@ pub struct DashboardState {
     next_id: StoredValue<Arc<Mutex<u64>>>,
 
     // Phase 3: Event handling
-    event_handlers: StoredValue<Arc<Mutex<Vec<EventHandler>>>>,
+    event_handlers: StoredValue<Arc<Mutex<Vec<Option<EventHandler>>>>>,
 
     /// Ledger of every topic pattern currently subscribed on behalf of this
     /// client, maintained by `subscribe_topic` / `unsubscribe_topic` (the two
@@ -819,9 +819,21 @@ impl DashboardState {
         let mut handlers = handlers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let id = handlers.len();
-        handlers.push(Arc::new(handler));
-        id
+        // Reuse a vacated slot before growing: a long-lived session mounts
+        // and unmounts views constantly, and an append-only Vec of dead
+        // closures is a slow leak (each tombstone still rode every dispatch).
+        if let Some((id, slot)) = handlers
+            .iter_mut()
+            .enumerate()
+            .find(|(_, slot)| slot.is_none())
+        {
+            *slot = Some(Arc::new(handler));
+            id
+        } else {
+            let id = handlers.len();
+            handlers.push(Some(Arc::new(handler)));
+            id
+        }
     }
 
     /// Unsubscribe from events
@@ -831,8 +843,9 @@ impl DashboardState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if id < handlers.len() {
-            // Replace with a no-op handler instead of removing to preserve indices
-            handlers[id] = Arc::new(|_| {});
+            // Vacate the slot instead of removing to preserve indices
+            // (ids held by other components must not shift).
+            handlers[id] = None;
         }
     }
 
@@ -862,30 +875,53 @@ impl DashboardState {
         let handlers = handlers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for handler in handlers.iter() {
+        for handler in handlers.iter().flatten() {
             handler(event.clone());
         }
     }
 
     /// Subscribe to a specific event topic on the Gateway.
     ///
-    /// On success the pattern is filed in `subscribed_topics` so the next
-    /// reconnect replays it — see that field's doc for why a missing replay is
-    /// a silent kill rather than a missing restore.
+    /// The pattern is filed in `subscribed_topics` **before** the RPC goes
+    /// out: a failed subscribe (e.g. socket mid-reconnect) must not silently
+    /// drop the topic until the owning component happens to remount — the
+    /// next reconnect's replay re-offers it, and a duplicate server-side
+    /// subscribe is idempotent. See that field's doc for why a missing replay
+    /// is a silent kill rather than a missing restore.
     pub async fn subscribe_topic(&self, pattern: &str) -> Result<(), String> {
+        self.subscribed_topics.with_value(|set| {
+            set.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(pattern.to_string());
+        });
         self.rpc_call(
             "events.subscribe",
             serde_json::json!({
                 "topics": [pattern]
             }),
         )
-        .await?;
-        self.subscribed_topics.with_value(|set| {
-            set.lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(pattern.to_string());
-        });
-        Ok(())
+        .await
+        .map(|_| ())
+    }
+
+    /// Subscribe **without** filing the pattern in the reconnect ledger.
+    ///
+    /// For component-scoped catch-all subscriptions (the home activity
+    /// feed's `"**"`): the owning component re-subscribes from its own
+    /// connect-driven effect on every reconnect, so a ledger entry would only
+    /// outlive the component — turning every later reconnect of *this*
+    /// socket into a receive-everything stream long after the view that
+    /// wanted it is gone. The caller must pair this with
+    /// [`Self::unsubscribe_topic`] on unmount.
+    pub async fn subscribe_topic_ephemeral(&self, pattern: &str) -> Result<(), String> {
+        self.rpc_call(
+            "events.subscribe",
+            serde_json::json!({
+                "topics": [pattern]
+            }),
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Unsubscribe from an event topic
@@ -1241,11 +1277,9 @@ impl DashboardState {
                             msg = stream.select_next_some() => {
                                 match msg {
                                     Ok(value) => {
-                                        // Topic/id-level breadcrumb only — never dump the full
-                                        // message: RPC responses (e.g. gateway.token.current) and
-                                        // event payloads carry secrets/content that must not leak
-                                        // into the browser console.
-                                        web_sys::console::log_1(&"Received WS message".into());
+                                        // Never log per-frame breadcrumbs here: a streaming run
+                                        // fires this branch per token, and payloads can carry
+                                        // secrets/content that must not reach the console.
 
                                         // Check if this is an RPC response (has 'id' field)
                                         if let Some(id) = value.get("id").and_then(|id| id.as_str()) {
@@ -1271,8 +1305,6 @@ impl DashboardState {
                                                                 data,
                                                             };
 
-                                                            web_sys::console::log_1(&format!("Event: {}", event.topic).into());
-
                                                             // Dispatch event to subscribers
                                                             state.dispatch_event(event);
                                                         }
@@ -1286,7 +1318,6 @@ impl DashboardState {
                                                         topic,
                                                         data,
                                                     };
-                                                    web_sys::console::log_1(&format!("Stream event: {}", event.topic).into());
                                                     state.dispatch_event(event);
                                                 }
                                             }

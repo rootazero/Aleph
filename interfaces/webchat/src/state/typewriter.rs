@@ -175,6 +175,20 @@ impl TypewriterClock {
             m.remove(id);
         });
     }
+
+    /// Reveal the whole message NOW (the user clicked a sweeping bubble).
+    ///
+    /// Sets the cursor straight to `total` instead of dropping it: a bubble
+    /// whose stream is still live would re-anchor a dropped cursor at zero
+    /// and replay the sweep from the beginning, which is the opposite of
+    /// "skip". No-op without a live cursor (history bubbles never had one).
+    pub fn skip(&self, id: &str, total: usize) {
+        self.reveals.update_untracked(|m| {
+            if let Some(cursor) = m.get_mut(id) {
+                cursor.revealed = total;
+            }
+        });
+    }
 }
 
 /// How long a cursor may sit un-advanced before it is treated as abandoned.

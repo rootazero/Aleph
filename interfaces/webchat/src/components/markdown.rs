@@ -396,8 +396,28 @@ pub fn TypewriterRenderer(
         }
     };
 
+    // Click-to-skip: a mid-sweep click jumps the reveal to the full arrived
+    // text (`TypewriterClock::skip`, which sets the cursor rather than
+    // dropping it — dropping would re-anchor a still-streaming bubble at
+    // zero). The pointer affordance shows only while a live cursor exists.
+    let sweeping = move || {
+        clock.tick.track();
+        clock.has_reveal(&message_id.get_value())
+    };
+    let on_skip = move |_| {
+        let id = message_id.get_value();
+        if clock.has_reveal(&id) {
+            clock.skip(&id, total);
+        }
+    };
+
     view! {
-        <div class="markdown-body text-sm leading-relaxed streaming-content" inner_html=html />
+        <div
+            class="markdown-body text-sm leading-relaxed streaming-content"
+            class:cursor-pointer=move || sweeping()
+            on:click=on_skip
+            inner_html=html
+        />
     }
     .into_any()
 }

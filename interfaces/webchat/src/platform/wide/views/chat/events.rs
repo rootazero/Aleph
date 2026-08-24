@@ -1109,6 +1109,12 @@ pub fn subscribe_run_events(
                 apply_context_gauge(chat, data);
             }
             "run_complete" => {
+                // The run is over: its trace-mode membership is no longer
+                // needed. Without this prune the set grew by one entry per
+                // run for the lifetime of the view.
+                if let Ok(mut runs) = trace_runs.lock() {
+                    runs.remove(run_id);
+                }
                 chat.complete_run(run_id);
                 // Promote the harness-authoritative final answer into the
                 // trailing bubble so it renders as the conversational reply —
@@ -1157,6 +1163,9 @@ pub fn subscribe_run_events(
                 }
             }
             "run_error" => {
+                if let Ok(mut runs) = trace_runs.lock() {
+                    runs.remove(run_id);
+                }
                 let error = data
                     .get("error")
                     .and_then(|e| e.as_str())

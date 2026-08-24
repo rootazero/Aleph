@@ -356,6 +356,13 @@ pub fn get_background_processes_dir() -> Result<PathBuf> {
     Ok(get_data_dir()?.join("background_processes"))
 }
 
+/// Directory for the busy-input wait lane's crash-durability journal
+/// (`busy_queue::durable`) — one entry per queued message, tombstoned on
+/// admission/stop/timeout, reinjected at boot.
+pub fn get_busy_queue_dir() -> Result<PathBuf> {
+    Ok(get_data_dir()?.join("busy_queue"))
+}
+
 // ============================================================================
 // Private scratch root (shared OS temp dir)
 // ============================================================================
