@@ -173,7 +173,7 @@ pub(crate) fn has_url_credentials(url_str: &str) -> bool {
     if let Some(scheme_end) = url_str.find("://") {
         let after_scheme = &url_str[scheme_end + 3..];
         let authority_end = after_scheme
-            .find(|c: char| c == '/' || c == '?' || c == '#')
+            .find(['/', '?', '#'])
             .unwrap_or(after_scheme.len());
         let authority = &after_scheme[..authority_end];
         if authority.contains('@') {
