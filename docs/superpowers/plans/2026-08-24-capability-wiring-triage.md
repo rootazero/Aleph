@@ -236,6 +236,32 @@ it, because it is one crate away from the extractor this round shipped.
 
 ## Fix round 2 — the bare-`*` predicate in `strip_comment_lines`, and its exposure event
 
+**Correction, added in Fix round 3 — do not trust the "5 genuine comment
+continuations" claim below.** The re-review opened all five and found
+**none of them is a comment.** Two are rustfmt's leading-binary-operator
+continuation style for a wrapped multiplication expression
+(`    * cfg.warning_threshold.clamp(0.0, 1.0)`); the rest are similarly
+ambiguous prose the narrower predicate still could not tell from code. The
+true classification of the 479 matched lines was **479 false positives, 0
+confirmed comments** — `is_block_comment_continuation` narrowed the defect
+without removing it, because a block-comment continuation and a leading
+binary-operator continuation have *identical* single-line shape; no
+stateless per-line predicate can separate them. This section's own
+"distinguishing fact" — *whitespace after `*` means comment, an identifier
+means dereference* — is false on its own measured population: `* cfg.
+warning_threshold` is whitespace-followed and is multiplication, not a
+comment. Fix round 3 replaced `is_block_comment_continuation` with a
+stateful implementation reusing `code_only`'s `LexState` (the same
+`in_block_comment` tracking `end_of_item` already threads across lines),
+which is the only correct answer to "is this line inside a comment right
+now" — see the "Fix round 3" section below for the full account, including
+why the fix's own state must also track `in_str` (a raw-string CSS/JSON
+payload reads exactly like a comment continuation to a state-blind
+scanner, the same class of ambiguity one level up).
+**Commits `64c33d427` and `b1c2bd666` both repeat the "5 kept as
+comments" claim below and are not rewritten** — this correction exists so
+a reader who greps those commit messages finds it before believing them.
+
 Task 1's `strip_comment_lines` dropped any line whose trimmed form started
 with `*`, intended to catch block-comment continuations (` * text`, a bare
 `*`, the closing `*/`). Measured directly against this repo's `src/` tree
@@ -295,3 +321,149 @@ two lines this round's own new tests account for.
 - **Guard 1** (`production_prefix_agrees_with_the_old_cut_where_the_old_cut_was_right`): `ok`, unaffected — it does not call `strip_comment_lines`.
 - **Guard 2** (`production_prefix_recovers_code_the_old_cut_discarded`): `ok`, floor unchanged at `>= 209` — it compares `production_prefix` against `old_prefix_cut` directly, neither of which calls `strip_comment_lines`.
 - **Guard 3** (`no_module_hand_rolls_the_cfg_test_prefix_cut`): `ok`, offender count still 0 — confirmed rather than assumed, per the instruction: none of its three literal patterns (`split("#[cfg(test)]")`, `find("#[cfg(test)]")`, `split_once("#[cfg(test)]")`) begin with `*`, so widening the bare-`*` predicate cannot change what this guard's own whole-file scan matches.
+
+## Fix round 3 — `strip_comment_lines` made stateful; `is_block_comment_continuation` deleted
+
+### Why narrowing could not work
+
+A block-comment continuation line (` * text`) and rustfmt's own style for a
+wrapped multi-line expression (`    * cfg.warning_threshold.clamp(0.0, 1.0)`)
+have identical single-line shape — a `*`, then whitespace, then text. That
+is a property of the two shapes, not a gap in any one heuristic, so no
+predicate that looks at one line in isolation can separate them. The only
+question that actually answers "is this a comment" is stateful: was the
+lexer already inside a `/* */` when it reached this line? `code_only`
+already tracks exactly that (`LexState.in_block_comment`, threaded across
+lines for `end_of_item`'s brace-counting) — `strip_comment_lines` was
+hand-rolling a stateless approximation of a question the same file already
+answers correctly, the same shape of defect this repo's own Task-1-round-2
+history already has an entry for (the `'{'`/`'}'` special case removed from
+`code_only` rather than kept beside the grammar).
+
+### The fix
+
+`strip_comment_lines` now threads one `LexState` across the whole file and
+calls the *existing, unmodified* `code_only` per line — no new lexer, no
+duplicated character walk. A line is dropped only when:
+
+- it is not blank, and
+- the lexer did **not** enter this line already inside an open string
+  (`state.in_str` checked *before* calling `code_only`), and
+- `code_only`'s output for this line, trimmed, is empty.
+
+That third condition covers the three cases the old code covered
+(`//` lines — `code_only` breaks at `//`, so `out` is empty; a line the
+lexer is already inside a block comment for; a line that opens and closes
+one with nothing else on it), driven entirely by state `code_only` already
+carries — no new pattern-matching. The `in_str` check exists because
+`code_only`'s exclusion of string interior (correct for its one caller,
+brace-counting — a `{` written inside a string must not count) makes a line
+wholly inside an open string produce the *same* empty output a comment line
+does; only knowing "was I already inside a string when this line started"
+tells the two apart. Raw strings make this common, not exotic: `LexState`
+does not lex them specially (documented on `code_only` since Task 1), so a
+multi-line raw-string CSS or JSON payload reads exactly like an ordinary
+open string, one line at a time — this is precisely the shape of the
+CSS-selector false-drop found below.
+
+`is_block_comment_continuation` is deleted entirely.
+
+### RED-first, confirmed before the fix
+
+Two new tests were written to fail under the code as it stood after Fix
+round 2 (`is_block_comment_continuation`), confirmed RED, then confirmed
+GREEN after applying the stateful fix (`git checkout`/re-apply the patch
+around the two runs, same discipline as every other measurement in this
+ledger — not committed in the RED state):
+
+```
+$ cargo test -p alephcore --lib utils::source_scan::tests::diag_temp -- --nocapture
+  (run against the Fix-round-2 code, is_block_comment_continuation still in place)
+thread '...diag_temp_multiplication_survives' panicked: a leading-multiplication continuation line was wrongly dropped as a comment
+thread '...diag_temp_css_in_raw_string_survives' panicked: a CSS universal-selector line inside a raw string was wrongly dropped as a comment
+test result: FAILED. 0 passed; 2 failed
+```
+
+Both confirmed RED. Renamed and kept as permanent regression tests
+(`strip_comment_lines_keeps_a_leading_multiplication_continuation`,
+`strip_comment_lines_keeps_a_css_line_inside_a_raw_string`) after applying
+the stateful fix; both pass.
+
+`strip_comment_lines_still_drops_every_continuation_shape` (Fix round 2) is
+**replaced** — the reviewer showed it passes unchanged under the OLD rule
+too, so it never distinguished the fix from the bug it was meant to catch.
+Its fixture is kept (a genuine multi-line block comment, continuation lines
+and closing `*/` all dropped — the case statefulness actually buys, as
+opposed to the two cases above that a stateless predicate got right only by
+accident) under the accurate name
+`strip_comment_lines_drops_a_genuine_multi_line_block_comment`.
+
+One collateral fix: the pre-existing, untouched-until-now
+`strip_comment_lines_drops_line_and_block_comment_lines` (Task 1) asserted
+that a bare `* continued` line gets dropped when its own fixture's block
+comment (`/* block */`) had already **closed on the same physical line**
+before that line was reached — i.e. its own fixture proved the exact
+ambiguity this round's fix refuses to guess at. The stateful implementation
+correctly keeps that line (no comment is open when the lexer reaches it),
+which is the correct behavior, not a regression, so the test's fixture was
+corrected to open a comment that actually stays open into the continuation
+line, preserving the test's original assertions and intent.
+
+### Post-fix classification of all 479 previously-matched lines
+
+Independently re-measured with a temporary diagnostic (added, run, reverted
+— not committed), replicating `strip_comment_lines`'s per-line decision
+directly (not by comparing output text, which a HashSet-based check would
+get wrong on duplicate lines) across every line the OLD `t.starts_with('*')`
+criterion matched in `src/`:
+
+```
+$ cargo test -p alephcore --lib utils::source_scan::diag_temp_recount -- --nocapture
+DIAG post_fix kept=479 dropped=0
+```
+
+**All 479 are now kept.** This matches the reviewer's finding exactly:
+there were zero confirmed comments in that population, so the correct
+outcome is that all 479 survive — the true "before vs after" is
+**479 wrongly dropped → 0 wrongly dropped**, not the 5-vs-474 framing Fix
+round 2 used.
+
+One measurement pitfall worth recording: the diagnostic first ran at
+`kept=482`, not 479, because two of this round's own new test fixtures were
+formatted across physical source lines using Rust's `\`-continuation
+syntax, and two of those physical lines happened to start with `*`
+themselves (deliberately — they're testing that exact shape) — polluting
+the very census being measured with its own new fixtures. Reformatted both
+onto single physical lines (matching the existing multi-line-block-comment
+test's style) to keep the measurement clean; the two RED-first tests'
+assertions are unchanged.
+
+### Exposure event — zero newly-failing tests
+
+```
+$ diff <(sort fixround2-tests.txt) <(sort fixround3-tests.txt)
+16767a16768
+> test utils::source_scan::tests::strip_comment_lines_drops_a_genuine_multi_line_block_comment ... ok
+16768a16770,16771
+> test utils::source_scan::tests::strip_comment_lines_keeps_a_css_line_inside_a_raw_string ... ok
+> test utils::source_scan::tests::strip_comment_lines_keeps_a_leading_multiplication_continuation ... ok
+16770d16772
+< test utils::source_scan::tests::strip_comment_lines_still_drops_every_continuation_shape ... ok
+
+$ cargo test -p alephcore --lib
+test result: ok. 17021 passed; 0 failed; 17 ignored; 0 measured; 0 filtered out; finished in 31.56s
+```
+
+The only changes anywhere in the 17,038-test corpus are this round's own
+test churn (net +2: three tests added, one replaced) — `strip_comment_lines_drops_line_and_block_comment_lines`
+stays `ok` under its corrected fixture (same name, so it does not appear as
+a diff line, but its body changed — see above). **Zero newly-failing
+tests**, and none outside expectation: widening `strip_comment_lines` a
+second time, this time correctly, again surfaced no pre-existing defect
+anywhere in the guard corpus.
+
+### Guard 1/2/3 — re-confirmed
+
+- **Guard 1**: `ok`, unaffected (still does not call `strip_comment_lines`).
+- **Guard 2**: `ok`, floor unchanged at `>= 209` (still does not call `strip_comment_lines`).
+- **Guard 3**: `ok`, offender count still 0 (none of its three literal patterns begin with `*`; the stateful rewrite changes nothing about what text those patterns match).
