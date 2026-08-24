@@ -66,11 +66,15 @@ impl SecretVault {
                         bytes.len()
                     )));
                 }
-                // `bincode::options()` returns a `Config` (1.3 API); `.limit`
-                // caps per-Vec length-prefix decoding. The outer
-                // `bytes.len()` check above is the actual heap bound — the
-                // per-Vec limit is defense-in-depth.
-                let data: VaultData = bincode::options()
+                // `bincode::config()` is the legacy 1.3 entry point that exposes the
+                // `.limit(N)` method directly (without the
+                // `InternalOptions` trait dance required for
+                // `bincode::options()`). It carries a deprecation
+                // lint, but the suggested replacement requires the
+                // internal trait — accept the lint rather than import
+                // a private symbol.
+                #[allow(deprecated)]
+                let data: VaultData = bincode::config()
                     .limit(MAX_VAULT_BYTES as u64)
                     .deserialize(&bytes)
                     .map_err(|e| {
