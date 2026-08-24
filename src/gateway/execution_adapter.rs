@@ -175,6 +175,32 @@ pub trait ExecutionAdapter: Send + Sync {
     ) -> Option<crate::routing::session_key::SessionKey> {
         None
     }
+
+    /// How long `run_id` has been running, in milliseconds, measured on the
+    /// server's MONOTONIC clock.
+    ///
+    /// A duration, deliberately, and not the wall-clock instant the run
+    /// started. A client that is handed a timestamp has to answer "whose
+    /// clock" before it can subtract anything, and the answer is not free:
+    /// a Panel on another machine is skewed against this one by an unbounded
+    /// amount, and a server clock step would move an already-reported start.
+    /// A duration computed here at the instant of the answer has neither
+    /// problem — the only error it carries is the one-way network delay
+    /// between this line and the client rendering it.
+    ///
+    /// `ActiveRun::admitted_at` is the reading taken, not `started_at`:
+    /// `started_at` is a wall clock and exists to be *reported*, so measuring
+    /// against it would re-open on the server the exact skew this method
+    /// exists to keep off the wire.
+    ///
+    /// `None` means "I cannot tell": the run already finished, was never held
+    /// by this adapter, or this adapter has no run table at all (mocks,
+    /// `SimpleExecutionEngine`). A caller must read that as "count from now",
+    /// never as "it started now" — the two differ only in what they claim to
+    /// know, and only the first one is true.
+    async fn run_elapsed_ms(&self, _run_id: &str) -> Option<u64> {
+        None
+    }
 }
 
 #[cfg(test)]

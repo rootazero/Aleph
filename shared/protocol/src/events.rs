@@ -214,6 +214,43 @@ pub enum StreamEvent {
         context_window: u32,
         total_tokens: u64,
     },
+
+    /// A human's message became a transcript row on `session_key`.
+    ///
+    /// Mirrors the gateway's `stream.session_user_message` frame. Field
+    /// names/types must stay aligned with `GatewayEventFrame::
+    /// SessionUserMessage` (`src/gateway/events/frame.rs`), whose doc owns the
+    /// reasons this is its own frame and why `author_user_id` is not optional.
+    ///
+    /// Session-keyed, not run-keyed — necessarily so: the run it belongs to is
+    /// somebody else's, which is the entire reason the receiving client cannot
+    /// already see the message. [`Self::run_id`] therefore answers `""` for it,
+    /// the same as [`Self::ClarificationEnded`].
+    ///
+    /// # Why a terminal client wants this
+    ///
+    /// It was exempted as Panel-only on the grounds that a client attached to
+    /// one conversation has nowhere to put a session-list frame. True of the
+    /// other two exemptions; false of this one. A TUI is attached to exactly
+    /// one session, and when that session is a shared room a peer's
+    /// `RunAccepted` carries the SAME `session_key` — so the guard admits it
+    /// and the answer streams in with no question above it. That is the
+    /// identical defect the Panel closed, on a surface that has the same place
+    /// to put the row: its transcript.
+    ///
+    /// Outside a project room this frame is never published at all (the
+    /// producer skips it when the author is unattributed), so a single-user
+    /// install pays nothing for it.
+    SessionUserMessage {
+        session_key: String,
+        author_user_id: String,
+        content: String,
+        /// RFC3339, from the same `MessageRecord` `chat.history` will serve.
+        timestamp: String,
+        /// Source event seq — the row's identity, so a client can order this
+        /// against a concurrently-arriving rehydrate without comparing text.
+        seq: u64,
+    },
 }
 
 /// Resolved model metadata attached to [`StreamEvent::ModelResolved`].
@@ -672,6 +709,11 @@ impl StreamEvent {
             // an empty run id is what every run-keyed consumer already treats
             // as "not mine".
             Self::ClarificationEnded { .. } => "",
+            // Session-keyed for the same structural reason: the run that
+            // produced this row belongs to somebody else, which is precisely
+            // why the receiving client cannot already see the message. There
+            // is no run id it could carry that any consumer would recognise.
+            Self::SessionUserMessage { .. } => "",
         }
     }
 }
@@ -850,6 +892,43 @@ pub struct AskUserQuestion {
     /// The answer is a credential: mask the input, never echo it.
     #[serde(default)]
     pub secret: bool,
+}
+
+/// Should a client render [`StreamEvent::SessionUserMessage`] as a bubble?
+///
+/// The question is "did somebody ELSE type this", and it is answered by author
+/// identity alone — deliberately NOT by whether the viewer owns the run that
+/// produced it. That test is safe only at turn *end*, long after `chat.send`
+/// returned the run id. This frame can arrive before that response does:
+/// `start_run` spawns execution and returns the id afterwards, so the two race,
+/// and the losing order renders the sender's own message twice with nothing to
+/// clean it up. Author identity has no such window — it is known before the
+/// send, not after it.
+///
+/// Both sides must be known. An unattributed message cannot be told apart from
+/// the viewer's own, and a viewer who does not yet know their own id (`users.me`
+/// still in flight, an older gateway, or a loopback caller with no principal
+/// record at all) cannot make the comparison. Either way the answer is "don't",
+/// which costs only the pre-existing behaviour: the message still lands when
+/// the viewer next loads the transcript.
+///
+/// Consequence worth naming: a second client of the SAME user is not served by
+/// this. It sees its own id and skips, then picks the row up on its next
+/// history load. Serving it would need a per-connection discriminator this
+/// frame deliberately does not carry — see the frame's doc for why author, not
+/// origin, is the field it was given.
+///
+/// Lives here rather than in either client because both of them have to answer
+/// it and they cannot see each other: the Panel is a WASM crate, the TUI a
+/// terminal binary, and `aleph-protocol` is the only thing they share. Two
+/// copies of a delivery predicate is two answers, and the wrong one duplicates
+/// a user's own message.
+#[must_use]
+pub fn peer_message_is_renderable(author_user_id: &str, viewer_user_id: Option<&str>) -> bool {
+    if author_user_id.is_empty() {
+        return false;
+    }
+    viewer_user_id.is_some_and(|me| !me.is_empty() && me != author_user_id)
 }
 
 #[cfg(test)]

@@ -307,7 +307,7 @@ pub(super) async fn confirm_session_switch(state: &mut AppState, client: &AlephC
     // the settings of the conversation being left) and adds a "Switched"
     // banner; `attach_session` then restores the incoming conversation's own.
     state.switch_session(&key);
-    attach_session(state, client, &key).await;
+    attach_session(state, client, &key, AttachMode::Append).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -479,12 +479,34 @@ pub(super) async fn confirm_provider_pick(state: &mut AppState, client: &AlephCl
     }
 }
 
+/// Whether an attach ADDS to what is on screen or REPLACES it.
+///
+/// Not cosmetic. Launch and `/session` both prepare the list themselves — the
+/// first keeps the welcome banner and the startup notices, the second wipes it
+/// in `switch_session` — so for them this call appends. A reconnect has no such
+/// preparation step and must not get one: clearing before the fetch means a
+/// `chat.history` that fails leaves the user staring at a blank screen on a
+/// connection that just came back, which is a worse outcome than the stale
+/// transcript it replaced.
+///
+/// `Replace` therefore clears **inside the success branch**, once the server's
+/// copy is actually in hand. A failed reattach then costs one error line and
+/// nothing else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AttachMode {
+    /// Append to what the caller has already prepared.
+    Append,
+    /// Swap in the server's copy, but only once it has arrived.
+    Replace,
+}
+
 /// Load a conversation: its transcript **and** the settings that govern it.
 ///
-/// The single attach path, used both at launch and after a switch. One call,
-/// because the transcript and the settings are one snapshot — a second RPC
-/// would open a window in which the screen shows a conversation while the
-/// status bar describes a different one's mode, tier and token count.
+/// The single attach path, used at launch, after a switch, and after a
+/// reconnect. One call, because the transcript and the settings are one
+/// snapshot — a second RPC would open a window in which the screen shows a
+/// conversation while the status bar describes a different one's mode, tier
+/// and token count.
 ///
 /// This is also why launching the TUI on an existing key finally shows
 /// anything: `chat.history` was previously reached *only* from the session
@@ -493,60 +515,82 @@ pub(super) async fn confirm_provider_pick(state: &mut AppState, client: &AlephCl
 ///
 /// Failure is reported and survivable: a conversation that cannot be loaded
 /// leaves the client on the key it was given with no settings, which the status
-/// bar renders as "unknown" rather than as the global defaults.
-pub(super) async fn attach_session(state: &mut AppState, client: &AlephClient, key: &str) {
+/// bar renders as "unknown" rather than as the global defaults. `AttachMode`
+/// exists so that survivability holds for the reconnect path too — see its doc.
+pub(super) async fn attach_session(
+    state: &mut AppState,
+    client: &AlephClient,
+    key: &str,
+    mode: AttachMode,
+) {
     let params = json!({ "session_key": key });
     match client.call::<_, Value>("chat.history", Some(params)).await {
-        Ok(result) => {
-            let rows = result
-                .get("messages")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            let mapped: Vec<app::ChatMessage> =
-                rows.iter().filter_map(history_message_from_json).collect();
-
-            // Render the server transcript verbatim (no local dedup/store).
-            for msg in mapped {
-                state.messages.push(msg);
-            }
-
-            // Restore the conversation's durable settings. Absent on an older
-            // gateway — read as "I was not told", so the caption falls back to
-            // the install default rather than to a value this client made up.
-            match result.get("session").cloned() {
-                Some(v) => match serde_json::from_value::<SessionSnapshot>(v) {
-                    Ok(snapshot) => state.apply_session_snapshot(snapshot),
-                    Err(e) => state.add_system_message(format!(
-                        "Session settings unreadable ({e}); showing install defaults."
-                    )),
-                },
-                None => state.add_system_message(
-                    "Gateway did not report session settings (older server); \
-                     showing install defaults."
-                        .to_string(),
-                ),
-            }
-
-            // Which run — if any — is in flight on this session right now.
-            //
-            // The field is always emitted by a core that has it (`null` when
-            // nothing is running), so its PRESENCE is the reconciliation
-            // signal and its value is the run to join; an older gateway omits
-            // it, and this screen then stays in the fail-open posture it has
-            // always had. Deliberately read from the same response as the
-            // transcript rather than through a second RPC: a client that holds
-            // the transcript but not the run (or the reverse) renders either a
-            // duplicated turn or a missing one.
-            if let Some(active) = active_run_from_history(&result) {
-                state.adopt_active_run(active);
-            }
-
-            state.scroll_to_bottom();
-
-        }
+        Ok(result) => apply_history(state, &result, mode),
         Err(e) => state.add_system_message(format!("History error: {e}")),
     }
+}
+
+/// Apply one `chat.history` response to this screen.
+///
+/// Split out from the call so the decision it carries is reachable without a
+/// gateway — and the decision is WHEN, not just whether: `AttachMode::Replace`
+/// drops the old transcript here, which is inside the caller's `Ok` arm by
+/// construction. A reattach whose fetch failed therefore cannot blank the
+/// screen, because this never runs.
+fn apply_history(state: &mut AppState, result: &Value, mode: AttachMode) {
+    let rows = result
+        .get("messages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mapped: Vec<app::ChatMessage> =
+        rows.iter().filter_map(history_message_from_json).collect();
+
+    // The server's copy is in hand, so it is now safe to drop what was on
+    // screen. Doing this before the call — the obvious place — turns a
+    // transient `chat.history` failure on a freshly-restored connection into a
+    // blank screen.
+    if mode == AttachMode::Replace {
+        state.messages.clear();
+    }
+
+    // Render the server transcript verbatim (no local dedup/store).
+    for msg in mapped {
+        state.messages.push(msg);
+    }
+
+    // Restore the conversation's durable settings. Absent on an older
+    // gateway — read as "I was not told", so the caption falls back to
+    // the install default rather than to a value this client made up.
+    match result.get("session").cloned() {
+        Some(v) => match serde_json::from_value::<SessionSnapshot>(v) {
+            Ok(snapshot) => state.apply_session_snapshot(snapshot),
+            Err(e) => state.add_system_message(format!(
+                "Session settings unreadable ({e}); showing install defaults."
+            )),
+        },
+        None => state.add_system_message(
+            "Gateway did not report session settings (older server); \
+             showing install defaults."
+                .to_string(),
+        ),
+    }
+
+    // Which run — if any — is in flight on this session right now.
+    //
+    // The field is always emitted by a core that has it (`null` when
+    // nothing is running), so its PRESENCE is the reconciliation
+    // signal and its value is the run to join; an older gateway omits
+    // it, and this screen then stays in the fail-open posture it has
+    // always had. Deliberately read from the same response as the
+    // transcript rather than through a second RPC: a client that holds
+    // the transcript but not the run (or the reverse) renders either a
+    // duplicated turn or a missing one.
+    if let Some(active) = active_run_from_history(result) {
+        state.adopt_active_run(active);
+    }
+
+    state.scroll_to_bottom();
 }
 
 /// Which run `chat.history` reports in flight on this session — a THREE-way
@@ -556,14 +600,24 @@ pub(super) async fn attach_session(state: &mut AppState, client: &AlephClient, k
 ///   learned nothing and stays in its fail-open posture.
 /// - `Some(None)` — asked and answered: nothing is running here. That is what
 ///   arms `AppState::session_reconciled`, and it is the common case.
-/// - `Some(Some(id))` — a turn to join.
+/// - `Some(Some(join))` — a turn to join, with the age the server measured.
 ///
 /// Collapsing the outer two (reading absent as "nothing running") would arm the
 /// guard against a server that never told it anything, and this screen would
 /// then drop every frame of every run it did not personally start.
-fn active_run_from_history(result: &Value) -> Option<Option<String>> {
+fn active_run_from_history(result: &Value) -> Option<Option<app::ActiveRunJoin>> {
     let value = result.get("active_run")?;
-    Some(value.as_str().filter(|s| !s.is_empty()).map(str::to_string))
+    let Some(run_id) = value.as_str().filter(|s| !s.is_empty()).map(str::to_string) else {
+        return Some(None);
+    };
+    // Taken from the SAME response, never re-derived by a second call: the
+    // field is a duration the server measured at the instant it answered, so
+    // asking again would be measuring a different instant against a transcript
+    // this screen already holds. Absent (older gateway, or the run left the
+    // engine's table between that handler's two lookups) means "not told",
+    // which the join reads as a floor.
+    let elapsed_ms = result.get("active_run_elapsed_ms").and_then(Value::as_u64);
+    Some(Some(app::ActiveRunJoin { run_id, elapsed_ms }))
 }
 
 /// Map one `chat.history` row (`{role, content, timestamp}`) into a `ChatMessage`.
@@ -578,7 +632,7 @@ fn history_message_from_json(v: &Value) -> Option<app::ChatMessage> {
     match role {
         "user" => Some(app::ChatMessage::User {
             content,
-            timestamp: parse_history_timestamp(v),
+            timestamp: app::row_timestamp(v.get("timestamp").and_then(Value::as_str)),
         }),
         "assistant" => Some(app::ChatMessage::Assistant {
             content,
@@ -589,14 +643,6 @@ fn history_message_from_json(v: &Value) -> Option<app::ChatMessage> {
         "system" => Some(app::ChatMessage::System { content }),
         _ => None,
     }
-}
-
-/// Best-effort RFC3339 timestamp parse, falling back to now.
-fn parse_history_timestamp(v: &Value) -> chrono::DateTime<chrono::Utc> {
-    v.get("timestamp")
-        .and_then(Value::as_str)
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map_or_else(chrono::Utc::now, |dt| dt.with_timezone(&chrono::Utc))
 }
 
 // ---------------------------------------------------------------------------
@@ -1091,6 +1137,30 @@ pub(super) async fn fetch_gateway_commands(
         )
 }
 
+/// This client's own principal id, or `None` when it cannot be established.
+///
+/// Needed to tell "somebody else typed this" from "I typed this" on
+/// `stream.session_user_message`. Author identity is the discriminator rather
+/// than run ownership because the frame can arrive BEFORE the `chat.send` that
+/// would teach this screen its own run id — the two race, and the losing order
+/// renders the sender's own message twice.
+///
+/// Every failure collapses to `None`, and the three that can happen say
+/// different things — an older gateway with no `users.me`, a transport error,
+/// and a loopback caller with no principal record at all. None of them may be
+/// read as "the author is somebody else": `None` disables the echo entirely,
+/// which is exactly the behaviour this client had before the frame existed.
+/// A peer's message then still arrives, on the next attach, as it always did.
+pub(super) async fn fetch_my_user_id(client: &AlephClient) -> Option<String> {
+    client
+        .call::<_, aleph_protocol::users::UserMeResult>("users.me", Some(json!({})))
+        .await
+        .ok()?
+        .user
+        .map(|u| u.user_id)
+        .filter(|id| !id.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1218,7 +1288,7 @@ mod tests {
 
 #[cfg(test)]
 mod active_run_tests {
-    use super::active_run_from_history;
+    use super::{active_run_from_history, app};
     use serde_json::json;
 
     /// "The server never told me" and "the server told me nothing is running"
@@ -1243,7 +1313,39 @@ mod active_run_tests {
     fn a_run_id_is_the_turn_to_join() {
         assert_eq!(
             active_run_from_history(&json!({ "active_run": "run-7" })),
-            Some(Some("run-7".to_string()))
+            Some(Some(app::ActiveRunJoin {
+                run_id: "run-7".to_string(),
+                elapsed_ms: None,
+            }))
+        );
+    }
+
+    /// The age rides along on the same response. A client that asked for it
+    /// separately would be timing a different instant than the one that
+    /// produced the run id beside it.
+    #[test]
+    fn the_reported_age_rides_with_the_run_id() {
+        assert_eq!(
+            active_run_from_history(
+                &json!({ "active_run": "run-7", "active_run_elapsed_ms": 240_000 })
+            ),
+            Some(Some(app::ActiveRunJoin {
+                run_id: "run-7".to_string(),
+                elapsed_ms: Some(240_000),
+            }))
+        );
+    }
+
+    /// An age with no run is not a turn to join. The field pair is read from
+    /// the run id outwards, so a server that reported one without the other
+    /// cannot produce a run this screen would try to settle.
+    #[test]
+    fn an_age_without_a_run_is_still_nothing_running() {
+        assert_eq!(
+            active_run_from_history(
+                &json!({ "active_run": serde_json::Value::Null, "active_run_elapsed_ms": 9 })
+            ),
+            Some(None)
         );
     }
 
@@ -1252,5 +1354,102 @@ mod active_run_tests {
     #[test]
     fn an_empty_string_is_not_a_run() {
         assert_eq!(active_run_from_history(&json!({ "active_run": "" })), Some(None));
+    }
+}
+
+#[cfg(test)]
+mod attach_mode_tests {
+    use super::{apply_history, AttachMode};
+    use crate::tui::app::{AppState, ChatMessage};
+    use serde_json::json;
+
+    fn user_rows(state: &AppState) -> Vec<&str> {
+        state
+            .messages
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::User { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn history(rows: &[&str]) -> serde_json::Value {
+        json!({
+            "messages": rows
+                .iter()
+                .map(|c| json!({ "role": "user", "content": c }))
+                .collect::<Vec<_>>(),
+            "active_run": serde_json::Value::Null,
+        })
+    }
+
+    /// Launch and `/session` prepare the list themselves — the first keeps the
+    /// welcome banner and the startup notices, the second wipes it in
+    /// `switch_session`. Both then append.
+    #[test]
+    fn an_appending_attach_keeps_what_the_caller_prepared() {
+        let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
+        state.messages.push(ChatMessage::User {
+            content: "prepared by the caller".into(),
+            timestamp: crate::tui::app::row_timestamp(None),
+        });
+
+        apply_history(&mut state, &history(&["from the server"]), AttachMode::Append);
+
+        assert_eq!(
+            user_rows(&state),
+            vec!["prepared by the caller", "from the server"]
+        );
+    }
+
+    /// A reattach swaps the screen for the server's copy — messages, tool rows
+    /// and whole turns can have landed while this client was offline, and only
+    /// the server's copy is complete.
+    #[test]
+    fn a_replacing_attach_swaps_in_the_servers_copy() {
+        let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
+        state.messages.push(ChatMessage::User {
+            content: "stale, from before the drop".into(),
+            timestamp: crate::tui::app::row_timestamp(None),
+        });
+
+        apply_history(
+            &mut state,
+            &history(&["what really happened"]),
+            AttachMode::Replace,
+        );
+
+        assert_eq!(user_rows(&state), vec!["what really happened"]);
+    }
+
+    /// The swap happens HERE, which is inside `attach_session`'s `Ok` arm. That
+    /// placement is the property: a reattach whose `chat.history` failed never
+    /// reaches this function, so it cannot leave the user on a blank screen at
+    /// the exact moment the connection came back.
+    #[test]
+    fn nothing_is_thrown_away_until_the_servers_copy_is_in_hand() {
+        let src = include_str!("commands.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap_or_default();
+        let attach = production
+            .split("pub(super) async fn attach_session")
+            .nth(1)
+            .expect("attach_session must exist");
+        let body = attach.split("\nfn apply_history").next().unwrap_or_default();
+        // Self-protection: a scanner that matched nothing would agree with
+        // everything below. Pin that this really is the function's body.
+        assert!(
+            body.contains("chat.history"),
+            "the scan found no attach_session body — the guard is blind, not clean"
+        );
+        assert!(
+            !body.contains("messages.clear()"),
+            "attach_session must not touch the transcript itself — the clear \
+             belongs in `apply_history`, which only runs on a successful fetch"
+        );
+        assert!(
+            body.contains("Ok(result) => apply_history(state, &result, mode)"),
+            "the applier must be reached only from the success arm"
+        );
     }
 }

@@ -463,6 +463,18 @@ impl AgentRunManager {
     pub fn active_run_for_session(&self, session_key: &str) -> Option<String> {
         self.execution_adapter.active_run_for_session(session_key)
     }
+
+    /// How long the run in flight has been running, in milliseconds.
+    ///
+    /// Same registry-vs-`active_runs` split as
+    /// [`Self::active_run_for_session`], from the other side: that one reads
+    /// the authoritative session registry because the run may not be ours,
+    /// and this one reads the adapter's run table because the registry holds
+    /// no timing. A run started by a CLI, channel or cron therefore answers
+    /// here as long as this process is the one executing it.
+    pub async fn run_elapsed_ms(&self, run_id: &str) -> Option<u64> {
+        self.execution_adapter.run_elapsed_ms(run_id).await
+    }
 }
 
 /// Why a turn could not be turned into a [`RunRequest`].

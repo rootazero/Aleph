@@ -6,12 +6,12 @@
 use std::time::{Duration, Instant};
 
 use aleph_protocol::{
-    summarize_tool_input, AgentTracePresentationPreset, AgentTraceToolResult, AskUserQuestion,
-    StreamEvent,
+    peer_message_is_renderable, summarize_tool_input, AgentTracePresentationPreset,
+    AgentTraceToolResult, AskUserQuestion, StreamEvent,
 };
 
 use super::super::slash::ToolProgressMode;
-use super::{Action, AppState, AskDialogView, ChatMessage};
+use super::{row_timestamp, Action, ActiveRunJoin, AppState, AskDialogView, ChatMessage};
 
 /// Bound on how many `(run_id, session_key)` pairs [`AppState`] remembers,
 /// learned one per `RunAccepted`. A background/cron/subagent-heavy install
@@ -181,19 +181,29 @@ impl AppState {
     /// cancel, so this screen could watch a turn it was unable to stop. It is
     /// also the positive half of [`Self::session_reconciled`]: without it,
     /// reconciling would drop the frames of the very run this screen wants.
-    pub fn adopt_active_run(&mut self, run_id: Option<String>) {
+    pub fn adopt_active_run(&mut self, active: Option<ActiveRunJoin>) {
         self.session_reconciled = true;
-        let Some(run_id) = run_id else {
+        let Some(ActiveRunJoin { run_id, elapsed_ms }) = active else {
             return;
         };
         let session_key = self.session_key.clone();
         self.mark_run_session(run_id.clone(), session_key);
         self.current_run = Some(run_id);
-        // Measured from the join, not from the run's real start: `active_run`
-        // carries the id and nothing else. Understating the elapsed time is the
-        // lesser evil against leaving the working indicator off, which is
-        // exactly the "frozen transcript" this whole path exists to end.
-        self.run_started_at = Some(Instant::now());
+        // Back-dated by the age the SERVER measured, so the working indicator
+        // reports the turn's age rather than this screen's attachment. Without
+        // the reading — an older gateway, or a run that left the engine's table
+        // between the two lookups behind that field — this falls back to now,
+        // which is what this line always did: a floor, understated on purpose,
+        // and still better than leaving the indicator off.
+        //
+        // `checked_sub` rather than `-`: subtracting past the start of the
+        // monotonic clock panics, and no reading off a wire may be able to
+        // take the whole client down.
+        self.run_started_at = Some(
+            elapsed_ms
+                .and_then(|ms| Instant::now().checked_sub(Duration::from_millis(ms)))
+                .unwrap_or_else(Instant::now),
+        );
         self.current_run_uses_agent_trace = false;
         self.current_run_trace_summary_applied = false;
         self.turn_streamed_len = 0;
@@ -572,6 +582,61 @@ impl AppState {
                 // core's, printed verbatim — this client does not own that
                 // vocabulary and must not paraphrase it.
                 self.add_system_message(format!("The agent's question ended ({outcome})."));
+                Action::ScrollToBottomIfAutoScroll
+            }
+
+            // A room peer's message became a transcript row. Session-keyed and
+            // run-less by design: the run that produced it is somebody else's,
+            // which is exactly why this screen cannot already see the message.
+            //
+            // What it closes: in a shared project room a peer's `RunAccepted`
+            // carries THIS session's key, so the guard admits it and the answer
+            // streams in with no question above it. The row itself only arrived
+            // on the next attach — this client never re-hydrates mid-session —
+            // so the question could be minutes behind its answer, or never
+            // appear at all in that sitting.
+            //
+            // Outside a room the frame is not published (the producer skips an
+            // unattributed author), so a single-user install never reaches here.
+            StreamEvent::SessionUserMessage {
+                session_key,
+                author_user_id,
+                content,
+                timestamp,
+                ..
+            } => {
+                // Belongs to another conversation: dropped, exactly as
+                // `frame_belongs_here` drops a foreign run's frames. This
+                // screen holds one transcript and no session list.
+                if session_key != self.session_key {
+                    return Action::None;
+                }
+                // "Somebody else typed this" — the shared delivery predicate,
+                // not a local re-derivation, and not run ownership (this frame
+                // races the `chat.send` that would teach this screen its own
+                // run id). Unknown on either side means don't, which is what
+                // this client did before the frame existed.
+                if !peer_message_is_renderable(&author_user_id, self.my_user_id.as_deref()) {
+                    return Action::None;
+                }
+                let row = ChatMessage::User {
+                    content,
+                    timestamp: row_timestamp(Some(&timestamp)),
+                };
+                // Placed BEFORE a bubble that is still streaming. The peer's
+                // run may have opened its assistant message already, and a
+                // question rendered under its own answer reads as a reply to
+                // it. Anything settled stays above, so this only ever moves the
+                // row past the one bubble that is still being written.
+                match self.messages.last() {
+                    Some(ChatMessage::Assistant {
+                        is_streaming: true, ..
+                    }) => {
+                        let at = self.messages.len() - 1;
+                        self.messages.insert(at, row);
+                    }
+                    _ => self.messages.push(row),
+                }
                 Action::ScrollToBottomIfAutoScroll
             }
 

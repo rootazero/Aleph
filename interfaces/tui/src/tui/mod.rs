@@ -20,7 +20,9 @@ mod slash;
 mod theme;
 mod widgets;
 
+use std::future::Future;
 use std::io;
+use std::pin::Pin;
 use std::time::Duration;
 
 use crossterm::{
@@ -41,8 +43,8 @@ use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 use app::{Action, AppState, Focus};
 use commands::{
     attach_session, btw_abort_or_close, confirm_provider_pick, confirm_session_switch,
-    dispatch_gateway_text, execute_local_command, fetch_gateway_commands, refresh_picker_provider,
-    send_to_agent, shadowed_gateway_commands,
+    dispatch_gateway_text, execute_local_command, fetch_gateway_commands, fetch_my_user_id,
+    refresh_picker_provider, send_to_agent, shadowed_gateway_commands, AttachMode,
 };
 use slash::ParsedInput;
 
@@ -112,7 +114,7 @@ fn default_provider_model(result: &Value) -> Option<String> {
 pub async fn run(
     client: AlephClient,
     mut gateway_events: mpsc::Receiver<StreamEvent>,
-    _config: &CliConfig,
+    config: &CliConfig,
     session_key: Option<String>,
     verbose: bool,
 ) -> CliResult<()> {
@@ -146,6 +148,15 @@ pub async fn run(
     // 3b. Fetch gateway commands for command palette
     let gateway_commands = fetch_gateway_commands(&client).await;
 
+    // 3b-ii. This client's own principal id. One call, at startup, because the
+    // answer cannot change for the life of a connection — the role and the
+    // principal are both fixed by the `connect` handshake. It exists to answer
+    // one question: on a shared room session, did somebody ELSE type the
+    // message the server just echoed. `None` (older gateway, transport error,
+    // or a caller with no principal record) turns the echo off rather than
+    // guessing, which is the behaviour this screen had before it existed.
+    let my_user_id = fetch_my_user_id(&client).await;
+
     // An empty key means "not routed yet": the first `agent.run` omits
     // `session_key` entirely and adopts whatever canonical key the gateway
     // reports back. Inventing a key here is what used to strand every keyed RPC
@@ -159,6 +170,7 @@ pub async fn run(
         state.add_system_message(note);
     }
     state.gateway_commands = gateway_commands;
+    state.my_user_id = my_user_id;
     // A local command that matches a gateway one makes the gateway one
     // unreachable — this client resolves local first and never falls through.
     // Say so once at startup rather than letting a whole namespace vanish
@@ -182,7 +194,7 @@ pub async fn run(
     // were; before this, `--session <key>` opened a blank screen and the status
     // bar reported the install defaults over a conversation that had its own.
     if let Some(key) = session_key.as_deref().filter(|k| !k.is_empty()) {
-        attach_session(&mut state, &client, key).await;
+        attach_session(&mut state, &client, key, AttachMode::Append).await;
     }
     let mut textarea = TextArea::default();
     textarea.set_placeholder_text("Type a message... (/ for commands)");
@@ -191,16 +203,14 @@ pub async fn run(
     let mut term_events = event::spawn_event_collector();
 
     // 5. Main loop
-    let mut tick_interval = tokio::time::interval(Duration::from_millis(50));
-
     let result = main_loop(
         &mut terminal,
         &mut state,
         &mut textarea,
         &client,
+        config,
         &mut gateway_events,
         &mut term_events,
-        &mut tick_interval,
     )
     .await;
 
@@ -216,18 +226,84 @@ pub async fn run(
     result
 }
 
+/// A reconnect attempt in flight, borrowing the client it will rebuild.
+type ReconnectAttempt<'a> = Pin<Box<dyn Future<Output = CliResult<()>> + 'a>>;
+
+/// One reconnect attempt, `delay` from now.
+///
+/// The wait lives INSIDE the future rather than in a second timer beside it, so
+/// one object answers both "is an attempt outstanding" and "when does it
+/// happen". Two pieces of state would be two things to get out of step, and the
+/// failure would be a client that either never retries or retries continuously.
+fn reconnect_after<'a>(
+    client: &'a AlephClient,
+    config: &'a CliConfig,
+    delay: Duration,
+) -> ReconnectAttempt<'a> {
+    Box::pin(async move {
+        tokio::time::sleep(delay).await;
+        client.reconnect(config).await
+    })
+}
+
+/// Await the attempt in flight, or never.
+///
+/// `None` has to be a branch that NEVER fires. A branch that resolved
+/// immediately would spin the select at full speed and burn a core for as long
+/// as the client is merely connected, which is almost always.
+///
+/// `select!` drops this wrapper every time another branch wins, and that is
+/// safe: the attempt itself lives in `pending` and is only borrowed here, so
+/// cancelling loses no progress — including none of the sleep.
+async fn awaiting_reconnect<'a>(pending: &mut Option<ReconnectAttempt<'a>>) -> CliResult<()> {
+    match pending {
+        Some(attempt) => attempt.await,
+        None => std::future::pending().await,
+    }
+}
+
+/// How long to wait before the attempt after a failed one.
+///
+/// Starts at zero: the first try after a drop goes out immediately, because the
+/// common case is a gateway that restarted and is already listening again. The
+/// ceiling keeps a long outage from becoming a busy loop while staying short
+/// enough that a user who fixes the network does not sit and wait for it.
+fn next_backoff(current: Duration) -> Duration {
+    const CEILING: Duration = Duration::from_secs(15);
+    if current.is_zero() {
+        Duration::from_secs(1)
+    } else {
+        (current * 2).min(CEILING)
+    }
+}
+
+
 /// The main event loop. Separated from `run()` so terminal restoration
 /// happens even if this function returns an error.
-async fn main_loop(
+async fn main_loop<'c>(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
     textarea: &mut TextArea<'_>,
-    client: &AlephClient,
+    client: &'c AlephClient,
+    config: &'c CliConfig,
     gateway_events: &mut mpsc::Receiver<StreamEvent>,
     term_events: &mut mpsc::Receiver<event::TermEvent>,
-    tick_interval: &mut tokio::time::Interval,
 ) -> CliResult<()> {
+    // Owned here rather than passed in: nothing outside this loop reads it, and
+    // a parameter that only one caller can supply is a parameter that only
+    // spends the argument budget.
+    let mut tick_interval = tokio::time::interval(Duration::from_millis(50));
+    // At most one reconnect attempt is ever outstanding, and the loop owns the
+    // policy: `shared/client` supplies only the mechanism, deliberately, so
+    // that a socket cannot come back without this screen learning of it and
+    // re-asking the server what is true (see `AlephClient::reconnect`).
+    let mut reconnecting: Option<ReconnectAttempt<'c>> = None;
+    let mut backoff = Duration::ZERO;
+    let mut reported_reconnect_failure = false;
     loop {
+        // Settled by the reconnect branch below; read after the select, where
+        // `reconnecting` is no longer borrowed.
+        let mut reconnect_outcome: Option<CliResult<()>> = None;
         // Draw
         terminal.draw(|f| render::render(f, state, textarea))?;
 
@@ -242,7 +318,61 @@ async fn main_loop(
             _ = tick_interval.tick() => {
                 Action::Tick
             }
+            outcome = awaiting_reconnect(&mut reconnecting) => {
+                reconnect_outcome = Some(outcome);
+                Action::None
+            }
         };
+
+        // A reconnect attempt settled. Handled here rather than inside the
+        // select branch because both outcomes need to touch `reconnecting`,
+        // which that branch still has borrowed.
+        if let Some(outcome) = reconnect_outcome {
+            reconnecting = None;
+            match outcome {
+                Ok(()) => {
+                    backoff = Duration::ZERO;
+                    state.is_connected = true;
+                    // Everything on this screen came from a connection that no
+                    // longer exists, and it stopped moving at a point nobody
+                    // recorded. Rebuild from the server rather than trusting a
+                    // transcript with an unknown hole in it — turns can have
+                    // completed, and a peer can have spoken, while this client
+                    // was away.
+                    state.begin_reattach();
+                    let key = state.session_key.clone();
+                    if key.is_empty() {
+                        // Nothing to re-open: the gateway has not routed a
+                        // conversation for this screen yet. `begin_reattach`
+                        // still ran, which is what re-arms reconciliation.
+                        state.add_system_message("Reconnected.".to_string());
+                    } else {
+                        attach_session(state, client, &key, AttachMode::Replace).await;
+                        state.add_system_message(
+                            "Reconnected; conversation reloaded from the server. \
+                             Locally-generated notices from before the drop are not \
+                             part of it and are gone."
+                                .to_string(),
+                        );
+                        state.scroll_to_bottom();
+                    }
+                }
+                Err(e) => {
+                    backoff = next_backoff(backoff);
+                    // Said once. A long outage retries every 15 s, and a line
+                    // per attempt would bury the transcript the user is still
+                    // reading — the status dot already reports the level.
+                    if !reported_reconnect_failure {
+                        reported_reconnect_failure = true;
+                        state.add_system_message(format!(
+                            "Reconnect failed ({e}). Still trying; the status dot \
+                             turns green when it succeeds."
+                        ));
+                    }
+                    reconnecting = Some(reconnect_after(client, config, backoff));
+                }
+            }
+        }
 
         // Execute action
         match action {
@@ -257,7 +387,24 @@ async fn main_loop(
                 // yields None on a WS drop — the client keeps an ownership anchor
                 // on the receiver — so the connection's own atomic is the only
                 // reliable disconnect signal.
-                state.is_connected = client.is_connected();
+                //
+                // The EDGE is what matters, not the level. The moment the
+                // socket goes from up to down is the moment everything this
+                // screen reconciled against it stops being true, and it is the
+                // only moment worth starting a reconnect from — reading the
+                // level alone would restart the attempt on every 50 ms tick.
+                let live = client.is_connected();
+                if live {
+                    state.is_connected = true;
+                } else if state.is_connected {
+                    state.on_disconnected();
+                    state.add_system_message(
+                        "Connection lost — reconnecting in the background.".to_string(),
+                    );
+                    backoff = Duration::ZERO;
+                    reported_reconnect_failure = false;
+                    reconnecting = Some(reconnect_after(client, config, backoff));
+                }
                 // Poll for pending tool approvals while a run is active. Ask
                 // exec tier can park a run waiting on a decision the thin client
                 // receives no event for; ~1s cadence (every 20th 50ms tick)
@@ -555,5 +702,36 @@ mod tests {
             .as_ref()
             .unwrap()
             .contains("no response in 30s"));
+    }
+}
+
+#[cfg(test)]
+mod reconnect_tests {
+    use super::next_backoff;
+    use std::time::Duration;
+
+    /// The first attempt after a drop goes out immediately. The common case is
+    /// a gateway that restarted and is already listening again, and making that
+    /// case wait is making every user wait for the rare one.
+    #[test]
+    fn the_first_attempt_is_not_delayed() {
+        assert_eq!(next_backoff(Duration::ZERO), Duration::from_secs(1));
+    }
+
+    /// Doubling, so a long outage is not a busy loop.
+    #[test]
+    fn each_failure_waits_longer_than_the_last() {
+        assert_eq!(next_backoff(Duration::from_secs(1)), Duration::from_secs(2));
+        assert_eq!(next_backoff(Duration::from_secs(4)), Duration::from_secs(8));
+    }
+
+    /// …to a ceiling, so a user who fixes the network is not left waiting for
+    /// an exponent. Unbounded doubling is how a client that "reconnects
+    /// automatically" ends up taking ten minutes to notice a server that came
+    /// back in ten seconds.
+    #[test]
+    fn the_wait_stops_growing_at_the_ceiling() {
+        assert_eq!(next_backoff(Duration::from_secs(10)), Duration::from_secs(15));
+        assert_eq!(next_backoff(Duration::from_secs(15)), Duration::from_secs(15));
     }
 }
