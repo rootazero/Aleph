@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make Aleph's 47 process-global capability handles declare themselves, be verified by a rule-derived census, and report at runtime whether they were installed — so "never installed" stops being indistinguishable from "installed with this value".
+**Goal:** Make Aleph's 46 process-global capability handles declare themselves, be verified by a rule-derived census, and report at runtime whether they were installed — so "never installed" stops being indistinguishable from "installed with this value".
 
 **Architecture:** Four layers, dependency-ordered. A correct production-source extractor (Phase 1) replaces the repo's `split("#[cfg(test)]")` idiom, which is blind to 276 of 1734 files. A `CapabilitySlot<T>` newtype (Phase 2) makes "write the value" and "stamp the roster" a single act, and gives boot's conditional-install `else` arms a place to say *why* (`decline(because)` — the Rust shape of Cordis's unsatisfied `inject`). A rule-derived source census (Phase 3) keeps the class closed. One diagnostics check (Phase 4) reports it, reusing the existing doctor battery so all four client faces inherit it for free.
 
@@ -11,18 +11,42 @@
 **Spec:** `docs/superpowers/specs/2026-08-24-capability-wiring-design.md`
 
 
-> ### ⚠️ Correction — the count is 47, not 46 (2026-08-24, after Task 6 executed)
+> ### ⚠️ Correction — the count is 46, but NOT the specification's 46 (2026-08-24, after Task 6 and its fix round)
 >
-> Every "46" below that describes the roster size has been updated to **47**, except
-> inside Task 6's own step block, which is kept verbatim and marked SUPERSEDED.
-> Task 6's rule-derived census found the spec's 46 was wrong in two independent ways
-> that happened to cancel to a plausible number:
-> `providers/route_handle.rs::GLOBAL` was in the roster only because three unrelated
-> statics are also named `GLOBAL` and are `.set(` in their own files, and
-> `metrics/mod.rs::METRICS_RUNTIME` was off it because rustfmt broke its writer
-> across two lines. Authoritative: `src/capability/census.rs`.
-> A known gap is recorded in that module's doc: `OnceLock<Lock<Option<T>>>` handles
-> filled *through* the guard are invisible to the rule (`moa::MOA_CONFIG` confirmed).
+> Every "46" below that describes the roster size is again **46** — and that number is
+> a trap, so read this before relying on it. Task 6's rule-derived census found the
+> specification's 46 was wrong in **three** members. The numbers agree; the rosters do
+> not. **The decomposition is the tell: the spec's 46 was 46 *written* handles; this
+> one is 45 written + 1 first-caller-wins.**
+>
+> - **OUT** — `extension/template.rs::FILE_REF_REGEX`, a compiled-regex cache in a
+>   zero-parameter fn. It was on the spec's roster only because `get_or_try_init` sat
+>   in the writer set, which is where a fallible initialiser had to go before install
+>   form 2 existed.
+> - **IN** — `metrics/mod.rs::METRICS_RUNTIME`, a real handle no setter search saw,
+>   because rustfmt put its `.set(` on the next line. Roster membership was a function
+>   of line length.
+> - **SAME, FOR A DIFFERENT REASON** — `providers/route_handle.rs::GLOBAL`, on the
+>   spec's roster by a **name collision**: seven container statics in `src/` are called
+>   `GLOBAL` and six are `.set(` in their own files, so a corpus-wide word-boundary
+>   search cannot tell the seventh from them. It is now selected by derivation, so a
+>   rename can no longer drop it silently.
+>
+> Arithmetic: spec's 46, −1 `FILE_REF_REGEX`, +1 `METRICS_RUNTIME` = 46. `GLOBAL` does
+> not move the count — it was already counted, wrongly. **This is the third cancelling
+> coincidence around this number in one task**, which is exactly why the disambiguation
+> lives in the census's own assertion message and module doc, not only here.
+>
+> Authoritative: `src/capability/census.rs` and
+> `.superpowers/sdd/2026-08-24-capability-wiring/capability-inventory.txt` (46 lines).
+> Task 6's own step block below is kept verbatim and marked SUPERSEDED.
+>
+> A known gap is recorded in the census module doc: **interior-mutable installs** —
+> a container built lazily with no argument and then filled *through* a guard — are
+> invisible to both rule arms while having the full failure semantics. At least four
+> instances, including both gateway fan-out registries and the **security audit trail**
+> (`security/audit.rs::GLOBAL_AUDIT`, which has no `OnceLock` at all). Unfixed this
+> round; direction is under-see.
 
 ## Global Constraints
 
@@ -61,7 +85,7 @@
 | `src/diagnostics/checks/mod.rs` **(modify)** | Declare + re-export `CapabilityWiringCheck`. |
 | `src/diagnostics/mod.rs` **(modify)** | Register the check in `default_registry()`. |
 | `src/gateway/shutdown_forensics.rs` **(modify)** | Add `booted() -> bool`; migrate `BOOT_INSTANT` to a slot. |
-| 47 handle-owning modules **(modify)** | Replace the bare `static` with a slot; keep `set_*` / `global_*` as `#[inline]` wrappers. |
+| 46 handle-owning modules **(modify)** | Replace the bare `static` with a slot; keep `set_*` / `global_*` as `#[inline]` wrappers. |
 | ~20 census-guard modules **(modify)** | Replace hand-rolled `split("#[cfg(test)]")` with `production_prefix()`. |
 | `docs/superpowers/plans/2026-08-24-capability-wiring-triage.md` **(create)** | Triage ledger for REDs surfaced by Task 3. |
 
@@ -766,7 +790,7 @@ Prepend to `src/capability/mod.rs` (above the test module):
 //! value" — §5.22 round-7 recorded the shape on `spend`: `spend.query` reports
 //! `configured: false`, which is a true statement about a box with no ceiling
 //! AND a true statement about a box that configured one whose handle was never
-//! installed. That round fixed two handles by hand. There are 47.
+//! installed. That round fixed two handles by hand. There are 46.
 //!
 //! # The shape
 //!
@@ -1678,7 +1702,7 @@ All six must pass. `cargo check -p alephcore` alone is not verification.
 git add -A
 git commit -m "capability: migrate the remaining install-once handles onto CapabilitySlot
 
-All 47 members of the rule-derived inventory now record their own outcome."
+All 46 members of the rule-derived inventory now record their own outcome."
 ```
 
 ---
@@ -1715,7 +1739,7 @@ pub static ALL_SLOTS: &[&'static dyn SlotStatus] = &[
 
 ⚠️ Slots are private to their modules. Expose each via a `pub(crate) fn` returning
 `&'static dyn SlotStatus` in its owning module (e.g. `pub(crate) fn policy_slot() -> &'static dyn SlotStatus { &GLOBAL_POLICY }`)
-and list the accessors, rather than making 47 statics `pub`. Least-knowledge (P5): the roster
+and list the accessors, rather than making 46 statics `pub`. Least-knowledge (P5): the roster
 needs status, not the handle.
 
 Replace the Task 6 count test with the two closing guards in `src/capability/census.rs`:
@@ -1759,7 +1783,7 @@ Replace the Task 6 count test with the two closing guards in `src/capability/cen
         );
         assert!(
             rostered.len() >= 40,
-            "roster has {} entries; 47 were measured. A shrinking roster and a \
+            "roster has {} entries; 46 were measured (NOT the spec's 46 -- see the correction block at the top of this plan). A shrinking roster and a \
              broken scan look identical in a green report.",
             rostered.len()
         );
@@ -2463,7 +2487,7 @@ git commit -m "session: adjudicate the capability-absent handling at each consum
 
 - [ ] **Step 1: Add the round to `FEATURE_LOCATOR.md`**
 
-Under §3.1, after the Round 8 dsh entry, add a round entry recording: the mechanism, the 47-member
+Under §3.1, after the Round 8 dsh entry, add a round entry recording: the mechanism, the 46-member
 inventory with the three measurement passes and why each was low, the 276-file blind spot, the
 three-state doctor rule, and — explicitly — that this does **not** reopen the "architecture not
 ported" ruling (spec §8).
