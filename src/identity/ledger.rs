@@ -382,27 +382,29 @@ pub enum LedgerCommandError {
     Key(#[from] KeyError),
 }
 
-/// `IndistinguishableDefault`, derived from every reader: this handle is used
-/// as an EXISTENCE ORACLE, never for its value.
+/// `FailsClosed` — and the reflex answer here was `IndistinguishableDefault`,
+/// so the derivation is recorded rather than the verdict.
+///
+/// This handle is used only as an EXISTENCE ORACLE, never for its value:
 /// `tools::scoped::ledger::ledger_intent` opens with a bare
-/// `crate::identity::global()?;`, `record_allowlist_refusal` and
+/// `crate::identity::global()?;`, and `record_allowlist_refusal` and
 /// `sandbox::exec_approval::gate::record_gate_decision` both open with
 /// `if crate::identity::global().is_none() { return; }`. So an uninstalled
-/// ledger does not fail a call — it makes every tool call, every approval
-/// decision and every refusal go unrecorded, and the chain that results
-/// verifies clean.
+/// ledger records nothing — every tool call, approval decision and refusal
+/// goes unwritten, silently, on those three paths.
 ///
-/// That is precisely the third case this module's own header does not cover:
-/// it distinguishes "the ledger looks quiet" from "the ledger stopped working"
-/// via [`AgentLedger::lost`], and an uninstalled ledger reads as the FORMER
-/// with `lost` at zero, because nothing ever failed — nothing was ever tried.
-static LEDGER: CapabilitySlot<Arc<AgentLedger>> = CapabilitySlot::new(
-    "identity/ledger",
-    MissingSemantics::IndistinguishableDefault {
-        reads_as: "an empty ledger that verifies clean -- every tool call, \
-                   approval and refusal went unrecorded, and `lost` reads 0",
-    },
-);
+/// The reflex conclusion from that is "an empty chain that verifies clean, and
+/// nobody can tell". It is wrong, and the reason is worth keeping: the one
+/// surface that shows a human this ledger, `builtin_tools::agent_identity`,
+/// already refuses rather than answering — *"the agent identity ledger is not
+/// installed in this process, so there is nothing to read. This is not an
+/// empty ledger — no records are being written at all."* Nothing else reads
+/// the chain for a health verdict (`verify_chain` has no caller outside this
+/// file, and `export`'s `failed_appends: ledger.lost()` already holds a
+/// ledger). So absence yields no legal-looking value anywhere: it is a dead
+/// feature that one reader names out loud and three do not.
+static LEDGER: CapabilitySlot<Arc<AgentLedger>> =
+    CapabilitySlot::new("identity/ledger", MissingSemantics::FailsClosed);
 
 /// `FailsClosed`: the reader that decides this is [`submit`], which answers
 /// `LedgerCommandError::NotInstalled` — an error whose own text names the
@@ -410,6 +412,7 @@ static LEDGER: CapabilitySlot<Arc<AgentLedger>> = CapabilitySlot::new(
 /// `aleph-server start`"). [`flush`] answers `false`, and [`record`] returns
 /// silently, but `record`'s production callers all stand behind [`LEDGER`]'s
 /// oracle above, so `record`'s silent arm is not the one an operator meets.
+/// Same variant as [`LEDGER`], reached independently.
 ///
 /// The two are installed together in one act by [`install`], so their absence
 /// is always jointly observed; they are two slots because they are two
