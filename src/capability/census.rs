@@ -6,11 +6,11 @@
 //! `ArcSwap*`) is a **capability handle** iff its own file **installs** it.
 //! There are two install forms, and both are properties of the code:
 //!
-//! 1. **Written** — something calls `set` / `store` / `swap` /
-//!    `get_or_try_init` on it. The value comes from the caller.
-//! 2. **First-caller-wins** — a `get_or_init` whose initialiser *depends on a
-//!    parameter of the enclosing function*. The value also comes from the
-//!    caller; only the delivery differs.
+//! 1. **Written** — something calls `set` / `store` / `swap` on it. The value
+//!    comes from the caller.
+//! 2. **First-caller-wins** — a `get_or_init` **or `get_or_try_init`** whose
+//!    initialiser *depends on a parameter of the enclosing function*. The value
+//!    also comes from the caller; only the delivery differs.
 //!
 //! ```ignore
 //! GLOBAL.get_or_init(|| Arc::new(RouteHandle::from_config(cfg)))    // install (uses `cfg`)
@@ -22,17 +22,36 @@
 //! write an honest `MissingSemantics`. Excluded by derivation, never by a name
 //! list.
 //!
+//! ## Why `get_or_try_init` is an initialiser, not a writer
+//!
+//! It sat in the writer set until form 2 existed, and that was the only place it
+//! could go: a fallible initialiser is still an initialiser, but with one arm
+//! there was nowhere to route it. Form 2 is what makes the writer membership
+//! wrong — `get_or_try_init` is `get_or_init` with a fallible closure, so the
+//! same question applies to it and had never been asked.
+//!
+//! Asking it moves exactly one static off the roster:
+//! `extension/template.rs::FILE_REF_REGEX`, a compiled-regex cache in the
+//! zero-parameter `fn file_ref_regex()`. Its own initialiser says why it does not
+//! belong — *"The regex is a compile-time constant; a parse failure is a
+//! programmer error"* — so its `Err` arm cannot occur and an "uninstalled" read
+//! simply initialises itself. It has none of the round-7 failure semantics, and
+//! migrating it onto a slot would mean either boot "installing" a regex or a
+//! diagnostic reporting "never installed" forever: the over-see direction.
+//!
 //! ## Why form 2 is a rule and not an exemption
 //!
 //! `providers/route_handle.rs::GLOBAL` is boot-installed
 //! (`orchestrator_init.rs:276`) and read through `try_global_route_handle() ->
 //! Option`, so it is a genuine member — but it has no setter anywhere in its own
 //! file. The specification's roster contained it anyway, because that roster was
-//! produced by a **corpus-wide word-boundary** writer search, and three
-//! unrelated statics also named `GLOBAL` are `.set(` in *their* files. It was in
-//! the roster by name collision: rename any one of those and the roster would
-//! have lost a real member with no signal at all. Form 2 selects it for the
-//! reason it actually belongs, and survives the rename.
+//! produced by a **corpus-wide word-boundary** writer search, and it is not the
+//! only static called `GLOBAL`: seven container statics in `src/` carry that
+//! name, six of them are `.set(` in their own files (nine sites across six
+//! files), and a corpus-wide search cannot tell the seventh from the other six.
+//! It was in the roster by name collision — rename any one of those six and the
+//! roster would have lost a real member with no signal at all. Form 2 selects it
+//! for the reason it actually belongs, and survives the rename.
 //!
 //! The discriminating half is *use*, not *presence*. Ten statics in `src/` are
 //! `get_or_init`-ed inside a function that HAS parameters and do not use them
@@ -72,7 +91,16 @@
 //! so a same-line matcher makes roster membership a function of line length.
 //! `a_writer_split_across_lines_is_still_a_writer` fails by name if it regresses.
 //!
-//! # Known gap: interior-mutable installs (`OnceLock<Lock<Option<T>>>`)
+//! ⚠️ The parameter-use test is **textual and non-transitive**. It asks whether
+//! the initialiser mentions a parameter *by name*, so
+//! `get_or_init(|| build(local))` — where `local` was itself derived from a
+//! parameter — is declined. Direction: **under-see**. Measured 2026-08-24: the
+//! shape exists (`skill/mod.rs::CACHED_MANIFEST` initialises from a local,
+//! `global_skills`) but that local comes from `get_skills_dir()` and is
+//! parameter-independent, so today the verdict is right anyway — zero instances,
+//! by luck rather than by construction.
+//!
+//! # Known gap: interior-mutable installs
 //!
 //! **Unfixed. Direction: under-see** — handles in this class never get slots, so
 //! they never get diagnostics, which is the silent-approval direction.
@@ -86,11 +114,29 @@
 //! failure semantics in full: an uninstalled read yields `None`, which reads as
 //! a legal "not configured" and no caller can tell.
 //!
-//! `providers/moa/config_handle.rs::MOA_CONFIG` is one **confirmed instance**
-//! (`the_interior_mutable_install_class_is_below_this_rules_resolution` pins its
-//! shape). It is excluded here, and it was excluded from the specification's
-//! roster too — this class has been missing from the roster all along, so
-//! nothing regressed; it was never seen.
+//! **Four confirmed instances**, and the class is wider than the spelling:
+//!
+//! | static | shape | an uninstalled read means |
+//! |---|---|---|
+//! | `providers/moa/config_handle.rs::MOA_CONFIG` | `OnceLock<RwLock<Option<MoaToml>>>` | "no `[moa]` section configured" |
+//! | `gateway/event_emitter/origin_fanout.rs::CHANNEL_REGISTRY` | `OnceLock<RwLock<Option<Arc<…>>>>` | origin fan-out silently skipped |
+//! | `gateway/event_emitter/team_fanout.rs::TEAM_EVENT_BUS` | `OnceLock<RwLock<Option<Arc<…>>>>` | team fan-out silently skipped |
+//! | `security/audit.rs::GLOBAL_AUDIT` | `RwLock<Option<SecurityAuditLog>>` — **no `OnceLock` at all** | no security audit trail |
+//!
+//! `GLOBAL_AUDIT` is why this section is no longer titled after the
+//! `OnceLock<Lock<Option<T>>>` spelling. It is not a container static, so it is
+//! not even a *candidate* here — no widening of either install form could ever
+//! reach it. The class is **interior-mutable installs**, and the spelling is
+//! just the shape three of the four happen to share. The other two are
+//! boot-installed subsystem handles ("called once during subsystem boot", both
+//! of them), so this is not one curiosity: it is two gateway fan-out paths and
+//! the audit trail, none of which can currently be asked whether boot reached
+//! them.
+//!
+//! `the_interior_mutable_install_class_is_below_this_rules_resolution` pins
+//! `MOA_CONFIG`'s shape. All four are excluded here, and all four were excluded
+//! from the specification's roster too — this class has been missing all along,
+//! so nothing regressed; it was never seen.
 //!
 //! Closing it needs a "who writes through the guard" predicate — reachability
 //! from a `write()`/`lock()` guard binding to the static — not a method-name
@@ -114,10 +160,15 @@ struct LazySite {
     file: String,
     name: String,
     container: String,
-    /// This static is `get_or_init`-ed inside a function that HAS parameters,
-    /// and the initialiser uses none of them. Without this the discrimination
-    /// guard could not tell a working predicate from one that stopped parsing
-    /// function signatures — both report "excluded".
+    /// Form 2 found at least one `get_or_init` / `get_or_try_init` call on this
+    /// static. Distinguishes "the arm looked and said no" from "the arm never
+    /// reached it" — which is the difference between a correct exclusion and a
+    /// recogniser that silently stopped matching.
+    saw_install_call: bool,
+    /// This static is initialised inside a function that HAS parameters, and the
+    /// initialiser uses none of them. Without this the discrimination guard
+    /// could not tell a working predicate from one that stopped parsing function
+    /// signatures — both report "excluded".
     saw_parameterised_get_or_init: bool,
 }
 
@@ -126,9 +177,19 @@ struct LazySite {
 const CONTAINERS: &[&str] = &["OnceLock", "OnceCell", "ArcSwapOption", "ArcSwapAny", "ArcSwap"];
 
 /// The ways a caller writes an install-once container from outside it.
-/// `get_or_init` is deliberately absent: it is handled by the second install
-/// form, which asks where the initialiser's data came from.
-const WRITERS: &[&str] = &["set", "store", "swap", "get_or_try_init"];
+///
+/// `get_or_init` and `get_or_try_init` are both deliberately absent: they are
+/// handled by the second install form, which asks where the initialiser's data
+/// came from. A fallible initialiser is still an initialiser — putting
+/// `get_or_try_init` here made "did this call succeed" the question instead,
+/// which is not the one that decides membership.
+const WRITERS: &[&str] = &["set", "store", "swap"];
+
+/// The install-once *initialiser* methods, routed to form 2.
+///
+/// Matched whole: `method_call_open_paren` rejects a trailing identifier byte,
+/// so `get_or_init` cannot match the head of `get_or_try_init`.
+const INITIALISERS: &[&str] = &["get_or_init", "get_or_try_init"];
 
 /// Strip an optional leading visibility modifier, returning the rest.
 ///
@@ -401,21 +462,27 @@ fn is_written(text: &str, name: &str) -> bool {
 
 /// Verdict of the first-caller-wins arm, with the fact the guards need.
 struct FirstCaller {
-    /// Some `get_or_init` initialiser used a parameter of its enclosing fn.
+    /// Some initialiser used a parameter of its enclosing fn.
     installs: bool,
-    /// Some `get_or_init` sat in a fn WITH parameters and used none of them —
+    /// An initialiser call on this static was found at all.
+    saw_call: bool,
+    /// Some initialiser sat in a fn WITH parameters and used none of them —
     /// i.e. the discriminating half actually ran and said no.
     declined_on_use: bool,
 }
 
-/// Is `name` installed by a `get_or_init` whose initialiser depends on a
-/// parameter of the enclosing function?
+/// Is `name` installed by an initialiser that depends on a parameter of the
+/// enclosing function?
 fn first_caller_install(text: &str, name: &str, spans: &[FnSpan]) -> FirstCaller {
-    let mut verdict = FirstCaller { installs: false, declined_on_use: false };
+    let mut verdict = FirstCaller { installs: false, saw_call: false, declined_on_use: false };
     for at in word_occurrences(text, name) {
-        let Some(open) = method_call_open_paren(text, at + name.len(), "get_or_init") else {
+        let Some(open) = INITIALISERS
+            .iter()
+            .find_map(|m| method_call_open_paren(text, at + name.len(), m))
+        else {
             continue;
         };
+        verdict.saw_call = true;
         let Some(close) = matching(text, open, b'(', b')') else { continue };
         let init = &text[open + 1..close];
         // innermost enclosing body
@@ -498,6 +565,7 @@ fn take_census() -> Census {
                     file: rel.clone(),
                     name,
                     container,
+                    saw_install_call: v.saw_call,
                     saw_parameterised_get_or_init: v.declined_on_use,
                 });
             }
@@ -600,18 +668,39 @@ mod tests {
 
         assert_eq!(
             written + first + slots,
-            47,
-            "the rule selected {} handles, not 47. 47 was measured on 2026-08-24 \
+            46,
+            "the rule selected {} handles, not 46. 46 was measured on 2026-08-24 \
              over {} container statics, decomposed as written {written} + \
              first-caller-wins {first} + slots {slots}, with {lazy} lazy caches \
              excluded by derivation.\n\
-             ⚠️ Investigate before editing this number. It is NOT the 46 in the \
-             specification: that roster was produced by a corpus-wide search and \
-             differs from this one in two members, both explained in the module \
-             doc — providers/route_handle.rs::GLOBAL (a real handle the spec held \
-             only by a name collision, now selected by derivation) and \
-             metrics/mod.rs::METRICS_RUNTIME (a real handle no setter search saw, \
-             because rustfmt put its `.set(` on the next line).",
+             \n\
+             ⚠️⚠️ THIS 46 IS NOT THE SPECIFICATION'S 46. The numbers agree; the \
+             ROSTERS DO NOT. Read this before concluding the spec was right and \
+             this census changed nothing — that conclusion is wrong, and the \
+             coincidence is the third one around this number in one task.\n\
+             \n\
+             The decomposition is the tell: the spec's 46 was 46 WRITTEN handles. \
+             This one is 45 written + 1 first-caller-wins. Three members differ:\n\
+             \n\
+               OUT  extension/template.rs::FILE_REF_REGEX — a compiled-regex cache \
+             in a ZERO-parameter fn whose own comment says the regex is a \
+             compile-time constant and a parse failure is a programmer error. It \
+             was on the spec's roster only because `get_or_try_init` sat in the \
+             writer set, which is where a fallible initialiser had to go before \
+             install form 2 existed.\n\
+               IN   metrics/mod.rs::METRICS_RUNTIME — a real handle no setter \
+             search saw, because rustfmt put its `.set(` on the next line.\n\
+               SAME BUT FOR A DIFFERENT REASON  providers/route_handle.rs::GLOBAL \
+             — on the spec's roster by a NAME COLLISION. Seven container statics \
+             in src/ are called GLOBAL; six are `.set(` in their own files (nine \
+             sites across six files), and a corpus-wide word-boundary search \
+             cannot tell the seventh from them. It is now selected by derivation, \
+             so a rename can no longer drop it silently.\n\
+             \n\
+             Arithmetic: the spec's 46, −1 FILE_REF_REGEX, +1 METRICS_RUNTIME = \
+             46. GLOBAL does not move the count — it was already counted, wrongly. \
+             Investigate before editing this number; the module doc carries the \
+             full derivation.",
             written + first + slots,
             population()
         );
@@ -693,8 +782,8 @@ mod tests {
     /// arm and by nothing else.
     ///
     /// This is the member the specification's roster held by accident: a
-    /// corpus-wide writer search matched it only because three unrelated statics
-    /// are also named `GLOBAL` and are `.set(` in their own files. It is
+    /// corpus-wide writer search could not distinguish it from the six OTHER
+    /// container statics named `GLOBAL` that are `.set(` in their own files. It is
     /// boot-installed at `orchestrator_init.rs:276` and read through
     /// `try_global_route_handle() -> Option`, so it genuinely belongs — and it
     /// now belongs for a reason a rename cannot break.
@@ -846,6 +935,66 @@ mod tests {
             sites.iter().filter(|s| !s.is_slot).all(|s| s.container != "CapabilitySlot"),
             "a site labelled raw carries the slot container type — the two \
              halves of the same fact have drifted"
+        );
+    }
+
+    /// A fallible initialiser is an initialiser, not a writer.
+    ///
+    /// `extension/template.rs::FILE_REF_REGEX` is the only `get_or_try_init`
+    /// site in `src/`. It is a compiled-regex cache in the **zero-parameter**
+    /// `fn file_ref_regex()`, and its own initialiser comment says the regex is
+    /// a compile-time constant whose parse failure would be a programmer error —
+    /// so its `Err` arm cannot occur and an "uninstalled" read initialises
+    /// itself. None of the round-7 failure semantics, and it was on the
+    /// specification's roster purely because `get_or_try_init` sat in `WRITERS`.
+    ///
+    /// Three-sided on purpose. "Not selected" alone would also pass if form 2
+    /// stopped recognising `get_or_try_init` altogether — the arm would simply
+    /// never reach this static, and a silent miss is spelled exactly like a
+    /// correct exclusion. `saw_install_call` is what tells them apart.
+    ///
+    /// The day someone writes `X.get_or_try_init(|| from(cfg))`, form 2 selects
+    /// it on its own merits and the count moves by derivation.
+    #[test]
+    fn a_fallible_initialiser_is_not_a_writer() {
+        let c = take_census();
+        let here = |s: &&HandleSite| {
+            s.file.ends_with("src/extension/template.rs") && s.name == "FILE_REF_REGEX"
+        };
+        assert!(
+            !c.written.iter().any(|s| here(&s)),
+            "FILE_REF_REGEX is selected by the WRITER arm — `get_or_try_init` is \
+             back in WRITERS. A fallible initialiser is still an initialiser; \
+             putting it there asks \"did the call succeed\" instead of \"where did \
+             the initialiser's data come from\", and that is not the question \
+             that decides membership."
+        );
+        assert!(
+            !c.first_caller.iter().any(|s| here(&s)),
+            "FILE_REF_REGEX is selected by the first-caller-wins arm, so \
+             `fn file_ref_regex()` has grown a parameter that its initialiser \
+             uses. If that is a real config-driven install, delete this test and \
+             let the count move."
+        );
+        let site = c
+            .lazy
+            .iter()
+            .find(|s| s.file.ends_with("src/extension/template.rs") && s.name == "FILE_REF_REGEX")
+            .expect("FILE_REF_REGEX is not even a candidate — the declaration recogniser stopped matching it");
+        assert!(
+            site.saw_install_call,
+            "form 2 never found an initialiser call on FILE_REF_REGEX. It is the \
+             only `get_or_try_init` site in src/, so this means the arm stopped \
+             matching that method — and every future `get_or_try_init` install \
+             would be missed in silence, which looks identical to a corpus that \
+             has none."
+        );
+        assert!(
+            !site.saw_parameterised_get_or_init,
+            "FILE_REF_REGEX was declined for lack of parameter USE, but \
+             `fn file_ref_regex()` takes no parameters at all — it must be \
+             declined for their ABSENCE. A mismatch here means the signature \
+             parser is attributing this site to the wrong enclosing function."
         );
     }
 

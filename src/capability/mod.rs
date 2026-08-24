@@ -7,9 +7,14 @@
 //! value" — §5.22 round-7 recorded the shape on `spend`: `spend.query` reports
 //! `configured: false`, which is a true statement about a box with no ceiling
 //! AND a true statement about a box that configured one whose handle was never
-//! installed. That round fixed two handles by hand. There are 47 — counted by
-//! the rule in `census`, not by hand, which is also where the two members an
-//! earlier hand count of "46" got wrong are named and explained.
+//! installed. That round fixed two handles by hand. There are 46 — counted by
+//! the rule in `census`, not by hand.
+//!
+//! ⚠️ That 46 is NOT the 46 an earlier hand count reported, even though the
+//! numbers agree: three members differ, and the decomposition is the tell (this
+//! one is 45 written + 1 first-caller-wins, that one was 46 written). `census`
+//! names all three and why each moved. Do not read the agreement as
+//! confirmation that nothing changed.
 //!
 //! # The shape
 //!
@@ -37,7 +42,7 @@ pub(crate) mod census;
 ///
 /// ⚠️ Membership in the roster is decided by THIS — the failure direction —
 /// not by the handle's type or its name. A handle belongs iff losing it yields
-/// a *wrong answer* rather than a crash. The 63 lazy caches in `src/` cannot
+/// a *wrong answer* rather than a crash. The 64 lazy caches in `src/` cannot
 /// write an honest variant here ("not built yet" is not a wrong answer), which
 /// is why the Task 6 rule excludes them by derivation rather than by a
 /// hand-written exclusion list that would rot.
