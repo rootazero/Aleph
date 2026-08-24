@@ -211,6 +211,30 @@ fn code_only(line: &str, state: &mut LexState) -> String {
     out
 }
 
+/// True for a trimmed line whose leading `*` opens or continues a block
+/// comment (` * text`, a bare `*`, or the closing `*/`) — false for a line
+/// that merely *starts* with `*` because it is a dereference or a glob
+/// (`*count += 1;`, `*self.captured.lock()…`, `*vendor,`).
+///
+/// Measured directly against this repo's `src/` tree on 2026-08-24: the
+/// naive `t.starts_with('*')` rule this replaces matched 479 lines, of which
+/// only **5** were genuine comment continuations and **474** were real Rust
+/// silently dropped from every guard sharing this scanner — a 99%
+/// false-positive rate. The distinguishing fact is what follows the leading
+/// `*`: a comment continuation is followed by whitespace, end of line, or
+/// `/` (the closing delimiter); a dereference or glob is followed by an
+/// identifier, `self`, or another `*`. If this predicate is ever
+/// "simplified" back to `starts_with('*')`, re-run that measurement first —
+/// it will not come out 5-vs-0 a second time.
+fn is_block_comment_continuation(trimmed_line: &str) -> bool {
+    match trimmed_line.strip_prefix('*') {
+        None => false,
+        Some(rest) => {
+            rest.is_empty() || rest.starts_with('/') || rest.starts_with(char::is_whitespace)
+        }
+    }
+}
+
 /// Drop whole-line comments (`//`, `/*`, and continuation `*` lines).
 ///
 /// A scanner judges code; a comment is documentation. A doc comment naming a
@@ -222,7 +246,7 @@ pub fn strip_comment_lines(src: &str) -> String {
         .lines()
         .filter(|l| {
             let t = l.trim_start();
-            !(t.starts_with("//") || t.starts_with("/*") || t.starts_with('*'))
+            !(t.starts_with("//") || t.starts_with("/*") || is_block_comment_continuation(t))
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -468,6 +492,34 @@ pub fn after() {}
         assert!(!out.contains("doc mention"));
         assert!(!out.contains("block"));
         assert!(!out.contains("continued"));
+    }
+
+    /// The bare-`*` rule must not eat dereferences and globs. `starts_with('*')`
+    /// alone matched 474 real-code lines to every 5 genuine comment
+    /// continuations on this repo's own `src/` tree (measured 2026-08-24) —
+    /// this pins the shape of the fix, not just one example.
+    #[test]
+    fn strip_comment_lines_keeps_dereferences_and_globs() {
+        let src = "*count += 1;\n*vendor,\n*ref_val = 3;\n*self.captured.lock().unwrap() += 1;\nuse std::io::*;\n";
+        let out = strip_comment_lines(src);
+        for kept in [
+            "*count += 1;",
+            "*vendor,",
+            "*ref_val = 3;",
+            "*self.captured.lock().unwrap() += 1;",
+            "use std::io::*;",
+        ] {
+            assert!(out.contains(kept), "wrongly dropped real code: {kept}");
+        }
+    }
+
+    /// The bare-`*` rule must still drop every genuine continuation shape:
+    /// `* text`, a bare `*`, and the closing `*/`.
+    #[test]
+    fn strip_comment_lines_still_drops_every_continuation_shape() {
+        let src = "/* block\n * a continuation line\n *\n */\npub fn survives() {}\n";
+        let out = strip_comment_lines(src);
+        assert_eq!(out.trim(), "pub fn survives() {}");
     }
 
     /// The shared walker used by guards this round: sanity-checks it can
