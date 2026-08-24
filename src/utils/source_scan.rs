@@ -570,6 +570,21 @@ pub fn after() {}
     }
 
     /// Guard 3 — no second author. The rule, not an exemption list.
+    ///
+    /// Scans WHOLE files on purpose — not [`production_prefix`]. 25 of the 32
+    /// offending files hold their occurrence inside a same-file
+    /// `#[cfg(test)] mod tests { .. }` block, because census guards are
+    /// themselves tests. Routing this guard through `production_prefix`
+    /// would strip that block before the scan ever saw it, making this
+    /// guard blind to 25 of the 32 files it exists to police. If you are
+    /// here to make this module internally consistent: this asymmetry is
+    /// the point.
+    ///
+    /// Line numbers are computed against the RAW file, not a pre-stripped
+    /// one: comment lines are skipped inline, one line at a time, rather
+    /// than by pre-filtering the text through `strip_comment_lines` and then
+    /// re-numbering the result — the latter reports line numbers that exist
+    /// only in the stripped text and not in the file anyone would open.
     #[test]
     fn no_module_hand_rolls_the_cfg_test_prefix_cut() {
         let mut offenders = Vec::new();
@@ -577,10 +592,14 @@ pub fn after() {}
             if rel == "src/utils/source_scan.rs" {
                 continue; // defines the replacement and tests the old shape
             }
-            for (n, line) in strip_comment_lines(&text).lines().enumerate() {
-                if line.contains(r##"split("#[cfg(test)]")"##)
-                    || line.contains(r##"find("#[cfg(test)]")"##)
-                    || line.contains(r##"split_once("#[cfg(test)]")"##)
+            for (n, line) in text.lines().enumerate() {
+                let t = line.trim_start();
+                if t.starts_with("//") || t.starts_with("/*") || t.starts_with('*') {
+                    continue;
+                }
+                if t.contains(r##"split("#[cfg(test)]")"##)
+                    || t.contains(r##"find("#[cfg(test)]")"##)
+                    || t.contains(r##"split_once("#[cfg(test)]")"##)
                 {
                     offenders.push(format!("{rel}:{}", n + 1));
                 }
