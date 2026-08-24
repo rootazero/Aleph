@@ -83,14 +83,16 @@ pub struct IdentityFiles {
 
 /// Resolve the path for an identity file.
 ///
-/// Checks `.aleph/<filename>` first, then `<identity_dir>/<filename>`.
-/// Returns the first path that exists, or None.
+/// Returns `<identity_dir>/<filename>` if it exists, otherwise `None`. The
+/// legacy `.aleph/<filename>` shadow was dropped: every write surface
+/// (`write_identity_file`, `self_config`, `identity.set/clear`, the `list_*`
+/// helpers) operates only on the root file, so a read-prefer on `.aleph/`
+/// would let an editor write to root while the prompt rendered the shadow —
+/// a silent-edit failure mode. Anything that still relies on the shadow
+/// layout would have been orphaned since the Phase-D2 cleanup; if the layout
+/// is needed again it must round-trip through the shared write helpers.
 #[must_use]
 pub fn resolve_path(identity_dir: &Path, filename: &str) -> Option<PathBuf> {
-    let aleph_path = identity_dir.join(".aleph").join(filename);
-    if aleph_path.is_file() {
-        return Some(aleph_path);
-    }
     let root_path = identity_dir.join(filename);
     if root_path.is_file() {
         return Some(root_path);
@@ -332,6 +334,45 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn write_then_load_round_trips_through_disk() {
+        // End-to-end guard for the write→read pipeline that the runtime
+        // prompt uses every turn. A prior shape split writes and reads
+        // between two surfaces with subtly different path resolution
+        // (the `.aleph/` shadow read-prefer), so edits could land on
+        // disk while the loader kept rendering the old copy. This test
+        // exercises the full cycle: `write_identity_file` is the shared
+        // primitive the two write surfaces use; `IdentityFiles::load` is
+        // the only reader the prompt layer ever sees.
+        let dir = TempDir::new().unwrap();
+        let initial = write_identity_file(dir.path(), "SOUL.md", "you are aleph v1")
+            .expect("initial write");
+        assert!(initial.backup_path.is_none(), "first write has no prior");
+
+        let files_v1 = IdentityFiles::load(dir.path(), &IdentityFilesConfig::default());
+        assert_eq!(files_v1.get("SOUL.md"), Some("you are aleph v1"));
+
+        // Overwrite — the prior version must be snapshotted before the
+        // loader can ever observe the new copy.
+        let second = write_identity_file(dir.path(), "SOUL.md", "you are aleph v2")
+            .expect("second write");
+        assert!(
+            second.backup_path.is_some(),
+            "overwrite must snapshot the prior version"
+        );
+
+        // The next-turn loader picks up the new copy verbatim. A stale read
+        // here would mean an editing edit landed on disk while the prompt
+        // kept rendering the old content — the exact failure mode this
+        // guard was added to catch.
+        let files_v2 = IdentityFiles::load(dir.path(), &IdentityFilesConfig::default());
+        assert_eq!(
+            files_v2.get("SOUL.md"),
+            Some("you are aleph v2"),
+            "loader must observe the most recent write"
+        );
+    }
+
+#[test]
     fn workspace_file_names_match_spec() {
         assert_eq!(IDENTITY_FILE_NAMES.len(), 5);
         assert_eq!(IDENTITY_FILE_NAMES[0], "SOUL.md");
@@ -462,26 +503,45 @@ mod tests {
     }
 
     #[test]
-    fn resolve_path_prefers_aleph_directory() {
+    fn resolve_path_returns_root_only() {
+        // Regression: the read-prefer on `.aleph/` shadow was removed because
+        // every write surface operates only on the root file. If a shadow
+        // copy exists, `resolve_path` MUST ignore it — otherwise the prompt
+        // would render stale content while `identity.set` writes the root.
         let dir = TempDir::new().unwrap();
         let aleph_dir = dir.path().join(".aleph");
         fs::create_dir_all(&aleph_dir).unwrap();
 
-        // File exists in both root and .aleph/
         fs::write(dir.path().join("SOUL.md"), "root version").unwrap();
-        fs::write(aleph_dir.join("SOUL.md"), "aleph version").unwrap();
+        fs::write(aleph_dir.join("SOUL.md"), "stale shadow version").unwrap();
 
         let resolved = resolve_path(dir.path(), "SOUL.md").unwrap();
-        assert_eq!(resolved, aleph_dir.join("SOUL.md"));
+        assert_eq!(
+            resolved,
+            dir.path().join("SOUL.md"),
+            "shadow .aleph/ copy must be ignored"
+        );
 
-        // Load should pick the .aleph/ version
         let config = IdentityFilesConfig::default();
         let ws = IdentityFiles::load(dir.path(), &config);
-        assert_eq!(ws.get("SOUL.md"), Some("aleph version"));
+        assert_eq!(
+            ws.get("SOUL.md"),
+            Some("root version"),
+            "loader must surface the root version"
+        );
     }
 
     #[test]
-    fn resolve_path_falls_back_to_root() {
+    fn resolve_path_returns_root_when_present() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("SOUL.md"), "root only").unwrap();
+
+        let resolved = resolve_path(dir.path(), "SOUL.md").unwrap();
+        assert_eq!(resolved, dir.path().join("SOUL.md"));
+    }
+
+    #[test]
+    fn resolve_path_returns_root_when_present_and_shadow_absent() {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("SOUL.md"), "root only").unwrap();
 
@@ -576,6 +636,42 @@ mod tests {
 
         let bad = write_identity_file(dir.path(), "../../etc/passwd", "x").unwrap_err();
         assert!(bad.contains("Invalid"));
+    }
+
+    #[test]
+    fn write_identity_file_rejects_content_above_size_cap() {
+        // Pin the 1 MB ceiling at the library surface — the same cap
+        // `self_config::write_file` and `identity.set` enforce. Any caller
+        // that grows past `MAX_IDENTITY_FILE_SIZE` must be turned away
+        // BEFORE any filesystem side effect (no partial write, no backup
+        // of the previous good version against a now-corrupt candidate).
+        let dir = TempDir::new().unwrap();
+        let oversize = "x".repeat(MAX_IDENTITY_FILE_SIZE + 1);
+        let err = write_identity_file(dir.path(), "SOUL.md", &oversize).unwrap_err();
+        assert!(
+            err.contains("exceeds maximum size"),
+            "size error must name the cap: {err}"
+        );
+        assert!(
+            err.contains(&MAX_IDENTITY_FILE_SIZE.to_string()),
+            "size error must cite the byte limit: {err}"
+        );
+        assert!(!dir.path().join("SOUL.md").exists(), "no file created");
+        assert!(
+            !dir.path().join("backups").exists(),
+            "no backup dir created — oversize must be a pre-flight gate"
+        );
+
+        // And exactly at the cap is still accepted.
+        let exact = "y".repeat(MAX_IDENTITY_FILE_SIZE);
+        write_identity_file(dir.path(), "SOUL.md", &exact)
+            .expect("exact-cap write should succeed");
+        assert_eq!(
+            std::fs::metadata(dir.path().join("SOUL.md"))
+                .unwrap()
+                .len(),
+            MAX_IDENTITY_FILE_SIZE as u64
+        );
     }
 
     #[test]

@@ -20,7 +20,7 @@ use crate::config::types::agents_def::{
 };
 use crate::config::types::profile::ProfileConfig;
 use crate::config::types::provider::ProviderConfig;
-use crate::gateway::identity_loader::IdentityFileLoader;
+
 use crate::thinker::soul_archetypes::SoulArchetype;
 
 pub(crate) mod templates;
@@ -97,12 +97,6 @@ pub struct ResolvedAgent {
     /// Resolved profile configuration
     pub profile: ProfileConfig,
 
-    /// Raw SOUL.md content (if present in workspace)
-    pub soul_md: Option<String>,
-
-    /// Raw AGENTS.md content (if present in workspace)
-    pub agents_md: Option<String>,
-
     /// Resolved AI model identifier
     pub model: String,
 
@@ -134,16 +128,26 @@ pub struct ResolvedAgent {
 /// Resolves agent definitions from configuration into runtime-ready structs.
 ///
 /// Merges `AgentDefinition` entries with `AgentDefaults`, `ProfileConfig`,
-/// and workspace files (SOUL.md, AGENTS.md) to produce fully resolved
-/// `ResolvedAgent` instances. MEMORY.md is loaded separately by the
-/// curated memory module — the resolver does not touch it.
+/// and the on-disk agent directory layout (which `initialize_agent_identity`
+/// seeds with SOUL.md / AGENTS.md / IDENTITY.md / MEMORY.md / TOOLS.md /
+/// HEARTBEAT.md) to produce fully resolved `ResolvedAgent` instances.
+///
+/// NOTE: this struct intentionally does NOT eagerly read SOUL.md / AGENTS.md
+/// into the resolver output. That work is done fresh every turn by
+/// `IdentityFiles::load` in `harness_bridge::prompt_build`, which is the
+/// single point that actually feeds the prompt. A prior shape populated
+/// `ResolvedAgent.{soul_md,agents_md}` here and copied them into
+/// `AgentInstanceConfig.system_prompt` — a complete boot-time read chain
+/// that had zero production readers (the field was only consumed by tests).
+/// It was removed in the identity-soul deepening round to eliminate the
+/// illusion that `agent_create`'s `system_prompt` argument survived past
+/// boot: in fact it took effect only via the SOUL.md / AGENTS.md write
+/// path that runs immediately below in `initialize_agent_identity`.
 #[derive(Default)]
-pub struct AgentDefinitionResolver {
-    identity_loader: IdentityFileLoader,
-}
+pub struct AgentDefinitionResolver {}
 
 impl AgentDefinitionResolver {
-    /// Create a new resolver with a fresh workspace file loader.
+    /// Create a new resolver.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -360,11 +364,10 @@ impl AgentDefinitionResolver {
             .or_else(|| defaults.skills_blacklist.clone())
             .unwrap_or_default();
 
-        // 6. Load SOUL.md, AGENTS.md from agent identity directory.
-        // MEMORY.md is owned by the curated memory module and read at prompt
-        // build time — see `MemoryContextProvider::build_curated_message`.
-        let soul_md = self.identity_loader.load(&agent_dir, "SOUL.md");
-        let agents_md = self.identity_loader.load_agents_md(&agent_dir);
+        // 6. (Formerly: load SOUL.md / AGENTS.md here. Moved out — see the
+        //    `AgentDefinitionResolver` doc comment for the rationale. The
+        //    runtime loader in `harness_bridge::prompt_build` reads these
+        //    files fresh each turn and feeds them to the prompt layers.)
 
         // 7. Build ResolvedAgent
         let name = agent.name.clone().unwrap_or_else(|| agent.id.clone());
@@ -381,8 +384,6 @@ impl AgentDefinitionResolver {
             workspace_path,
             agent_dir,
             profile,
-            soul_md,
-            agents_md,
             model,
             skills,
             skills_blacklist,

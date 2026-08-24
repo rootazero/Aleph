@@ -412,7 +412,6 @@ impl TeamCreateTool {
                 workspace: workspace_path,
                 agent_dir: agent_state_dir.clone(),
                 model: model.to_string(),
-                system_prompt: combined_prompt,
                 toolset,
             },
             ProvisionDeps {

@@ -105,7 +105,6 @@ pub mod event_visibility;
 pub mod execution_adapter;
 pub mod i18n;
 pub mod idempotency;
-pub mod identity_loader;
 pub mod inter_agent_policy;
 pub mod lane;
 pub mod media;

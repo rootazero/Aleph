@@ -1033,6 +1033,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_write_rejects_oversize_content() {
+        // Tool surface guard for the 1 MB cap that `write_identity_file`
+        // enforces (and that the RPC handler now classifies as
+        // INVALID_PARAMS). The cap is also tested at the library surface
+        // and at the RPC handler — this is the third leg of the triangle.
+        // Oversize content is an operator mistake, so the tool reports it
+        // as `success: false` with a human message instead of returning an
+        // `Err(ToolError)` — the model is expected to retry with a smaller
+        // payload, and a non-actionable error would only waste a turn.
+        let tmp = TempDir::new().unwrap();
+        let tool = tool_with_dir(tmp.path());
+        let oversize = "x".repeat(super::MAX_FILE_CONTENT_SIZE + 1);
+        let result = AlephTool::call(
+            &tool,
+            SelfConfigArgs::WriteFile {
+                file_name: "SOUL.md".to_string(),
+                content: oversize,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!result.success, "oversize write must report failure");
+        assert!(
+            result.message.contains("exceeds maximum size"),
+            "size error must be human-readable, got: {}",
+            result.message
+        );
+        assert!(!tmp.path().join("SOUL.md").exists());
+        assert!(
+            !tmp.path().join("backups").exists(),
+            "no backup taken for a refused write"
+        );
+    }
+
+    #[tokio::test]
     async fn test_write_rejects_invalid_name() {
         let tmp = TempDir::new().unwrap();
         let tool = tool_with_dir(tmp.path());

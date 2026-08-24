@@ -2,6 +2,7 @@
 
 use super::identity_files::sanitize_identity_content;
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
+use crate::thinker::prompt_mode::PromptMode;
 
 pub struct SoulLayer;
 
@@ -11,6 +12,17 @@ impl PromptLayer for SoulLayer {
     }
     fn priority(&self) -> u32 {
         50
+    }
+    fn supports_mode(&self, mode: PromptMode) -> bool {
+        // Soul is persona — it is dropped from `Minimal` (74 B scaffold) for
+        // the same reason `ProfileLayer` drops it: minimal mode is a blunt
+        // "tools-only" affordance, and leaving one half of the persona trio
+        // in while the others are out produces an inconsistent identity
+        // (SOUL.md says one thing, no AGENTS.md / IDENTITY.md to ground it).
+        // Excluding Minimal here is the default-revert-to-caller-friendly
+        // choice: callers who want soul in a compact build should use
+        // `PromptMode::Compact`, which keeps this layer in.
+        !matches!(mode, PromptMode::Minimal)
     }
     fn paths(&self) -> &'static [AssemblyPath] {
         // `Cached` is the live main-loop path
@@ -70,6 +82,19 @@ mod tests {
         // Must ride the live main-loop path so SOUL.md actually reaches the
         // production prompt.
         assert!(paths.contains(&AssemblyPath::Cached));
+    }
+
+    #[test]
+    fn soul_layer_excluded_from_minimal_mode() {
+        // Pin the gate: Minimal mode is a 74-byte "tools-only" scaffold,
+        // and persona layers (Soul / Profile / IdentityFiles) must all opt
+        // out for the cut to be consistent. A prior shape omitted the
+        // override and silently rendered SOUL.md while dropping AGENTS.md /
+        // IDENTITY.md — a half-persona injection that nobody tested for.
+        use crate::thinker::prompt_mode::PromptMode;
+        assert!(!SoulLayer.supports_mode(PromptMode::Minimal));
+        assert!(SoulLayer.supports_mode(PromptMode::Full));
+        assert!(SoulLayer.supports_mode(PromptMode::Compact));
     }
 
     #[test]
