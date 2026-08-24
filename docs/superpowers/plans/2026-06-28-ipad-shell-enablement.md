@@ -1,5 +1,15 @@
 # iPad Shell Enablement Implementation Plan
 
+> **⚠️ Superseded 2026-08-24 — the committed `Info.plist` this document edits no longer exists.**
+> `mobile/ios/AlephPaneliOS/Resources/Info.plist` is xcodegen *output* and is now
+> gitignored beside the generated `.xcodeproj`; `project.yml`'s `info.properties`
+> block is the only source, and there is nothing to restore before a commit. Every
+> step below that stages that file, or that asks a regeneration to preserve its
+> `${ALEPH_VERSION}` / `${ALEPH_BUILD}` placeholders, describes the world as it was
+> — the current one is stated once, in `mobile/ios/README.md` and
+> `mobile/ios/.gitignore`. Kept as the record of what was done: do not re-add the
+> file by following it.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the existing iOS Panel shell (`mobile/ios/`) run as a native full-screen iPad app that renders the panel's existing desktop split-pane (Wide) layout, and unify the native pairing screen with the desktop dark connect card — with zero panel (`interfaces/webchat/`) changes.
