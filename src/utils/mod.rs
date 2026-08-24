@@ -14,6 +14,7 @@ pub mod process_alive;
 pub mod reqwest_limit;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod scratch;
+pub mod source_scan;
 pub mod sqlite_open;
 pub mod text_format;
 pub mod vault_io;
