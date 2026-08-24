@@ -363,11 +363,12 @@ impl LeakDetector {
     /// The first substring of `content` whose `(siphash, byte length)` matches a
     /// registered secret, or `None`.
     ///
-    /// Cost is `O(content.len() * sum(injected_lens))` hashing, and the common
-    /// case — no secret was injected — exits on the first check. Windows are
-    /// taken over `char_indices` so a multi-byte boundary can never panic; a
-    /// window is skipped when the end offset is not a char boundary (a secret is
-    /// matched at its own byte length, so its real occurrence always is one).
+    /// Thin wrapper over [`Self::find_all_injected_substrings`]; retained as a
+    /// stable public-ish API for external callers that want the single-match
+    /// shape. Internally every scan goes through `find_all_injected_substrings`
+    /// so the multi-match finding (CRITICAL-1, batch 2026-08-25) is upheld
+    /// regardless of which API the caller picks.
+    #[allow(dead_code)]
     fn find_injected_substring<'c>(&self, content: &'c str) -> Option<&'c str> {
         self.find_all_injected_substrings(content)
             .into_iter()
