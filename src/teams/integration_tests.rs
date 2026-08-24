@@ -387,6 +387,7 @@ async fn test_context_injection_shows_inbox_summary() {
             }],
             reply_to: None,
             attachments: vec![],
+            author_user_id: None,
         })
         .await
         .unwrap();
@@ -404,6 +405,7 @@ async fn test_context_injection_shows_inbox_summary() {
             }],
             reply_to: None,
             attachments: vec![],
+            author_user_id: None,
         })
         .await
         .unwrap();
@@ -502,6 +504,7 @@ async fn test_team_disband_cleanup() {
             }],
             reply_to: None,
             attachments: vec![],
+            author_user_id: None,
         })
         .await
         .unwrap();
@@ -519,6 +522,7 @@ async fn test_team_disband_cleanup() {
             }],
             reply_to: None,
             attachments: vec![],
+            author_user_id: None,
         })
         .await
         .unwrap();

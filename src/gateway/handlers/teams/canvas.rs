@@ -94,6 +94,7 @@ pub async fn handle_chat_send(
                 recipients: Vec::new(),
                 reply_to: None,
                 attachments: Vec::new(),
+                author_user_id: None,
             },
             chrono::Duration::days(3650),
         )

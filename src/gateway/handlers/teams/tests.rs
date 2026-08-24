@@ -519,6 +519,7 @@ mod tests {
                 attachments: vec![],
                 created_at: t1,
                 expires_at: None,
+                author_user_id: None,
             },
             TeamMessage {
                 id: "m1".to_string(),
@@ -533,6 +534,7 @@ mod tests {
                 attachments: vec![],
                 created_at: t0,
                 expires_at: None,
+                author_user_id: None,
             },
         ];
 
@@ -580,6 +582,7 @@ mod tests {
             attachments: vec![],
             created_at: Utc.timestamp_millis_opt(at_millis).unwrap(),
             expires_at: None,
+            author_user_id: None,
         }
     }
 

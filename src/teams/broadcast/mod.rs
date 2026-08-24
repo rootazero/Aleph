@@ -877,6 +877,7 @@ impl GroupChatBroadcaster {
                         recipients: Vec::new(),
                         reply_to: None,
                         attachments: Vec::new(),
+                        author_user_id: None,
                     },
                     chrono::Duration::days(3650),
                 )
@@ -959,6 +960,7 @@ impl GroupChatBroadcaster {
                 recipients: Vec::new(),
                 reply_to: None,
                 attachments: Vec::new(),
+                author_user_id: None,
             })
             .await;
     }

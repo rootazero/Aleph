@@ -124,6 +124,10 @@ pub struct TeamMessage {
     pub attachments: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
+    /// The human user who authored this message, when the sender was a human
+    /// (vs. an agent or the system). `None` for agent/system rows, and for
+    /// human rows sent before this column existed.
+    pub author_user_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -141,4 +145,7 @@ pub struct NewMessage {
     pub recipients: Vec<Recipient>,
     pub reply_to: Option<String>,
     pub attachments: Vec<String>,
+    /// The human user who authored this message, when the sender was a human
+    /// (vs. an agent or the system). `None` for agent/system rows.
+    pub author_user_id: Option<String>,
 }
