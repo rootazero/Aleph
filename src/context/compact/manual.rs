@@ -1386,4 +1386,41 @@ mod tests {
             "the compaction summary must never be mistaken for the user's task"
         );
     }
+
+    /// The `reads_as` sentence names two compiled constants, so both are tied
+    /// to the arms that really return them.
+    ///
+    /// Premise stated out loud: `install_manual_compaction`'s only caller is
+    /// `bin/aleph-server/.../orchestrator_init.rs`, so nothing in the library
+    /// installs this handle and the fallback arms are observable here. If a
+    /// library test ever installs it, the assertion below names that rather
+    /// than going quietly vacuous.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = manual_wiring_slot();
+        assert_eq!(slot.id(), "context/manual-compact-wiring");
+        let MissingSemantics::IndistinguishableDefault { reads_as } = slot.missing() else {
+            panic!(
+                "expected IndistinguishableDefault, got {:?}",
+                slot.missing()
+            );
+        };
+        assert!(reads_as.contains("DEFAULT_KEEP_TOKENS"), "got {reads_as:?}");
+        assert!(
+            reads_as.contains("SUMMARIZER_INPUT_TOKEN_BUDGET"),
+            "got {reads_as:?}"
+        );
+        assert!(
+            MANUAL_WIRING.get().is_none(),
+            "a library test now installs the manual-compaction wiring; this \
+             guard's premise is gone and the three assertions below are about \
+             an installed handle, not an absent one"
+        );
+        assert_eq!(manual_keep_tokens(), DEFAULT_KEEP_TOKENS);
+        assert_eq!(
+            manual_summarizer_input_budget(),
+            SUMMARIZER_INPUT_TOKEN_BUDGET
+        );
+        assert!(manual_summarizer().is_none());
+    }
 }

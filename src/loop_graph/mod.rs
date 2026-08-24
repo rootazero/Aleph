@@ -239,4 +239,32 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }
+
+    /// Both handles reach the roster, with the right sentence on the one that
+    /// has a sentence.
+    ///
+    /// No runtime tie here on purpose: `set_global_for_test` installs `GLOBAL`
+    /// from sibling tests in this very module, so an "uninstalled read still
+    /// resolves to ..." assertion would pass or fail on libtest's scheduling.
+    /// A flaky guard teaches people to re-run.
+    #[test]
+    fn the_accessors_expose_both_handles_to_the_roster() {
+        assert_eq!(global_slot().id(), "loop-graph/store");
+        assert_eq!(event_bus_slot().id(), "loop-graph/event-bus");
+        let MissingSemantics::IndistinguishableDefault { reads_as } = global_slot().missing()
+        else {
+            panic!(
+                "expected IndistinguishableDefault, got {:?}",
+                global_slot().missing()
+            );
+        };
+        assert!(
+            reads_as.contains("ungoverned"),
+            "must name governing_owner's Ok(None) -- the ACL's permit answer; got {reads_as:?}"
+        );
+        assert!(matches!(
+            event_bus_slot().missing(),
+            MissingSemantics::FailsClosed
+        ));
+    }
 }

@@ -592,3 +592,42 @@ allowed_hosts = ["panel.example.com"]
         );
     }
 }
+
+#[cfg(test)]
+mod capability_slot_tests {
+    use super::*;
+
+    /// The `reads_as` sentence reaches an operator, so the fallback it names
+    /// is asserted against what `effective_path()` really returns.
+    ///
+    /// Premise stated out loud: `set_effective_path`'s only caller is
+    /// `bin/aleph-server/main.rs`, so nothing in the library installs this pin
+    /// and an uninstalled read is observable here.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = effective_config_path_slot();
+        assert_eq!(slot.id(), "config/effective-path");
+        let MissingSemantics::IndistinguishableDefault { reads_as } = slot.missing() else {
+            panic!(
+                "expected IndistinguishableDefault, got {:?}",
+                slot.missing()
+            );
+        };
+        assert!(
+            reads_as.contains("--config"),
+            "the sentence has to name the thing that gets ignored; got {reads_as:?}"
+        );
+        assert!(
+            EFFECTIVE_CONFIG_PATH.get().is_none(),
+            "a library test now installs the --config pin; this guard's \
+             premise is gone and the assertion below is about an installed \
+             handle, not an absent one"
+        );
+        assert_eq!(
+            Config::effective_path(),
+            Config::default_path(),
+            "an uninstalled read no longer resolves to the default path, so \
+             the sentence above is stale"
+        );
+    }
+}

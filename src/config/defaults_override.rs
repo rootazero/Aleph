@@ -267,4 +267,33 @@ timeout_seconds = 120
         assert!(result.provider.is_none());
         assert!(result.generation.is_none());
     }
+
+    /// The `reads_as` sentence reaches an operator, so the fallback it names
+    /// is asserted — and asserting it also pins [`EMPTY_DEFAULTS_OVERRIDE`]'s
+    /// literal against someone filling a value into it.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = defaults_override_slot();
+        assert_eq!(slot.id(), "config/defaults-override");
+        let MissingSemantics::IndistinguishableDefault { reads_as } = slot.missing() else {
+            panic!(
+                "expected IndistinguishableDefault, got {:?}",
+                slot.missing()
+            );
+        };
+        assert!(
+            reads_as.contains("empty override"),
+            "must name what get_defaults_override() really hands back; got {reads_as:?}"
+        );
+        assert!(EMPTY_DEFAULTS_OVERRIDE.memory.is_none());
+        assert!(EMPTY_DEFAULTS_OVERRIDE.provider.is_none());
+        assert!(EMPTY_DEFAULTS_OVERRIDE.generation.is_none());
+        assert!(EMPTY_DEFAULTS_OVERRIDE.provider_timeout_seconds().is_none());
+        assert!(EMPTY_DEFAULTS_OVERRIDE
+            .memory_similarity_threshold()
+            .is_none());
+        assert!(EMPTY_DEFAULTS_OVERRIDE
+            .generation_timeout_seconds()
+            .is_none());
+    }
 }

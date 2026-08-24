@@ -211,3 +211,58 @@ pub fn set_open_loop_inject(enabled: bool) {
 pub fn open_loop_inject() -> bool {
     OPEN_LOOP_INJECT.get().copied().unwrap_or(false)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// All five handles reach the roster under the ids Task 11 will read, and
+    /// the one that carries a `reads_as` sentence carries the right one.
+    ///
+    /// No runtime tie on `OPEN_LOOP_INJECT` on purpose: `curated.rs`'s tests
+    /// call `set_open_loop_inject(true)`, so "an uninstalled read is false"
+    /// would pass or fail on libtest's scheduling. A flaky guard teaches
+    /// people to re-run.
+    #[test]
+    fn the_accessors_expose_all_five_handles_to_the_roster() {
+        assert_eq!(session_end_mcp_slot().id(), "memory/session-end-mcp");
+        assert_eq!(
+            session_end_summarizer_slot().id(),
+            "memory/session-end-summarizer"
+        );
+        assert_eq!(session_reflector_slot().id(), "memory/session-reflector");
+        assert_eq!(
+            session_end_compression_slot().id(),
+            "memory/session-end-compression"
+        );
+        assert_eq!(open_loop_inject_slot().id(), "memory/open-loop-inject");
+
+        for slot in [
+            session_end_mcp_slot(),
+            session_end_summarizer_slot(),
+            session_reflector_slot(),
+            session_end_compression_slot(),
+        ] {
+            assert!(
+                matches!(slot.missing(), MissingSemantics::FailsClosed),
+                "{} is a fire-and-forget session-end hook: absence must be \
+                 FailsClosed, got {:?}",
+                slot.id(),
+                slot.missing()
+            );
+        }
+
+        let MissingSemantics::IndistinguishableDefault { reads_as } =
+            open_loop_inject_slot().missing()
+        else {
+            panic!(
+                "expected IndistinguishableDefault, got {:?}",
+                open_loop_inject_slot().missing()
+            );
+        };
+        assert!(
+            reads_as.contains("false"),
+            "must name open_loop_inject()'s real fallback; got {reads_as:?}"
+        );
+    }
+}

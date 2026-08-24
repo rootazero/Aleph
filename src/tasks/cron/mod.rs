@@ -1019,4 +1019,24 @@ mod tests {
              doing so has either dropped the feature or grown its own path to it"
         );
     }
+
+    /// The `reads_as` sentence reaches an operator, and this one had to be
+    /// re-derived: the reflex verdict for a handle whose only readers are
+    /// enforcement paths is `FailsOpen`, and it is wrong here because the
+    /// fire-time refusal does not depend on this handle. See the static's doc.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = global_cron_slot();
+        assert_eq!(slot.id(), "cron/service");
+        let MissingSemantics::IndistinguishableDefault { reads_as } = slot.missing() else {
+            panic!(
+                "expected IndistinguishableDefault, got {:?}",
+                slot.missing()
+            );
+        };
+        assert!(
+            reads_as.contains("crons: 0"),
+            "must name the value users.update's freeze really reports; got {reads_as:?}"
+        );
+    }
 }

@@ -378,4 +378,33 @@ mod tests {
         let timer = StageTimer::start("empty_meta_test");
         assert!(timer.metadata.is_none());
     }
+
+    /// The `reads_as` sentence reaches an operator, so it is tied to the
+    /// fallback `metrics_runtime()` really returns rather than spot-read.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = metrics_runtime_slot();
+        assert_eq!(slot.id(), "metrics/runtime");
+        let MissingSemantics::IndistinguishableDefault { reads_as } = slot.missing() else {
+            panic!(
+                "expected IndistinguishableDefault, got {:?}",
+                slot.missing()
+            );
+        };
+        // Tied to the CONSTANT, not to the literal "2.0x": change
+        // DEFAULT_WARNING_MULTIPLIER and this names the stale sentence
+        // instead of agreeing with it.
+        assert!(
+            reads_as.contains(&format!("{DEFAULT_WARNING_MULTIPLIER:.1}x")),
+            "the sentence must name the real multiplier \
+             ({DEFAULT_WARNING_MULTIPLIER}); got {reads_as:?}"
+        );
+        let d = MetricsRuntime::default();
+        assert_eq!(d.warning_multiplier, DEFAULT_WARNING_MULTIPLIER);
+        assert!(
+            d.enable_logging && d.enable_warnings,
+            "the sentence claims logging and warnings are ON when nothing is \
+             installed; MetricsRuntime::default() no longer agrees"
+        );
+    }
 }

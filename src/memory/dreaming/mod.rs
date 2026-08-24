@@ -3324,4 +3324,32 @@ mod tests {
             "the night's budget is the CONFIGURED ceiling, not the compiled-in default"
         );
     }
+
+    /// The `reads_as` sentence reaches an operator, so the fallback it names
+    /// is asserted.
+    ///
+    /// Premise stated out loud: `ensure_dream_daemon_with_orientation` returns
+    /// early under `cfg!(test)`, so no library test can install this daemon and
+    /// an uninstalled read is observable here.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = dream_daemon_slot();
+        assert_eq!(slot.id(), "memory/dream-daemon");
+        let MissingSemantics::IndistinguishableDefault { reads_as } = slot.missing() else {
+            panic!(
+                "expected IndistinguishableDefault, got {:?}",
+                slot.missing()
+            );
+        };
+        assert!(
+            reads_as.contains("not running"),
+            "must name what daemon_status() tells an operator; got {reads_as:?}"
+        );
+        assert!(
+            daemon_status().is_none(),
+            "a daemon got installed inside a test binary, so the cfg!(test) \
+             early return in ensure_dream_daemon_with_orientation is gone -- \
+             and with it this guard's premise"
+        );
+    }
 }
