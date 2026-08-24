@@ -488,4 +488,109 @@ pub fn after() {}
             );
         }
     }
+
+    /// Every `.rs` file under `src/`, as `(repo-relative path, text)` — shared
+    /// by the guards below via [`rust_sources_under`], rather than minting a
+    /// second directory walk in this module.
+    fn all_sources() -> Vec<(String, String)> {
+        rust_sources_under(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"))
+    }
+
+    fn old_prefix_cut(src: &str) -> String {
+        let src = src.replace('\r', "");
+        src.split("#[cfg(test)]").next().unwrap_or(&src).to_string()
+    }
+
+    /// Guard 1 — no regression. Where the old cut was right, we agree with it.
+    ///
+    /// "Agree" is checked on the retained *code*, not byte-for-byte text: the
+    /// old cut keeps the blank lines and the attribute's leading whitespace
+    /// that preceded the test module, which carry no meaning to any scanner.
+    #[test]
+    fn production_prefix_agrees_with_the_old_cut_where_the_old_cut_was_right() {
+        let mut compared = 0usize;
+        for (rel, text) in all_sources() {
+            let old = old_prefix_cut(&text);
+            // "old cut was right" == nothing but whitespace follows the test
+            // module, i.e. the new extractor found no extra code.
+            let new = production_prefix(&text);
+            if new.split_whitespace().eq(old.split_whitespace()) {
+                compared += 1;
+                continue;
+            }
+            assert!(
+                new.len() >= old.trim_end().len(),
+                "{rel}: new extraction is SHORTER than the old prefix cut — the \
+                 extractor is dropping production code"
+            );
+        }
+        assert!(
+            compared > 1_000,
+            "expected >1000 files where old and new agree, saw {compared} — either the \
+             extractor regressed or the corpus changed shape; investigate, do not relax"
+        );
+    }
+
+    /// Guard 2 — real expansion. The ~213-file class must actually recover code.
+    ///
+    /// The count is asserted because a shrinking census and a broken census
+    /// look identical in a passing report. The floor (213) was measured
+    /// directly against the shipped `production_prefix` on 2026-08-24 — NOT
+    /// the 276 first quoted for this class while this guard was being
+    /// planned. That 276 was measured against a pre-fix build of the
+    /// extractor whose `end_of_item` returned early and so over-kept
+    /// trailing test lines, which were then double-counted as "recovered
+    /// production code". Fixing that over-keep necessarily moves this
+    /// number DOWN; a number that had gone UP would have been the alarming
+    /// one.
+    #[test]
+    fn production_prefix_recovers_code_the_old_cut_discarded() {
+        let mut recovered = 0usize;
+        let mut worst = (0usize, String::new());
+        for (rel, text) in all_sources() {
+            let old = old_prefix_cut(&text).trim_end().len();
+            let new = production_prefix(&text).trim_end().len();
+            if new > old {
+                recovered += 1;
+                if new - old > worst.0 {
+                    worst = (new - old, rel);
+                }
+            }
+        }
+        assert!(
+            recovered >= 213,
+            "expected >=213 files to recover production code (measured 213 against the \
+             shipped extractor on 2026-08-24); saw {recovered}. A drop means the \
+             extractor stopped recognising a shape — investigate before lowering this \
+             floor. (Do not confuse this with the 276 once cited for this class: that \
+             figure came from a pre-fix build that over-kept trailing test lines and \
+             was itself wrong — see the doc comment above.)"
+        );
+        assert!(worst.0 > 10_000, "worst-case recovery {worst:?} is implausibly small");
+    }
+
+    /// Guard 3 — no second author. The rule, not an exemption list.
+    #[test]
+    fn no_module_hand_rolls_the_cfg_test_prefix_cut() {
+        let mut offenders = Vec::new();
+        for (rel, text) in all_sources() {
+            if rel == "src/utils/source_scan.rs" {
+                continue; // defines the replacement and tests the old shape
+            }
+            for (n, line) in strip_comment_lines(&text).lines().enumerate() {
+                if line.contains(r##"split("#[cfg(test)]")"##)
+                    || line.contains(r##"find("#[cfg(test)]")"##)
+                    || line.contains(r##"split_once("#[cfg(test)]")"##)
+                {
+                    offenders.push(format!("{rel}:{}", n + 1));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "these hand-roll the production-prefix cut instead of calling \
+             `utils::source_scan::production_prefix`:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
 }
