@@ -179,11 +179,26 @@ fn member_run_metadata(
     // seeds the author from `AUTHOR_USER_KEY` specifically, and derives nothing
     // about it from the scope — precisely because in a room those two are
     // different people.
+    //
+    // Fourth carrier, same value: `run_loop` reads this exact key at :366 to
+    // seed `TURN_ORIGINATOR` — the approval-originator gate. The human whose
+    // message woke this member is the one who may answer its approval cards;
+    // without this a member's parked tool call is routed by session/owner
+    // alone, and in a room that owner is the CREATOR (see above), not the
+    // person who actually spoke this turn. Bound from the SAME
+    // `current_room_author()` call as `AUTHOR_USER_KEY` above — deliberately
+    // NOT `visibility::ambient_actor()`, which falls back through
+    // `ambient_owner()` to the room's creator when no author is seeded (e.g.
+    // a nested agent-to-agent fan-out with no human behind it), which would
+    // stamp an originator nobody actually is. `None` (no ambient author: the
+    // background dispatcher, tests) writes nothing on either key — a
+    // background dispatcher does not invent an author.
     if let Some(author) = crate::scope::current_room_author() {
         metadata.insert(
             crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string(),
-            author,
+            author.clone(),
         );
+        metadata.insert("originator_user_id".to_string(), author);
     }
     metadata
 }
@@ -1114,6 +1129,66 @@ mod tests {
         assert_eq!(m.get("platform").map(String::as_str), Some("webchat"));
         assert_eq!(m.get("team_id").map(String::as_str), Some("team-x"));
         assert_eq!(m.get("chain_depth").map(String::as_str), Some("2"));
+    }
+
+    /// Approval-originator gate (`run_loop` reads this exact key at :366): the
+    /// human whose message woke this member must be stamped as the one who
+    /// may answer its approval cards. Bound from `scope::current_room_author()`
+    /// — the SAME source as `AUTHOR_USER_KEY` — not
+    /// `visibility::ambient_actor()` (Ruling P12): in a `Project` scope with no
+    /// seeded author, `ambient_actor()` falls back through `ambient_owner()`
+    /// to the room's CREATOR, which would stamp an originator nobody actually
+    /// is inside a nested agent-to-agent fan-out with no human behind it.
+    #[tokio::test]
+    async fn member_run_metadata_carries_originator_for_approval_gate() {
+        let metadata = crate::scope::with_room_author(Some("u-bob".to_string()), async {
+            member_run_metadata("team-1", 0)
+        })
+        .await;
+        assert_eq!(
+            metadata.get("originator_user_id").map(String::as_str),
+            Some("u-bob"),
+            "the room's speaker must be stamped as the approval originator"
+        );
+        // Same value, both wires — one derivation, two consumer keys.
+        assert_eq!(
+            metadata
+                .get(crate::gateway::execution_engine::AUTHOR_USER_KEY)
+                .map(String::as_str),
+            Some("u-bob")
+        );
+    }
+
+    /// A background dispatcher does not invent an author: with no ambient room
+    /// author seeded (the tests above, or a background dispatcher with no
+    /// human behind it), the key must be ABSENT, not defaulted to anyone —
+    /// mirrors the existing `AUTHOR_USER_KEY` guarantee one line up.
+    #[test]
+    fn member_run_metadata_omits_originator_with_no_ambient_author() {
+        let metadata = member_run_metadata("team-1", 0);
+        assert!(
+            metadata.get("originator_user_id").is_none(),
+            "a bare call with no ambient author must not invent an originator"
+        );
+        assert!(metadata
+            .get(crate::gateway::execution_engine::AUTHOR_USER_KEY)
+            .is_none());
+    }
+
+    /// The single-human path is unchanged: when the room's only speaker IS the
+    /// operator, the stamped originator is simply that same id — the card
+    /// already went to them before this gate existed (session ownership), and
+    /// nothing here narrows or widens who it reaches.
+    #[tokio::test]
+    async fn member_run_metadata_originator_matches_a_solo_operator_speaker() {
+        let metadata = crate::scope::with_room_author(Some("u-operator".to_string()), async {
+            member_run_metadata("team-1", 0)
+        })
+        .await;
+        assert_eq!(
+            metadata.get("originator_user_id").map(String::as_str),
+            Some("u-operator")
+        );
     }
 
     /// A member run must declare its mode rather than inherit the global
