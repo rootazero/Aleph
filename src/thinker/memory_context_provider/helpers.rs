@@ -1,3 +1,4 @@
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::memory::notes::orientation::types::OrientationSnapshot;
 use crate::sync_primitives::Arc;
 use crate::thinker::xml_util::escape_xml;
@@ -33,18 +34,32 @@ pub fn render_orientation_envelope(s: &OrientationSnapshot) -> String {
 /// and has 3 callsites + 2 test fixtures. Threading an optional
 /// `Arc<MemoryContextProvider>` argument through every caller would be a
 /// 5-file blast radius for what is essentially a single fire-and-forget
-/// invalidation. Using an opt-in `OnceCell` keeps the change surgical:
+/// invalidation. Using an opt-in capability slot keeps the change surgical:
 /// `agent_init` registers the MCP once at startup, the session-end path
-/// reads the cell and spawns the eviction (and reads the MCP's extension
+/// reads the slot and spawns the eviction (and reads the MCP's extension
 /// registry for the session-close capture-filter pass).
-static SESSION_END_MCP: tokio::sync::OnceCell<Arc<super::MemoryContextProvider>> =
-    tokio::sync::OnceCell::const_new();
+///
+/// `FailsClosed`, like the three siblings below: `emit_session_end_raw` reads
+/// it as `if let Some(mcp)` with no `else`, so an uninstalled handle means the
+/// curated snapshot is never evicted and `registry` stays `None`, taking the
+/// session-close capture-filter pass with it. Nothing is granted; two
+/// fire-and-forget effects simply do not happen, and no surface says so.
+static SESSION_END_MCP: CapabilitySlot<Arc<super::MemoryContextProvider>> =
+    CapabilitySlot::new("memory/session-end-mcp", MissingSemantics::FailsClosed);
+
+/// The five handles in this file, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn session_end_mcp_slot() -> &'static dyn SlotStatus {
+    &SESSION_END_MCP
+}
 
 /// Register a `MemoryContextProvider` for SessionEnd-triggered curated
 /// invalidation. Idempotent; subsequent calls are a no-op (returns the
 /// `Err(_)` from `OnceCell::set` silently).
 pub fn register_session_end_mcp(mcp: Arc<super::MemoryContextProvider>) {
-    let _ = SESSION_END_MCP.set(mcp);
+    let _ = SESSION_END_MCP.install(mcp);
 }
 
 /// Read the registered MCP, if any. Used by
@@ -60,16 +75,30 @@ pub fn session_end_mcp() -> Option<Arc<super::MemoryContextProvider>> {
 /// `emit_session_end_raw`. The two cells are kept separate so
 /// Spec A (cache invalidation) and Spec B (summary production) remain
 /// independently removable.
-static SESSION_END_SUMMARIZER: tokio::sync::OnceCell<
+/// `FailsClosed`: `if let Some(summarizer)` with no `else`. An uninstalled
+/// handle means no Spec-B summary is produced AND — the second-order cost, and
+/// the one the call site spends twenty lines on — nothing registers with
+/// `flush::global_registry()`'s readiness gate, so `HybridAssembler::assemble`
+/// stops waiting for a snapshot that is never coming. That reads as "ready",
+/// which is true, and useless.
+static SESSION_END_SUMMARIZER: CapabilitySlot<
     Arc<crate::memory::session_search_summary::end_hook::SessionEndSummarizer>,
-> = tokio::sync::OnceCell::const_new();
+> = CapabilitySlot::new(
+    "memory/session-end-summarizer",
+    MissingSemantics::FailsClosed,
+);
+
+#[allow(dead_code)]
+pub(crate) fn session_end_summarizer_slot() -> &'static dyn SlotStatus {
+    &SESSION_END_SUMMARIZER
+}
 
 /// Register a `SessionEndSummarizer` for Spec B on-session-end hook firing.
 /// Idempotent; subsequent calls are a no-op.
 pub fn register_session_end_summarizer(
     summarizer: Arc<crate::memory::session_search_summary::end_hook::SessionEndSummarizer>,
 ) {
-    let _ = SESSION_END_SUMMARIZER.set(summarizer);
+    let _ = SESSION_END_SUMMARIZER.install(summarizer);
 }
 
 /// Read the registered `SessionEndSummarizer`, if any.
@@ -84,16 +113,24 @@ pub fn session_end_summarizer(
 /// (only when `[memory.reflection] enabled = true`), consumed fire-and-forget
 /// at session-end in `emit_session_end_raw`. Kept separate so the
 /// reflection feature stays independently removable from Spec A/Spec B.
-static SESSION_REFLECTOR: tokio::sync::OnceCell<
-    Arc<crate::memory::session_reflection::SessionReflector>,
-> = tokio::sync::OnceCell::const_new();
+/// `FailsClosed`: `if let Some(reflector)` with no `else`, and the reflector
+/// self-gates on substance and cooldown anyway — so "no lesson was distilled
+/// tonight" is a legitimate outcome that an uninstalled handle produces for a
+/// different reason, with no way to tell them apart. Nothing is granted.
+static SESSION_REFLECTOR: CapabilitySlot<Arc<crate::memory::session_reflection::SessionReflector>> =
+    CapabilitySlot::new("memory/session-reflector", MissingSemantics::FailsClosed);
+
+#[allow(dead_code)]
+pub(crate) fn session_reflector_slot() -> &'static dyn SlotStatus {
+    &SESSION_REFLECTOR
+}
 
 /// Register a `SessionReflector` for on-session-end lesson distillation.
 /// Idempotent; subsequent calls are a no-op.
 pub fn register_session_reflector(
     reflector: Arc<crate::memory::session_reflection::SessionReflector>,
 ) {
-    let _ = SESSION_REFLECTOR.set(reflector);
+    let _ = SESSION_REFLECTOR.install(reflector);
 }
 
 /// Read the registered `SessionReflector`, if any.
@@ -107,16 +144,28 @@ pub fn session_reflector() -> Option<Arc<crate::memory::session_reflection::Sess
 /// in `emit_session_end_raw` to drain pending raws into linked
 /// notes immediately. Kept separate from the cells above so the flush feature
 /// stays independently removable.
-static SESSION_END_COMPRESSION: tokio::sync::OnceCell<
+/// `FailsClosed`: `.map(|cs| ..)` on the read, so an uninstalled handle
+/// produces `None` and the Pillar-2 flush never runs — pending raws are not
+/// drained into linked notes at session end. They are not lost (the periodic
+/// path still consolidates them); what is lost is the immediacy, silently.
+static SESSION_END_COMPRESSION: CapabilitySlot<
     Arc<crate::memory::compression::CompressionService>,
-> = tokio::sync::OnceCell::const_new();
+> = CapabilitySlot::new(
+    "memory/session-end-compression",
+    MissingSemantics::FailsClosed,
+);
+
+#[allow(dead_code)]
+pub(crate) fn session_end_compression_slot() -> &'static dyn SlotStatus {
+    &SESSION_END_COMPRESSION
+}
 
 /// Register a `CompressionService` for the on-session-end real-time flush.
 /// Idempotent; subsequent calls are a no-op (first call wins).
 pub fn register_session_end_compression(
     compression: Arc<crate::memory::compression::CompressionService>,
 ) {
-    let _ = SESSION_END_COMPRESSION.set(compression);
+    let _ = SESSION_END_COMPRESSION.install(compression);
 }
 
 /// Read the registered `CompressionService`, if any. Used by
@@ -132,11 +181,30 @@ pub fn session_end_compression() -> Option<Arc<crate::memory::compression::Compr
 /// callers. Set once at startup by `agent_init`; read in `capture_curated`.
 /// Unset (default) reads `false`, so the open-loops block is never injected
 /// unless explicitly enabled.
-static OPEN_LOOP_INJECT: tokio::sync::OnceCell<bool> = tokio::sync::OnceCell::const_new();
+///
+/// The one `IndistinguishableDefault` in this file, and the sentence above is
+/// the derivation: [`open_loop_inject`] ends in `.unwrap_or(false)`, so an
+/// uninstalled flag is byte-identical to an operator who left
+/// `[memory.reflection] open_loop_inject_prompt` off. Note this handle is
+/// installed with the config value either way — `false` is a legitimate
+/// INSTALL here, not an absence, which is exactly the distinction the slot can
+/// now record and the bare flag could not.
+static OPEN_LOOP_INJECT: CapabilitySlot<bool> = CapabilitySlot::new(
+    "memory/open-loop-inject",
+    MissingSemantics::IndistinguishableDefault {
+        reads_as: "false -- open loops are never injected, exactly as if \
+                   [memory.reflection] open_loop_inject_prompt were off",
+    },
+);
+
+#[allow(dead_code)]
+pub(crate) fn open_loop_inject_slot() -> &'static dyn SlotStatus {
+    &OPEN_LOOP_INJECT
+}
 
 /// Enable/disable open-loop injection. Idempotent; first call wins.
 pub fn set_open_loop_inject(enabled: bool) {
-    let _ = OPEN_LOOP_INJECT.set(enabled);
+    let _ = OPEN_LOOP_INJECT.install(enabled);
 }
 
 /// Whether last session's open loops should be injected into curated context.
