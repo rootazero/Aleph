@@ -115,10 +115,52 @@ impl SessionActor {
                                     created_at_ms: at,
                                 };
                                 self.head_seq = seq;
+                                // Observer notification must not be allowed
+                                // to kill the actor: a panicking observer
+                                // used to strand the broadcast and the
+                                // caller's reply, with the event durable
+                                // in storage but neither subscriber nor
+                                // caller told. `catch_unwind` is sound
+                                // here because the closure only takes
+                                // `&self.id` and `&record`, both
+                                // `RefUnwindSafe`.
                                 if let Some(obs) = &self.observer {
-                                    obs.on_appended(&self.id, &record);
+                                    let id = &self.id;
+                                    let record_ref = &record;
+                                    if std::panic::catch_unwind(
+                                        std::panic::AssertUnwindSafe(|| {
+                                            obs.on_appended(id, record_ref);
+                                        }),
+                                    )
+                                    .is_err()
+                                    {
+                                        tracing::error!(
+                                            id = ?self.id,
+                                            "SessionActor observer panicked; \
+                                             continuing (event already durable)"
+                                        );
+                                    }
                                 }
-                                let _ = self.broadcaster.send(record);
+                                // Broadcast send: a `SendError` here means either (a) zero receivers
+                                // (legitimate after every subscriber has
+                                // detached) or (b) the buffer is full
+                                // (BROADCAST_BUFFER = 256 — a slow subscriber
+                                // would silently drop events). Distinguish the
+                                // two cases at the trace level so a lagging
+                                // subscriber shows up in logs rather than as
+                                // a silently missing row in the live view.
+                                if self.broadcaster.send(record).is_err()
+                                    && self.broadcaster.receiver_count() > 0
+                                {
+                                    tracing::warn!(
+                                        id = ?self.id,
+                                        seq,
+                                        "SessionActor broadcast buffer full — \
+                                         at least one subscriber is lagging; \
+                                         they will see RecvError::Lagged and \
+                                         should call get_events() to recover."
+                                    );
+                                }
                                 let _ = reply.send(Ok(seq));
                                 idle_deadline = Instant::now() + self.idle_timeout;
                             }
@@ -146,6 +188,68 @@ impl SessionActor {
                     }
                 },
                 _ = tokio::time::sleep_until(idle_deadline) => {
+                    // Drain any commands already buffered in the inbox
+                    // before exiting. Without this, a command that lands
+                    // between the sleep returning and `run()` returning
+                    // (a tiny but real window — the mpsc buffer is 64)
+                    // has its `oneshot::Sender` dropped with `run()`,
+                    // surfacing as `SessionError::ActorShutdown` to the
+                    // caller with no signal that the event was never
+                    // appended. Drain until the inbox is empty or the
+                    // next recv would block.
+                    let mut drained = 0u32;
+                    while let Ok(cmd) = self.inbox.try_recv() {
+                        match cmd {
+                            ActorCommand::EmitEvent { event, reply } => {
+                                let mut seq = self.head_seq + 1;
+                                let at = now_ms();
+                                let append_result =
+                                    self.store.append(&self.id, seq, &event, at).await;
+                                match append_result {
+                                    Ok(()) => {
+                                        let record = SessionEventRecord {
+                                            seq,
+                                            event,
+                                            created_at_ms: at,
+                                        };
+                                        self.head_seq = seq;
+                                        let _ = self.broadcaster.send(record);
+                                        let _ = reply.send(Ok(seq));
+                                    }
+                                    Err(e) => {
+                                        let _ = reply.send(Err(e));
+                                    }
+                                }
+                            }
+                            ActorCommand::GetEvents { from, to, reply } => {
+                                let result =
+                                    self.store.load_events_range(&self.id, from, to).await;
+                                let _ = reply.send(result);
+                            }
+                            ActorCommand::Subscribe { reply } => {
+                                let _ = reply.send(self.broadcaster.subscribe());
+                            }
+                            ActorCommand::Shutdown { reply } => {
+                                let _ = reply.send(());
+                                if drained > 0 {
+                                    tracing::debug!(
+                                        id = ?self.id,
+                                        drained,
+                                        "SessionActor idle-timeout drained buffered commands",
+                                    );
+                                }
+                                return;
+                            }
+                        }
+                        drained = drained.saturating_add(1);
+                    }
+                    if drained > 0 {
+                        tracing::debug!(
+                            id = ?self.id,
+                            drained,
+                            "SessionActor idle-timeout drained buffered commands",
+                        );
+                    }
                     tracing::debug!(id = ?self.id, "SessionActor idle timeout — detaching");
                     return;
                 }
