@@ -43,6 +43,16 @@ pub struct DefaultCompoundIngestor<S: NoteStore + Send + Sync + 'static> {
     pub orientation: Option<Arc<dyn NoteOrientation>>,
     pub memory_dir: PathBuf,
     pub budget: RelatedBudget,
+    /// Age ceiling, in seconds, for abandoned `.tx/{id}` apply-staging trees.
+    /// `try_apply` sweeps siblings past this age before staging its own, which
+    /// is what keeps residue from accumulating inside a resident process (boot
+    /// only catches what a dead process left behind).
+    ///
+    /// Carried as a field rather than read at the call site for the same reason
+    /// `full_rebuild_all` takes it as an argument: a sweep whose policy is
+    /// implicit is a sweep nobody can turn down. Production passes
+    /// `memory.compound_ingest.tx_residue_gc_seconds`.
+    pub tx_residue_gc_seconds: u64,
     /// Optional embedding manager. When set, `ingest_batch` pushes touched
     /// notes into the pending queue and flushes once at the tail so vectors
     /// are written without waiting for the next `reembed_all` migration.

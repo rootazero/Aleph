@@ -522,6 +522,13 @@ pub async fn handle_history(
             // the token counter restarting at zero, the model caption naming
             // the default the session had overridden.
             let session_snapshot = crate::gateway::session_snapshot::snapshot_from_metadata(&meta);
+            // The lane's waiting messages, by the SAME canonical key and at
+            // the same post-gate position as `active_run` and `plan` above,
+            // and for the same reason: they are one snapshot with the
+            // transcript. A client that attached mid-wait never saw the
+            // `RunQueued` frames — they fired before its socket existed — so
+            // without this it paints "thinking" over a queue it cannot see.
+            let pending = crate::gateway::busy_queue::pending_for(&canonical);
             JsonRpcResponse::success(
                 request.id,
                 json!({
@@ -529,6 +536,7 @@ pub async fn handle_history(
                     "messages": chat_messages,
                     "count": count,
                     "active_run": active_run,
+                    "pending": pending,
                     "plan": plan,
                     "session": session_snapshot,
                 }),
@@ -1104,6 +1112,66 @@ mod tests {
             assert!(
                 !waiting.is_cancelled(),
                 "a denied abort must not purge the foreign session's queue"
+            );
+        }
+
+        /// End-to-end coverage for `chat.history`'s `"pending"` key: drives
+        /// the real `handle_history`, not just `busy_queue::pending_for` in
+        /// isolation, so a future edit swapping `&canonical` for
+        /// `params.session_key` (or dropping the field) would fail here even
+        /// though `pending_for` itself stayed correct.
+        ///
+        /// Addresses the session by a differently-cased-but-equivalent
+        /// spelling, on purpose: `normalize_agent_id` folds it to the same
+        /// `SessionKey`, so the session lookup still succeeds either way, but
+        /// only the CANONICAL string is what `busy_queue::register` (and
+        /// production's `register_run`) key the lane on — a raw,
+        /// non-canonical `params.session_key` would look up a lane that was
+        /// never registered under that exact spelling and silently report no
+        /// one waiting, which is the bug this test exists to catch (see the
+        /// call site's own comment).
+        ///
+        /// Uses its own session key rather than `alice_session`'s shared
+        /// literal: `busy_queue` is a process-global lane keyed by that same
+        /// string, and `chat_abort_denies_a_foreign_session_key` above also
+        /// registers a ticket on it — tests run in parallel, so sharing the
+        /// key would make this test's own lane depth depend on whether that
+        /// other test's `TicketGuard` has dropped yet.
+        #[tokio::test]
+        async fn chat_history_reports_the_sessions_pending_lane() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let key = SessionKey::main("HistoryPendingTest");
+            store.get_or_create(&key).await.unwrap();
+            let canonical = key.to_key_string();
+            assert_eq!(
+                canonical, "agent:historypendingtest:main",
+                "test premise: agent_id normalizes to lowercase"
+            );
+
+            let _waiting = crate::gateway::busy_queue::register(&canonical, 8, "queued-1")
+                .expect("lane has room");
+
+            let response = handle_history(
+                request(
+                    "chat.history",
+                    json!({ "session_key": "agent:HistoryPendingTest:main" }),
+                ),
+                store.clone(),
+                None,
+            )
+            .await;
+
+            let pending = response
+                .result
+                .as_ref()
+                .and_then(|r| r.get("pending"))
+                .unwrap_or_else(|| panic!("chat.history response carried no \"pending\" key: {response:?}"));
+            assert_eq!(
+                pending,
+                &json!([{ "run_id": "queued-1", "ahead": 0 }]),
+                "the session's own waiting lane must be reported verbatim, even \
+                 when addressed by a non-canonical spelling of the same session"
             );
         }
 

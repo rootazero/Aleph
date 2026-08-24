@@ -520,6 +520,49 @@ pub fn snapshot() -> BusyQueueSnapshot {
     }
 }
 
+pub use aleph_protocol::queue::PendingRun;
+
+/// Messages still waiting on `session_key`, in lane order.
+///
+/// Cancelled tickets are neither listed nor counted, matching [`snapshot`]'s
+/// `total_waiting` contract and [`TicketGuard::ahead`].
+///
+/// # Known limit: a `/btw` side question's ticket is invisible here
+///
+/// `session_key` here is the caller's **addressed** session (`chat.history`
+/// is keyed by conversation), but [`register_run`] deliberately keys a
+/// side question's ticket on its **derived** execution session
+/// ([`crate::gateway::btw::execution_session`]) — see that function's doc
+/// for why. So a queued side question's ticket lives in a lane this
+/// function can never look up by the addressed key. The live
+/// `StreamEvent::RunQueued` frame does not have this gap: it carries the
+/// addressed session key regardless of which lane the ticket sits in (see
+/// `busy_queue::spawn`'s `report` closure), so a client attached to the
+/// conversation still sees the transient frame — it just never lands in
+/// this snapshot. Fixing the mismatch is a separate decision; this
+/// function's key is not to be changed to chase it (see [`register_run`]'s
+/// doc for what keying it on the addressed session costs instead).
+#[must_use]
+pub fn pending_for(session_key: &str) -> Vec<PendingRun> {
+    let map = lock();
+    let Some(lane) = map.get(session_key) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut ahead = 0u16;
+    for t in &lane.tickets {
+        if t.cancelled {
+            continue;
+        }
+        out.push(PendingRun {
+            run_id: t.run_id.clone(),
+            ahead,
+        });
+        ahead = ahead.saturating_add(1);
+    }
+    out
+}
+
 /// Observability view of the wait lanes. See [`snapshot`].
 #[derive(Debug, Clone, Default)]
 pub struct BusyQueueSnapshot {
@@ -592,6 +635,41 @@ impl TicketGuard {
                 true
             }
         }
+    }
+
+    /// How many messages ahead of this one may still run.
+    ///
+    /// The wire value behind `StreamEvent::RunQueued.ahead`, so it answers the
+    /// only question a waiting user asks. Counts with `snapshot`'s contract,
+    /// not the raw deque length: a cancelled ticket ahead of me will never
+    /// become a run, and telling the user to wait for it is the same class of
+    /// lie `mark_admitted` removed on the other side.
+    ///
+    /// Fails **open** (`0`) when this ticket is no longer in its lane —
+    /// withdrawn by `mark_admitted`, dropped, or the lane garbage-collected —
+    /// the same posture as [`Self::is_front`] and [`Self::drain_epoch`]. `0`
+    /// renders as "about to start", and whatever happens next (`RunAccepted`
+    /// or `RunError`) overwrites that phase, so a stale open answer costs one
+    /// frame, never a stuck UI.
+    ///
+    /// Saturates at `u16::MAX`; the lane cap (`max_per_session`, default 32)
+    /// is three orders of magnitude below it.
+    #[must_use]
+    pub fn ahead(&self) -> u16 {
+        let map = lock();
+        let Some(lane) = map.get(&self.session_key) else {
+            return 0;
+        };
+        let mut ahead = 0u16;
+        for t in &lane.tickets {
+            if t.id == self.ticket {
+                return ahead;
+            }
+            if !t.cancelled {
+                ahead = ahead.saturating_add(1);
+            }
+        }
+        0
     }
 
     /// Whether an explicit stop abandoned this message while it waited —
@@ -1102,6 +1180,49 @@ mod tests {
         assert!(!cancel_queued_run("bq-cancel-b"));
     }
 
+    /// `ahead` counts messages that may still run, matching `snapshot`'s
+    /// `total_waiting` contract — a cancelled ticket ahead of me will never
+    /// become a run, so reporting it would tell the user to wait for something
+    /// that is already gone.
+    #[test]
+    fn ahead_counts_only_tickets_that_may_still_run() {
+        // Process-global run-id namespace — see the comment on
+        // `cancel_queued_run_targets_exactly_one_ticket`.
+        let s = "sess-ahead-live";
+        let a = register(s, CAP, "ahead-live-a").expect("a");
+        let b = register(s, CAP, "ahead-live-b").expect("b");
+        let c = register(s, CAP, "ahead-live-c").expect("c");
+
+        assert_eq!(a.ahead(), 0, "front ticket has nobody ahead of it");
+        assert_eq!(b.ahead(), 1);
+        assert_eq!(c.ahead(), 2);
+
+        // Cancelling the middle one must shrink what `c` is told to wait for.
+        assert!(cancel_queued_run("ahead-live-b"));
+        assert_eq!(c.ahead(), 1, "a cancelled predecessor is not a wait");
+        assert_eq!(a.ahead(), 0);
+        drop((a, b, c));
+    }
+
+    /// Fail-open, same posture as `is_front` / `drain_epoch`: a ticket whose
+    /// lane or entry is gone reports "nobody ahead". Reporting a stale positive
+    /// would park a client's UI on a wait that no longer exists.
+    #[test]
+    fn ahead_fails_open_when_the_ticket_left_the_lane() {
+        let s = "sess-ahead-gone";
+        let a = register(s, CAP, "run-a").expect("a");
+        let b = register(s, CAP, "run-b").expect("b");
+        assert_eq!(b.ahead(), 1);
+
+        // `mark_admitted` withdraws a ticket without touching its guard.
+        mark_admitted(s, "run-a");
+        assert_eq!(b.ahead(), 0, "the ticket ahead was withdrawn");
+
+        mark_admitted(s, "run-b");
+        assert_eq!(b.ahead(), 0, "own ticket withdrawn reads as fail-open 0");
+        drop((a, b));
+    }
+
     #[test]
     fn snapshot_reports_depth_deepest_first() {
         let shallow = "bq-test-snap|a";
@@ -1243,5 +1364,45 @@ mod tests {
             "an unrelated mark must not disturb the lane"
         );
         assert_eq!(purge(s), 1, "and must not silently drop the ticket");
+    }
+
+    /// The durable half of `RunQueued`. A client that attaches mid-wait never saw
+    /// the frame — it fired before the socket existed — so the snapshot it
+    /// already fetches has to carry the same fact.
+    #[test]
+    fn pending_for_lists_live_waiters_in_lane_order() {
+        // Process-global run-id namespace — see the comment on
+        // `cancel_queued_run_targets_exactly_one_ticket`.
+        let s = "sess-pending";
+        let a = register(s, CAP, "pending-lane-a").expect("a");
+        let b = register(s, CAP, "pending-lane-b").expect("b");
+        let c = register(s, CAP, "pending-lane-c").expect("c");
+
+        let pending = pending_for(s);
+        assert_eq!(
+            pending
+                .iter()
+                .map(|p| (p.run_id.as_str(), p.ahead))
+                .collect::<Vec<_>>(),
+            vec![
+                ("pending-lane-a", 0),
+                ("pending-lane-b", 1),
+                ("pending-lane-c", 2)
+            ]
+        );
+
+        assert!(cancel_queued_run("pending-lane-b"));
+        let pending = pending_for(s);
+        assert_eq!(
+            pending
+                .iter()
+                .map(|p| (p.run_id.as_str(), p.ahead))
+                .collect::<Vec<_>>(),
+            vec![("pending-lane-a", 0), ("pending-lane-c", 1)],
+            "a cancelled waiter is neither listed nor counted"
+        );
+
+        assert!(pending_for("sess-that-never-existed").is_empty());
+        drop((a, b, c));
     }
 }

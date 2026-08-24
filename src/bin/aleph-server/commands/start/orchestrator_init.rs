@@ -360,6 +360,11 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // identical (R6); `None` degrades manual compaction to the deterministic
     // summary, never to a no-op.
     let cheap_summary_provider = build_cheap_summary_provider(config, primary_provider_key);
+    // Build the context-budget config ONCE here (it used to be built inline in
+    // the harness literal below): the manual `/compact` wiring needs the
+    // derived summarizer-input budget, and building twice would double the
+    // chain-minimum derivation + its startup log lines.
+    let context_budget_config = build_context_budget_config(config, primary_provider_key);
     alephcore::context::compact::manual::install_manual_compaction(
         alephcore::context::compact::manual::ManualCompactWiring {
             summarizer: cheap_summary_provider
@@ -370,6 +375,11 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
                 .as_ref()
                 .and_then(|cb| cb.manual_compact_keep_tokens)
                 .unwrap_or(alephcore::context::compact::manual::DEFAULT_KEEP_TOKENS),
+            summarizer_input_budget: context_budget_config.as_ref().map_or(
+                alephcore::context::compact::compactor::CompactorConfig::default()
+                    .summarizer_input_budget,
+                |c| c.summarizer_input_budget,
+            ),
         },
     );
 
@@ -382,8 +392,10 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         named_providers,
         verifier_chain,
         // H2: opt-in mid-run context compaction. `None` (section absent /
-        // disabled) keeps the previous behavior — no compaction.
-        context_budget_config: build_context_budget_config(config, primary_provider_key),
+        // disabled) keeps the previous behavior — no compaction. Built once
+        // above (the manual `/compact` wiring reads the derived
+        // summarizer-input budget from the same value).
+        context_budget_config,
         // Per-run serving-model refinement (§2.2): re-keys the chain-minimum
         // budget onto the model each run actually serves (select_model /
         // model_hint / brain pin), min-floored by the chain-minimum so

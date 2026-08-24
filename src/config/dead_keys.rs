@@ -122,6 +122,22 @@ const TOLERATED: &[Tolerated] = &[
         path: "desktop.mic_level",
         why: "reporter removed 2026-08-09; see the module doc of src/config/types/desktop.rs",
     },
+    // These two shipped in `CompoundIngestConfig` from the day the section was
+    // written and were read by nothing for their whole life. Note what that
+    // means for this scanner: a key the schema *declares* parses, so
+    // `serde_ignored` never saw them — "parses but reaches no code" is a
+    // different question from "parses and is discarded", and only the second
+    // one is mechanically visible here. Removing the fields moves them into
+    // this scanner's reach, and these entries keep an existing file from
+    // warning about a line we shipped.
+    Tolerated {
+        path: "memory.compound_ingest.replan_on_hash_conflict",
+        why: "retired 2026-08-23 — the hash-conflict replan is exactly one attempt, decided in               src/memory/notes/ingest/ingestor/batch.rs; this knob never reached it",
+    },
+    Tolerated {
+        path: "memory.compound_ingest.failure_cooldown_seconds",
+        why: "retired 2026-08-23 — a failed ingest defers its raw rows for RETRY_GRACE_SECS               (src/memory/compression/service.rs); this knob never reached anything",
+    },
 ];
 
 /// Deserialize `contents`, returning the value alongside the dotted key paths

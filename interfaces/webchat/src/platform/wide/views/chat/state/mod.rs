@@ -7,6 +7,11 @@ use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 use shared_ui_logic::state::merge_recalled_draft;
 
+mod run_phase;
+mod send_error;
+pub use run_phase::ChatPhase;
+pub use send_error::{ChatSendError, ChatSendErrorCode};
+
 /// File staged for upload as part of the next outbound message.
 ///
 /// Lives on `ChatState` so both the composer's paperclip input AND the
@@ -73,90 +78,6 @@ pub fn queue_preview_label(entry: &QueuedPrompt) -> String {
 #[must_use]
 pub fn queue_row_key(idx: usize, entry: &QueuedPrompt) -> String {
     format!("{idx}:{}", entry.text)
-}
-
-/// Stable, machine-readable code for a chat send / delivery failure.
-///
-/// Mirrors openhuman's `chatSendError.ts` taxonomy so analytics and tests
-/// can branch on a small fixed set instead of substring-matching messages.
-/// New variants only — never rename or repurpose existing ones (wire-stable).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChatSendErrorCode {
-    /// WebSocket dropped or never established.
-    SocketDisconnected,
-    /// Cloud provider rejected the send (HTTP error, rate limit, etc.).
-    CloudSendFailed,
-    /// Server-side safety pipeline blocked the prompt.
-    PromptBlocked,
-    /// Server flagged the prompt for review (soft warning).
-    PromptReview,
-    /// Usage limit / quota reached.
-    UsageLimitReached,
-    /// Run aborted due to a safety timeout.
-    SafetyTimeout,
-    /// The composer refused the send before it left the client — the input is
-    /// not supported on this surface (e.g. attachments in team group chat).
-    /// Distinct from the server-side codes above: nothing was transmitted, and
-    /// the user can fix it and retry immediately.
-    Unsupported,
-    /// Catch-all for unmapped errors. Use the message field for context.
-    Unknown,
-}
-
-/// Structured chat send error — preferred over the legacy bare
-/// `error_message` string. Both are populated in lock-step so existing
-/// readers keep working unchanged.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChatSendError {
-    pub code: ChatSendErrorCode,
-    pub message: String,
-}
-
-impl ChatSendError {
-    pub fn new(code: ChatSendErrorCode, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-        }
-    }
-
-    /// Heuristic classifier — maps an opaque error string to a code so the
-    /// existing `ChatApi::send` error path can produce structured errors
-    /// without a wire-format change. Order matters (most specific first).
-    pub fn classify(msg: impl Into<String>) -> Self {
-        let message = msg.into();
-        let l = message.to_lowercase();
-        let code =
-            if l.contains("disconnect") || l.contains("not connected") || l.contains("websocket") {
-                ChatSendErrorCode::SocketDisconnected
-            } else if l.contains("prompt_blocked") || l.contains("prompt injection") {
-                ChatSendErrorCode::PromptBlocked
-            } else if l.contains("prompt_review") {
-                ChatSendErrorCode::PromptReview
-            } else if l.contains("usage limit") || l.contains("quota") || l.contains("rate limit") {
-                ChatSendErrorCode::UsageLimitReached
-            } else if l.contains("safety timeout")
-                || l.contains("turn timeout")
-                || l.contains("stalled after")
-            {
-                // Harness-side watchdogs (TerminateReason::TurnTimeout /
-                // StallTimeout humanized text) — the run itself was killed.
-                ChatSendErrorCode::SafetyTimeout
-            } else if l.contains("timed out")
-                || l.contains("cloud")
-                || l.contains("http")
-                || l.contains("provider")
-            {
-                // "Request timed out" comes from the provider transport
-                // (connect/TTFB/stream-idle), not the harness — an upstream
-                // delivery failure, so it belongs with CloudSendFailed.
-                ChatSendErrorCode::CloudSendFailed
-            } else {
-                ChatSendErrorCode::Unknown
-            };
-        Self { code, message }
-    }
 }
 
 /// Transient provider-retry status for the active run.
@@ -481,16 +402,6 @@ pub enum MemberStatus {
     Idle,
     Working,
     Done,
-    Error,
-}
-
-/// Top-level Chat UI phase.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ChatPhase {
-    #[default]
-    Idle,
-    Thinking,
-    Streaming,
     Error,
 }
 
@@ -1212,6 +1123,41 @@ impl ChatState {
         self.reasoning_text.set(String::new());
     }
 
+    /// The run joined its session's wait lane. Idempotent — the lane reports
+    /// only when `ahead` changes, but a re-attach can replay the same value.
+    ///
+    /// Scoped to the run this conversation is actually following: a lane frame
+    /// for a sibling run (another tab, a channel, cron) must not repaint this
+    /// conversation's phase.
+    pub fn mark_queued(&self, run_id: &str, ahead: u16) {
+        if self.active_run_id.get_untracked().as_deref() != Some(run_id) {
+            return;
+        }
+        self.phase.set(ChatPhase::Queued { ahead });
+    }
+
+    /// The run was admitted to the engine — the wait is over.
+    ///
+    /// Only ever moves `Queued` to `Thinking`; every other phase is left
+    /// exactly as it was, because admission answers "the wait ended", never
+    /// "what is happening now" (a later frame may already have moved this
+    /// conversation to `Streaming`).
+    ///
+    /// This cannot ride on `start_assistant_message`, which is what
+    /// `run_accepted` already calls: that early-returns once the run's bubble
+    /// exists, and by admission time the queued frame has created it. Without
+    /// this method the phase would read "queued" until the first
+    /// `turn_started` or token — i.e. for the whole of model latency, exactly
+    /// while the model is in fact thinking.
+    pub fn mark_admitted(&self, run_id: &str) {
+        if self.active_run_id.get_untracked().as_deref() != Some(run_id) {
+            return;
+        }
+        if matches!(self.phase.get_untracked(), ChatPhase::Queued { .. }) {
+            self.phase.set(ChatPhase::Thinking);
+        }
+    }
+
     /// Begin a new agent step (Think→Act iteration) for `run_id`.
     ///
     /// Driven by `agent_trace.turn_started`. If the current
@@ -1533,7 +1479,15 @@ impl ChatState {
     }
 
     /// Mark current run as errored.
-    pub fn fail_run(&self, run_id: &str, error: &str) {
+    ///
+    /// `error_code` is the server's own classification of the failure
+    /// (`aleph_protocol::receipt::ReceiptCode`, carried on the wire as
+    /// `run_error.error_code`) — prefer it over re-deriving a bucket from the
+    /// rendered message, which is what left Stop, a rejected queued message,
+    /// and an expired key all rendering as an UNKNOWN banner. `None` is only
+    /// for a core that predates the field or a transport-layer failure raised
+    /// before any run exists.
+    pub fn fail_run(&self, run_id: &str, error: &str, error_code: Option<&str>) {
         let target_id = format!("assistant-{run_id}");
         self.messages.update(|msgs| {
             if let Some(msg) = msgs.iter_mut().rev().find(|m| m.id == target_id) {
@@ -1556,7 +1510,7 @@ impl ChatState {
             self.phase.set(ChatPhase::Error);
             self.clear_provider_retry();
         }
-        let structured = ChatSendError::classify(error);
+        let structured = ChatSendError::from_wire_code(error_code, error);
         self.error_message.set(Some(structured.message.clone()));
         self.send_error.set(Some(structured));
     }
@@ -2215,7 +2169,7 @@ mod step_tests {
             attempt: 3,
             max_attempts: 3,
         });
-        chat.fail_run("r1", "provider 302ai transient: Request timed out");
+        chat.fail_run("r1", "provider 302ai transient: Request timed out", None);
         assert!(
             chat.provider_retry.with_untracked(|n| n.is_none()),
             "run settled — retry notice must clear"
@@ -2633,6 +2587,88 @@ mod step_tests {
             "another run's live tool must keep running"
         );
     }
+
+    /// Asserting the effect arrives, not that the call happened. `mark_queued`
+    /// is guarded on `active_run_id`, and `start_assistant_message` sets that
+    /// only on the branch where it does not early-return — so this is the one
+    /// path the whole queued phase depends on.
+    #[test]
+    fn marking_a_run_queued_moves_the_phase() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("run-a");
+        chat.mark_queued("run-a", 2);
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Queued { ahead: 2 });
+    }
+
+    /// A lane frame for a sibling run — another tab, a channel, cron — must not
+    /// repaint this conversation.
+    #[test]
+    fn a_sibling_runs_lane_frame_repaints_nothing() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("run-a");
+        chat.mark_queued("run-b", 5);
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Thinking);
+    }
+
+    /// Admission is the edge that ends the wait. It cannot ride on
+    /// `start_assistant_message`: that early-returns once the bubble exists,
+    /// and by admission time the queued frame has already created it — so
+    /// without this the phase reads "queued" for the whole of model latency.
+    #[test]
+    fn admission_clears_the_queued_phase_and_touches_nothing_else() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("run-a");
+        chat.mark_queued("run-a", 1);
+        chat.mark_admitted("run-a");
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Thinking);
+
+        // Every other phase is left exactly as it was: admission answers only
+        // "the wait is over", never "what is happening now".
+        chat.phase.set(ChatPhase::Streaming);
+        chat.mark_admitted("run-a");
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Streaming);
+
+        // And a sibling run's admission is not this conversation's news.
+        chat.mark_queued("run-a", 1);
+        chat.mark_admitted("run-b");
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Queued { ahead: 1 });
+    }
+
+    /// Pins the fact `platform::phone::chat::composer`'s `running` predicate
+    /// depends on: unlike `fail_run`, `set_send_error` is NOT scoped to a run
+    /// id — it flips `phase` to `Error` unconditionally and leaves
+    /// `active_run_id` exactly as it was. That is why the phone composer's
+    /// busy check cannot rely on `phase.is_busy()` alone (`Error` reads
+    /// `false`) and must also check `active_run_id.get().is_some()` — a
+    /// `flush_queue` steer-send failing on a transient error while the real
+    /// run is still streaming must not read as idle. If this test ever goes
+    /// red, `set_send_error` became run-scoped and the second arm in
+    /// `composer.rs` can be reconsidered — by a person reading this failure,
+    /// not by someone "simplifying" a line they assume is dead weight.
+    #[test]
+    fn set_send_error_flips_phase_without_touching_the_active_run() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("run-a");
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Thinking);
+
+        chat.set_send_error(ChatSendError::new(ChatSendErrorCode::CloudSendFailed, "boom"));
+
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Error);
+        assert_eq!(
+            chat.active_run_id.get_untracked().as_deref(),
+            Some("run-a"),
+            "set_send_error must not clear active_run_id — the run it \
+             failed to steer into is still in flight server-side"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2693,7 +2729,7 @@ mod queue_tests {
 
         // A second run id the Panel is holding — queued in the gateway's wait
         // lane — fails (purged by a Stop, rejected by a full lane, timed out).
-        chat.fail_run("queued", "queue full");
+        chat.fail_run("queued", "queue full", None);
 
         assert_eq!(
             chat.active_run_id.get_untracked().as_deref(),
@@ -2706,7 +2742,7 @@ mod queue_tests {
         );
 
         // The live run's own failure does tear it down.
-        chat.fail_run("live", "provider unreachable");
+        chat.fail_run("live", "provider unreachable", None);
         assert!(chat.active_run_id.get_untracked().is_none());
     }
 
@@ -2954,7 +2990,7 @@ mod queue_tests {
         // they describe stops holding in the browser — this repo's recurring
         // shape, where the guard asserted the call and not the effect. A source
         // assertion is the only handle a host test has on a Leptos view.
-        let src = include_str!("messages.rs");
+        let src = include_str!("../messages.rs");
         let body = src
             .split("fn QueuedGhosts()")
             .nth(1)

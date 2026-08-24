@@ -601,6 +601,55 @@ Invariants worth preserving:
   emitter already sent a `RunError`; only the never-ran outcomes are the
   caller's to report.
 
+**The wire representation of waiting.** Before this was wired, a queued run
+emitted nothing at all between `chat.send` returning its id and `RunAccepted`
+— every client painted "thinking" over a run the engine had never heard of,
+for as long as `busy_queue_max_wait_secs`. Waiting now has two halves, split
+the same way `agent_trace` (lossy live mirror) and `RunSummary` (authority)
+already are: the live half is the best-effort `StreamEvent::RunQueued{run_id,
+session_key, ahead}`; the authoritative half is `chat.history`'s `pending[]`
+array (`aleph_protocol::queue::PendingRun`), which carries the lane
+truthfully — but **no client renders it today**. `active_run` and `pending[]`
+are disjoint by construction: `try_claim` calls `busy_queue::mark_admitted`
+in the same step that populates `active_run`, which withdraws the ticket
+from the lane, so a run that is `active_run` has already left `pending[]`,
+and a run still in `pending[]` is never `active_run`. A returning client has
+no way to identify which queued entry (if any) is its own from `pending[]`
+alone, either — the entries carry neither an author nor the message payload
+(deliberate non-goals, see the design doc's §7). The live
+`StreamEvent::RunQueued` frame is currently the only representation of a
+user's own wait that any client renders; wiring an attach-time renderer for
+`pending[]` is a decision recorded separately, not yet made. `ahead` comes
+from `TicketGuard::ahead()`, which counts the same way `snapshot()`'s
+`total_waiting` contract does — a cancelled ticket ahead of you is not a wait
+— and fails **open** to `0` once the ticket has left the lane (withdrawn by
+`mark_admitted`, dropped, or garbage-collected). `0` renders as "about to
+start", and whichever terminal frame arrives next (`RunAccepted` or
+`RunError`) overwrites it, so a stale open answer costs one frame, never a
+stuck UI.
+
+**Why position is self-reported by the waiter, not broadcast or polled.** The
+production point is the wait loop itself: `report(ahead)` is called from
+`deliver_with_ticket`, immediately before it parks — not from inside the
+"not front" branch. That distinction is deliberate: a front ticket refused
+for steering backpressure (`attempt()` returning `AgentBusy` at
+`max_pending_steering`) is waiting too, and it is the one wait that otherwise
+has no representation anywhere; reporting only from the not-front branch would
+miss it. Two alternatives were rejected. The lane broadcasting positions to
+every waiter would require the process-global lane table
+(`static LANES: OnceLock<Mutex<HashMap<..>>>`) to hold emitters — a
+responsibility that table does not have today and should not gain. The client
+polling `chat.pending` would reintroduce a poll this gateway already removed
+once, when Round-5 of the busy-input work converted queue visibility from
+polling to event-driven delivery; bringing it back would undo that round.
+`report` is `async` and awaited inline rather than a callback that spawns:
+`ahead` only decreases, and spawning would abandon that ordering, letting two
+rapid updates land inverted and flicker the number a user is reading.
+Reporting is deduplicated — `report` fires only when `ahead` actually changes
+— so an idle session that is never made to wait sees none of this: it takes
+the front of its lane on the first attempt and the function returns before the
+report point is ever reached.
+
 Stopping has two granularities: `/stop` purges the whole session lane
 (`busy_queue::purge`, wired only in `command_handler::handle_stop` — the
 `Interrupt` mode depends on the lane to restart its own message, so

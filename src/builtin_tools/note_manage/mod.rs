@@ -186,6 +186,7 @@ impl NoteManageTool {
             }
             NoteManageAction::Query
             | NoteManageAction::List
+            | NoteManageAction::Get
             | NoteManageAction::Insights
             | NoteManageAction::Evolution => return,
         };
@@ -203,14 +204,17 @@ impl NoteManageTool {
 impl AlephTool for NoteManageTool {
     const NAME: &'static str = "note_manage";
     const DESCRIPTION: &'static str =
-        "Create, update, append, query, list, delete, or rename personal knowledge notes; \
-         `insights` reads knowledge-graph health (gaps, bridges, communities) and \
+        "Create, update, append, get, query, list, delete, or rename personal knowledge \
+         notes; `insights` reads knowledge-graph health (gaps, bridges, communities) and \
          `evolution` explains why memory changed (or didn't) in recent dream cycles. \
          Notes are markdown files organized by category (preference, plan, learning, \
          project, personal, tool, lesson, goal-lessons, skill, reference, feedback, \
          transcript, query, contradiction, other, subagent-*). Markdown structure \
          (headings, paragraphs, code blocks) is preserved verbatim in create/update. \
-         `query` is hybrid semantic + full-text search. \
+         `query` is hybrid semantic + full-text search and caps every hit's body at \
+         4,000 chars; `get` reads ONE note by name, whole. `update` replaces a note's \
+         body wholesale, so ALWAYS `get` the note first and edit what it returns — \
+         rewriting from a `query` hit drops everything past the cut. \
          `rename` renames a note and rewrites every inbound [[wikilink]]. Typed \
          `relations` ([{to, type}]) declare semantic edges; supersedes/superseded_by/ \
          contradicts are force-surfaced at retrieval. \
@@ -240,6 +244,7 @@ impl AlephTool for NoteManageTool {
             NoteManageAction::Append => self.handle_append(&args).await,
             NoteManageAction::Query => self.handle_query(&args).await,
             NoteManageAction::List => self.handle_list(&args).await,
+            NoteManageAction::Get => self.handle_get(&args).await,
             NoteManageAction::Delete => self.handle_delete(&args).await,
             NoteManageAction::Rename => self.handle_rename(&args).await,
             NoteManageAction::Insights => self.handle_insights(&args).await,

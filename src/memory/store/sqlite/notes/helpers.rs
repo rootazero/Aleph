@@ -9,7 +9,6 @@ use std::collections::HashSet;
 
 use crate::error::AlephError;
 use crate::memory::notes::store::NoteIndexEntry;
-use crate::memory::notes::ProvenanceOrigin;
 use tracing::warn;
 
 /// Build a `NoteIndexEntry` from a row that includes a `link_count` column.
@@ -70,31 +69,6 @@ pub(crate) fn body_text_sha256(body: &str) -> String {
     let mut h = Sha256::new();
     h.update(body.as_bytes());
     format!("{:x}", h.finalize())
-}
-
-/// Stable string encoding of `ProvenanceOrigin` for the `notes_provenance.origin`
-/// column. Mirrors the literals parsed by `extract_provenance_markers` so a
-/// round-trip read+write is identity.
-pub(crate) const fn provenance_origin_to_str(origin: &ProvenanceOrigin) -> &'static str {
-    match origin {
-        ProvenanceOrigin::RawSource => "raw_source",
-        ProvenanceOrigin::PriorNote => "prior_note",
-        ProvenanceOrigin::Inferred => "inferred",
-        ProvenanceOrigin::System => "system",
-        ProvenanceOrigin::Legacy => "legacy",
-    }
-}
-
-/// Inverse of `provenance_origin_to_str`. Unknown values fall back to `Legacy`
-/// so a foreign writer cannot poison reads.
-pub(crate) fn provenance_origin_from_str(s: &str) -> ProvenanceOrigin {
-    match s {
-        "raw_source" => ProvenanceOrigin::RawSource,
-        "prior_note" => ProvenanceOrigin::PriorNote,
-        "inferred" => ProvenanceOrigin::Inferred,
-        "system" => ProvenanceOrigin::System,
-        _ => ProvenanceOrigin::Legacy,
-    }
 }
 
 /// Load note markdown content from disk given index metadata and `agent_id`.
@@ -190,26 +164,4 @@ pub(crate) fn collect_edges_between(
         edges.push(row.map_err(|e| AlephError::config(format!("collect_edges row: {e}")))?);
     }
     Ok(edges)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn provenance_origin_str_roundtrips_all_variants() {
-        for o in [
-            ProvenanceOrigin::RawSource,
-            ProvenanceOrigin::PriorNote,
-            ProvenanceOrigin::Inferred,
-            ProvenanceOrigin::System,
-            ProvenanceOrigin::Legacy,
-        ] {
-            assert_eq!(
-                provenance_origin_from_str(provenance_origin_to_str(&o)),
-                o,
-                "round-trip must be identity for {o:?}"
-            );
-        }
-    }
 }

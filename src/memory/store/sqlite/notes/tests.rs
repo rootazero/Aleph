@@ -1113,6 +1113,95 @@ mod tests {
         assert_eq!(citing, vec!["preference/typescript".to_string()]);
     }
 
+    /// A fact can quote a raw that never reaches the note's `source_notes`
+    /// list — that is the whole point of the inline `<!-- src: ... -->` marker,
+    /// which the ingest prompt asks the model to attach per line.
+    ///
+    /// `notes_citing` read `notes_sources` alone until 2026-08-23, so such a
+    /// note answered "does not cite this raw" while the marker was sitting in
+    /// it. Three documents already described the union — this trait's own doc,
+    /// `MEMORY_SYSTEM.md`, and the `RAW_MEMORY.md` retention invariant that
+    /// tells a future GC "do not delete a row while `notes_citing` is
+    /// non-empty". A GC honouring that against the narrower query would delete
+    /// exactly the rows the markers point at.
+    #[tokio::test]
+    async fn notes_citing_finds_a_raw_quoted_by_one_fact_and_not_by_the_note() {
+        use crate::memory::notes::{FactProvenance, ProvenanceOrigin};
+
+        let dir = tempfile::tempdir().unwrap();
+        let backend = SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap();
+        let note = KnowledgeNote {
+            title: "typescript".into(),
+            category: "preference".into(),
+            facts: vec!["prefers ts".into(), "quotes something".into()],
+            // Deliberately does NOT list `raw-fact-only`.
+            source_notes: vec!["raw-batch".into()],
+            fact_provenance: vec![
+                FactProvenance::default(),
+                FactProvenance {
+                    origin: ProvenanceOrigin::RawSource,
+                    source_id: Some("raw-fact-only".into()),
+                    inferred: false,
+                },
+            ],
+            ..Default::default()
+        };
+        backend
+            .index_note(&note, "default", "preference")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            backend.notes_citing("default", "raw-fact-only").await.unwrap(),
+            vec!["preference/typescript".to_string()],
+            "the note quotes this raw in a fact; only `notes_provenance` knows"
+        );
+        assert_eq!(
+            backend.notes_citing("default", "raw-batch").await.unwrap(),
+            vec!["preference/typescript".to_string()],
+            "the note-level citation must keep working"
+        );
+        assert!(
+            backend
+                .notes_citing("default", "raw-never-mentioned")
+                .await
+                .unwrap()
+                .is_empty(),
+            "self-guard: the union must not match everything"
+        );
+    }
+
+    /// A note that cites the same raw both ways is one row, not two — the
+    /// caller iterates this list issuing a DB read per entry.
+    #[tokio::test]
+    async fn notes_citing_dedups_a_note_that_cites_the_same_raw_at_both_levels() {
+        use crate::memory::notes::{FactProvenance, ProvenanceOrigin};
+
+        let dir = tempfile::tempdir().unwrap();
+        let backend = SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap();
+        let note = KnowledgeNote {
+            title: "typescript".into(),
+            category: "preference".into(),
+            facts: vec!["prefers ts".into()],
+            source_notes: vec!["raw-both".into()],
+            fact_provenance: vec![FactProvenance {
+                origin: ProvenanceOrigin::RawSource,
+                source_id: Some("raw-both".into()),
+                inferred: false,
+            }],
+            ..Default::default()
+        };
+        backend
+            .index_note(&note, "default", "preference")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            backend.notes_citing("default", "raw-both").await.unwrap(),
+            vec!["preference/typescript".to_string()]
+        );
+    }
+
     #[tokio::test]
     async fn get_graph_data_surfaces_edge_relation_kind() {
         let backend = make_backend();
@@ -1200,6 +1289,81 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(pending[0].retry_count, 3);
+    }
+
+    /// `archive_review` had a writer and no reader anywhere in the repo —
+    /// tests included. That is load-bearing for `rejected`: the candidate's
+    /// facts were never written to a note, so the archive row is the only place
+    /// the proposal survives at all. "The knowledge is preserved" is a claim
+    /// about a table somebody has to be able to read.
+    #[tokio::test]
+    async fn a_decided_verdict_can_be_read_back() {
+        let backend = make_backend();
+        let id = backend
+            .enqueue_review(
+                "agent1",
+                r#"{"note":"candidate"}"#,
+                "high",
+                0.3,
+                "contradicts",
+            )
+            .await
+            .unwrap();
+        backend.archive_review(&id, "rejected").await.unwrap();
+
+        // Gone from the queue…
+        assert!(backend
+            .list_pending_review("agent1", i64::MAX)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // …and readable in the archive, verdict and all.
+        let rows = backend.list_review_archive("agent1", 10).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].final_status, "rejected");
+        assert_eq!(rows[0].reason, "contradicts");
+        assert!(rows[0].candidate_json.contains("candidate"));
+
+        // Scoped by agent like every other note-layer read.
+        assert!(backend
+            .list_review_archive("other-agent", 10)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    /// An append-only decision log with no retention grows for the life of the
+    /// install — one row per gated candidate, each carrying a whole note
+    /// payload. Retention has to age rows out *and* leave recent ones, or it is
+    /// either a leak or an amnesia.
+    #[tokio::test]
+    async fn retention_ages_out_old_verdicts_and_keeps_recent_ones() {
+        let backend = make_backend();
+        for (n, status) in [("old", "rejected"), ("new", "approved")] {
+            let id = backend
+                .enqueue_review("agent1", &format!(r#"{{"n":"{n}"}}"#), "low", 0.5, "why")
+                .await
+                .unwrap();
+            backend.archive_review(&id, status).await.unwrap();
+        }
+        // Backdate one row past the window.
+        {
+            let conn = backend.conn().lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute(
+                "UPDATE notes_review_archive SET archived_at = archived_at - 1000 \
+                 WHERE candidate_json LIKE '%old%'",
+                [],
+            )
+            .unwrap();
+        }
+
+        let pruned = backend.prune_review_archive("agent1", 500).await.unwrap();
+        assert_eq!(pruned, 1);
+
+        let rows = backend.list_review_archive("agent1", 10).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].final_status, "approved");
     }
 
     // ---- §2.10 embedding dimensions + vector freshness --------------------

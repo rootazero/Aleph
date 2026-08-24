@@ -443,14 +443,19 @@ impl BuiltinToolRegistry {
             .with_clipboard_enabled(clipboard_enabled);
         // Automation runs arbitrary host code (AppleScript/JXA/shell/PowerShell)
         // + Shortcuts — gate it behind the same approval policy as DesktopTool/
-        // PimTool via the `DesktopAutomation` action type (permissive default =
-        // Allow, so byte-identical until a policy file tightens it).
+        // PimTool via the `DesktopAutomation` action type. ⚠️ The curated default
+        // for `DesktopAutomation` is `Ask`, and the tool resolves `Ask` to a
+        // refusal string with no interactive consumer — on a policy-file-absent
+        // install this gate REFUSES, it is not inert. Pending user ruling ⓒ
+        // (FEATURE_LOCATOR §7.3, 2026-08-23 entry).
         let automation_tool = AutomationTool::new(Arc::clone(&desktop_platform))
             .with_approval_policy(Arc::clone(&approval_policy));
         let permission_tool = PermissionTool::new(Arc::clone(&desktop_platform));
         // Media tool — camera/mic capture rides the same approval policy via the
-        // `MediaCapture` action type (permissive default = Allow, so byte-
-        // identical until a policy file sets `media_capture: ask/deny`).
+        // `MediaCapture` action type. ⚠️ The curated default is `Ask`, which the
+        // tool resolves to a refusal string with no interactive consumer — on a
+        // policy-file-absent install this gate REFUSES, it is not inert. Pending
+        // user ruling ⓒ (FEATURE_LOCATOR §7.3, 2026-08-23 entry).
         let media_tool = MediaTool::new(Arc::clone(&desktop_platform))
             .with_approval_policy(Arc::clone(&approval_policy));
 

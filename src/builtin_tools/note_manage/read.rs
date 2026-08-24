@@ -9,10 +9,11 @@ use tracing::warn;
 
 use crate::error::{AlephError, Result};
 use crate::memory::notes::canonicalize_category;
+use crate::memory::notes::sanitize_title;
 use crate::memory::notes::store::NoteStore;
 
 use super::args::{NoteListEntry, NoteManageArgs, NoteManageResult, SearchAdvisory};
-use super::helpers::bound_chars;
+use super::helpers::{bound_chars, validate_category};
 use super::NoteManageTool;
 
 /// Per-note content cap in `query` results. A single sprawling note must not
@@ -22,6 +23,15 @@ const PER_NOTE_MAX_CHARS: usize = 4_000;
 /// Total content budget for one `query` response, in chars. Mirrors the
 /// output-bounding discipline used by the browser tools' `bound_content`.
 const TOTAL_CONTENT_MAX_CHARS: usize = 24_000;
+
+/// Content ceiling for one `get`, in chars — 16x the per-hit `query` cap.
+///
+/// `query` budgets because it returns *many* notes and one sprawling hit must
+/// not crowd out the rest; `get` returns exactly the note that was asked for,
+/// so the only thing left to bound is the context window itself. Sixteen times
+/// the survey cap clears every note the ingest and tool paths actually produce
+/// while still refusing to hand a pathological file to the model whole.
+const GET_MAX_CHARS: usize = 64_000;
 
 /// recall_signals channel for explicit `note_manage(query)` look-ups. Distinct
 /// from the auto-recall channel so the per-day dedup of the two paths is
@@ -255,7 +265,7 @@ impl NoteManageTool {
         if bodies_omitted > 0 {
             combined_content.push_str(&format!(
                 "[{bodies_omitted} more matching note(s) listed above without bodies — \
-                 query with a smaller limit or read them individually]\n"
+                 read any of them whole with action `get`]\n"
             ));
             advisory.bodies_omitted = Some(bodies_omitted);
         }
@@ -278,6 +288,157 @@ impl NoteManageTool {
             content: Some(combined_content),
             notes: Some(notes),
             search: Some(advisory),
+        })
+    }
+
+    /// `get` — read one note by address.
+    ///
+    /// The write surface replaces a note's body wholesale (`update`), and until
+    /// this action existed the only body-returning read was `query`: a *ranked
+    /// search* whose every hit is cut at [`PER_NOTE_MAX_CHARS`]. So the model
+    /// could overwrite a note it had only ever seen 4,000 chars of, and the
+    /// truncation marker sat in the very text it would copy forward. The Panel
+    /// never had this problem — `graph.node_detail` reads the same file from
+    /// disk, whole. This is that capability on the model's face.
+    ///
+    /// Two rules it does not share with `query`:
+    ///
+    /// * **The address must be unambiguous.** With no `category`, the filename
+    ///   is resolved through the index; two notes of that name in different
+    ///   categories is a refusal that names both, not a first-hit guess. Same
+    ///   discipline as the wikilink resolver's tiers — a wrong note handed to a
+    ///   wholesale rewrite is worse than no note.
+    /// * **Disk is the answer.** The index row supplies tags and category; the
+    ///   body comes from the markdown file, which is the source of truth. A row
+    ///   whose file is gone reports missing rather than serving stale metadata.
+    pub(super) async fn handle_get(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
+        let agent_id_owned = self.resolve_agent_id(args)?;
+        let agent_id = agent_id_owned.as_str();
+
+        let filename = args
+            .filename
+            .as_deref()
+            .ok_or_else(|| AlephError::tool("filename is required for get"))?;
+        let safe_filename = sanitize_title(filename)?;
+
+        let note_path = match args.category.as_deref() {
+            Some(raw) => {
+                let category = canonicalize_category(raw);
+                validate_category(&category)?;
+                format!("{category}/{safe_filename}")
+            }
+            None => {
+                let mut hits = self
+                    .indexer
+                    .store()
+                    .find_by_filename(&safe_filename, agent_id)
+                    .await
+                    .map_err(|e| AlephError::tool(format!("Failed to locate note: {e}")))?;
+                hits.sort();
+                match hits.len() {
+                    0 => {
+                        return Err(AlephError::tool(format!(
+                            "Note '{safe_filename}' not found. Pass `category` if you know it, \
+                             or use the `query` action to search."
+                        )))
+                    }
+                    1 => hits.remove(0),
+                    _ => {
+                        return Err(AlephError::tool(format!(
+                            "Note '{safe_filename}' exists in {} categories ({}). \
+                             Pass `category` to say which one.",
+                            hits.len(),
+                            hits.join(", ")
+                        )))
+                    }
+                }
+            }
+        };
+
+        let (category, file_stem) = note_path
+            .split_once('/')
+            .map(|(c, f)| (c.to_string(), f.to_string()))
+            .ok_or_else(|| AlephError::tool(format!("malformed note path '{note_path}'")))?;
+
+        let file_path = crate::memory::notes::store::note_content_path(
+            self.indexer.memory_dir(),
+            agent_id,
+            &category,
+            &file_stem,
+        );
+        let raw = match tokio::fs::read_to_string(&file_path).await {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(AlephError::tool(format!(
+                    "Note '{note_path}' does not exist."
+                )))
+            }
+            Err(e) => return Err(AlephError::tool(format!("Failed to read note: {e}"))),
+        };
+
+        // Recall bookkeeping, same channel as `query`: an addressed read is the
+        // strongest form of explicit look-up there is, and a note the model
+        // keeps opening must not age as never-used. The query text is the path,
+        // so `get` and `query` occupy different dedup keys on the same channel.
+        // Best-effort — a signal write failure never fails the read.
+        if let Err(e) = self
+            .indexer
+            .store()
+            .record_recall_hits(
+                &note_path,
+                NOTE_MANAGE_RECALL_CHANNEL,
+                &[(note_path.clone(), 1.0)],
+                agent_id,
+            )
+            .await
+        {
+            tracing::debug!(error = %e, "note_manage get: recall signal write failed");
+        }
+
+        let tags = self
+            .indexer
+            .store()
+            .get_note_index(&note_path, agent_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|e| e.tags)
+            .unwrap_or_default();
+
+        let total_chars = raw.chars().count();
+        let content = bound_chars(&raw, GET_MAX_CHARS);
+        let message = if total_chars > GET_MAX_CHARS {
+            // Naming the overflow is the difference between "this is the note"
+            // and "this is the front of the note": a wholesale `update` written
+            // from a truncated read is exactly the loss this action exists to
+            // stop, so the ceiling has to be stated where the caller cannot
+            // miss it, not only inside the body's own marker.
+            format!(
+                "Read note '{note_path}' — TRUNCATED at {GET_MAX_CHARS} of {total_chars} chars. \
+                 Do NOT `update` this note from this response; the tail is not shown."
+            )
+        } else {
+            format!("Read note '{note_path}' ({total_chars} chars)")
+        };
+
+        Ok(NoteManageResult {
+            related_notes: None,
+            success: true,
+            message,
+            // Deliberately no `destination`: that field is a *write* receipt
+            // (see `NoteManageResult::destination`). Stamping one on a read is
+            // how a model ends up telling the user something was filed away
+            // when nothing was written.
+            destination: None,
+            note_path: Some(note_path.clone()),
+            content: Some(content),
+            notes: Some(vec![NoteListEntry {
+                path: note_path,
+                category,
+                filename: file_stem,
+                tags,
+            }]),
+            search: None,
         })
     }
 

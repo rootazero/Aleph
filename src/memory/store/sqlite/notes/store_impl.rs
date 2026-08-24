@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::error::AlephError;
 use crate::memory::notes::graph::{GraphEdge, GraphNode, GraphSnapshot};
 use crate::memory::notes::store::{
-    GraphEdgeRow, NoteIndexEntry, NoteStore, OutgoingLinkRow, ReviewQueueRow,
+    GraphEdgeRow, NoteIndexEntry, NoteStore, OutgoingLinkRow, ReviewArchiveRow, ReviewQueueRow,
 };
 use crate::memory::notes::{
     extract_wikilinks_with_alias, FactProvenance, KnowledgeNote, ProvenanceOrigin,
@@ -25,7 +25,7 @@ use super::super::SqliteMemoryBackend;
 
 use super::helpers::{
     body_text_sha256, collect_edges_between, load_note_content_from_disk,
-    provenance_origin_from_str, provenance_origin_to_str, row_to_entry,
+    row_to_entry,
 };
 
 macro_rules! lock_conn {
@@ -387,11 +387,17 @@ impl NoteStore for SqliteMemoryBackend {
                 .map_err(|e| AlephError::config(format!("index_note fts tx commit: {e}")))?;
         }
 
-        // Persist per-fact provenance for governance / review (Phase C2.9.2).
-        // Inlined under the existing connection guard rather than calling
-        // `self.upsert_provenance(...)` so we don't drop and re-acquire the
-        // connection mutex mid-write. An empty `fact_provenance` (legacy notes)
-        // is fine: the DELETE clears any stale rows and the loop is a no-op.
+        // Persist per-fact provenance for governance / review (Phase C2.9.2)
+        // and for the fact-level half of `notes_citing`. This is the single
+        // writer of `notes_provenance`: there used to be a second one — a
+        // `NoteStore::upsert_provenance` whose body was a byte-for-byte copy of
+        // this loop and whose only mention anywhere was the comment here saying
+        // it is not called. Written inline under the connection guard already
+        // held, because taking it again from an async trait method would mean
+        // dropping and re-acquiring the mutex mid-write.
+        //
+        // An empty `fact_provenance` (legacy notes) is fine: the DELETE clears
+        // any stale rows and the loop is a no-op.
         conn.execute(
             "DELETE FROM notes_provenance WHERE agent_id = ?1 AND note_path = ?2",
             params![agent_id, path],
@@ -399,7 +405,7 @@ impl NoteStore for SqliteMemoryBackend {
         .map_err(|e| AlephError::config(format!("index_note prov delete: {e}")))?;
         let now_ts = chrono::Utc::now().timestamp();
         for (idx, p) in note.fact_provenance.iter().enumerate() {
-            let origin_str = provenance_origin_to_str(&p.origin);
+            let origin_str = p.origin.as_str();
             let source_kind: Option<&str> = match p.origin {
                 ProvenanceOrigin::RawSource => Some("raw"),
                 ProvenanceOrigin::PriorNote => Some("note"),
@@ -2208,83 +2214,6 @@ impl NoteStore for SqliteMemoryBackend {
     // Phase C2.9.2 governance: per-fact provenance + async review queue.
     // -----------------------------------------------------------------
 
-    async fn upsert_provenance(
-        &self,
-        agent_id: &str,
-        note_path: &str,
-        provs: &[FactProvenance],
-    ) -> Result<(), AlephError> {
-        let conn = lock_conn!(self)?;
-
-        conn.execute(
-            "DELETE FROM notes_provenance WHERE agent_id = ?1 AND note_path = ?2",
-            params![agent_id, note_path],
-        )
-        .map_err(|e| AlephError::config(format!("upsert_provenance delete: {e}")))?;
-
-        let now_ts = chrono::Utc::now().timestamp();
-        for (idx, p) in provs.iter().enumerate() {
-            let origin_str = provenance_origin_to_str(&p.origin);
-            let source_kind: Option<&str> = match p.origin {
-                ProvenanceOrigin::RawSource => Some("raw"),
-                ProvenanceOrigin::PriorNote => Some("note"),
-                _ => None,
-            };
-            conn.execute(
-                "INSERT INTO notes_provenance \
-                 (agent_id, note_path, fact_idx, origin, source_kind, source_id, inferred, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    agent_id,
-                    note_path,
-                    idx as i64,
-                    origin_str,
-                    source_kind,
-                    p.source_id,
-                    i64::from(p.inferred),
-                    now_ts,
-                ],
-            )
-            .map_err(|e| AlephError::config(format!("upsert_provenance insert: {e}")))?;
-        }
-        Ok(())
-    }
-
-    async fn get_provenance(
-        &self,
-        agent_id: &str,
-        note_path: &str,
-    ) -> Result<Vec<FactProvenance>, AlephError> {
-        let conn = lock_conn!(self)?;
-
-        let mut stmt = conn
-            .prepare(
-                "SELECT origin, source_id, inferred FROM notes_provenance \
-                 WHERE agent_id = ?1 AND note_path = ?2 \
-                 ORDER BY fact_idx ASC",
-            )
-            .map_err(|e| AlephError::config(format!("get_provenance prepare: {e}")))?;
-
-        let rows = stmt
-            .query_map(params![agent_id, note_path], |row| {
-                let origin: String = row.get(0)?;
-                let source_id: Option<String> = row.get(1)?;
-                let inferred: i64 = row.get(2)?;
-                Ok(FactProvenance {
-                    origin: provenance_origin_from_str(&origin),
-                    source_id,
-                    inferred: inferred != 0,
-                })
-            })
-            .map_err(|e| AlephError::config(format!("get_provenance query: {e}")))?;
-
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r.map_err(|e| AlephError::config(format!("get_provenance row: {e}")))?);
-        }
-        Ok(out)
-    }
-
     async fn enqueue_review(
         &self,
         agent_id: &str,
@@ -2412,6 +2341,54 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(())
     }
 
+    async fn list_review_archive(
+        &self,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ReviewArchiveRow>, AlephError> {
+        let conn = lock_conn!(self)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, candidate_json, final_status, reason, created_at, archived_at \
+                 FROM notes_review_archive WHERE agent_id = ?1 \
+                 ORDER BY archived_at DESC LIMIT ?2",
+            )
+            .map_err(|e| AlephError::config(format!("list_review_archive prepare: {e}")))?;
+        let rows = stmt
+            .query_map(params![agent_id, limit as i64], |r| {
+                Ok(ReviewArchiveRow {
+                    id: r.get(0)?,
+                    candidate_json: r.get(1)?,
+                    final_status: r.get(2)?,
+                    reason: r.get(3)?,
+                    created_at: r.get(4)?,
+                    archived_at: r.get(5)?,
+                })
+            })
+            .map_err(|e| AlephError::config(format!("list_review_archive query: {e}")))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| AlephError::config(format!("list_review_archive row: {e}")))?);
+        }
+        Ok(out)
+    }
+
+    async fn prune_review_archive(
+        &self,
+        agent_id: &str,
+        older_than_secs: i64,
+    ) -> Result<usize, AlephError> {
+        let conn = lock_conn!(self)?;
+        let cutoff = chrono::Utc::now().timestamp() - older_than_secs;
+        let n = conn
+            .execute(
+                "DELETE FROM notes_review_archive WHERE agent_id = ?1 AND archived_at < ?2",
+                params![agent_id, cutoff],
+            )
+            .map_err(|e| AlephError::config(format!("prune_review_archive: {e}")))?;
+        Ok(n)
+    }
+
     /// Phase C2.7 — return the most recent `created_at` recall signal for
     /// `(agent_id, note_path)`, or `None` when no signals exist. Scoped to the
     /// recording agent so a sibling agent's recall of a same-named note can't
@@ -2497,8 +2474,33 @@ impl NoteStore for SqliteMemoryBackend {
         source_ref: &str,
     ) -> Result<Vec<String>, AlephError> {
         let conn = lock_conn!(self)?;
+        // Both provenance tables, not just `notes_sources`. They record two
+        // different citations and neither contains the other: `notes_sources`
+        // is note-level (`source_notes` frontmatter, with the batch-id
+        // fallback), `notes_provenance` is fact-level (an inline
+        // `<!-- src: ... -->` marker the model attached to one line). A note
+        // can quote a raw in a single fact without that raw ever reaching its
+        // frontmatter list, and reading only the first table reports that note
+        // as not citing it.
+        //
+        // Three documents already describe this as the union — the trait doc
+        // here, MEMORY_SYSTEM.md's read-API list, and RAW_MEMORY.md, which
+        // builds the raw-retention invariant ("do not delete a row while
+        // `notes_citing` is non-empty") on top of it. A future GC honouring
+        // that invariant against the narrower query would delete raws that are
+        // still quoted, and the evidence chain would go to `pruned: true`.
+        //
+        // `UNION` (not `UNION ALL`) dedups a note that cites both ways;
+        // `ORDER BY` keeps the caller's list stable across runs.
         let mut stmt = conn
-            .prepare("SELECT note_path FROM notes_sources WHERE agent_id = ?1 AND source_ref = ?2")
+            .prepare(
+                "SELECT note_path FROM notes_sources \
+                 WHERE agent_id = ?1 AND source_ref = ?2 \
+                 UNION \
+                 SELECT note_path FROM notes_provenance \
+                 WHERE agent_id = ?1 AND source_id = ?2 \
+                 ORDER BY note_path",
+            )
             .map_err(|e| AlephError::config(format!("notes_citing prepare: {e}")))?;
         let rows = stmt
             .query_map(params![agent_id, source_ref], |r| r.get::<_, String>(0))

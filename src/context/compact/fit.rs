@@ -331,6 +331,7 @@ mod tests {
             critical_threshold: 0.85,
             token_estimate_ratio: 1.0,
             fresh_tail_count: 1,
+            summarizer_input_budget: 48_000,
             circuit_breaker_max: 2,
             max_splits: 3,
         };
@@ -374,6 +375,7 @@ mod tests {
             critical_threshold: 0.85,
             token_estimate_ratio: 3.5,
             fresh_tail_count: 1,
+            summarizer_input_budget: 48_000,
             circuit_breaker_max: 2,
             max_splits: 3,
         };

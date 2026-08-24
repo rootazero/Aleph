@@ -330,6 +330,13 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
 
         // --- stream.* frames that carry their session key directly ---
         "stream.run_accepted"
+        // A queued run's only frame before admission — see the field doc on
+        // `StreamEvent::RunQueued` for why it carries `session_key` at all
+        // (the run→session seed moves from admission to arrival). Grouped
+        // with `stream.run_accepted` rather than the `ByRunId` family below
+        // for the same reason: both are keyed by the session they were
+        // ADDRESSED to, not correlated after the fact through a run id.
+        | "stream.run_queued"
         | "stream.session_updated"
         // The peer-echo of a human's message. Session-scoped for the same
         // reason its transcript is: the audience that may read the row is
@@ -1126,6 +1133,57 @@ mod tests {
                 )
                 .await,
             "an unresolvable run id still fails closed — the seed is what changed, not the rule"
+        );
+    }
+
+    /// `RunQueued` is a run's FIRST frame — the first chance to seed the
+    /// run→session index, and the reason the seed moved from admission to
+    /// arrival. `note_frame` is generic over "names both", so this works with
+    /// no code mentioning the variant, which is exactly why it needs a test:
+    /// renaming the field or nesting it breaks the seed silently and every
+    /// queued-run frame then fails closed for everyone, its owner included.
+    #[tokio::test]
+    async fn a_queued_frame_reaches_its_session_and_nobody_else() {
+        let (store, _temp) = test_store();
+        let key = SessionKey::main("conv-still-waiting");
+        stamp_owner(&store, &key, "alice").await;
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+
+        let run_queued = serde_json::json!({
+            "run_id": "r-still-waiting",
+            "session_key": key.to_key_string(),
+            "ahead": 1,
+        });
+
+        let index = EventVisibilityIndex::new();
+        index
+            .note_frame("stream.run_queued", Some(&run_queued))
+            .await;
+        assert!(
+            index
+                .event_admits(
+                    "stream.run_queued",
+                    Some(&run_queued),
+                    Some("alice"),
+                    false,
+                    &store,
+                    None
+                )
+                .await,
+            "the owner must see their own message waiting"
+        );
+        assert!(
+            !index
+                .event_admits(
+                    "stream.run_queued",
+                    Some(&run_queued),
+                    Some("bob"),
+                    false,
+                    &store,
+                    None
+                )
+                .await,
+            "naming the session must not widen the audience beyond it"
         );
     }
 
@@ -2257,7 +2315,8 @@ mod tests {
     fn every_frame_variant_is_classified() {
         fn expected(frame: &GatewayEventFrame) -> SessionIdentity {
             match frame {
-                GatewayEventFrame::RunAccepted { session_key, .. } => {
+                GatewayEventFrame::RunAccepted { session_key, .. }
+                | GatewayEventFrame::RunQueued { session_key, .. } => {
                     SessionIdentity::BySessionKey(session_key.clone())
                 }
                 GatewayEventFrame::Reasoning { run_id, .. }
@@ -2349,6 +2408,11 @@ mod tests {
                 run_id: "r1".into(),
                 session_key: "agent:main:main".into(),
                 accepted_at: "t".into(),
+            },
+            GatewayEventFrame::RunQueued {
+                run_id: "r1".into(),
+                session_key: "agent:main:main".into(),
+                ahead: 2,
             },
             GatewayEventFrame::Reasoning {
                 run_id: "r1".into(),

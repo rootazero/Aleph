@@ -72,7 +72,36 @@ pub fn spawn_queued_run<P, R, E>(
             Some(ticket) => {
                 let mut attempt =
                     || engine.execute(request.clone(), agent.clone(), emitter.clone());
-                deliver_with_ticket(ticket, cfg, &mut attempt).await
+                // The lane's own surface for "still waiting". `session_key`
+                // is the ADDRESSED session, not the derived execution lane
+                // — same reason the never-ran `RunError` below names it:
+                // the client resolving this frame is attached to the
+                // former, and this is the run's first frame, so nothing
+                // has seeded the run→session index yet.
+                let queued_emitter = emitter.clone();
+                let queued_run_id = run_id.clone();
+                let queued_session = session_key.clone();
+                let mut report = move |ahead: u16| {
+                    let emitter = queued_emitter.clone();
+                    let run_id = queued_run_id.clone();
+                    let session_key = queued_session.clone();
+                    async move {
+                        if let Err(e) = emitter
+                            .emit(StreamEvent::RunQueued {
+                                run_id,
+                                session_key,
+                                ahead,
+                            })
+                            .await
+                        {
+                            // Best-effort mirror: `chat.history.pending`
+                            // is the authoritative half, so a dropped
+                            // frame costs liveness, never correctness.
+                            tracing::debug!("failed to emit RunQueued: {e}");
+                        }
+                    }
+                };
+                deliver_with_ticket(ticket, cfg, &mut attempt, &mut report).await
             }
         };
 

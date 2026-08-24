@@ -670,7 +670,9 @@ async fn a_side_question_does_not_queue_behind_a_waiting_main_message() {
 
     let ticket = register(&side_lane, cfg.max_per_session, "run-btw")
         .expect("the side question takes a ticket on its own lane");
-    let outcome = deliver_with_ticket(ticket, cfg, &mut || async { Ok(()) }).await;
+    let outcome = deliver_with_ticket(ticket, cfg, &mut || async { Ok(()) }, &mut |_: u16| async {
+    })
+    .await;
     assert!(
         matches!(outcome, DeliveryOutcome::Executed(Ok(()))),
         "a side question must be delivered while a waiting message holds the \
@@ -690,7 +692,9 @@ async fn a_side_question_does_not_queue_behind_a_waiting_main_message() {
 
     let ticket = register(&ordinary_lane, cfg.max_per_session, "run-ordinary")
         .expect("the ordinary message takes a ticket");
-    let outcome = deliver_with_ticket(ticket, cfg, &mut || async { Ok(()) }).await;
+    let outcome = deliver_with_ticket(ticket, cfg, &mut || async { Ok(()) }, &mut |_: u16| async {
+    })
+    .await;
     assert!(
         matches!(outcome, DeliveryOutcome::TimedOut),
         "an ordinary message must wait behind the main lane's waiting ticket — \

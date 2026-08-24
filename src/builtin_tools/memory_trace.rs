@@ -74,6 +74,38 @@ pub struct EvidenceItem {
     pub pruned: bool,
 }
 
+/// One fact of a note beside where that specific line came from.
+///
+/// The evidence chain above answers "which raw memories fed this note". This
+/// answers the finer question the chain cannot: *which line*, and whether the
+/// model quoted it or inferred it.
+///
+/// Every fact carries an inline `<!-- origin: ..., inferred: ... -->` marker
+/// written at ingest. This is the first *structured* read of them. The only
+/// other path that reaches a caller at all is `note_manage(action='get')`,
+/// which hands back the whole file — capped at its own char ceiling, markers
+/// buried in prose as HTML comments, and nothing anywhere saying what they
+/// mean; every other rendering (`body_text_for_fts`, the panel drawer, note
+/// listings) strips them.
+#[derive(Debug, Clone, Serialize)]
+pub struct FactOrigin {
+    /// The note this fact belongs to.
+    pub note_path: String,
+    /// Position of the fact within that note, 0-based.
+    pub fact_idx: usize,
+    /// The fact as a reader sees it, provenance marker removed.
+    pub text: String,
+    /// `raw_source` / `prior_note` / `inferred` / `system` / `legacy`.
+    /// `legacy` means the line carries no marker at all — written before the
+    /// markers existed, or edited in by hand in Obsidian.
+    pub origin: &'static str,
+    /// The model's own claim about whether it invented this line.
+    pub inferred: bool,
+    /// Raw-memory id or note path this fact was quoted from, when the marker
+    /// named one.
+    pub source_id: Option<String>,
+}
+
 /// Result of walking the evidence chain.
 #[derive(Debug, Clone, Serialize)]
 pub struct TraceResult {
@@ -88,6 +120,11 @@ pub struct TraceResult {
     /// when empty, so the evidence-chain kinds keep the output they had.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub write_decisions: Vec<MemoryWriteDecisionRow>,
+    /// Per-fact origins — only populated for `kind: "note"`, and empty when the
+    /// note cannot be read or parsed. Absent from the serialized shape when
+    /// empty, so the other kinds keep the output they had.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub facts: Vec<FactOrigin>,
 }
 
 /// Tool that walks a memory claim down to ground-truth evidence.
@@ -106,6 +143,10 @@ impl MemoryTraceTool {
         "Drill a memory claim down to ground-truth evidence: profile section / note / raw id \
          → source notes → raw memories → original transcript text. Returns the evidence chain; \
          missing raws are marked as pruned rather than causing an error.\n\n\
+         `kind: \"note\"` also returns `facts[]`: each fact of that note with its `origin` \
+         (raw_source / prior_note / inferred / system / legacy), an `inferred` flag and the \
+         `source_id` it was quoted from. Answer \"did I actually say that?\" from these rows; \
+         `inferred: true` means no one ever said it.\n\n\
          Use `kind: \"write_decision\"` for the mirror question — why a fact is NOT in memory. \
          It returns one row per `remember` OR `flag_user_correction` write ATTEMPT (newest \
          first), refusals included, each with a machine-readable `reason` (written / duplicate / \
@@ -125,6 +166,53 @@ impl MemoryTraceTool {
             agent_id: agent_id.into(),
             note_memory_dir,
         }
+    }
+
+    /// Read one note's facts and the origin marker on each.
+    ///
+    /// Reads the markdown, not `notes_provenance`. The table is a projection of
+    /// these same markers, rebuilt on every index pass, and it does not store
+    /// the fact text — so a caller that wants both would pair text from the
+    /// file with provenance from the index and mis-attribute any fact whose
+    /// note changed since. From the file the two always describe the same
+    /// bytes. (The table earns its place on the other axis: `notes_citing`
+    /// reads it to find fact-level citations of a source across notes, which
+    /// no single file can answer.)
+    ///
+    /// Every failure returns an empty list rather than an error: this is one
+    /// section of a trace answer, and a note that was pruned, renamed, or
+    /// hand-edited into unparseable shape should not take the evidence chain
+    /// down with it.
+    async fn fact_origins(&self, agent: &str, note_path: &str) -> Vec<FactOrigin> {
+        let safe = crate::memory::notes::sanitize_note_path(note_path);
+        // `sanitize_note_path` returns "" when every segment is unsafe. Joining
+        // that would open the agent directory itself.
+        if safe.is_empty() {
+            return Vec::new();
+        }
+        let file = self
+            .note_memory_dir
+            .join(agent)
+            .join(format!("{safe}.md"));
+        let Ok(content) = tokio::fs::read_to_string(&file).await else {
+            return Vec::new();
+        };
+        let stem = safe.rsplit('/').next().unwrap_or(&safe);
+        let Ok(note) = crate::memory::notes::KnowledgeNote::from_markdown(stem, &content) else {
+            return Vec::new();
+        };
+        note.facts_with_origin()
+            .into_iter()
+            .enumerate()
+            .map(|(fact_idx, (text, prov))| FactOrigin {
+                note_path: note_path.to_string(),
+                fact_idx,
+                text,
+                origin: prov.origin.as_str(),
+                inferred: prov.inferred,
+                source_id: prov.source_id,
+            })
+            .collect()
     }
 
     /// Execute the evidence-chain walk.
@@ -254,10 +342,20 @@ impl MemoryTraceTool {
             Vec::new()
         };
 
+        // 6. Per-fact origins for a note trace. The evidence chain says which
+        //    raws fed the note; this says which line came from which, and
+        //    whether the model quoted or inferred it.
+        let facts = if args.kind == TraceKind::Note {
+            self.fact_origins(agent, &args.target).await
+        } else {
+            Vec::new()
+        };
+
         Ok(TraceResult {
             target: args.target,
             notes,
             evidence,
+            facts,
             write_decisions,
         })
     }
@@ -447,6 +545,114 @@ mod tests {
             .unwrap();
         let json = serde_json::to_value(&out).unwrap();
         assert!(json.get("write_decisions").is_none(), "{json}");
+    }
+
+    /// Of the lines in my memory, which did I say and which did the model
+    /// invent? The markers carrying that answer are written on every fact at
+    /// ingest and stripped from every rendering except the raw-file read
+    /// `note_manage(action='get')` — where they arrive as unexplained HTML
+    /// comments inside prose, under a truncation cap. `facts[]` is the first
+    /// form of them a caller can act on per line.
+    #[tokio::test]
+    async fn note_kind_reports_which_facts_were_quoted_and_which_were_inferred() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend: MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+        let note_dir = dir.path().join("main").join("preference");
+        tokio::fs::create_dir_all(&note_dir).await.unwrap();
+        // Built line-by-line on purpose: `extract_facts` treats an indented
+        // `- ` as a continuation of the fact above it, so a stray two spaces
+        // here would silently collapse three facts into one — which is exactly
+        // what the first version of this fixture did.
+        let md = [
+            "---",
+            "category: preference",
+            "---",
+            "",
+            "- the user prefers TypeScript <!-- src: raw-7, origin: raw_source, inferred: false -->",
+            "- the user probably dislikes Flow <!-- origin: inferred, inferred: true -->",
+            "- a line typed by hand in Obsidian",
+        ]
+        .join("\n");
+        tokio::fs::write(note_dir.join("typescript.md"), md)
+            .await
+            .unwrap();
+
+        let tool = MemoryTraceTool::new(backend, "main", dir.path().to_path_buf());
+        let out = tool
+            .call_impl(MemoryTraceArgs {
+                target: "preference/typescript".into(),
+                kind: TraceKind::Note,
+                max_results: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(out.facts.len(), 3, "{:?}", out.facts);
+
+        assert_eq!(out.facts[0].origin, "raw_source");
+        assert!(!out.facts[0].inferred);
+        assert_eq!(out.facts[0].source_id.as_deref(), Some("raw-7"));
+        assert_eq!(
+            out.facts[0].text, "the user prefers TypeScript",
+            "the marker is machinery, not something a reader should be shown"
+        );
+
+        assert_eq!(out.facts[1].origin, "inferred");
+        assert!(out.facts[1].inferred, "this line was never said by anyone");
+        assert!(out.facts[1].source_id.is_none());
+
+        assert_eq!(
+            out.facts[2].origin, "legacy",
+            "no marker at all — hand-edited, or written before markers existed"
+        );
+        assert_eq!(out.facts[2].fact_idx, 2);
+    }
+
+    /// Only the note kind carries them, and an unreadable note degrades to an
+    /// absent key rather than taking the evidence chain down with it.
+    #[tokio::test]
+    async fn facts_are_absent_for_other_kinds_and_for_a_note_that_is_not_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend: MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+        let tool = MemoryTraceTool::new(backend, "main", dir.path().to_path_buf());
+
+        for (target, kind) in [
+            ("preference/missing", TraceKind::Note),
+            ("raw-1", TraceKind::Raw),
+        ] {
+            let out = tool
+                .call_impl(MemoryTraceArgs {
+                    target: target.into(),
+                    kind,
+                    max_results: None,
+                })
+                .await
+                .unwrap();
+            assert!(out.facts.is_empty());
+            let json = serde_json::to_value(&out).unwrap();
+            assert!(json.get("facts").is_none(), "{json}");
+        }
+    }
+
+    /// `sanitize_note_path` collapses an all-unsafe path to the empty string;
+    /// joining that would hand back the agent directory itself.
+    #[tokio::test]
+    async fn a_traversal_target_reads_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend: MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+        let tool = MemoryTraceTool::new(backend, "main", dir.path().to_path_buf());
+        let out = tool
+            .call_impl(MemoryTraceArgs {
+                target: "../../..".into(),
+                kind: TraceKind::Note,
+                max_results: None,
+            })
+            .await
+            .unwrap();
+        assert!(out.facts.is_empty());
     }
 
     #[test]

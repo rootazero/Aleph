@@ -2143,3 +2143,363 @@ mod clipboard_master_switch {
         assert_eq!(*counts.system_reads.lock().unwrap(), 0);
     }
 }
+
+/// Tests for the `effect` evidence grade — Stage 1 of the ActionResult port
+/// (docs/superpowers/specs/2026-08-23-desktop-action-result-review.md).
+mod effect_grading {
+    use super::*;
+    use aleph_desktop::traits::{
+        AccessibilityCapability, AutomationCapability, MediaCapability, PermissionCapability,
+        PimCapability, PowerCapability, ScreenCapability, SystemCapability,
+    };
+    use aleph_desktop::{
+        DesktopPlatform, MouseButton, OcrResult, Result as DResult, ScreenRegion, Screenshot,
+        WindowInfo,
+    };
+    use aleph_protocol::desktop_bridge::methods::ax::{
+        AxActionResult, AxElement, AxVerification, QueryByRoleParams, QueryFocusedParams,
+        QueryListResult, QueryResult, QueryTreeParams, SetValueParams,
+    };
+    use types::{ActionEffect, DesktopBatchAction};
+
+    // ── Pure classifier ─────────────────────────────────────────────
+
+    #[test]
+    fn set_value_is_confirmed_only_by_a_matching_readback() {
+        let confirmed = serde_json::json!({"verification": {"state": "verified"}});
+        assert_eq!(
+            types::effect_for("set_value", Some(&confirmed)),
+            ActionEffect::Confirmed
+        );
+        // A read-back that did not match is unproven, not failed.
+        let unverified = serde_json::json!({"verification": {"state": "unverified"}});
+        assert_eq!(
+            types::effect_for("set_value", Some(&unverified)),
+            ActionEffect::Unverifiable
+        );
+        assert_eq!(
+            types::effect_for("set_value", None),
+            ActionEffect::Unverifiable
+        );
+    }
+
+    #[test]
+    fn restart_app_grades_by_its_three_state_poll() {
+        let back = serde_json::json!({"verified": true});
+        assert_eq!(
+            types::effect_for("restart_app", Some(&back)),
+            ActionEffect::Confirmed
+        );
+        // Quit provably landed, relaunch disproven: partially effective.
+        let gone = serde_json::json!({"verified": false});
+        assert_eq!(
+            types::effect_for("restart_app", Some(&gone)),
+            ActionEffect::Partial
+        );
+        // `verified: null` — the platform cannot enumerate running apps.
+        let unknown = serde_json::json!({"verified": null});
+        assert_eq!(
+            types::effect_for("restart_app", Some(&unknown)),
+            ActionEffect::Unverifiable
+        );
+    }
+
+    /// Synthetic input is never `confirmed`: OS/event acceptance is a
+    /// diagnostic, not evidence (cua-driver's invariant, adopted verbatim).
+    #[test]
+    fn synthetic_input_grades_unverifiable() {
+        for verb in [
+            "click",
+            "double_click",
+            "drag",
+            "hover",
+            "mouse_button",
+            "scroll",
+            "type_text",
+            "key_combo",
+            "key_button",
+            "paste",
+            "clipboard_write",
+            "launch_app",
+            "quit_app",
+            "move_window",
+            "resize_window",
+            "ax_action",
+        ] {
+            assert_eq!(
+                types::effect_for(verb, None),
+                ActionEffect::Unverifiable,
+                "{verb} has no post-action evidence today"
+            );
+        }
+    }
+
+    /// The injection gate is `classify_approval().is_some()`: pin both sides
+    /// so a verb can neither gain nor lose its grade silently.
+    #[test]
+    fn the_grade_gate_covers_exactly_the_mutating_verbs() {
+        for verb in [
+            "screenshot",
+            "ocr",
+            "window_list",
+            "cursor_position",
+            "clipboard_read",
+            "screen_record",
+            "focus_window",
+            "display_list",
+            "wait_visual",
+            "verify_state",
+        ] {
+            assert!(
+                classify_approval(&make_args(verb)).is_none(),
+                "{verb} is read-only and must stay ungraded"
+            );
+        }
+        for verb in [
+            "click",
+            "double_click",
+            "drag",
+            "hover",
+            "mouse_button",
+            "scroll",
+            "type_text",
+            "key_combo",
+            "key_button",
+            "paste",
+            "clipboard_write",
+            "launch_app",
+            "quit_app",
+            "restart_app",
+            "set_value",
+            "ax_action",
+            "move_window",
+            "resize_window",
+            "batch",
+        ] {
+            assert!(
+                classify_approval(&make_args(verb)).is_some(),
+                "{verb} is mutating and must be graded"
+            );
+        }
+    }
+
+    // ── Integration over a mock platform ────────────────────────────
+
+    struct FxScreen;
+
+    #[async_trait]
+    impl ScreenCapability for FxScreen {
+        async fn screenshot(&self, _r: Option<ScreenRegion>) -> DResult<Screenshot> {
+            Ok(Screenshot {
+                image_base64: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAE0lEQVR4nGNgYGD4//8/GDMwAAAp5AX71ZPZmwAAAABJRU5ErkJggg==".into(),
+                width: 2,
+                height: 2,
+                format: "png".into(),
+                scale_factor: None,
+            })
+        }
+        async fn ocr(&self, _i: Option<&[u8]>) -> DResult<OcrResult> {
+            Err(aleph_desktop::DesktopError::NotImplemented("ocr".into()))
+        }
+        async fn click(&self, _x: f64, _y: f64, _b: MouseButton) -> DResult<()> {
+            Ok(())
+        }
+        async fn type_text(&self, _t: &str) -> DResult<()> {
+            Ok(())
+        }
+        async fn key_combo(&self, _m: &[String], _k: &str) -> DResult<()> {
+            Ok(())
+        }
+        async fn scroll(&self, _d: &str, _a: i32) -> DResult<()> {
+            Ok(())
+        }
+        async fn hover(&self, _x: f64, _y: f64) -> DResult<()> {
+            Ok(())
+        }
+        async fn window_list(&self) -> DResult<Vec<WindowInfo>> {
+            Ok(vec![])
+        }
+        async fn focus_window(&self, _id: u64) -> DResult<()> {
+            Ok(())
+        }
+        async fn launch_app(&self, _n: &str) -> DResult<()> {
+            Ok(())
+        }
+        async fn clipboard_read(&self) -> DResult<String> {
+            Ok(String::new())
+        }
+        async fn clipboard_write(&self, _t: &str) -> DResult<()> {
+            Ok(())
+        }
+    }
+
+    /// An AX capability whose `set_value` read-back always matches.
+    struct VerifiedAx;
+
+    #[async_trait]
+    impl AccessibilityCapability for VerifiedAx {
+        async fn query_focused(&self, _p: QueryFocusedParams) -> DResult<Option<AxElement>> {
+            Err(aleph_desktop::DesktopError::NotImplemented("q".into()))
+        }
+        async fn query_tree(&self, _p: QueryTreeParams) -> DResult<QueryResult> {
+            Err(aleph_desktop::DesktopError::NotImplemented("q".into()))
+        }
+        async fn query_by_role(&self, _p: QueryByRoleParams) -> DResult<QueryListResult> {
+            Err(aleph_desktop::DesktopError::NotImplemented("q".into()))
+        }
+        async fn set_value(&self, _p: SetValueParams) -> DResult<AxActionResult> {
+            Ok(AxActionResult {
+                performed: true,
+                path: "accessibility".into(),
+                matched: None,
+                verification: Some(AxVerification {
+                    state: "verified".into(),
+                    reason: None,
+                    actual_preview: None,
+                }),
+            })
+        }
+    }
+
+    struct FxPlatform {
+        screen: FxScreen,
+        ax: Option<VerifiedAx>,
+    }
+
+    impl DesktopPlatform for FxPlatform {
+        fn platform_name(&self) -> &str {
+            "fx-mock"
+        }
+        fn screen(&self) -> Option<&dyn ScreenCapability> {
+            Some(&self.screen)
+        }
+        fn ax(&self) -> Option<&dyn AccessibilityCapability> {
+            self.ax.as_ref().map(|a| a as &dyn AccessibilityCapability)
+        }
+        fn pim(&self) -> Option<&dyn PimCapability> {
+            None
+        }
+        fn system(&self) -> Option<&dyn SystemCapability> {
+            None
+        }
+        fn automation(&self) -> Option<&dyn AutomationCapability> {
+            None
+        }
+        fn permission(&self) -> Option<&dyn PermissionCapability> {
+            None
+        }
+        fn media(&self) -> Option<&dyn MediaCapability> {
+            None
+        }
+        fn power(&self) -> Option<&dyn PowerCapability> {
+            None
+        }
+    }
+
+    fn tool(has_ax: bool) -> DesktopTool {
+        DesktopTool::new().with_platform(Arc::new(FxPlatform {
+            screen: FxScreen,
+            ax: has_ax.then_some(VerifiedAx),
+        }))
+    }
+
+    fn leaf(action: &str) -> DesktopBatchAction {
+        DesktopBatchAction::empty(action)
+    }
+
+    #[tokio::test]
+    async fn a_delivered_click_is_unverifiable_not_confirmed() {
+        let mut args = make_args("click");
+        args.x = Some(10.0);
+        args.y = Some(20.0);
+        let out = AlephTool::call(&tool(false), args).await.unwrap();
+        assert!(out.success, "click failed: {:?}", out.message);
+        assert_eq!(out.data.as_ref().unwrap()["effect"], "unverifiable");
+    }
+
+    #[tokio::test]
+    async fn read_only_verbs_carry_no_grade() {
+        let out = AlephTool::call(&tool(false), make_args("screenshot"))
+            .await
+            .unwrap();
+        assert!(out.success, "screenshot failed: {:?}", out.message);
+        assert!(
+            out.data.as_ref().and_then(|d| d.get("effect")).is_none(),
+            "a read-only verb must not carry an effect grade"
+        );
+    }
+
+    #[tokio::test]
+    async fn refusals_carry_no_grade() {
+        let mut args = make_args("scroll");
+        args.delta_x = Some(0.0);
+        args.delta_y = Some(0.0);
+        let out = AlephTool::call(&tool(false), args).await.unwrap();
+        assert!(!out.success);
+        assert!(
+            out.data.as_ref().and_then(|d| d.get("effect")).is_none(),
+            "a refusal is a different fact than an evidence grade"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_value_with_a_matching_readback_is_confirmed() {
+        let mut args = make_args("set_value");
+        args.text = Some("hello".into());
+        let out = AlephTool::call(&tool(true), args).await.unwrap();
+        assert!(out.success, "set_value failed: {:?}", out.message);
+        assert_eq!(out.data.as_ref().unwrap()["effect"], "confirmed");
+    }
+
+    #[tokio::test]
+    async fn a_batch_is_only_as_proven_as_its_weakest_link() {
+        let mut first = leaf("click");
+        first.x = Some(1.0);
+        first.y = Some(2.0);
+        let mut second = leaf("click");
+        second.x = Some(3.0);
+        second.y = Some(4.0);
+        let mut args = make_args("batch");
+        args.actions = vec![first, second];
+        let out = AlephTool::call(&tool(false), args).await.unwrap();
+        assert!(out.success, "batch failed: {:?}", out.message);
+        let data = out.data.unwrap();
+        assert_eq!(data["effect"], "unverifiable");
+        assert_eq!(data["results"][0]["data"]["effect"], "unverifiable");
+    }
+
+    #[tokio::test]
+    async fn a_batch_of_confirmed_links_is_confirmed() {
+        let mut set_a = leaf("set_value");
+        set_a.text = Some("a".into());
+        let mut set_b = leaf("set_value");
+        set_b.text = Some("b".into());
+        let mut args = make_args("batch");
+        args.actions = vec![set_a, set_b];
+        let out = AlephTool::call(&tool(true), args).await.unwrap();
+        assert!(out.success, "batch failed: {:?}", out.message);
+        assert_eq!(out.data.unwrap()["effect"], "confirmed");
+    }
+
+    #[tokio::test]
+    async fn a_batch_stopped_early_is_partial_with_a_delivered_count() {
+        let mut good_click = leaf("click");
+        good_click.x = Some(5.0);
+        good_click.y = Some(6.0);
+        let mut bad_scroll = leaf("scroll");
+        bad_scroll.delta_x = Some(0.0);
+        bad_scroll.delta_y = Some(0.0);
+        let mut args = make_args("batch");
+        args.actions = vec![good_click, bad_scroll, leaf("click")];
+        let out = AlephTool::call(&tool(false), args).await.unwrap();
+        assert!(!out.success);
+        let data = out.data.unwrap();
+        assert_eq!(data["effect"], "partial");
+        assert_eq!(data["delivered_count"], 1);
+        assert_eq!(
+            data["results"].as_array().unwrap().len(),
+            2,
+            "the chain stops at the first failure"
+        );
+    }
+}

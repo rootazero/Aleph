@@ -137,7 +137,6 @@ pub fn PhoneChatHistory() -> impl IntoView {
             key,
             locale,
         ));
-
         navigate("/", NavigateOptions::default());
     };
 

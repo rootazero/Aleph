@@ -1318,6 +1318,7 @@ fn build_context_triple(
             llm.clone(),
             CompactorConfig {
                 fresh_tail: cfg.fresh_tail_count,
+                summarizer_input_budget: cfg.summarizer_input_budget,
                 ..CompactorConfig::default()
             },
         )

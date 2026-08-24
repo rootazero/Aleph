@@ -2199,9 +2199,7 @@ mod tests {
     /// landed after the previous ceiling (`agent_identity`, `goal`, the
     /// `mcp_*` family, `subagent` etc.) and the `desktop` family grew with
     /// the `ax_query_*` / `ax_snapshot` / `gui_locate` / `set_of_marks`
-    /// additions. The 1 KiB of headroom above the current measured value
-    /// gives a small buffer so the ratchet doesn't trip on the next
-    /// adjacent PR.
+    /// additions.
     /// Against the three questions: (1) runtime facts — the new tools
     /// each describe behavior the schema cannot carry (e.g.
     /// `agent_identity` distinguishes "self" from "persona" callers,
@@ -2214,7 +2212,58 @@ mod tests {
     /// tool has a real consumer in the registry (the registry schema
     /// byte total is the union of every tool the daemon can advertise,
     /// so any active tool is a live consumer).
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 107_528;
+    ///
+    /// 2026-08-23 (measured, **lowered** from 107_528): 107_528 → 106_944 B.
+    /// A lowering needs no three-question answer — the answer is owed by
+    /// whoever spends, not by whoever gives back. What is worth recording is
+    /// *why* the previous number was not the measured one: it was set at
+    /// `measured + 1 KiB` with the reason "gives a small buffer so the ratchet
+    /// doesn't trip on the next adjacent PR", and that sentence and "this is a
+    /// hard cap" cannot both be true. A ceiling above the measured value has
+    /// already issued the difference; the health of a ratchet is not whether it
+    /// has ever fired but how far it sits from what it measures. So it now sits
+    /// on the measurement, and every future raise has to say what it bought.
+    ///
+    /// What this measurement includes over the last one: `note_manage` grew by
+    /// ~440 B to advertise the `get` action and to tell the model to `get`
+    /// before it `update`s. Against the three questions: (1) a runtime fact the
+    /// schema cannot carry — that `query` truncates each hit at 4,000 chars
+    /// while `update` replaces a body wholesale is a relationship *between two
+    /// actions*, and no single argument field owns it; (2) a stronger model
+    /// cannot guess it, and guessing wrong is the expensive direction — it
+    /// silently rewrites a long note from a truncated read, which is the exact
+    /// data loss the action exists to prevent; (3) the consumer is
+    /// `note_manage` itself, shipped and dispatched.
+    ///
+    /// 2026-08-23 (measured, raised from 106_944): 106_944 → 108_056 B.
+    /// **821 of those bytes are not a purchase — they are the previous entry
+    /// being wrong.** That entry says the ceiling "now sits on the
+    /// measurement"; the tree it shipped measures 107_765 B. A number recorded
+    /// as measured was 821 B under the actual, and since that round's last
+    /// commit this test has failed on ubuntu, macos, windows and the loom job
+    /// — four red platforms, pushed. The likely mechanic is the one the entry
+    /// above was written about, mirrored: the reading was taken before the
+    /// last description edit in the same round rather than after it. So the
+    /// rule the entry states needs one more clause: a ratchet number is
+    /// measured only if the measurement ran on the bytes that shipped. Both
+    /// numbers here were produced by running this test — once with
+    /// `MemoryTraceTool::DESCRIPTION` reverted to the parent commit (107_765)
+    /// and once with it in place (108_056) — precisely so the split between
+    /// inherited drift and this round's spend is a reading, not a subtraction.
+    ///
+    /// The 291 B this round actually spends: `memory_trace` gains the sentence
+    /// announcing its `facts[]` block (per-fact `origin` / `inferred` /
+    /// `source_id`). Against the three questions: (1) it is a runtime fact no
+    /// argument schema can carry — an *output* shape is not describable by any
+    /// parameter, and the axis it exposes (quoted vs. inferred) reaches a
+    /// caller nowhere else in structured form; (2) a stronger model cannot
+    /// guess it, and the
+    /// failure mode of not knowing is the exact one this tool's existing text
+    /// already warns about — answering "did I actually say that?" from
+    /// recollection instead of from rows; (3) the consumer is
+    /// `MemoryTraceTool`, shipped and dispatched, and the field is populated
+    /// on every `kind: "note"` call.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 108_056;
 
     #[test]
     fn catalog_description_bytes_ratchet() {

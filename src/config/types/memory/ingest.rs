@@ -12,10 +12,16 @@ pub struct CompoundIngestConfig {
     pub related_preview_char_cap: usize,
     #[serde(default = "super::defaults::default_related_total_byte_cap")]
     pub related_total_byte_cap: usize,
-    #[serde(default = "super::defaults::default_replan_on_hash_conflict")]
-    pub replan_on_hash_conflict: u32,
-    #[serde(default = "super::defaults::default_failure_cooldown_seconds")]
-    pub failure_cooldown_seconds: u64,
+    /// Age ceiling, in seconds, for abandoned `.tx/{id}` apply-staging trees.
+    /// Trees older than this are deleted — the ceiling is really "how long may
+    /// one apply take", and an apply takes milliseconds, so the default hour is
+    /// three orders of magnitude of headroom over a live transaction.
+    ///
+    /// Two callers, covering the two ways residue outlives its owner:
+    /// `full_rebuild_all` at boot (a process died between staging and commit)
+    /// and `DefaultCompoundIngestor::try_apply` before every apply (a *live*
+    /// process whose cleanup `remove_dir_all` failed and warned). Both reach it
+    /// through `notes::ingest::sweep_tx_residue`.
     #[serde(default = "super::defaults::default_tx_residue_gc_seconds")]
     pub tx_residue_gc_seconds: u64,
     /// mem0-style write-time semantic dedup. When enabled, a planned `Create`
@@ -47,8 +53,6 @@ impl Default for CompoundIngestConfig {
             max_related_pages: 15,
             related_preview_char_cap: 800,
             related_total_byte_cap: 12 * 1024,
-            replan_on_hash_conflict: 1,
-            failure_cooldown_seconds: 300,
             tx_residue_gc_seconds: 3600,
             dedup_enabled: true,
             dedup_similarity_threshold: 0.92,

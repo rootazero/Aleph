@@ -56,6 +56,42 @@ pub enum StreamEvent {
         accepted_at: String,
     },
 
+    /// The run joined its session's wait lane and has not been admitted yet.
+    ///
+    /// The first frame of a run that has to wait, and the only representation
+    /// waiting has ever had on the wire. Before it, a queued run emitted
+    /// nothing at all between `chat.send` returning its id and
+    /// `RunAccepted` — so every client painted "thinking" for a run the
+    /// engine had never heard of.
+    ///
+    /// Not emitted at all on the common path: an idle session takes the front
+    /// of the lane immediately and runs, so nothing new appears on a
+    /// conversation that was not already waiting.
+    ///
+    /// # Why it names its session
+    ///
+    /// `EventVisibilityIndex`'s run→session seed came only from
+    /// `RunAccepted`, which is emitted *post-admission*, so nothing during the
+    /// wait could be resolved. Carrying `session_key` moves that seed from
+    /// admission to **arrival** — the moment the run actually became
+    /// addressable, since `chat.send` has already handed the id to the caller.
+    /// `note_frame` runs ahead of the filter, so the frame seeds itself.
+    ///
+    /// Deliberately has no `seq`: its sibling `RunAccepted` has none either,
+    /// and nothing reads `seq` for ordering or de-duplication.
+    RunQueued {
+        run_id: String,
+        /// The session the run was **addressed to** — not the derived
+        /// execution lane a `/btw` side question runs on. A client is attached
+        /// to the former; the latter may have no row at all yet. Same
+        /// reasoning as the `session_key` on the never-ran `RunError` in
+        /// `busy_queue::spawn`.
+        session_key: String,
+        /// How many messages ahead of this one may still run.
+        /// `0` means "nobody ahead, but not started yet".
+        ahead: u16,
+    },
+
     /// Reasoning/thinking process update
     Reasoning {
         run_id: String,

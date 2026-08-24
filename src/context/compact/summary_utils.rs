@@ -388,12 +388,17 @@ pub fn latest_user_task(tail: &[UnifiedMessage]) -> Option<String> {
 // Summarizer-input bounding — single source for every compaction drain site
 // ---------------------------------------------------------------------------
 
-/// Summarizer-input token budget for a single summarization call.
+/// Summarizer-input token budget for a single summarization call — the
+/// **default and ceiling**, not the operative value.
 ///
 /// Bounds the side-channel call so a long compressible span cannot overflow the
-/// (possibly flash-tier) summarizer's own context window. Chosen well below
-/// common flash-tier windows (64k+) to leave room for the prompt scaffold and
-/// the summary output.
+/// (possibly flash-tier) summarizer's own context window. Production wiring
+/// derives the operative value per deployment from the summarizer model's own
+/// window (`deps_builder::context_budget::derive_summarizer_input_budget`:
+/// `min(this constant, window / 4)`) and carries it on
+/// `ContextBudgetConfig::summarizer_input_budget` → `CompactorConfig`; this
+/// constant remains the fallback for unwired paths (bare `Default` configs,
+/// tests) and the hard cap the derivation can never exceed.
 ///
 /// Single-sourced here because all three drain sites need the same number:
 /// [`super::compactor`]'s window selection and extend-merge, the session-split

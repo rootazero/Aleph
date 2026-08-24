@@ -923,6 +923,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // (mirrors how WebFetch is wired) instead of hardcoded defaults.
     let webhook_ssrf_policy = loaded_app_config.ssrf.clone();
 
+    // Same reason, one field: the boot note-index pass sweeps abandoned `.tx`
+    // apply-staging trees, and its age ceiling is an operator setting.
+    let tx_residue_max_age = loaded_app_config
+        .memory
+        .compound_ingest
+        .tx_residue_gc_seconds;
+
     // Wrap app config in Arc<RwLock> early so agent handlers can read output_mode dynamically
     let app_config = Arc::new(tokio::sync::RwLock::new(loaded_app_config));
 
@@ -2132,7 +2139,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         let agent_id = default_agent_id.clone();
         tokio::spawn(async move {
             tracing::info!(agent = %agent_id, "Reconciling note index with disk");
-            let stats = indexer.full_rebuild_all(&agent_id).await;
+            let stats = indexer
+                .full_rebuild_all(&agent_id, tx_residue_max_age)
+                .await;
             tracing::info!(
                 corpora = stats.corpora,
                 indexed = stats.total.indexed,
@@ -2149,6 +2158,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // is the shape a misconfigured embedding dimension
                 // makes; `reembed_all` is the repair.
                 stale_vectors = stats.total.stale_vectors,
+                // Non-zero means a previous process died mid-ingest. The trees
+                // were full copies of notes-about-to-be-written sitting in the
+                // user's vault, and before this line existed nothing removed or
+                // reported them.
+                tx_residue_removed = stats.tx_residue_removed,
                 "Note index rebuild complete"
             );
             for (corpus, error) in &stats.failed {

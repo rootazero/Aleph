@@ -8,11 +8,30 @@
 
 | Method | Source | Scope |
 |---|---|---|
-| `retrieve(query, agent_id, limit)` | `src/memory/note_retrieval/mod.rs` | Hybrid vector + FTS, one agent |
-| `vector_retrieve(query, agent_id, limit)` | `src/memory/note_retrieval/mod.rs` | Pure vector, one agent |
-| `text_retrieve(query, agent_id, limit)` | `src/memory/note_retrieval/mod.rs` | Pure FTS, rank-scored |
-| `retrieve_multi_agent(query, agents, limit)` | `src/memory/note_retrieval/mod.rs` | Hybrid across N agents, top-k merged |
-| `retrieve_all_agents(query, memory_dir, limit)` | `src/memory/note_retrieval/mod.rs` | Discovers agent dirs, then multi-agent |
+| `retrieve(query, agent_id, limit)` | `note_retrieval/single_agent.rs` | Hybrid vector + FTS, one agent |
+| `vector_retrieve(query, agent_id, limit)` | `note_retrieval/single_agent.rs` | Pure vector, one agent |
+| `text_retrieve(query, agent_id, limit)` | `note_retrieval/single_agent.rs` | Pure FTS, rank-scored |
+| `retrieve_multi_agent(query, agents, limit)` | `note_retrieval/multi_agent.rs` | Hybrid across N agents, top-k merged |
+
+⚠️ **`retrieve_all_agents` is gone and must not come back** (it was in this table
+until 2026-08-23, four months after its deletion). It enumerated every corpus on
+disk and retrieved across all of them, which is a visibility hole with a
+convenient name: a caller cannot ask "who is asking" of a signature that does
+not take it. Callers now enumerate with `project_scope::list_note_corpora`,
+filter with `visibility::partition_visible_to`, and pass the survivors to
+`retrieve_multi_agent` — the same thing minus the hole. The reasoning is kept
+verbatim at the deletion site in `multi_agent.rs`.
+
+**Module layout** (`NoteFactRetrieval`'s methods, split 2026-08-23 — pure motion,
+no behaviour change): `builder.rs` construction and configuration ·
+`single_agent.rs` and `multi_agent.rs` the entry points above ·
+`pipeline.rs` what happens to a candidate pool before it is returned
+(`fetch_limit`, `apply_scoring`, `surface_relations`, `apply_rerank`) ·
+`signals.rs` recall-signal writes and the reinforcement counts they feed back ·
+`mod.rs` the struct and the constants. They are inherent-impl blocks on one
+type, so there is no delegation layer; the only cost of the split is that a
+method one stage calls on another is `pub(super)` rather than private — the same
+visibility it had when they shared a file.
 
 The struct:
 
@@ -115,7 +134,7 @@ The algorithm has four steps:
    *scores.entry(path.clone()).or_insert(0.0) += rrf;
    ```
 
-   Paths that appear in both lists accumulate scores from each — this is why hybrid beats either ranker in isolation. The shared helper `rrf_fuse` in `src/memory/note_retrieval/hybrid.rs` implements the same math for reusable callers.
+   Paths that appear in both lists accumulate scores from each — this is why hybrid beats either ranker in isolation. ⚠️ This paragraph used to end by naming a shared `rrf_fuse` helper in `note_retrieval/hybrid.rs`: that file does not exist, and the `rrf_fuse` that does (`src/context/retrieval/content_index.rs`) fuses the porter and trigram FTS indexes for the *context* content index — same math, different subsystem, never called from here. The fusion below is the only one on this path.
 3. **Sort and truncate.** The fused map is converted to a vector, sorted descending by score, and truncated to `limit`.
 4. **Content hydration.** For each surviving path the backend calls `get_note_index(path, agent_id)` and `load_note_content_from_disk(entry, agent_id)` to read the markdown file at `memory/note/{agent_id}/{category}/{filename}.md`. The result is assembled into a `NoteSearchResult` carrying `path`, `filename`, `category`, `tags`, `content`, `score`, `created_at`, `updated_at`.
 
@@ -289,7 +308,7 @@ pub trait RerankProvider: Send + Sync {
 | `src/memory/rerank/pinecone.rs` | `pinecone` | *(from `RerankConfig.models[0]`)* |
 | `src/memory/rerank/vllm.rs` | `vllm` | *(from `RerankConfig.models[0]`)* |
 
-Config (`RerankConfig` in `provider.rs`) carries `enabled: bool` (default `false`), `provider`, `api_base`, `api_key` (vault-backed, never serialized), `models: Vec<String>`, `timeout_ms: 5000`, `rerank_weight: 0.6`. The `blend_scores` helper computes `final = rerank_weight * rerank_score + (1 - rerank_weight) * original_score` for sorted pairing. **Implemented but not wired into `NoteFactRetrieval` as of this doc; see `src/memory/note_retrieval/hybrid.rs` for the expected integration point.**
+Config (`RerankConfig` in `provider.rs`) carries `enabled: bool` (default `false`), `provider`, `api_base`, `api_key` (vault-backed, never serialized), `models: Vec<String>`, `timeout_ms: 5000`, `rerank_weight: 0.6`. The `blend_scores` helper (`src/memory/rerank/mod.rs`) computes `final = rerank_weight * rerank_score + (1 - rerank_weight) * original_score` for sorted pairing. ⚠️ This paragraph claimed until 2026-08-23 that reranking was **not** wired into `NoteFactRetrieval`, and pointed at a file that does not exist. It is wired: `with_reranker` / `with_rerank_config` install it and `pipeline.rs::apply_rerank` is the stage, over-fetching by `RERANK_CANDIDATE_MULTIPLIER` (capped at `RERANK_MAX_CANDIDATES`) so the cross-encoder has a pool to reorder.
 
 ## 7. Query Expander (Optional, Not Wired)
 

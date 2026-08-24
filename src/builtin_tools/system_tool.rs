@@ -201,8 +201,13 @@ Examples:
 
         // Gate state-changing actions behind the approval policy (the same OS
         // ops DesktopTool gates), so an agent cannot bypass that gate via the
-        // `system` tool. Permissive default = Allow, so this is byte-identical
-        // until a policy file tightens it.
+        // `system` tool. ⚠️ The curated built-in default for these action types
+        // is `Ask` (and `DesktopReadClipboard` has no curated entry at all),
+        // and this layer resolves `Ask` to a refusal string with no interactive
+        // consumer — so on a policy-file-absent install the gated actions are
+        // REFUSED, not allowed. Whether that fail-dead posture is the intended
+        // shipped behavior is a pending user ruling (FEATURE_LOCATOR §7.3,
+        // 2026-08-23 entry, item ⓒ); do not "fix" the wiring before it lands.
         let gated = match args.action.as_str() {
             "launch_app" | "quit_app" | "restart_app" => Some((
                 ActionType::DesktopLaunchApp,
@@ -222,9 +227,14 @@ Examples:
             // BT-A-R4-03: previously `clipboard_read` fell through the
             // `_ => None` arm while `clipboard_write` was gated. The
             // disclosure risk (passwords, 2FA codes, copied secrets) is
-            // symmetric. Default Allow keeps today's behaviour; a policy
-            // that needs Ask/Deny for clipboard can tighten this and
-            // `clipboard_write` independently.
+            // symmetric. ⚠️ `DesktopReadClipboard` has no curated default
+            // entry, so this arm resolves to `Ask` — a refusal with no
+            // consumer — on every policy-file-absent install, while the
+            // `desktop` tool's own `clipboard_read` is approval-exempt: one
+            // capability, two paths, two treatments. Adding a curated entry
+            // here is deliberately deferred to the pending ⓒ ruling
+            // (FEATURE_LOCATOR §7.3, 2026-08-23 entry) — wiring it now would
+            // pre-empt that decision.
             "clipboard_read" => Some((
                 ActionType::DesktopReadClipboard,
                 args.body.clone().unwrap_or_default(),

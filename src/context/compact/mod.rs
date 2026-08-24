@@ -3,12 +3,17 @@
 //! Houses the LLM-based `ContextCompactor` plus the semantic-unit chunker and
 //! summary utilities it relies on.
 //!
-//! `session_summary_source` (cross-session artifact consumer) remains under
-//! `crate::memory::session_compactor::summary_source` — it is not part of the
-//! live-compaction path.
+//! `session_summary_source` (cross-session artifact consumer) lives under
+//! `crate::memory::session_compactor::summary_source`; it IS part of the
+//! live-compaction path — the compactor's zero-cost `SessionMemoryReuse`
+//! strategy reads it before paying a side-channel summarization call.
 
 pub mod compactor;
 pub mod directive;
+/// Event-level cut-boundary guards shared by the drain sites that cut into
+/// the persisted event log (`manual` / `session_split`) — the event-typed
+/// mirror of the compactor's message-level `snap_boundary_forward`.
+mod event_snap;
 /// Cumulative "which files did this conversation read / change" ledger,
 /// re-emitted below the summary at every compaction drain site (pi
 /// `computeFileLists` parity). Private to the compaction module for the same

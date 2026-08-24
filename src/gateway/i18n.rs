@@ -221,17 +221,27 @@ pub enum ReceiptKind {
 impl ReceiptKind {
     /// Stable wire code carried on `StreamEvent::RunError.error_code`.
     /// Clients may switch on it, so these strings are API — do not rename.
+    ///
+    /// The spellings live in `aleph_protocol::receipt::ReceiptCode`, which the
+    /// Panel also reads, so the two sides cannot drift into two taxonomies.
     #[must_use]
     pub const fn code(self) -> &'static str {
+        self.protocol_code().as_wire()
+    }
+
+    /// This bucket as the shared protocol type.
+    #[must_use]
+    pub const fn protocol_code(self) -> aleph_protocol::receipt::ReceiptCode {
+        use aleph_protocol::receipt::ReceiptCode as C;
         match self {
-            Self::Timeout => "TIMEOUT",
-            Self::Cancelled => "CANCELLED",
-            Self::AgentBusy => "AGENT_BUSY",
-            Self::RateLimited => "RATE_LIMITED",
-            Self::Auth => "AUTH",
-            Self::Unreachable => "PROVIDERS_UNREACHABLE",
-            Self::Failed => "FAILED",
-            Self::SpendExhausted { .. } => "SPEND_EXHAUSTED",
+            Self::Timeout => C::Timeout,
+            Self::Cancelled => C::Cancelled,
+            Self::AgentBusy => C::AgentBusy,
+            Self::RateLimited => C::RateLimited,
+            Self::Auth => C::Auth,
+            Self::Unreachable => C::ProvidersUnreachable,
+            Self::Failed => C::Failed,
+            Self::SpendExhausted { .. } => C::SpendExhausted,
         }
     }
 
@@ -919,6 +929,19 @@ mod tests {
             "PROVIDERS_UNREACHABLE",
             "wire code is client-visible API"
         );
+        // The five below, plus the two above, are pinned literally rather
+        // than derived: `protocol_code()`'s match is a bijection onto
+        // `ReceiptCode`, so the set-based coverage test below
+        // (`every_protocol_receipt_code_is_produced_by_some_kind`) cannot
+        // catch two arms being SWAPPED — the image set is unchanged and
+        // every other test in the repo still passes. A frozen wire contract
+        // is exactly where a literal is correct; see `code()`'s own doc
+        // ("these strings are API — do not rename").
+        assert_eq!(ReceiptKind::Timeout.code(), "TIMEOUT");
+        assert_eq!(ReceiptKind::Cancelled.code(), "CANCELLED");
+        assert_eq!(ReceiptKind::AgentBusy.code(), "AGENT_BUSY");
+        assert_eq!(ReceiptKind::RateLimited.code(), "RATE_LIMITED");
+        assert_eq!(ReceiptKind::Failed.code(), "FAILED");
     }
 
     /// The wording is chosen by `Limit`'s shape, not by who is asking:
@@ -1168,5 +1191,39 @@ mod tests {
             t(Msg::ClarifyReplyPickOne, Locale::En)
         );
         assert_eq!(Locale::from_config(None), Locale::Zh);
+    }
+
+    /// Server-side reconciliation: every protocol bucket must be reachable
+    /// from some `ReceiptKind`, and every `ReceiptKind` must map to one. A
+    /// literal list here would be the same enumeration bug one level up, so
+    /// the expectation is derived from `ReceiptCode::ALL`.
+    #[test]
+    fn every_protocol_receipt_code_is_produced_by_some_kind() {
+        use aleph_protocol::receipt::ReceiptCode;
+        use std::collections::HashSet;
+
+        let produced: HashSet<ReceiptCode> = [
+            ReceiptKind::Timeout,
+            ReceiptKind::Cancelled,
+            ReceiptKind::AgentBusy,
+            ReceiptKind::RateLimited,
+            ReceiptKind::Auth,
+            ReceiptKind::Unreachable,
+            ReceiptKind::Failed,
+            ReceiptKind::SpendExhausted {
+                limit: Limit::Total,
+                reset_ms: 0,
+            },
+        ]
+        .into_iter()
+        .map(ReceiptKind::protocol_code)
+        .collect();
+
+        let expected: HashSet<ReceiptCode> = ReceiptCode::ALL.iter().copied().collect();
+        assert_eq!(
+            produced, expected,
+            "a protocol bucket with no producing ReceiptKind is unreachable; \
+             a ReceiptKind with no bucket cannot be rendered by any client"
+        );
     }
 }

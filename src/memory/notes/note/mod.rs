@@ -407,18 +407,52 @@ impl KnowledgeNote {
     #[must_use]
     pub fn body_text_for_fts(&self) -> String {
         match self.body.as_deref() {
-            Some(body) if !body.is_empty() => parsing::PROVENANCE_RE
-                .replace_all(body, "")
-                .trim()
-                .to_string(),
+            Some(body) if !body.is_empty() => strip_provenance_marker(body),
             _ => self
                 .facts
                 .iter()
-                .map(|f| parsing::PROVENANCE_RE.replace_all(f, "").trim().to_string())
+                .map(|f| strip_provenance_marker(f))
                 .collect::<Vec<_>>()
                 .join("\n"),
         }
     }
+
+    /// Each fact as a reader sees it — marker removed — beside the provenance
+    /// that marker carried.
+    ///
+    /// This is the readable form of the `<!-- src: ..., origin: ..., inferred:
+    /// ... -->` markers the ingest prompt asks the model to attach. They are
+    /// written on every fact and stripped from every rendering except the
+    /// raw-file read behind `note_manage(action='get')`, which returns them
+    /// buried in prose; this is the first form that separates the two.
+    ///
+    /// Read from the note, not from `notes_provenance`: the text and the marker
+    /// then come from the same bytes. Pairing text from one source with
+    /// provenance from another is how a fact gets attributed to a source it
+    /// never had.
+    ///
+    /// `fact_provenance` is a public field, so a caller can hand us a note
+    /// whose two vectors disagree in length; a fact with no row falls back to
+    /// `Legacy`, which is what "no marker" already means.
+    #[must_use]
+    pub fn facts_with_origin(&self) -> Vec<(String, FactProvenance)> {
+        self.facts
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                (
+                    strip_provenance_marker(f),
+                    self.fact_provenance.get(i).cloned().unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+}
+
+/// Drop inline provenance markers from note text. Three call sites wanted the
+/// same two lines; the third is where a spelling starts to drift.
+fn strip_provenance_marker(s: &str) -> String {
+    parsing::PROVENANCE_RE.replace_all(s, "").trim().to_string()
 }
 
 /// Marker that opens a note body's link footer.

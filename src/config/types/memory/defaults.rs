@@ -265,14 +265,6 @@ pub const fn default_governance_enabled() -> bool {
     false
 }
 
-pub const fn default_replan_on_hash_conflict() -> u32 {
-    1
-}
-
-pub const fn default_failure_cooldown_seconds() -> u64 {
-    300
-}
-
 pub const fn default_tx_residue_gc_seconds() -> u64 {
     3600
 }

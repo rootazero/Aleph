@@ -37,6 +37,51 @@ use crate::providers::{create_provider, AiProvider};
 ///
 /// Fail-soft by construction: a misconfigured model never aborts boot and never
 /// blocks summarization (the compactor falls back to the main LLM).
+/// Resolve the model history summarization will actually run on, plus the
+/// tier that named it (`"summary_model"` for the explicit operator override,
+/// `"preset aux_model"` for the auto tier).
+///
+/// This is the single source for the two-tier resolution
+/// [`build_cheap_summary_provider`] implements: explicit `[context_budget]
+/// summary_model` first, then the primary preset's declared
+/// `default_aux_model`. Returns `None` under the same gates as that builder
+/// (section missing/disabled, no provider entry to clone, neither tier names
+/// a model) — plus when the resolved model IS the provider's configured
+/// default, since summarization then runs on the main model and no distinct
+/// cheap provider is built. In that case the returned model is the primary's
+/// own default, so callers that want "which model summarizes" (rather than
+/// "should a cheap provider be built") get the true answer either way.
+pub(crate) fn effective_summary_model(
+    config: &Config,
+    primary_provider_key: &str,
+) -> Option<(String, &'static str)> {
+    let cb = config.context_budget.as_ref()?;
+    if !cb.enabled {
+        return None;
+    }
+    let base = config.providers.get(primary_provider_key)?;
+    let explicit = cb
+        .summary_model
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let (model, source): (String, &'static str) = match explicit {
+        Some(model) => (model.to_string(), "summary_model"),
+        None => (
+            crate::providers::get_preset(&primary_provider_key.to_lowercase())
+                .and_then(|p| p.default_aux_model)?
+                .to_string(),
+            "preset aux_model",
+        ),
+    };
+    if base.models.first().is_some_and(|m| m.as_str() == model) {
+        // Resolved model == primary default: summarization runs on the main
+        // model (the byte-identical cheap provider is never built).
+        return base.models.first().map(|m| (m.clone(), "primary default"));
+    }
+    Some((model, source))
+}
+
 #[must_use]
 pub fn build_cheap_summary_provider(
     config: &Config,
@@ -49,35 +94,11 @@ pub fn build_cheap_summary_provider(
 
     let base = config.providers.get(primary_provider_key)?;
 
-    // Tier 1: explicit operator override. Tier 2: the primary preset's declared
-    // cheap aux model (`default_aux_model`, never the `default_model` fallback).
-    let explicit = cb
-        .summary_model
-        .as_ref()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty());
-    let summary_model: String = match explicit {
-        Some(model) => model.to_string(),
-        None => crate::providers::get_preset(&primary_provider_key.to_lowercase())
-            .and_then(|p| p.default_aux_model)?
-            .to_string(),
-    };
-
-    // No-op when the resolved summary model is the primary's own default model —
-    // the rebuilt provider would be byte-identical, so reuse the main LLM.
-    if base
-        .models
-        .first()
-        .is_some_and(|m| m.as_str() == summary_model)
-    {
+    let (summary_model, source) = effective_summary_model(config, primary_provider_key)?;
+    if source == "primary default" {
         return None;
     }
 
-    let source = if explicit.is_some() {
-        "summary_model"
-    } else {
-        "preset aux_model"
-    };
     // rust-doctor-disable-next-line excessive-clone
     let mut cheap_cfg = base.clone();
     cheap_cfg.models = vec![summary_model.clone()];

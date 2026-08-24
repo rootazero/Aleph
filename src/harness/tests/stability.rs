@@ -1136,8 +1136,7 @@ impl AiProvider for InjectsSteeringProvider {
         _payload: RequestPayload<'a>,
     ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
         Box::pin(async move {
-            self.calls
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let _ = self
                 .session
                 .emit_event(

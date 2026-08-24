@@ -1,9 +1,8 @@
-//! Context Budget — pressure sensing, compaction circuit breaker, and diminishing returns detection.
+//! Context Budget — pressure sensing and the compaction circuit breaker.
 //!
 //! This module replaces the old `ToolCompactorConfig` with a richer abstraction
 //! that tracks context window pressure across turns and issues directives to the
-//! agent loop (compact, split the session, compact to fit, or stop on
-//! diminishing returns).
+//! agent loop (compact, split the session, or compact to fit).
 
 pub mod cheap_passes;
 pub mod preflight;
@@ -174,12 +173,23 @@ pub struct ContextBudgetConfig {
     pub token_budget: u64,
     /// Fraction of budget at which compaction triggers (e.g. 0.70).
     pub warning_threshold: f64,
-    /// Fraction of budget at which we force a final reply (e.g. 0.85).
+    /// Fraction of budget at which pressure is critical and the deterministic
+    /// compact-to-fit floor engages (e.g. 0.85).
     pub critical_threshold: f64,
     /// Characters-per-token ratio for estimation.
     pub token_estimate_ratio: f64,
     /// Number of recent messages to leave untouched during compaction.
     pub fresh_tail_count: usize,
+    /// Token budget for a single summarizer-input call, derived from the
+    /// summarizer model's own context window (see
+    /// `deps_builder::context_budget::derive_summarizer_input_budget`):
+    /// `min(SUMMARIZER_INPUT_TOKEN_BUDGET, window / 4)` — never above the
+    /// historical 48k constant, smaller when the (possibly flash-tier)
+    /// summarizer's window could not hold 48k of transcript plus the prompt
+    /// scaffold and the summary output. A fixed 48k against a 64k-window
+    /// cheap model overflowed the summarizer itself, so every compaction
+    /// silently degraded to first-line truncation.
+    pub summarizer_input_budget: usize,
     /// Max consecutive compaction attempts before circuit breaker trips.
     pub circuit_breaker_max: usize,
     /// Max session-splits allowed in one run before a circuit-breaker trip
@@ -246,8 +256,8 @@ impl CompactionCircuitBreaker {
 // ContextBudget
 // =============================================================================
 
-/// Orchestrator that combines pressure sensing, circuit breaking, and
-/// diminishing returns detection to issue directives to the agent loop.
+/// Orchestrator that combines pressure sensing and circuit breaking to issue
+/// directives to the agent loop.
 #[derive(Debug)]
 pub struct ContextBudget {
     token_budget: u64,
@@ -297,12 +307,6 @@ impl ContextBudget {
     #[must_use]
     pub const fn token_estimate_ratio(&self) -> f64 {
         self.token_estimate_ratio
-    }
-
-    /// Warning threshold fraction.
-    #[must_use]
-    pub const fn warning_threshold(&self) -> f64 {
-        self.warning_threshold
     }
 
     /// Fraction of budget at which context is considered critically full.
@@ -527,7 +531,7 @@ impl ContextBudget {
     /// after [`ContextBudget::new`]. The seed is clamped to the same band as
     /// live observations, non-finite values are ignored, and
     /// [`ContextBudget::observe_actual_usage`] keeps refining it exactly as a
-    /// mid-run factor. Breaker / diminishing / split state is untouched — only
+    /// mid-run factor. Breaker / split state is untouched — only
     /// estimator accuracy carries over.
     pub fn seed_calibration(&mut self, factor: f64) {
         if !factor.is_finite() {
@@ -560,6 +564,7 @@ mod tests {
             critical_threshold: 0.85,
             token_estimate_ratio: 3.5,
             fresh_tail_count: 6,
+            summarizer_input_budget: 48_000,
             circuit_breaker_max: 3,
             max_splits: 3,
         }

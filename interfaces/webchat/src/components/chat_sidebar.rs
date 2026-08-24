@@ -23,6 +23,10 @@ use crate::views::chat::state::{
 // The topic grammar is the protocol crate's, not a view module's: the server
 // classifies delivery from the same parser (`event_visibility`).
 use aleph_protocol::team_topic::{parse_team_topic, TeamTopicKind};
+// The wire shape of the wait lane's `pending[]` entries — the same type the
+// server serializes onto `chat.history`, so a field rename there is a
+// compile error here rather than a client that silently reads an empty queue.
+use aleph_protocol::queue::PendingRun;
 
 use web_sys::HtmlInputElement;
 
@@ -159,20 +163,23 @@ pub(crate) fn occupancy_from_history(
 /// `origin_channel`); callers must already have `chat.session_key`
 /// pointing at `key`.
 ///
-/// Returns the run in flight on this session at fetch time, if any. Callers
-/// that own a [`SessionMap`] should hand it to [`hydrate_and_follow`] rather
-/// than calling this directly — a transcript loaded while a turn is running is
-/// only half the answer.
+/// Returns the run in flight on this session at fetch time, if any, plus the
+/// snapshot's wait lane. Callers that own a [`SessionMap`] should hand both to
+/// [`hydrate_and_follow`] rather than calling this directly — a transcript
+/// loaded while a turn is running is only half the answer, and the lane is
+/// what lets a client that attaches mid-wait repaint the queued phase that a
+/// live client would have learned from `RunQueued` frames it never saw.
 pub(crate) async fn hydrate_session_history(
     dash: DashboardState,
     chat: ChatState,
     workspace: Option<WorkspaceState>,
     key: String,
     locale: crate::i18n::Locale,
-) -> Option<String> {
+) -> (Option<String>, Vec<PendingRun>) {
     match ChatApi::history(&dash, &key, Some(50)).await {
         Ok(loaded) => {
             let active_run = loaded.active_run;
+            let pending = loaded.pending;
             let history = loaded.messages;
             // Distinct assistant run_ids → fetch their persisted traces.
             let run_ids: Vec<String> = {
@@ -327,12 +334,26 @@ pub(crate) async fn hydrate_session_history(
                 chat.settle_plan(Some(&plan));
             }
 
-            active_run
+            (active_run, pending)
         }
         Err(e) => {
             web_sys::console::error_1(&format!("Failed to load history: {e}").into());
-            None
+            (None, Vec::new())
         }
+    }
+}
+
+/// Restore the queued phase for a run this client is now following.
+///
+/// Live clients reach it through `RunQueued`; a client that attached mid-wait
+/// never saw those frames — they fired before its socket existed — so the
+/// snapshot it already fetched is the only place the fact survives.
+///
+/// `mark_queued` is scoped to `active_run_id`, so a lane entry for a sibling
+/// run repaints nothing, and replaying the same value is idempotent.
+fn restore_queued_phase(chat: &ChatState, run_id: &str, pending: &[PendingRun]) {
+    if let Some(entry) = pending.iter().find(|p| p.run_id == run_id) {
+        chat.mark_queued(run_id, entry.ahead);
     }
 }
 
@@ -374,8 +395,9 @@ pub(crate) async fn hydrate_and_follow(
     key: String,
     locale: crate::i18n::Locale,
 ) {
-    let Some(run_id) = hydrate_session_history(dash, chat, workspace, key.clone(), locale).await
-    else {
+    let (run_id, pending) =
+        hydrate_session_history(dash, chat, workspace, key.clone(), locale).await;
+    let Some(run_id) = run_id else {
         return;
     };
     // Already following it — our own send bound it, or `run_accepted` did.
@@ -383,6 +405,9 @@ pub(crate) async fn hydrate_and_follow(
     // `settle_run` cannot clear (see `SessionMap::running`), and the route is
     // the thing being established here, so having it already IS the answer.
     if sessions.route_lookup(&run_id).is_some() {
+        // `active_run_id` is already set on this path, so the phase can be
+        // restored right here — an early return is still a follow path.
+        restore_queued_phase(&chat, &run_id, &pending);
         return;
     }
     // `hydrate_session_history` wrote into the singleton `ChatState`, which is
@@ -397,6 +422,7 @@ pub(crate) async fn hydrate_and_follow(
     }
     sessions.bind_run(&run_id, conv, Some(&key));
     chat.start_assistant_message(&run_id);
+    restore_queued_phase(&chat, &run_id, &pending);
 }
 
 #[component]
