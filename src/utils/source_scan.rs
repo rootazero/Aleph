@@ -413,7 +413,9 @@ pub fn strip_comment_lines(src: &str) -> String {
 #[cfg(test)]
 pub(crate) fn rust_sources_under(root: &std::path::Path) -> Vec<(String, String)> {
     fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -1063,7 +1065,10 @@ pub fn after() {}
              the falling number was leaked test code being counted as recovered \
              production code."
         );
-        assert!(worst.0 > 10_000, "worst-case recovery {worst:?} is implausibly small");
+        assert!(
+            worst.0 > 10_000,
+            "worst-case recovery {worst:?} is implausibly small"
+        );
     }
 
     /// Guard 3 — no second author. The rule, not an exemption list.

@@ -77,7 +77,9 @@ pub enum Outcome {
     Installed,
     /// Boot reached this slot and could not install it. `because` is shown to
     /// operators verbatim, so name the missing input, not the symptom.
-    Declined { because: &'static str },
+    Declined {
+        because: &'static str,
+    },
 }
 
 /// Type-erased view of a slot, for the roster and the diagnostics check.
@@ -99,7 +101,12 @@ pub struct CapabilitySlot<T: 'static> {
 
 impl<T: 'static> CapabilitySlot<T> {
     pub const fn new(id: &'static str, missing: MissingSemantics) -> Self {
-        Self { id, missing, value: OnceLock::new(), outcome: OnceLock::new() }
+        Self {
+            id,
+            missing,
+            value: OnceLock::new(),
+            outcome: OnceLock::new(),
+        }
     }
 
     /// Install the value and stamp the roster. Returns `false` when already
@@ -188,7 +195,12 @@ pub struct MutableCapabilitySlot<T: 'static> {
 
 impl<T: 'static> MutableCapabilitySlot<T> {
     pub const fn new(id: &'static str, missing: MissingSemantics) -> Self {
-        Self { id, missing, value: OnceLock::new(), outcome: OnceLock::new() }
+        Self {
+            id,
+            missing,
+            value: OnceLock::new(),
+            outcome: OnceLock::new(),
+        }
     }
 
     /// Install the value and stamp the roster.
@@ -282,7 +294,10 @@ mod tests {
         static S: CapabilitySlot<u32> =
             CapabilitySlot::new("test/idem", MissingSemantics::FailsClosed);
         assert!(S.install(1));
-        assert!(!S.install(2), "second install must be a no-op returning false");
+        assert!(
+            !S.install(2),
+            "second install must be a no-op returning false"
+        );
         assert_eq!(S.get(), Some(&1));
         // NOTE-3: a losing install disturbs neither half of the pair. The stamp
         // is written INSIDE `if fresh`, after the value lands, so "stamp present"
@@ -315,7 +330,10 @@ mod tests {
             CapabilitySlot::new("test/erased", MissingSemantics::ConsumerDecides);
         let erased: &'static dyn SlotStatus = &ERASED;
         assert_eq!(erased.id(), "test/erased");
-        assert!(matches!(erased.missing(), MissingSemantics::ConsumerDecides));
+        assert!(matches!(
+            erased.missing(),
+            MissingSemantics::ConsumerDecides
+        ));
     }
 
     /// ⚠️ KNOWN HAZARD, pinned deliberately — this test does not endorse the
@@ -345,7 +363,10 @@ mod tests {
         static S: CapabilitySlot<u32> =
             CapabilitySlot::new("test/decline-then-install", MissingSemantics::FailsOpen);
         S.decline("input absent at boot");
-        assert!(S.install(1), "install still succeeds -- the value write is unguarded");
+        assert!(
+            S.install(1),
+            "install still succeeds -- the value write is unguarded"
+        );
         assert_eq!(S.get(), Some(&1));
         assert!(
             matches!(S.outcome(), Some(Outcome::Declined { .. })),
@@ -359,7 +380,10 @@ mod tests {
             MutableCapabilitySlot::new("test/mut-unset", MissingSemantics::FailsOpen);
         // This is spend::update_policy's EXISTING contract: the live-apply
         // verdict downgrades to Restart when no handle has been installed yet.
-        assert!(!M.update(5), "update on an uninstalled slot must report false");
+        assert!(
+            !M.update(5),
+            "update on an uninstalled slot must report false"
+        );
         assert!(M.load().is_none());
         assert!(M.outcome().is_none());
     }

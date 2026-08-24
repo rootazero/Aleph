@@ -210,7 +210,13 @@ struct LazySite {
 
 /// Install-once container types. Compared against the FINAL path segment, so a
 /// qualified path resolves to the same member as a bare name.
-const CONTAINERS: &[&str] = &["OnceLock", "OnceCell", "ArcSwapOption", "ArcSwapAny", "ArcSwap"];
+const CONTAINERS: &[&str] = &[
+    "OnceLock",
+    "OnceCell",
+    "ArcSwapOption",
+    "ArcSwapAny",
+    "ArcSwap",
+];
 
 /// The ways a caller writes an install-once container from outside it.
 ///
@@ -256,7 +262,9 @@ fn parse_static_decl(line: &str) -> Option<(String, String)> {
     let (name, after) = rest.split_once(':')?;
     let name = name.trim();
     if name.is_empty()
-        || !name.chars().all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
     {
         return None;
     }
@@ -366,13 +374,17 @@ fn fn_spans(text: &str) -> Vec<FnSpan> {
         let mut k = skip_ws(bytes, j);
         // optional generic list
         if bytes.get(k) == Some(&b'<') {
-            let Some(end) = matching_generics(text, k) else { continue };
+            let Some(end) = matching_generics(text, k) else {
+                continue;
+            };
             k = skip_ws(bytes, end + 1);
         }
         if bytes.get(k) != Some(&b'(') {
             continue;
         }
-        let Some(close) = matching(text, k, b'(', b')') else { continue };
+        let Some(close) = matching(text, k, b'(', b')') else {
+            continue;
+        };
         let params = param_idents(&text[k + 1..close]);
         // body: the first `{` after the parameter list; a `;` first means no body
         let mut b = close + 1;
@@ -382,8 +394,13 @@ fn fn_spans(text: &str) -> Vec<FnSpan> {
         if bytes.get(b) != Some(&b'{') {
             continue;
         }
-        let Some(end) = matching(text, b, b'{', b'}') else { continue };
-        out.push(FnSpan { params, body: b..end });
+        let Some(end) = matching(text, b, b'{', b'}') else {
+            continue;
+        };
+        out.push(FnSpan {
+            params,
+            body: b..end,
+        });
     }
     out
 }
@@ -439,7 +456,9 @@ fn param_idents(src: &str) -> Vec<String> {
             if ch.is_ascii_alphanumeric() || ch == '_' {
                 cur.push(ch);
             } else if !cur.is_empty() {
-                if !matches!(cur.as_str(), "mut" | "ref") && cur.starts_with(|c: char| c.is_ascii_lowercase() || c == '_') {
+                if !matches!(cur.as_str(), "mut" | "ref")
+                    && cur.starts_with(|c: char| c.is_ascii_lowercase() || c == '_')
+                {
                     out.push(std::mem::take(&mut cur));
                 } else {
                     cur.clear();
@@ -492,7 +511,9 @@ fn top_level_colon(p: &str) -> Option<usize> {
 /// Does any `WRITERS` method get called on `name` anywhere in `text`?
 fn is_written(text: &str, name: &str) -> bool {
     word_occurrences(text, name).into_iter().any(|at| {
-        WRITERS.iter().any(|m| method_call_open_paren(text, at + name.len(), m).is_some())
+        WRITERS
+            .iter()
+            .any(|m| method_call_open_paren(text, at + name.len(), m).is_some())
     })
 }
 
@@ -510,7 +531,11 @@ struct FirstCaller {
 /// Is `name` installed by an initialiser that depends on a parameter of the
 /// enclosing function?
 fn first_caller_install(text: &str, name: &str, spans: &[FnSpan]) -> FirstCaller {
-    let mut verdict = FirstCaller { installs: false, saw_call: false, declined_on_use: false };
+    let mut verdict = FirstCaller {
+        installs: false,
+        saw_call: false,
+        declined_on_use: false,
+    };
     for at in word_occurrences(text, name) {
         let Some(open) = INITIALISERS
             .iter()
@@ -519,7 +544,9 @@ fn first_caller_install(text: &str, name: &str, spans: &[FnSpan]) -> FirstCaller
             continue;
         };
         verdict.saw_call = true;
-        let Some(close) = matching(text, open, b'(', b')') else { continue };
+        let Some(close) = matching(text, open, b'(', b')') else {
+            continue;
+        };
         let init = &text[open + 1..close];
         // innermost enclosing body
         let Some(span) = spans
@@ -532,7 +559,11 @@ fn first_caller_install(text: &str, name: &str, spans: &[FnSpan]) -> FirstCaller
         if span.params.is_empty() {
             continue;
         }
-        if span.params.iter().any(|p| !word_occurrences(init, p).is_empty()) {
+        if span
+            .params
+            .iter()
+            .any(|p| !word_occurrences(init, p).is_empty())
+        {
             verdict.installs = true;
         } else {
             verdict.declined_on_use = true;
@@ -577,8 +608,12 @@ fn take_census() -> Census {
         sources.len()
     );
 
-    let mut c =
-        Census { written: Vec::new(), first_caller: Vec::new(), slots: Vec::new(), lazy: Vec::new() };
+    let mut c = Census {
+        written: Vec::new(),
+        first_caller: Vec::new(),
+        slots: Vec::new(),
+        lazy: Vec::new(),
+    };
     for (rel, text) in sources {
         let prod = strip_comment_lines(&production_prefix(&text));
         let mut spans: Option<Vec<FnSpan>> = None;
@@ -586,8 +621,12 @@ fn take_census() -> Census {
             let Some((name, container)) = parse_static_decl(line) else {
                 continue;
             };
-            let site =
-                || HandleSite { file: rel.clone(), name: name.clone(), container: container.clone(), is_slot: false };
+            let site = || HandleSite {
+                file: rel.clone(),
+                name: name.clone(),
+                container: container.clone(),
+                is_slot: false,
+            };
             if is_written(&prod, &name) {
                 c.written.push(site());
                 continue;
@@ -667,8 +706,12 @@ mod tests {
     #[test]
     fn the_capability_handle_inventory_is_the_size_we_measured() {
         let c = take_census();
-        let (written, first, slots, lazy) =
-            (c.written.len(), c.first_caller.len(), c.slots.len(), c.lazy.len());
+        let (written, first, slots, lazy) = (
+            c.written.len(),
+            c.first_caller.len(),
+            c.slots.len(),
+            c.lazy.len(),
+        );
 
         // ONE write, not one per line. libtest prints its own progress lines to
         // the same stderr from another thread, and it spliced one of them into
@@ -677,19 +720,33 @@ mod tests {
         // an hour chasing a census defect that did not exist. The inventory is a
         // cross-task interface; it must not be reassembled from interleaved
         // output.
-        let mut report =
-            format!("--- capability handles: {} raw, {slots} slots ---\n", written + first);
+        let mut report = format!(
+            "--- capability handles: {} raw, {slots} slots ---\n",
+            written + first
+        );
         for s in c.written.iter() {
-            report.push_str(&format!("  RAW  {:14} {:32} {}\n", s.container, s.name, s.file));
+            report.push_str(&format!(
+                "  RAW  {:14} {:32} {}\n",
+                s.container, s.name, s.file
+            ));
         }
         for s in c.first_caller.iter() {
-            report.push_str(&format!("  RAW  {:14} {:32} {}\n", s.container, s.name, s.file));
+            report.push_str(&format!(
+                "  RAW  {:14} {:32} {}\n",
+                s.container, s.name, s.file
+            ));
         }
         for s in c.slots.iter() {
-            report.push_str(&format!("  SLOT {:14} {:32} {}\n", s.container, s.name, s.file));
+            report.push_str(&format!(
+                "  SLOT {:14} {:32} {}\n",
+                s.container, s.name, s.file
+            ));
         }
         for s in &c.lazy {
-            report.push_str(&format!("  LAZY {:14} {:32} {}\n", s.container, s.name, s.file));
+            report.push_str(&format!(
+                "  LAZY {:14} {:32} {}\n",
+                s.container, s.name, s.file
+            ));
         }
         report.push_str(&format!(
             "--- candidates {} = written {written} + first-caller-wins {first} + slots {slots} \
@@ -767,8 +824,11 @@ mod tests {
     #[test]
     fn the_round_seven_anchors_are_selected_by_the_rule() {
         let sites = capability_handles();
-        let found =
-            |file: &str, name: &str| sites.iter().any(|s| s.file.ends_with(file) && s.name == name);
+        let found = |file: &str, name: &str| {
+            sites
+                .iter()
+                .any(|s| s.file.ends_with(file) && s.name == name)
+        };
         assert!(
             found("src/spend/mod.rs", "GLOBAL_LEDGER"),
             "GLOBAL_LEDGER is the §5.22 round-7 anchor and is written in the \
@@ -796,7 +856,10 @@ mod tests {
     fn self_initialising_containers_are_excluded_by_derivation() {
         let c = take_census();
         let selected = |file: &str, name: &str| {
-            c.written.iter().chain(c.first_caller.iter()).chain(c.slots.iter())
+            c.written
+                .iter()
+                .chain(c.first_caller.iter())
+                .chain(c.slots.iter())
                 .any(|s| s.file.ends_with(file) && s.name == name)
         };
         // (file, name, sits in a parameterised fn and must be declined on USE)
@@ -847,7 +910,8 @@ mod tests {
     fn route_handle_global_is_selected_by_the_first_caller_wins_arm_alone() {
         let c = take_census();
         let is = |v: &[HandleSite]| {
-            v.iter().any(|s| s.file.ends_with("src/providers/route_handle.rs") && s.name == "GLOBAL")
+            v.iter()
+                .any(|s| s.file.ends_with("src/providers/route_handle.rs") && s.name == "GLOBAL")
         };
         assert!(
             is(&c.first_caller),
@@ -913,7 +977,10 @@ mod tests {
         )
         .expect("config_handle.rs");
         let prod = strip_comment_lines(&production_prefix(&src));
-        assert!(prod.contains("static MOA_CONFIG:"), "MOA_CONFIG is gone or renamed");
+        assert!(
+            prod.contains("static MOA_CONFIG:"),
+            "MOA_CONFIG is gone or renamed"
+        );
         assert!(
             !is_written(&prod, "MOA_CONFIG"),
             "MOA_CONFIG now has a writer: it is selectable by install form 1, the \
@@ -951,7 +1018,10 @@ mod tests {
                 .chain(c.first_caller.iter())
                 .chain(c.slots.iter())
                 .any(|s| s.file.ends_with(file) && s.name == name);
-            let in_lazy = c.lazy.iter().any(|s| s.file.ends_with(file) && s.name == name);
+            let in_lazy = c
+                .lazy
+                .iter()
+                .any(|s| s.file.ends_with(file) && s.name == name);
             assert!(
                 !in_handles && !in_lazy,
                 "{name} lives in a #[cfg(test)] fn in {file} and must not reach \
@@ -976,7 +1046,11 @@ mod tests {
         let c = take_census();
         let (raw, slots) = (c.written.len() + c.first_caller.len(), c.slots.len());
         let sites = capability_handles();
-        assert_eq!(sites.len(), raw + slots, "the projection dropped or duplicated sites");
+        assert_eq!(
+            sites.len(),
+            raw + slots,
+            "the projection dropped or duplicated sites"
+        );
         assert_eq!(
             sites.iter().filter(|s| s.is_slot).count(),
             slots,
@@ -984,7 +1058,10 @@ mod tests {
              migration finished\" through this bool alone."
         );
         assert!(
-            sites.iter().filter(|s| !s.is_slot).all(|s| !s.container.ends_with("CapabilitySlot")),
+            sites
+                .iter()
+                .filter(|s| !s.is_slot)
+                .all(|s| !s.container.ends_with("CapabilitySlot")),
             "a site labelled raw carries a slot container type — the two \
              halves of the same fact have drifted. `ends_with`, not `==`: \
              `MutableCapabilitySlot` is the second spelling, and an equality \
