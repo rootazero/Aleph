@@ -29,6 +29,7 @@
 //! requires BOTH keys to be present and coherent; if either is missing or invalid,
 //! `scope_from_metadata` returns `None` (fail-closed, legacy compat).
 
+use aleph_protocol::scope as wire;
 use std::collections::HashMap;
 
 pub mod carried;
@@ -55,33 +56,30 @@ impl ScopeId {
     /// - `Project(p)` → `"project:<p>"`
     pub fn render(&self) -> String {
         match self {
-            ScopeId::Org => "org".to_string(),
-            ScopeId::Personal(ref_id) => format!("personal:{}", ref_id),
-            ScopeId::Project(ref_id) => format!("project:{}", ref_id),
+            ScopeId::Org => wire::ORG.to_string(),
+            ScopeId::Personal(ref_id) => format!("{}{}", wire::PERSONAL_PREFIX, ref_id),
+            ScopeId::Project(ref_id) => wire::project_scope_id(ref_id),
         }
     }
 
     /// Parse a scope from its rendered form. Returns `None` if the input is
     /// invalid or refers to an unknown scope kind (fail-closed).
+    ///
+    /// Both directions are spelled in terms of [`aleph_protocol::scope`], the
+    /// shared home of this vocabulary, so a client that constructs one of
+    /// these strings cannot be reading a prefix core no longer emits. Keeping
+    /// the *typed* enum here is deliberate: a client may name a scope, it may
+    /// not decide what one permits.
     pub fn parse(s: &str) -> Option<ScopeId> {
-        match s {
-            "org" => Some(ScopeId::Org),
-            _ => {
-                if let Some((kind, ref_id)) = s.split_once(':') {
-                    match kind {
-                        "personal" if !ref_id.is_empty() => {
-                            Some(ScopeId::Personal(ref_id.to_string()))
-                        }
-                        "project" if !ref_id.is_empty() => {
-                            Some(ScopeId::Project(ref_id.to_string()))
-                        }
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
-            }
+        if s == wire::ORG {
+            return Some(ScopeId::Org);
         }
+        if let Some(ref_id) = wire::project_id_of(s) {
+            return Some(ScopeId::Project(ref_id.to_string()));
+        }
+        s.strip_prefix(wire::PERSONAL_PREFIX)
+            .filter(|ref_id| !ref_id.is_empty())
+            .map(|ref_id| ScopeId::Personal(ref_id.to_string()))
     }
 }
 
@@ -522,5 +520,67 @@ mod tests {
         assert!(ScopeAttribution::from_persisted(None, None).is_none());
         // Unparseable scope_id: fail closed, never guess.
         assert!(ScopeAttribution::from_persisted(Some("u-alice"), Some("garbage")).is_none());
+    }
+}
+
+#[cfg(test)]
+mod wire_reconciliation {
+    use super::*;
+
+    /// The typed enum here and the string vocabulary in `aleph_protocol::
+    /// scope` are two halves of one contract living in two crates — the shape
+    /// this repo has watched drift more than once, because neither half fails
+    /// to compile when the other changes its spelling. A client filtering on
+    /// a prefix core stopped emitting gets an empty list, and an empty list
+    /// renders identically to "this room has nothing in it".
+    ///
+    /// So: assert both directions against the shared helpers rather than
+    /// against literals. A literal here would just be a third copy.
+    #[test]
+    fn renders_and_parses_the_shared_wire_spelling() {
+        let project = ScopeId::Project("p-x7f2".to_string());
+        assert_eq!(project.render(), wire::project_scope_id("p-x7f2"));
+        assert_eq!(
+            ScopeId::parse(&wire::project_scope_id("p-x7f2")),
+            Some(project)
+        );
+
+        assert_eq!(ScopeId::Org.render(), wire::ORG);
+        assert_eq!(ScopeId::parse(wire::ORG), Some(ScopeId::Org));
+
+        let personal = ScopeId::Personal("u-alice".to_string());
+        assert!(personal.render().starts_with(wire::PERSONAL_PREFIX));
+        assert_eq!(ScopeId::parse(&personal.render()), Some(personal));
+    }
+
+    /// `belongs_to_project` is the predicate every client will reach for when
+    /// filtering a list by room. It has to agree with what core actually
+    /// stamps, so drive it from `render()` rather than from a hand-written
+    /// string — including the unstamped case, whose fail-closed direction is
+    /// the one a `==` at a call site gets wrong.
+    #[test]
+    fn the_client_membership_predicate_agrees_with_what_core_stamps() {
+        let stamped = ScopeId::Project("p-a".to_string()).render();
+        assert!(wire::belongs_to_project(Some(&stamped), "p-a"));
+        assert!(!wire::belongs_to_project(Some(&stamped), "p-b"));
+
+        let personal = ScopeId::Personal("u-alice".to_string()).render();
+        assert!(!wire::belongs_to_project(Some(&personal), "p-a"));
+        assert!(!wire::belongs_to_project(None, "p-a"));
+    }
+
+    /// Behaviour-preservation for the rewrite that moved the spelling out:
+    /// the pre-existing parser kept everything after the FIRST colon, and
+    /// rejected an empty ref and an unknown kind. All three still hold.
+    #[test]
+    fn parse_keeps_its_pre_existing_edge_behaviour() {
+        assert_eq!(
+            ScopeId::parse("project:p-a:b"),
+            Some(ScopeId::Project("p-a:b".to_string()))
+        );
+        assert_eq!(ScopeId::parse("project:"), None);
+        assert_eq!(ScopeId::parse("personal:"), None);
+        assert_eq!(ScopeId::parse("team:t-1"), None);
+        assert_eq!(ScopeId::parse("no-colon"), None);
     }
 }
