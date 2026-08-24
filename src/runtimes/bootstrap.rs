@@ -126,7 +126,7 @@ pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
             expected: format!("binary '{name}' on PATH after install"),
         });
     }
-    let bin_path = match probe_result.bin_path.clone() {
+    let bin_path = match probe_result.bin_path.take() {
         Some(path) => path,
         None => {
             return Ok(BootstrapResult::PathNotFound {
