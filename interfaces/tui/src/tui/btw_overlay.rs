@@ -48,14 +48,14 @@ const CLAIM_CAP: usize = 32;
 /// How a side question ended.
 ///
 /// One enum rather than an `aborted` flag beside an `Option<String>` error.
-/// The four endings are mutually exclusive and each owes the user a different
-/// word, and the flags-plus-option shape had already forced two of them to
-/// share one: `settle_superseded` had nowhere to put "the user moved on"
-/// except the error field, so a question nobody failed rendered as `failed` —
-/// the same word a provider outage gets, over a run that may still be running
-/// and may still succeed. A third boolean would have made eight states of
-/// which five are unrepresentable nonsense; this makes the four sayable and
-/// the rest impossible.
+/// The endings are mutually exclusive and each owes the user a different word,
+/// and the flags-plus-option shape had already forced two of them to share one:
+/// `settle_superseded` had nowhere to put "the user moved on" except the error
+/// field, so a question nobody failed rendered as `failed` — the same word a
+/// provider outage gets, over a run that may still be running and may still
+/// succeed. A third boolean would have made eight states of which five are
+/// unrepresentable nonsense; this makes each ending sayable and the rest
+/// impossible.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum BtwOutcome {
     /// It finished. The answer may still be empty — "it said nothing" is a
@@ -73,6 +73,19 @@ pub enum BtwOutcome {
     /// The run failed, carrying the reason. Distinct from an empty answer:
     /// "it broke" and "it said nothing" are different things to be told.
     Failed(String),
+    /// The socket died while it was being answered, and on reconnect the
+    /// gateway no longer reported the run in flight. Carries what it did say.
+    ///
+    /// The fifth ending exists because the other four are each a lie about
+    /// this one. The frames emitted while this client was away are gone — the
+    /// text on file may be a **prefix** of the real answer with no way to tell,
+    /// so `Answered` would present a truncation as the whole thing. And on the
+    /// commonest of the states the server reports here the run did not break,
+    /// it finished with nobody listening, so `Failed` names the wrong event.
+    ///
+    /// This is `Superseded`'s sibling: same "the text is whatever arrived",
+    /// different cause, and the cause is the part the user needs to read.
+    Disconnected(String),
 }
 
 /// One finished side question.
@@ -116,14 +129,29 @@ impl BtwExchange {
             BtwOutcome::Aborted => "aborted",
             BtwOutcome::Superseded => "superseded",
             BtwOutcome::Failed(_) => "failed",
+            BtwOutcome::Disconnected(_) => "disconnected",
         }
     }
 
-    /// The failure reason, for the surface that renders it in full.
+    /// The line that goes above the answer, when the ending owes one.
+    ///
+    /// **The label belongs to the outcome, not to the widget.** This used to be
+    /// an `error()` accessor with the widget writing `"Error: "` in front of
+    /// whatever came back — which was right while `Failed` was the only ending
+    /// with anything to say, and became wrong the moment
+    /// [`BtwOutcome::Disconnected`] arrived: a question that finished on the
+    /// server while this client was away is not an error, and captioning it as
+    /// one is the same overload the enum's own doc exists to prevent.
+    ///
+    /// It goes in the BODY, not in the status line. That line is one row tall,
+    /// so a multi-line provider error rendered there showed its first line and
+    /// dropped the rest with nowhere else to read it — and the interesting part
+    /// of an error is rarely its first line. The body region wraps and scrolls.
     #[must_use]
-    pub fn error(&self) -> Option<&str> {
+    pub fn note(&self) -> Option<String> {
         match &self.outcome {
-            BtwOutcome::Failed(reason) => Some(reason),
+            BtwOutcome::Failed(reason) => Some(format!("Error: {reason}")),
+            BtwOutcome::Disconnected(note) => Some(note.clone()),
             _ => None,
         }
     }
@@ -323,6 +351,19 @@ impl BtwOverlay {
         }
     }
 
+    /// Take the active question, but only when `run_id` is the run answering
+    /// it.
+    ///
+    /// The one place a settlement asks "is this mine, and may I have it" — the
+    /// three settlers below differ only in the ending they then name, and they
+    /// used to repeat this check-then-take in full. A settler that forgot the
+    /// check would file a *different* question's text under this run's ending,
+    /// which is the misattribution [`Self::for_active_run`] exists to prevent.
+    fn take_active_run(&mut self, run_id: &str) -> Option<BtwActive> {
+        self.for_active_run(run_id)?;
+        self.active.take()
+    }
+
     /// Settle the active question as answered.
     ///
     /// `fallback` is the authoritative final text from the run summary, used
@@ -330,10 +371,7 @@ impl BtwOverlay {
     /// trace mirror still has an answer, and an empty bubble would report the
     /// opposite.
     pub fn finish_active(&mut self, run_id: &str, fallback: Option<&str>) {
-        if self.for_active_run(run_id).is_none() {
-            return;
-        }
-        let Some(active) = self.active.take() else {
+        let Some(active) = self.take_active_run(run_id) else {
             return;
         };
         let answer = if active.answer.trim().is_empty() {
@@ -351,16 +389,38 @@ impl BtwOverlay {
     /// Settle the active question as failed, keeping whatever text arrived
     /// before the failure — a partial answer is still worth reading.
     pub fn fail_active(&mut self, run_id: &str, error: String) {
-        if self.for_active_run(run_id).is_none() {
-            return;
-        }
-        let Some(active) = self.active.take() else {
+        let Some(active) = self.take_active_run(run_id) else {
             return;
         };
         self.finish_exchange(BtwExchange {
             question: active.question,
             answer: active.answer,
             outcome: BtwOutcome::Failed(error),
+        });
+    }
+
+    /// Stop claiming a side question is being answered, because the connection
+    /// that was carrying its frames died and the gateway no longer reports the
+    /// run in flight.
+    ///
+    /// Deliberately **not** a verdict. `note` is what the server said became of
+    /// the run, verbatim from the caller — this overlay is not in a position to
+    /// decide whether the work succeeded, only to stop showing a spinner over
+    /// something nobody is going to stream to it. See
+    /// [`BtwOutcome::Disconnected`] for why the four older endings all say
+    /// something untrue here.
+    ///
+    /// Keyed on `run_id` like every other settler: by the time this is called
+    /// the user may already have asked something else, and that question's text
+    /// must not be filed under this run's ending.
+    pub fn settle_disconnected(&mut self, run_id: &str, note: String) {
+        let Some(active) = self.take_active_run(run_id) else {
+            return;
+        };
+        self.finish_exchange(BtwExchange {
+            question: active.question,
+            answer: active.answer,
+            outcome: BtwOutcome::Disconnected(note),
         });
     }
 
@@ -650,7 +710,7 @@ mod tests {
         assert_eq!(filed.status(), "superseded");
         assert_eq!(filed.outcome, BtwOutcome::Superseded);
         assert_eq!(
-            filed.error(),
+            filed.note(),
             None,
             "a superseded question has no failure to report"
         );
@@ -848,5 +908,69 @@ mod tests {
         asking(&mut o, "q2", "r2");
         assert!(o.open);
         assert_eq!(o.exchanges.len(), 1);
+    }
+
+    /// The reconnect repair's landing: the spinner stops, whatever streamed is
+    /// kept, and the word is neither `answered` nor `failed`.
+    ///
+    /// `answered` would present a possibly-truncated prefix as the whole
+    /// answer; `failed` would report a break over a run that, on the commonest
+    /// path here, finished cleanly with nobody listening.
+    #[test]
+    fn a_question_settled_after_a_reconnect_keeps_its_text_and_says_why() {
+        let mut o = BtwOverlay::default();
+        asking(&mut o, "what is a monoid?", "r-side");
+        o.push_delta("r-side", "a monoid is");
+
+        o.settle_disconnected("r-side", "the gateway reports the run finished".to_string());
+
+        assert!(o.active.is_none(), "the spinner must stop");
+        let filed = o.current().expect("the question was filed");
+        assert_eq!(filed.answer, "a monoid is", "the partial answer is kept");
+        assert_eq!(filed.status(), "disconnected");
+        assert_ne!(filed.status(), "answered");
+        assert_eq!(
+            filed.note(),
+            Some("the gateway reports the run finished".to_string()),
+            "what the server said is the part the user needs"
+        );
+    }
+
+    /// The note is NOT captioned as an error. `note()` owns the wording per
+    /// outcome precisely so a finished-while-away question is not labelled the
+    /// way a provider outage is.
+    #[test]
+    fn only_a_failure_is_captioned_as_one() {
+        let mut o = BtwOverlay::default();
+        asking(&mut o, "q", "r1");
+        o.settle_disconnected("r1", "the gateway has no record of the run".to_string());
+        let note = o.current().and_then(BtwExchange::note).expect("a note");
+        assert!(!note.starts_with("Error:"), "not an error: {note}");
+
+        asking(&mut o, "q2", "r2");
+        o.fail_active("r2", "provider 429".to_string());
+        assert_eq!(
+            o.current().and_then(BtwExchange::note),
+            Some("Error: provider 429".to_string()),
+            "a real failure still says so"
+        );
+    }
+
+    /// Keyed on the run id like every other settler. By the time the repair
+    /// runs the user may already have asked something else — filing that
+    /// question's text under the old run's ending is the misattribution
+    /// `for_active_run` exists to prevent.
+    #[test]
+    fn the_repair_cannot_settle_a_question_it_is_not_about() {
+        let mut o = BtwOverlay::default();
+        asking(&mut o, "second question", "r-new");
+        o.push_delta("r-new", "still going");
+
+        o.settle_disconnected("r-old", "the gateway has no record of the run".to_string());
+
+        let active = o.active.as_ref().expect("the live question is untouched");
+        assert_eq!(active.question, "second question");
+        assert_eq!(active.answer, "still going");
+        assert!(o.exchanges.is_empty(), "nothing was filed");
     }
 }

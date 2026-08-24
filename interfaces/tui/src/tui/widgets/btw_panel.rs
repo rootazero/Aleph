@@ -72,17 +72,14 @@ fn body(overlay: &BtwOverlay, spinner_frame: usize) -> (String, String, String) 
     }
     match overlay.current() {
         Some(exchange) => {
-            // The failure goes in the BODY, not in the status line.
-            //
-            // That line is one row tall, so a multi-line provider error
-            // rendered there showed its first line and dropped the rest with
-            // nowhere else to read it — and the interesting part of an error
-            // is rarely its first line. The body region already wraps and
-            // scrolls, so the whole text is reachable; the status line keeps
-            // the one word that fits a single row by construction.
-            let body = match exchange.error() {
-                Some(err) if exchange.answer.is_empty() => format!("Error: {err}"),
-                Some(err) => format!("Error: {err}\n\n{}", exchange.answer),
+            // An ending that owes an explanation puts it in the BODY, above the
+            // text — see `BtwExchange::note`, which owns the wording, including
+            // the `Error:` label that used to be written here. Two endings need
+            // this and they need different words; a label chosen by the widget
+            // would caption both with whichever one it happened to know about.
+            let body = match exchange.note() {
+                Some(note) if exchange.answer.is_empty() => note,
+                Some(note) => format!("{note}\n\n{}", exchange.answer),
                 None => exchange.answer.clone(),
             };
             (
