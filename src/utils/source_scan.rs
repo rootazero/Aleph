@@ -96,20 +96,64 @@ struct LexState {
     in_block_comment: bool,
 }
 
+/// If `chars[i]` is `'` and it opens a genuine char literal, return the
+/// number of characters the literal spans (including both quotes).
+/// Otherwise — a lifetime, or a malformed/unterminated literal — return
+/// `None`; the caller must then treat the `'` as an ordinary character.
+///
+/// Recognised by grammar, not by an enumerated list of shapes — a list is
+/// exactly the defect this function exists to not repeat. Two forms:
+///
+/// - **Escaped**: `chars[i + 1] == '\\'` (`'\n'`, `'\\'`, `'\''`, `'\u{7B}'`).
+///   The escape body cannot contain an unescaped `'`, with one exception:
+///   if the character right after the backslash is itself `'`, that is the
+///   escaped quote of `'\''`, and the real closing quote is the one after
+///   *that*. Otherwise the closing quote is the first `'` found scanning
+///   forward from just past the backslash — wherever it lands, including
+///   after an arbitrary-length body like `\u{7B}`, whose written form
+///   happens to contain a literal `{` and `}` that must never be counted.
+/// - **Simple**: `chars[i + 2] == Some('\'')` (`'a'`, `'{'`, `'}'`, `'0'`) —
+///   a bare one-character literal, three characters total.
+///
+/// Anything else starting with `'` is a lifetime (`'a`, `'static`, `'_`) or
+/// too malformed to call a literal. A malformed literal with no closing
+/// quote on this line returns `None` rather than consuming to end of line —
+/// a scanner that runs off the end on bad input is how the original bug
+/// (an unmatched lifetime quote swallowing the rest of the line) behaved.
+fn char_literal_len(chars: &[char], i: usize) -> Option<usize> {
+    debug_assert_eq!(chars.get(i), Some(&'\''));
+    if chars.get(i + 1) == Some(&'\\') {
+        if chars.get(i + 2) == Some(&'\'') {
+            // '\'' — the quote at i+2 is the escaped character itself, not
+            // the closing quote; the closing quote is the one after it.
+            return (chars.get(i + 3) == Some(&'\'')).then_some(4);
+        }
+        let mut j = i + 2;
+        while j < chars.len() {
+            if chars[j] == '\'' {
+                return Some(j - i + 1);
+            }
+            j += 1;
+        }
+        return None; // unterminated on this line
+    }
+    if chars.get(i + 2) == Some(&'\'') {
+        return Some(3); // 'X'
+    }
+    None // a lifetime, or too malformed to call a literal
+}
+
 /// A line with line-comments, block-comments, and string/char literal
 /// *contents* removed, so braces inside them are not counted by
 /// [`end_of_item`]. `state` carries `in_str`/`in_block_comment` across every
 /// line of one item scan.
 ///
-/// Never toggles any state on a bare `'`: a lifetime (`&'static str`,
-/// `&'a T`) is a single unmatched quote, and treating it as a char-literal
-/// delimiter would leave the scanner "inside a char literal" for the rest of
-/// the line — dropping every brace after it, including the one that opens
-/// the item's body. Since this scanner exists only to count braces, the
-/// only char literals that can matter are `'{'` and `'}'`; those two are
-/// recognised by exact lookahead and skipped whole. Every other `'` —
-/// including every lifetime — is emitted as an ordinary character and
-/// changes no state.
+/// Char literals are recognised via [`char_literal_len`] and skipped whole,
+/// so none of their interior characters — including a `{`/`}` written out
+/// in an escape body like `'\u{7B}'` — are ever counted or emitted. A bare
+/// `'` that [`char_literal_len`] does not recognise (a lifetime, or a
+/// malformed literal) is emitted as an ordinary character and changes no
+/// state — it is never treated as entering "inside a char literal".
 fn code_only(line: &str, state: &mut LexState) -> String {
     let chars: Vec<char> = line.chars().collect();
     let mut out = String::with_capacity(chars.len());
@@ -145,11 +189,13 @@ fn code_only(line: &str, state: &mut LexState) -> String {
                 state.in_str = true;
                 idx += 1;
             }
-            '\'' if chars.get(idx + 1) == Some(&'{') && chars.get(idx + 2) == Some(&'\'') => {
-                idx += 3; // the char literal '{' — skip whole, don't count the brace
-            }
-            '\'' if chars.get(idx + 1) == Some(&'}') && chars.get(idx + 2) == Some(&'\'') => {
-                idx += 3; // the char literal '}' — skip whole, don't count the brace
+            '\'' => {
+                if let Some(len) = char_literal_len(&chars, idx) {
+                    idx += len; // skip the whole literal; its interior is never counted
+                } else {
+                    out.push(c); // a lifetime (or malformed literal) is ordinary text
+                    idx += 1;
+                }
             }
             '/' if chars.get(idx + 1) == Some(&'/') => break, // line comment: rest of line is not code
             '/' if chars.get(idx + 1) == Some(&'*') => {
@@ -348,6 +394,60 @@ pub fn after() {}
         let out = production_prefix(src);
         assert!(out.contains("pub fn after()"), "got:\n{out}");
         assert!(!out.contains("let open"));
+    }
+
+    /// Round-2 defect: `'\u{7B}'` is a Unicode-escape char literal whose
+    /// *written* form contains a literal `{` and `}`. A recogniser that
+    /// special-cased only the exact three-character forms `'{'`/`'}'` let
+    /// both braces leak into the scanned text; they self-balance (net depth
+    /// 0), but the line still "contains a `{`", which flips `opened` true
+    /// and — combined with depth 0 — closes the item scan right there, even
+    /// though the item's REAL opening brace (on a later line) was never
+    /// reached. `-> bool` only appears past that real opening brace, so its
+    /// absence from the output is what distinguishes "correctly stripped
+    /// through the real close" from "prematurely closed on the escape".
+    #[test]
+    fn cfg_test_item_containing_a_unicode_escape_char_literal_does_not_eat_following_code() {
+        let src = "#[cfg(test)]\n\
+                   fn matches(buf: [u8; '\\u{7B}' as usize])\n\
+                   \x20\x20\x20\x20-> bool\n\
+                   {\n\
+                   \x20\x20\x20\x20true\n\
+                   }\n\
+                   pub fn after() {}\n";
+        let out = production_prefix(src);
+        assert!(out.contains("pub fn after()"), "got:\n{out}");
+        assert!(!out.contains("-> bool"), "got:\n{out}");
+    }
+
+    /// The escaped-quote literal `'\''` contains no braces of its own; this
+    /// pins that the new grammar-based recogniser still consumes all four
+    /// of its characters (`'`, `\`, `'`, `'`) as one unit rather than
+    /// miscounting any of them individually.
+    #[test]
+    fn cfg_test_item_containing_an_escaped_quote_char_literal_does_not_eat_following_code() {
+        let src = "#[cfg(test)]\n\
+                   fn t() {\n\
+                   \x20\x20\x20\x20let q = '\\'';\n\
+                   }\n\
+                   pub fn after() {}\n";
+        let out = production_prefix(src);
+        assert!(out.contains("pub fn after()"), "got:\n{out}");
+        assert!(!out.contains("let q"));
+    }
+
+    /// A lifetime and a char literal on the same line must not interfere
+    /// with each other: the lifetime changes no state, and the `'{'`
+    /// literal is still recognised and its brace still excluded from the
+    /// count, so the line's three real brace pairs are counted correctly.
+    #[test]
+    fn line_with_both_a_lifetime_and_a_char_literal_counts_braces_correctly() {
+        let src = "#[cfg(test)]\n\
+                   fn f<'a>(c: char) -> &'a str { if c == '{' { \"x\" } else { \"y\" } }\n\
+                   pub fn after() {}\n";
+        let out = production_prefix(src);
+        assert!(out.contains("pub fn after()"), "got:\n{out}");
+        assert!(!out.contains("if c =="), "got:\n{out}");
     }
 
     /// CRLF checkouts are real on Windows; a `\n`-anchored scan matches
