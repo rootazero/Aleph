@@ -27,6 +27,10 @@
 
 use std::sync::OnceLock;
 
+/// The membership rule that decides what belongs in this module's roster.
+#[cfg(test)]
+pub(crate) mod census;
+
 /// What a read observes when this capability was NEVER installed.
 ///
 /// ⚠️ Membership in the roster is decided by THIS — the failure direction —
