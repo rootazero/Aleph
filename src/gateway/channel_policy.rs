@@ -93,14 +93,14 @@ static SNAPSHOT_READY: Notify = Notify::const_new();
 
 /// Publish the boot channel-config snapshot. Called once from
 /// `initialize_inbound_router` after every `register_channel_config`, before the
-/// router is sealed in `Arc`. Idempotent — a later set (e.g. a second boot in a
-/// test process) is ignored by the `OnceLock`.
+/// router is sealed in `Arc`. Idempotent — a later install (e.g. a second boot
+/// in a test process) returns `false` and is ignored by the slot.
 pub fn set_channel_config_snapshot(configs: HashMap<String, ChannelConfig>) {
     if !CHANNEL_CONFIG_SNAPSHOT.install(configs) {
         tracing::debug!("channel config snapshot already published; ignoring re-set");
     }
     // Wake any boot scans parked in `wait_for_channel_config_snapshot`. Callers
-    // that arrive after this see the `OnceLock` already set and never park.
+    // that arrive after this see the slot already installed and never park.
     SNAPSHOT_READY.notify_waiters();
 }
 
