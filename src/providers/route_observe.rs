@@ -18,11 +18,10 @@
 //! semantic-router's `x-vsr-*` decision headers, `RouteLLM`'s per-route model
 //! counts) without any of their classifier machinery.
 
-use std::sync::OnceLock;
-
 use arc_swap::ArcSwap;
 use serde_json::json;
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::config::types::{LoadBalanceStrategy, ModelRouteConfig, RouteMode};
 use crate::providers::default_handle::DefaultProviderHandle;
 use crate::providers::failover::{FailoverHealth, ModelCooldown, ProviderCooldown};
@@ -374,12 +373,39 @@ impl RouteObservability {
 /// [`route_handle`](crate::providers::route_handle)'s global. Registered by
 /// the production boot path only (`orchestrator_init`), so library tests
 /// never see a populated global.
-static GLOBAL: OnceLock<RouteObservability> = OnceLock::new();
+/// `ConsumerDecides`: six production readers, each choosing differently.
+/// `self_config`'s `route_status` drops the whole `data.runtime` object and the
+/// sentence that tells the model to read it — the same tool then says nothing
+/// about live health, so the model does exactly what that sentence warns
+/// against and guesses why a provider was chosen. `health_prober` `continue`s
+/// every tick forever, a prober that never probes and never says so.
+/// `route_config`'s hot-apply of `config_problems` is skipped silently, and
+/// three more readers each pick their own answer.
+///
+/// ⚠️ The paragraph above this one points at
+/// [`route_handle`](crate::providers::route_handle)'s global for "the same
+/// contract". After batch D that is now the ONE handle in `src/` still on a raw
+/// `OnceLock` — deliberately: it is first-caller-wins (its initialiser closes
+/// over the caller's `cfg`), which `CapabilitySlot::install` cannot express
+/// without forging an `Installed` stamp for a boot that never happened.
+/// Task 13 adjudicates it. Do not "finish the job" by migrating it here.
+static GLOBAL: CapabilitySlot<RouteObservability> = CapabilitySlot::new(
+    "providers/route-observability",
+    MissingSemantics::ConsumerDecides,
+);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn global_route_observability_slot() -> &'static dyn SlotStatus {
+    &GLOBAL
+}
 
 /// Register the boot-assembled bundle. First call wins (one chain assembly
 /// per boot); later calls are ignored.
 pub fn set_global_route_observability(obs: RouteObservability) {
-    let _ = GLOBAL.set(obs);
+    let _ = GLOBAL.install(obs);
 }
 
 /// The boot-registered bundle, if the production chain has been assembled.

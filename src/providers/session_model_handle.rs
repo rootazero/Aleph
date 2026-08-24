@@ -33,6 +33,7 @@
 //! would have left the other two writing to memory only, each with its own
 //! green unit test.
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::RwLock;
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -84,7 +85,24 @@ pub trait SessionPinSink: Send + Sync {
     fn persist(&self, session_key: &str, pref: Option<&SessionModelPref>);
 }
 
-static PIN_SINK: OnceLock<std::sync::Arc<dyn SessionPinSink>> = OnceLock::new();
+/// `FailsClosed`: both readers are `if let Some(sink)` with no `else`
+/// ([`set_session_model`], [`clear_session_model`]), so an uninstalled sink
+/// means a pick governs this process and nothing else. Nothing is granted and
+/// nothing durable is falsely claimed — [`install_pin_sink`]'s own doc calls
+/// that "the honest degradation", and it is right about the in-process half.
+///
+/// The part that is dead and silent is the restart: a user who pins a model
+/// gets no signal that the pin will not survive one.
+static PIN_SINK: CapabilitySlot<std::sync::Arc<dyn SessionPinSink>> =
+    CapabilitySlot::new("providers/session-pin-sink", MissingSemantics::FailsClosed);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn pin_sink_slot() -> &'static dyn SlotStatus {
+    &PIN_SINK
+}
 
 /// Install the durability sink. First call wins (one boot, one sink).
 ///
@@ -92,7 +110,7 @@ static PIN_SINK: OnceLock<std::sync::Arc<dyn SessionPinSink>> = OnceLock::new();
 /// in-memory and behave exactly as they did before, which is the honest
 /// degradation: nothing claims to have been saved.
 pub fn install_pin_sink(sink: std::sync::Arc<dyn SessionPinSink>) {
-    let _ = PIN_SINK.set(sink);
+    let _ = PIN_SINK.install(sink);
 }
 
 fn sink() -> Option<&'static std::sync::Arc<dyn SessionPinSink>> {
@@ -161,7 +179,26 @@ pub fn clear_session_model(session_key: &str) {
 }
 
 /// The provider keys a `select_model(provider=…)` pin can actually resolve to.
-static PINNABLE_PROVIDERS: OnceLock<std::collections::BTreeSet<String>> = OnceLock::new();
+///
+/// `FailsOpen`, and unlike its neighbour above this one really is a gate.
+/// `builtin_tools::select_model::refuse_unpinnable_provider` opens with
+/// `let known = pinnable_providers()?;` — a `?` on an `Option<..>` returning
+/// `Option<String>`, so "no set published" produces NO REFUSAL. The
+/// consequence is not hypothetical and is written out in the setter's doc
+/// below: `select_model(provider="openai")` on an Anthropic-only deployment
+/// returns `ok: true`, the run silently falls back to the default chain, and
+/// the mis-attributed `(provider, model)` pair is written into the
+/// routing-experience store the model later reads back as verified.
+static PINNABLE_PROVIDERS: CapabilitySlot<std::collections::BTreeSet<String>> =
+    CapabilitySlot::new("providers/pinnable-set", MissingSemantics::FailsOpen);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn pinnable_providers_slot() -> &'static dyn SlotStatus {
+    &PINNABLE_PROVIDERS
+}
 
 /// Publish the provider keys the run builder will resolve a pin against.
 ///
@@ -177,7 +214,7 @@ static PINNABLE_PROVIDERS: OnceLock<std::collections::BTreeSet<String>> = OnceLo
 /// First call wins (one chain assembly per boot), matching
 /// [`route_observe`](super::route_observe)'s global.
 pub fn set_pinnable_providers(names: impl IntoIterator<Item = String>) {
-    let _ = PINNABLE_PROVIDERS.set(names.into_iter().collect());
+    let _ = PINNABLE_PROVIDERS.install(names.into_iter().collect());
 }
 
 /// Whether `provider` can be pinned, plus the valid set for the error message.
