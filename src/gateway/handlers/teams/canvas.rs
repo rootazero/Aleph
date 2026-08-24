@@ -127,10 +127,12 @@ pub async fn handle_chat_send(
     // @-mentions a member or @all/@everyone; otherwise it is observed
     // (persisted + broadcast, no run minted). A store `Err` on either read
     // below must not let this new mechanism swallow a message into observe
-    // mode — `unwrap_or_default()` keeps `humans.len()` from exceeding 1 on
-    // a failed author count (so the gate falls through to "activates"), and
-    // an empty roster on a failed member read only suppresses recognizing an
-    // explicit @-mention, never an `@all`/`@everyone` broadcast.
+    // mode (Ruling P9) — `unwrap_or_default()` keeps `humans.len()` from
+    // exceeding 1 on a failed author count (so the gate falls through to
+    // "activates"), and a failed member read forces `observe = false`
+    // outright (matched on the `Result`, NOT proxied by "was the roster
+    // empty" — a team that genuinely has no members yet is a real, non-error
+    // state and must keep going through the normal predicate below).
     let mut humans: std::collections::HashSet<String> = msg_store
         .distinct_human_authors(&params.team_id)
         .await
@@ -140,15 +142,17 @@ pub async fn handle_chat_send(
     if let Some(a) = &author {
         humans.insert(a.clone());
     }
-    let roster_ids: Vec<String> = store
-        .get_members(&params.team_id)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|m| m.agent_id)
-        .collect();
-    let observe = humans.len() > 1
-        && !crate::teams::broadcast::targets::has_activation_mention(&params.message, &roster_ids);
+    let observe = match store.get_members(&params.team_id).await {
+        Ok(members) => {
+            let roster_ids: Vec<String> = members.into_iter().map(|m| m.agent_id).collect();
+            humans.len() > 1
+                && !crate::teams::broadcast::targets::has_activation_mention(
+                    &params.message,
+                    &roster_ids,
+                )
+        }
+        Err(_) => false,
+    };
 
     // Real-time fan-out to the OTHER humans in the thread — both modes emit
     // this; an observed message is still live-visible to the room, it just

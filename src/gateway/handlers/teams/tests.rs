@@ -1385,7 +1385,72 @@ mod chat_send_gate_tests {
     use crate::gateway::session_store::SessionStore;
     use crate::teams::messages::{MessageStore, NewMessage, SqliteMessageStore};
     use crate::teams::store::SqliteTeamStore;
-    use crate::teams::NewTeam;
+    use crate::teams::{NewTeam, Team, TeamMember, TeamSummary};
+
+    /// `TeamStore` decorator that forwards every method to `inner` except
+    /// `get_members`, which always returns `Err` — the seam Ruling P9's test
+    /// needs to distinguish "the roster read failed" from "the roster read
+    /// succeeded and came back empty" (the latter must NOT force `observe`;
+    /// only the former may).
+    struct GetMembersErroringStore {
+        inner: Arc<dyn crate::teams::TeamStore>,
+    }
+
+    #[async_trait]
+    impl crate::teams::TeamStore for GetMembersErroringStore {
+        async fn create_team(&self, input: NewTeam) -> crate::error::Result<Team> {
+            self.inner.create_team(input).await
+        }
+        async fn get_team(&self, id: &str) -> crate::error::Result<Option<Team>> {
+            self.inner.get_team(id).await
+        }
+        async fn get_team_by_name(&self, name: &str) -> crate::error::Result<Option<Team>> {
+            self.inner.get_team_by_name(name).await
+        }
+        async fn list_teams(&self) -> crate::error::Result<Vec<TeamSummary>> {
+            self.inner.list_teams().await
+        }
+        async fn disband_team(&self, id: &str) -> crate::error::Result<()> {
+            self.inner.disband_team(id).await
+        }
+        async fn delete_team(&self, id: &str) -> crate::error::Result<()> {
+            self.inner.delete_team(id).await
+        }
+        async fn add_member(
+            &self,
+            input: crate::teams::NewTeamMember,
+        ) -> crate::error::Result<TeamMember> {
+            self.inner.add_member(input).await
+        }
+        async fn get_members(&self, _team_id: &str) -> crate::error::Result<Vec<TeamMember>> {
+            Err(crate::error::AlephError::ConfigError {
+                message: "injected: roster read failed (Ruling P9 test seam)".to_string(),
+                suggestion: None,
+            })
+        }
+        async fn remove_member(&self, team_id: &str, agent_id: &str) -> crate::error::Result<()> {
+            self.inner.remove_member(team_id, agent_id).await
+        }
+        async fn get_agent_teams(&self, agent_id: &str) -> crate::error::Result<Vec<TeamSummary>> {
+            self.inner.get_agent_teams(agent_id).await
+        }
+        async fn set_protocol(
+            &self,
+            team_id: &str,
+            protocol: Option<String>,
+        ) -> crate::error::Result<()> {
+            self.inner.set_protocol(team_id, protocol).await
+        }
+        async fn rename_team(&self, id: &str, name: &str) -> crate::error::Result<()> {
+            self.inner.rename_team(id, name).await
+        }
+        async fn set_name_auto(&self, id: &str, value: bool) -> crate::error::Result<()> {
+            self.inner.set_name_auto(id, value).await
+        }
+        async fn take_auto_name_flag(&self, id: &str) -> crate::error::Result<bool> {
+            self.inner.take_auto_name_flag(id).await
+        }
+    }
 
     /// The spawned fan-out dispatch never resolves any real agent here (the
     /// registry is empty) — this adapter exists only so `GatewayContext`
@@ -1643,6 +1708,46 @@ mod chat_send_gate_tests {
             "an explicit @-mention must still activate in a multi-human thread: {result:?}"
         );
         assert_eq!(result["observed"], serde_json::json!(false));
+    }
+
+    /// Ruling P9: a genuine multi-human thread (alice earlier, bob now) whose
+    /// message @-names nobody would normally observe — but a `get_members`
+    /// store `Err` must not let the new activation gate swallow the message
+    /// into observe mode. The brief's prose is binding here, not its
+    /// `unwrap_or_default()` code, which (before this fix) turned the `Err`
+    /// into an empty roster and observed anyway.
+    #[tokio::test]
+    async fn get_members_error_forces_activation_not_observe() {
+        let (real_store, team_id) = team_owned_by("u-bob").await;
+        let store: Arc<dyn crate::teams::TeamStore> =
+            Arc::new(GetMembersErroringStore { inner: real_store });
+        let msg_store = message_store().await;
+        seed_human_message(&msg_store, &team_id, "u-alice").await;
+        let (_scratch, ctx) = gateway_context();
+
+        let resp = send_as(
+            "u-bob",
+            Arc::clone(&store),
+            Arc::clone(&msg_store),
+            ctx,
+            &team_id,
+            // No @mention — this alone, with a healthy roster read, would
+            // observe (see multi_human_without_mention_observes_instead_of_dispatching).
+            "我觉得可以",
+        )
+        .await;
+
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let result = resp.result.expect("result present");
+        assert!(
+            result["run_id"].is_string(),
+            "a get_members store Err must fall through to activation, not observe mode: {result:?}"
+        );
+        assert_eq!(
+            result["observed"],
+            serde_json::json!(false),
+            "the roster-read failure must not swallow this message into observe mode"
+        );
     }
 }
 
