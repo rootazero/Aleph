@@ -1341,6 +1341,51 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// `#[allow(dead_code)]` appears in `spend/mod.rs` prose explaining why the
     /// real attribute is there, and any doc comment quoting this return type
     /// would mint a phantom accessor.
+    ///
+    /// # Line breaks: this recogniser tolerates them; two others do not
+    ///
+    /// Measured 2026-08-25 rather than assumed, because "the guard is green" and
+    /// "the guard cannot see this" print identically and the difference was
+    /// argued the wrong way once already.
+    ///
+    /// **This function is newline-tolerant.** `slot_status_ref_at` peels the
+    /// return type with `trim_end().strip_suffix(..)`, and `str::trim_end`
+    /// removes `\n` like any other whitespace — the same property `skip_ws`
+    /// gives `method_call_open_paren` after the `METRICS_RUNTIME` fix. Verified
+    /// against three split forms, including the one **rustfmt actually
+    /// produces** for an over-width signature, which breaks after the opening
+    /// paren rather than before the arrow:
+    ///
+    /// ```ignore
+    /// pub(crate) fn a_name_long_enough_to_push_this_signature_past_100_cols(
+    /// ) -> &'static dyn SlotStatus {
+    /// ```
+    ///
+    /// The discriminating experiment, for whoever repeats it: split the
+    /// signature **and** delete that accessor's `#[allow(dead_code)]`. If this
+    /// function sees the accessor,
+    /// `every_roster_accessor_still_carries_the_expiring_allow` fires and NAMES
+    /// it; if it were blind, that guard would pass and
+    /// `every_migrated_slot_has_a_roster_accessor` would name the static
+    /// instead. One green proves nothing on its own.
+    ///
+    /// ⚠️ **`parse_static_decl` and the slot arm of `take_census` ARE
+    /// line-based** — both read `static NAME: Container<` from a single line.
+    /// That is safe, and the reason is worth writing down rather than
+    /// rediscovering: rustfmt's over-width wrap for a `static` breaks *inside
+    /// the generic list*, so line one keeps `static NAME: Container<` intact —
+    /// verified for both a raw handle and a slot, census unchanged at 46. Any
+    /// other wrap is not a fixed point of rustfmt, so `cargo fmt --check`
+    /// rejects it. And if one ever does slip through, it fails LOUDLY: the
+    /// handle leaves the census and
+    /// `the_capability_handle_inventory_is_the_size_we_measured` reds on the
+    /// total. Do not "fix" those two by making them span lines without first
+    /// producing a wrap that actually breaks them.
+    ///
+    /// The `#[allow(dead_code)]` scan below is line-based too, and survives that
+    /// same real wrap (the attribute still sits directly above the line carrying
+    /// `fn`). A hypothetically split attribute would make it *over*-report,
+    /// which is the safe direction.
     fn roster_accessors() -> Vec<AccessorSite> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut out = Vec::new();
@@ -1469,12 +1514,22 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         assert_eq!(
             accessors.len(),
             c.slots.len(),
-            "{} roster accessors for {} slots, and every slot has one — so this \
-             is a STRAY accessor: one returns `&'static dyn SlotStatus` for \
-             something that is not a migrated handle, or a slot has two. Task 11 \
-             builds the roster from exactly these, so the roster would carry it \
-             too.\n\n(If you expected 'missing accessor', that is the loop \
-             above; it runs first and names the static.)",
+            "{} roster accessors for {} slots, and every slot has one. Two \
+             causes, and the counts tell them apart:\n\
+             \n\
+             - MORE accessors than slots: a STRAY accessor — one returns \
+             `&'static dyn SlotStatus` for something that is not a migrated \
+             handle, or a slot has two. Task 11 would carry it into the roster.\n\
+             - FEWER accessors than slots is impossible here (the loop above \
+             runs first and names any unwired slot), so if you are reading this \
+             with slots > accessors, a slot DECLARATION stopped being \
+             recognised: `parse_static_decl` and the slot arm of `take_census` \
+             read `static NAME: Container<` from ONE line. Check \
+             `the_capability_handle_inventory_is_the_size_we_measured` in the \
+             same run — it will be red too, and its message is the accurate \
+             one.\n\
+             \n\
+             (If you expected 'missing accessor', that is the loop above.)",
             accessors.len(),
             c.slots.len()
         );
