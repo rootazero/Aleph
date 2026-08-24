@@ -41,6 +41,7 @@ pub async fn handle_chat_send(
     event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     coord_task_store: Option<Arc<dyn crate::agents::swarm::tasks::CoordTaskStore>>,
     broadcast_cfg: crate::teams::broadcast::BroadcastConfig,
+    security_store: Arc<crate::gateway::security::SecurityStore>,
 ) -> JsonRpcResponse {
     let params: ChatSendParams = match parse_params(&request) {
         Ok(p) => p,
@@ -77,13 +78,24 @@ pub async fn handle_chat_send(
         );
     };
 
+    // The speaker (spec §6.2 humanization): the gateway caller's identity, or
+    // (in a project room) the room's actual speaker rather than the room's
+    // creator — see `visibility::ambient_actor`'s doc for why `ambient_owner`
+    // alone would answer with the wrong person here. `None` for an
+    // unattributed/internal caller (legacy behavior — the message is stored
+    // without an author, same as before this field existed).
+    let author = crate::gateway::visibility::ambient_actor();
+
     // Persist the user message into the shared transcript (single source of
     // truth). Long TTL: the transcript is a durable record, not short-lived
     // inbox traffic (recipient-less messages would otherwise expire in 30 min).
     // A persistence failure must be visible — the fan-out below still runs,
     // but the triggering message would be a silent hole in the durable
-    // transcript (P7).
-    if let Err(e) = msg_store
+    // transcript (P7). The persisted row's id becomes `message_id` in the
+    // response and the `.message` event below; a failed persist still lets
+    // the turn proceed (existing warn-and-continue), just with no id to hand
+    // back.
+    let persisted_id: Option<String> = match msg_store
         .send_message_with_ttl(
             crate::teams::messages::NewMessage {
                 team_id: params.team_id.clone(),
@@ -94,14 +106,81 @@ pub async fn handle_chat_send(
                 recipients: Vec::new(),
                 reply_to: None,
                 attachments: Vec::new(),
-                author_user_id: None,
+                author_user_id: author.clone(),
             },
             chrono::Duration::days(3650),
         )
         .await
     {
-        warn!(team_id = %params.team_id, error = %e,
-            "team chat: failed to persist user message into the team transcript");
+        Ok(msg) => Some(msg.id),
+        Err(e) => {
+            warn!(team_id = %params.team_id, error = %e,
+                "team chat: failed to persist user message into the team transcript");
+            None
+        }
+    };
+
+    // Multi-human activation gate (spec §6.2): with exactly one distinct
+    // human author ever seen in this transcript, every message still
+    // activates — byte-identical to the single-user history. Once a SECOND
+    // human has spoken, a message only activates the roster when it
+    // @-mentions a member or @all/@everyone; otherwise it is observed
+    // (persisted + broadcast, no run minted). A store `Err` on either read
+    // below must not let this new mechanism swallow a message into observe
+    // mode — `unwrap_or_default()` keeps `humans.len()` from exceeding 1 on
+    // a failed author count (so the gate falls through to "activates"), and
+    // an empty roster on a failed member read only suppresses recognizing an
+    // explicit @-mention, never an `@all`/`@everyone` broadcast.
+    let mut humans: std::collections::HashSet<String> = msg_store
+        .distinct_human_authors(&params.team_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    if let Some(a) = &author {
+        humans.insert(a.clone());
+    }
+    let roster_ids: Vec<String> = store
+        .get_members(&params.team_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| m.agent_id)
+        .collect();
+    let observe = humans.len() > 1
+        && !crate::teams::broadcast::targets::has_activation_mention(&params.message, &roster_ids);
+
+    // Real-time fan-out to the OTHER humans in the thread — both modes emit
+    // this; an observed message is still live-visible to the room, it just
+    // does not mint a run. `display_name` is UI sugar (never persisted): a
+    // failed/missing user lookup falls back to the raw id, same as every
+    // other display-name resolution in this crate.
+    let display_name: Option<String> = author.as_ref().map(|uid| {
+        security_store
+            .get_user(uid)
+            .ok()
+            .flatten()
+            .map(|u| u.display_name)
+            .unwrap_or_else(|| uid.clone())
+    });
+    crate::gateway::event_emitter::team_fanout::publish_team_event(
+        &params.team_id,
+        "message",
+        serde_json::json!({
+            "text": params.message, "message_id": persisted_id,
+            "author_user_id": author, "author_display_name": display_name,
+        }),
+    );
+
+    if observe {
+        // Observed: no roster member was addressed, so no run is minted —
+        // skip auto-name/broadcaster/fanout/spawn entirely. The message is
+        // already durable (above) and already broadcast (above); there is
+        // nothing else for this turn to do.
+        return JsonRpcResponse::success(
+            request.id,
+            serde_json::json!({ "run_id": null, "observed": true, "message_id": persisted_id }),
+        );
     }
 
     // First-message auto-name: if this team was created with a blank name
@@ -169,12 +248,28 @@ pub async fn handle_chat_send(
     // `current_scope() == None`: member session rows written NULL/NULL (adopted
     // by the operator), and every memory write filed into the BASE partition
     // that `session_read_ids` unions into every other principal's turn.
-    let carried = crate::scope::CarriedAttribution::capture();
+    //
+    // `with_speaker(author)` overrides the carried room-author task-local
+    // with the speaker this handler already resolved above. Without it, a
+    // spawn here that never had `scope::with_room_author` seeded around it
+    // (nothing on this RPC path seeds it) carries `room_author: None`, and
+    // `ambient_room_author()` inside the fan-out then falls back to the
+    // scope's `owner_user_id` — the ROOM'S CREATOR, identically for every
+    // member. A message from Bob in Alice's room would resolve its actor to
+    // Alice: confidently wrong, not merely missing (see
+    // `CarriedAttribution`'s doc and `with_speaker`'s doc for the full
+    // shape). `with_speaker` only overwrites when `author.is_some()`, so an
+    // unattributed call keeps whatever `capture()` read — never widens,
+    // never blanks.
+    let carried = crate::scope::CarriedAttribution::capture().with_speaker(author.clone());
     tokio::spawn(carried.reestablish(async move {
         broadcaster.dispatch_user(team_id, message, fanout).await;
     }));
 
-    JsonRpcResponse::success(request.id, serde_json::json!({ "run_id": run_id }))
+    JsonRpcResponse::success(
+        request.id,
+        serde_json::json!({ "run_id": run_id, "observed": false, "message_id": persisted_id }),
+    )
 }
 
 #[derive(Debug, serde::Deserialize)]

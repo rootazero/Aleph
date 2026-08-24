@@ -1358,6 +1358,294 @@ mod chat_cancel_gate_tests {
     }
 }
 
+/// Handler-level tests for the multi-user teamchat P3 author-stamping +
+/// activation-gate + observe-mode work (`handle_chat_send`'s new
+/// `author`/`observe` machinery in `canvas.rs`).
+///
+/// Teams here are created (not `insert_team_with_id`'d) so ownership is
+/// stamped from the ambient caller — `gate_team` must admit whichever
+/// `CALLER_USER` each test scopes the call under, which the unowned literal-id
+/// fixture (`super::tests::team_store_with`) cannot provide.
+mod chat_send_gate_tests {
+    use super::*;
+
+    use async_trait::async_trait;
+
+    use crate::gateway::agent_instance::{AgentInstance, AgentRegistry};
+    use crate::gateway::caller_identity::CALLER_USER;
+    use crate::gateway::context::GatewayContext;
+    use crate::gateway::event_emitter::EventEmitter;
+    use crate::gateway::execution_adapter::ExecutionAdapter;
+    use crate::gateway::execution_engine::{ExecutionError, RunRequest, RunStatus};
+    use crate::gateway::inter_agent_policy::AgentToAgentPolicy;
+    use crate::gateway::security::SecurityStore;
+    use crate::gateway::session_store::sqlite_backend::{
+        SqliteSessionStore, SqliteSessionStoreConfig,
+    };
+    use crate::gateway::session_store::SessionStore;
+    use crate::teams::messages::{MessageStore, NewMessage, SqliteMessageStore};
+    use crate::teams::store::SqliteTeamStore;
+    use crate::teams::NewTeam;
+
+    /// The spawned fan-out dispatch never resolves any real agent here (the
+    /// registry is empty) — this adapter exists only so `GatewayContext`
+    /// type-checks; its methods are never expected to be called by the
+    /// assertions below (the handler's own JSON-RPC response is asserted
+    /// synchronously, before the background spawn has any chance to run on
+    /// the single-threaded `#[tokio::test]` runtime).
+    struct NoopAdapter;
+
+    #[async_trait]
+    impl ExecutionAdapter for NoopAdapter {
+        async fn execute(
+            &self,
+            _request: RunRequest,
+            _agent: Arc<AgentInstance>,
+            _emitter: Arc<dyn EventEmitter + Send + Sync>,
+        ) -> Result<(), ExecutionError> {
+            Ok(())
+        }
+
+        async fn cancel(&self, _run_id: &str) -> Result<(), ExecutionError> {
+            Ok(())
+        }
+
+        async fn get_status(&self, _run_id: &str) -> Option<RunStatus> {
+            None
+        }
+
+        async fn active_run_count(&self) -> usize {
+            0
+        }
+    }
+
+    fn gateway_context() -> (tempfile::TempDir, Arc<GatewayContext>) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let session_store: Arc<dyn SessionStore> = Arc::new(
+            SqliteSessionStore::new(SqliteSessionStoreConfig {
+                db_path: temp.path().join("sessions.db"),
+                ..Default::default()
+            })
+            .expect("session store"),
+        );
+        (
+            temp,
+            Arc::new(GatewayContext::new(
+                session_store,
+                Arc::new(AgentRegistry::new()),
+                Arc::new(NoopAdapter),
+                Arc::new(AgentToAgentPolicy::permissive()),
+            )),
+        )
+    }
+
+    /// A team led by "leader", owned by `owner` (stamped from the ambient
+    /// caller at creation — `TeamStore::create_team`'s doc). Whichever caller
+    /// a test scopes `handle_chat_send` under must equal `owner`, or
+    /// `gate_team` 404s before any of the new machinery runs.
+    async fn team_owned_by(owner: &str) -> (Arc<dyn crate::teams::TeamStore>, String) {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+        let raw_store = SqliteTeamStore::new(conn);
+        raw_store.migrate().await.expect("migrate");
+        let store: Arc<dyn crate::teams::TeamStore> = Arc::new(raw_store);
+        let team = CALLER_USER
+            .scope(
+                Some(owner.to_string()),
+                store.create_team(NewTeam {
+                    name: "T".to_string(),
+                    description: String::new(),
+                    leader_id: "leader".to_string(),
+                }),
+            )
+            .await
+            .expect("create team");
+        (store, team.id)
+    }
+
+    async fn message_store() -> Arc<dyn MessageStore> {
+        Arc::new(SqliteMessageStore::new_in_memory().await)
+    }
+
+    /// Seed one earlier human message from `author` — the transcript history
+    /// `distinct_human_authors` reads back.
+    async fn seed_human_message(msg_store: &Arc<dyn MessageStore>, team_id: &str, author: &str) {
+        msg_store
+            .send_message_with_ttl(
+                NewMessage {
+                    team_id: team_id.to_string(),
+                    from_agent: crate::teams::broadcast::RESERVED_USER_HANDLE.to_string(),
+                    msg_type: crate::teams::messages::MessageType::Message,
+                    subject: String::new(),
+                    content: format!("earlier message from {author}"),
+                    recipients: Vec::new(),
+                    reply_to: None,
+                    attachments: Vec::new(),
+                    author_user_id: Some(author.to_string()),
+                },
+                chrono::Duration::days(3650),
+            )
+            .await
+            .expect("seed earlier human message");
+    }
+
+    fn send_req(team_id: &str, message: &str) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "teams.chat.send".to_string(),
+            params: Some(json!({ "team_id": team_id, "message": message })),
+            id: Some(json!(9)),
+        }
+    }
+
+    /// Runs `handle_chat_send` with `caller` scoped as `CALLER_USER`, and all
+    /// the optional dependencies the observe/auto-name/broadcaster paths
+    /// don't need for these tests set to `None`.
+    #[allow(clippy::too_many_arguments)]
+    async fn send_as(
+        caller: &str,
+        store: Arc<dyn crate::teams::TeamStore>,
+        msg_store: Arc<dyn MessageStore>,
+        ctx: Arc<GatewayContext>,
+        team_id: &str,
+        message: &str,
+    ) -> JsonRpcResponse {
+        let security = Arc::new(SecurityStore::in_memory().expect("security store"));
+        CALLER_USER
+            .scope(
+                Some(caller.to_string()),
+                handle_chat_send(
+                    send_req(team_id, message),
+                    store,
+                    Some(msg_store),
+                    ctx,
+                    None,
+                    None,
+                    None,
+                    None,
+                    crate::teams::broadcast::BroadcastConfig::default(),
+                    security,
+                ),
+            )
+            .await
+    }
+
+    /// Two distinct humans have spoken (alice earlier, bob now) and bob's
+    /// message @-names nobody — spec §6.2's observe mode: persisted +
+    /// broadcast, but no run minted.
+    #[tokio::test]
+    async fn multi_human_without_mention_observes_instead_of_dispatching() {
+        let (store, team_id) = team_owned_by("u-bob").await;
+        let msg_store = message_store().await;
+        seed_human_message(&msg_store, &team_id, "u-alice").await;
+        let (_scratch, ctx) = gateway_context();
+
+        let resp = send_as(
+            "u-bob",
+            Arc::clone(&store),
+            Arc::clone(&msg_store),
+            ctx,
+            &team_id,
+            "我觉得可以",
+        )
+        .await;
+
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let result = resp.result.expect("result present");
+        assert!(
+            result["run_id"].is_null(),
+            "an observed message must not mint a run: {result:?}"
+        );
+        assert_eq!(result["observed"], serde_json::json!(true));
+        assert!(
+            result["message_id"].is_string(),
+            "message_id must still be present: {result:?}"
+        );
+
+        // The new row carries bob's author_user_id.
+        let rows = msg_store
+            .list_team_messages(&team_id, 10)
+            .await
+            .expect("list transcript");
+        let bobs_row = rows
+            .iter()
+            .find(|m| m.content == "我觉得可以")
+            .expect("bob's message is in the transcript");
+        assert_eq!(bobs_row.author_user_id, Some("u-bob".to_string()));
+
+        // No fan-out tree was registered for this send: the response's
+        // `run_id` is null, so there is no id under which one could exist —
+        // `register_fanout` is the only mint point and this handler never
+        // reached it for the observe branch.
+    }
+
+    /// A single human (alice, both times) has ever spoken in this team —
+    /// activation must stay byte-identical to the pre-P3 behavior: every
+    /// message activates (leader fallback, no @ needed).
+    #[tokio::test]
+    async fn single_human_path_is_byte_identical_to_before() {
+        let (store, team_id) = team_owned_by("u-alice").await;
+        let msg_store = message_store().await;
+        seed_human_message(&msg_store, &team_id, "u-alice").await;
+        let (_scratch, ctx) = gateway_context();
+
+        let resp = send_as(
+            "u-alice",
+            Arc::clone(&store),
+            Arc::clone(&msg_store),
+            ctx,
+            &team_id,
+            "随便聊聊",
+        )
+        .await;
+
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let result = resp.result.expect("result present");
+        assert!(
+            result["run_id"].is_string(),
+            "a single-human thread must still activate (leader fallback): {result:?}"
+        );
+        assert_eq!(result["observed"], serde_json::json!(false));
+        assert!(result["message_id"].is_string());
+    }
+
+    /// Two distinct humans (alice earlier, bob now), and bob's message
+    /// explicitly @-names a roster member — activation still fires even
+    /// though a second human is in the thread.
+    #[tokio::test]
+    async fn multi_human_with_mention_still_dispatches() {
+        let (store, team_id) = team_owned_by("u-bob").await;
+        store
+            .add_member(crate::teams::NewTeamMember::for_agent(
+                team_id.clone(),
+                "coder",
+                "member",
+            ))
+            .await
+            .expect("add coder to roster");
+        let msg_store = message_store().await;
+        seed_human_message(&msg_store, &team_id, "u-alice").await;
+        let (_scratch, ctx) = gateway_context();
+
+        let resp = send_as(
+            "u-bob",
+            Arc::clone(&store),
+            Arc::clone(&msg_store),
+            ctx,
+            &team_id,
+            "@coder 实现它",
+        )
+        .await;
+
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let result = resp.result.expect("result present");
+        assert!(
+            result["run_id"].is_string(),
+            "an explicit @-mention must still activate in a multi-human thread: {result:?}"
+        );
+        assert_eq!(result["observed"], serde_json::json!(false));
+    }
+}
+
 mod template_handler_tests {
     use super::*;
 

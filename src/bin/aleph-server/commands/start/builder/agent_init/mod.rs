@@ -1672,6 +1672,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 use alephcore::teams::broadcast::BroadcastConfig;
                 let chat_ctx = gateway_ctx.clone();
                 let chat_msg_store = message_store.clone();
+                // Author-stamping (multi-user teamchat P3): resolves the
+                // human-readable display name for the `.message` event's
+                // `author_display_name` field. Same injection shape as the
+                // other cloned handles below.
+                let chat_security_store = security_store.clone();
                 // Resolve a cheap provider (haiku → default) for first-message
                 // team auto-naming, mirroring single chat's auto-topic provider.
                 let chat_topic_provider: Option<Arc<dyn alephcore::providers::AiProvider>> =
@@ -1731,6 +1736,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         let bus = chat_event_bus.clone();
                         let coord = chat_coord_store.clone();
                         let bcast = chat_broadcast_cfg.clone();
+                        let sec = chat_security_store.clone();
                         async move {
                             alephcore::gateway::handlers::teams::handle_chat_send(
                                 req,
@@ -1742,6 +1748,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                                 Some(bus),
                                 coord,
                                 bcast,
+                                sec,
                             )
                             .await
                         }
