@@ -1,12 +1,12 @@
 //! Core PII detection and replacement engine
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::config::PiiAction;
 use crate::config::PrivacyConfig;
 use crate::pii::allowlist::PiiAllowlist;
 use crate::pii::rules::PiiRule;
 use crate::sync_primitives::{Arc, RwLock};
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
 use tracing::warn;
 
 /// Number of built-in rules prepended by [`crate::pii::rules::build_rules`].
@@ -104,8 +104,34 @@ impl FilterResult {
     }
 }
 
-/// Global PII engine singleton
-static PII_ENGINE: OnceLock<Arc<RwLock<PiiEngine>>> = OnceLock::new();
+/// Global PII engine singleton.
+///
+/// `FailsOpen`, and this is the highest-severity member of the whole roster —
+/// derived from the readers, which agree: `mcp::redact::redact_mcp_error`
+/// answers `None => text.to_string()`, so an MCP error echoes its arguments and
+/// headers to the model **unredacted**; `providers::http_provider` wraps its
+/// filtering pass in `if let Some(engine_lock)` with no `else`, so every
+/// outbound message leaves the process unmasked. Neither says a word. A
+/// redaction engine that was never installed is a gate that silently stopped
+/// gating, which is exactly what this variant names.
+///
+/// ⚠️ The third reader looks like a counter-example and is not:
+/// `security::runtime_guard::new_with_audit` does `PiiEngine::global()
+/// .or_else(|| Some(… PrivacyConfig::default() …))`, i.e. it substitutes a
+/// DEFAULT-configured engine. That is a second defect of a different shape
+/// (the operator's `[privacy]` rules silently replaced by the compiled ones),
+/// not evidence that absence is safe — and it covers only the guardrail
+/// pipeline, not the two paths above.
+static PII_ENGINE: CapabilitySlot<Arc<RwLock<PiiEngine>>> =
+    CapabilitySlot::new("pii/engine", MissingSemantics::FailsOpen);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn pii_engine_slot() -> &'static dyn SlotStatus {
+    &PII_ENGINE
+}
 
 /// Main PII filtering engine
 pub struct PiiEngine {
@@ -151,7 +177,7 @@ impl PiiEngine {
     /// Initialize the global PII engine
     pub fn init(config: PrivacyConfig) {
         let engine = Arc::new(RwLock::new(Self::new(config)));
-        if PII_ENGINE.set(engine).is_err() {
+        if !PII_ENGINE.install(engine) {
             warn!("PiiEngine already initialized, ignoring duplicate init call");
         }
     }
@@ -747,7 +773,7 @@ mod tests {
     ///
     /// The engine is a **process** global and libtest runs in parallel, so the
     /// test cannot be written as "install mine first, then check mine survived"
-    /// — `test_reload_updates_rules` initialises the same `OnceLock`, and
+    /// — `test_reload_updates_rules` initialises the same slot, and
     /// whichever test the scheduler starts first decides whose config is live.
     /// Written that way it passed alone and failed at random in a full run,
     /// which is the worst shape a guard can have: the isolated run is the one
