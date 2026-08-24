@@ -24,8 +24,9 @@
 //! mutex-hold time is bounded.
 
 use std::borrow::Cow;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use async_trait::async_trait;
 use rusqlite::{params, Connection, OptionalExtension};
 use tokio::sync::Mutex;
@@ -763,20 +764,51 @@ fn cap_chars(s: &str, max: usize) -> String {
 // Process-wide accessor
 // ---------------------------------------------------------------------------
 
-static GLOBAL_EVENT_STORE: OnceLock<Arc<dyn SessionEventStore>> = OnceLock::new();
+/// `ConsumerDecides`, and this handle is the sharper case of the pair in this
+/// batch: five production reads produce four *different* answers, two of which
+/// are reported to the caller as success.
+///
+/// | reader | an uninstalled read becomes |
+/// |---|---|
+/// | `builtin_tools/recall_events.rs` | `Ok(empty)` plus a note to the model |
+/// | `builtin_tools/sessions/compact_tool.rs` | an `AlephError` |
+/// | [`retire_live_events`] | `Ok(0)` — "retired nothing", indistinguishable from "there was nothing to retire" |
+/// | [`is_event_retired`] | `Ok(false)` — "not retired", the fail-open direction |
+/// | `gateway/execution_engine/run_loop/inner.rs` | the legacy backfill is skipped in silence |
+///
+/// Each arm is individually defensible (all four doc-comment their reasoning),
+/// which is exactly why no `IndistinguishableDefault { reads_as }` sentence
+/// could be written for this slot: there is no single thing a missing handle
+/// reads as. Task 15 adjudicates the arms; this variant records that there are
+/// four of them.
+static GLOBAL_EVENT_STORE: CapabilitySlot<Arc<dyn SessionEventStore>> =
+    CapabilitySlot::new("session/event-store", MissingSemantics::ConsumerDecides);
 
 /// Install the process-wide session event store. Called once at daemon boot
 /// (`aleph-server start`) so the `session_search` builtin tool can reach the
 /// event log without threading dependencies through the `AlephTool` trait.
 /// Mirrors [`crate::tools::result_store::set_global_tool_result_store`].
 /// Idempotent: a second call is ignored.
+#[inline]
 pub fn set_global_session_event_store(store: Arc<dyn SessionEventStore>) {
-    let _ = GLOBAL_EVENT_STORE.set(store);
+    let _ = GLOBAL_EVENT_STORE.install(store);
 }
 
 /// Fetch the process-wide session event store, if one has been installed.
+///
+/// ⚠️ `None` says nothing about whether boot reached this slot. Ask
+/// [`global_session_event_store_slot`]`().outcome()` for that.
+#[inline]
 pub fn global_session_event_store() -> Option<Arc<dyn SessionEventStore>> {
     GLOBAL_EVENT_STORE.get().cloned()
+}
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn global_session_event_store_slot() -> &'static dyn SlotStatus {
+    &GLOBAL_EVENT_STORE
 }
 
 /// Retire every live event at or after `from_seq` in the process-wide event log
@@ -802,7 +834,7 @@ pub async fn retire_live_events(
 
 /// The process-wide event store used by tests that need the real
 /// `retire_live_events` / `is_event_retired` path (the handlers reach the store
-/// through the `OnceLock` above, so they cannot be handed one).
+/// through the process-wide slot above, so they cannot be handed one).
 ///
 /// A single shared in-memory store: `set_global_session_event_store` only ever
 /// honours the first call, so every test must install the SAME instance or the
@@ -810,7 +842,7 @@ pub async fn retire_live_events(
 /// their own session keys.
 #[cfg(test)]
 pub(crate) fn install_test_event_store() -> Arc<SqliteEventStore> {
-    static TEST_STORE: OnceLock<Arc<SqliteEventStore>> = OnceLock::new();
+    static TEST_STORE: std::sync::OnceLock<Arc<SqliteEventStore>> = std::sync::OnceLock::new();
     let store = TEST_STORE
         .get_or_init(|| {
             let conn = Connection::open_in_memory().expect("in-memory sqlite");
@@ -838,6 +870,19 @@ pub async fn is_event_retired(session_id: &SessionId, seq: EventSeq) -> Result<b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ========================================================================
+    // The process-global handle, as a capability slot
+    // ========================================================================
+
+    /// See `session::service::tests::the_accessor_exposes_this_handle_to_the_roster`
+    /// for why this asserts through the accessor rather than the static.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = global_session_event_store_slot();
+        assert_eq!(slot.id(), "session/event-store");
+        assert!(matches!(slot.missing(), MissingSemantics::ConsumerDecides));
+    }
 
     #[test]
     fn migrate_creates_session_events_table_and_indexes() {

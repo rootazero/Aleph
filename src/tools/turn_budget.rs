@@ -15,8 +15,9 @@
 //! so dropping them adds little value while costing more recall.
 
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Mutex;
 
 /// Default per-turn budget. Mirrors hermes' `MAX_TURN_BUDGET_CHARS=200_000`,
@@ -78,17 +79,47 @@ pub fn budget_for_window(token_budget: u64) -> (usize, usize) {
 // Process-wide installer
 // =============================================================================
 
-static GLOBAL_BUDGET: OnceLock<Arc<TurnResultBudget>> = OnceLock::new();
+/// `FailsOpen`. Both production readers end an `Option` chain with this handle
+/// (`runner_impl`: `self.turn_budget.or(windowed).or_else(global)`;
+/// `subagent_spawner`: a per-window budget `.or_else(global)`), and
+/// `runner_impl`'s own comment states the consequence of the chain running out:
+/// "`None` (nothing anywhere) keeps the legacy behavior — Layer 2 / Layer 3 are
+/// inert."
+///
+/// Inert is the open direction, not the closed one. This is the *only* cap on
+/// how much tool output one turn may keep in context; without it nothing spills
+/// and nothing is evicted, and `budget_for_window`'s doc a few lines above says
+/// an overflow on the small-window models this exists for "is fatal to the run
+/// rather than recoverable". So a missing handle does not disable a feature —
+/// it removes a bound while every caller keeps behaving as though it were
+/// enforced.
+static GLOBAL_BUDGET: CapabilitySlot<Arc<TurnResultBudget>> =
+    CapabilitySlot::new("tools/turn-budget", MissingSemantics::FailsOpen);
 
 /// Install the process-wide `TurnResultBudget`. Called once at server
 /// boot. Idempotent — subsequent calls are silently ignored.
+#[inline]
 pub fn set_global_turn_result_budget(budget: Arc<TurnResultBudget>) {
-    let _ = GLOBAL_BUDGET.set(budget);
+    let _ = GLOBAL_BUDGET.install(budget);
 }
 
 /// Read the process-wide `TurnResultBudget`, if installed.
+///
+/// ⚠️ `None` says nothing about whether boot reached this slot. Ask
+/// [`global_turn_result_budget_slot`]`().outcome()` for that — the difference
+/// between "this deployment sets no turn cap" and "boot never got here" is
+/// invisible from this return value, and the second one is a silent regression.
+#[inline]
 pub fn global_turn_result_budget() -> Option<Arc<TurnResultBudget>> {
     GLOBAL_BUDGET.get().cloned()
+}
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn global_turn_result_budget_slot() -> &'static dyn SlotStatus {
+    &GLOBAL_BUDGET
 }
 
 /// Turn identifier. Wraps the same `Uuid` used by
@@ -231,6 +262,24 @@ impl TurnResultBudget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ========================================================================
+    // The process-global handle, as a capability slot
+    // ========================================================================
+
+    /// See `session::service::tests::the_accessor_exposes_this_handle_to_the_roster`
+    /// for why this asserts through the accessor rather than the static.
+    ///
+    /// `FailsOpen` is pinned rather than merely written down: it is the whole
+    /// reason this handle is worth a roster entry. Softened to `FailsClosed` it
+    /// would tell an operator that a missing turn cap is the safe direction,
+    /// which is backwards — see the declaration's doc.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = global_turn_result_budget_slot();
+        assert_eq!(slot.id(), "tools/turn-budget");
+        assert!(matches!(slot.missing(), MissingSemantics::FailsOpen));
+    }
 
     fn tid(seq: u64) -> TurnId {
         // Deterministic UUIDs derived from the seq so tests with the
