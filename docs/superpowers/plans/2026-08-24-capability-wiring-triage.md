@@ -145,17 +145,91 @@ floor is now stale, not the extractor broken.
 a comment noting that Task 3's migration is what moved it (209 measured
 2026-08-24 post-migration; do not confuse this with the 213 figure that
 preceded Task 3, the same way that comment already warns not to confuse 213
-with the pre-fix 276). This file is outside Task 3's assigned file list
-(`src/utils/source_scan.rs` belongs to Task 2), so no edit was made here —
-left for Task 13 or an explicit follow-up decision.
+with the pre-fix 276).
 
-## Files scanned but out of Task 3's authoritative list (informational only)
+**Done in Fix round 1** (see below): the plan author authorised editing
+`src/utils/source_scan.rs` for this. Re-measured with the shipped Rust
+extractor (not the plan author's Python replication, which disagreed —
+198 vs 209 — because it lacks `code_only`/`char_literal_len` and so
+miscounts braces inside string literals; the Rust re-measurement reproduced
+209 exactly, confirming the original number and the direction of the
+Python instrument's error). Floor is now `>= 209`, with the mechanism
+written into the doc comment above the assertion.
 
-`tests/canvas_wire.rs:379` hand-rolls the identical
+## Files scanned but out of Task 3's authoritative list
+
+`tests/canvas_wire.rs:379` hand-rolled the identical
 `.split("#[cfg(test)]").next()` idiom. Guard 3 (`no_module_hand_rolls_the_cfg_test_prefix_cut`)
-only walks `src/` (via `rust_sources_under(.../src)`), so this integration-test
-file is structurally invisible to it and was correctly absent from the
-authoritative 35-line failure output used as this task's work list. Not
-migrated — outside scope as defined by the brief ("the AUTHORITATIVE list is
-guard 3's own failure output"). Flagged here for whoever next touches that
-file or extends guard 3's walk to `tests/`.
+only walked `src/` (via `rust_sources_under(.../src)`), so this integration-test
+file was structurally invisible to it and correctly absent from the
+authoritative 35-line failure output used as this task's original work list.
+
+**Done in Fix round 1**: guard 3 now walks `tests/` in addition to `src/`
+(chained `rust_sources_under` calls; `rust_sources_under` reports paths
+relative to `CARGO_MANIFEST_DIR` regardless of which root it walked, so the
+existing `src/utils/source_scan.rs` self-exemption string match is
+unaffected by the second root). Offender count with the extended walk: **1**
+(`tests/canvas_wire.rs:379`) before migrating it, **0** after. Migrated the
+same way as the 35 sites above — this crate's `production_prefix` is `pub`
+and this file is an integration test of the same `alephcore` crate, so it
+calls `alephcore::utils::source_scan::production_prefix(&src)` (the file
+already strips comments upstream via its own `read_source_without_comments`
+helper, shared with a second, unrelated call site — left untouched, since it
+does not hand-roll the `#[cfg(test)]` cut and touching it would have widened
+scope beyond the one flagged line).
+
+## Sites outside `alephcore` — REPORT, not migrated this round
+
+Four more sites hand-roll the identical idiom, all outside the `alephcore`
+crate that owns `utils::source_scan`:
+
+| # | Site | Crate | Notes |
+|---|---|---|---|
+| 1 | `interfaces/webchat/src/disposed_reads.rs:411` | `aleph-panel` (webchat, wasm) | See below — the most interesting finding of this round |
+| 2 | `interfaces/tui/src/tui/commands.rs:1159` | `aleph-tui` | Corpus walker scanning for `BtwTurn::resolve(` calls |
+| 3 | `interfaces/webchat/src/platform/wide/views/settings/network/cluster.rs:546` | `aleph-panel` (webchat, wasm) | Pins that the cluster settings page holds no client-side role gate |
+| 4 | `interfaces/webchat/src/platform/wide/views/canvas/shape_view.rs:965` | `aleph-panel` (webchat, wasm) | Local `production_code()` helper for a forbidden-token scan |
+
+None were migrated. `production_prefix`/`strip_comment_lines` live in
+`alephcore::utils::source_scan`; `interfaces/tui` and `interfaces/webchat`
+are separate workspace crates that do not (and, for `webchat`'s wasm target,
+structurally should not) depend on the full server library `alephcore` —
+adding that dependency just to reach two functions would be a real
+architectural change (R1/R3 territory: a wasm frontend crate pulling in the
+whole core), not something this round scoped or should improvise. The fix is
+moving `source_scan` (or just `production_prefix`/`strip_comment_lines`) into
+a crate all four already share — `shared/protocol` or a new tiny
+`shared/source_scan` — which is genuine new scope. **Verdict: REPORT** for
+all four; a human needs to decide where that shared crate lives and whether
+it is worth minting for four call sites.
+
+Checked and clean: `grep -rn` for the same three patterns
+(`.split`/`.find`/`.split_once("#[cfg(test)]")`) across `interfaces/cli/`,
+`shared/`, and `desktop/` returns zero hits — the four sites above are the
+complete cross-crate list, not a sample of it.
+
+### Site 1 is the interesting one: it is itself a census guard, and it is blind
+
+`interfaces/webchat/src/disposed_reads.rs` is not an ordinary file that
+happens to contain a hand-rolled cut — its whole reason to exist, stated in
+its own module doc, is: **"no plain `get_untracked()` past an `.await`
+inside `spawn_local`. `RwSignal::get_untracked` unwraps — reading a
+*disposed* signal panics, and a panic in the panel takes the whole page to
+the recovery overlay."** That is the same failure class §7 of CLAUDE.md's
+judgement criteria already has an entry for (`preset_picker.rs`, `preview.rs`
+— an Escape key crashing the whole Panel because a listener outlived its
+owner) — this file is the guard that exists specifically to stop the next
+one.
+
+The hand-rolled cut at line 411 is not in that primary guard
+(`no_plain_untracked_read_survives_an_await`, which walks the source with
+purpose-built lexing — `awaiting_blocks`/`late_untracked_reads` — not a naive
+split) but in its sibling in the same file,
+`window_listener_tests::every_window_listener_is_removed_or_declared_permanent`
+— the guard for exactly the class of bug this module's doc comment cites as
+precedent (the 2026-08-18 Escape-crash). So within the one file whose entire
+purpose is "stop the panel from crash-panicking on stale reactive state,"
+one of its two guards carries precisely the blindness this Task 3 round
+exists to remove — invisible to its own comparison the same way the 35 sites
+in `alephcore` were, for the same reason, and nothing in this round fixes
+it, because it is one crate away from the extractor this round shipped.
