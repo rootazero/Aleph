@@ -115,7 +115,9 @@
 //! failure semantics in full: an uninstalled read yields `None`, which reads as
 //! a legal "not configured" and no caller can tell.
 //!
-//! **Six confirmed instances**, and the class is wider than the spelling:
+//! **At least nine confirmed instances — and read the counting rule below
+//! before you use that number.** Five share one spelling; four do not, and the
+//! class is defined by the *install*, never by the syntax:
 //!
 //! | static | shape | an uninstalled read means |
 //! |---|---|---|
@@ -124,31 +126,51 @@
 //! | `gateway/middleware/latency.rs::GLOBAL_LATENCY` | `OnceLock<RwLock<Option<Arc<…>>>>` | `/metrics` renders no latency family |
 //! | `gateway/event_emitter/origin_fanout.rs::CHANNEL_REGISTRY` | `OnceLock<RwLock<Option<Arc<…>>>>` | origin fan-out silently skipped |
 //! | `gateway/event_emitter/team_fanout.rs::TEAM_EVENT_BUS` | `OnceLock<RwLock<Option<Arc<…>>>>` | team fan-out silently skipped |
-//! | `security/audit.rs::GLOBAL_AUDIT` | `RwLock<Option<SecurityAuditLog>>` — **no `OnceLock` at all** | no security audit trail |
+//! | `security/audit.rs::GLOBAL_AUDIT` | `RwLock<Option<SecurityAuditLog>>` — **no `OnceLock`** | no security audit trail |
+//! | `agents/background_persistence.rs::STORE_DIR` | `LazyLock<Mutex<Option<PathBuf>>>` | "persistence disabled … every entry point is a no-op" |
+//! | `builtin_tools/process_journal.rs::STORE_DIR` | `LazyLock<Mutex<Option<PathBuf>>>` | same sentence, verbatim |
+//! | `builtin_tools/scratchpad_registry.rs::STORE_PATH` | `Lazy<Mutex<Option<PathBuf>>>` | "keeps the registry in-memory-only" |
 //!
-//! ⚠️ COUNT THIS YOURSELF FROM THE SPELLING; do not inherit the number. It has
-//! been wrong twice — recorded first as one instance, then as four, now six —
-//! and each revision was found by someone re-reading the corpus rather than by
-//! anything going red. Nothing here asserts six: the class is *below this
-//! rule's resolution* by construction, so no guard can see a seventh arrive.
-//! `STATE_REGISTRY` was not even hidden — `origin_fanout.rs` names it in the
-//! doc comment on its own entry above ("Mirrors the
+//! The last three each state the round-7 ambiguity **in their own doc comment**
+//! and are boot-installed by an `init_*` through a lock guard. They are *more*
+//! invisible than the first six: `LazyLock` / `Lazy` are not in `CONTAINERS`,
+//! so unlike the five `OnceLock` ones they are not even in the population of
+//! candidates — the carve-out this section already makes for `GLOBAL_AUDIT`.
+//!
+//! ⚠️ COUNT THIS YOURSELF, **AND COUNT BY THE CLASS — NOT BY THE SPELLING.**
+//! The class is *a handle whose contents are installed at boot through interior
+//! mutability*; `OnceLock<Lock<Option<T>>>` is the shape five members happen to
+//! share, and grepping for it is a proxy that under-counts by construction. The
+//! previous revision of this section said "count from the spelling" and was
+//! itself the fourth undercount in a row: one instance, then four, then six,
+//! now nine — **three of those four revisions were written by someone who had
+//! just been told the previous figure was too low.** So assume nine is too low
+//! as well. It is a floor, not a count.
+//!
+//! Two reasons to believe that specifically. First, nothing here asserts nine:
+//! the class is *below this rule's resolution* by construction, so no guard can
+//! see a tenth arrive. Second, even the `Option` in the shapes above is a
+//! proxy for "absent" — `process_journal.rs::RESERVED_THROUGH`
+//! (`LazyLock<Mutex<u64>>`) says *"`0` = nothing reserved (also the value while
+//! persistence is off)"*, the identical ambiguity carried by a sentinel integer
+//! instead. Any scan keyed on `Option` misses every member that spells "absent"
+//! some other way, and this table was built by such a scan.
+//!
+//! `STATE_REGISTRY` shows how little hiding this takes: `origin_fanout.rs` names
+//! it in the doc comment on its own row above ("Mirrors the
 //! `middleware::request_state` global-registry pattern"), and it still sat
-//! outside the count.
+//! outside the count for two revisions.
 //!
 //! `GLOBAL_AUDIT` is why this section is no longer titled after the
 //! `OnceLock<Lock<Option<T>>>` spelling. It is not a container static, so it is
 //! not even a *candidate* here — no widening of either install form could ever
-//! reach it. The class is **interior-mutable installs**, and the spelling is
-//! just the shape five of the six happen to share. The other five are all
-//! boot-installed subsystem handles ("called once during subsystem boot" /
-//! "called by `MiddlewareChain` during initialization"), so this is not one
-//! curiosity: it is two gateway fan-out paths, two gateway middleware handles
-//! and the audit trail, none of which can currently be asked whether boot
-//! reached them.
+//! reach it. The class is **interior-mutable installs**: two gateway fan-out
+//! paths, two gateway middleware handles, the audit trail, three persistence
+//! roots, and the `[moa]` config — none of which can currently be asked whether
+//! boot reached them.
 //!
 //! `the_interior_mutable_install_class_is_below_this_rules_resolution` pins
-//! `MOA_CONFIG`'s shape. All six are excluded here, and all six were excluded
+//! `MOA_CONFIG`'s shape. All nine are excluded here, and all nine were excluded
 //! from the specification's roster too — this class has been missing all along,
 //! so nothing regressed; it was never seen.
 //!
@@ -595,13 +617,25 @@ fn take_census() -> Census {
             if !rest.contains("CapabilitySlot<") {
                 continue; // also covers MutableCapabilitySlot<, which contains it
             }
-            let Some((name, _)) = rest.split_once(':') else {
+            let Some((name, after)) = rest.split_once(':') else {
+                continue;
+            };
+            // Read the declared type rather than hard-coding one of the two.
+            // A literal here was invisible while zero `MutableCapabilitySlot`
+            // statics existed and became false the moment the first one landed
+            // — in a column this file's own doc calls a cross-task interface.
+            let Some(declared) = after.trim().split('<').next() else {
                 continue;
             };
             c.slots.push(HandleSite {
                 file: rel.clone(),
                 name: name.trim().to_string(),
-                container: "CapabilitySlot".into(),
+                container: declared
+                    .trim()
+                    .rsplit("::")
+                    .next()
+                    .unwrap_or(declared)
+                    .to_string(),
                 is_slot: true,
             });
         }
@@ -693,8 +727,11 @@ mod tests {
              this census changed nothing — that conclusion is wrong, and the \
              coincidence is the third one around this number in one task.\n\
              \n\
-             The decomposition is the tell: the spec's 46 was 46 WRITTEN handles. \
-             This one is 45 written + 1 first-caller-wins. Three members differ:\n\
+             The decomposition is the tell: AS FIRST DERIVED on 2026-08-24, \
+             BEFORE ANY MIGRATION, the spec's 46 was 46 WRITTEN handles and this \
+             one was 45 written + 1 first-caller-wins. Migration moves members \
+             from `written` into `slots`, so compare the SUM printed above, not \
+             those two figures. Three members differ:\n\
              \n\
                OUT  extension/template.rs::FILE_REF_REGEX — a compiled-regex cache \
              in a ZERO-parameter fn whose own comment says the regex is a \
@@ -947,9 +984,11 @@ mod tests {
              migration finished\" through this bool alone."
         );
         assert!(
-            sites.iter().filter(|s| !s.is_slot).all(|s| s.container != "CapabilitySlot"),
-            "a site labelled raw carries the slot container type — the two \
-             halves of the same fact have drifted"
+            sites.iter().filter(|s| !s.is_slot).all(|s| !s.container.ends_with("CapabilitySlot")),
+            "a site labelled raw carries a slot container type — the two \
+             halves of the same fact have drifted. `ends_with`, not `==`: \
+             `MutableCapabilitySlot` is the second spelling, and an equality \
+             check would have been blind to exactly the one that exists."
         );
     }
 
@@ -1045,5 +1084,199 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
              its bound; `destructured` must bind `root`, not nothing."
         );
     }
-}
 
+    // ========================================================================
+    // The accessor contract (Task 7 writes it, Tasks 8-10 copy it, Task 11
+    // consumes it)
+    // ========================================================================
+
+    /// One production `fn … -> &'static dyn SlotStatus` — the roster's entry
+    /// point for one migrated handle.
+    struct AccessorSite {
+        file: String,
+        name: String,
+        /// The function body, used to tie an accessor to the static it returns.
+        /// The BODY, not the name: `&GLOBAL_LEDGER` is a fact the compiler
+        /// checks, while a name is a convention that drifts.
+        body: String,
+        allows_dead_code: bool,
+    }
+
+    /// If `text[..at]` (everything left of a `SlotStatus` token) ends with
+    /// `-> &'static dyn [some::path::]`, the offset of that `->`.
+    ///
+    /// Token-wise rather than substring-wise so it does not matter where
+    /// rustfmt breaks the signature — the same lesson `method_call_open_paren`
+    /// carries above: a matcher that only works on one line makes its verdict a
+    /// function of line length.
+    fn slot_status_return_at(text: &str, at: usize) -> Option<usize> {
+        let mut head = text[..at]
+            .trim_end_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == ':');
+        for token in ["dyn", "'static", "&", "->"] {
+            head = head.trim_end().strip_suffix(token)?;
+        }
+        Some(head.len())
+    }
+
+    /// Every roster accessor in `src/`, recognised by RETURN TYPE, never by name.
+    ///
+    /// ⚠️ The `_slot()` suffix is not the anchor and must not become one: it is
+    /// already taken for something else by
+    /// `gateway/event_emitter/origin_fanout.rs::registry_slot()` and
+    /// `team_fanout.rs::team_event_bus_slot()`, which return
+    /// `&'static RwLock<Option<…>>` — and those two are themselves members of
+    /// the interior-mutable-install gap this module documents, so the collision
+    /// gets worse, not better, if that gap is ever closed.
+    /// `-> &'static dyn SlotStatus` is what Task 11's roster actually consumes,
+    /// so it is what this matches.
+    ///
+    /// Comment-stripped first, and that is load-bearing twice over:
+    /// `#[allow(dead_code)]` appears in `spend/mod.rs` prose explaining why the
+    /// real attribute is there, and any doc comment quoting this return type
+    /// would mint a phantom accessor.
+    fn roster_accessors() -> Vec<AccessorSite> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut out = Vec::new();
+        for (rel, text) in rust_sources_under(&root) {
+            let prod = strip_comment_lines(&production_prefix(&text));
+            for at in word_occurrences(&prod, "SlotStatus") {
+                let Some(arrow) = slot_status_return_at(&prod, at) else {
+                    continue;
+                };
+                let Some(fn_kw) = word_occurrences(&prod[..arrow], "fn").last().copied() else {
+                    continue;
+                };
+                let name_start = skip_ws(prod.as_bytes(), fn_kw + 2);
+                let name: String = prod[name_start..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                let Some(open) = prod[at..].find('{').map(|i| at + i) else {
+                    continue;
+                };
+                let Some(close) = matching(&prod, open, b'{', b'}') else {
+                    continue;
+                };
+                // Attribute lines sitting directly above the fn's own line.
+                let line_start = prod[..fn_kw].rfind('\n').map_or(0, |i| i + 1);
+                let mut allows_dead_code = false;
+                let mut before = &prod[..line_start];
+                loop {
+                    let trimmed = before.trim_end_matches('\n');
+                    let start = trimmed.rfind('\n').map_or(0, |i| i + 1);
+                    let line = trimmed[start..].trim();
+                    if !line.starts_with("#[") {
+                        break;
+                    }
+                    if line.contains("allow(dead_code)") {
+                        allows_dead_code = true;
+                    }
+                    before = &trimmed[..start];
+                }
+                out.push(AccessorSite {
+                    file: rel.clone(),
+                    name,
+                    body: prod[open + 1..close].to_string(),
+                    allows_dead_code,
+                });
+            }
+        }
+        out
+    }
+
+    /// Every migrated slot has a roster accessor.
+    ///
+    /// This is the half of the accessor contract that matters, and it went
+    /// unnamed until review: a slot with no accessor is silently absent from
+    /// Task 11's roster — a capability handle that cannot say whether boot
+    /// installed it, i.e. **this round's own defect, reintroduced by its fix**.
+    /// It is also the likelier mistake by an order of magnitude. A batch
+    /// migrates ~15 handles; the accessor is two lines per handle; omitting two
+    /// lines breaks no build, fails no test, and reads as finished work.
+    #[test]
+    fn every_migrated_slot_has_a_roster_accessor() {
+        let c = take_census();
+        let accessors = roster_accessors();
+        // Vacuity: "no slots to check" and "the recogniser stopped matching"
+        // are the same green without this.
+        assert!(
+            !c.slots.is_empty(),
+            "no migrated slots at all — either every handle was reverted, or \
+             the slot arm of take_census stopped matching"
+        );
+        assert!(
+            !accessors.is_empty(),
+            "{} slots exist but the accessor scan found none, so this guard is \
+             about to report every slot as unwired. Check the recogniser \
+             (`-> &'static dyn SlotStatus`) before believing the failures below.",
+            c.slots.len()
+        );
+        for slot in &c.slots {
+            let wired = accessors
+                .iter()
+                .any(|a| a.file == slot.file && !word_occurrences(&a.body, &slot.name).is_empty());
+            assert!(
+                wired,
+                "{} in {} is a migrated slot with NO roster accessor. Nothing \
+                 else can see this: it compiles, every test passes, and the \
+                 handle is simply missing from Task 11's roster — unable to say \
+                 whether boot installed it, which is the defect this round \
+                 exists to remove. Add, next to the static:\n\n    \
+                 #[allow(dead_code)]\n    pub(crate) fn {}_slot() -> &'static \
+                 dyn SlotStatus {{ &{} }}\n\n(the name is convention; the \
+                 return type is what this guard and the roster both read)",
+                slot.name,
+                slot.file,
+                slot.name.to_lowercase(),
+                slot.name
+            );
+        }
+    }
+
+    /// The `#[allow(dead_code)]` on every roster accessor is an exemption with
+    /// an expiry, so this is the force that makes it shrink.
+    ///
+    /// ⚠️ **WHEN THE ROSTER LANDS THIS MUST BE 0 AND THIS ASSERTION MUST BE
+    /// DELETED.** Deleting the attributes is part of wiring the roster, not a
+    /// follow-up: an `#[allow(dead_code)]` left on an accessor whose consumer
+    /// exists would later mask a genuinely unwired handle — the same defect
+    /// `every_migrated_slot_has_a_roster_accessor` guards, arriving through the
+    /// permit instead of through the omission.
+    ///
+    /// Deliberately NOT phrased as "if `ALL_SLOTS` exists": that name appears
+    /// nowhere in `src/` and in no brief, so a roster called `SLOT_ROSTER` would
+    /// leave such a guard green forever with ~46 permits shipped. This one is
+    /// non-vacuous today and announces its own expiry — the day the attributes
+    /// come off it goes red at a named line.
+    #[test]
+    fn every_roster_accessor_still_carries_the_expiring_allow() {
+        let c = take_census();
+        let accessors = roster_accessors();
+        assert_eq!(
+            accessors.len(),
+            c.slots.len(),
+            "{} roster accessors for {} slots. Either a slot has two, or one \
+             accessor returns `&'static dyn SlotStatus` for something that is \
+             not a migrated handle — and Task 11 builds the roster from exactly \
+             these, so the roster would be wrong in the same direction.",
+            accessors.len(),
+            c.slots.len()
+        );
+        let bare: Vec<String> = accessors
+            .iter()
+            .filter(|a| !a.allows_dead_code)
+            .map(|a| format!("{} ({})", a.name, a.file))
+            .collect();
+        assert!(
+            bare.is_empty(),
+            "these roster accessors have no `#[allow(dead_code)]`: {bare:?}\n\n\
+             If the roster does NOT exist yet, this is a build error waiting to \
+             happen: CI runs `cargo clippy -p alephcore -- -D warnings`, so an \
+             unconsumed `pub(crate) fn` is an error, not a warning.\n\n\
+             If the roster DOES now exist, this is the expiry firing as \
+             designed: remove the attribute from EVERY accessor and delete this \
+             test in the same commit. A half-removed set is the worst state — \
+             the remaining permits would mask genuinely unwired handles."
+        );
+    }
+}

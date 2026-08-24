@@ -861,7 +861,10 @@ fn the_slot_accessors_expose_both_handles_to_the_roster() {
                     slot.id()
                 );
             }
-            other => panic!("{}: expected IndistinguishableDefault, got {other:?}", slot.id()),
+            other => panic!(
+                "{}: expected IndistinguishableDefault, got {other:?}",
+                slot.id()
+            ),
         }
     }
 }

@@ -436,6 +436,15 @@ pub fn install_policy(policy: crate::config::types::policies::SpendPolicy) {
 /// `update_policy_into(handle, policy)`; the slot type carries that seam now —
 /// `capability::tests::update_before_install_returns_false_and_changes_nothing`
 /// pins the same contract against a slot the test owns.
+///
+/// `#[must_use]` for the same reason [`MutableCapabilitySlot::update`] carries
+/// it one level down: a caller who writes `update_policy(p);` and drops the
+/// bool reports a successful hot-apply for a store that never happened. The
+/// argument for keeping the slot type at all was "the type enforces it rather
+/// than each call site remembering" — that applies here too, and a wrapper that
+/// forwards a `#[must_use]` value without being `#[must_use]` itself is a hole
+/// in exactly that argument.
+#[must_use]
 pub fn update_policy(policy: crate::config::types::policies::SpendPolicy) -> bool {
     GLOBAL_POLICY.update(policy)
 }
@@ -453,7 +462,9 @@ pub fn update_policy(policy: crate::config::types::policies::SpendPolicy) -> boo
 pub fn current_policy() -> crate::config::types::policies::SpendPolicy {
     GLOBAL_POLICY
         .load()
-        .map_or_else(crate::config::types::policies::SpendPolicy::default, |p| (**p).clone())
+        .map_or_else(crate::config::types::policies::SpendPolicy::default, |p| {
+            (**p).clone()
+        })
 }
 
 /// The two handles above, type-erased for the roster.
@@ -484,7 +495,6 @@ pub(crate) fn global_ledger_slot() -> &'static dyn SlotStatus {
 pub(crate) fn global_policy_slot() -> &'static dyn SlotStatus {
     &GLOBAL_POLICY
 }
-
 
 // ============================================================================
 // The two principal resolvers

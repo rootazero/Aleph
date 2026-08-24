@@ -11,10 +11,16 @@
 //! the rule in `census`, not by hand.
 //!
 //! ⚠️ That 46 is NOT the 46 an earlier hand count reported, even though the
-//! numbers agree: three members differ, and the decomposition is the tell (this
-//! one is 45 written + 1 first-caller-wins, that one was 46 written). `census`
-//! names all three and why each moved. Do not read the agreement as
-//! confirmation that nothing changed.
+//! numbers agree: three members differ, and the decomposition is the tell — as
+//! first derived on 2026-08-24, **before any migration**, this one was 45
+//! written + 1 first-caller-wins and that one was 46 written. `census` names
+//! all three and why each moved. Do not read the agreement as confirmation that
+//! nothing changed.
+//!
+//! Those two figures are a first derivation, not a live reading: migration moves
+//! members from `written` into `slots` (as of the `spend` migration the split is
+//! 43 + 1 + 2), and the invariant is the SUM. `census`'s assertion prints the
+//! live split on failure; compare against that, never against this sentence.
 //!
 //! # The shape
 //!
