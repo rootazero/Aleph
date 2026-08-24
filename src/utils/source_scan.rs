@@ -85,14 +85,35 @@ fn end_of_item(lines: &[&str], start: usize) -> usize {
 /// scan, so a string literal or block comment that spans multiple lines
 /// is tracked correctly instead of resetting on each new line.
 ///
-/// Declared boundary, not a bug: raw strings (`r#"…"#`) are not lexed as
-/// raw — their interior `"` characters toggle `in_str` like any other
-/// string. In practice braces inside raw strings still balance out, and a
-/// full Rust lexer is more machinery than a brace-counting item-boundary
-/// scanner needs.
+/// Raw strings (`r#"…"#`, `br#`, `cr#`) ARE lexed as raw. That was once a
+/// declared boundary, on the reasoning that braces inside raw strings
+/// balance out anyway so a brace-counting item-boundary scanner did not
+/// need a full lexer. The reasoning was sound for the caller it was
+/// written for and wrong for the second caller that arrived later:
+/// [`strip_comment_lines`] reads `in_str` at line start to tell "inside an
+/// open string" from "inside a comment", and there a desync does not
+/// balance out — it inverts the decision, in the silent-approval
+/// direction, for every line until the state resyncs.
+///
+/// Two payload shapes desynchronised, both common here: an odd number of
+/// `"` in the payload (regex character classes like `["\']`,
+/// `src/sandbox/command_policy/normalize.rs:142`) and a payload ending in
+/// `\` (`raw.strip_prefix(r"\\?\")`, `src/utils/paths.rs:56` — one line,
+/// 18 desync runs, 206 comment lines wrongly made visible). Once
+/// desynchronised, a `/*` in the payload latched `in_block_comment`, which
+/// only `*/` clears: measured 2026-08-24 that swallowed lines 117→580 of
+/// `src/sandbox/command_policy/rules.rs` — production source, the sandbox
+/// hardline rule table — and ran to EOF in `src/sandbox/config.rs`.
 #[derive(Default)]
 struct LexState {
+    /// Inside a string literal of any kind: ordinary, byte, C, or raw.
+    /// [`strip_comment_lines`] reads this at line start.
     in_str: bool,
+    /// `Some(n)` while the open string is a RAW one opened with `n` hashes
+    /// (`r"…"` is `Some(0)`, `r#"…"#` is `Some(1)`); `None` when the open
+    /// string is ordinary, or when no string is open. Inside a raw string
+    /// `\` is not an escape and a bare `"` is not a terminator.
+    raw_hashes: Option<usize>,
     in_block_comment: bool,
 }
 
@@ -143,6 +164,43 @@ fn char_literal_len(chars: &[char], i: usize) -> Option<usize> {
     None // a lifetime, or too malformed to call a literal
 }
 
+/// If the `"` at `quote` opens a RAW string, its hash count (`r"…"` is 0,
+/// `r#"…"#` is 1); otherwise `None`.
+///
+/// Read backwards from the quote — over the run of `#`, then the required
+/// `r`, then an optional `b`/`c` byte- or C-string prefix — because by the
+/// time the scan reaches the quote those characters have already been
+/// emitted as ordinary code. The character before the prefix must not be
+/// an identifier character: that is what stops an identifier merely
+/// *ending* in `r` from being read as a raw-string opener.
+fn raw_string_hashes(chars: &[char], quote: usize) -> Option<usize> {
+    debug_assert_eq!(chars.get(quote), Some(&'"'));
+    let mut j = quote;
+    let mut hashes = 0usize;
+    while j > 0 && chars[j - 1] == '#' {
+        j -= 1;
+        hashes += 1;
+    }
+    if j == 0 || chars[j - 1] != 'r' {
+        return None;
+    }
+    j -= 1; // the `r`
+    if j > 0 && matches!(chars[j - 1], 'b' | 'c') {
+        j -= 1; // `br"…"` / `cr"…"` are raw too
+    }
+    if j > 0 && (chars[j - 1].is_alphanumeric() || chars[j - 1] == '_') {
+        return None; // the tail of an identifier, not a prefix
+    }
+    Some(hashes)
+}
+
+/// Whether the `"` at `quote` terminates a raw string opened with `hashes`
+/// hashes — i.e. whether exactly that many `#` follow it. A shorter run
+/// does NOT close it: the payload of `r##"… r#" …"##` contains one.
+fn raw_string_closes(chars: &[char], quote: usize, hashes: usize) -> bool {
+    (1..=hashes).all(|k| chars.get(quote + k) == Some(&'#'))
+}
+
 /// A line with line-comments, block-comments, and string/char literal
 /// *contents* removed, so braces inside them are not counted by
 /// [`end_of_item`]. `state` carries `in_str`/`in_block_comment` across every
@@ -154,6 +212,19 @@ fn char_literal_len(chars: &[char], i: usize) -> Option<usize> {
 /// `'` that [`char_literal_len`] does not recognise (a lifetime, or a
 /// malformed literal) is emitted as an ordinary character and changes no
 /// state — it is never treated as entering "inside a char literal".
+///
+/// Every literal the scan skips leaves a SENTINEL in the output: a single
+/// `"` where a string delimiter stood, a single `_` for a whole char
+/// literal. Never a brace, so [`end_of_item`]'s counting is unaffected.
+/// The sentinel exists because this function has two callers asking two
+/// different questions of one walk. For brace counting, emitting nothing
+/// for a literal is exactly right. For [`strip_comment_lines`], which asks
+/// "does this line contain any code?", a literal IS code — and emitting
+/// nothing made a line whose entire content is a literal
+/// indistinguishable from a comment, which on this repo silently hid 9 763
+/// lines of real code from ~36 census guards (measured 2026-08-24). One
+/// sentinel answers both questions; forking the lexer would have made a
+/// second author for the same walk.
 fn code_only(line: &str, state: &mut LexState) -> String {
     let chars: Vec<char> = line.chars().collect();
     let mut out = String::with_capacity(chars.len());
@@ -176,9 +247,25 @@ fn code_only(line: &str, state: &mut LexState) -> String {
             continue;
         }
         if state.in_str {
+            if let Some(hashes) = state.raw_hashes {
+                // Raw: `\` is not an escape, and only a `"` followed by the
+                // matching run of `#` terminates.
+                if c == '"' && raw_string_closes(&chars, idx, hashes) {
+                    state.in_str = false;
+                    state.raw_hashes = None;
+                    out.push('"'); // sentinel
+                    idx += 1 + hashes;
+                } else {
+                    idx += 1;
+                }
+                continue;
+            }
             match c {
                 '\\' => escaped = true,
-                '"' => state.in_str = false,
+                '"' => {
+                    state.in_str = false;
+                    out.push('"'); // sentinel
+                }
                 _ => {}
             }
             idx += 1;
@@ -187,11 +274,17 @@ fn code_only(line: &str, state: &mut LexState) -> String {
         match c {
             '"' => {
                 state.in_str = true;
+                state.raw_hashes = raw_string_hashes(&chars, idx);
+                out.push('"'); // sentinel
                 idx += 1;
             }
             '\'' => {
                 if let Some(len) = char_literal_len(&chars, idx) {
-                    idx += len; // skip the whole literal; its interior is never counted
+                    // Skip the whole literal — its interior is never counted —
+                    // but leave a sentinel so a line that is nothing but a char
+                    // literal does not read as empty.
+                    out.push('_');
+                    idx += len;
                 } else {
                     out.push(c); // a lifetime (or malformed literal) is ordinary text
                     idx += 1;
@@ -239,17 +332,25 @@ fn code_only(line: &str, state: &mut LexState) -> String {
 /// correctly by walking the file, not by looking at it alone.
 ///
 /// A previously-open string counts as code even on a line where nothing is
-/// visible outside it: `code_only` excludes string interior from its
-/// output (correct for its one caller, brace-counting, where a `{` written
+/// visible outside it: `code_only` excludes string *interior* from its
+/// output (correct for its brace-counting caller, where a `{` written
 /// inside a string must not count), so a line wholly inside an open string
-/// produces the same empty output a comment line does. Raw strings make
-/// this common, not exotic — `LexState` does not lex them specially (see
-/// `code_only`'s doc), so a multi-line raw string (a CSS or JSON payload
-/// embedded via `r#"…"#`, for instance) reads exactly like an ordinary open
-/// string, one line at a time. `state.in_str` at the start of each line is
-/// what disambiguates "inside an open string" from "inside a comment" —
-/// `code_only` cannot tell the two apart from its output alone, because it
-/// treats both the same way on purpose.
+/// still produces the same empty output a comment line does — the
+/// delimiter sentinel appears only on lines that carry a delimiter.
+/// Multi-line raw strings (a CSS or JSON payload embedded via `r#"…"#`)
+/// make that shape common, not exotic. `state.in_str` at the start of each
+/// line is what disambiguates "inside an open string" from "inside a
+/// comment"; `code_only` cannot tell the two apart from its output alone
+/// on such a line, because it treats both the same way on purpose.
+///
+/// That makes `in_str` a correctness input here, not a detail of brace
+/// counting — which is why [`LexState`] lexes raw strings properly (see
+/// its doc). A spurious `in_str == true` at line start does not balance
+/// out the way a brace desync does: it KEEPS every line until the state
+/// resyncs, feeding comment text to ~36 census guards as if it were code.
+/// 750 comment lines across 38 files leaked that way before raw strings
+/// were lexed — 1.5x the population of the defect the round before this
+/// one was written to fix, in the opposite direction.
 #[must_use]
 pub fn strip_comment_lines(src: &str) -> String {
     let mut state = LexState::default();
@@ -556,11 +657,10 @@ pub fn after() {}
         }
     }
 
-    /// `LexState` does not lex raw strings specially (see `code_only`'s
-    /// doc), so a multi-line raw string reads exactly like an ordinary open
-    /// string — a CSS payload embedded via `r#"…"#` produces the same empty
-    /// `code_only` output a comment line does, and only `in_str` at
-    /// line-start tells the two apart. Confirmed RED under
+    /// A line in the middle of a multi-line raw string produces the same
+    /// empty `code_only` output a comment line does — no delimiter stands
+    /// on it, so no sentinel is emitted — and only `in_str` at line-start
+    /// tells the two apart. Confirmed RED under
     /// `is_block_comment_continuation` before the fix (that predicate never
     /// looked at string state at all, so it matched this line's leading `*`
     /// the same way it matched a comment continuation).
@@ -584,6 +684,150 @@ pub fn after() {}
         let src = "/* block\n * a continuation line\n *\n */\npub fn survives() {}\n";
         let out = strip_comment_lines(src);
         assert_eq!(out.trim(), "pub fn survives() {}");
+    }
+
+    /// M1, the dominant wrong-drop mechanism: a line whose ENTIRE content is
+    /// a string literal is CODE, not a comment.
+    ///
+    /// `code_only`'s documented job for [`end_of_item`] is to remove literal
+    /// *contents* so braces inside them are not counted, and emitting nothing
+    /// at all is exactly right for brace counting. Reusing that same output as
+    /// a proxy for "does this line contain any code?" answers a *different*
+    /// question, and for that one a literal IS code — so before the sentinel
+    /// landed, such a line rendered empty and was indistinguishable from a
+    /// comment. Measured on this repo 2026-08-24: 9 715 lines dropped this
+    /// way, 96.3 % of all wrong drops. The blind spot stayed empty only
+    /// because rustfmt puts a trailing `,` or `)` on most wrapped argument
+    /// lines — an accident of formatting, not an invariant, and nothing
+    /// tested it. The shapes that fall through are the last argument of a
+    /// wrapped `assert!`/`format!`/`anyhow!` and `\`-continued fragments.
+    #[test]
+    fn strip_comment_lines_keeps_a_lone_string_literal_line() {
+        let src = "assert!(\n    ok,\n    \"the last argument of a wrapped assert carries no trailing punctuation\"\n);\n";
+        let out = strip_comment_lines(src);
+        assert!(
+            out.contains("the last argument of a wrapped assert"),
+            "a line whose whole content is a string literal is a token, not a comment — and \
+             string literals are exactly the shape this repo's censuses scrape \
+             (`count(\"\\\".tx\\\"\")`, `name: \"foo\"`, `register_handler!(\"method\")`); got:\n{out}"
+        );
+    }
+
+    /// M3, the same contract mismatch on char literals: `char_literal_len`
+    /// skips the literal whole, so a line whose entire content is `'_'` or
+    /// `' '` — the whole body of a match arm or a wrapped argument — rendered
+    /// empty and was dropped. 48 lines on this repo.
+    #[test]
+    fn strip_comment_lines_keeps_a_lone_char_literal_line() {
+        let src = "let under = matches!(\n    c,\n    '_'\n);\nlet space = s.trim_matches(\n    ' '\n);\n";
+        let out = strip_comment_lines(src);
+        for kept in ["'_'", "' '"] {
+            assert!(
+                out.contains(kept),
+                "a line whose whole content is a char literal was dropped as a comment: {kept}\ngot:\n{out}"
+            );
+        }
+    }
+
+    /// M2/5(a): a raw-string payload carrying an odd number of `"` used to
+    /// desynchronise `in_str`, because the lexer honoured ordinary string
+    /// rules inside raw payloads. Regex character classes like `["\']` are
+    /// this repo's dominant source of that shape
+    /// (`src/sandbox/command_policy/normalize.rs:142`,
+    /// `src/security/injection_patterns.rs:245`).
+    ///
+    /// The direction of the failure is the dangerous one: a spurious
+    /// `in_str == true` at line start makes `strip_comment_lines` KEEP the
+    /// line, so genuine comments are fed to ~36 census guards as if they were
+    /// code — attacking precisely the property this function exists for. 750
+    /// comment lines across 38 files leaked this way, measured 2026-08-24.
+    #[test]
+    fn a_raw_string_payload_with_unbalanced_quotes_does_not_desync() {
+        let src = "let re = Regex::new(r#\"(?i)[-/]e\\s+[\"\\']?([a-zA-Z0-9]+)\"#);\n// this comment must still be dropped\npub fn after() {}\n";
+        let out = strip_comment_lines(src);
+        assert!(
+            !out.contains("this comment must still be dropped"),
+            "an unbalanced `\\\"` inside a raw payload desynchronised `in_str`, so the comment \
+             line after it was kept as code; got:\n{out}"
+        );
+        assert!(out.contains("pub fn after()"), "got:\n{out}");
+    }
+
+    /// The second, distinct desync mechanism: a raw string ENDING in a
+    /// backslash. The trailing `\` is literal in a raw string, but the old
+    /// lexer applied escape rules inside every string, so it consumed the
+    /// closing `"` and `in_str` latched true. `src/utils/paths.rs:56`
+    /// (`raw.strip_prefix(r"\\?\")`) is the live instance: that one line
+    /// produced 18 desync runs and 206 newly-visible comment lines in that
+    /// file alone.
+    #[test]
+    fn a_raw_string_ending_in_a_backslash_does_not_desync() {
+        let src = "let Some(rest) = raw.strip_prefix(r\"\\\\?\\\") else {\n// this comment must still be dropped\npub fn after() {}\n";
+        let out = strip_comment_lines(src);
+        assert!(
+            !out.contains("this comment must still be dropped"),
+            "a raw string ending in a backslash ate its own closing quote; got:\n{out}"
+        );
+        assert!(out.contains("pub fn after()"), "got:\n{out}");
+    }
+
+    /// M4, the worst of the four and the only one that reached production
+    /// source: once `in_str` reads false while still inside a raw payload, a
+    /// `/*` in that payload latches `in_block_comment`, which only `*/`
+    /// clears. `src/sandbox/command_policy/rules.rs:117` latches on
+    /// `r#"["']?/+(?:\.{1,2}/*)*…"#` and swallows lines 117→580 — 463 lines of
+    /// the sandbox hardline rule table, and it SURVIVES `production_prefix`.
+    /// `src/sandbox/config.rs:522` latches on a `"**/*.pem"` glob and never
+    /// clears, reaching EOF still inside a block comment.
+    ///
+    /// The `description:` line is the load-bearing assertion: the comment line
+    /// is dropped either way (it is a comment), so only a real code line after
+    /// the latch distinguishes "the latch is gone" from "the latch swallowed
+    /// everything, comment included".
+    #[test]
+    fn a_block_comment_opener_inside_a_raw_payload_does_not_latch() {
+        let src = "let rule = r#\"[\"']?/+(?:\\.{1,2}/*)*\"#;\n// this comment must still be dropped\ndescription: \"recursive remove targeting an absolute root\",\n";
+        let out = strip_comment_lines(src);
+        assert!(
+            out.contains("recursive remove targeting an absolute root"),
+            "a `/*` inside a raw payload latched a block comment over the production code \
+             after it — this is the sandbox hardline rule table's shape; got:\n{out}"
+        );
+        assert!(
+            !out.contains("this comment must still be dropped"),
+            "got:\n{out}"
+        );
+    }
+
+    /// A raw string closes only on its own hash count, and the `b`/`c` byte
+    /// and C-string prefixes are raw too. A closer that ignored the hash run
+    /// would end the string at the payload's own `r#"`, leaving the lexer
+    /// inside a phantom ordinary string at end of line — the same
+    /// keep-the-comment failure as the tests above, reached a different way.
+    #[test]
+    fn a_raw_string_closes_only_on_its_own_hash_count() {
+        for prefix in ["r##", "br##", "cr##"] {
+            let src = format!(
+                "let s = {prefix}\"payload with a lone r#\" inside\"##;\n// this comment must still be dropped\npub fn after() {{}}\n"
+            );
+            let out = strip_comment_lines(&src);
+            assert!(
+                !out.contains("this comment must still be dropped"),
+                "{prefix} closed on a shorter hash run; got:\n{out}"
+            );
+            assert!(out.contains("pub fn after()"), "{prefix}; got:\n{out}");
+        }
+    }
+
+    /// The sentinel must not leak into what a consumer reads.
+    /// `strip_comment_lines` returns the ORIGINAL line text — `code_only`'s
+    /// output feeds only the keep/drop decision — so no `"` or `_` invented by
+    /// the lexer may appear in the result.
+    #[test]
+    fn strip_comment_lines_returns_original_line_text_not_lexer_output() {
+        let src = "let a = \"x\";\nlet b = '_';\nlet c = r#\"raw\"#;\n";
+        let out = strip_comment_lines(src);
+        assert_eq!(out.trim(), src.trim(), "got:\n{out}");
     }
 
     /// The shared walker used by guards this round: sanity-checks it can
@@ -678,10 +922,33 @@ pub fn after() {}
     /// shipped extractor post-migration (instrumented print, run, reverted);
     /// not a Python transliteration, which — lacking `code_only` and
     /// `char_literal_len` — measured a different, wrong number on the same
-    /// tree. If this floor drops again, the first question is the same one
-    /// this paragraph answers: did the corpus's own `"#[cfg(test)]"`-shaped
-    /// text change, or did the extractor stop recognising a shape? Only the
-    /// second is alarming.
+    /// tree.
+    ///
+    /// The floor moved a third time, to 193, on 2026-08-24 — for the SAME
+    /// reason as the 276 → 213 move: the number that came down had been
+    /// counting leaked TEST code as recovered production code. Fix round 4
+    /// taught [`LexState`] to lex raw strings, so a JSON or TOML payload
+    /// written `r#"{ … }"#` inside a `#[cfg(test)]` item no longer feeds its
+    /// braces to `end_of_item`'s depth. Before that, those braces
+    /// desynchronised the scan, it returned EARLY, and the tail of the test
+    /// module stayed in the "production" output — which then measured longer
+    /// than the naive cut and counted as recovery. 16 files were in that
+    /// state. Checked tree-wide across all 34 files whose output moved:
+    /// 3 065 non-blank lines removed, every one of them at or after its own
+    /// file's `#[cfg(test)]` attribute and inside a `#[cfg(test)]` item by an
+    /// independent formatting oracle; 79 lines of genuine production code
+    /// RECOVERED in `src/hub/install.rs`, where the desync had instead run
+    /// the scan PAST the item's true end; zero production lines lost. The
+    /// companion guard above moved the other way in step — `compared`
+    /// 2 235 → 2 251, i.e. those 16 files now AGREE with the naive cut
+    /// instead of beating it — and `worst` is unchanged at 62 118 bytes.
+    ///
+    /// If this floor drops again, the first question is the same one these
+    /// paragraphs answer: did the corpus's own `"#[cfg(test)]"`-shaped text
+    /// change, did the extractor stop recognising a shape, or did it stop
+    /// MIS-recognising one? Only the second is alarming — but the third has
+    /// now fired twice, so "the number went down" is never by itself the
+    /// answer.
     #[test]
     fn production_prefix_recovers_code_the_old_cut_discarded() {
         let mut recovered = 0usize;
@@ -697,14 +964,15 @@ pub fn after() {}
             }
         }
         assert!(
-            recovered >= 209,
-            "expected >=209 files to recover production code (measured 209 against the \
-             shipped extractor on 2026-08-24, post-migration; see the doc comment above \
-             for why this moved down from 213); saw {recovered}. A further drop means the \
-             extractor stopped recognising a shape — investigate before lowering this \
-             floor. (Do not confuse this with the 276 once cited for this class: that \
-             figure came from a pre-fix build that over-kept trailing test lines and \
-             was itself wrong — see the doc comment above.)"
+            recovered >= 193,
+            "expected >=193 files to recover production code (measured 193 against the \
+             shipped extractor on 2026-08-24, after raw strings were lexed as raw; see \
+             the doc comment above for why this moved down from 209, and before that from \
+             213 and 276); saw {recovered}. A further drop means the extractor stopped \
+             recognising a shape — investigate before lowering this floor, and note that \
+             every previous drop was the opposite: it stopped MIS-recognising one, and \
+             the falling number was leaked test code being counted as recovered \
+             production code."
         );
         assert!(worst.0 > 10_000, "worst-case recovery {worst:?} is implausibly small");
     }
@@ -731,9 +999,25 @@ pub fn after() {}
     ///
     /// Line numbers are computed against the RAW file, not a pre-stripped
     /// one: comment lines are skipped inline, one line at a time, rather
-    /// than by pre-filtering the text through `strip_comment_lines` and then
-    /// re-numbering the result — the latter reports line numbers that exist
-    /// only in the stripped text and not in the file anyone would open.
+    /// than by pre-filtering the text through [`strip_comment_lines`] and
+    /// then re-numbering the result — the latter reports line numbers that
+    /// exist only in the stripped text, not in the file anyone would open.
+    ///
+    /// Skipping inline is not licence to re-answer "is this line a comment"
+    /// locally. This guard threads a [`LexState`] down the same walk and
+    /// asks [`code_only`] — the one recogniser — so keeping raw line
+    /// numbers costs no second author. It used to hand-roll
+    /// `starts_with("//") || starts_with("/*") || starts_with('*')`: the
+    /// *pre-narrowing* bare-`*` rule, standing in the file whose entire
+    /// subject is that this question cannot be answered by looking at a
+    /// line alone. That third disjunct by itself skipped 496 lines across
+    /// 235 files on this repo, every one of them real code, in the
+    /// direction where the guard silently approves.
+    ///
+    /// The needle search still runs on the RAW line, never on `code_only`'s
+    /// output: the patterns this guard hunts ARE string literals
+    /// (`split("#[cfg(test)]")`), and `code_only` removes literal contents
+    /// by design. `code_only` decides only whether the line is code at all.
     #[test]
     fn no_module_hand_rolls_the_cfg_test_prefix_cut() {
         let tests_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
@@ -745,11 +1029,12 @@ pub fn after() {}
             if rel == "src/utils/source_scan.rs" {
                 continue; // defines the replacement and tests the old shape
             }
+            let mut state = LexState::default();
             for (n, line) in text.lines().enumerate() {
-                let t = line.trim_start();
-                if t.starts_with("//") || t.starts_with("/*") || t.starts_with('*') {
+                if code_only(line, &mut state).trim().is_empty() {
                     continue;
                 }
+                let t = line.trim_start();
                 if t.contains(r##"split("#[cfg(test)]")"##)
                     || t.contains(r##"find("#[cfg(test)]")"##)
                     || t.contains(r##"split_once("#[cfg(test)]")"##)
