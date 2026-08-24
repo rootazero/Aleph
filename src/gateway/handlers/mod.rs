@@ -36,6 +36,7 @@
 //! | workspace | Workspace isolation management |
 //! | daemon | Daemon status, shutdown, logs |
 //! | teams | Team management (list, get, disband, delete) |
+//! | kanban | Structured, scope-filterable goal/loop listing for the project Kanban tab |
 
 pub mod acp_config;
 pub mod activity;
@@ -86,6 +87,7 @@ pub mod heartbeat;
 pub mod hooks_admin;
 pub mod identity;
 pub mod insights;
+pub mod kanban;
 pub mod logs;
 pub mod markdown_skills;
 pub mod mcp;
@@ -880,6 +882,15 @@ impl HandlerRegistry {
         // need two-phase wiring; if the daemon was never initialized (memory
         // disabled or simulated mode), it simply returns an error.
         registry.register("dreaming.run_now", dreaming::handle_run_now);
+
+        // Kanban data plane — structured goal/loop listing for the project
+        // Kanban tab (design doc 2026-08-24-multiuser-teamchat-p3 §B1). Both
+        // read a process-global store (`goal::global()` / `looping::global()`,
+        // installed unconditionally at boot) so, like `dreaming.run_now`
+        // above, they need no two-phase wiring. See `kanban.rs`'s module doc
+        // for the `scope_id` filter's visibility rule.
+        registry.register("goal.list", kanban::handle_list);
+        registry.register("loop.list", kanban::handle_loop_list);
 
         // Background sub-agent tree snapshot — reads the process-global
         // BackgroundAgentTracker (no per-boot state), but P1 (spec §11-1c)

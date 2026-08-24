@@ -701,6 +701,18 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("canvas.selection.set", Treatment::KeyChecked),
     // --- on-demand resume ---
     ("agent.resume", Treatment::KeyChecked),
+    // --- goal.list / loop.list (Kanban data plane, handlers/kanban.rs) ---
+    // Both read a process-global store (`goal::global()` / `looping::global()`)
+    // with no per-request `TeamStore`-style decorator, so the visibility rule
+    // lives in the handler itself rather than at a construction chokepoint —
+    // same shape as `subagent.tree` above. An OMITTED `scope_id` filter keeps
+    // the pre-existing owner-only default (`stamped_owner_visible`, unchanged
+    // from before this RPC existed — background work is not room-owned by
+    // default, SECURITY.md P2); an EXPLICIT `scope_id: "project:<id>"` gates
+    // the queried scope once via `project_visible` (non-member ⇒ empty set,
+    // never an error — no existence oracle) before retaining matching rows.
+    ("goal.list", Treatment::ListFiltered),
+    ("loop.list", Treatment::ListFiltered),
 ];
 
 /// Whole families ruled [`Treatment::OrgShared`], as prefixes.
@@ -1215,6 +1227,17 @@ mod tests {
                 crate::gateway::method_admin::method_requires_admin(m),
                 "{m} is absent from SCOPED_METHODS only because it is admin-gated"
             );
+        }
+    }
+
+    /// Curated pin for the Kanban data plane (`handlers/kanban.rs`,
+    /// `2026-08-24-multiuser-teamchat-p3` §B1): a deletion or typo here
+    /// should fail this test by name, same discipline as
+    /// `every_session_addressed_method_is_registered` above.
+    #[test]
+    fn kanban_list_methods_are_registered_and_list_filtered() {
+        for m in ["goal.list", "loop.list"] {
+            assert_eq!(treatment_of(m), Some(Treatment::ListFiltered), "{m}");
         }
     }
 
