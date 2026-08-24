@@ -564,7 +564,7 @@ mod tests {
         // placeholder-bearing text and only substituted afterwards,
         // so a `sk-…` value resolved at this step was added to the
         // outbound string AFTER every leak/redact pass.
-        use crate::secrets::vendor_patterns::is_block_class_secret;
+        use crate::secrets::leak_detector::is_block_class_secret;
         let guard = RuntimeSecurityGuard::default_guard();
         let context = SecurityContext::default();
         let input = "Authorization: Bearer {{secret:test_key}}";
