@@ -37,7 +37,14 @@ fn second_start_exits_64_with_holder_pid() {
     let started = Instant::now();
     let second = Command::new(bin)
         .args(["--bind", "127.0.0.1", "--port", "0", "start"])
+        // `ALEPH_HOME` outranks the `HOME` fallback (see
+        // `utils::paths::get_config_dir`), so set both. With only `HOME`, a machine
+        // that has `ALEPH_HOME` set sends this child to *that* home — where the
+        // lock taken above is not held. It then starts a real server that never
+        // exits, so `.output()` blocks forever: this test does not fail, it hangs,
+        // and a hung binary leaves the whole suite with no verdict at all.
         .env("HOME", dir.path())
+        .env("ALEPH_HOME", dir.path().join(".aleph"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()

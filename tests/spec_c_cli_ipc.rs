@@ -94,7 +94,13 @@ async fn cli_secret_set_forwards_to_admin_endpoint_when_lock_held() {
     let out = tokio::task::spawn_blocking(move || {
         Command::new(bin)
             .args(["secret", "set", "FOO", "--value", "bar"])
+            // `ALEPH_HOME` outranks the `HOME` fallback (see
+            // `utils::paths::get_config_dir`), so set both. With only `HOME`,
+            // this child resolves its state outside the tempdir on any machine
+            // that has `ALEPH_HOME` set — and `ALEPH_HOME` is a product knob,
+            // not a test-only switch.
             .env("HOME", &home_for_cli)
+            .env("ALEPH_HOME", home_for_cli.join(".aleph"))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()
