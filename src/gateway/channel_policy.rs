@@ -6,13 +6,13 @@
 //! channel adapters (WhatsApp evaluates them in `wa_policy/`; the inbound
 //! router has its own `ChannelConfig` twin), and [`E164Number`] normalization.
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::config::types::policies::ExecTier;
 use crate::gateway::execution_engine::CHANNEL_TOOL_PERMISSIONS_KEY;
 use crate::gateway::inbound_router::{ChannelConfig, ChannelPermissionLevel};
 use crate::gateway::pair_loop_guard::PairLoopGuardConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::OnceLock;
 use tokio::sync::Notify;
 
 /// Highest execution tier an untrusted (`Chat`) channel may run at.
@@ -52,7 +52,37 @@ pub fn channel_permission_level_from_role(caller_role: &str) -> Option<ChannelPe
 /// no global; `AgentInstance::origin_route` returns only channel + conversation,
 /// no permission data). `None` until boot sets it (tests / pre-channel-init) →
 /// callers fail closed to guest + no deny layer.
-static CHANNEL_CONFIG_SNAPSHOT: OnceLock<HashMap<String, ChannelConfig>> = OnceLock::new();
+///
+/// `IndistinguishableDefault`, on the axis that matters. The guest floor is
+/// unconditional (`channel_identity_meta` writes it before consulting the
+/// config at all), so losing the snapshot cannot promote anyone. What it loses
+/// is the DENY layer: [`system_continuation_identity`]'s `unwrap_or_default()`
+/// yields a `ChannelConfig::default()`, whose `tool_permissions` is `None`, and
+/// the resulting metadata is byte-identical to the metadata for a channel the
+/// operator never configured. An admin's explicit per-channel deny is simply
+/// not there, and no caller can tell that apart from "this channel has no
+/// denies" — which is the fail-open gap the paragraph above says this snapshot
+/// exists to close.
+///
+/// ⚠️ Read alongside [`wait_for_channel_config_snapshot`]: boot scans park on
+/// the publish rather than racing it, so on a healthy boot this default is
+/// unreachable. The diagnostic is for the boot that is not healthy.
+static CHANNEL_CONFIG_SNAPSHOT: CapabilitySlot<HashMap<String, ChannelConfig>> =
+    CapabilitySlot::new(
+        "gateway/channel-config-snapshot",
+        MissingSemantics::IndistinguishableDefault {
+            reads_as: "ChannelConfig::default() -- the guest floor with NO per-channel \
+                       tool-deny layer, identical to an unconfigured channel",
+        },
+    );
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn channel_config_snapshot_slot() -> &'static dyn SlotStatus {
+    &CHANNEL_CONFIG_SNAPSHOT
+}
 
 /// Notified once the snapshot is published, so boot-time system-continuation
 /// scans (resume / goal wake) that are spawned *before*
@@ -66,7 +96,7 @@ static SNAPSHOT_READY: Notify = Notify::const_new();
 /// router is sealed in `Arc`. Idempotent — a later set (e.g. a second boot in a
 /// test process) is ignored by the `OnceLock`.
 pub fn set_channel_config_snapshot(configs: HashMap<String, ChannelConfig>) {
-    if CHANNEL_CONFIG_SNAPSHOT.set(configs).is_err() {
+    if !CHANNEL_CONFIG_SNAPSHOT.install(configs) {
         tracing::debug!("channel config snapshot already published; ignoring re-set");
     }
     // Wake any boot scans parked in `wait_for_channel_config_snapshot`. Callers
@@ -288,6 +318,26 @@ impl Default for ChannelAccessConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// See `session::service::tests::the_accessor_exposes_this_handle_to_the_roster`
+    /// for why this asserts through the accessor rather than the static.
+    ///
+    /// The `reads_as` sentence is asserted, not just the variant: it is shown
+    /// to an operator verbatim, and a sentence naming the wrong default is a
+    /// diagnostic that lies (Task 8 caught exactly that in a brief's table).
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = channel_config_snapshot_slot();
+        assert_eq!(slot.id(), "gateway/channel-config-snapshot");
+        match slot.missing() {
+            MissingSemantics::IndistinguishableDefault { reads_as } => assert!(
+                reads_as.contains("ChannelConfig::default()"),
+                "the sentence must name the real fallback, not a nearby \
+                 constant; got {reads_as:?}"
+            ),
+            other => panic!("expected IndistinguishableDefault, got {other:?}"),
+        }
+    }
 
     #[test]
     fn test_chat_channel_never_runs_at_full_tier() {

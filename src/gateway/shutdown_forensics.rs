@@ -17,21 +17,55 @@
 // path; on Windows that probe is compiled out, leaving them unused.
 #[cfg_attr(windows, allow(unused_imports))]
 use std::process::{Command, Stdio};
-use std::sync::OnceLock;
 #[cfg_attr(windows, allow(unused_imports))]
 use std::time::{Duration, Instant};
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use serde::Serialize;
 
 /// Process boot timestamp. Captured once via [`mark_boot`] so uptime can be
 /// derived without threading the boot time through every caller.
-static BOOT_INSTANT: OnceLock<Instant> = OnceLock::new();
+///
+/// `FailsClosed`: the single reader is
+/// [`snapshot_shutdown_context`], which writes `uptime_secs: None` and — via
+/// `skip_serializing_if` — omits the field entirely. Uptime is reported as
+/// unknown rather than wrong, and no other behaviour changes.
+///
+/// This slot is also the wiring check's process sentinel — see [`booted`]. It
+/// is the one member of the roster whose value nobody needs; what Task 12 reads
+/// is whether it is there at all.
+static BOOT_INSTANT: CapabilitySlot<Instant> =
+    CapabilitySlot::new("gateway/boot-instant", MissingSemantics::FailsClosed);
 
 /// Initialize the boot-time marker. Safe to call more than once; only the
 /// first call wins. Call this from `aleph-server::main()` right after argv
 /// parsing so the uptime number is meaningful.
 pub fn mark_boot() {
-    let _ = BOOT_INSTANT.set(Instant::now());
+    let _ = BOOT_INSTANT.install(Instant::now());
+}
+
+/// True iff this process ran `aleph-server start` far enough to reach
+/// [`mark_boot`] (the first statement after argv parsing).
+///
+/// The `core/capability-wiring` check keys its three-state verdict on this: a
+/// cold `aleph-server doctor` process installs nothing, so reporting its empty
+/// roster as a problem — or as a pass — would both be fiction.
+///
+/// ⚠️ Deliberately `BOOT_INSTANT.get().is_some()` and NOT
+/// `matches!(outcome(), Some(Outcome::Installed))`. The two agree today and
+/// would diverge the day someone calls `decline` on this slot — and the honest
+/// answer to "did this process boot" is about the VALUE, not the stamp.
+#[must_use]
+pub fn booted() -> bool {
+    BOOT_INSTANT.get().is_some()
+}
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn boot_instant_slot() -> &'static dyn SlotStatus {
+    &BOOT_INSTANT
 }
 
 /// Structured forensics snapshot. Serialized as JSON for grep-friendly
@@ -217,12 +251,39 @@ mod tests {
         assert!(start.elapsed() < Duration::from_millis(10));
     }
 
+    /// See `session::service::tests::the_accessor_exposes_this_handle_to_the_roster`
+    /// for why this asserts through the accessor rather than the static.
     #[test]
-    fn mark_boot_is_idempotent() {
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = boot_instant_slot();
+        assert_eq!(slot.id(), "gateway/boot-instant");
+        assert!(matches!(slot.missing(), MissingSemantics::FailsClosed));
+    }
+
+    /// `booted()` is how the wiring check tells "this process never ran boot"
+    /// from "boot ran and left holes". Without it a cold `aleph-server doctor`
+    /// would report every slot missing on a perfectly healthy machine.
+    ///
+    /// ⚠️ THIS IS THE ONLY TEST IN THE LIB BINARY THAT MAY TOUCH `BOOT_INSTANT`,
+    /// and that is why `mark_boot_is_idempotent` was folded into it rather than
+    /// left beside it. The brief asked for a second test and told me to grep
+    /// first; the grep says `mark_boot_is_idempotent` already called
+    /// `mark_boot()`. A separate `assert!(!booted())` would therefore have gone
+    /// red only when the other test won the libtest race — a flaky guard, which
+    /// teaches people to re-run rather than to look. Its assertions are kept
+    /// verbatim below, so nothing was traded away for the determinism.
+    #[test]
+    fn booted_is_false_before_mark_boot_and_true_after() {
+        // The negative half is the meaningful assertion and it is only sound
+        // because of the invariant in the doc above: nothing else in this
+        // binary reaches the marker, so no ordering can have set it already.
+        assert!(!booted());
         mark_boot();
-        // First call may or may not have been the first writer; if so a
-        // subsequent set is a no-op. Either way the elapsed value must be
-        // monotonic.
+        assert!(booted());
+
+        // Absorbed from `mark_boot_is_idempotent`: the first call above may or
+        // may not have been the first writer; if not, a subsequent set is a
+        // no-op. Either way the elapsed value must be monotonic.
         let first = BOOT_INSTANT.get().expect("boot recorded").elapsed();
         mark_boot();
         let second = BOOT_INSTANT.get().expect("boot recorded").elapsed();

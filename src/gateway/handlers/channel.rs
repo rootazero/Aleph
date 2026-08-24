@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::debug;
 
-use std::sync::OnceLock;
 use tokio::sync::RwLock;
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::gateway::channel::{ChannelId, ChannelInfo, ChannelStatus, OutboundMessage};
 use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
@@ -137,11 +137,29 @@ pub fn store_and_strip_channel_secrets(
 ///
 /// When `channel.start` RPC recreates a Telegram channel from config,
 /// it needs to re-attach the `ToolCatalog` so slash commands are registered.
-static TELEGRAM_TOOL_REGISTRY: OnceLock<Arc<crate::tool_metadata::ToolCatalog>> = OnceLock::new();
+///
+/// `FailsClosed`: `channel.start` builds the replacement `TelegramChannel` and
+/// simply does not call `set_tool_registry` on it. The channel comes up, the
+/// RPC reports success, and slash commands are gone from that channel until the
+/// daemon restarts. Nothing is granted that should not be — and nothing says
+/// the capability went missing.
+static TELEGRAM_TOOL_REGISTRY: CapabilitySlot<Arc<crate::tool_metadata::ToolCatalog>> =
+    CapabilitySlot::new(
+        "gateway/telegram-tool-registry",
+        MissingSemantics::FailsClosed,
+    );
 
 /// Store `ToolCatalog` for use when recreating Telegram channels.
 pub fn set_telegram_tool_registry(registry: Arc<crate::tool_metadata::ToolCatalog>) {
-    let _ = TELEGRAM_TOOL_REGISTRY.set(registry);
+    let _ = TELEGRAM_TOOL_REGISTRY.install(registry);
+}
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn telegram_tool_registry_slot() -> &'static dyn SlotStatus {
+    &TELEGRAM_TOOL_REGISTRY
 }
 
 /// Get cached `ToolCatalog` for Telegram channel recreation.
@@ -797,6 +815,15 @@ pub async fn handle_delete(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// See `session::service::tests::the_accessor_exposes_this_handle_to_the_roster`
+    /// for why this asserts through the accessor rather than the static.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = telegram_tool_registry_slot();
+        assert_eq!(slot.id(), "gateway/telegram-tool-registry");
+        assert!(matches!(slot.missing(), MissingSemantics::FailsClosed));
+    }
 
     #[test]
     fn test_status_to_string() {

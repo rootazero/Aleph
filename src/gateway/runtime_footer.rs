@@ -19,9 +19,10 @@
 //!   into one line).
 
 use std::path::Path;
-use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
+
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 
 use crate::gateway::event_emitter::ToolSummaryItem;
 
@@ -204,13 +205,35 @@ pub fn build_footer_line(
 /// reply-emitter construction paths that don't otherwise thread the
 /// gateway config (e.g. the inbound-router executor). Defaults to
 /// disabled when never initialized — tests stay zero-touch.
-static GLOBAL_FOOTER_CONFIG: OnceLock<RuntimeFooterConfig> = OnceLock::new();
+///
+/// `IndistinguishableDefault`: [`global_config`] returns
+/// `RuntimeFooterConfig::default()`, whose `enabled` is `false`, so
+/// [`build_footer_block`] returns an empty string on its first line. A reply
+/// with no footer is exactly what an operator who set
+/// `enabled = false` asked for, so the two are the same observation — which is
+/// why "defaults to disabled when never initialized" above is a true sentence
+/// that nonetheless cannot answer "did boot get here?".
+static GLOBAL_FOOTER_CONFIG: CapabilitySlot<RuntimeFooterConfig> = CapabilitySlot::new(
+    "gateway/runtime-footer",
+    MissingSemantics::IndistinguishableDefault {
+        reads_as: "RuntimeFooterConfig::default() -- enabled: false, i.e. no footer on \
+                   any reply, identical to [gateway.runtime_footer] enabled = false",
+    },
+);
 
 /// Install the global footer configuration. Idempotent — only the first
 /// caller wins, subsequent calls are silently ignored. Call this from
 /// `aleph-server::start` once `FullGatewayConfig` is loaded.
 pub fn set_global_config(cfg: RuntimeFooterConfig) {
-    let _ = GLOBAL_FOOTER_CONFIG.set(cfg);
+    let _ = GLOBAL_FOOTER_CONFIG.install(cfg);
+}
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn global_footer_config_slot() -> &'static dyn SlotStatus {
+    &GLOBAL_FOOTER_CONFIG
 }
 
 /// Read the global footer configuration. Returns a disabled config when
@@ -240,6 +263,28 @@ pub fn build_footer_block(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// See `session::service::tests::the_accessor_exposes_this_handle_to_the_roster`
+    /// for why this asserts through the accessor rather than the static.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = global_footer_config_slot();
+        assert_eq!(slot.id(), "gateway/runtime-footer");
+        match slot.missing() {
+            MissingSemantics::IndistinguishableDefault { reads_as } => {
+                assert!(
+                    reads_as.contains("enabled: false"),
+                    "must name what global_config() really returns; got {reads_as:?}"
+                );
+                assert!(
+                    !RuntimeFooterConfig::default().enabled,
+                    "the sentence above is derived from this default -- if it \
+                     ever flips, the diagnostic starts lying"
+                );
+            }
+            other => panic!("expected IndistinguishableDefault, got {other:?}"),
+        }
+    }
 
     fn fields(slice: &[&str]) -> Vec<String> {
         slice.iter().map(|s| (*s).to_string()).collect()
