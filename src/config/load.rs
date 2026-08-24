@@ -2,18 +2,39 @@
 //!
 //! This module handles loading configuration from TOML files.
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::config::Config;
 use crate::error::{AlephError, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use tracing::{debug, error, info, warn};
 
 /// The config file this process was told to use, if `--config` named one.
 /// Write-once so that no code path can move the file out from under a
 /// consumer that already cached it (`ConfigPatcher`, `AgentManager`, the
 /// config watcher all hold their own copy).
-static EFFECTIVE_CONFIG_PATH: OnceLock<PathBuf> = OnceLock::new();
+///
+/// `IndistinguishableDefault`, derived from [`Config::effective_path`], whose
+/// last line is `.unwrap_or_else(Self::default_path)`. An uninstalled handle is
+/// therefore byte-identical to "nobody passed `--config`", and the failure it
+/// hides is the one the setter's own doc describes as already having happened
+/// once: the server running on the operator's file while every other reader
+/// reads `~/.aleph/config.toml`. A doctor that parses "the config file" parses
+/// one nothing is using, and says so with confidence.
+static EFFECTIVE_CONFIG_PATH: CapabilitySlot<PathBuf> = CapabilitySlot::new(
+    "config/effective-path",
+    MissingSemantics::IndistinguishableDefault {
+        reads_as: "the default ~/.aleph config path, even when --config named another",
+    },
+);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn effective_config_path_slot() -> &'static dyn SlotStatus {
+    &EFFECTIVE_CONFIG_PATH
+}
 
 impl Config {
     /// Get the default config path using unified directory
@@ -43,7 +64,17 @@ impl Config {
     /// to consumers that keep their own copy of it, so moving it would only
     /// split the process across two files again.
     pub fn set_effective_path(path: PathBuf) -> std::result::Result<(), PathBuf> {
-        EFFECTIVE_CONFIG_PATH.set(path)
+        // The clone exists to keep this signature: `CapabilitySlot::install`
+        // consumes the value and answers a bool, while the `Err(PathBuf)` here
+        // is the REJECTED path and `main.rs` prints it. Migrating the handle
+        // must be invisible from outside, so the echo is reconstructed rather
+        // than the caller changed. One clone, once, on the argv path.
+        let rejected = path.clone();
+        if EFFECTIVE_CONFIG_PATH.install(path) {
+            Ok(())
+        } else {
+            Err(rejected)
+        }
     }
 
     /// The config file this process reads and writes: the `--config` override
@@ -145,7 +176,7 @@ impl Config {
 
         // Load defaults override BEFORE parsing config.toml
         // because serde calls fn default_*() during deserialization,
-        // and those functions need to read from the OnceLock.
+        // and those functions need to read from the defaults-override slot.
         if let Some(ref dir) = config_dir {
             let defaults_path = dir.join("defaults.toml");
             let defaults = crate::config::defaults_override::load_defaults_override(&defaults_path);
@@ -206,7 +237,7 @@ impl Config {
                 crate::config::presets_override::load_presets_override(&presets_path);
         }
 
-        // Assign defaults override to config (already loaded into OnceLock above)
+        // Assign defaults override to config (already installed above)
         config.defaults_override =
             crate::config::defaults_override::get_defaults_override().clone();
 
@@ -275,7 +306,7 @@ impl Config {
                 "Config file not found, generating default configuration"
             );
             // Load defaults override BEFORE Self::default() so serde default
-            // functions can read from the OnceLock during construction.
+            // functions can read from the defaults-override slot during construction.
             if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
                 let defaults_path = config_dir.join("defaults.toml");
                 let defaults =

@@ -2,15 +2,15 @@
 //!
 //! These types represent user overrides for built-in default values used during
 //! serde deserialization. Because serde calls `fn default_*()` functions while
-//! parsing config.toml, this file must be loaded and the `OnceLock` initialized
-//! BEFORE config.toml is parsed.
+//! parsing config.toml, this file must be loaded and the slot below
+//! initialized BEFORE config.toml is parsed.
 //!
 //! All fields are Option<T> so users only need to specify the defaults they
 //! want to change. Missing fields fall back to the hard-coded defaults.
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use serde::Deserialize;
 use std::path::Path;
-use std::sync::OnceLock;
 use tracing::warn;
 
 // =============================================================================
@@ -59,10 +59,51 @@ pub struct DefaultsOverride {
 }
 
 // =============================================================================
-// OnceLock global singleton
+// Process-global singleton
 // =============================================================================
 
-static DEFAULTS_OVERRIDE: OnceLock<DefaultsOverride> = OnceLock::new();
+/// `IndistinguishableDefault`, derived from the one reader
+/// ([`get_defaults_override`]): an uninstalled handle answers the empty
+/// override, which is byte-for-byte what a machine with no
+/// `~/.aleph/defaults.toml` answers. Every `fn default_*()` serde calls while
+/// parsing `config.toml` then returns its compiled value, and the operator's
+/// `defaults.toml` is silently inert. The failure has a narrow window and no
+/// symptom: this handle must be installed BEFORE config parsing, so "installed
+/// too late" and "never installed" read the same to every consumer.
+static DEFAULTS_OVERRIDE: CapabilitySlot<DefaultsOverride> = CapabilitySlot::new(
+    "config/defaults-override",
+    MissingSemantics::IndistinguishableDefault {
+        reads_as: "an empty override -- every serde `default_*()` returns its \
+                   compiled value, as if ~/.aleph/defaults.toml did not exist",
+    },
+);
+
+/// The fallback [`get_defaults_override`] hands back when nothing was
+/// installed — deliberately OUTSIDE the slot.
+///
+/// Latching it through [`CapabilitySlot::install`] would stamp `Installed` for
+/// a boot that never happened, which is the forged stamp the whole round exists
+/// to make impossible. `get_or_init` on the slot is not available for the same
+/// reason, and that absence is the type doing its job rather than a gap in it.
+///
+/// A `const`-constructed plain `static` rather than a second `OnceLock`: it adds
+/// no census candidate (the container-type rule selects `OnceLock`/`OnceCell`,
+/// not arbitrary data), and the exhaustive struct literal means adding a field
+/// to `DefaultsOverride` is a compile error here rather than a silently
+/// widened default.
+static EMPTY_DEFAULTS_OVERRIDE: DefaultsOverride = DefaultsOverride {
+    memory: None,
+    provider: None,
+    generation: None,
+};
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn defaults_override_slot() -> &'static dyn SlotStatus {
+    &DEFAULTS_OVERRIDE
+}
 
 /// Initialize the global defaults override. Called once during startup.
 ///
@@ -71,7 +112,7 @@ static DEFAULTS_OVERRIDE: OnceLock<DefaultsOverride> = OnceLock::new();
 /// (e.g. a test running after a previous one) must restart the process or
 /// otherwise reset the global state.
 pub fn init_defaults_override(overrides: DefaultsOverride) {
-    if DEFAULTS_OVERRIDE.set(overrides).is_err() {
+    if !DEFAULTS_OVERRIDE.install(overrides) {
         warn!(
             "DEFAULTS_OVERRIDE already initialized; ignoring re-init. \
              defaults.toml from this load is silently inactive — restart the \
@@ -84,7 +125,7 @@ pub fn init_defaults_override(overrides: DefaultsOverride) {
 ///
 /// Returns a default (empty) override if not yet initialized.
 pub fn get_defaults_override() -> &'static DefaultsOverride {
-    DEFAULTS_OVERRIDE.get_or_init(DefaultsOverride::default)
+    DEFAULTS_OVERRIDE.get().unwrap_or(&EMPTY_DEFAULTS_OVERRIDE)
 }
 
 // =============================================================================
