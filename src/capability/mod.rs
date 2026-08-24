@@ -132,6 +132,76 @@ impl<T: Send + Sync + 'static> SlotStatus for CapabilitySlot<T> {
     }
 }
 
+/// Install-once, then live-swap. Exactly one member today:
+/// `spend::GLOBAL_POLICY` (`OnceLock<ArcSwap<SpendPolicy>>`, hot-applied by
+/// the config live-reload path).
+///
+/// `update` returning `false` when nothing was installed is an EXISTING
+/// contract, not a new one: `spend::update_policy` feeds the live-apply
+/// verdict's honest downgrade to `Restart`. It is preserved exactly.
+///
+/// ⚠️ If migration finds this type has no second member and `spend` could use
+/// `CapabilitySlot<ArcSwap<T>>` directly, delete it (R10 YAGNI withdrawal) —
+/// it exists to carry an existing handle, not to reserve a shape.
+pub struct MutableCapabilitySlot<T: 'static> {
+    id: &'static str,
+    missing: MissingSemantics,
+    value: OnceLock<arc_swap::ArcSwap<T>>,
+    outcome: OnceLock<Outcome>,
+}
+
+impl<T: 'static> MutableCapabilitySlot<T> {
+    #[must_use]
+    pub const fn new(id: &'static str, missing: MissingSemantics) -> Self {
+        Self { id, missing, value: OnceLock::new(), outcome: OnceLock::new() }
+    }
+
+    pub fn install(&'static self, v: T) -> bool {
+        let fresh = self.value.set(arc_swap::ArcSwap::from_pointee(v)).is_ok();
+        if fresh {
+            let _ = self.outcome.set(Outcome::Installed);
+        }
+        fresh
+    }
+
+    /// Hot-apply a new value. `false` means no handle has been installed yet.
+    pub fn update(&'static self, v: T) -> bool {
+        match self.value.get() {
+            Some(cell) => {
+                cell.store(std::sync::Arc::new(v));
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn decline(&'static self, because: &'static str) {
+        let _ = self.outcome.set(Outcome::Declined { because });
+    }
+
+    #[inline]
+    pub fn load(&self) -> Option<arc_swap::Guard<std::sync::Arc<T>>> {
+        self.value.get().map(arc_swap::ArcSwap::load)
+    }
+
+    #[must_use]
+    pub fn outcome(&self) -> Option<&Outcome> {
+        self.outcome.get()
+    }
+}
+
+impl<T: Send + Sync + 'static> SlotStatus for MutableCapabilitySlot<T> {
+    fn id(&self) -> &'static str {
+        self.id
+    }
+    fn missing(&self) -> MissingSemantics {
+        self.missing
+    }
+    fn outcome(&self) -> Option<&Outcome> {
+        self.outcome.get()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +256,27 @@ mod tests {
         let erased: &'static dyn SlotStatus = &UNSET;
         assert_eq!(erased.id(), "test/unset");
         assert!(matches!(erased.missing(), MissingSemantics::ConsumerDecides));
+    }
+
+    #[test]
+    fn update_before_install_returns_false_and_changes_nothing() {
+        static M: MutableCapabilitySlot<u32> =
+            MutableCapabilitySlot::new("test/mut-unset", MissingSemantics::FailsOpen);
+        // This is spend::update_policy's EXISTING contract: the live-apply
+        // verdict downgrades to Restart when no handle has been installed yet.
+        assert!(!M.update(5), "update on an uninstalled slot must report false");
+        assert!(M.load().is_none());
+        assert!(M.outcome().is_none());
+    }
+
+    #[test]
+    fn install_then_update_swaps_the_value_and_keeps_the_stamp() {
+        static M: MutableCapabilitySlot<u32> =
+            MutableCapabilitySlot::new("test/mut-live", MissingSemantics::FailsOpen);
+        assert!(M.install(1));
+        assert_eq!(**M.load().expect("installed"), 1);
+        assert!(M.update(2));
+        assert_eq!(**M.load().expect("installed"), 2);
+        assert!(matches!(M.outcome(), Some(Outcome::Installed)));
     }
 }
