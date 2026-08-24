@@ -74,10 +74,15 @@
 
 mod config;
 mod deliver;
+/// Crash durability sidecar (journal + tombstones + boot survivors).
+/// Doc: the module header carries the four tombstone arms and the
+/// duplicate-over-loss contract.
+pub mod durable;
 mod spawn;
 
 pub use config::BusyQueueConfig;
-pub use deliver::{deliver_with_ticket, DeliveryOutcome};
+pub use deliver::{deliver_with_ticket, run_queued_reporter, DeliveryOutcome};
+pub use durable::{QueuedRunPayload, SettleReason};
 pub use spawn::spawn_queued_run;
 
 use std::collections::{HashMap, VecDeque};
@@ -382,6 +387,12 @@ pub fn mark_admitted(session_key: &str, run_id: &str) {
         }
         wake
     };
+    // Admission is one of the journal's four tombstone arms: from here the
+    // message is a *run*, owned by the run's own lifecycle (and the resume
+    // coordinator's crash recovery) — the queue's record must close NOW, or
+    // a crash mid-run would reinject a message the coordinator is also
+    // re-triggering. See `durable`'s module doc.
+    durable::record_settled(run_id, durable::SettleReason::Admitted);
     // Promote whoever was behind the admitted run so it can attempt right away
     // instead of waiting out the fallback tick.
     wake.notify_waiters();
@@ -440,22 +451,28 @@ pub fn waiting_since(session_key: &str, run_id: &str) -> Option<Instant> {
 /// [`mark_admitted`], so the count reported back to the user ("N queued
 /// messages dropped") no longer includes the run the stop is cancelling.
 pub fn purge(session_key: &str) -> usize {
-    let (count, wake) = {
+    let (count, wake, mut abandoned) = {
         let mut map = lock();
         match map.get_mut(session_key) {
             Some(lane) => {
                 let mut count = 0;
+                let mut abandoned = Vec::new();
                 for ticket in &mut lane.tickets {
                     if !ticket.cancelled {
                         ticket.cancelled = true;
                         count += 1;
+                        abandoned.push(ticket.run_id.clone());
                     }
                 }
-                (count, Some(Arc::clone(&lane.wake)))
+                (count, Some(Arc::clone(&lane.wake)), abandoned)
             }
-            None => (0, None),
+            None => (0, None, Vec::new()),
         }
     };
+    // Tombstone arm: an abandoned message must not come back at boot.
+    for run_id in abandoned.drain(..) {
+        durable::record_settled(&run_id, durable::SettleReason::Purged);
+    }
     if let Some(wake) = wake {
         wake.notify_waiters();
     }
@@ -484,6 +501,11 @@ pub fn cancel_queued_run(run_id: &str) -> bool {
         });
         (hit.is_some(), hit)
     };
+    // Tombstone arm: same reason as `purge` — an explicit stop must survive
+    // a restart instead of re-delivering the message the user cancelled.
+    if found {
+        durable::record_settled(run_id, durable::SettleReason::Cancelled);
+    }
     if let Some(wake) = wake {
         wake.notify_waiters();
     }

@@ -19,7 +19,6 @@ use tokio::sync::Semaphore;
 
 use crate::config::types::ResumeConfig;
 use crate::gateway::agent_instance::{AgentInstance, AgentRegistry};
-use crate::gateway::event_emitter::CollectingEventEmitter;
 use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::execution_engine::{RunRequest, UNATTENDED_KEY};
 use crate::session::events::{now_ms, RunOutcome, SessionEvent, SessionEventRecord};
@@ -315,8 +314,9 @@ pub struct ResumeCoordinator {
     /// workspace but not the scope writes the room's memory to the org
     /// partition.
     session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
-    /// Where a resumed run's live frames go. `None` in tests and non-gateway
-    /// contexts (behaviour-identical to the old collect-and-drop path).
+    /// Where a resumed run's live frames go. Required — a bus is one
+    /// `GatewayEventBus::new()` away even in tests, so there is no `Option`
+    /// escape hatch that could re-introduce the collect-and-drop shape.
     ///
     /// Without it a recovered run is *visibly running and provably
     /// unstoppable*: `SessionRunRegistry::try_claim` broadcasts
@@ -324,7 +324,7 @@ pub struct ResumeCoordinator {
     /// `run_id` minted below never reaches a client — and that run_id is the
     /// only key `chat.abort` and `agent.cancel` accept. See
     /// [`ResumeCoordinator::retrigger`].
-    event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
+    event_bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
     /// Bounds the boot resume burst. `max_concurrent` permits.
     semaphore: Arc<Semaphore>,
     /// Session keys with a resume in flight, so one session is never resumed
@@ -363,7 +363,7 @@ impl ResumeCoordinator {
         execution_adapter: Arc<dyn ExecutionAdapter>,
         agent_registry: Arc<AgentRegistry>,
         session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
-        event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
+        event_bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
     ) -> Self {
         let permits = config.max_concurrent.max(1);
         Self {
@@ -815,10 +815,9 @@ impl ResumeCoordinator {
             model_override: None,
         };
 
-        // Broadcast the recovered run live (Panel / CLI / `aleph watch`) when a
-        // bus is wired; collect-and-drop otherwise so tests and non-gateway
-        // contexts stay behaviour-identical. Same two arms as
-        // `execute::spawn_continuation_run` and `handlers::agent`.
+        // Broadcast the recovered run live (Panel / CLI / `aleph watch`) on
+        // the bus. Same two arms as `execute::spawn_continuation_run` and
+        // `handlers::agent`.
         //
         // This is not cosmetic. `SessionRunRegistry::try_claim` broadcasts
         // `RunningSetChanged` unconditionally, so the sidebar shows the session
@@ -828,14 +827,11 @@ impl ResumeCoordinator {
         // the only carrier of the `run_id` that `chat.abort` / `agent.cancel`
         // require. A crash-recovered long run was therefore visibly running and
         // unstoppable from every UI until it finished or the daemon was killed
-        // again.
-        let base: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
-            match &self.event_bus {
-                Some(bus) => Arc::new(crate::gateway::event_emitter::GatewayEventEmitter::new(
-                    Arc::clone(bus),
-                )),
-                None => Arc::new(CollectingEventEmitter::new()),
-            };
+        // again. (That is also why the bus is a mandatory constructor
+        // parameter: the collect-and-drop shape must not be constructible.)
+        let base: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> = Arc::new(
+            crate::gateway::event_emitter::GatewayEventEmitter::new(Arc::clone(&self.event_bus)),
+        );
         // Fan the recovered run's final reply out to the session's bound
         // origin channel — the human who asked. Without this the resumed run
         // completed into a collect-and-drop emitter: the crash-recovered

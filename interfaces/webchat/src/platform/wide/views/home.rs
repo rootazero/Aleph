@@ -208,9 +208,15 @@ pub fn Home() -> impl IntoView {
             // Server-side topic subscription. The bus already filters
             // by pattern, so `**` is the simplest single round-trip;
             // streaming chatter is dropped by `classify_topic`.
+            //
+            // Ephemeral on purpose: this effect re-runs on every reconnect
+            // and re-subscribes, so the pattern must NOT enter the reconnect
+            // ledger — a ledgered `"**"` outlives this view and turns every
+            // later reconnect of this socket into a receive-everything
+            // stream. Unmounted below via `on_cleanup`.
             let state_for_topic = state;
             leptos::task::spawn_local(async move {
-                if let Err(e) = state_for_topic.subscribe_topic("**").await {
+                if let Err(e) = state_for_topic.subscribe_topic_ephemeral("**").await {
                     web_sys::console::warn_1(
                         &format!("Activity feed: subscribe failed: {e}").into(),
                     );
@@ -224,6 +230,19 @@ pub fn Home() -> impl IntoView {
             }
             activity_buffer.update(std::collections::VecDeque::clear);
         }
+    });
+
+    // Unmounting Home must also drop the server-side `"**"` subscription —
+    // otherwise this socket keeps receiving (and the bus keeps sending) every
+    // event for the rest of the connection.
+    leptos::prelude::on_cleanup(move || {
+        if let Some(id) = activity_sub_id.get_value() {
+            state.unsubscribe_events(id);
+            activity_sub_id.set_value(None);
+        }
+        leptos::task::spawn_local(async move {
+            let _ = state.unsubscribe_topic("**").await;
+        });
     });
 
     // Fetch stats when connected

@@ -288,9 +288,9 @@ pub fn side_key_for(main: &SessionKey) -> SessionKey {
 /// # Where it is deliberately NOT applied, and why
 ///
 /// [`crate::gateway::event_emitter::origin_fanout::OriginFanoutEmitter`] also
-/// delivers a run's final reply to a channel, and it has four construction
-/// sites. **None of them can carry a side question**, each for its own reason,
-/// so none of them marks:
+/// delivers a run's final reply to a channel, and it has five construction
+/// sites. The first four **cannot carry a side question**, each for its own
+/// reason, so none of them marks:
 ///
 /// * `announce_delivery.rs` — both halves are machine-authored. `input` is a
 ///   `[system] …` literal (`subagent_announce.rs`, `process_announce.rs`) and
@@ -309,6 +309,13 @@ pub fn side_key_for(main: &SessionKey) -> SessionKey {
 ///   `SimpleExecutionEngine` has no btw handling whatsoever — no stamp, no
 ///   side-session redirect, no read-only ceiling — so on that adapter a
 ///   `/btw …` is not a side question anywhere in the system.
+///
+/// The fifth site, `busy_queue/durable.rs`'s boot reinjection, CAN receive a
+/// journaled `/btw` record, and answers by rule instead of by marker: a
+/// survivor whose lane key differs from its addressed key (i.e. it executes
+/// on a derived side session) skips the fan-out entirely and rides the bus
+/// alone — a re-delivered side answer must not land on the origin channel
+/// unmarked.
 ///
 /// A fifth fan-out site owes the same question before it inherits that answer.
 #[must_use]

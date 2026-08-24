@@ -237,7 +237,7 @@ async fn a_resumed_room_run_reaches_the_engine_with_the_rooms_scope() {
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions,
-        None,
+        test_bus(),
     );
     assert_eq!(coordinator.resume_interrupted_runs().await.resumed, 1);
 
@@ -271,7 +271,7 @@ async fn interrupted_run_is_repaired_and_retriggered() {
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
-        None,
+        test_bus(),
     );
     let report = coordinator.resume_interrupted_runs().await;
 
@@ -333,7 +333,7 @@ async fn on_demand_resume_repairs_and_retriggers_the_named_session() {
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
-        None,
+        test_bus(),
     );
     let report = coordinator
         .resume_session(&target)
@@ -396,7 +396,7 @@ async fn concurrent_resumes_of_one_session_repair_the_boundary_once() {
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
-        None,
+        test_bus(),
     ));
 
     let (a, b) = tokio::join!(
@@ -463,7 +463,7 @@ async fn on_demand_resume_of_a_finished_session_is_a_no_op() {
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
-        None,
+        test_bus(),
     );
 
     let report = coordinator.resume_session(&sid).await.expect("resume ok");
@@ -491,7 +491,7 @@ async fn on_demand_resume_of_an_unknown_session_reports_no_runs() {
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
-        None,
+        test_bus(),
     );
 
     let report = coordinator.resume_session(&sid).await.expect("resume ok");
@@ -520,7 +520,7 @@ async fn on_demand_resume_works_when_the_boot_scan_is_disabled() {
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
-        None,
+        test_bus(),
     );
 
     // The scan stays off...
@@ -558,7 +558,7 @@ async fn disabled_config_never_triggers_execute() {
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
-        None,
+        test_bus(),
     );
     let report = coordinator.resume_interrupted_runs().await;
 
@@ -627,7 +627,7 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
-        None,
+        test_bus(),
     );
     let report = coordinator.resume_interrupted_runs().await;
 
@@ -714,7 +714,7 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
         Arc::new(RecordingAdapter::new()) as Arc<dyn ExecutionAdapter>,
         registry_with_agent(passive_sid.agent_id()).await,
         sessions(),
-        None,
+        test_bus(),
     );
     coordinator2.resume_interrupted_runs().await;
     assert_eq!(
@@ -766,7 +766,7 @@ async fn too_old_candidate_abandons_and_blocks_the_goal() {
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
-        None,
+        test_bus(),
     );
     let report = coordinator.resume_interrupted_runs().await;
 
@@ -847,7 +847,7 @@ async fn resumed_channel_run_reinherits_the_channels_guest_clamp_and_deny_layer(
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
-        None,
+        test_bus(),
     );
     let report = coordinator.resume_interrupted_runs().await;
     assert_eq!(report.resumed, 1);
@@ -901,7 +901,7 @@ async fn resumed_run_with_no_routable_origin_is_marked_unattended() {
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
-        None,
+        test_bus(),
     );
     assert_eq!(coordinator.resume_interrupted_runs().await.resumed, 1);
 
@@ -952,14 +952,22 @@ impl ExecutionAdapter for EmittingAdapter {
     }
 }
 
+/// The event bus is a mandatory constructor input (no `Option` escape hatch
+/// that could re-introduce the collect-and-drop shape); tests that don't care
+/// about frames use this throwaway bus with no subscribers.
+fn test_bus() -> Arc<alephcore::gateway::event_bus::GatewayEventBus> {
+    Arc::new(alephcore::gateway::event_bus::GatewayEventBus::new())
+}
+
 /// A crash-recovered run must be visible to, and stoppable from, the UIs.
 ///
 /// Asserted at the CONSUMER end (a bus subscriber), not by inspecting which
 /// emitter was constructed. `RunAccepted` is load-bearing twice over: it seeds
 /// `event_visibility::EventVisibilityIndex`, which fail-closed-drops every
 /// later frame of a run it never saw accepted, and it is the only carrier of
-/// the `run_id` that `chat.abort` / `agent.cancel` require. With the resumed
-/// run wired to a bare `CollectingEventEmitter`, the sidebar lit up (the run
+/// the `run_id` that `chat.abort` / `agent.cancel` require. The
+/// pre-mandatory-bus shape (a bare `CollectingEventEmitter`) lit the sidebar
+/// up (the run
 /// registry broadcasts `RunningSetChanged` regardless) while the transcript
 /// stayed empty and no UI could stop the run.
 #[tokio::test]
@@ -977,7 +985,7 @@ async fn a_resumed_run_reaches_the_gateway_bus() {
         Arc::new(EmittingAdapter) as Arc<dyn ExecutionAdapter>,
         registry_with_agent(sid.agent_id()).await,
         sessions(),
-        Some(bus),
+        bus,
     );
     assert_eq!(coordinator.resume_interrupted_runs().await.resumed, 1);
 

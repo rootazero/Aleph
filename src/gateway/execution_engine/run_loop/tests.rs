@@ -357,6 +357,13 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         ingress_why: "rescue of an already-admitted request. A real steering message is a different path — it reached `build_run_request` on its way in and stamped there",
     },
     RunProducer {
+        file: "src/gateway/busy_queue/durable.rs",
+        attribution: "inherits",
+        attribution_why: "boot reinjection rebuilds the request from the journaled payload, whose metadata round-trips the original arrival's scope/caller stamps verbatim",
+        ingress: Ingress::Machine,
+        ingress_why: "boot-time re-delivery of a message the human sent before the crash — the keystroke stamped at the original arrival (mirrors resume_coordinator: re-stamping here would let a crash-restart loop hold the sensor open with nobody present)",
+    },
+    RunProducer {
         file: "src/teams/dispatcher/runner.rs",
         attribution: "stamps",
         attribution_why: "from the ambient scope/turn-context when a live caller exists (team_delegate reaches task_run_metadata before the spawn); the autonomous dispatcher reads None and stamps nothing — MU4-03 adjudicated 2026-08-18",
