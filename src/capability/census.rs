@@ -115,9 +115,10 @@
 //! failure semantics in full: an uninstalled read yields `None`, which reads as
 //! a legal "not configured" and no caller can tell.
 //!
-//! **At least nine confirmed instances — and read the counting rule below
-//! before you use that number.** Five share one spelling; four do not, and the
-//! class is defined by the *install*, never by the syntax:
+//! **At least SIXTEEN confirmed instances — and the number is the least
+//! reliable thing in this section.** Read the counting rule below before using
+//! it. Five members share one spelling; eleven do not, and the class is defined
+//! by the *install*, never by the syntax:
 //!
 //! | static | shape | an uninstalled read means |
 //! |---|---|---|
@@ -126,53 +127,84 @@
 //! | `gateway/middleware/latency.rs::GLOBAL_LATENCY` | `OnceLock<RwLock<Option<Arc<…>>>>` | `/metrics` renders no latency family |
 //! | `gateway/event_emitter/origin_fanout.rs::CHANNEL_REGISTRY` | `OnceLock<RwLock<Option<Arc<…>>>>` | origin fan-out silently skipped |
 //! | `gateway/event_emitter/team_fanout.rs::TEAM_EVENT_BUS` | `OnceLock<RwLock<Option<Arc<…>>>>` | team fan-out silently skipped |
-//! | `security/audit.rs::GLOBAL_AUDIT` | `RwLock<Option<SecurityAuditLog>>` — **no `OnceLock`** | no security audit trail |
+//! | `security/audit.rs::GLOBAL_AUDIT` | `RwLock<Option<…>>` — **no `OnceLock`** | no security audit trail |
 //! | `agents/background_persistence.rs::STORE_DIR` | `LazyLock<Mutex<Option<PathBuf>>>` | "persistence disabled … every entry point is a no-op" |
-//! | `builtin_tools/process_journal.rs::STORE_DIR` | `LazyLock<Mutex<Option<PathBuf>>>` | same sentence, verbatim |
+//! | `builtin_tools/process_journal.rs::STORE_DIR` | `LazyLock<Mutex<Option<PathBuf>>>` | the same sentence, verbatim |
 //! | `builtin_tools/scratchpad_registry.rs::STORE_PATH` | `Lazy<Mutex<Option<PathBuf>>>` | "keeps the registry in-memory-only" |
+//! | `builtin_tools/process_journal.rs::RESERVED_THROUGH` | `LazyLock<Mutex<u64>>` | "`0` = nothing reserved (also the value while persistence is off)" |
+//! | `exec/masker.rs::OPERATOR_PATTERNS` | `LazyLock<RwLock<Arc<Vec<…>>>>` | zero mask patterns — redaction degrades to none |
+//! | `utils/paths.rs::PLUGIN_SKILL_DIRS` | `RwLock<Vec<PathBuf>>` — **no `OnceLock`** | "no plugin skills" = `load_all` never ran |
+//! | `agents/registry.rs::PLUGIN_SUBAGENTS` | `OnceLock<RwLock<Arc<[AgentDef]>>>` | "no plugin sub-agents" = extensions never loaded |
+//! | `projects/roster.rs::ROSTER` | `OnceLock<RwLock<RosterSnapshot>>` | `is_member` → `false` for everyone (its own doc says so) |
+//! | `scope/directory.rs::NAMES` | `OnceLock<RwLock<HashMap<…>>>` | every user renders as a bare id; `hydrate` is "called once at boot" |
+//! | `gateway/interfaces/plugin.rs::PLUGINS` | `LazyLock<RwLock<HashMap<…>>>` | `get_factory` → `None` = "unknown channel type"; each channel registers "exactly once at startup" |
 //!
-//! The last three each state the round-7 ambiguity **in their own doc comment**
-//! and are boot-installed by an `init_*` through a lock guard. They are *more*
-//! invisible than the first six: `LazyLock` / `Lazy` are not in `CONTAINERS`,
-//! so unlike the five `OnceLock` ones they are not even in the population of
-//! candidates — the carve-out this section already makes for `GLOBAL_AUDIT`.
+//! **Already answers, deliberately not counted:** `browser/manager.rs::LIVE_MANAGER`
+//! (`Mutex<Option<Weak<…>>>`) is in the class by install, but `apply_policy_live`
+//! returns a `bool` and its doc forbids reporting the change as live — so it
+//! *can* be asked whether boot reached it. It is the one member of this shape
+//! that already has the property this round adds. Listed so the next sweep does
+//! not re-discover it as a defect.
 //!
-//! ⚠️ COUNT THIS YOURSELF, **AND COUNT BY THE CLASS — NOT BY THE SPELLING.**
-//! The class is *a handle whose contents are installed at boot through interior
-//! mutability*; `OnceLock<Lock<Option<T>>>` is the shape five members happen to
-//! share, and grepping for it is a proxy that under-counts by construction. The
-//! previous revision of this section said "count from the spelling" and was
-//! itself the fourth undercount in a row: one instance, then four, then six,
-//! now nine — **three of those four revisions were written by someone who had
-//! just been told the previous figure was too low.** So assume nine is too low
-//! as well. It is a floor, not a count.
+//! **Boundary cases, examined and left out** (they accumulate at runtime, so
+//! "empty" is a true answer as well as an ambiguous one):
+//! `gateway/handlers/markdown_skills.rs::SKILL_PATHS`,
+//! `agents/background_persistence.rs::INDEX`,
+//! `builtin_tools/process_journal.rs::{INDEX, UNDELIVERED}`. Named rather than
+//! silently dropped: each is one argument away from being a member, and the
+//! next person to count deserves to inherit the argument instead of re-deriving
+//! it. They are the reason "at least".
 //!
-//! Two reasons to believe that specifically. First, nothing here asserts nine:
-//! the class is *below this rule's resolution* by construction, so no guard can
-//! see a tenth arrive. Second, even the `Option` in the shapes above is a
-//! proxy for "absent" — `process_journal.rs::RESERVED_THROUGH`
-//! (`LazyLock<Mutex<u64>>`) says *"`0` = nothing reserved (also the value while
-//! persistence is off)"*, the identical ambiguity carried by a sentinel integer
-//! instead. Any scan keyed on `Option` misses every member that spells "absent"
-//! some other way, and this table was built by such a scan.
+//! # How to count this class (the number will be wrong again)
+//!
+//! ⚠️ **RE-DERIVE FROM THE DEFINITION. DO NOT TRUST THE FIGURE ABOVE.** The
+//! class is *a handle whose contents are installed after boot through interior
+//! mutability, whose uninstalled read is a legal-looking value*. It has been
+//! counted six times and revised upward five: **1 → 4 → 6 → 9 → 14 → 16.** The
+//! previous revision wrote "assume nine is too low as well" into this file and
+//! was then found low by five. **A warning is not a counting rule**, which is
+//! why what follows is a method rather than another warning.
+//!
+//! 1. **Grep the rationale sentence, not the type.** Authors who choose this
+//!    pattern explain themselves in near-identical words: *"installed once at
+//!    boot"*, *"a process-global publish … rather than threading it through
+//!    every boot seam"*, *"published after every extension load"*, *"called
+//!    once during subsystem boot"*. Three members were found this way and by no
+//!    type-shaped grep. The sentence is a better fingerprint than the shape,
+//!    because it is what the author writes when they make this choice.
+//! 2. **Then enumerate lock-bearing statics** (`Mutex` / `RwLock` at any
+//!    nesting, under `OnceLock` / `LazyLock` / `Lazy` / bare) and ask of each:
+//!    who writes through the guard, and when? Boot/subsystem-publish ⇒ member.
+//!    Accumulates during normal work ⇒ not.
+//! 3. **Do not key on `Option`.** "Absent" has been spelled at least five ways
+//!    here: `None`, an empty `Vec`/slice, an empty `HashMap`, a sentinel `0`,
+//!    and a `Default::default()` snapshot. Every table above was built by a
+//!    scan keyed on one of those spellings, which is precisely how it kept
+//!    coming out low.
+//!
+//! Nothing asserts sixteen, and nothing can: the class is *below this rule's
+//! resolution* by construction, so no guard sees the seventeenth arrive. That
+//! is the reason this is prose with a method attached rather than a test.
 //!
 //! `STATE_REGISTRY` shows how little hiding this takes: `origin_fanout.rs` names
 //! it in the doc comment on its own row above ("Mirrors the
 //! `middleware::request_state` global-registry pattern"), and it still sat
 //! outside the count for two revisions.
 //!
-//! `GLOBAL_AUDIT` is why this section is no longer titled after the
-//! `OnceLock<Lock<Option<T>>>` spelling. It is not a container static, so it is
-//! not even a *candidate* here — no widening of either install form could ever
-//! reach it. The class is **interior-mutable installs**: two gateway fan-out
-//! paths, two gateway middleware handles, the audit trail, three persistence
-//! roots, and the `[moa]` config — none of which can currently be asked whether
-//! boot reached them.
+//! `GLOBAL_AUDIT` and `PLUGIN_SKILL_DIRS` are why this section is no longer
+//! titled after the `OnceLock<Lock<Option<T>>>` spelling. Neither is a container
+//! static, so neither is even a *candidate* here — no widening of either install
+//! form could reach them. The class is **interior-mutable installs**: two
+//! gateway fan-out paths, two gateway middleware handles, the channel-factory
+//! table, the audit trail, three persistence roots, the id floor, the operator
+//! mask patterns, the plugin skill dirs and sub-agents, the project roster, the
+//! user directory, and the `[moa]` config — none of which can currently be
+//! asked whether boot reached them.
 //!
 //! `the_interior_mutable_install_class_is_below_this_rules_resolution` pins
-//! `MOA_CONFIG`'s shape. All nine are excluded here, and all nine were excluded
-//! from the specification's roster too — this class has been missing all along,
-//! so nothing regressed; it was never seen.
+//! `MOA_CONFIG`'s shape. All sixteen are excluded here, and all sixteen were
+//! excluded from the specification's roster too — this class has been missing
+//! all along, so nothing regressed; it was never seen.
 //!
 //! Closing it needs a "who writes through the guard" predicate — reachability
 //! from a `write()`/`lock()` guard binding to the static — not a method-name
@@ -663,18 +695,14 @@ fn take_census() -> Census {
             // A literal here was invisible while zero `MutableCapabilitySlot`
             // statics existed and became false the moment the first one landed
             // — in a column this file's own doc calls a cross-task interface.
-            let Some(declared) = after.trim().split('<').next() else {
-                continue;
-            };
+            // `split_once`, not `split(..).next()`: the latter can never
+            // return `None`, so its `else { continue }` arm was unreachable
+            // code wearing the shape of a fallible parse.
+            let declared = after.split_once('<').map_or(after, |(head, _)| head).trim();
             c.slots.push(HandleSite {
                 file: rel.clone(),
                 name: name.trim().to_string(),
-                container: declared
-                    .trim()
-                    .rsplit("::")
-                    .next()
-                    .unwrap_or(declared)
-                    .to_string(),
+                container: declared.rsplit("::").next().unwrap_or(declared).to_string(),
                 is_slot: true,
             });
         }
@@ -1180,19 +1208,93 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     }
 
     /// If `text[..at]` (everything left of a `SlotStatus` token) ends with
-    /// `-> &'static dyn [some::path::]`, the offset of that `->`.
+    /// `&'static dyn [some::path::]`, everything left of that `&`.
+    ///
+    /// The shared half of both recognisers below: one asks what sits to the
+    /// left of the reference (`->` = an accessor, `<` / `[` / `,` = a
+    /// collection), the other does not care.
     ///
     /// Token-wise rather than substring-wise so it does not matter where
     /// rustfmt breaks the signature — the same lesson `method_call_open_paren`
     /// carries above: a matcher that only works on one line makes its verdict a
     /// function of line length.
-    fn slot_status_return_at(text: &str, at: usize) -> Option<usize> {
+    fn slot_status_ref_at(text: &str, at: usize) -> Option<&str> {
         let mut head = text[..at]
             .trim_end_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == ':');
-        for token in ["dyn", "'static", "&", "->"] {
+        for token in ["dyn", "'static", "&"] {
             head = head.trim_end().strip_suffix(token)?;
         }
+        Some(head)
+    }
+
+    /// The offset of the `->` in `-> &'static dyn [path::]SlotStatus`.
+    fn slot_status_return_at(text: &str, at: usize) -> Option<usize> {
+        let head = slot_status_ref_at(text, at)?
+            .trim_end()
+            .strip_suffix("->")?;
         Some(head.len())
+    }
+
+    /// Every ROSTER declaration in `text` — an item whose type puts
+    /// `&'static dyn SlotStatus` in a **collection** position.
+    ///
+    /// This answers "does the roster exist yet?" without naming it, which is
+    /// the whole point: `ALL_SLOTS` appears in no brief and nowhere in `src/`,
+    /// so a guard keyed on that identifier would stay green forever if Task 11
+    /// picked any other name — and it could not be broken today, which by this
+    /// repo's rule means it would not yet be a guard. A roster has to put these
+    /// references in a `Vec` / slice / array to be a roster at all, and THAT is
+    /// checkable now (`the_roster_recogniser_knows_a_roster_from_an_accessor`).
+    ///
+    /// Two boundaries, both deliberate and both toward under-seeing:
+    ///
+    /// - **Item position only.** The enclosing fragment must be a `static`
+    ///   declaration or carry a `->`. A `let` binding is NOT a roster — and
+    ///   that exclusion is load-bearing rather than tidy:
+    ///   `spend::tests::the_slot_accessors_expose_both_handles_to_the_roster`
+    ///   contains `let slots: [&'static dyn SlotStatus; 2]`, and
+    ///   `production_prefix` strips nothing from a test-only *file* (the
+    ///   `#[cfg(test)]` lives on `mod tests;` in the PARENT). Without this
+    ///   check that local would be read as a roster and the guard below would
+    ///   fire on day one.
+    /// - A roster assembled into a local and never named at item level is
+    ///   missed. Task 11's roster must be reachable from other modules, so it
+    ///   will be a `static` or a `fn`; the miss is theoretical and silent, so
+    ///   it is recorded here rather than assumed away.
+    fn roster_collections(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for at in word_occurrences(text, "SlotStatus") {
+            let Some(head) = slot_status_ref_at(text, at) else {
+                continue;
+            };
+            let head = head.trim_end();
+            // `<` (Vec<…>), `[` (slice or array), `,` (tuple / later element).
+            if !head.ends_with(['<', '[', ',']) {
+                continue;
+            }
+            // The enclosing fragment: back to the previous statement or block
+            // boundary. `'static` is removed before testing for the `static`
+            // keyword, because `&'static ` contains it as a substring.
+            let start = head.rfind([';', '{', '}']).map_or(0, |i| i + 1);
+            let fragment = head[start..].replace("'static", "");
+            if fragment.contains("->") || fragment.contains("static ") {
+                out.push(fragment.split_whitespace().collect::<Vec<_>>().join(" "));
+            }
+        }
+        out
+    }
+
+    /// Every roster declaration across `src/`.
+    fn rosters_in_src() -> Vec<String> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        rust_sources_under(&root)
+            .into_iter()
+            .flat_map(|(rel, text)| {
+                roster_collections(&strip_comment_lines(&production_prefix(&text)))
+                    .into_iter()
+                    .map(move |d| format!("{rel}: {d}"))
+            })
+            .collect()
     }
 
     /// Every roster accessor in `src/`, recognised by RETURN TYPE, never by name.
@@ -1288,6 +1390,21 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
              (`-> &'static dyn SlotStatus`) before believing the failures below.",
             c.slots.len()
         );
+        // F3: this 1:1 invariant used to live in the expiry guard below — the
+        // one Task 11 is told to DELETE. "No stray accessor" would therefore
+        // have vanished at exactly the moment the roster started consuming
+        // accessors, i.e. when it first mattered. It lives here instead,
+        // because this guard outlives the roster.
+        assert_eq!(
+            accessors.len(),
+            c.slots.len(),
+            "{} roster accessors for {} slots. Either a slot has two, or one \
+             accessor returns `&'static dyn SlotStatus` for something that is \
+             not a migrated handle — and Task 11 builds the roster from exactly \
+             these, so the roster would be wrong in the same direction.",
+            accessors.len(),
+            c.slots.len()
+        );
         for slot in &c.slots {
             let wired = accessors
                 .iter()
@@ -1301,7 +1418,13 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
                  exists to remove. Add, next to the static:\n\n    \
                  #[allow(dead_code)]\n    pub(crate) fn {}_slot() -> &'static \
                  dyn SlotStatus {{ &{} }}\n\n(the name is convention; the \
-                 return type is what this guard and the roster both read)",
+                 return type is what this guard and the roster both read)\n\n\
+                 ⚠️ If the accessor DOES exist but lives in another file, this \
+                 message is misleading: the search is scoped to the static's \
+                 own file, deliberately, because that is where every migration \
+                 so far puts it. Centralising accessors is a legitimate choice \
+                 — it just needs this scope widened in the same commit, not an \
+                 accessor added twice.",
                 slot.name,
                 slot.file,
                 slot.name.to_lowercase(),
@@ -1327,17 +1450,14 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// come off it goes red at a named line.
     #[test]
     fn every_roster_accessor_still_carries_the_expiring_allow() {
-        let c = take_census();
+        // The 1:1 accessor/slot invariant deliberately does NOT live here — see
+        // `every_migrated_slot_has_a_roster_accessor`, which survives this test.
         let accessors = roster_accessors();
-        assert_eq!(
-            accessors.len(),
-            c.slots.len(),
-            "{} roster accessors for {} slots. Either a slot has two, or one \
-             accessor returns `&'static dyn SlotStatus` for something that is \
-             not a migrated handle — and Task 11 builds the roster from exactly \
-             these, so the roster would be wrong in the same direction.",
-            accessors.len(),
-            c.slots.len()
+        assert!(
+            !accessors.is_empty(),
+            "the accessor scan found none, so this guard is about to report \
+             that no permit is missing — which is also what it reports when \
+             every permit is missing. Check the recogniser first."
         );
         let bare: Vec<String> = accessors
             .iter()
@@ -1355,5 +1475,98 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
              test in the same commit. A half-removed set is the worst state — \
              the remaining permits would mask genuinely unwired handles."
         );
+    }
+
+    /// The permits are gone once the roster exists — the half of the expiry the
+    /// guard above cannot see.
+    ///
+    /// `every_roster_accessor_still_carries_the_expiring_allow` asserts the
+    /// permits are PRESENT, so it fires only once someone has already begun
+    /// removing them. It catches partial removal and misses total inaction —
+    /// and total inaction is the hazard the exemption was written against:
+    /// ~46 permits shipped, each one able to mask a genuinely unwired handle.
+    /// Proven by mutation, not argued: a roster added with both permits left in
+    /// place left the whole suite green before this test existed.
+    ///
+    /// The trigger is the roster's TYPE SHAPE, never its name — see
+    /// `roster_collections` for why `if ALL_SLOTS exists` would have been
+    /// unfalsifiable and rename-fragile.
+    ///
+    /// ⚠️ Not implementable as "does production code call `X_slot()`": the
+    /// accessors' only callers today are in `src/spend/tests.rs`, a test-only
+    /// *file* whose `#[cfg(test)]` sits on `mod tests;` in the parent, so
+    /// `production_prefix` strips nothing from it and a caller scan would read
+    /// those as production callers and red on day one. Nor as
+    /// `#[expect(dead_code)]`: tests already reach the accessors, so
+    /// `dead_code` never fires in the test build and the expectation would be
+    /// unfulfilled today.
+    #[test]
+    fn the_expiring_allow_is_gone_once_the_roster_exists() {
+        let accessors = roster_accessors();
+        assert!(
+            !accessors.is_empty(),
+            "the accessor scan found none — with nothing to check this guard \
+             reports the same green it reports when every permit is correctly \
+             gone. Check the recogniser before trusting it."
+        );
+        let rosters = rosters_in_src();
+        let permits: Vec<String> = accessors
+            .iter()
+            .filter(|a| a.allows_dead_code)
+            .map(|a| format!("{} ({})", a.name, a.file))
+            .collect();
+        assert!(
+            rosters.is_empty() || permits.is_empty(),
+            "a roster now exists:\n  {}\n\nbut these accessors still carry \
+             `#[allow(dead_code)]`:\n  {}\n\nThe permit's stated reason — \"no \
+             production caller yet\" — has expired. Remove it from EVERY \
+             accessor and delete `every_roster_accessor_still_carries_the_expiring_allow` \
+             in the same commit. A permit left on an accessor whose consumer \
+             exists silences a real `dead_code`, which is how a handle that \
+             nothing wires reaches the roster looking wired.",
+            rosters.join("\n  "),
+            permits.join("\n  ")
+        );
+    }
+
+    /// The roster recogniser, exercised on synthetic declarations.
+    ///
+    /// Necessary because `src/` contains no roster yet: without this, a
+    /// recogniser that silently stopped matching would look exactly like "the
+    /// roster has not landed", and the guard above would stay green forever
+    /// with every permit shipped. This is the same vacuity trap the two scans
+    /// above guard with `!is_empty()`, in the one place where the corpus cannot
+    /// supply a positive case.
+    #[test]
+    fn the_roster_recogniser_knows_a_roster_from_an_accessor() {
+        for src in [
+            "static ALL_SLOTS: &[&'static dyn SlotStatus] = &[];",
+            "pub fn all_slots() -> Vec<&'static dyn SlotStatus> { vec![] }",
+            "fn r() -> [&'static dyn SlotStatus; 2] { todo!() }",
+            "fn r() -> Vec<&'static dyn crate::capability::SlotStatus> { todo!() }",
+            "pub static SLOT_ROSTER: &[&'static dyn SlotStatus] = &[a(), b()];",
+        ] {
+            assert!(
+                !roster_collections(src).is_empty(),
+                "a roster this shape is not recognised, so the expiry guard \
+                 would never fire for it: {src}"
+            );
+        }
+        for src in [
+            // An accessor is not a roster.
+            "pub(crate) fn global_ledger_slot() -> &'static dyn SlotStatus { &X }",
+            // ⚠️ This exact line is in `src/spend/tests.rs`, which
+            // `production_prefix` does not strip (its `#[cfg(test)]` is on
+            // `mod tests;` in the parent). Reading it as a roster would red the
+            // expiry guard on day one.
+            "let slots: [&'static dyn SlotStatus; 2] = [global_ledger_slot(), global_policy_slot()];",
+            "let erased: &dyn SlotStatus = &GLOBAL_POLICY;",
+        ] {
+            assert!(
+                roster_collections(src).is_empty(),
+                "recognised as a roster when it is not one — the expiry guard \
+                 would fire before any roster exists: {src}"
+            );
+        }
     }
 }

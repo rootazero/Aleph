@@ -18,9 +18,12 @@
 //! nothing changed.
 //!
 //! Those two figures are a first derivation, not a live reading: migration moves
-//! members from `written` into `slots` (as of the `spend` migration the split is
-//! 43 + 1 + 2), and the invariant is the SUM. `census`'s assertion prints the
-//! live split on failure; compare against that, never against this sentence.
+//! members from `written` into `slots`, and the invariant is the SUM. Compare
+//! against the live split `census`'s assertion prints on failure — never
+//! against a figure written in prose, this paragraph included. An earlier draft
+//! named the split as of the `spend` migration and would have gone stale at the
+//! very next migrated handle: the same defect the sentence above qualifies,
+//! reintroduced one paragraph lower by the fix for it.
 //!
 //! # The shape
 //!
