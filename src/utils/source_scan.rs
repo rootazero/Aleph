@@ -211,42 +211,54 @@ fn code_only(line: &str, state: &mut LexState) -> String {
     out
 }
 
-/// True for a trimmed line whose leading `*` opens or continues a block
-/// comment (` * text`, a bare `*`, or the closing `*/`) — false for a line
-/// that merely *starts* with `*` because it is a dereference or a glob
-/// (`*count += 1;`, `*self.captured.lock()…`, `*vendor,`).
-///
-/// Measured directly against this repo's `src/` tree on 2026-08-24: the
-/// naive `t.starts_with('*')` rule this replaces matched 479 lines, of which
-/// only **5** were genuine comment continuations and **474** were real Rust
-/// silently dropped from every guard sharing this scanner — a 99%
-/// false-positive rate. The distinguishing fact is what follows the leading
-/// `*`: a comment continuation is followed by whitespace, end of line, or
-/// `/` (the closing delimiter); a dereference or glob is followed by an
-/// identifier, `self`, or another `*`. If this predicate is ever
-/// "simplified" back to `starts_with('*')`, re-run that measurement first —
-/// it will not come out 5-vs-0 a second time.
-fn is_block_comment_continuation(trimmed_line: &str) -> bool {
-    match trimmed_line.strip_prefix('*') {
-        None => false,
-        Some(rest) => {
-            rest.is_empty() || rest.starts_with('/') || rest.starts_with(char::is_whitespace)
-        }
-    }
-}
-
-/// Drop whole-line comments (`//`, `/*`, and continuation `*` lines).
+/// Drop lines that are comment ONLY: a `//` line, a line consumed entirely
+/// by an already-open block comment, or a line that opens and closes one
+/// with nothing else on it.
 ///
 /// A scanner judges code; a comment is documentation. A doc comment naming a
 /// symbol is not a call site, and an explanatory comment describing a bug is
 /// not the bug — this repo has been bitten in both directions.
+///
+/// Stateful on purpose, reusing `code_only`'s `LexState` — the exact
+/// `in_block_comment` tracking `end_of_item` already carries across lines —
+/// rather than pattern-matching one line in isolation. A block-comment
+/// continuation line (` * text`) and rustfmt's own leading-binary-operator
+/// continuation style (`    * cfg.warning_threshold.clamp(0.0, 1.0)`) have
+/// IDENTICAL single-line shape; no stateless per-line predicate can tell
+/// them apart, because that is a property of the two shapes, not a gap in
+/// any one heuristic. This function's earlier stateless attempt at exactly
+/// such a predicate (`is_block_comment_continuation`, since deleted)
+/// measured its own matched population on this repo's `src/` tree and found
+/// **zero confirmed block-comment continuations among the 479 lines it
+/// matched** — every one was either that rustfmt multiplication style or
+/// prose it could not distinguish, and its own "distinguishing fact"
+/// (whitespace after `*` means comment) was false on its own measured
+/// corpus (`* cfg.warning_threshold` is whitespace-followed and is a
+/// multiplication). Knowing "am I inside a `/* */` right now" is the only
+/// thing that actually answers the question; a line can only be classified
+/// correctly by walking the file, not by looking at it alone.
+///
+/// A previously-open string counts as code even on a line where nothing is
+/// visible outside it: `code_only` excludes string interior from its
+/// output (correct for its one caller, brace-counting, where a `{` written
+/// inside a string must not count), so a line wholly inside an open string
+/// produces the same empty output a comment line does. Raw strings make
+/// this common, not exotic — `LexState` does not lex them specially (see
+/// `code_only`'s doc), so a multi-line raw string (a CSS or JSON payload
+/// embedded via `r#"…"#`, for instance) reads exactly like an ordinary open
+/// string, one line at a time. `state.in_str` at the start of each line is
+/// what disambiguates "inside an open string" from "inside a comment" —
+/// `code_only` cannot tell the two apart from its output alone, because it
+/// treats both the same way on purpose.
 #[must_use]
 pub fn strip_comment_lines(src: &str) -> String {
+    let mut state = LexState::default();
     src.replace('\r', "")
         .lines()
-        .filter(|l| {
-            let t = l.trim_start();
-            !(t.starts_with("//") || t.starts_with("/*") || is_block_comment_continuation(t))
+        .filter(|line| {
+            let entered_in_str = state.in_str;
+            let code = code_only(line, &mut state);
+            entered_in_str || line.trim().is_empty() || !code.trim().is_empty()
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -486,7 +498,12 @@ pub fn after() {}
 
     #[test]
     fn strip_comment_lines_drops_line_and_block_comment_lines() {
-        let src = "// a doc mention of foo()\npub fn real() {}\n/* block */\n * continued\n";
+        // The block comment genuinely stays open into ` * continued` — unlike
+        // the fix-round-3 defect this file used to encode, a bare `* text`
+        // line is only a comment when the lexer is actually still inside a
+        // `/* */` when it reaches that line, not because of what the line
+        // looks like on its own.
+        let src = "// a doc mention of foo()\npub fn real() {}\n/* block\n * continued\n */\n";
         let out = strip_comment_lines(src);
         assert!(out.contains("pub fn real()"));
         assert!(!out.contains("doc mention"));
@@ -513,10 +530,57 @@ pub fn after() {}
         }
     }
 
-    /// The bare-`*` rule must still drop every genuine continuation shape:
-    /// `* text`, a bare `*`, and the closing `*/`.
+    /// rustfmt's own style for a wrapped multi-line expression puts the
+    /// continuing operator first — a `*` followed by whitespace, the exact
+    /// single-line shape a stateless predicate cannot tell apart from a
+    /// block-comment continuation. Confirmed RED under the predicate this
+    /// replaced (`is_block_comment_continuation`) before the fix landed:
+    /// that predicate matched this shape and dropped both lines.
     #[test]
-    fn strip_comment_lines_still_drops_every_continuation_shape() {
+    fn strip_comment_lines_keeps_a_leading_multiplication_continuation() {
+        // Deliberately kept on one physical source line: a `\n`-escaped
+        // fixture spread across real physical lines would itself start a
+        // line with `*`, polluting any census that scans this file's own
+        // source text for that exact shape (as this fix's own measurement
+        // does — see the doc comment on `strip_comment_lines`).
+        let src = "let window_chars = (cfg.token_budget as f64)\n    * cfg.warning_threshold.clamp(0.0, 1.0)\n    * cfg.token_estimate_ratio.max(1.0);\n";
+        let out = strip_comment_lines(src);
+        for kept in [
+            "* cfg.warning_threshold.clamp(0.0, 1.0)",
+            "* cfg.token_estimate_ratio.max(1.0);",
+        ] {
+            assert!(
+                out.contains(kept),
+                "a leading-multiplication continuation line was wrongly dropped as a comment: {kept}"
+            );
+        }
+    }
+
+    /// `LexState` does not lex raw strings specially (see `code_only`'s
+    /// doc), so a multi-line raw string reads exactly like an ordinary open
+    /// string — a CSS payload embedded via `r#"…"#` produces the same empty
+    /// `code_only` output a comment line does, and only `in_str` at
+    /// line-start tells the two apart. Confirmed RED under
+    /// `is_block_comment_continuation` before the fix (that predicate never
+    /// looked at string state at all, so it matched this line's leading `*`
+    /// the same way it matched a comment continuation).
+    #[test]
+    fn strip_comment_lines_keeps_a_css_line_inside_a_raw_string() {
+        // See the sibling test above for why this stays on one physical line.
+        let src = "let css = r#\"\n* { margin: 0; padding: 0; box-sizing: border-box; }\n\"#;\n";
+        let out = strip_comment_lines(src);
+        assert!(
+            out.contains("* { margin: 0; padding: 0; box-sizing: border-box; }"),
+            "a CSS universal-selector line inside a raw string was wrongly dropped as a comment"
+        );
+    }
+
+    /// The case statefulness actually buys, as opposed to the case a
+    /// stateless predicate got right only by accident (the two tests
+    /// above): a genuine block comment spanning several lines. Its
+    /// continuation lines and the closing `*/` must still be dropped.
+    #[test]
+    fn strip_comment_lines_drops_a_genuine_multi_line_block_comment() {
         let src = "/* block\n * a continuation line\n *\n */\npub fn survives() {}\n";
         let out = strip_comment_lines(src);
         assert_eq!(out.trim(), "pub fn survives() {}");
