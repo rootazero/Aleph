@@ -34,16 +34,6 @@ impl DuckDuckGoProvider {
     }
 }
 
-impl Default for DuckDuckGoProvider {
-    fn default() -> Self {
-        // `new()` can only fail if `reqwest::Client::builder()` itself fails
-        // (effectively impossible in default builds — TLS backend init /
-        // invalid proxy URL). Propagate via `expect` so the panic message
-        // surfaces the diagnostic context rather than a bare `unwrap`.
-        Self::new().expect("DuckDuckGo default client construction failed")
-    }
-}
-
 #[async_trait]
 impl SearchProvider for DuckDuckGoProvider {
     async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
@@ -245,7 +235,12 @@ pub(crate) fn parse_ddg_lite_html(body: &str, max_results: usize) -> Vec<SearchR
 ///
 /// - Direct `https://...` → returned as-is
 /// - Protocol-relative redirect `//duckduckgo.com/l/?uddg=ENCODED` →
-///   percent-decode the `uddg` param
+///   percent-decode the `uddg` param **only if the decoded value is
+///   itself an `http://` / `https://` URL** — without this guard a
+///   `uddg=javascript%3A...` payload (from a compromised DDG response
+///   or a CAPTCHA challenge page that re-uses the result-link layout)
+///   would surface as a navigable `javascript:` URL in
+///   `SearchResult.url` for downstream tools.
 /// - Anything else → empty string (skip)
 fn normalize_ddg_href(href: &str) -> String {
     if href.starts_with("http://") || href.starts_with("https://") {
@@ -256,7 +251,15 @@ fn normalize_ddg_href(href: &str) -> String {
     if let Some(qs_start) = href.find('?') {
         for pair in href[qs_start + 1..].split('&') {
             if let Some(v) = pair.strip_prefix("uddg=") {
-                return percent_decode(v);
+                let decoded = percent_decode(v);
+                // Re-validate scheme after decode: the redirect target
+                // comes from user-controlled HTML and could be anything
+                // (javascript:, data:, file:, …). We only accept the
+                // two schemes a downstream HTTP fetch tool can navigate.
+                if decoded.starts_with("http://") || decoded.starts_with("https://") {
+                    return decoded;
+                }
+                return String::new();
             }
         }
     }
@@ -384,6 +387,38 @@ mod tests {
         assert_eq!(
             normalize_ddg_href("//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpath&rut=1"),
             "https://example.com/path"
+        );
+    }
+
+    /// Defense-in-depth: a `uddg` value that decodes to a non-HTTP
+    /// scheme (`javascript:`, `data:`, `file:`, …) MUST be dropped,
+    /// not surfaced as a navigable URL in `SearchResult.url`. Without
+    /// this guard, a compromised or malformed DDG response could feed
+    /// an arbitrary-scheme URL to downstream tools (web_fetch, etc.).
+    #[test]
+    fn normalize_ddg_href_rejects_non_http_uddg_decodes() {
+        assert_eq!(
+            normalize_ddg_href("//duckduckgo.com/l/?uddg=javascript%3Aalert(1)"),
+            "",
+            "javascript: scheme in uddg must be rejected"
+        );
+        assert_eq!(
+            normalize_ddg_href("//duckduckgo.com/l/?uddg=data%3Atext%2Fhtml%2Cfoo"),
+            "",
+            "data: scheme in uddg must be rejected"
+        );
+        assert_eq!(
+            normalize_ddg_href("//duckduckgo.com/l/?uddg=file%3A%2F%2F%2Fetc%2Fpasswd"),
+            "",
+            "file: scheme in uddg must be rejected"
+        );
+        // Bare scheme without authority (no `//`) is also dropped — we
+        // require both the scheme prefix AND the `://` to match the
+        // pattern used for direct hrefs above.
+        assert_eq!(
+            normalize_ddg_href("//duckduckgo.com/l/?uddg=vbscript%3Amsgbox(1)"),
+            "",
+            "vbscript: scheme in uddg must be rejected"
         );
     }
 
