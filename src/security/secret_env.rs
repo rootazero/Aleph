@@ -57,7 +57,21 @@ const SECRET_SUFFIXES: &[&str] = &[
     "_CREDENTIALS",
     "_ACCESS_KEY",
     "_PRIVATE_KEY",
+    // Common credential-bearing suffixes the original list missed:
+    // SSH/GPG keys (SSH_KEY, MY_GPG_KEY), TLS certificates, auth tokens,
+    // bare password-style vars. The module doc promises "false positives
+    // only strip a non-secret var" — false negatives would leak a credential.
+    "_KEY",
+    "_CERT",
+    "_AUTH",
+    "_PASS",
 ];
+
+/// Substring markers that flag a name as credential-bearing regardless of
+/// position. `_SECRET` only matches the suffix (`FOO_SECRET`), not the
+/// substring (`SECRET_FOO`); the substring form catches the common
+/// `MY_*_SECRET_NAME` shape that real-world deployments use.
+const SECRET_SUBSTRINGS: &[&str] = &["SECRET", "PASSWORD", "PRIVATE_KEY", "CREDENTIAL"];
 
 #[must_use]
 pub fn is_secret_env(name: &str) -> bool {
@@ -65,7 +79,13 @@ pub fn is_secret_env(name: &str) -> bool {
     if SECRET_ENV_EXACT.contains(&upper.as_str()) {
         return true;
     }
-    SECRET_SUFFIXES.iter().any(|s| upper.ends_with(s))
+    if SECRET_SUFFIXES.iter().any(|s| upper.ends_with(s)) {
+        return true;
+    }
+    if SECRET_SUBSTRINGS.iter().any(|s| upper.contains(s)) {
+        return true;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -95,5 +115,17 @@ mod tests {
         assert!(!is_secret_env("HOME"));
         assert!(!is_secret_env("LANG"));
         assert!(!is_secret_env("ALEPH_CHROME_PATH"));
+    }
+
+    #[test]
+    fn broader_suffixes_catch_common_shapes() {
+        // Previously the suffix list missed these; they would have leaked
+        // a credential into a child process.
+        assert!(is_secret_env("SSH_KEY"));
+        assert!(is_secret_env("MY_GPG_KEY"));
+        assert!(is_secret_env("TLS_CERT"));
+        assert!(is_secret_env("K8S_AUTH"));
+        assert!(is_secret_env("MY_DB_PASS"));
+        assert!(is_secret_env("MY_SECRET_NAME"));
     }
 }
