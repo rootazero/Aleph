@@ -20,8 +20,8 @@
 ///     .with_meta("model", "gpt-4");
 /// // ... do work
 /// ```
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use std::collections::BTreeMap;
-use std::sync::OnceLock;
 use std::time::Instant;
 
 /// Default warning multiplier applied when no policy is configured.
@@ -50,7 +50,32 @@ impl Default for MetricsRuntime {
     }
 }
 
-static METRICS_RUNTIME: OnceLock<MetricsRuntime> = OnceLock::new();
+/// `IndistinguishableDefault`, derived from the single reader below:
+/// [`metrics_runtime`] answers `.get().copied().unwrap_or_default()`, so an
+/// uninstalled handle hands every `StageTimer` the compiled
+/// `MetricsRuntime::default()` — warnings on, logging on, 2.0x threshold —
+/// and an operator who set `[policies.metrics] enable_warnings = false` keeps
+/// getting warnings with nothing anywhere saying why.
+///
+/// ⚠️ This handle is the reason the census is derived rather than grepped: it
+/// was absent from the specification's hand-written roster because rustfmt put
+/// its `.set(` on the line after the receiver. See
+/// `capability::census::tests::the_writer_recogniser_reads_across_line_breaks`.
+static METRICS_RUNTIME: CapabilitySlot<MetricsRuntime> = CapabilitySlot::new(
+    "metrics/runtime",
+    MissingSemantics::IndistinguishableDefault {
+        reads_as: "MetricsRuntime::default() -- warnings and stage logging on, \
+                   2.0x warning threshold, whatever [policies.metrics] said",
+    },
+);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn metrics_runtime_slot() -> &'static dyn SlotStatus {
+    &METRICS_RUNTIME
+}
 
 /// Bind the live metrics knobs from `[policies.metrics]`. Called once from
 /// `Config::load` so `StageTimer` honours user-configured thresholds instead of
@@ -63,14 +88,11 @@ pub fn init_metrics_runtime(policy: &crate::config::MetricsPolicy) {
         } else {
             DEFAULT_WARNING_MULTIPLIER
         };
-    if METRICS_RUNTIME
-        .set(MetricsRuntime {
-            warning_multiplier,
-            enable_logging: policy.enable_logging,
-            enable_warnings: policy.enable_warnings,
-        })
-        .is_err()
-    {
+    if !METRICS_RUNTIME.install(MetricsRuntime {
+        warning_multiplier,
+        enable_logging: policy.enable_logging,
+        enable_warnings: policy.enable_warnings,
+    }) {
         tracing::warn!(
             "metrics runtime already initialised; ignoring reload — the reloaded \
              [policies.metrics] values are silently inactive, restart the process to \

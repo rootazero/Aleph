@@ -991,28 +991,53 @@ mod tests {
 
     /// A writer split across lines is still a writer.
     ///
-    /// `metrics/mod.rs::METRICS_RUNTIME` is installed once from `Config::load`
-    /// via `init_metrics_runtime(policy)` and read as
-    /// `.get().copied().unwrap_or_default()` — an uninstalled read yields the
-    /// compiled defaults and no caller can tell, which is the round-7
-    /// indistinguishable-default shape verbatim. It was missing from the
-    /// specification's roster for one reason only: `rustfmt` broke the line, so
-    /// the source reads `if METRICS_RUNTIME\n        .set(…)` and a
-    /// `contains("METRICS_RUNTIME.set(")` test says no.
-    ///
     /// Roster membership must not be a function of line length.
+    ///
+    /// ⚠️ **This guard used to be anchored on a live member and could not stay
+    /// there.** `metrics/mod.rs::METRICS_RUNTIME` was the anchor: installed from
+    /// `Config::load` via `init_metrics_runtime(policy)`, read as
+    /// `.get().copied().unwrap_or_default()`, and missing from the
+    /// specification's hand-written roster for one reason only — rustfmt broke
+    /// the line, so the source read `if METRICS_RUNTIME\n        .set(…)` and a
+    /// `contains("METRICS_RUNTIME.set(")` test said no.
+    ///
+    /// Batch D migrated it, and `written` is now **0 by design**: emptying that
+    /// bucket is this round's completion signal. Any assertion of the form
+    /// `c.written.iter().any(…)` is therefore structurally doomed — not by a
+    /// regression, but by the round succeeding. Re-anchoring on some other
+    /// member would only defer that by one batch.
+    ///
+    /// So the property is pinned against a fabricated corpus instead, which is
+    /// strictly stronger: it survives an empty `written` bucket, it names the
+    /// exact wrap it defends, and it cannot go quiet because the last live
+    /// example moved. The negative half is what makes it a discrimination test
+    /// rather than a "does anything match" test.
     #[test]
-    fn a_writer_split_across_lines_is_still_a_writer() {
-        let c = take_census();
+    fn the_writer_recogniser_reads_across_line_breaks() {
+        // Byte-for-byte the shape rustfmt produced for `init_metrics_runtime`.
+        let split = "if METRICS_RUNTIME\n    .set(MetricsRuntime { a: 1 })\n    .is_err()\n{}";
         assert!(
-            c.written
-                .iter()
-                .any(|s| s.file.ends_with("src/metrics/mod.rs") && s.name == "METRICS_RUNTIME"),
-            "METRICS_RUNTIME is not selected by the writer arm. Its `.set(` sits \
-             on the line AFTER the receiver, so this fails the moment the writer \
-             search goes back to matching `NAME.method(` as one contiguous \
-             string — and it would take a real capability handle off the roster \
-             with no other signal."
+            is_written(split, "METRICS_RUNTIME"),
+            "the writer arm no longer sees a `.set(` that sits on the line AFTER \
+             its receiver. This is how a real capability handle drops off the \
+             roster with no other signal: it reads as a lazy cache, the total \
+             moves by one, and the only explanation on offer is \"someone deleted \
+             a static\"."
+        );
+        // Same bytes, one line: the recogniser must not have become "matches
+        // anything containing the name".
+        assert!(
+            is_written("METRICS_RUNTIME.set(v);", "METRICS_RUNTIME"),
+            "the contiguous form must match too"
+        );
+        assert!(
+            !is_written(
+                "let x = METRICS_RUNTIME\n    .get()\n    .copied();",
+                "METRICS_RUNTIME"
+            ),
+            "a reader is not a writer — if this fails the recogniser has \
+             degraded to \"the name appears near a method call\", which would \
+             select every lazy cache in src/"
         );
     }
 
