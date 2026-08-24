@@ -10,9 +10,21 @@ abstraction), or REPORT (needs a human decision — do not guess).
 grows from this migration (4 corpus walkers + 8 `include_str!` guards). None
 of them flipped from `ok` to `FAILED`. In particular the predicted likeliest
 hit — `dispatchable.rs`'s builtin-tool-dispatchability census, which gained
-~62% more of `definitions.rs` to scan — stayed green: no advertised-but-
-undispatchable tool was hiding in the previously-invisible two thirds of the
-catalogue.
+~62% more of `definitions.rs` to scan — stayed green.
+
+**Update, retracted by the plan author after independently replicating the
+guard's own extraction over both the old-truncated and full source:** the
+reason is not "no bug happened to be hiding there" but structural —
+`definitions.rs`'s catalogue rows end before the 37% mark, so the 101,980
+bytes the old cut discarded are 16 `#[test]` functions and six further
+`#[cfg(test)]` markers, containing zero catalogue rows and zero dispatch
+arms. Both passes over `definitions.rs` / `core_tools.rs` / `tool_registry_impl.rs`
+(old and new) produced identical counts: `catalog hits=162 advertised=172
+dispatch arms=189 dispatchable=183 gap=0`. `dispatchable.rs` still belongs on
+the list of 12 whose *byte* visibility grows — what was wrong was inferring
+"more bytes visible" implies "more matches possible" for this specific guard,
+which the guard's own shape rules out. Recorded here so anyone reading this
+ledger does not go looking for a finding that was never there to find.
 
 Command and full before/after diff:
 
