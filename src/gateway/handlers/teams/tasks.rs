@@ -702,6 +702,16 @@ pub(crate) struct ChatHistoryItem {
     pub(crate) kind: &'static str,
     /// Milliseconds since Unix epoch — Panel uses this for chronological order.
     pub(crate) created_at: i64,
+    /// The human speaker's raw id, for a `kind == "user"` row whose
+    /// `TeamMessage::author_user_id` is set (P2's `send`-time author stamp,
+    /// spec §6.2 humanization). `None` for agent/system rows, and for a
+    /// human row persisted before this field existed. Mirrors the live
+    /// `team.<id>.message` event's `author_user_id` so a replayed row and
+    /// its live twin carry identical attribution.
+    pub(crate) author_user_id: Option<String>,
+    /// Resolved display name for `author_user_id`, via the single derivation
+    /// in `speaker.rs` — `None` exactly when `author_user_id` is `None`.
+    pub(crate) author_display_name: Option<String>,
 }
 
 /// Whether a stored team message belongs in the group-chat transcript at all.
@@ -738,16 +748,34 @@ fn history_kind(m: &crate::teams::messages::TeamMessage) -> &'static str {
 /// Map a flat list of [`TeamMessage`] values to [`ChatHistoryItem`] values,
 /// sorted chronologically, dropping directed inbox traffic. Extracted as a free
 /// function so it is unit-testable without any async store.
-pub(crate) fn map_history(msgs: Vec<crate::teams::messages::TeamMessage>) -> Vec<ChatHistoryItem> {
+///
+/// `labels` is the caller's already-resolved `author_user_id -> display_name`
+/// map (built once via [`speaker::resolve_labels_for_messages`] over the same
+/// batch, per Ruling P2 — this function does not open a `SecurityStore`
+/// lookup of its own).
+pub(crate) fn map_history(
+    msgs: Vec<crate::teams::messages::TeamMessage>,
+    labels: &std::collections::HashMap<String, String>,
+) -> Vec<ChatHistoryItem> {
     let mut items: Vec<ChatHistoryItem> = msgs
         .into_iter()
         .filter(is_chat_visible)
-        .map(|m| ChatHistoryItem {
-            kind: history_kind(&m),
-            from_agent: m.from_agent,
-            content: m.content,
-            msg_type: m.msg_type.as_str().to_string(),
-            created_at: m.created_at.timestamp_millis(),
+        .map(|m| {
+            let kind = history_kind(&m);
+            // `speaker_label`'s `Some(_)` arm never consults `from_agent`, so
+            // the row's real `from_agent` is fine to pass unconditionally.
+            let author_display_name = m.author_user_id.as_deref().map(|uid| {
+                crate::teams::broadcast::speaker::speaker_label(&m.from_agent, Some(uid), labels)
+            });
+            ChatHistoryItem {
+                kind,
+                from_agent: m.from_agent,
+                author_user_id: m.author_user_id,
+                author_display_name,
+                content: m.content,
+                msg_type: m.msg_type.as_str().to_string(),
+                created_at: m.created_at.timestamp_millis(),
+            }
         })
         .collect();
     items.sort_by_key(|i| i.created_at);
@@ -761,6 +789,7 @@ pub async fn handle_chat_history(
     request: JsonRpcRequest,
     store: Arc<dyn crate::teams::TeamStore>,
     msg_store: Arc<dyn crate::teams::messages::MessageStore>,
+    security_store: Arc<crate::gateway::security::SecurityStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.chat.history request");
 
@@ -784,7 +813,13 @@ pub async fn handle_chat_history(
         .await
         .unwrap_or_default();
 
-    let mut items = map_history(msgs);
+    // Ruling P2: resolve every distinct human author's display name through
+    // the single derivation in `speaker.rs` (batched once here, not per row
+    // and not via a fresh `SecurityStore::get_user` loop) — same injection
+    // point `teams.chat.send` uses for the live event.
+    let labels =
+        crate::teams::broadcast::speaker::resolve_labels_for_messages(Some(&security_store), &msgs);
+    let mut items = map_history(msgs, &labels);
     // Keep the newest window; `map_history` returns oldest-first.
     if items.len() > CHAT_BUBBLE_LIMIT {
         items.drain(..items.len() - CHAT_BUBBLE_LIMIT);

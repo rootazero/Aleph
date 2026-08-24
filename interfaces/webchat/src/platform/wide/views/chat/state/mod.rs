@@ -5,7 +5,7 @@ use crate::api::sessions::SessionKnobs;
 use crate::api::teams::CoordTaskDto;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
-use shared_ui_logic::state::merge_recalled_draft;
+use shared_ui_logic::state::{merge_recalled_draft, remember_own_message_id};
 
 mod run_phase;
 mod send_error;
@@ -631,6 +631,15 @@ pub struct ChatState {
     /// task strip + drawer). Empty when not in team mode. Fetched from
     /// `teams.list_tasks` and upserted by `team.<id>.task.<verb>` events.
     pub team_tasks: RwSignal<Vec<CoordTaskDto>>,
+    /// Bounded FIFO of this viewer's own recently-sent `teams.chat.send`
+    /// `message_id`s (spec §6.2 P3). `teams.chat.send`'s response and the
+    /// live `team.<id>.message` event it triggers carry the SAME id — this
+    /// lets `team_events`'s Message arm recognize and skip the live echo of
+    /// a bubble the composer already pushed optimistically, without falsely
+    /// suppressing a second browser tab's own copy of the same human's
+    /// message (dedup is keyed by id, not by "am I the author"). See
+    /// `shared_ui_logic::state::team_chat::remember_own_message_id`.
+    pub own_team_msg_ids: RwSignal<std::collections::VecDeque<String>>,
     /// Per explore-group expand override, keyed by group key. Absent = use the
     /// default (running groups open, completed collapsed); present = the
     /// user's explicit toggle. Lives here — not as a group-local signal —
@@ -692,6 +701,7 @@ impl ChatState {
             team_id: RwSignal::new(None),
             team_members: RwSignal::new(Vec::new()),
             team_tasks: RwSignal::new(Vec::new()),
+            own_team_msg_ids: RwSignal::new(std::collections::VecDeque::new()),
             strip_open: RwSignal::new(std::collections::HashMap::new()),
             plan: RwSignal::new(None),
         }
@@ -1066,6 +1076,28 @@ impl ChatState {
                 },
             );
         });
+    }
+
+    /// How many of this viewer's own recently-sent team-chat `message_id`s
+    /// to remember for self-echo dedup (see [`Self::own_team_msg_ids`]).
+    const OWN_TEAM_MSG_ID_CAP: usize = 32;
+
+    /// Record `message_id` as one of this viewer's own team-chat sends, so
+    /// the live `team.<id>.message` echo of it (`team_events`'s Message arm)
+    /// is recognized and skipped rather than rendered as a second bubble.
+    /// Bounded FIFO — see [`Self::own_team_msg_ids`].
+    pub fn remember_own_team_message(&self, message_id: String) {
+        self.own_team_msg_ids.update(|ids| {
+            remember_own_message_id(ids, message_id, Self::OWN_TEAM_MSG_ID_CAP);
+        });
+    }
+
+    /// Whether `message_id` is one of this viewer's own remembered
+    /// team-chat sends (see [`Self::remember_own_team_message`]).
+    #[must_use]
+    pub fn is_own_team_message(&self, message_id: &str) -> bool {
+        self.own_team_msg_ids
+            .with_untracked(|ids| ids.iter().any(|id| id == message_id))
     }
 
     /// Start a new assistant message placeholder (streaming).
@@ -2659,7 +2691,10 @@ mod step_tests {
         chat.start_assistant_message("run-a");
         assert_eq!(chat.phase.get_untracked(), ChatPhase::Thinking);
 
-        chat.set_send_error(ChatSendError::new(ChatSendErrorCode::CloudSendFailed, "boom"));
+        chat.set_send_error(ChatSendError::new(
+            ChatSendErrorCode::CloudSendFailed,
+            "boom",
+        ));
 
         assert_eq!(chat.phase.get_untracked(), ChatPhase::Error);
         assert_eq!(

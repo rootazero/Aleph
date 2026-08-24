@@ -9,8 +9,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::api::chat::ChatApi;
-use crate::api::team_chat
-::{TeamChatApi, TeamMessageItem};
+use crate::api::team_chat::{TeamChatApi, TeamMessageItem};
 use crate::api::teams::{TeamSummary, TeamsApi};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
@@ -111,6 +110,13 @@ fn team_history_item_to_message(index: usize, item: TeamMessageItem) -> ChatMess
         _ if item.from_agent == RESERVED_USER_HANDLE => "user",
         _ => "assistant",
     };
+    // Only a "user" row can carry a human author (spec §6.2 P3 — `None` for
+    // agent/system rows, and for a Panel pointed at an older core that never
+    // sent this field). Reuses the SAME `ChatMessage.author_user_id` field
+    // and `MessageBubble` rendering a P2 project-room peer message gets:
+    // `messages.rs`'s `author_label` suppresses the label for the viewer's
+    // own id and otherwise resolves it via `UserDirectoryState`.
+    let author_user_id = (role == "user").then(|| item.author_user_id).flatten();
     ChatMessage {
         id: format!("team-hist-{index}"),
         role: role.to_string(),
@@ -128,9 +134,11 @@ fn team_history_item_to_message(index: usize, item: TeamMessageItem) -> ChatMess
         // out of the Telegram-style grouping pass.
         agent_id: (role == "assistant").then_some(item.from_agent),
         plan_archive: None,
-        // `teams.chat.history` is the legacy group-broadcast surface (not a
-        // P2 project room) — it carries no `author_user_id`.
-        author_user_id: None,
+        // `teams.chat.history` is a legacy group-broadcast surface, but as of
+        // P3 §6.2 humanization a "user" row now carries the real speaker's
+        // `author_user_id` (server-resolved from `TeamMessage::author_user_id`
+        // — see `map_history`), not a P2 project-room author.
+        author_user_id,
     }
 }
 
@@ -515,7 +523,6 @@ pub fn ChatSidebar() -> impl IntoView {
                                         &id,
                                         t_string!(i18n, chat.new_chat).to_string(),
                                     );
-
                                 }
                             }
                             agents.set(list);
@@ -1931,6 +1938,8 @@ mod team_history_tests {
             msg_type: "message".to_string(),
             kind: kind.to_string(),
             created_at: 0,
+            author_user_id: None,
+            author_display_name: None,
         }
     }
 
@@ -1960,6 +1969,31 @@ mod team_history_tests {
         assert_eq!(m.role, "assistant");
         assert_eq!(m.agent_id.as_deref(), Some("risk_analyst"));
         assert_eq!(m.id, "team-hist-3");
+    }
+
+    #[test]
+    fn user_kind_carries_the_human_authors_id_for_the_label() {
+        // Spec §6.2 humanization (P3): a "user" history row now carries the
+        // real speaker's raw id, so `MessageBubble` can resolve and show it
+        // — same field, same styling, a P2 room peer message gets.
+        let mut it = kinded(RESERVED_USER_HANDLE, "user");
+        it.author_user_id = Some("u-alice".to_string());
+        it.author_display_name = Some("Alice".to_string());
+        let m = team_history_item_to_message(0, it);
+        assert_eq!(m.role, "user");
+        assert_eq!(m.author_user_id, Some("u-alice".to_string()));
+    }
+
+    #[test]
+    fn agent_kind_never_carries_an_author_user_id() {
+        // Even if a future core somehow set it, an agent bubble must not
+        // pick up human attribution — that field means something entirely
+        // different for the two roles.
+        let mut it = item("risk_analyst");
+        it.author_user_id = Some("u-alice".to_string());
+        let m = team_history_item_to_message(0, it);
+        assert_eq!(m.role, "assistant");
+        assert_eq!(m.author_user_id, None);
     }
 
     #[test]

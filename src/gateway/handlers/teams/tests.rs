@@ -28,6 +28,7 @@ pub use super::workflow::*;
 mod tests {
     use super::*;
     use crate::agents::swarm::tasks::store::SqliteCoordTaskStore;
+    use std::collections::HashMap;
 
     async fn coord_store() -> Arc<dyn CoordTaskStore> {
         let conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
@@ -538,7 +539,7 @@ mod tests {
             },
         ];
 
-        let items = map_history(msgs);
+        let items = map_history(msgs, &HashMap::new());
         assert_eq!(items.len(), 2);
 
         // Chronological after sort: t0 first.
@@ -590,24 +591,73 @@ mod tests {
     fn map_history_classifies_user_agent_and_system_rows() {
         use crate::teams::messages::types::MessageType;
 
-        let items = map_history(vec![
-            history_msg(
-                crate::teams::broadcast::RESERVED_USER_HANDLE,
-                MessageType::Message,
-                &[],
-                1,
-            ),
-            history_msg("risk_analyst", MessageType::Message, &[], 2),
-            history_msg(
-                crate::teams::broadcast::SYSTEM_HANDLE,
-                MessageType::SystemNotification,
-                &[],
-                3,
-            ),
-        ]);
+        let items = map_history(
+            vec![
+                history_msg(
+                    crate::teams::broadcast::RESERVED_USER_HANDLE,
+                    MessageType::Message,
+                    &[],
+                    1,
+                ),
+                history_msg("risk_analyst", MessageType::Message, &[], 2),
+                history_msg(
+                    crate::teams::broadcast::SYSTEM_HANDLE,
+                    MessageType::SystemNotification,
+                    &[],
+                    3,
+                ),
+            ],
+            &HashMap::new(),
+        );
 
         let kinds: Vec<&str> = items.iter().map(|i| i.kind).collect();
         assert_eq!(kinds, vec!["user", "agent", "system"]);
+    }
+
+    #[test]
+    fn map_history_carries_author_fields_for_human_rows_none_for_agent_rows() {
+        use crate::teams::messages::types::MessageType;
+
+        // A human row (`author_user_id: Some(_)`, spec §6.2 humanization)
+        // must carry BOTH raw id and resolved display name; an agent row
+        // (`author_user_id: None`) must carry neither — mirrors the live
+        // `team.<id>.message` event's `{author_user_id, author_display_name}`
+        // shape (Task 2) so a replayed row and its live twin agree.
+        let mut human = history_msg(
+            crate::teams::broadcast::RESERVED_USER_HANDLE,
+            MessageType::Message,
+            &[],
+            1,
+        );
+        human.author_user_id = Some("u-alice".to_string());
+        // A second human with no row in `labels` — falls back to the raw id,
+        // the same degradation `speaker::speaker_label` gives every other
+        // caller (P7: a missing/failed display-name lookup never blocks).
+        let mut human_unresolved = history_msg(
+            crate::teams::broadcast::RESERVED_USER_HANDLE,
+            MessageType::Message,
+            &[],
+            2,
+        );
+        human_unresolved.author_user_id = Some("u-bob".to_string());
+        let agent = history_msg("risk_analyst", MessageType::Message, &[], 3);
+
+        let labels = HashMap::from([("u-alice".to_string(), "Alice".to_string())]);
+        let items = map_history(vec![human, human_unresolved, agent], &labels);
+        assert_eq!(items.len(), 3);
+
+        assert_eq!(items[0].author_user_id, Some("u-alice".to_string()));
+        assert_eq!(items[0].author_display_name, Some("Alice".to_string()));
+
+        assert_eq!(items[1].author_user_id, Some("u-bob".to_string()));
+        assert_eq!(
+            items[1].author_display_name,
+            Some("u-bob".to_string()),
+            "no label entry for u-bob ⇒ falls back to the raw id"
+        );
+
+        assert_eq!(items[2].author_user_id, None, "agent row carries no author");
+        assert_eq!(items[2].author_display_name, None);
     }
 
     #[test]
@@ -618,15 +668,18 @@ mod tests {
         // router's escalation hints are addressed to one agent and were never
         // shown live. Replaying them turned a re-opened group chat into a
         // noisier conversation than the one the user had just been watching.
-        let items = map_history(vec![
-            history_msg(
-                "team_dispatcher",
-                MessageType::SystemNotification,
-                &["leader"],
-                1,
-            ),
-            history_msg("risk_analyst", MessageType::Message, &[], 2),
-        ]);
+        let items = map_history(
+            vec![
+                history_msg(
+                    "team_dispatcher",
+                    MessageType::SystemNotification,
+                    &["leader"],
+                    1,
+                ),
+                history_msg("risk_analyst", MessageType::Message, &[], 2),
+            ],
+            &HashMap::new(),
+        );
 
         assert_eq!(items.len(), 1, "only the conversation row survives");
         assert_eq!(items[0].from_agent, "risk_analyst");
@@ -639,12 +692,15 @@ mod tests {
         // An addressed *conversation* message (@mention reply) is still chat —
         // the filter keys on type-plus-recipients, not recipients alone, so an
         // agent-to-agent reply is not mistaken for inbox plumbing.
-        let items = map_history(vec![history_msg(
-            "risk_analyst",
-            MessageType::Message,
-            &["growth_analyst"],
-            1,
-        )]);
+        let items = map_history(
+            vec![history_msg(
+                "risk_analyst",
+                MessageType::Message,
+                &["growth_analyst"],
+                1,
+            )],
+            &HashMap::new(),
+        );
 
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].kind, "agent");
