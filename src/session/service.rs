@@ -74,7 +74,13 @@ pub trait SessionService: Send + Sync + 'static {
 ///
 /// `tools/scoped/dispatch.rs` takes a `let … else` and silently returns;
 /// `builtin_tools/sessions/compact_tool.rs` turns the same `None` into an
-/// `AlephError`; the six gateway sites skip a projection step without a word.
+/// `AlephError`. The remaining SEVEN are gateway sites, and they do not all lose
+/// the same thing: six drop a `session_events` append (`openai_api`,
+/// `execution_engine::{execute, fast_path ×2, simple ×2}`), so the event never
+/// reaches the log and the `MessageProjector` never sees it — while
+/// `run_loop/inner.rs` skips a *legacy event-log backfill*, a different loss on
+/// a path only a pre-event-log session reaches.
+///
 /// Whether each of those is the right answer is adjudicated in Task 15. What
 /// this variant records is that a missing handle here produces *nine separately
 /// chosen wrong answers*, not one — so no single `reads_as` sentence could be
@@ -133,8 +139,8 @@ mod tests {
     /// The roster's entry point for this handle.
     ///
     /// Task 11 assembles its roster from accessors like this one rather than
-    /// from 46 `pub static`s, so the accessor — not the static — is the thing
-    /// that must keep working. Asserting through it pins the id on the path the
+    /// from one `pub static` per migrated handle, so the accessor — not the
+    /// static — is the thing that must keep working. Asserting through it pins the id on the path the
     /// roster actually walks, and gives the `#[allow(dead_code)]` its precise
     /// meaning: no PRODUCTION caller yet, as opposed to no caller at all.
     #[test]

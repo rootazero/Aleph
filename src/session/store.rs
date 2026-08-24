@@ -765,7 +765,7 @@ fn cap_chars(s: &str, max: usize) -> String {
 // ---------------------------------------------------------------------------
 
 /// `ConsumerDecides`, and this handle is the sharper case of the pair in this
-/// batch: five production reads produce four *different* answers, two of which
+/// batch: five production reads produce five *different* answers, two of which
 /// are reported to the caller as success.
 ///
 /// | reader | an uninstalled read becomes |
@@ -776,11 +776,11 @@ fn cap_chars(s: &str, max: usize) -> String {
 /// | [`is_event_retired`] | `Ok(false)` — "not retired", the fail-open direction |
 /// | `gateway/execution_engine/run_loop/inner.rs` | the legacy backfill is skipped in silence |
 ///
-/// Each arm is individually defensible (all four doc-comment their reasoning),
+/// Each arm is individually defensible (all five doc-comment their reasoning),
 /// which is exactly why no `IndistinguishableDefault { reads_as }` sentence
 /// could be written for this slot: there is no single thing a missing handle
 /// reads as. Task 15 adjudicates the arms; this variant records that there are
-/// four of them.
+/// five of them.
 static GLOBAL_EVENT_STORE: CapabilitySlot<Arc<dyn SessionEventStore>> =
     CapabilitySlot::new("session/event-store", MissingSemantics::ConsumerDecides);
 

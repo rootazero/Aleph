@@ -670,7 +670,9 @@ mod tests {
             MissingSemantics::IndistinguishableDefault { reads_as } => {
                 assert!(
                     reads_as.contains("usize::MAX"),
-                    "the sentence a diagnostic prints must name what                      `result_budget_ceiling()` really falls back to, got: {reads_as:?}"
+                    "the sentence a diagnostic prints must name what \
+                     `result_budget_ceiling()` really falls back to, got: \
+                     {reads_as:?}"
                 );
             }
             other => panic!("expected IndistinguishableDefault, got {other:?}"),

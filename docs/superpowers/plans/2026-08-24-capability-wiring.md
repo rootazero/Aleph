@@ -1485,9 +1485,18 @@ Assign each handle a `MissingSemantics` by asking *what a read observes when nob
 - [ ] **Step 4: Run the affected suites**
 
 ```bash
-cargo test -p alephcore --lib session:: tools::result_store tools::turn_budget tools::in_flight tools::result_processing 2>&1 | tail -14
+cargo test -p alephcore --lib -- session:: tools::result_store tools::turn_budget tools::in_flight tools::result_processing 2>&1 | tail -14
 cargo test -p alephcore --lib capability::census 2>&1 | tail -6
 ```
+
+⚠️ **This command shipped without the `--` and could not run** — `cargo test`
+accepts one positional TESTNAME, so the multi-filter form exits 1 with
+`unexpected argument 'tools::result_store'` before compiling anything. Task 8 hit
+it and worked around it; the `--` above is the fix. Left annotated rather than
+silently corrected because later batches read this plan as a template, and the
+shape that invites the error is worth seeing next to the shape that works. The
+failure is loud, so the cost is a minute — the reason to record it is that a step
+which has never been executed is worth knowing about.
 
 Expected: all green; census shows 38 raw + 8 slots.
 
@@ -2192,7 +2201,48 @@ git commit -m "docs: close the Task 3 triage ledger"
   `src/bin/aleph-server/commands/start/builder/subsystems.rs:{292,319,348,391,396,398}`,
   `src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:{682,751}`,
   `src/bin/aleph-server/commands/start/builder/agent_init/tool_catalog_init.rs:470`,
-  `src/bin/aleph-server/commands/start/mod.rs:109`, `src/bin/aleph-server/main.rs:79`
+  `src/bin/aleph-server/commands/start/mod.rs:109`, `src/bin/aleph-server/main.rs:79`,
+  **`src/bin/aleph-server/commands/start/mod.rs:3163-3195`** — a `match` arm, not an
+  `if`, and it decides THREE slots at once (see Step 2's ⚠️ below)
+
+**Two decline sites this task's own search shape will not find. Read both before Step 1.**
+
+1. **`start/mod.rs:3163-3195` — three slots inside a `match` arm.**
+   ```rust
+   match alephcore::tools::result_store::ToolResultStore::new("global") {
+       Ok(store) => {
+           set_global_tool_result_store(store);   // tools/result-store
+           set_global_result_budget_ceiling(…);   // tools/result-budget-ceiling
+           set_global_turn_result_budget(budget); // tools/turn-budget
+       }
+       Err(e) => { tracing::warn!(…, "…Layer 2 + Layer 3 disabled"); }
+   }
+   ```
+   Step 1's `grep` includes `match ` so it will *list* this, but Step 3's guard
+   recognised `if` / `if let` openers only and would have **silently exempted all
+   three** — widened below. Note also for Task 15: `turn-budget` and
+   `result-budget-ceiling` are installed only inside the result-store's `Ok` arm
+   though neither depends on the store, so a `ToolResultStore::new` failure
+   silently disables the turn cap — a handle Task 8 judged `FailsOpen`.
+
+2. **`src/tools/result_processing.rs::set_global_result_budget_ceiling` — an early
+   return inside the library setter, outside this task's walk root entirely.**
+   It returns without installing when `ceiling >= DEFAULT_RESULT_BUDGET_TOKENS`,
+   with the reason already written down ("a large-window model installs nothing
+   and behaves byte-for-byte as it does today"). Step 1 greps
+   `src/bin/aleph-server/commands/start/` and Step 3 walks `src/bin/aleph-server`
+   only, so **neither reaches it**.
+
+   ⚠️ Boot passes `per_result_tokens`, whose maximum *is* `DEFAULT_RESULT_BUDGET_TOKENS`,
+   and the no-`[context_budget]` path passes that constant directly — so this decline
+   fires for **every deployment without a small window**, i.e. the common healthy case.
+   Until it is converted, a healthy box reports `outcome() == None` on that slot, which
+   `capability/mod.rs` defines as "nothing ever reached this slot — either this process
+   did not boot, or boot died before getting here". That is the confident-lie direction,
+   and it becomes observable the moment Task 11/12 land.
+
+   Task 8 recorded this at the declaration; it is repeated here because that file is
+   one this task has no reason to open.
 
 **Interfaces:**
 - Consumes: `decline` on every migrated slot
@@ -2296,6 +2346,13 @@ into the next item.
         out
     }
 
+    /// Which conditional opener decided an install — the `else` for one is a
+    /// sibling arm for the other, so they cannot share a check.
+    enum GuardKind {
+        If,
+        MatchArm,
+    }
+
     /// Every conditional capability install in boot says why it was skipped.
     #[test]
     fn no_conditional_boot_install_is_silent() {
@@ -2323,8 +2380,21 @@ into the next item.
                 }
                 let my_indent = indent_of(&lines[i]);
 
-                // Nearest enclosing `if`-family opener at a strictly smaller indent.
-                let mut guard: Option<usize> = None;
+                // Nearest enclosing CONDITIONAL opener at a strictly smaller
+                // indent. TWO families, not one.
+                //
+                // ⚠️ This recognised `if` / `if let` only for one revision, and
+                // `start/mod.rs:3163` is why that was not enough: three installs
+                // sit inside `match ToolResultStore::new { Ok(store) => … ,
+                // Err(e) => warn! }`. From each of them the back-walk lands on
+                // `Ok(store) => {`, finds no `if`, sets `guard = None`, and takes
+                // the `continue` below commented "unconditional install: fine".
+                // It is not unconditional — an `Err` decides three slots and says
+                // nothing — and `examined >= 15` is satisfied by the genuine
+                // `if let` sites, so the vacuity assertion could not report it
+                // either. A guard blind to a whole opener family reports "all
+                // clear" about sites it never read.
+                let mut guard: Option<(usize, GuardKind)> = None;
                 for j in (0..i).rev() {
                     if lines[j].trim().is_empty() {
                         continue;
@@ -2335,18 +2405,50 @@ into the next item.
                     }
                     let t = lines[j].trim_start();
                     if t.starts_with("if ") || t.starts_with("if let ") {
-                        guard = Some(j);
+                        guard = Some((j, GuardKind::If));
+                    } else if t.contains("=>") && t.ends_with('{') {
+                        // A match arm. Nothing else in Rust opens a block with
+                        // `… => {`; closures spell their params `|a, b|`.
+                        guard = Some((j, GuardKind::MatchArm));
                     }
                     break; // first shallower line decides; do not keep walking out
                 }
-                let Some(g) = guard else { continue }; // unconditional install: fine
+                let Some((g, kind)) = guard else { continue }; // unconditional install: fine
                 examined += 1;
 
-                let (_, closing) = block_at(&lines, g);
-                let closer = lines.get(closing).map(String::as_str).unwrap_or("");
-                let has_else_with_decline = closer.trim_start().starts_with("} else")
-                    && block_at(&lines, closing).0.contains("decline");
-                if !has_else_with_decline {
+                let says_why = match kind {
+                    GuardKind::If => {
+                        let (_, closing) = block_at(&lines, g);
+                        let closer = lines.get(closing).map(String::as_str).unwrap_or("");
+                        closer.trim_start().starts_with("} else")
+                            && block_at(&lines, closing).0.contains("decline")
+                    }
+                    // A match arm's "else" is a SIBLING ARM, so the subject is
+                    // the whole `match`: step out exactly one level and require a
+                    // `decline` somewhere in its body.
+                    //
+                    // Deliberately weaker than the `If` branch, and say so rather
+                    // than assume it away: an arm that declines the WRONG slot
+                    // still passes here. Pinning which arm declines what needs
+                    // arm-by-arm parsing; the defect worth catching first is "this
+                    // match decides a slot and never declines at all".
+                    //
+                    // `contains("match ")`, not `starts_with`: `let x = match y {`
+                    // is the common spelling, and `starts_with` would walk past it
+                    // to an unrelated earlier `match`. If the line one step out is
+                    // not a match at all, this yields `false` and the site is
+                    // REPORTED — over-report rather than silently exempt, which is
+                    // the failure this whole widening exists to remove.
+                    GuardKind::MatchArm => {
+                        let arm_indent = indent_of(&lines[g]);
+                        lines[..g]
+                            .iter()
+                            .rposition(|l| !l.trim().is_empty() && indent_of(l) < arm_indent)
+                            .filter(|&m| lines[m].contains("match "))
+                            .is_some_and(|m| block_at(&lines, m).0.contains("decline"))
+                    }
+                };
+                if !says_why {
                     offenders.push(format!("{rel}:{}", i + 1));
                 }
             }
@@ -2390,6 +2492,23 @@ cp /tmp/subsystems.rs.bak src/bin/aleph-server/commands/start/builder/subsystems
 Expected: `test result: FAILED` ⇒ **RED** naming `subsystems.rs:<line>`. If instead you get
 `examined only 0`, the wrapper derivation broke — fix that before trusting any green from
 this guard.
+
+⚠️ **Falsify the `match` branch separately — the `if` branch passing proves nothing about
+it.** That is the whole lesson of the revision that added it: the guard was green crate-wide
+while structurally blind to three slots.
+
+```bash
+cp src/bin/aleph-server/commands/start/mod.rs /tmp/mod.rs.bak
+# Delete the `decline` from the Err arm at ~3189 and confirm all THREE installs
+# in the Ok arm are named.
+cargo test -p alephcore --lib capability::census::tests::no_conditional_boot_install 2>&1 | tail -12
+cp /tmp/mod.rs.bak src/bin/aleph-server/commands/start/mod.rs
+```
+
+Expected: **RED** naming three lines in `start/mod.rs` (one per slot). A single line means
+the back-walk is still resolving only one of them; a green means the `match` opener is not
+being recognised at all — check `t.contains("=>") && t.ends_with('{')` against the actual
+formatting of that arm before believing it.
 
 - [ ] **Step 4: Run boot tests and the verification set**
 

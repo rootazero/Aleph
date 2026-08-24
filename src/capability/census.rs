@@ -115,9 +115,9 @@
 //! failure semantics in full: an uninstalled read yields `None`, which reads as
 //! a legal "not configured" and no caller can tell.
 //!
-//! **At least SIXTEEN confirmed instances — and the number is the least
+//! **At least SEVENTEEN confirmed instances — and the number is the least
 //! reliable thing in this section.** Read the counting rule below before using
-//! it. Five members share one spelling; eleven do not, and the class is defined
+//! it. Five members share one spelling; twelve do not, and the class is defined
 //! by the *install*, never by the syntax:
 //!
 //! | static | shape | an uninstalled read means |
@@ -138,6 +138,7 @@
 //! | `projects/roster.rs::ROSTER` | `OnceLock<RwLock<RosterSnapshot>>` | `is_member` → `false` for everyone (its own doc says so) |
 //! | `scope/directory.rs::NAMES` | `OnceLock<RwLock<HashMap<…>>>` | every user renders as a bare id; `hydrate` is "called once at boot" |
 //! | `gateway/interfaces/plugin.rs::PLUGINS` | `LazyLock<RwLock<HashMap<…>>>` | `get_factory` → `None` = "unknown channel type"; each channel registers "exactly once at startup" |
+//! | `agents/subagent_tool/types.rs::MAX_CONCURRENT_SUBAGENTS` | `AtomicUsize` — **no lock at all** | `4`; an operator who set `[execution] max_concurrent_subagents = 1` silently gets the default |
 //!
 //! **Already answers, deliberately not counted:** `browser/manager.rs::LIVE_MANAGER`
 //! (`Mutex<Option<Weak<…>>>`) is in the class by install, but `apply_policy_live`
@@ -155,15 +156,26 @@
 //! next person to count deserves to inherit the argument instead of re-deriving
 //! it. They are the reason "at least".
 //!
+//! `logging/level_control.rs::CURRENT_LOG_LEVEL` (`AtomicU8`, stored by
+//! `init_log_level` under a `Once`) is left out for the same reason by a
+//! different route: its uninstalled read is `Info`, which is also the
+//! *documented* behaviour when `RUST_LOG` is unset — so the default is a true
+//! answer as well as an ambiguous one. Same treatment as `SKILL_PATHS`, recorded
+//! so the next count inherits the argument rather than re-deriving it.
+//!
 //! # How to count this class (the number will be wrong again)
 //!
 //! ⚠️ **RE-DERIVE FROM THE DEFINITION. DO NOT TRUST THE FIGURE ABOVE.** The
 //! class is *a handle whose contents are installed after boot through interior
 //! mutability, whose uninstalled read is a legal-looking value*. It has been
-//! counted six times and revised upward five: **1 → 4 → 6 → 9 → 14 → 16.** The
-//! previous revision wrote "assume nine is too low as well" into this file and
-//! was then found low by five. **A warning is not a counting rule**, which is
-//! why what follows is a method rather than another warning.
+//! counted seven times and revised upward six:
+//! **1 → 4 → 6 → 9 → 14 → 16 → 17.** The revision before last wrote "assume nine
+//! is too low as well" into this file and was then found low by five; the one
+//! after it shipped the method below and was still found low by one.
+//! **A warning is not a counting rule**, which is why what follows is a method
+//! rather than another warning — and the seventh revision found its member
+//! because the METHOD had the same defect the method itself diagnoses, one level
+//! up. See step 2.
 //!
 //! 1. **Grep the rationale sentence, not the type.** Authors who choose this
 //!    pattern explain themselves in near-identical words: *"installed once at
@@ -172,18 +184,33 @@
 //!    once during subsystem boot"*. Three members were found this way and by no
 //!    type-shaped grep. The sentence is a better fingerprint than the shape,
 //!    because it is what the author writes when they make this choice.
-//! 2. **Then enumerate lock-bearing statics** (`Mutex` / `RwLock` at any
-//!    nesting, under `OnceLock` / `LazyLock` / `Lazy` / bare) and ask of each:
-//!    who writes through the guard, and when? Boot/subsystem-publish ⇒ member.
-//!    Accumulates during normal work ⇒ not.
+//! 2. **Then enumerate interior-mutable statics** — `Mutex` / `RwLock` at any
+//!    nesting (under `OnceLock` / `LazyLock` / `Lazy` / bare), `ArcSwap`, **and
+//!    atomics** — and ask of each: who writes through it, and when?
+//!    Boot/subsystem-publish ⇒ member. Accumulates during normal work ⇒ not.
+//!
+//!    ⚠️ This step read "lock-bearing statics" for one revision, and that is how
+//!    `MAX_CONCURRENT_SUBAGENTS` stayed out: an atomic is interior mutability
+//!    **without a lock**, so it was outside the enumeration by construction.
+//!    That is step 3's disease one level up — the scan was keyed on the
+//!    *container* spelling instead of the *absent value* spelling, and it came
+//!    out low for exactly the same reason. The `ArcSwap` half was checked when
+//!    this was widened: outside `spend::GLOBAL_POLICY` (already migrated) there
+//!    are none, so atomics were the live gap.
+//!
+//!    ⚠️ And enumerate over **declarations, not lines**:
+//!    `gateway/interfaces/plugin.rs::PLUGINS` — a member already in the table
+//!    above — spans three lines, so a single-line `grep` for
+//!    `static … : …Mutex/RwLock…` drops it. Anyone running this step literally
+//!    loses a member that was already counted.
 //! 3. **Do not key on `Option`.** "Absent" has been spelled at least five ways
 //!    here: `None`, an empty `Vec`/slice, an empty `HashMap`, a sentinel `0`,
 //!    and a `Default::default()` snapshot. Every table above was built by a
 //!    scan keyed on one of those spellings, which is precisely how it kept
 //!    coming out low.
 //!
-//! Nothing asserts sixteen, and nothing can: the class is *below this rule's
-//! resolution* by construction, so no guard sees the seventeenth arrive. That
+//! Nothing asserts seventeen, and nothing can: the class is *below this rule's
+//! resolution* by construction, so no guard sees the eighteenth arrive. That
 //! is the reason this is prose with a method attached rather than a test.
 //!
 //! `STATE_REGISTRY` shows how little hiding this takes: `origin_fanout.rs` names
@@ -194,15 +221,16 @@
 //! `GLOBAL_AUDIT` and `PLUGIN_SKILL_DIRS` are why this section is no longer
 //! titled after the `OnceLock<Lock<Option<T>>>` spelling. Neither is a container
 //! static, so neither is even a *candidate* here — no widening of either install
-//! form could reach them. The class is **interior-mutable installs**: two
+//! form could reach them. `MAX_CONCURRENT_SUBAGENTS` is a third reason: an
+//! atomic bears no lock at all. The class is **interior-mutable installs**: two
 //! gateway fan-out paths, two gateway middleware handles, the channel-factory
 //! table, the audit trail, three persistence roots, the id floor, the operator
 //! mask patterns, the plugin skill dirs and sub-agents, the project roster, the
-//! user directory, and the `[moa]` config — none of which can currently be
-//! asked whether boot reached them.
+//! user directory, the sub-agent concurrency cap, and the `[moa]` config — none
+//! of which can currently be asked whether boot reached them.
 //!
 //! `the_interior_mutable_install_class_is_below_this_rules_resolution` pins
-//! `MOA_CONFIG`'s shape. All sixteen are excluded here, and all sixteen were
+//! `MOA_CONFIG`'s shape. All seventeen are excluded here, and all seventeen were
 //! excluded from the specification's roster too — this class has been missing
 //! all along, so nothing regressed; it was never seen.
 //!
@@ -1390,21 +1418,6 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
              (`-> &'static dyn SlotStatus`) before believing the failures below.",
             c.slots.len()
         );
-        // F3: this 1:1 invariant used to live in the expiry guard below — the
-        // one Task 11 is told to DELETE. "No stray accessor" would therefore
-        // have vanished at exactly the moment the roster started consuming
-        // accessors, i.e. when it first mattered. It lives here instead,
-        // because this guard outlives the roster.
-        assert_eq!(
-            accessors.len(),
-            c.slots.len(),
-            "{} roster accessors for {} slots. Either a slot has two, or one \
-             accessor returns `&'static dyn SlotStatus` for something that is \
-             not a migrated handle — and Task 11 builds the roster from exactly \
-             these, so the roster would be wrong in the same direction.",
-            accessors.len(),
-            c.slots.len()
-        );
         for slot in &c.slots {
             let wired = accessors
                 .iter()
@@ -1431,6 +1444,40 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
                 slot.name
             );
         }
+        // F3: this 1:1 invariant used to live in the expiry guard below — the
+        // one Task 11 is told to DELETE. "No stray accessor" would therefore
+        // have vanished at exactly the moment the roster started consuming
+        // accessors, i.e. when it first mattered. It lives here instead,
+        // because this guard outlives the roster.
+        //
+        // ⚠️ ORDER IS LOAD-BEARING: this runs AFTER the per-slot loop above, and
+        // it used to run before it. A missing accessor — which this guard's own
+        // doc calls the likeliest mistake in the round — trips BOTH assertions,
+        // so whichever runs first is the only message anyone reads. Running the
+        // count first produced "7 roster accessors for 8 slots. Either a slot
+        // has two, or one accessor returns … for something that is not a
+        // migrated handle": both explanations false for that defect, and both
+        // sending the reader after a stray accessor that does not exist, while
+        // the message written for the case — the one above, which names the
+        // static and pastes in the fix — was unreachable. A genuinely stray
+        // accessor printed the SAME sentence with 9 instead of 7, so two
+        // opposite defects differed by one digit.
+        //
+        // The loop cannot absorb the stray direction (no slot is unwired by an
+        // extra accessor), so this assertion still has to exist — it just has to
+        // run second. Falsified in both directions.
+        assert_eq!(
+            accessors.len(),
+            c.slots.len(),
+            "{} roster accessors for {} slots, and every slot has one — so this \
+             is a STRAY accessor: one returns `&'static dyn SlotStatus` for \
+             something that is not a migrated handle, or a slot has two. Task 11 \
+             builds the roster from exactly these, so the roster would carry it \
+             too.\n\n(If you expected 'missing accessor', that is the loop \
+             above; it runs first and names the static.)",
+            accessors.len(),
+            c.slots.len()
+        );
     }
 
     /// The `#[allow(dead_code)]` on every roster accessor is an exemption with
