@@ -159,7 +159,7 @@ pub async fn handle_chat_send(
     // does not mint a run. `display_name` is UI sugar (never persisted): a
     // failed/missing user lookup falls back to the raw id, via the single
     // derivation `speaker::resolve_display_name` (same degradation contract
-    // `speaker::resolve_labels` gives the transcript rendering below).
+    // `speaker::resolve_labels_for_messages` gives the transcript rendering below).
     let display_name: Option<String> = author
         .as_ref()
         .map(|uid| crate::teams::broadcast::speaker::resolve_display_name(&security_store, uid));

@@ -34,10 +34,15 @@ pub fn build_member_input(
          ——被 reject 就按反馈重做再交。你仍可自由 @ 其他成员协作,但讨论要服务于把任务做完,而不是只在群里闲聊。"
             .to_string()
     };
-    // Empty `human_roster` (no human has spoken yet, or the identity store is
-    // unavailable — `speaker::resolve_labels`'s degradation) omits this clause
-    // entirely, so a single-human/no-human thread's prompt is byte-identical to
-    // before this line existed.
+    // Empty `human_roster` — no human-authored row has been seen in the visible
+    // transcript window yet, or the identity store was unavailable and
+    // `speaker::resolve_labels_for_messages` degraded to an empty map — omits this
+    // clause entirely rather than rendering it with an empty value. This is the
+    // UNCOMMON case: once a human has actually spoken, `human_roster` is non-empty
+    // and the clause DOES render (see `non_empty_human_roster_renders_its_own_clause`
+    // below). Nothing here makes the prompt byte-identical to before this parameter
+    // existed — the closing bullet's "或任何真人参与者" addition below is
+    // unconditional and always differs from the pre-this-task prompt.
     let human_roster_line = if human_roster.is_empty() {
         String::new()
     } else {
@@ -91,10 +96,14 @@ mod tests {
         );
     }
 
-    /// Empty `human_roster` (no human has spoken yet, or the identity store was
-    /// unavailable) must omit the "真人参与者:" clause entirely — not print it
-    /// with an empty value — so a single-human/no-human thread's prompt stays
-    /// byte-identical to before this parameter existed.
+    /// Empty `human_roster` — no human-authored row has been seen in the visible
+    /// window, or the identity store was unavailable — must omit the "真人参与者:"
+    /// clause entirely, not print it with an empty value. This is the UNCOMMON
+    /// path: once a human has spoken, `human_roster` is non-empty and the clause
+    /// renders (`non_empty_human_roster_renders_its_own_clause`). The prompt is
+    /// NOT byte-identical to before this parameter existed either way — the
+    /// closing bullet's "或任何真人参与者" addition (asserted below) is
+    /// unconditional.
     #[test]
     fn empty_human_roster_omits_the_clause() {
         let out = build_member_input(

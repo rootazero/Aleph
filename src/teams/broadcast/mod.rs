@@ -324,9 +324,9 @@ pub struct GroupChatBroadcaster {
     /// historical hardcoded caps, so an unconfigured deployment is unchanged.
     config: BroadcastConfig,
     /// User-identity store, for resolving human transcript rows' `author_user_id`
-    /// to a display name (`speaker::resolve_labels`, spec §6.2 humanization).
-    /// `None` degrades every human row's label to its raw user id — never blocks
-    /// or fails a run over a display-name lookup (P7).
+    /// to a display name (`speaker::resolve_labels_for_messages`, spec §6.2
+    /// humanization). `None` degrades every human row's label to its raw user id —
+    /// never blocks or fails a run over a display-name lookup (P7).
     security_store: Option<Arc<SecurityStore>>,
 }
 
@@ -705,11 +705,11 @@ impl GroupChatBroadcaster {
             .list_team_messages(&team_id, 200)
             .await
             .unwrap_or_default();
-        let labels = speaker::resolve_labels(self.security_store.as_ref(), &raw);
+        let labels = speaker::resolve_labels_for_messages(self.security_store.as_ref(), &raw);
         // `labels`' keys are already exactly the thread's distinct human authors
-        // (`resolve_labels` builds them from this same `raw` history), and its
-        // values already carry the store's degrade-to-raw-id fallback — so the
-        // human roster is just those entries, formatted and sorted by user id
+        // (`resolve_labels_for_messages` builds them from this same `raw` history),
+        // and its values already carry the store's degrade-to-raw-id fallback — so
+        // the human roster is just those entries, formatted and sorted by user id
         // for a deterministic prompt (sorting by the resolved label would let a
         // display-name rename reshuffle the roster's order for no reason).
         let mut human_ids: Vec<&String> = labels.keys().collect();
@@ -721,7 +721,7 @@ impl GroupChatBroadcaster {
             .join(", ");
         let history: Vec<(String, String)> = raw
             .into_iter()
-            .map(|m| (speaker::speaker_label(&m, &labels), m.content))
+            .map(|m| (speaker::speaker_label_for_message(&m, &labels), m.content))
             .collect();
         let transcript =
             transcript::format_transcript(&history, self.config.transcript_token_budget);
