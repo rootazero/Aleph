@@ -23,7 +23,11 @@
 /// follows a mid-file test item.
 ///
 /// Deliberately orthogonal to [`strip_comment_lines`]: a guard decides for
-/// itself whether comments are in scope. Most want both.
+/// itself whether comments are in scope. Call this function first if you
+/// need both — `strip_comment_lines` drops whole physical lines and can
+/// discard production code that shares a line with a comment delimiter
+/// (e.g. `*/ pub fn x() {}`), so filtering comments after item extraction is
+/// the safe order.
 #[must_use]
 pub fn production_prefix(src: &str) -> String {
     let normalized = src.replace('\r', "");
@@ -54,8 +58,12 @@ fn end_of_item(lines: &[&str], start: usize) -> usize {
     let mut depth: i32 = 0;
     let mut opened = false;
     let mut k = start;
+    // Carried across every line of this one item scan, so a string literal
+    // or block comment that spans physical lines is tracked correctly
+    // instead of being reset (and mis-scanned) on each new line.
+    let mut state = LexState::default();
     while k < lines.len() {
-        let code = code_only(lines[k]);
+        let code = code_only(lines[k], &mut state);
         depth += i32::try_from(code.matches('{').count()).unwrap_or(0);
         depth -= i32::try_from(code.matches('}').count()).unwrap_or(0);
         if code.contains('{') {
@@ -73,30 +81,85 @@ fn end_of_item(lines: &[&str], start: usize) -> usize {
     lines.len()
 }
 
-/// A line with line-comments and string/char literal *contents* removed, so
-/// braces inside them are not counted by [`end_of_item`].
-fn code_only(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut chars = line.chars().peekable();
-    let mut in_str = false;
-    let mut in_char = false;
+/// Lexer state threaded across every physical line of one [`end_of_item`]
+/// scan, so a string literal or block comment that spans multiple lines
+/// is tracked correctly instead of resetting on each new line.
+///
+/// Declared boundary, not a bug: raw strings (`r#"…"#`) are not lexed as
+/// raw — their interior `"` characters toggle `in_str` like any other
+/// string. In practice braces inside raw strings still balance out, and a
+/// full Rust lexer is more machinery than a brace-counting item-boundary
+/// scanner needs.
+#[derive(Default)]
+struct LexState {
+    in_str: bool,
+    in_block_comment: bool,
+}
+
+/// A line with line-comments, block-comments, and string/char literal
+/// *contents* removed, so braces inside them are not counted by
+/// [`end_of_item`]. `state` carries `in_str`/`in_block_comment` across every
+/// line of one item scan.
+///
+/// Never toggles any state on a bare `'`: a lifetime (`&'static str`,
+/// `&'a T`) is a single unmatched quote, and treating it as a char-literal
+/// delimiter would leave the scanner "inside a char literal" for the rest of
+/// the line — dropping every brace after it, including the one that opens
+/// the item's body. Since this scanner exists only to count braces, the
+/// only char literals that can matter are `'{'` and `'}'`; those two are
+/// recognised by exact lookahead and skipped whole. Every other `'` —
+/// including every lifetime — is emitted as an ordinary character and
+/// changes no state.
+fn code_only(line: &str, state: &mut LexState) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = String::with_capacity(chars.len());
+    let mut idx = 0usize;
     let mut escaped = false;
-    while let Some(c) = chars.next() {
+    while idx < chars.len() {
+        let c = chars[idx];
+        if state.in_block_comment {
+            if c == '*' && chars.get(idx + 1) == Some(&'/') {
+                state.in_block_comment = false;
+                idx += 2;
+            } else {
+                idx += 1;
+            }
+            continue;
+        }
         if escaped {
             escaped = false;
+            idx += 1;
+            continue;
+        }
+        if state.in_str {
+            match c {
+                '\\' => escaped = true,
+                '"' => state.in_str = false,
+                _ => {}
+            }
+            idx += 1;
             continue;
         }
         match c {
-            '\\' if in_str || in_char => escaped = true,
-            '"' if !in_char => {
-                in_str = !in_str;
+            '"' => {
+                state.in_str = true;
+                idx += 1;
             }
-            '\'' if !in_str => {
-                in_char = !in_char;
+            '\'' if chars.get(idx + 1) == Some(&'{') && chars.get(idx + 2) == Some(&'\'') => {
+                idx += 3; // the char literal '{' — skip whole, don't count the brace
             }
-            '/' if !in_str && !in_char && chars.peek() == Some(&'/') => break,
-            _ if in_str || in_char => {}
-            _ => out.push(c),
+            '\'' if chars.get(idx + 1) == Some(&'}') && chars.get(idx + 2) == Some(&'\'') => {
+                idx += 3; // the char literal '}' — skip whole, don't count the brace
+            }
+            '/' if chars.get(idx + 1) == Some(&'/') => break, // line comment: rest of line is not code
+            '/' if chars.get(idx + 1) == Some(&'*') => {
+                state.in_block_comment = true;
+                idx += 2;
+            }
+            _ => {
+                out.push(c);
+                idx += 1;
+            }
         }
     }
     out
@@ -210,6 +273,81 @@ mod tests {
         let out = production_prefix(src);
         assert!(out.contains("pub fn after()"), "got:\n{out}");
         assert!(!out.contains("unbalanced"));
+    }
+
+    /// Critical: a lifetime (`&'static str`) is a single unmatched `'`. A
+    /// scanner that toggles a char-literal flag on any bare `'` gets stuck
+    /// "inside a char literal" for the rest of the line, silently dropping
+    /// every brace after it — including the one that opens the item's body.
+    #[test]
+    fn cfg_test_item_containing_a_lifetime_does_not_eat_following_code() {
+        let src = r#"#[cfg(test)]
+pub(super) fn declared_scopes() -> Vec<&'static str> {
+    vec![]
+}
+pub fn after() {}
+"#;
+        let out = production_prefix(src);
+        assert!(out.contains("pub fn after()"), "got:\n{out}");
+        assert!(!out.contains("declared_scopes"));
+    }
+
+    /// A brace inside a `/* ... */` block comment must not be counted.
+    #[test]
+    fn cfg_test_item_containing_a_block_comment_brace_does_not_eat_following_code() {
+        let src = r#"#[cfg(test)]
+fn t() {
+    /* a comment with a { brace inside */
+    let x = 1;
+}
+pub fn after() {}
+"#;
+        let out = production_prefix(src);
+        assert!(out.contains("pub fn after()"), "got:\n{out}");
+        assert!(!out.contains("let x = 1"));
+    }
+
+    /// A string literal that spans physical lines (an unescaped newline
+    /// inside the quotes) must keep its `in_str` state across the line
+    /// break, or a `}` on the continuation line is counted as structural.
+    ///
+    /// The trailing `let also_hidden` line is load-bearing: a scanner that
+    /// resets `in_str` every line miscounts the phantom `}` on the
+    /// continuation line as the real closing brace of `fn t()`, ending the
+    /// item one statement too early and leaking `also_hidden` — still
+    /// `#[cfg(test)]`-only code — into the production output. Without this
+    /// second statement the false-close and the true close land on the same
+    /// line by coincidence and the bug produces no observable difference.
+    #[test]
+    fn cfg_test_item_containing_a_multiline_string_brace_does_not_eat_following_code() {
+        let src = r#"#[cfg(test)]
+fn t() {
+    let s = "first
+} still inside the string";
+    let also_hidden = 2;
+}
+pub fn after() {}
+"#;
+        let out = production_prefix(src);
+        assert!(out.contains("pub fn after()"), "got:\n{out}");
+        assert!(!out.contains("still inside the string"));
+        assert!(!out.contains("also_hidden"), "got:\n{out}");
+    }
+
+    /// The char literals `'{'` and `'}'` must still be recognised (by exact
+    /// lookahead) and skipped whole, not miscounted as structural braces.
+    #[test]
+    fn cfg_test_item_containing_brace_char_literals_does_not_eat_following_code() {
+        let src = r#"#[cfg(test)]
+fn t() {
+    let open = '{';
+    let close = '}';
+}
+pub fn after() {}
+"#;
+        let out = production_prefix(src);
+        assert!(out.contains("pub fn after()"), "got:\n{out}");
+        assert!(!out.contains("let open"));
     }
 
     /// CRLF checkouts are real on Windows; a `\n`-anchored scan matches
