@@ -37,22 +37,57 @@ pub use store::LoopGraphStore;
 pub use templates::AUDIT_NODE_BODY;
 pub use types::{EdgeKind, GraphEdge, GraphNode, NodeKind, Origin};
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
-use once_cell::sync::OnceCell;
 
 /// Process-global graph store. Initialized once at daemon boot
 /// (`constructor.rs`); `None` until then so tests / early-boot read as
 /// "no graph subsystem" (fail-soft, mirrors `goal::global`).
-static GLOBAL: OnceCell<Arc<LoopGraphStore>> = OnceCell::new();
+///
+/// `IndistinguishableDefault` rather than `ConsumerDecides`, and the three
+/// readers are why: two of them fold absence into a POSITIVE answer.
+/// `service::governing_owner` returns `Ok(None)` — its own doc says that means
+/// *"genuinely ungoverned"*, "including the legitimate case where the
+/// loop-graph subsystem never booted", and it is the objective ACL's permit
+/// answer. `service::notify_node_settled` returns `true`, i.e. the settle claim
+/// is EARNED, retiring that review for good on a key that never moves again.
+/// The third (`render_session_topology`) just renders nothing.
+static GLOBAL: CapabilitySlot<Arc<LoopGraphStore>> = CapabilitySlot::new(
+    "loop-graph/store",
+    MissingSemantics::IndistinguishableDefault {
+        reads_as: "\"genuinely ungoverned\" -- the objective ACL's permit answer, \
+                   and a settle claim earned without any watcher review",
+    },
+);
 
 /// Process-global topology event bus. Initialized once at daemon boot, next
 /// to [`init_global`]. `None` until then — publishing into an absent bus is a
 /// no-op, so tests and early boot need no special casing.
-static EVENT_BUS: OnceCell<TopologyEventBus> = OnceCell::new();
+///
+/// `FailsClosed`: [`publish`] is `if let Some(bus)` with no `else`, so topology
+/// events are dropped and nothing is granted; and `loop_graph_manage`'s audit
+/// block omits its own liveness line when the bus is absent, so the diagnostic
+/// that would have said "the audit trail is not being written" is the thing
+/// that goes missing. Dead and silent, which is what this variant names.
+static EVENT_BUS: CapabilitySlot<TopologyEventBus> =
+    CapabilitySlot::new("loop-graph/event-bus", MissingSemantics::FailsClosed);
+
+/// The handles above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn global_slot() -> &'static dyn SlotStatus {
+    &GLOBAL
+}
+
+#[allow(dead_code)]
+pub(crate) fn event_bus_slot() -> &'static dyn SlotStatus {
+    &EVENT_BUS
+}
 
 /// Install the global store at boot. Idempotent: a second call is ignored.
 pub fn init_global(store: Arc<LoopGraphStore>) {
-    let _ = GLOBAL.set(store);
+    let _ = GLOBAL.install(store);
 }
 
 /// Read the global store, if initialized.
@@ -62,7 +97,7 @@ pub fn global() -> Option<Arc<LoopGraphStore>> {
 
 /// Install the global topology event bus at boot. Idempotent.
 pub fn init_event_bus(bus: TopologyEventBus) {
-    let _ = EVENT_BUS.set(bus);
+    let _ = EVENT_BUS.install(bus);
 }
 
 /// Read the global event bus, if initialized.
@@ -134,7 +169,7 @@ pub fn spawn_event_persister(
 
 #[cfg(test)]
 pub fn set_global_for_test(store: Arc<LoopGraphStore>) {
-    let _ = GLOBAL.set(store);
+    let _ = GLOBAL.install(store);
 }
 
 #[cfg(test)]

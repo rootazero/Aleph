@@ -21,6 +21,7 @@ use futures::future::join_all;
 use once_cell::sync::OnceCell;
 use tracing::{info, warn};
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::loop_graph::types::EdgeKind;
 use crate::sync_primitives::Mutex;
 use crate::tasks::cron::SharedCronService;
@@ -37,7 +38,23 @@ const DEFAULT_AGENT: &str = crate::routing::DEFAULT_AGENT_ID;
 /// watcher run.
 const WATCH_DEBOUNCE: Duration = Duration::from_secs(60);
 
-static CRON_TRIGGER: OnceCell<SharedCronService> = OnceCell::new();
+/// `FailsClosed`, from the one reader: `notify_node_settled` logs
+/// *"watchers paired but no cron trigger handle"* by name and returns `false`,
+/// which releases the settle claim so the next observation of the same terminal
+/// row retries. Nothing is granted and the miss is named. The cost is real but
+/// bounded — [`init_cron_trigger`]'s own doc states it: watchers fall back to
+/// their own cadence.
+static CRON_TRIGGER: CapabilitySlot<SharedCronService> =
+    CapabilitySlot::new("loop-graph/cron-trigger", MissingSemantics::FailsClosed);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn cron_trigger_slot() -> &'static dyn SlotStatus {
+    &CRON_TRIGGER
+}
+
 /// watcher job id → its debounce [`Stamp`] (when, for which node's victory,
 /// and whether that run ever confirmed). The node half is what makes "held
 /// off by the debounce counts as reviewed" a true statement rather than a
@@ -51,7 +68,7 @@ static DEBOUNCE: OnceCell<Mutex<HashMap<String, Stamp>>> = OnceCell::new();
 /// trigger degrades to a no-op and watchers rely on their own cadence.
 pub fn init_cron_trigger(svc: Option<SharedCronService>) {
     if let Some(s) = svc {
-        let _ = CRON_TRIGGER.set(s);
+        let _ = CRON_TRIGGER.install(s);
     }
 }
 
