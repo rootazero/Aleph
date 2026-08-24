@@ -319,14 +319,16 @@ fn code_only(line: &str, state: &mut LexState) -> String {
 /// continuation style (`    * cfg.warning_threshold.clamp(0.0, 1.0)`) have
 /// IDENTICAL single-line shape; no stateless per-line predicate can tell
 /// them apart, because that is a property of the two shapes, not a gap in
-/// any one heuristic. This function's earlier stateless attempt at exactly
-/// such a predicate (`is_block_comment_continuation`, since deleted)
-/// measured its own matched population on this repo's `src/` tree and found
-/// **zero confirmed block-comment continuations among the 479 lines it
-/// matched** — every one was either that rustfmt multiplication style or
-/// prose it could not distinguish, and its own "distinguishing fact"
-/// (whitespace after `*` means comment) was false on its own measured
-/// corpus (`* cfg.warning_threshold` is whitespace-followed and is a
+/// any one heuristic. Measured on this repo's `src/` tree, over two
+/// generations of that mistake: the bare `starts_with('*')` rule matched
+/// **479** lines and **zero** of them were block-comment continuations
+/// (460 real code, 19 raw-string payload). The refined stateless predicate
+/// that replaced it (`is_block_comment_continuation`, since deleted)
+/// narrowed those 479 down to **5** — and was still wrong on every one:
+/// four are rustfmt's multiplication continuation and the fifth is a line
+/// of CSS inside an `r#"…"#`. Its own "distinguishing fact" (whitespace
+/// after `*` means comment) was false on its own measured corpus
+/// (`* cfg.warning_threshold` is whitespace-followed and is a
 /// multiplication). Knowing "am I inside a `/* */` right now" is the only
 /// thing that actually answers the question; a line can only be classified
 /// correctly by walking the file, not by looking at it alone.
