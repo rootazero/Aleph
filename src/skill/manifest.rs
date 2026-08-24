@@ -6,6 +6,7 @@ use crate::domain::skill::{
     EligibilitySpec, InstallKind, InstallSpec, InvocationPolicy, Os, PromptScope, SkillContent,
     SkillId, SkillManifest, SkillSource,
 };
+use crate::skill::guard::{install_allowed, scan_content, ThreatLevel, TrustLevel};
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -32,6 +33,15 @@ pub enum SkillParseError {
         max: u64,
         path: std::path::PathBuf,
     },
+    /// The guard (see [`crate::skill::guard`]) classified the file's content
+    /// at a threat level the source's trust level is not allowed to install.
+    /// Reload paths go through the same gate as install paths: a SKILL.md
+    /// tampered after install must not bypass the install-time audit.
+    Guarded {
+        level: crate::skill::guard::ThreatLevel,
+        trust: crate::skill::guard::TrustLevel,
+        findings: Vec<String>,
+    },
 }
 
 impl std::fmt::Display for SkillParseError {
@@ -48,6 +58,13 @@ impl std::fmt::Display for SkillParseError {
                 size,
                 path.display()
             ),
+            Self::Guarded { level, trust, findings } => write!(
+                f,
+                "skill guard denied install: threat level {:?} not allowed for trust {:?}; findings: {}",
+                level,
+                trust,
+                findings.join(", ")
+            ),
         }
     }
 }
@@ -57,7 +74,10 @@ impl std::error::Error for SkillParseError {
         match self {
             Self::Io(e) => Some(e),
             Self::Yaml(e) => Some(e),
-            Self::NoFrontmatter | Self::EmptyName | Self::FileTooLarge { .. } => None,
+            Self::NoFrontmatter
+            | Self::EmptyName
+            | Self::FileTooLarge { .. }
+            | Self::Guarded { .. } => None,
         }
     }
 }
@@ -167,6 +187,22 @@ struct RawInstallSpec {
 /// mappings + alias expansions.
 pub const MAX_SKILL_FILE_BYTES: u64 = 1024 * 1024;
 
+/// Map a skill's source to the trust level the install gate uses.
+///
+/// `Bundled` skills ship with the Aleph binary — they are `Trusted` by
+/// construction (they were reviewed at build time). Everything else
+/// (plugin, workspace, global) is `Community`: arbitrary third-party
+/// content the daemon should never auto-promote.
+fn trust_for_source(source: &SkillSource) -> TrustLevel {
+    match source {
+        SkillSource::Bundled => TrustLevel::Trusted,
+        SkillSource::Plugin(_)
+        | SkillSource::Workspace
+        | SkillSource::Global
+        | SkillSource::Unknown => TrustLevel::Community,
+    }
+}
+
 /// Parse a SKILL.md file from disk.
 pub fn parse_skill_file(
     path: impl AsRef<Path>,
@@ -182,7 +218,37 @@ pub fn parse_skill_file(
             });
         }
     }
-    let content = std::fs::read_to_string(path_ref)?;
+    let content_bytes = std::fs::read(path_ref)?;
+    // Funnel every load path through the install-time guard: a SKILL.md
+    // tampered after install must not bypass the install-time audit.
+    // Previously only the external install RPC handler called
+    // `install_allowed`; `reload_file` / `rescan_dirs` skipped it, so a
+    // file mutated on disk would re-enter the registry un-redacted.
+    let trust = trust_for_source(&source);
+    let verdict = scan_content(
+        path_ref
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default()
+            .as_str(),
+        &content_bytes,
+    );
+    if !install_allowed(verdict.level, trust) {
+        return Err(SkillParseError::Guarded {
+            level: verdict.level,
+            trust,
+            findings: verdict
+                .findings
+                .iter()
+                .map(|f| format!("{}: {}", f.file, f.pattern_id))
+                .collect(),
+        });
+    }
+    // OK to convert bytes to String now: the scan already validated the
+    // content, and the size cap is on the bytes.
+    let content = String::from_utf8(content_bytes).map_err(|e| {
+        SkillParseError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    })?;
     parse_skill_content(&content, source)
 }
 
