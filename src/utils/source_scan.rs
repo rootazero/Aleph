@@ -28,6 +28,26 @@
 /// discard production code that shares a line with a comment delimiter
 /// (e.g. `*/ pub fn x() {}`), so filtering comments after item extraction is
 /// the safe order.
+///
+/// # Known gap (F2, review round 4, unfixed)
+///
+/// The `#[cfg(test)]` attribute is detected below by a raw
+/// `trim_start().starts_with("#[cfg(test)]")` scan over `lines[i]` — not by
+/// lexing. So a line whose TEXT begins with `#[cfg(test)]` but which is
+/// really string-literal or comment-block payload is read as a live
+/// attribute, and [`end_of_item`] is then started on the following line
+/// with a fresh [`LexState`] that does not inherit the enclosing
+/// string/comment state — which can discard the whole tail of a file. This
+/// is the under-see direction (a guard silently approves what it cannot
+/// see), and it predates this module: it is not something this round
+/// introduced, and the fix is larger than a doc-comment pass — lex the
+/// file once, ask the lexer whether the attribute line's first column is
+/// live code, and seed `end_of_item`'s `LexState` from that walk rather
+/// than defaulting it. Zero reachable instances in `src/` as of
+/// 2026-08-24: the only 2 lines whose text starts with `#[cfg(test)]`
+/// while actually being string payload are both inside their own file's
+/// `#[cfg(test)] mod tests` block, which this scan already excises at the
+/// outer attribute before reaching them.
 #[must_use]
 pub fn production_prefix(src: &str) -> String {
     let normalized = src.replace('\r', "");
@@ -100,10 +120,11 @@ fn end_of_item(lines: &[&str], start: usize) -> usize {
 /// `src/sandbox/command_policy/normalize.rs:142`) and a payload ending in
 /// `\` (`raw.strip_prefix(r"\\?\")`, `src/utils/paths.rs:56` — one line,
 /// 18 desync runs, 206 comment lines wrongly made visible). Once
-/// desynchronised, a `/*` in the payload latched `in_block_comment`, which
-/// only `*/` clears: measured 2026-08-24 that swallowed lines 117→580 of
-/// `src/sandbox/command_policy/rules.rs` — production source, the sandbox
-/// hardline rule table — and ran to EOF in `src/sandbox/config.rs`.
+/// desynchronised, a `/*` in the payload latched `block_comment_depth`,
+/// which only `*/` clears: measured 2026-08-24 that swallowed lines
+/// 117→580 of `src/sandbox/command_policy/rules.rs` — production source,
+/// the sandbox hardline rule table — and ran to EOF in
+/// `src/sandbox/config.rs`.
 #[derive(Default)]
 struct LexState {
     /// Inside a string literal of any kind: ordinary, byte, C, or raw.
@@ -114,7 +135,16 @@ struct LexState {
     /// string is ordinary, or when no string is open. Inside a raw string
     /// `\` is not an escape and a bare `"` is not a terminator.
     raw_hashes: Option<usize>,
-    in_block_comment: bool,
+    /// Block-comment nesting depth; `0` means not inside one. Rust nests
+    /// `/* … /* … */ … */`, so this counts delimiters rather than toggling
+    /// a bool. A bool cleared on the FIRST `*/`, releasing the lexer while
+    /// an outer comment was still open (review round 4, finding F1) — that
+    /// leaked comment text into `strip_comment_lines`'s output and could
+    /// make `end_of_item` run long and discard production code. Zero live
+    /// instances on this repo's `src/` tree as of 2026-08-24 (an
+    /// independent nesting-aware scan of all 2,444 files found none); it
+    /// was a future hazard, not a present defect.
+    block_comment_depth: u32,
 }
 
 /// If `chars[i]` is `'` and it opens a genuine char literal, return the
@@ -203,7 +233,7 @@ fn raw_string_closes(chars: &[char], quote: usize, hashes: usize) -> bool {
 
 /// A line with line-comments, block-comments, and string/char literal
 /// *contents* removed, so braces inside them are not counted by
-/// [`end_of_item`]. `state` carries `in_str`/`in_block_comment` across every
+/// [`end_of_item`]. `state` carries `in_str`/`block_comment_depth` across every
 /// line of one item scan.
 ///
 /// Char literals are recognised via [`char_literal_len`] and skipped whole,
@@ -216,15 +246,18 @@ fn raw_string_closes(chars: &[char], quote: usize, hashes: usize) -> bool {
 /// Every literal the scan skips leaves a SENTINEL in the output: a single
 /// `"` where a string delimiter stood, a single `_` for a whole char
 /// literal. Never a brace, so [`end_of_item`]'s counting is unaffected.
-/// The sentinel exists because this function has two callers asking two
-/// different questions of one walk. For brace counting, emitting nothing
-/// for a literal is exactly right. For [`strip_comment_lines`], which asks
-/// "does this line contain any code?", a literal IS code — and emitting
-/// nothing made a line whose entire content is a literal
-/// indistinguishable from a comment, which on this repo silently hid 9 763
-/// lines of real code from ~36 census guards (measured 2026-08-24). One
-/// sentinel answers both questions; forking the lexer would have made a
-/// second author for the same walk.
+/// The sentinel exists because this function has three callers asking two
+/// different questions of one walk. For brace counting ([`end_of_item`]),
+/// emitting nothing for a literal is exactly right. For "does this line
+/// contain any code?" — asked by [`strip_comment_lines`]'s filter (which
+/// also consults `entered_in_str`, since a previously-open string counts as
+/// code even where nothing is visible on this line) and, more plainly, by
+/// `no_module_hand_rolls_the_cfg_test_prefix_cut`'s `!code.trim().is_empty()`
+/// — a literal IS code, and emitting nothing made a line whose entire
+/// content is a literal indistinguishable from a comment, which on this
+/// repo silently hid 9 763 lines of real code from ~36 census guards
+/// (measured 2026-08-24). One sentinel answers both questions; forking the
+/// lexer would have made a second author for the same walk.
 fn code_only(line: &str, state: &mut LexState) -> String {
     let chars: Vec<char> = line.chars().collect();
     let mut out = String::with_capacity(chars.len());
@@ -232,9 +265,13 @@ fn code_only(line: &str, state: &mut LexState) -> String {
     let mut escaped = false;
     while idx < chars.len() {
         let c = chars[idx];
-        if state.in_block_comment {
-            if c == '*' && chars.get(idx + 1) == Some(&'/') {
-                state.in_block_comment = false;
+        if state.block_comment_depth > 0 {
+            if c == '/' && chars.get(idx + 1) == Some(&'*') {
+                // Nested opener: only the matching `*/` may close this one.
+                state.block_comment_depth += 1;
+                idx += 2;
+            } else if c == '*' && chars.get(idx + 1) == Some(&'/') {
+                state.block_comment_depth -= 1;
                 idx += 2;
             } else {
                 idx += 1;
@@ -292,7 +329,7 @@ fn code_only(line: &str, state: &mut LexState) -> String {
             }
             '/' if chars.get(idx + 1) == Some(&'/') => break, // line comment: rest of line is not code
             '/' if chars.get(idx + 1) == Some(&'*') => {
-                state.in_block_comment = true;
+                state.block_comment_depth = 1;
                 idx += 2;
             }
             _ => {
@@ -313,7 +350,7 @@ fn code_only(line: &str, state: &mut LexState) -> String {
 /// not the bug — this repo has been bitten in both directions.
 ///
 /// Stateful on purpose, reusing `code_only`'s `LexState` — the exact
-/// `in_block_comment` tracking `end_of_item` already carries across lines —
+/// `block_comment_depth` tracking `end_of_item` already carries across lines —
 /// rather than pattern-matching one line in isolation. A block-comment
 /// continuation line (` * text`) and rustfmt's own leading-binary-operator
 /// continuation style (`    * cfg.warning_threshold.clamp(0.0, 1.0)`) have
@@ -575,6 +612,20 @@ pub fn after() {}
         assert!(!out.contains("let q"));
     }
 
+    /// Review round 4, finding 6: this branch is defensive and, until this
+    /// test, unpinned — deleting it (mutant `MI`) survived all seven of the
+    /// round's mutation-killing tests AND is byte-identical on this repo's
+    /// whole `src/` corpus (2,444 files, 0 diffs), because every corpus
+    /// instance of `'\''` happens to be followed by a non-`'` character that
+    /// the generic scan below also stops on one position early — the
+    /// generic scan alone would return `Some(3)` here (closing on the
+    /// escaped quote itself, at `i + 2`) instead of the correct `Some(4)`.
+    #[test]
+    fn char_literal_len_recognises_the_escaped_quote_special_case() {
+        let chars: Vec<char> = "'\\''".chars().collect();
+        assert_eq!(char_literal_len(&chars, 0), Some(4));
+    }
+
     /// A lifetime and a char literal on the same line must not interfere
     /// with each other: the lifetime changes no state, and the `'{'`
     /// literal is still recognised and its brace still excluded from the
@@ -688,6 +739,27 @@ pub fn after() {}
         assert_eq!(out.trim(), "pub fn survives() {}");
     }
 
+    /// F1 (review round 4, finding 1): Rust nests `/* … /* … */ … */`, but
+    /// `LexState`'s block-comment flag used to be a bool that cleared on the
+    /// FIRST `*/` — so the outer comment released early and " still outer
+    /// */" leaked into `code_only`'s output as ordinary code, making the
+    /// whole line read as containing code and survive `strip_comment_lines`.
+    /// Zero live instances on this repo's `src/` tree as of 2026-08-24 (an
+    /// independent nesting-aware scan of all 2,444 files found none) — this
+    /// pins the fix against the shape a future commit could still produce
+    /// (e.g. commenting out a function that itself contains `/* */`).
+    #[test]
+    fn nested_block_comments_are_fully_dropped() {
+        let src = "/* outer /* inner */ still outer */\npub fn after() {}\n";
+        let out = strip_comment_lines(src);
+        assert!(
+            !out.contains("still outer"),
+            "a nested block comment released on the FIRST `*/` instead of \
+             the matching outer one, leaking comment text as code; got:\n{out}"
+        );
+        assert!(out.contains("pub fn after()"), "got:\n{out}");
+    }
+
     /// M1, the dominant wrong-drop mechanism: a line whose ENTIRE content is
     /// a string literal is CODE, not a comment.
     ///
@@ -775,7 +847,7 @@ pub fn after() {}
 
     /// M4, the worst of the four and the only one that reached production
     /// source: once `in_str` reads false while still inside a raw payload, a
-    /// `/*` in that payload latches `in_block_comment`, which only `*/`
+    /// `/*` in that payload latches `block_comment_depth`, which only `*/`
     /// clears. `src/sandbox/command_policy/rules.rs:117` latches on
     /// `r#"["']?/+(?:\.{1,2}/*)*…"#` and swallows lines 117→580 — 463 lines of
     /// the sandbox hardline rule table, and it SURVIVES `production_prefix`.
@@ -819,6 +891,20 @@ pub fn after() {}
             );
             assert!(out.contains("pub fn after()"), "{prefix}; got:\n{out}");
         }
+    }
+
+    /// Review round 4, finding 6: this branch is defensive and, until this
+    /// test, unpinned — deleting it (mutant `MH`) survived all seven of the
+    /// round's mutation-killing tests AND is byte-identical on this repo's
+    /// whole `src/` corpus (2,444 files, 0 diffs). Without it, `foor"x"` —
+    /// an identifier ending in `r` immediately followed by a string — would
+    /// be misread as `foo` plus a zero-hash raw-string opener (`Some(0)`)
+    /// instead of `None`, an ordinary string preceded by an identifier.
+    #[test]
+    fn raw_string_hashes_rejects_a_quote_preceded_by_an_identifier_tail() {
+        let chars: Vec<char> = "foor\"x\"".chars().collect();
+        let quote = chars.iter().position(|&c| c == '"').unwrap();
+        assert_eq!(raw_string_hashes(&chars, quote), None);
     }
 
     /// The sentinel must not leak into what a consumer reads.
@@ -938,12 +1024,13 @@ pub fn after() {}
     /// state. Checked tree-wide across all 34 files whose output moved:
     /// 3 065 non-blank lines removed, every one of them at or after its own
     /// file's `#[cfg(test)]` attribute and inside a `#[cfg(test)]` item by an
-    /// independent formatting oracle; 79 lines of genuine production code
-    /// RECOVERED in `src/hub/install.rs`, where the desync had instead run
-    /// the scan PAST the item's true end; zero production lines lost. The
-    /// companion guard above moved the other way in step — `compared`
-    /// 2 235 → 2 251, i.e. those 16 files now AGREE with the naive cut
-    /// instead of beating it — and `worst` is unchanged at 62 118 bytes.
+    /// independent formatting oracle; 76 lines of genuine production code
+    /// RECOVERED in `src/hub/install.rs` (a line-multiset diff of pre-vs-post
+    /// output: 332 removed, 76 added, 75 non-blank), where the desync had
+    /// instead run the scan PAST the item's true end; zero production lines
+    /// lost. The companion guard above moved the other way in step —
+    /// `compared` 2 235 → 2 251, i.e. those 16 files now AGREE with the naive
+    /// cut instead of beating it — and `worst` is unchanged at 62 222 bytes.
     ///
     /// If this floor drops again, the first question is the same one these
     /// paragraphs answer: did the corpus's own `"#[cfg(test)]"`-shaped text
