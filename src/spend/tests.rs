@@ -281,31 +281,22 @@ fn principals_in_is_empty_for_a_period_with_no_rows() {
 }
 
 // ============================================================================
-// update_policy_into (the injectable core of `update_policy`)
+// update_policy's `false` branch — moved, not dropped
 // ============================================================================
-
-/// The live-apply honest-downgrade signal (G14, in `config::live_apply`)
-/// rests on `update_policy` returning `false` when no handle is installed.
-/// `GLOBAL_POLICY` is a process-wide `OnceLock` that this binary's other
-/// tests (`providers::metering`'s `install_test_spend_globals`) may install
-/// in any order relative to this one, so the `None` branch cannot be
-/// exercised through the real global — see `update_policy_into`'s doc.
-#[test]
-fn update_policy_into_reports_false_with_no_handle() {
-    assert!(!update_policy_into(None, SpendPolicy::default()));
-}
-
-#[test]
-fn update_policy_into_stores_into_a_provided_handle_and_reports_true() {
-    let handle = arc_swap::ArcSwap::from_pointee(SpendPolicy::default());
-    let new_policy = SpendPolicy {
-        per_user_usd: Some(42.0),
-        ..SpendPolicy::default()
-    };
-
-    assert!(update_policy_into(Some(&handle), new_policy.clone()));
-    assert_eq!(*handle.load_full(), new_policy);
-}
+//
+// The live-apply honest-downgrade signal (G14, in `config::live_apply`) rests
+// on `update_policy` returning `false` when no handle is installed. That branch
+// still cannot be exercised through the real global — `install_policy` is
+// idempotent and `cargo test --lib` runs this crate's whole suite in one
+// process, so `providers::metering`'s `install_test_spend_globals` may install
+// the handle before or after any test here, in an order this crate does not
+// control. It used to be reached through an injectable
+// `update_policy_into(handle, policy)`; `MutableCapabilitySlot` is that seam
+// now, and keeping both would be two implementations of one hot-apply. The
+// pair that lived here is
+// `capability::tests::update_before_install_returns_false_and_changes_nothing`
+// and `capability::tests::install_then_update_swaps_the_value_and_keeps_the_stamp`,
+// each against a slot the test owns.
 
 // ============================================================================
 // check_with (the injectable core of `check`)
@@ -825,4 +816,52 @@ fn g15_no_ambient_actor_or_current_agent_id_in_spend_source() {
          agent is not a person and cannot hold a budget:\n  {}",
         offenders.join("\n  ")
     );
+}
+
+// ============================================================================
+// The process-global handles, as capability slots
+// ============================================================================
+
+#[test]
+fn the_policy_handle_reports_whether_it_was_installed() {
+    // The §5.22 round-7 shape, now answerable: `configured: false` is a
+    // true statement about an unconfigured box AND about a box whose
+    // handle boot never installed. Only the outcome separates them.
+    use crate::capability::SlotStatus;
+    let erased: &dyn SlotStatus = &GLOBAL_POLICY;
+    assert_eq!(erased.id(), "spend/policy");
+}
+
+/// The roster's entry point for these two handles.
+///
+/// Task 11 assembles `ALL_SLOTS` from accessors like these rather than from 46
+/// `pub static`s, so the accessor — not the static — is the thing that must
+/// keep working. Asserting through it also means the ids are pinned on the path
+/// the roster actually walks: a slot renamed in one place and not the other
+/// shows up here instead of as a roster entry quietly describing the wrong
+/// handle.
+#[test]
+fn the_slot_accessors_expose_both_handles_to_the_roster() {
+    use crate::capability::{MissingSemantics, SlotStatus};
+
+    let slots: [&'static dyn SlotStatus; 2] = [global_ledger_slot(), global_policy_slot()];
+    let ids: Vec<&str> = slots.iter().map(|s| s.id()).collect();
+    assert_eq!(ids, vec!["spend/ledger", "spend/policy"]);
+
+    // Both are the round-7 shape by construction, and the sentence each one
+    // carries is what a diagnostic prints when `outcome()` is `None`. A slot
+    // that lost it would still report an id and still look fine.
+    for slot in slots {
+        match slot.missing() {
+            MissingSemantics::IndistinguishableDefault { reads_as } => {
+                assert!(
+                    !reads_as.is_empty(),
+                    "{}: an IndistinguishableDefault with nothing to say is the \
+                     silence this round exists to remove",
+                    slot.id()
+                );
+            }
+            other => panic!("{}: expected IndistinguishableDefault, got {other:?}", slot.id()),
+        }
+    }
 }

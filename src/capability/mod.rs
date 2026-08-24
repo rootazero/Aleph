@@ -162,9 +162,17 @@ impl<T: Send + Sync + 'static> SlotStatus for CapabilitySlot<T> {
 /// contract, not a new one: `spend::update_policy` feeds the live-apply
 /// verdict's honest downgrade to `Restart`. It is preserved exactly.
 ///
-/// ⚠️ If migration finds this type has no second member and `spend` could use
-/// `CapabilitySlot<ArcSwap<T>>` directly, delete it (R10 YAGNI withdrawal) —
-/// it exists to carry an existing handle, not to reserve a shape.
+/// ⚠️ The withdrawal question this type shipped with — "if migration finds no
+/// second member and `spend` could use `CapabilitySlot<ArcSwap<T>>` directly,
+/// delete it (R10)" — was asked during the `spend` migration and answered NO.
+/// There is still exactly one member, but the substitution is not equivalent:
+/// with a bare `CapabilitySlot<ArcSwap<T>>` the hot-apply is
+/// `get().map_or(false, |c| { c.store(..); true })` written at the call site,
+/// so the `#[must_use] -> bool` below — the thing that stops a dropped return
+/// from reporting a hot-apply that never happened — becomes something each
+/// future call site must remember rather than something the type enforces.
+/// That is the discipline-instead-of-construction failure the module doc opens
+/// with. Re-ask if `update`'s return ever stops being load-bearing.
 pub struct MutableCapabilitySlot<T: 'static> {
     id: &'static str,
     missing: MissingSemantics,

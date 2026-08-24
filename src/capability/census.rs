@@ -53,10 +53,11 @@
 //! roster would have lost a real member with no signal at all. Form 2 selects it
 //! for the reason it actually belongs, and survives the rename.
 //!
-//! The discriminating half is *use*, not *presence*. Ten statics in `src/` are
-//! `get_or_init`-ed inside a function that HAS parameters and do not use them
-//! (`cached_repo_root(working_dir)`, `cached_glob_regex(pattern)`, … — caches
-//! keyed by an argument, built from nothing). All ten stay lazy. A predicate
+//! The discriminating half is *use*, not *presence*. Ten sites across eight
+//! statics in `src/` are `get_or_init`-ed inside a function that HAS parameters
+//! and do not use them (`cached_repo_root(working_dir)`,
+//! `cached_glob_regex(pattern)`, … — caches keyed by an argument, built from
+//! nothing). All eight stay lazy. A predicate
 //! that asked only "does the enclosing fn take arguments" would swallow them,
 //! and `self_initialising_containers_are_excluded_by_derivation` fails by name
 //! if it ever degrades that way.
@@ -114,27 +115,40 @@
 //! failure semantics in full: an uninstalled read yields `None`, which reads as
 //! a legal "not configured" and no caller can tell.
 //!
-//! **Four confirmed instances**, and the class is wider than the spelling:
+//! **Six confirmed instances**, and the class is wider than the spelling:
 //!
 //! | static | shape | an uninstalled read means |
 //! |---|---|---|
 //! | `providers/moa/config_handle.rs::MOA_CONFIG` | `OnceLock<RwLock<Option<MoaToml>>>` | "no `[moa]` section configured" |
+//! | `gateway/middleware/request_state.rs::STATE_REGISTRY` | `OnceLock<RwLock<Option<Arc<…>>>>` | `request.state` sees no registry |
+//! | `gateway/middleware/latency.rs::GLOBAL_LATENCY` | `OnceLock<RwLock<Option<Arc<…>>>>` | `/metrics` renders no latency family |
 //! | `gateway/event_emitter/origin_fanout.rs::CHANNEL_REGISTRY` | `OnceLock<RwLock<Option<Arc<…>>>>` | origin fan-out silently skipped |
 //! | `gateway/event_emitter/team_fanout.rs::TEAM_EVENT_BUS` | `OnceLock<RwLock<Option<Arc<…>>>>` | team fan-out silently skipped |
 //! | `security/audit.rs::GLOBAL_AUDIT` | `RwLock<Option<SecurityAuditLog>>` — **no `OnceLock` at all** | no security audit trail |
+//!
+//! ⚠️ COUNT THIS YOURSELF FROM THE SPELLING; do not inherit the number. It has
+//! been wrong twice — recorded first as one instance, then as four, now six —
+//! and each revision was found by someone re-reading the corpus rather than by
+//! anything going red. Nothing here asserts six: the class is *below this
+//! rule's resolution* by construction, so no guard can see a seventh arrive.
+//! `STATE_REGISTRY` was not even hidden — `origin_fanout.rs` names it in the
+//! doc comment on its own entry above ("Mirrors the
+//! `middleware::request_state` global-registry pattern"), and it still sat
+//! outside the count.
 //!
 //! `GLOBAL_AUDIT` is why this section is no longer titled after the
 //! `OnceLock<Lock<Option<T>>>` spelling. It is not a container static, so it is
 //! not even a *candidate* here — no widening of either install form could ever
 //! reach it. The class is **interior-mutable installs**, and the spelling is
-//! just the shape three of the four happen to share. The other two are
-//! boot-installed subsystem handles ("called once during subsystem boot", both
-//! of them), so this is not one curiosity: it is two gateway fan-out paths and
-//! the audit trail, none of which can currently be asked whether boot reached
-//! them.
+//! just the shape five of the six happen to share. The other five are all
+//! boot-installed subsystem handles ("called once during subsystem boot" /
+//! "called by `MiddlewareChain` during initialization"), so this is not one
+//! curiosity: it is two gateway fan-out paths, two gateway middleware handles
+//! and the audit trail, none of which can currently be asked whether boot
+//! reached them.
 //!
 //! `the_interior_mutable_install_class_is_below_this_rules_resolution` pins
-//! `MOA_CONFIG`'s shape. All four are excluded here, and all four were excluded
+//! `MOA_CONFIG`'s shape. All six are excluded here, and all six were excluded
 //! from the specification's roster too — this class has been missing all along,
 //! so nothing regressed; it was never seen.
 //!
@@ -736,8 +750,9 @@ mod tests {
     /// declined on parameter **use** rather than on parameter **absence**.
     ///
     /// That second half is what stops the first-caller-wins arm from degrading
-    /// into "the enclosing fn takes arguments". Ten statics in `src/` would be
-    /// swallowed by that weaker predicate; `cached_repo_root(working_dir)` and
+    /// into "the enclosing fn takes arguments". Ten such sites across eight
+    /// statics in `src/` would be swallowed by that weaker predicate;
+    /// `cached_repo_root(working_dir)` and
     /// `guess_source(path)` are two of them, and both build their cache from
     /// nothing while merely being *keyed* by the argument.
     #[test]
@@ -1031,3 +1046,4 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         );
     }
 }
+
