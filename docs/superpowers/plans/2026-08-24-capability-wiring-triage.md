@@ -233,3 +233,65 @@ one of its two guards carries precisely the blindness this Task 3 round
 exists to remove — invisible to its own comparison the same way the 35 sites
 in `alephcore` were, for the same reason, and nothing in this round fixes
 it, because it is one crate away from the extractor this round shipped.
+
+## Fix round 2 — the bare-`*` predicate in `strip_comment_lines`, and its exposure event
+
+Task 1's `strip_comment_lines` dropped any line whose trimmed form started
+with `*`, intended to catch block-comment continuations (` * text`, a bare
+`*`, the closing `*/`). Measured directly against this repo's `src/` tree
+(independently reproduced with a temporary diagnostic test — added, run,
+reverted, same discipline as the guard-2 floor re-measurement above):
+
+```
+$ cargo test -p alephcore --lib utils::source_scan::diag_temp_bare_star -- --nocapture
+DIAG genuine=5 not_comment_kept=474
+```
+
+**5 genuine comment continuations, 474 real Rust lines wrongly matched** —
+every `*count += 1;`, `*vendor,`, `*ref_val = …`, `*self.captured.lock()…`
+was silently dropped from what every one of the 36 guards sharing
+`strip_comment_lines` could see. Fixed with `is_block_comment_continuation`:
+a `*` opens a comment continuation only when what follows is whitespace, end
+of line, or `/` (the closing delimiter) — anything else is a dereference or
+a glob. Re-measured after the fix with the same diagnostic: **5 kept as
+comments (unchanged), 0 real code dropped** (the 474 are now correctly kept
+as code). Independently confirmed the 5-vs-474 count matched the plan
+author's own measurement exactly before applying the fix.
+
+Two permanent regression tests added
+(`strip_comment_lines_keeps_dereferences_and_globs`,
+`strip_comment_lines_still_drops_every_continuation_shape`), and the
+5-vs-474 measurement is written into `is_block_comment_continuation`'s doc
+comment, per the instruction that a future reader who simplifies the
+predicate back to `starts_with('*')` needs to see the number that makes that
+a regression.
+
+### This is an exposure event — treated like Task 3 itself
+
+Full `--lib` diff against the current Fix-round-1 state (17017 passed / 0
+failed / 17 ignored) is exactly two added lines — my own two new tests, both
+`ok` — and **zero existing tests changed status**:
+
+```
+$ diff <(sort fixround1-tests.txt) <(sort fixround2-tests.txt)
+16768a16769,16770
+> test utils::source_scan::tests::strip_comment_lines_keeps_dereferences_and_globs ... ok
+> test utils::source_scan::tests::strip_comment_lines_still_drops_every_continuation_shape ... ok
+
+$ cargo test -p alephcore --lib 2>&1 | tail -3
+test result: ok. 17019 passed; 0 failed; 17 ignored; 0 measured; 0 filtered out; finished in 32.31s
+```
+
+**Zero newly-failing tests.** Widening `strip_comment_lines`'s visibility by
+474 previously-hidden lines, across all 36 guards that consume it (directly
+or via `production_prefix` composition), surfaced no pre-existing defect
+anywhere in the corpus. This is reported plainly per the instruction that an
+empty result and an unrun comparison must not look identical: the command
+was run, the diff is reproduced above in full, and it contains exactly the
+two lines this round's own new tests account for.
+
+### Guard states, confirmed rather than assumed
+
+- **Guard 1** (`production_prefix_agrees_with_the_old_cut_where_the_old_cut_was_right`): `ok`, unaffected — it does not call `strip_comment_lines`.
+- **Guard 2** (`production_prefix_recovers_code_the_old_cut_discarded`): `ok`, floor unchanged at `>= 209` — it compares `production_prefix` against `old_prefix_cut` directly, neither of which calls `strip_comment_lines`.
+- **Guard 3** (`no_module_hand_rolls_the_cfg_test_prefix_cut`): `ok`, offender count still 0 — confirmed rather than assumed, per the instruction: none of its three literal patterns (`split("#[cfg(test)]")`, `find("#[cfg(test)]")`, `split_once("#[cfg(test)]")`) begin with `*`, so widening the bare-`*` predicate cannot change what this guard's own whole-file scan matches.
