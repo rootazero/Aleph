@@ -10,8 +10,9 @@ use super::ExtensionManager;
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
 
-/// `ConsumerDecides`, by weight of evidence: about twenty production readers,
-/// each writing its own meaning for absence. `plugin_manage` answers a named
+/// `ConsumerDecides`, by weight of evidence: 27 production call sites across
+/// the two accessors (counted with `#[cfg(test)]` items stripped), each writing
+/// its own meaning for absence. `plugin_manage` answers a named
 /// error; `hooks_admin` and `handlers::services` answer their own refusals;
 /// `tools::usage::report` and `hub::reconcile` return early and report nothing
 /// missing. The sharpest is `hooks::executor`, where an early return means a
