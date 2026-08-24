@@ -104,7 +104,15 @@ fn is_hex_ip_literal(s: &str) -> bool {
 }
 
 fn is_decimal_ip_literal(s: &str) -> bool {
-    if s.contains('.') || s.len() <= 3 || !s.chars().all(|c| c.is_ascii_digit()) {
+    // Bare all-digit strings (`"10"`, `"127"`) are short-form IPv4 per
+    // glibc/musl resolver: a request to `http://10/` reaches `10.0.0.0`
+    // (RFC 1123 §2.1 treats a single integer hostname as a 32-bit IPv4
+    // value, big-endian across the four octets). The previous guard
+    // (`s.len() > 3`) rejected those short strings, sending them straight
+    // to the OS resolver — which then connected to the private/loopback
+    // address while the validator happily believed they were harmless
+    // hostnames.
+    if s.contains('.') || !s.chars().all(|c| c.is_ascii_digit()) || s.is_empty() {
         return false;
     }
     // Must parse as u32 (max IPv4 decimal form is 4294967295) — otherwise a
@@ -148,7 +156,30 @@ fn is_octal_or_short_ipv4(s: &str) -> bool {
 }
 
 /// Returns true if the URL string contains embedded credentials (user:pass@host).
+///
+/// The `url` crate normalises a few pathological inputs:
+///
+/// - `http://@host/` parses with `username() == ""` and `password() == None`,
+///   so the parser-only check below returns `false`. RFC 3986 §3.2.1
+///   permits the empty userinfo, and an attacker using the bare-at form
+///   would otherwise slip past.
+/// - `http://:@host/` parses with `username() == ""` and `password() ==
+///   Some("")`, which the parser-only check would catch — included for
+///   completeness in the regex below.
+///
+/// We therefore inspect the raw authority for any `userinfo@` shape, and
+/// only fall back to the parsed form if the regex misses.
 pub(crate) fn has_url_credentials(url_str: &str) -> bool {
+    if let Some(scheme_end) = url_str.find("://") {
+        let after_scheme = &url_str[scheme_end + 3..];
+        let authority_end = after_scheme
+            .find(|c: char| c == '/' || c == '?' || c == '#')
+            .unwrap_or(after_scheme.len());
+        let authority = &after_scheme[..authority_end];
+        if authority.contains('@') {
+            return true;
+        }
+    }
     match url::Url::parse(url_str) {
         Ok(parsed) => !parsed.username().is_empty() || parsed.password().is_some(),
         Err(_) => false,

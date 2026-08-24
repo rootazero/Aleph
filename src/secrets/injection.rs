@@ -49,6 +49,13 @@ impl InjectedSecret {
 ///
 /// Returns the rendered string and a list of injected secrets
 /// (with hashes, never plaintext) for downstream leak detection.
+///
+/// A prompt that legitimately uses `{{secret:NAME}}` five times previously
+/// decrypted the same vault entry five times per render. This implementation
+/// makes one resolve per unique name — the resulting `DecryptedSecret` is
+/// retained in a small per-render map and `expose()`d once per occurrence,
+/// and one `InjectedSecret` is emitted per unique name (downstream
+/// fingerprint registration is per-name, not per-occurrence).
 pub async fn render_with_secrets(
     input: &str,
     resolver: &dyn AsyncSecretResolver,
@@ -59,17 +66,43 @@ pub async fn render_with_secrets(
         return Ok((input.to_string(), Vec::new()));
     }
 
-    let mut result = String::with_capacity(input.len());
-    let mut injected = Vec::with_capacity(refs.len());
-    let mut last_end = 0usize;
+    // Phase 1: resolve each unique name exactly once. Order of first
+    // occurrence is preserved so the returned `injected` Vec is
+    // deterministic for the same input.
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut unique_order: Vec<&str> = Vec::new();
+    for r in &refs {
+        if seen.insert(r.name.as_str()) {
+            unique_order.push(r.name.as_str());
+        }
+    }
 
+    // `resolved_storage` owns the `DecryptedSecret`s for the duration of
+    // the call; the borrow map below points into it. Drop the storage
+    // (and zeroize via `secrecy`) on function return.
+    let mut resolved_storage: Vec<DecryptedSecret> = Vec::with_capacity(unique_order.len());
+    let mut injected = Vec::with_capacity(unique_order.len());
+    for name in &unique_order {
+        let decrypted = resolver.resolve(name).await?;
+        injected.push(InjectedSecret::from_value(name, decrypted.expose()));
+        resolved_storage.push(decrypted);
+    }
+    let resolved: std::collections::HashMap<&str, &DecryptedSecret> = unique_order
+        .iter()
+        .zip(resolved_storage.iter())
+        .map(|(name, d)| (*name, d))
+        .collect();
+
+    // Phase 2: substitute each `{{secret:NAME}}` occurrence with the cached
+    // plaintext. No further resolver calls.
+    let mut result = String::with_capacity(input.len());
+    let mut last_end = 0usize;
     for secret_ref in &refs {
         result.push_str(&input[last_end..secret_ref.start]);
-        let decrypted = resolver.resolve(&secret_ref.name).await?;
-        let value = decrypted.expose();
-
-        injected.push(InjectedSecret::from_value(&secret_ref.name, value));
-        result.push_str(value);
+        let decrypted = resolved
+            .get(secret_ref.name.as_str())
+            .expect("unique names resolved in phase 1");
+        result.push_str(decrypted.expose());
         last_end = secret_ref.end;
     }
     result.push_str(&input[last_end..]);
