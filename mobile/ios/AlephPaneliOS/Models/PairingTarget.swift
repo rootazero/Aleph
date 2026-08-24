@@ -18,9 +18,33 @@ struct PairingTarget: Equatable {
     /// typed `http://` / `https://` gets the scheme's default instead.
     static let alephListenerPort: UInt16 = 18790
 
-    /// Host of the target (without brackets for IPv6).
+    /// Host of the target, always **without** IPv6 brackets.
+    ///
+    /// Foundation has shipped both spellings here: `URLComponents.host` handed
+    /// back `::1` on the version this file was first written against and hands
+    /// back `[::1]` on the current one. Neither is assumed — brackets are
+    /// stripped if present — because a comment that names an external
+    /// behaviour is a fact that can rot while still reading as correct, and
+    /// this one did. Nothing that builds a URL *string* may use this accessor;
+    /// use ``hostLiteral``.
     var host: String {
-        URLComponents(url: url, resolvingAgainstBaseURL: false)?.host ?? ""
+        let raw = URLComponents(url: url, resolvingAgainstBaseURL: false)?.host ?? ""
+        guard raw.hasPrefix("["), raw.hasSuffix("]") else { return raw }
+        return String(raw.dropFirst().dropLast())
+    }
+
+    /// The host as it must appear **inside a URL string**: bracketed when it is
+    /// an IPv6 literal, bare otherwise.
+    ///
+    /// One accessor owns the bracket rule so it is answered once instead of at
+    /// each call site. It was answered twice before, in opposite directions:
+    /// ``origin`` re-added brackets Foundation had already supplied and emitted
+    /// `http://[[::1]]:18790`, while ``unreachableMessage`` two lines down
+    /// interpolated the raw host and happened to be right — on this Foundation,
+    /// and wrong on the other one.
+    var hostLiteral: String {
+        let bare = host
+        return bare.contains(":") ? "[\(bare)]" : bare
     }
 
     /// Port of the target. ``parse(_:)`` always writes an explicit port, so the
@@ -50,12 +74,7 @@ struct PairingTarget: Equatable {
     /// and a silently wrong default port is exactly how a correct-looking
     /// address fails.
     var origin: String {
-        // Foundation's `.host` strips the brackets off an IPv6 literal (the
-        // desktop's `Url::host_str` keeps them), so re-add them — without this
-        // an IPv6 gateway is reported as `http://::1:18790`, which parses as
-        // nothing and reads as a typo in our own message.
-        let literal = host.contains(":") ? "[\(host)]" : host
-        return "\(scheme)://\(literal):\(port)"
+        "\(scheme)://\(hostLiteral):\(port)"
     }
 
     /// The port to assume when the user wrote none. Two different questions,
@@ -137,14 +156,14 @@ struct PairingTarget: Equatable {
         let hint: String
         if scheme == "https" && port != 443 {
             hint = "If it is behind a reverse proxy or CDN, remove the port so "
-                + "the default 443 is used (https://\(host))."
+                + "the default 443 is used (https://\(hostLiteral))."
         } else if scheme == "https" {
             hint = "If the server listens on a different port, add it "
-                + "explicitly (for example \(host):8443)."
+                + "explicitly (for example \(hostLiteral):8443)."
         } else {
             hint = "If it is behind HTTPS or a reverse proxy, enter the full "
-                + "URL (for example https://\(host)); to use a different port, "
-                + "add it explicitly (for example \(host):18790)."
+                + "URL (for example https://\(hostLiteral)); to use a different "
+                + "port, add it explicitly (for example \(hostLiteral):18790)."
         }
         return "No Aleph server answered at \(origin). "
             + "Check the address and that the server is running. \(hint)"

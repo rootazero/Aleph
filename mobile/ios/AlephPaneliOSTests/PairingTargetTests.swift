@@ -97,6 +97,46 @@ import Foundation
         #expect(bare.port == 18790)
     }
 
+    /// The bracket rule, pinned as an *invariant* rather than as Foundation's
+    /// current behaviour. `URLComponents.host` has returned both `::1` and
+    /// `[::1]` across Foundation versions; the previous code encoded one of
+    /// them in a comment and re-added brackets unconditionally, which emitted
+    /// `http://[[::1]]:9000` once Foundation started supplying them itself
+    /// (measured on the iOS 27 SDK: `.host` == `[::1]`). Asserting "exactly one
+    /// bracket pair" holds under either behaviour, so this test cannot rot the
+    /// same way the comment did.
+    @Test("the ipv6 bracket rule is answered exactly once")
+    func ipv6BracketRuleIsIdempotent() throws {
+        let t = try PairingTarget.parse("[::1]:9000").get()
+
+        #expect(t.host == "::1", "host is the bare literal; got \(t.host)")
+        #expect(!t.host.contains("["), "host must never carry brackets")
+        #expect(t.hostLiteral == "[::1]", "got \(t.hostLiteral)")
+        #expect(t.origin.filter { $0 == "[" }.count == 1, "got \(t.origin)")
+        #expect(t.origin.filter { $0 == "]" }.count == 1, "got \(t.origin)")
+
+        // A name is not an IPv6 literal and must stay unbracketed.
+        let named = try PairingTarget.parse("box.lan:9000").get()
+        #expect(named.hostLiteral == "box.lan")
+        #expect(!named.origin.contains("["))
+    }
+
+    /// The second half of the same defect. `origin` and `unreachableMessage`
+    /// each decided the bracket question separately and in opposite directions,
+    /// so one of them was always wrong — the message happened to be the right
+    /// one here, which is why only `origin` failed. Both now read the same
+    /// accessor, and this pins the message so they cannot drift apart again.
+    @Test("an ipv6 failure message stays bracketed too")
+    func ipv6UnreachableMessageIsBracketed() throws {
+        let t = try PairingTarget.parse("[::1]").get()
+        let msg = t.unreachableMessage
+        #expect(msg.contains("http://[::1]:18790"), "got: \(msg)")
+        #expect(!msg.contains("[[") && !msg.contains("]]"), "got: \(msg)")
+        // The bare `::1:18790` spelling parses as nothing and reads as a typo
+        // in our own error text.
+        #expect(!msg.contains("://::1"), "got: \(msg)")
+    }
+
     @Test("out-of-range port rejected, not crashing")
     func outOfRangePortRejected() {
         #expect(PairingTarget.parse("http://host:99999") == .failure(.invalidURL))
