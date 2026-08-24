@@ -9,11 +9,13 @@
 //! this module is the other half of it.
 //!
 //! Shape follows the existing session-end hooks (`memory_context_provider`):
-//! a process-wide `OnceCell` registered at startup, read lazily at call time.
+//! a process-wide capability slot registered at startup, read lazily at call
+//! time.
 //! Lazy is required, not incidental — the MCP manager spawns (and servers
 //! handshake) before the agent's provider exists, so a callback that captured a
 //! provider eagerly could only ever be installed too late to be declared.
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
 
 use crate::error::{AlephError, Result};
@@ -30,13 +32,32 @@ use crate::providers::AiProvider;
 /// server's own `max_tokens` is treated as a request, not an authority.
 const MAX_SAMPLING_TOKENS: u32 = 4096;
 
-static SAMPLING_LLM: tokio::sync::OnceCell<Arc<dyn AiProvider>> =
-    tokio::sync::OnceCell::const_new();
+/// `FailsClosed`, from both readers, and this handle is unusual in that its
+/// absence is already *designed* to be observable: [`sampling_llm_registered`]
+/// exists so `can_sample()` is a fact rather than a structural `true` — the
+/// defect this module's header opens with. So an uninstalled provider means
+/// Aleph never declares the `sampling` capability, and a request that arrives
+/// anyway gets a named error ("no LLM provider is registered on this host").
+///
+/// Nothing is granted and nothing lies. What is lost is the feature, silently
+/// from the SERVER's point of view: it simply never sees the capability
+/// offered, and cannot tell "this host does not do sampling" from "this host's
+/// boot did not reach the registration".
+static SAMPLING_LLM: CapabilitySlot<Arc<dyn AiProvider>> =
+    CapabilitySlot::new("mcp/sampling-llm", MissingSemantics::FailsClosed);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
+/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+#[allow(dead_code)]
+pub(crate) fn sampling_llm_slot() -> &'static dyn SlotStatus {
+    &SAMPLING_LLM
+}
 
 /// Register the provider that answers MCP sampling requests.
 /// Idempotent; the first call wins.
 pub fn register_sampling_llm(provider: Arc<dyn AiProvider>) {
-    let _ = SAMPLING_LLM.set(provider);
+    let _ = SAMPLING_LLM.install(provider);
 }
 
 /// Whether a sampling provider has been registered.
