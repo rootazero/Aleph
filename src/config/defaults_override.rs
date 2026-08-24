@@ -91,6 +91,21 @@ static DEFAULTS_OVERRIDE: CapabilitySlot<DefaultsOverride> = CapabilitySlot::new
 /// not arbitrary data), and the exhaustive struct literal means adding a field
 /// to `DefaultsOverride` is a compile error here rather than a silently
 /// widened default.
+///
+/// ⚠️ **This is the one BEHAVIOUR change in the batch, and it is a fix.** The
+/// old accessor was `get_or_init(DefaultsOverride::default)`, which **latched**
+/// the empty default into the cell on first read. `Config::load` calls
+/// [`init_defaults_override`] only when `get_config_dir()` succeeds (`load.rs`,
+/// inside `if let Some(ref dir) = config_dir`) but calls
+/// [`get_defaults_override`] unconditionally further down — so a load that
+/// could not resolve a config dir latched the empty override, and the next
+/// load that *did* find one hit "already initialized; ignoring re-init" and
+/// **silently discarded the operator's `defaults.toml`**. Reading through a
+/// separate static cannot latch, so that later install now succeeds.
+///
+/// Blast radius checked: all five `get_defaults_override()` callers `.clone()`
+/// or read a field immediately, so no long-lived `&'static` holds the
+/// pre-install address across an install.
 static EMPTY_DEFAULTS_OVERRIDE: DefaultsOverride = DefaultsOverride {
     memory: None,
     provider: None,

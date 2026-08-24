@@ -32,17 +32,28 @@ use crate::providers::AiProvider;
 /// server's own `max_tokens` is treated as a request, not an authority.
 const MAX_SAMPLING_TOKENS: u32 = 4096;
 
-/// `FailsClosed`, from both readers, and this handle is unusual in that its
-/// absence is already *designed* to be observable: [`sampling_llm_registered`]
-/// exists so `can_sample()` is a fact rather than a structural `true` — the
-/// defect this module's header opens with. So an uninstalled provider means
-/// Aleph never declares the `sampling` capability, and a request that arrives
-/// anyway gets a named error ("no LLM provider is registered on this host").
+/// `FailsClosed`: the one production reader is [`serve_sampling`], which
+/// answers `AlephError::IoError("MCP sampling requested but no LLM provider is
+/// registered on this host")`. Nothing is granted and the error names its own
+/// missing input.
 ///
-/// Nothing is granted and nothing lies. What is lost is the feature, silently
-/// from the SERVER's point of view: it simply never sees the capability
-/// offered, and cannot tell "this host does not do sampling" from "this host's
-/// boot did not reach the registration".
+/// ⚠️ **The capability declaration does NOT depend on this handle**, and an
+/// earlier draft of this comment claimed it did. The chain is:
+/// `with_sampling_bridge` (`mcp/manager/actor.rs:171-176`) installs a callback
+/// that closes over [`serve_sampling`] — unconditionally, and resolving its
+/// provider lazily precisely because the manager spawns before the agent's LLM
+/// exists — and `McpServerConnection::can_sample`
+/// (`mcp/external/connection.rs:302-307`) asks `handler.has_callback()`. So
+/// with this slot empty the `sampling` capability **is** still declared, the
+/// server **does** see it offered, and a request that arrives gets the error
+/// above. The "structural `true`" defect this module's header opens with was
+/// fixed by making `can_sample` ask about the callback, not by consulting this
+/// handle.
+///
+/// [`sampling_llm_registered`] reads like the observability for that and is
+/// not: it has **no production caller** — its only caller is a `#[cfg(test)]`
+/// guard in this file. It is an existence oracle nothing consumes, recorded
+/// here rather than deleted because it was not orphaned by this migration.
 static SAMPLING_LLM: CapabilitySlot<Arc<dyn AiProvider>> =
     CapabilitySlot::new("mcp/sampling-llm", MissingSemantics::FailsClosed);
 
