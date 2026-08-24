@@ -180,14 +180,23 @@ final class Recorded: @unchecked Sendable {
         stored = value
     }
 
+    /// `NSLock`'s `lock()`/`unlock()` are `noasync` — holding a lock across a
+    /// suspension point is a deadlock waiting to happen, so the compiler refuses
+    /// them in an async frame — a warning under the `SWIFT_VERSION = 5.9` this
+    /// target used to build with, an error under the Swift 6 it builds with now.
+    /// Keep every critical section in a *synchronous* frame:
+    /// `value()` polls this and never touches the lock itself.
+    private func snapshot() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored
+    }
+
     /// Polls briefly — the probe's `await` returns once the *response* is read,
     /// which can race the stub's receive callback finishing.
     func value() async -> String? {
         for _ in 0..<40 {
-            lock.lock()
-            let current = stored
-            lock.unlock()
-            if current != nil { return current }
+            if let current = snapshot() { return current }
             try? await Task.sleep(nanoseconds: 25_000_000)
         }
         return nil

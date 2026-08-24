@@ -7,7 +7,16 @@ import Foundation
 /// the scheme is part of the endpoint, not decoration. Probing an `https://`
 /// target over plaintext gets no reply at all, which the probe would then have
 /// to report as "down" for a server that is perfectly healthy.
-protocol ReachabilityProbing {
+///
+/// `Sendable` is part of the contract, not compiler appeasement. The only
+/// caller is `AppState`, which is `@MainActor`-isolated, so every
+/// `await probe.probe(…)` hands the conformer out to a nonisolated async frame
+/// and back across an isolation boundary. Swift 5 allowed that silently; Swift
+/// 6 rejects it (`sending 'self.probe' risks causing data races`). The
+/// consequence for conformers is the real point: one that wants mutable state
+/// must carry its own isolation — an actor, or a lock — instead of borrowing
+/// the caller's main actor, which it never actually ran on.
+protocol ReachabilityProbing: Sendable {
     func probe(_ target: PairingTarget) async -> Bool
 }
 
@@ -109,6 +118,21 @@ struct GatewayReadyProbe: ReachabilityProbing {
 /// user ever gets the chance to approve it.
 ///
 /// Stateless, hence safe to hand to a `URLSession` on an arbitrary queue.
+///
+/// **Same silent-unwire shape as `PanelWebView.Coordinator`, and currently
+/// safe for a reason that lives outside this repo.** This is an `@optional`
+/// `@objc` requirement, so a signature that drifts from the imported one stops
+/// being a witness without failing the build — `URLSession` then takes default
+/// handling, every self-signed LAN gateway probes as down, and the user is
+/// stranded on the pairing screen. Its sibling in `PanelWebView` broke exactly
+/// this way under Swift 6 (`CertChallengeHookIsWiredTests` now pins it). The
+/// only reason this one did not is that `URLSessionDelegate`'s completion
+/// handler is *not* `NS_SWIFT_UI_ACTOR`-annotated the way WebKit's is — an
+/// Apple header fact, not a property of this code, and Apple has been adding
+/// those annotations release by release. If a future SDK annotates it, the
+/// compiler will say only `nearly matches optional requirement`, as a warning,
+/// in an otherwise green build: pin it the way the sibling is pinned rather
+/// than reading the warning as noise.
 private final class AcceptAnyServerTrust: NSObject, URLSessionDelegate, @unchecked Sendable {
     func urlSession(
         _ session: URLSession,
