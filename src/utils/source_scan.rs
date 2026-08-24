@@ -531,18 +531,41 @@ pub fn after() {}
         );
     }
 
-    /// Guard 2 — real expansion. The ~213-file class must actually recover code.
+    /// Guard 2 — real expansion. The ~209-file class must actually recover code.
     ///
     /// The count is asserted because a shrinking census and a broken census
-    /// look identical in a passing report. The floor (213) was measured
+    /// look identical in a passing report. The floor was 213, measured
     /// directly against the shipped `production_prefix` on 2026-08-24 — NOT
     /// the 276 first quoted for this class while this guard was being
     /// planned. That 276 was measured against a pre-fix build of the
     /// extractor whose `end_of_item` returned early and so over-kept
     /// trailing test lines, which were then double-counted as "recovered
-    /// production code". Fixing that over-keep necessarily moves this
-    /// number DOWN; a number that had gone UP would have been the alarming
-    /// one.
+    /// production code". Fixing that over-keep necessarily moved that
+    /// number DOWN from 276; a number that had gone UP would have been the
+    /// alarming one.
+    ///
+    /// The floor moved again, to 209, the same day: the plan round that
+    /// migrated 35 hand-rolled `src.split("#[cfg(test)]")` call sites onto
+    /// `production_prefix` deleted the literal string `"#[cfg(test)]"` from
+    /// 4 of those sites' *production* code (bodies not under their own
+    /// file's `#[cfg(test)]` — a local `production_prefix`/`production_source`
+    /// helper, mostly). Those 4 files' old bodies held that literal
+    /// *earlier* in the file than the file's own real `#[cfg(test)]`
+    /// boundary, which is exactly the shape that fools `old_prefix_cut`
+    /// below (a bare, unanchored whole-text match with no syntax awareness)
+    /// into truncating far too early — so those 4 files counted toward
+    /// "recovered" for the wrong reason: not a genuine mid-file test item,
+    /// but the guard's own comparison baseline being fooled by the very
+    /// text this guard searches for. Removing that literal text made all 4
+    /// files' naive cut and canonical cut agree for the first time, so they
+    /// stopped counting: 213 − 4 = 209. Re-measured directly against the
+    /// shipped extractor post-migration (instrumented print, run, reverted);
+    /// not a Python transliteration, which — lacking `code_only` and
+    /// `char_literal_len` — measured a different, wrong number on the same
+    /// tree. If this floor drops again, the first question is the same one
+    /// this paragraph answers: did the corpus's own `"#[cfg(test)]"`-shaped
+    /// text change, or did the extractor stop recognising a shape? Only the
+    /// second is alarming.
     #[test]
     fn production_prefix_recovers_code_the_old_cut_discarded() {
         let mut recovered = 0usize;
@@ -558,9 +581,10 @@ pub fn after() {}
             }
         }
         assert!(
-            recovered >= 213,
-            "expected >=213 files to recover production code (measured 213 against the \
-             shipped extractor on 2026-08-24); saw {recovered}. A drop means the \
+            recovered >= 209,
+            "expected >=209 files to recover production code (measured 209 against the \
+             shipped extractor on 2026-08-24, post-migration; see the doc comment above \
+             for why this moved down from 213); saw {recovered}. A further drop means the \
              extractor stopped recognising a shape — investigate before lowering this \
              floor. (Do not confuse this with the 276 once cited for this class: that \
              figure came from a pre-fix build that over-kept trailing test lines and \
@@ -580,6 +604,15 @@ pub fn after() {}
     /// here to make this module internally consistent: this asymmetry is
     /// the point.
     ///
+    /// Walks `tests/` in addition to `src/` — `production_prefix` is `pub`
+    /// and reachable from this crate's own integration tests, so a hand-roll
+    /// there is the identical defect this guard exists to police, not a
+    /// different one. `rust_sources_under` reports paths relative to
+    /// `CARGO_MANIFEST_DIR` regardless of which root it is walking, so a
+    /// `tests/` file renders as `tests/…` and a `src/` file as `src/…` — the
+    /// self-exemption below matches on the full `src/…` string and is
+    /// unaffected by the second root.
+    ///
     /// Line numbers are computed against the RAW file, not a pre-stripped
     /// one: comment lines are skipped inline, one line at a time, rather
     /// than by pre-filtering the text through `strip_comment_lines` and then
@@ -587,8 +620,12 @@ pub fn after() {}
     /// only in the stripped text and not in the file anyone would open.
     #[test]
     fn no_module_hand_rolls_the_cfg_test_prefix_cut() {
+        let tests_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
         let mut offenders = Vec::new();
-        for (rel, text) in all_sources() {
+        for (rel, text) in all_sources()
+            .into_iter()
+            .chain(rust_sources_under(&tests_root))
+        {
             if rel == "src/utils/source_scan.rs" {
                 continue; // defines the replacement and tests the old shape
             }
