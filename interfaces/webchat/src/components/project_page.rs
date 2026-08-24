@@ -5,7 +5,8 @@
 //!
 //! With no project selected it renders an empty-state placeholder. With one
 //! selected it renders the room page: header (name + owner/member badge), a
-//! tab strip (群聊 default / 设置 / 看板·工作区浏览·记忆浏览 P3 placeholders),
+//! tab strip (群聊 default / 设置 / 看板 live; 工作区浏览·记忆浏览 still P3
+//! placeholders),
 //! and the active tab's body.
 //!
 //! ## i18n
@@ -35,6 +36,7 @@
 //! brand-new session, and the two never saw each other's messages on any
 //! surface.
 
+mod kanban;
 mod settings;
 
 use leptos::prelude::*;
@@ -51,10 +53,11 @@ use crate::platform::wide::views::chat::state::ChatState;
 use crate::state::layout::WorkspaceState;
 use crate::state::sessions::SessionMap;
 use crate::state::user_directory::UserDirectoryState;
+use kanban::KanbanTab;
 use settings::SettingsTab;
 
-/// Sub-tab inside a project room page. `Kanban` / `Workspace` / `Memory` are
-/// P3 (spec §6.4) — rendered as bare placeholders here, no content.
+/// Sub-tab inside a project room page. `Kanban` is live (P3 Task 8);
+/// `Workspace` / `Memory` are still rendered as bare placeholders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RoomSubTab {
     Chat,
@@ -225,7 +228,10 @@ fn ProjectRoomPage(project_id: String) -> impl IntoView {
                         RoomSubTab::Settings => view! {
                             <SettingsTab project=p.clone() refresh=refresh />
                         }.into_any(),
-                        RoomSubTab::Kanban | RoomSubTab::Workspace | RoomSubTab::Memory => {
+                        RoomSubTab::Kanban => view! {
+                            <KanbanTab project=p.clone() />
+                        }.into_any(),
+                        RoomSubTab::Workspace | RoomSubTab::Memory => {
                             view! { <PlaceholderTab /> }.into_any()
                         }
                     }}

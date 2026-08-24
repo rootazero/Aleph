@@ -39,6 +39,18 @@ pub struct TeamSummary {
     /// sort the sidebar group-chat list newest-first.
     #[serde(default)]
     pub last_message_at: Option<i64>,
+    /// The scope this team is stamped for, as a rendered scope id
+    /// (`aleph_protocol::scope`) — `project:<id>` for a team created inside a
+    /// project room, absent for a personal one. The server skips serializing
+    /// `None`, so `serde(default)` here is load-bearing, not decorative.
+    ///
+    /// Read by the project room's Kanban tab to show only that room's teams.
+    /// It was missing from this DTO while the server had been sending it since
+    /// P2 — serde drops unknown keys in silence, so the field did not fail to
+    /// arrive so much as fail to exist, and a filter over an absent field
+    /// yields an empty board, which renders exactly like an empty room.
+    #[serde(default)]
+    pub scope_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -5,9 +5,9 @@
 //! what this component renders, but hiding the controls avoids a round trip
 //! that can only ever come back `PERMISSION_DENIED`).
 //!
-//! Kanban / 工作区浏览 / 记忆浏览 are P3 — `ProjectRoomPage` (the parent)
-//! renders those as bare placeholder tabs; this file is the 设置 tab body
-//! only.
+//! 工作区浏览 / 记忆浏览 are still P3 placeholders rendered by `ProjectRoomPage`
+//! (the parent); 看板 is live in `project_page::kanban`. This file is the 设置
+//! tab body only.
 //!
 //! Every mutation handler here is inlined directly at its `on:click=move
 //! |_| { .. }` site rather than bound to a named closure first — `Show`'s
