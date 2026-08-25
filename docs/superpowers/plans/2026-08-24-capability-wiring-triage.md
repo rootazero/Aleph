@@ -519,17 +519,29 @@ files of slack below the measurement.
 
 **It was deliberately NOT re-pinned to 196**, and that is the one judgement
 call in this row. Every number in this floor's chain is an explained
-measurement, and I could not fully explain 196. Three files were added under
-`src/` since `8d963222a` (`capability/census.rs`, `capability/mod.rs`,
-`diagnostics/checks/capability_wiring.rs`) and the count rose by exactly three —
-but that agreement is a coincidence, not a mechanism: only **one** of the three
-(`capability/mod.rs`) is in today's recovering set. So at least two of the three
-new recoveries come from the 50 modified files or from the extractor refactor in
-Task 12, and `production_prefix` itself was refactored in that window
-(`partition_on_cfg_test`), so "unchanged file ⇒ unchanged verdict" cannot be
-assumed either. Pinning 196 would put an unexplained number into a chain whose
-whole value is that every number in it is explained. Left at 193, with this
-paragraph as the record of the gap.
+measurement, and at the time of writing I could not explain 196.
+
+**The mechanism is now known (fix round 1).** Today's extractor reproduces 193
+exactly on the `8d963222a` corpus, so the extractor is exonerated and the whole
++3 is corpus drift. But only **one** of the three is a genuine recovery:
+`capability/mod.rs`, which really does hold a mid-file
+`#[cfg(test)] pub(crate) mod census;`. The other two —
+`extension/manager_global.rs` and `mcp/sampling_bridge.rs` — recover only
+because they gained **doc comments** that mention the attribute, and
+`old_prefix_cut` is an unanchored whole-text match that truncates on prose
+exactly as it does on code.
+
+Two consequences, both now written into the doc comment above the assertion:
+
+* the honest re-pin under "genuine recoveries" is **194**, not 196; and
+* **this metric drifts upward on documentation churn**, so "the number went up"
+  is exactly as uninformative as the doc already says "the number went down" is.
+
+193, 194 and 196 are all correct under three different predicates — the last
+explained measurement, the count of genuine recoveries, and what the assertion
+literally computes. The floor stays at the first, and the rule this round keeps
+re-learning is written beside it: **state the predicate beside whatever number
+you write.**
 
 **The right way to close that gap is a guard this round does not have**: a
 tree-wide assertion that no `#[cfg(test)]` code leaks into the production half.
@@ -580,7 +592,21 @@ read, in the one direction (`under`-scan) that a prefix cut can fail.
 
 Sizes of that unread region: 13 files in `interfaces/webchat/src` and 5 in
 `interfaces/tui/src` carry more than one `#[cfg(test)]` occurrence, discarding
-between 728 and 48 825 bytes each.
+between **728 and 60 616** bytes each. (An earlier draft of this row said
+"48 825" — that was the webchat maximum quoted as if it were the whole span.
+The file counts are exact.)
+
+The two worth naming, because they belong to the one site left on REPORT — the
+`aleph-tui` census, which walks `interfaces/tui/src`:
+
+* `tui/app/mod.rs` declares `#[cfg(test)] mod tests;` on **line 11 of 1 470**.
+  The census reads eleven lines and skips 1 458 — **99% of the file unread**.
+* `tui/btw_overlay.rs`'s first marker is an indented `#[cfg(test)]` at line 97,
+  hiding 30 159 bytes: **the BTW subsystem's own view file is ~86% unread by
+  the BTW census.**
+
+Whoever picks up that REPORT verdict starts from these numbers rather than
+measuring them again.
 
 ### And a rule, so the fix is not three edits that can be undone one at a time
 
