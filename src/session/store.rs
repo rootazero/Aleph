@@ -799,7 +799,10 @@ pub fn set_global_session_event_store(store: Arc<dyn SessionEventStore>) {
 /// The `else` half of [`set_global_session_event_store`]: boot's install is
 /// conditional, and without this the five consumers named on the static above
 /// cannot tell "this deployment has no session-event log" from "boot died
-/// before line 455". `because` is quoted verbatim to an operator.
+/// before it reached `build_sqlite_session_service`'s call site in
+/// `start_server`". Named rather than numbered on purpose — a line coordinate
+/// in this file would be a carried number for a file that has no reason to
+/// track `start/mod.rs`. `because` is quoted verbatim to an operator.
 #[inline]
 pub fn decline_global_session_event_store(because: &'static str) {
     GLOBAL_EVENT_STORE.decline(because);

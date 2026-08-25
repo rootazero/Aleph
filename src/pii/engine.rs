@@ -172,7 +172,23 @@ impl PiiEngine {
         }
     }
 
-    /// Initialize the global PII engine
+    /// Initialize the global PII engine.
+    ///
+    /// **No decline arm, and that is the answer rather than an omission.** The
+    /// capability-wiring round's hand-over listed "`PiiEngine::init`'s absence
+    /// when `[privacy]` is off" as a natural
+    /// [`crate::capability::CapabilitySlot::decline`] site. There is no such
+    /// absence: this installs an engine unconditionally, whatever `[privacy]`
+    /// says, so `[privacy]` off is an INSTALL of a disabled config — the same
+    /// asymmetry [`crate::thinker::memory_context_provider::set_open_loop_inject`]
+    /// documents for `false`. Boot calls this once, unconditionally
+    /// (`start/mod.rs`, right after the bind address resolves). Confirmed on a
+    /// live daemon 2026-08-25: `pii/engine` appears in none of the 22
+    /// not-installed findings a provider-less boot reports.
+    ///
+    /// Stated here rather than only in a report because a future reader asking
+    /// "why does the roster's one `FailsOpen`-and-highest-severity handle have
+    /// no decline?" will open this function, not the report.
     pub fn init(config: PrivacyConfig) {
         let engine = Arc::new(RwLock::new(Self::new(config)));
         if !PII_ENGINE.install(engine) {

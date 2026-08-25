@@ -1099,6 +1099,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                          service\" message names the cause. No scheduled job \
                          runs this boot.",
                     );
+                    // NOT gated on `!args.daemon` — see the same fix in
+                    // `helpers.rs`'s extension-manager arm. The decline above
+                    // tells the operator an accompanying message names the
+                    // cause; in daemon mode the `eprintln!` below does not run,
+                    // so without this line that promise refers to nothing and
+                    // `{e}` is lost.
+                    tracing::warn!(error = %e, "Failed to initialize cron service; cron disabled");
                     if !args.daemon {
                         eprintln!(
                             "Warning: Failed to initialize cron service: {e}. Cron disabled."

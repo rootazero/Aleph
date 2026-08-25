@@ -382,6 +382,16 @@ pub(super) async fn initialize_extension_manager(daemon: bool) {
                  that the extension tree under `$ALEPH_HOME` (else `~/.aleph`) \
                  is readable.",
             );
+            // NOT gated on `!daemon`: `tracing` routes to the log file in
+            // daemon mode, which is the production path, and the decline above
+            // promises the operator a message that names the cause. The
+            // `eprintln!` below cannot be that message — it is the interactive
+            // nicety, and in daemon mode it never runs, taking `{e}` with it.
+            // Same reasoning, written out, at `start/mod.rs`'s orchestrator arm.
+            tracing::warn!(
+                error = %e,
+                "Failed to initialize extension manager; plugins, skills and hooks unavailable"
+            );
             if !daemon {
                 eprintln!("Warning: Failed to initialize extension manager: {e}. Plugin tools will be unavailable.");
             }

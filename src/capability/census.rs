@@ -1796,34 +1796,91 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         t.starts_with("fn ")
     }
 
-    /// Names of the `pub`-ish fns that install a capability slot, derived
-    /// crate-wide.
+    /// The slot statics `body` calls `method` on, as `"{file}::{STATIC}"` keys.
     ///
-    /// Two conditions, both properties of the code: the body calls `.install(`,
-    /// **and** the file declares a `CapabilitySlot` / `MutableCapabilitySlot`
-    /// static. The second is what keeps `service::platform::install`,
+    /// Whitespace-tolerant through `method_call_open_paren`, so `X\n  .install(v)`
+    /// counts — the same reason this module's writer recogniser is, and the same
+    /// failure if it were not (`rustfmt` decides where the break goes).
+    fn slots_touched(
+        body: &str,
+        statics: &[String],
+        method: &str,
+        file: &str,
+    ) -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        for name in statics {
+            let hit = word_occurrences(body, name)
+                .into_iter()
+                .any(|at| method_call_open_paren(body, at + name.len(), method).is_some());
+            if hit {
+                out.insert(format!("{file}::{name}"));
+            }
+        }
+        out
+    }
+
+    /// Names of the slot statics declared in one file's production half.
+    fn slot_statics(lines: &[String]) -> Vec<String> {
+        lines
+            .iter()
+            .filter_map(|l| {
+                let t = strip_visibility(l.trim_start());
+                let rest = t.strip_prefix("static ")?;
+                if !rest.contains("CapabilitySlot<") {
+                    return None;
+                }
+                let (name, _) = rest.split_once(':')?;
+                Some(name.trim().to_string())
+            })
+            .collect()
+    }
+
+    /// Both halves of the capability wrapper vocabulary, derived crate-wide.
+    ///
+    /// A wrapper is a `pub`-ish fn whose body calls `.install(` (or `.decline(`)
+    /// on a slot static declared in its own file. Both maps carry the SLOT keys
+    /// the body touches, not just the name — which is what lets the gate rule
+    /// below ask "was *this* handle declined" instead of "was the word `decline`
+    /// present somewhere".
+    ///
+    /// ⚠️ The file-declares-a-slot condition removes NOTHING today — measured
+    /// 2026-08-25: 44 functions qualify on the `.install(` clause alone and all
+    /// 44 survive the slot clause. `service::platform::install`,
     /// `ResolverScope::install`, `runtimes::bootstrap::install` and
-    /// `security::audit::install_global` — four unrelated functions that share a
-    /// name with a real wrapper — out of the set.
+    /// `security::audit::install_global` — the four an earlier draft of this doc
+    /// claimed it excluded — are already excluded by the first clause, because
+    /// none of them contains `.install(` in its body. The condition is kept for
+    /// the case it *would* catch: a future `fn install_x()` that calls
+    /// `SOMETHING.install(v)` on a non-slot container in a file with no slot.
+    /// The real over-see is the one named below, and it is name-keying.
     ///
     /// ⚠️ Keyed on the bare NAME, so two wrappers called `init_global` in
     /// different modules are one entry. Direction: over-see for the call-site
-    /// scan (a same-named non-slot call can be examined), and over-see for the
-    /// hazard rule below (two modules' single sites read as one module's two).
-    /// Both fail loudly — a demanded `decline` that should not be there, or a
-    /// forbidden one that is — rather than going quiet.
-    fn install_wrapper_names() -> std::collections::BTreeSet<String> {
-        let mut out = std::collections::BTreeSet::new();
-        for (_, text) in rust_sources_under(&manifest_src()) {
+    /// scan (three of those four functions above DO have their call sites
+    /// examined, through the bare names `install` / `install_global` that other
+    /// files contribute), and over-see for the hazard rule below. Both fail
+    /// loudly — a demanded `decline` that should not be there, or a forbidden
+    /// one that is — rather than going quiet.
+    struct CapWrappers {
+        installs: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+        declines: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+        /// decline-wrapper name -> the file that defines it.
+        decline_file: std::collections::BTreeMap<String, String>,
+    }
+
+    fn capability_wrappers() -> CapWrappers {
+        let mut w = CapWrappers {
+            installs: std::collections::BTreeMap::new(),
+            declines: std::collections::BTreeMap::new(),
+            decline_file: std::collections::BTreeMap::new(),
+        };
+        for (rel, text) in rust_sources_under(&manifest_src()) {
             if !text.contains("CapabilitySlot") {
                 continue;
             }
             let (_, lines) = prod_lines(&text);
-            let declares_slot = lines.iter().any(|l| {
-                let t = strip_visibility(l.trim_start());
-                t.starts_with("static ") && t.contains("CapabilitySlot<")
-            });
-            if !declares_slot {
+            let statics = slot_statics(&lines);
+            if statics.is_empty() {
                 continue;
             }
             for i in 0..lines.len() {
@@ -1843,12 +1900,30 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
                     continue;
                 }
                 let (body, _) = block_at(&lines, i);
-                if body.contains(".install(") {
-                    out.insert(name.to_string());
+                let installs = slots_touched(&body, &statics, "install", &rel);
+                if !installs.is_empty() {
+                    w.installs
+                        .entry(name.to_string())
+                        .or_default()
+                        .extend(installs);
+                }
+                let declines = slots_touched(&body, &statics, "decline", &rel);
+                if !declines.is_empty() {
+                    w.declines
+                        .entry(name.to_string())
+                        .or_default()
+                        .extend(declines);
+                    w.decline_file.insert(name.to_string(), rel.clone());
                 }
             }
         }
-        out
+        w
+    }
+
+    /// Names of the `pub fn`s that install a capability — the vocabulary the
+    /// conditional-site scan matches call sites against.
+    fn install_wrapper_names() -> std::collections::BTreeSet<String> {
+        capability_wrappers().installs.into_keys().collect()
     }
 
     fn manifest_src() -> std::path::PathBuf {
@@ -1888,6 +1963,35 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
             }
         }
         out
+    }
+
+    /// The text of every arm after the first in the `if`-chain whose first block
+    /// closes at `first_close`. `None` when the chain has no `else` at all.
+    ///
+    /// Shared by [`governing_alternative`] and the gate rule, so "what counts as
+    /// the else side of a conditional" has one answer rather than two that drift.
+    fn else_chain(lines: &[String], first_close: usize) -> Option<String> {
+        if !lines
+            .get(first_close)
+            .is_some_and(|l| l.trim_start().starts_with("} else"))
+        {
+            return None;
+        }
+        let mut out = Vec::new();
+        let mut cur = first_close;
+        loop {
+            let (body, c) = block_at(lines, cur);
+            out.push(body);
+            if lines
+                .get(c)
+                .is_some_and(|l| l.trim_start().starts_with("} else"))
+            {
+                cur = c;
+            } else {
+                break;
+            }
+        }
+        Some(out.join("\n"))
     }
 
     /// The sibling arms of the construct that governs the install at `site`.
@@ -1947,28 +2051,9 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
 
         if t.starts_with("if ") || t.starts_with("if let ") {
             let (_, first_close) = block_at(lines, g);
-            if !lines
-                .get(first_close)
-                .is_some_and(|l| l.trim_start().starts_with("} else"))
-            {
-                // Conditional, and no alternative exists to hold a `decline`.
-                return Some(String::new());
-            }
-            let mut out = Vec::new();
-            let mut cur = first_close;
-            loop {
-                let (body, c) = block_at(lines, cur);
-                out.push(body);
-                if lines
-                    .get(c)
-                    .is_some_and(|l| l.trim_start().starts_with("} else"))
-                {
-                    cur = c;
-                } else {
-                    break;
-                }
-            }
-            return Some(out.join("\n"));
+            // `None` here is "conditional, and no alternative exists to hold a
+            // `decline`" — the defect, not a skip.
+            return Some(else_chain(lines, first_close).unwrap_or_default());
         }
 
         // A `match` arm: the alternative is every OTHER arm of the same match.
@@ -2043,38 +2128,56 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// * **Multi-CALL, single-site.** Rule 2 approximates reachability by
     ///   counting sites. One conditional site inside a function that runs many
     ///   times per process reaches the same hazard and is not detected.
-    ///   Direction: under-see. No such site exists in `src/` today (every
-    ///   conditional install is on a once-per-process boot path).
+    ///   Direction: under-see. Checked 2026-08-25: none of the 18 single-site
+    ///   wrappers is multi-call, so the rule holds — but the reason is
+    ///   per-wrapper, not "boot runs once". An earlier draft justified it with
+    ///   "(every conditional install is on a once-per-process boot path)",
+    ///   which this guard's own exempt pair falsifies: `config/load.rs:208` and
+    ///   `:342` are conditional installs in `Config::load`, and the entire
+    ///   ruling at those two sites rests on `Config::load` running many times
+    ///   per process. They are safe because rule 2 already forbids stamping
+    ///   them, not because they run once.
     /// * **Which slot was declined.** The check is `contains("decline")` over
     ///   the alternative, so an arm that declines a DIFFERENT handle satisfies
     ///   it. Deriving the expected `decline_*` name from the install wrapper's
     ///   name was rejected: `ensure_dream_daemon_with_orientation` /
     ///   `decline_dream_daemon` already breaks the convention, so the rule
     ///   would need an exception list on day one.
+    ///   [`every_slot_installed_inside_a_gate_is_declined_in_its_else`] asks the
+    ///   per-slot question this one cannot, by resolving wrappers to the slot
+    ///   statics they touch rather than to their names — the two are
+    ///   complementary and neither subsumes the other.
     /// * **Conditionals above the nearest one.** The opener is the first
     ///   strictly-shallower line, matching this scan's stated rule; an install
-    ///   nested three blocks inside a gate is judged against the innermost.
+    ///   nested three blocks inside a gate is judged against the innermost. The
+    ///   gate rule named above covers this direction, because it starts from the
+    ///   gate rather than from the install.
+    /// * **A multi-line `if` condition whose `{` sits on its own line.** The
+    ///   opener then resolves to a bare `{` and the install reads as
+    ///   unconditional. Zero instances in `src/` on 2026-08-25 — the
+    ///   orchestrator gate's `if let (Some(default_provider), Some(session_service))`
+    ///   is single-line — but it is one `rustfmt` reflow away, so it is named
+    ///   here rather than discovered later. The gate rule sees these (its opener
+    ///   test is the `if` line itself, not the line above the body).
     #[test]
     fn no_conditional_capability_install_is_silent() {
         let wrappers = install_wrapper_names();
         assert!(
-            wrappers.len() >= 30,
-            "derived only {} install wrappers; >=30 expected. A derivation that \
-             stopped matching makes this guard pass by finding nothing.",
+            wrappers.len() >= 39,
+            "derived only {} install wrappers; >=39 expected (the live count on \
+             2026-08-25). A derivation that stopped matching makes this guard \
+             pass by finding nothing.",
             wrappers.len()
         );
         let test_only = test_only_module_files();
-        assert!(
-            !test_only.is_empty(),
-            "derived zero test-only module files; the exclusion silently stopped \
-             running and this guard is now reading test fixtures as boot code"
-        );
 
         let mut sites: Vec<CondSite> = Vec::new();
+        let mut suppressed = 0usize;
         for (rel, text) in rust_sources_under(&manifest_src()) {
-            if rel.starts_with("src/capability/") || test_only.contains(&rel) {
+            if rel.starts_with("src/capability/") {
                 continue;
             }
+            let is_fixture = test_only.contains(&rel);
             let present: Vec<&String> = wrappers.iter().filter(|w| text.contains(*w)).collect();
             if present.is_empty() {
                 continue;
@@ -2090,6 +2193,10 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
                 let Some(alt) = governing_alternative(&lines, i) else {
                     continue; // unconditional install: nothing to explain
                 };
+                if is_fixture {
+                    suppressed += 1;
+                    continue;
+                }
                 sites.push(CondSite {
                     wrapper: (*w).clone(),
                     at: format!("{rel}:{}", nums[i]),
@@ -2099,11 +2206,41 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         }
 
         assert!(
-            sites.len() >= 15,
+            sites.len() >= 19,
             "examined only {} conditional installs; 19 were measured on \
-             2026-08-25. Zero-or-few is how this guard reports 'all clear' about \
-             sites it never read.",
+             2026-08-25, and this floor sits flush against that measurement on \
+             purpose. An earlier draft left it at 15 — four below — and the \
+             slack was not caution, it was already-issued permission: it turned \
+             a mutation the guard CAN see (reverting the if-with-no-`else` fix, \
+             which costs exactly two sites) into a documented 'boundary'. \
+             Zero-or-few is how this guard reports 'all clear' about sites it \
+             never read.",
             sites.len()
+        );
+
+        // The test-only exclusion, asserted on the quantity it protects rather
+        // than on the one an earlier draft counted. That draft asserted
+        // `!test_only_module_files().is_empty()` against a live 230 — a number
+        // that moves every time anyone anywhere adds a `#[cfg(test)] mod x;`, so
+        // no floor could sit flush against it, and one that tried would be
+        // measuring test-module churn rather than this exclusion. What the
+        // exclusion is FOR is keeping fixture call sites out of the verdict, and
+        // that is a property, not a count: it either removes some or it does not.
+        //
+        // ⚠️ Ordered AFTER the site floor deliberately. `suppressed` is counted
+        // through the same opener reader as `sites`, so a break in that reader
+        // zeroes both — and when it does, "you examined too few sites" is the
+        // accurate diagnosis while "the exclusion stopped running" sends the
+        // reader to the wrong file. Forced 2026-08-25: reverting the
+        // if-with-no-`else` fix zeroes `suppressed` (all four fixture sites are
+        // bare `if`s) and this assertion fired first, naming the wrong cause.
+        assert!(
+            suppressed > 0,
+            "no call site was removed by the test-only-module exclusion. Either \
+             that exclusion stopped running — in which case this guard is now \
+             reading test fixtures as boot code — or the opener reader above \
+             stopped matching. Measured 2026-08-25: 4 removed, all in \
+             plugins/handlers/tests.rs."
         );
 
         let mut per_wrapper: std::collections::BTreeMap<&str, Vec<&CondSite>> =
@@ -2142,6 +2279,267 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
              the stamp would outlive the state it describes — drop the decline \
              at these sites and record the reason in a comment instead:\n  {}",
             hazardous.join("\n  ")
+        );
+    }
+
+    /// The slots a span of code installs (or declines), whether through a
+    /// wrapper call or a direct `STATIC.install(v)` on a slot the span's own
+    /// file declares.
+    ///
+    /// Both spellings are needed: boot calls wrappers, while a setter that
+    /// declines itself (`init_cron_trigger`, `set_global_result_budget_ceiling`)
+    /// touches its static directly.
+    fn slots_in(
+        span: &str,
+        wrappers: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+        local_statics: &[String],
+        file: &str,
+        method: &str,
+    ) -> std::collections::BTreeSet<String> {
+        let mut out = slots_touched(span, local_statics, method, file);
+        for (name, slots) in wrappers {
+            if span_calls(span, name) {
+                out.extend(slots.iter().cloned());
+            }
+        }
+        out
+    }
+
+    /// Does any production line of `span` call the free function `name`?
+    fn span_calls(span: &str, name: &str) -> bool {
+        span.lines()
+            .any(|line| !is_fn_definition(line) && calls(line, name))
+    }
+
+    /// What a span installs, split by whether the scan can name the slot.
+    ///
+    /// `strict` is every slot reached through a wrapper name that belongs to
+    /// exactly one slot, plus every direct `STATIC.install(v)` — both resolve to
+    /// a single handle, so the gate rule can demand that handle by name.
+    ///
+    /// `ambiguous` is one entry per wrapper NAME that several modules share
+    /// (`init_global` is five slots; `set_global` is two). The scan is
+    /// name-keyed, so at such a call site it cannot tell which module was meant
+    /// — and a guard that cannot tell must not assert which. Demanding all five
+    /// produced three false offenders when this rule was first run against the
+    /// real tree (the cron gate and both codex gates), every one of them a
+    /// collision rather than a missing decline. Direction: under-see on
+    /// ambiguous names only.
+    struct GateInstalls {
+        strict: std::collections::BTreeSet<String>,
+        ambiguous: Vec<(String, std::collections::BTreeSet<String>)>,
+    }
+
+    fn gate_installs(
+        span: &str,
+        wrappers: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+        local_statics: &[String],
+        file: &str,
+    ) -> GateInstalls {
+        let mut g = GateInstalls {
+            strict: slots_touched(span, local_statics, "install", file),
+            ambiguous: Vec::new(),
+        };
+        for (name, slots) in wrappers {
+            if !span_calls(span, name) {
+                continue;
+            }
+            if slots.len() == 1 {
+                g.strict.extend(slots.iter().cloned());
+            } else {
+                g.ambiguous.push((name.clone(), slots.clone()));
+            }
+        }
+        g
+    }
+
+    /// How many slots a wrapper name covers, for the ambiguous-name message.
+    fn slots_count(
+        name: &str,
+        wrappers: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+    ) -> usize {
+        wrappers
+            .get(name)
+            .map_or(0, std::collections::BTreeSet::len)
+    }
+
+    /// Every handle installed inside a gated block is declined in that block's
+    /// `else`, slot by slot.
+    ///
+    /// This is the half [`no_conditional_capability_install_is_silent`] cannot
+    /// reach. That guard is *site*-centric: it finds an install whose own
+    /// nearest enclosing line is an `if`, and asks whether the word `decline`
+    /// appears in the alternative. Two consequences, both measured on
+    /// 2026-08-25 by mutating the real tree:
+    ///
+    /// * An install nested several blocks below the gate is not its own
+    ///   conditional site, so it is never examined — the seven handles
+    ///   `agent_init` installs inside `if let Some(provider_registry)` were held
+    ///   up by ONE of them (`ensure_dream_daemon_with_orientation`, whose opener
+    ///   does resolve to that gate).
+    /// * `contains("decline")` is satisfied by any one decline, so deleting SIX
+    ///   of those seven declines was **green**. Forced, not reasoned.
+    ///
+    /// Asking it per slot fixes both: the gate's `else` must decline every
+    /// handle the gate's body installs.
+    ///
+    /// ⚠️ The scan of the then-arm **excludes the opener line**, and that is
+    /// load-bearing rather than tidy. `if EXTENSION_MANAGER.install(manager) { Ok }
+    /// else { Err(rejected) }` and `Config::set_effective_path`'s twin both
+    /// install *in the condition*; their `else` means "a handle is already
+    /// installed", which is the opposite of a decline. Including the opener made
+    /// both of them offenders.
+    ///
+    /// ## What this cannot see
+    ///
+    /// **Transitive installs.** The scan is lexical, so a gate whose body calls
+    /// a function that installs elsewhere (`initialize_orchestrator`,
+    /// `BuiltinToolRegistry::with_config`) reads as installing nothing. That is
+    /// why `start/mod.rs`'s orchestrator gate is invisible here and is covered
+    /// instead by [`every_decline_wrapper_has_a_production_caller`], and why the
+    /// seven residue handles installed from `src/executor/` are covered by
+    /// neither. Direction: under-see, and it is the same boundary the round drew
+    /// when it declined to write a remote authority on another module's absence.
+    #[test]
+    fn every_slot_installed_inside_a_gate_is_declined_in_its_else() {
+        let w = capability_wrappers();
+        let test_only = test_only_module_files();
+        let mut gates = 0usize;
+        let mut offenders: Vec<String> = Vec::new();
+
+        for (rel, text) in rust_sources_under(&manifest_src()) {
+            if rel.starts_with("src/capability/") || test_only.contains(&rel) {
+                continue;
+            }
+            let (nums, lines) = prod_lines(&text);
+            let statics = slot_statics(&lines);
+            for i in 0..lines.len() {
+                let t = lines[i].trim_start();
+                if !(t.starts_with("if ") || t.starts_with("if let ")) {
+                    continue;
+                }
+                let (_, close) = block_at(&lines, i);
+                let Some(alt) = else_chain(&lines, close) else {
+                    continue; // no `else`: the site-centric guard owns this shape
+                };
+                let body = lines[i + 1..close.min(lines.len())].join("\n");
+                let installed = gate_installs(&body, &w.installs, &statics, &rel);
+                if installed.strict.is_empty() && installed.ambiguous.is_empty() {
+                    continue;
+                }
+                gates += 1;
+                let declined = slots_in(&alt, &w.declines, &statics, &rel, "decline");
+                let mut missing: Vec<String> =
+                    installed.strict.difference(&declined).cloned().collect();
+                missing.extend(
+                    installed
+                        .ambiguous
+                        .iter()
+                        .filter(|(_, slots)| slots.is_disjoint(&declined))
+                        .map(|(name, _)| {
+                            format!(
+                                "{name}(any of its {} slots)",
+                                slots_count(name, &w.installs)
+                            )
+                        }),
+                );
+                if !missing.is_empty() {
+                    offenders.push(format!(
+                        "{rel}:{} — else never declines {missing:?}",
+                        nums[i]
+                    ));
+                }
+            }
+        }
+
+        assert_eq!(
+            gates, 15,
+            "examined {gates} gated blocks that install a capability; 15 were \
+             measured on 2026-08-25. A count that moved without a capability \
+             being added or removed means the block reader stopped matching — \
+             which is how this guard would report 'all clear' about blocks it \
+             never opened."
+        );
+        assert!(
+            offenders.is_empty(),
+            "these gates install a capability and their `else` never declines \
+             it, so on the configuration where the handle is absent the operator \
+             is told nothing:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
+    /// Every `decline_*` wrapper is called from production code outside its own
+    /// file.
+    ///
+    /// The rule the two site-centric guards structurally cannot state. Eleven of
+    /// this round's fifteen declines fire from places that are **unconditional
+    /// at their own call site** — `decline_orchestrator_slots`'s four, because
+    /// `initialize_orchestrator` installs them unconditionally while its CALLER
+    /// is gated; and `agent_init`'s seven, which sit in an `else` no install
+    /// site resolves to. Emptying `decline_orchestrator_slots`' body was
+    /// **green** against the site-centric guard (forced 2026-08-25). It is red
+    /// here, because those four wrappers then have no caller at all.
+    ///
+    /// This is also this repo's own R10 rule arriving at the same place from the
+    /// other side: a wrapper with zero consumers is an abstraction to withdraw,
+    /// not a capability that is quietly unstamped.
+    ///
+    /// ⚠️ "Outside its own file" is deliberate. `ensure_dream_daemon_with_orientation`
+    /// (a decliner as well as an installer) is called by `ensure_dream_daemon`
+    /// in the same file — and that wrapper has zero callers of its own, so an
+    /// in-file caller would have satisfied this rule with a dead one. The cost
+    /// is a false orphan for any decliner whose only legitimate caller is
+    /// in-file; there is none today.
+    ///
+    /// What it does NOT check: that the call sits in the right arm. That is the
+    /// gate rule above; the two are complementary and neither subsumes the other.
+    #[test]
+    fn every_decline_wrapper_has_a_production_caller() {
+        let w = capability_wrappers();
+        assert!(
+            w.declines.len() >= 24,
+            "derived only {} decline wrappers; >=24 expected — the live count on \
+             2026-08-25, so this floor sits flush against its own measurement. \
+             A derivation that stopped matching makes this guard pass by finding \
+             nothing.",
+            w.declines.len()
+        );
+        let test_only = test_only_module_files();
+
+        let mut called: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for (rel, text) in rust_sources_under(&manifest_src()) {
+            if rel.starts_with("src/capability/") || test_only.contains(&rel) {
+                continue;
+            }
+            let present: Vec<&String> = w
+                .declines
+                .keys()
+                .filter(|n| text.contains(n.as_str()) && w.decline_file.get(*n) != Some(&rel))
+                .collect();
+            if present.is_empty() {
+                continue;
+            }
+            let (_, lines) = prod_lines(&text);
+            for line in &lines {
+                if is_fn_definition(line) {
+                    continue;
+                }
+                for name in &present {
+                    if calls(line, name) {
+                        called.insert((*name).clone());
+                    }
+                }
+            }
+        }
+
+        let orphans: Vec<&String> = w.declines.keys().filter(|n| !called.contains(*n)).collect();
+        assert!(
+            orphans.is_empty(),
+            "these `decline_*` wrappers have no production caller outside their \
+             own file, so the handles they speak for read as a bare 'never \
+             reached' — either wire them where the install is skipped, or delete \
+             them (R10):\n  {orphans:?}"
         );
     }
 
