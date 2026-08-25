@@ -15,12 +15,12 @@
 
 /// See module docs.
 pub fn safe_freeze_offset(text: &str, prev_safe: usize) -> Option<usize> {
-    let mut in_fence = false;
+    let mut fence_marker: Option<usize> = None;
     let mut pending_ref_def = false;
     let mut last_safe = prev_safe;
     let mut cursor = prev_safe;
 
-    for line in text[prev_safe..].split_inclusive('\n') {
+    for line in text.get(prev_safe..)?.split_inclusive('\n') {
         if !line.ends_with('\n') {
             // Incomplete trailing line (no newline yet) — never safe.
             break;
@@ -28,17 +28,31 @@ pub fn safe_freeze_offset(text: &str, prev_safe: usize) -> Option<usize> {
         let trimmed = line.trim_end_matches('\n');
         cursor += line.len();
 
-        if trimmed.trim_start().starts_with("```") {
-            in_fence = !in_fence;
-            if !in_fence {
-                // Just closed a fence — safe up to and including this line.
+        let bare = trimmed.trim();
+        let is_all_backticks = !bare.is_empty() && bare.chars().all(|c| c == '`');
+        let leading_ticks = trimmed.trim_start().chars().take_while(|&c| c == '`').count();
+
+        match fence_marker {
+            Some(open_len) if is_all_backticks && bare.chars().count() >= open_len => {
+                // Closes the fence: a bare line of backticks at least as
+                // long as the opening run. A shorter or non-bare run is
+                // just fence content (CommonMark semantics).
+                fence_marker = None;
                 last_safe = cursor;
                 pending_ref_def = false;
+                continue;
             }
-            continue;
-        }
-        if in_fence {
-            continue;
+            Some(_) => {
+                // Still inside the fence.
+                continue;
+            }
+            None if leading_ticks >= 3 => {
+                // Opens a new fence. An info string after the backticks
+                // (e.g. "```rust") is allowed and doesn't affect the count.
+                fence_marker = Some(leading_ticks);
+                continue;
+            }
+            None => {}
         }
         if trimmed.trim().is_empty() {
             // A blank line always ends any open paragraph or reference-link
@@ -123,5 +137,31 @@ mod tests {
         let text = "```rust\ncode\n```\nmore\n";
         let after_fence = safe_freeze_offset(text, 0).unwrap();
         assert_eq!(after_fence, text.len());
+    }
+
+    #[test]
+    fn prev_safe_past_the_end_of_text_returns_none_instead_of_panicking() {
+        let text = "short\n";
+        assert_eq!(safe_freeze_offset(text, 100), None);
+    }
+
+    #[test]
+    fn prev_safe_exactly_at_text_len_returns_none() {
+        let text = "line one\n";
+        assert_eq!(safe_freeze_offset(text, text.len()), None);
+    }
+
+    #[test]
+    fn a_longer_opening_fence_is_not_closed_by_a_shorter_backtick_run_inside_it() {
+        let text = "````markdown\nsome text\n```\ninner code\n```\n````\nafter\n";
+        let result = safe_freeze_offset(text, 0);
+        assert_eq!(result, Some(text.len()));
+    }
+
+    #[test]
+    fn a_bare_backtick_run_shorter_than_the_opening_fence_does_not_close_it() {
+        let text = "````\n```\nafter\n";
+        let result = safe_freeze_offset(text, 0);
+        assert_eq!(result, None);
     }
 }
