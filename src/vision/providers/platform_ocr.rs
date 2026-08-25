@@ -75,25 +75,29 @@ impl PlatformOcrProvider {
     /// - `Url` variant: not supported for platform OCR (would need HTTP fetch).
     async fn resolve_png_bytes(image: &ImageInput) -> Result<Vec<u8>, VisionError> {
         match image {
-            ImageInput::Base64 { data, .. } => {
+            ImageInput::Base64 { data, format } => {
                 use base64::Engine;
-                let estimated_decoded = (data.len() / 4) * 3;
-                if estimated_decoded as u64 > crate::vision::types::MAX_IMAGE_FILE_SIZE {
-                    return Err(VisionError::ImageError(format!(
-                        "base64 image exceeds maximum size of {} MB",
-                        crate::vision::types::MAX_IMAGE_FILE_SIZE / (1024 * 1024)
-                    )));
-                }
                 let decoded = base64::engine::general_purpose::STANDARD
                     .decode(data)
                     .map_err(|e| VisionError::ImageError(format!("Invalid base64 image: {e}")))?;
                 if decoded.len() as u64 > crate::vision::types::MAX_IMAGE_FILE_SIZE {
                     return Err(VisionError::ImageError(format!(
-                        "decoded base64 image exceeds maximum size of {} MB",
+                        "decoded image exceeds maximum size of {} MB",
                         crate::vision::types::MAX_IMAGE_FILE_SIZE / (1024 * 1024)
                     )));
                 }
-                Ok(decoded)
+                // The platform OCR backend only accepts PNG. Fail loudly
+                // instead of silently handing it a mislabeled payload — the
+                // upstream Vision framework may detect format from magic
+                // bytes, but other platform providers will not.
+                match format {
+                    ImageFormat::Png => Ok(decoded),
+                    other => Err(VisionError::ImageError(format!(
+                        "Platform OCR currently accepts only PNG; got {other:?}. \
+                         Route the request through a transcoding pipeline or \
+                         add a transcode step."
+                    ))),
+                }
             }
             ImageInput::FilePath { path } => {
                 let bytes = tokio::fs::read(path).await.map_err(|e| {
@@ -173,7 +177,14 @@ impl VisionProvider for PlatformOcrProvider {
 // =============================================================================
 
 /// Convert the desktop-layer OCR result into the vision-layer OCR shape.
+///
+/// TODO(vision): expose `lines` (bounding box, confidence, recognition
+/// candidates) once a consumer asks for them — per CLAUDE.md R10 YAGNI, defer
+/// until a real caller. Until then, retain the field on the input type so
+/// future migration is cheap; the explicit `let _lines =` binding makes the
+/// omission greppable so future readers don't 'fix' it by mistake.
 fn convert_platform_ocr_result(result: aleph_desktop::OcrResult) -> OcrResult {
+    let _lines = result.lines; // tracked above; intentional discard
     OcrResult {
         full_text: result.full_text,
     }
