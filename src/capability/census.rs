@@ -1854,13 +1854,34 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// `SOMETHING.install(v)` on a non-slot container in a file with no slot.
     /// The real over-see is the one named below, and it is name-keying.
     ///
-    /// ⚠️ Keyed on the bare NAME, so two wrappers called `init_global` in
-    /// different modules are one entry. Direction: over-see for the call-site
-    /// scan (three of those four functions above DO have their call sites
-    /// examined, through the bare names `install` / `install_global` that other
-    /// files contribute), and over-see for the hazard rule below. Both fail
-    /// loudly — a demanded `decline` that should not be there, or a forbidden
-    /// one that is — rather than going quiet.
+    /// ⚠️ Keyed on the bare NAME, so five wrappers called `init_global` in five
+    /// modules are one entry. Direction: over-see for the call-site scan (three
+    /// of those four functions above DO have their call sites examined, through
+    /// the bare names `install` / `install_global` that other files contribute),
+    /// and over-see for the hazard rule. Both fail loudly — a demanded `decline`
+    /// that should not be there, or a forbidden one that is — rather than going
+    /// quiet.
+    ///
+    /// Measured 2026-08-25, three entries own more than one slot and so land in
+    /// [`GateInstalls`]'s `ambiguous` bucket — but only two of the three are
+    /// name collisions, and the difference matters when reading a failure:
+    ///
+    /// * `init_global` — 5 slots, 5 modules. A collision.
+    /// * `set_global` — 2 slots, 2 modules (`codex_token_refresher`,
+    ///   `gateway::security::shared_token`). A collision.
+    /// * `install` — 2 slots, **one function**: `identity::ledger::install`
+    ///   installs `LEDGER` and `WRITER` together. Not a collision at all; it
+    ///   shares the bucket because the bucket's test is "more than one slot",
+    ///   which is the right test for the gate rule and the wrong word for this
+    ///   paragraph.
+    ///
+    /// ⚠️ [`every_decline_wrapper_has_a_production_caller`] inherits the same
+    /// name-keying in the OPPOSITE direction — **under**-see. `decline_global` is
+    /// defined in two files (`tasks/cron/mod.rs`,
+    /// `gateway/codex_token_refresher.rs`) and `decline_file` records only one,
+    /// so a caller of either satisfies both and one of the two could lose its
+    /// only caller unnoticed. Not over-see, which fails loudly; this one goes
+    /// quiet.
     struct CapWrappers {
         installs: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
         declines: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
@@ -1918,6 +1939,118 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
             }
         }
         w
+    }
+
+    /// The cargo target a source file belongs to.
+    ///
+    /// `src/bin/<name>/**` is its own binary crate; everything else under `src/`
+    /// is the library.
+    fn target_of(rel: &str) -> String {
+        rel.strip_prefix("src/bin/")
+            .and_then(|r| r.split('/').next())
+            .map_or_else(|| "lib".to_string(), |bin| format!("bin:{bin}"))
+    }
+
+    /// `(target, fn name)` -> the slots that function's body installs (or
+    /// declines) through the wrapper vocabulary, and how many definitions of
+    /// that name merged into the entry.
+    type HopMap =
+        std::collections::BTreeMap<(String, String), (std::collections::BTreeSet<String>, usize)>;
+
+    /// One hop of call-graph reach, per binary target.
+    struct Hop {
+        installs: HopMap,
+        declines: HopMap,
+    }
+
+    fn one_hop(w: &CapWrappers, test_only: &std::collections::BTreeSet<String>) -> Hop {
+        let mut hop = Hop {
+            installs: HopMap::new(),
+            declines: HopMap::new(),
+        };
+        for (rel, text) in rust_sources_under(&manifest_src()) {
+            if rel.starts_with("src/capability/") || test_only.contains(&rel) {
+                continue;
+            }
+            let target = target_of(&rel);
+            if !target.starts_with("bin:") {
+                continue; // see `hoppable`: the library gets no hop
+            }
+            let (_, lines) = prod_lines(&text);
+            let statics = slot_statics(&lines);
+            for i in 0..lines.len() {
+                if !is_fn_definition(&lines[i]) {
+                    continue;
+                }
+                let t = strip_visibility(lines[i].trim_start()).trim_start();
+                let t = t.strip_prefix("async ").unwrap_or(t);
+                let t = t.strip_prefix("const ").unwrap_or(t);
+                let Some(rest) = t.strip_prefix("fn ") else {
+                    continue;
+                };
+                let Some(name) = rest.split('(').next() else {
+                    continue;
+                };
+                let name = name.split('<').next().unwrap_or(name).trim().to_string();
+                if name.is_empty() {
+                    continue;
+                }
+                let (body, _) = block_at(&lines, i);
+                for (map, wrappers, method) in [
+                    (&mut hop.installs, &w.installs, "install"),
+                    (&mut hop.declines, &w.declines, "decline"),
+                ] {
+                    let slots = slots_in(&body, wrappers, &statics, &rel, method);
+                    if slots.is_empty() {
+                        continue;
+                    }
+                    let e = map
+                        .entry((target.clone(), name.clone()))
+                        .or_insert_with(|| (std::collections::BTreeSet::new(), 0));
+                    e.0.extend(slots);
+                    e.1 += 1;
+                }
+            }
+        }
+        hop
+    }
+
+    /// The `(name, slots)` pairs a gate in `file` may hop through.
+    ///
+    /// **Two restrictions, both forced by measurement rather than chosen.**
+    ///
+    /// 1. **Binary targets only.** A gate in the library gets no hop. Measured
+    ///    2026-08-25: hopping symmetrically inside `lib` took the gate count from
+    ///    15 to 77 and produced **61 offenders, every one of them false** —
+    ///    because `ExecutionEngine::new` installs `gateway/concurrency-limiter`,
+    ///    and once a hop is keyed on a bare fn name, `new(` appears in almost
+    ///    every `if`/`else` body in the crate. What makes the boot binary
+    ///    different is not its path: `src/bin/<name>/` is its own crate, so a
+    ///    function defined there can only be called from that binary, and a gate
+    ///    there is the last word on what this process wires. A library function
+    ///    is a component that does not know its callers — the same argument this
+    ///    round used when it refused to decline `src/executor/`'s handles from
+    ///    `agent_init`.
+    /// 2. **Unique names only.** A name defined more than once in the target is
+    ///    not hopped at all, rather than hopped loosely. Elsewhere in these
+    ///    guards an ambiguous name is demoted to "at least one slot declined";
+    ///    here demotion would still *assert* something about a call the scan
+    ///    cannot resolve, which is how the 61 arrived. A hop it cannot resolve is
+    ///    a hop it must not take.
+    ///
+    /// Direction of both: under-see.
+    fn hoppable<'a>(
+        hop: &'a HopMap,
+        file: &str,
+    ) -> Vec<(&'a String, &'a std::collections::BTreeSet<String>)> {
+        let target = target_of(file);
+        if !target.starts_with("bin:") {
+            return Vec::new();
+        }
+        hop.iter()
+            .filter(|((t, _), (_, defs))| t == &target && *defs == 1)
+            .map(|((_, name), (slots, _))| (name, slots))
+            .collect()
     }
 
     /// Names of the `pub fn`s that install a capability — the vocabulary the
@@ -2128,8 +2261,10 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// * **Multi-CALL, single-site.** Rule 2 approximates reachability by
     ///   counting sites. One conditional site inside a function that runs many
     ///   times per process reaches the same hazard and is not detected.
-    ///   Direction: under-see. Checked 2026-08-25: none of the 18 single-site
-    ///   wrappers is multi-call, so the rule holds — but the reason is
+    ///   Direction: under-see. Checked 2026-08-25: the 19 sites resolve to 18
+    ///   distinct wrappers, 17 of them single-site (the 18th is
+    ///   `init_defaults_override`, the two-site exempt pair), and none of those
+    ///   17 is multi-call — so the rule holds — but the reason is
     ///   per-wrapper, not "boot runs once". An earlier draft justified it with
     ///   "(every conditional install is on a once-per-process boot path)",
     ///   which this guard's own exempt pair falsifies: `config/load.rs:208` and
@@ -2236,10 +2371,12 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         // bare `if`s) and this assertion fired first, naming the wrong cause.
         assert!(
             suppressed > 0,
-            "no call site was removed by the test-only-module exclusion. Either \
-             that exclusion stopped running — in which case this guard is now \
-             reading test fixtures as boot code — or the opener reader above \
-             stopped matching. Measured 2026-08-25: 4 removed, all in \
+            "no call site was removed by the test-only-module exclusion. Three \
+             causes, and the message cannot tell them apart: that exclusion \
+             stopped running (this guard is now reading test fixtures as boot \
+             code); the opener reader above stopped matching; or the four fixture \
+             call sites were legitimately deleted, in which case re-measure and \
+             lower this to the new count. Measured 2026-08-25: 4 removed, all in \
              plugins/handlers/tests.rs."
         );
 
@@ -2335,6 +2472,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         wrappers: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
         local_statics: &[String],
         file: &str,
+        hop: &HopMap,
     ) -> GateInstalls {
         let mut g = GateInstalls {
             strict: slots_touched(span, local_statics, "install", file),
@@ -2350,17 +2488,35 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
                 g.ambiguous.push((name.clone(), slots.clone()));
             }
         }
+        for (name, slots) in hoppable(hop, file) {
+            if span_calls(span, name) {
+                g.strict.extend(slots.iter().cloned());
+            }
+        }
         g
     }
 
-    /// How many slots a wrapper name covers, for the ambiguous-name message.
-    fn slots_count(
-        name: &str,
+    /// The slots an else-chain declines, including one hop into a same-binary
+    /// aggregator.
+    ///
+    /// Symmetric with [`gate_installs`], and load-bearing rather than tidy:
+    /// `decline_orchestrator_slots` declares no slot and calls no `.decline(` —
+    /// it calls four leaf wrappers. Adding the hop on the install side alone
+    /// turns the unmutated tree red at the orchestrator gate.
+    fn gate_declines(
+        span: &str,
         wrappers: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
-    ) -> usize {
-        wrappers
-            .get(name)
-            .map_or(0, std::collections::BTreeSet::len)
+        local_statics: &[String],
+        file: &str,
+        hop: &HopMap,
+    ) -> std::collections::BTreeSet<String> {
+        let mut out = slots_in(span, wrappers, local_statics, file, "decline");
+        for (name, slots) in hoppable(hop, file) {
+            if span_calls(span, name) {
+                out.extend(slots.iter().cloned());
+            }
+        }
+        out
     }
 
     /// Every handle installed inside a gated block is declined in that block's
@@ -2392,18 +2548,38 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     ///
     /// ## What this cannot see
     ///
-    /// **Transitive installs.** The scan is lexical, so a gate whose body calls
-    /// a function that installs elsewhere (`initialize_orchestrator`,
-    /// `BuiltinToolRegistry::with_config`) reads as installing nothing. That is
-    /// why `start/mod.rs`'s orchestrator gate is invisible here and is covered
-    /// instead by [`every_decline_wrapper_has_a_production_caller`], and why the
-    /// seven residue handles installed from `src/executor/` are covered by
-    /// neither. Direction: under-see, and it is the same boundary the round drew
-    /// when it declined to write a remote authority on another module's absence.
+    /// * **Transitive installs beyond one hop, and any hop out of a binary.**
+    ///   [`hoppable`] resolves a gate body's call into a function defined in the
+    ///   same binary target, once. So `start/mod.rs`'s orchestrator gate IS
+    ///   covered (its body calls `initialize_orchestrator`, boot-local, which
+    ///   installs four handles) — but the seven residue handles installed from
+    ///   `src/executor/` are not, because `BuiltinToolRegistry::with_config` is a
+    ///   library function whose callers it does not know. That is the same
+    ///   boundary this round drew when it refused to decline those seven from
+    ///   `agent_init`: a gate is the last word only on what its own binary
+    ///   wires. Direction: under-see, and deliberate.
+    ///
+    ///   ⚠️ One of the seven is looser than "no decline exists":
+    ///   `loop-graph/cron-trigger` HAS an inline decline, in `init_cron_trigger`'s
+    ///   own `else` (`loop_graph/service.rs`), and that `if`/`else` is one of the
+    ///   gates below. It reads "never reached" on a provider-less boot because
+    ///   its *caller* never runs, not because the slot lacks a decline.
+    ///
+    /// * **`match` gates.** This opens `if` / `if let` only. A `match` whose one
+    ///   arm installs two handles and whose other declines one satisfies
+    ///   [`no_conditional_capability_install_is_silent`]'s `contains("decline")`
+    ///   and is invisible here. Today's three match gates (the cron `Err` arm,
+    ///   the extension-manager `Err` arm, the tool-result-store `Err` arm) are
+    ///   covered by that site guard — but by a property of today's call counts
+    ///   (`init_global` has exactly one conditional site, so it misses the
+    ///   two-site exempt bucket), not by either rule. A second conditional site
+    ///   for any of those wrappers would move it into the exempt bucket and
+    ///   leave the match arm unguarded by anything.
     #[test]
     fn every_slot_installed_inside_a_gate_is_declined_in_its_else() {
         let w = capability_wrappers();
         let test_only = test_only_module_files();
+        let hop = one_hop(&w, &test_only);
         let mut gates = 0usize;
         let mut offenders: Vec<String> = Vec::new();
 
@@ -2422,13 +2598,16 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
                 let Some(alt) = else_chain(&lines, close) else {
                     continue; // no `else`: the site-centric guard owns this shape
                 };
-                let body = lines[i + 1..close.min(lines.len())].join("\n");
-                let installed = gate_installs(&body, &w.installs, &statics, &rel);
+                // `(i + 1).min(close)`: `block_at`'s fallback for an unterminated
+                // `if` on a file's final production line returns `lines.len()-1`,
+                // which can be < i + 1 and would panic the slice.
+                let body = lines[(i + 1).min(close)..close.min(lines.len())].join("\n");
+                let installed = gate_installs(&body, &w.installs, &statics, &rel, &hop.installs);
                 if installed.strict.is_empty() && installed.ambiguous.is_empty() {
                     continue;
                 }
                 gates += 1;
-                let declined = slots_in(&alt, &w.declines, &statics, &rel, "decline");
+                let declined = gate_declines(&alt, &w.declines, &statics, &rel, &hop.declines);
                 let mut missing: Vec<String> =
                     installed.strict.difference(&declined).cloned().collect();
                 missing.extend(
@@ -2436,12 +2615,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
                         .ambiguous
                         .iter()
                         .filter(|(_, slots)| slots.is_disjoint(&declined))
-                        .map(|(name, _)| {
-                            format!(
-                                "{name}(any of its {} slots)",
-                                slots_count(name, &w.installs)
-                            )
-                        }),
+                        .map(|(name, slots)| format!("{name} (any of its {} slots)", slots.len())),
                 );
                 if !missing.is_empty() {
                     offenders.push(format!(
@@ -2453,9 +2627,10 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         }
 
         assert_eq!(
-            gates, 15,
-            "examined {gates} gated blocks that install a capability; 15 were \
-             measured on 2026-08-25. A count that moved without a capability \
+            gates, 16,
+            "examined {gates} gated blocks that install a capability; 16 were \
+             measured on 2026-08-25 (15 lexical + the orchestrator gate, which is \
+             reached only through the one-hop rule). A count that moved without a capability \
              being added or removed means the block reader stopped matching — \
              which is how this guard would report 'all clear' about blocks it \
              never opened."
@@ -2492,8 +2667,17 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// is a false orphan for any decliner whose only legitimate caller is
     /// in-file; there is none today.
     ///
-    /// What it does NOT check: that the call sits in the right arm. That is the
-    /// gate rule above; the two are complementary and neither subsumes the other.
+    /// What it does NOT check: that the call sits in the right arm — and the
+    /// gap that opens is not hypothetical. `decline_orchestrator_slots` is a
+    /// cross-file aggregator: it lives in `orchestrator_init.rs` and its body
+    /// calls the four leaf wrappers, so **its body is their production caller
+    /// whether or not anything ever calls the aggregator.** Deleting the gate's
+    /// `else`-arm call to it — five lines, no `dead_code` warning, because the
+    /// `Err` arm still calls it — left all three guards green when the
+    /// re-review forced it on 2026-08-25, silently un-declining the round's one
+    /// `FailsOpen` handle. That is why [`hoppable`] exists: the gate rule now
+    /// resolves that call and demands the four slots by name. The two rules are
+    /// complementary and neither subsumes the other.
     #[test]
     fn every_decline_wrapper_has_a_production_caller() {
         let w = capability_wrappers();
