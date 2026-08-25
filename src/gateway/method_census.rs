@@ -334,6 +334,8 @@ mod tests {
         ("projects.rename", Class::Open),
         ("projects.room_session", Class::Open),
         ("projects.touch", Class::Open),
+        ("projects.workspace.list", Class::Open),
+        ("projects.workspace.read", Class::Open),
         ("providers.catalog", Class::Admin),
         ("providers.create", Class::Admin),
         ("providers.delete", Class::Admin),

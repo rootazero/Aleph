@@ -683,6 +683,8 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("projects.member.remove", Treatment::KeyChecked),
     ("projects.member.list", Treatment::KeyChecked),
     ("projects.room_session", Treatment::KeyChecked),
+    ("projects.workspace.list", Treatment::KeyChecked),
+    ("projects.workspace.read", Treatment::KeyChecked),
     // --- canvas.* (whiteboard — handlers/canvas.rs) ---
     // Every addressed method resolves the document through the shared
     // `gate_canvas` admission point (`visibility::canvas_visible`: owner OR

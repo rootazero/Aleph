@@ -636,6 +636,16 @@ impl HandlerRegistry {
                 let s = s.clone();
                 async move { projects::handle_member_list(req, s).await }
             });
+            let s = default_store.clone();
+            registry.register("projects.workspace.list", move |req| {
+                let s = s.clone();
+                async move { projects::handle_workspace_list(req, s).await }
+            });
+            let s = default_store.clone();
+            registry.register("projects.workspace.read", move |req| {
+                let s = s.clone();
+                async move { projects::handle_workspace_read(req, s).await }
+            });
             let s = default_store;
             registry.register("projects.room_session", move |req| {
                 let s = s.clone();

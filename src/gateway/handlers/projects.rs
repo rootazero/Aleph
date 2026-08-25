@@ -887,6 +887,266 @@ fn project_error_response(id: Option<serde_json::Value>, err: ProjectError) -> J
     JsonRpcResponse::error(id, code, msg)
 }
 
+// ============================================================================
+// projects.workspace.list / projects.workspace.read
+// ============================================================================
+//
+// A read-only browse of the directory a room is bound to. Two RPCs, one gate
+// order, and four separate reasons a path can be refused — kept apart on
+// purpose, because folding them together is how a browse surface turns into
+// an existence oracle for the filesystem.
+//
+// The order is: room visibility (`gate_project`) -> is the room bound at all
+// -> does the requested path resolve INSIDE the bound root -> is it denied by
+// the credential / `deny_read_globs` floor. Each answers a different question,
+// and only the first two are safe to describe to the caller.
+
+/// Largest slice of a file `projects.workspace.read` will return.
+const WORKSPACE_READ_MAX_BYTES: usize = 64 * 1024;
+
+/// How much of a file is sniffed for NUL before calling it binary.
+const WORKSPACE_BINARY_SNIFF_BYTES: usize = 8 * 1024;
+
+#[derive(Debug, Deserialize)]
+pub struct WorkspaceListParams {
+    pub project_id: String,
+    /// Path relative to the bound root. Absent, empty, or `"."` means the
+    /// root itself.
+    #[serde(default)]
+    pub rel_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WorkspaceReadParams {
+    pub project_id: String,
+    pub rel_path: String,
+}
+
+/// One directory entry as the Panel renders it.
+#[derive(Debug, Serialize)]
+struct WorkspaceEntry {
+    name: String,
+    is_dir: bool,
+    /// Byte size for a file; `0` for a directory (not the directory's
+    /// recursive weight — this surface never walks).
+    size: u64,
+}
+
+/// Why a workspace path could not be served.
+///
+/// Separate from the JSON-RPC response so the two callers map it once, and so
+/// the mapping is reviewable in one place: `Outside` is the caller's mistake
+/// and says so, while `Denied` and `Missing` deliberately collapse into the
+/// SAME not-found shape. A denied file must not be distinguishable from an
+/// absent one, or the read-denial floor becomes a way to enumerate which
+/// secrets exist.
+enum PathRefusal {
+    /// Resolved outside the bound root: `..`, an absolute path, or a symlink
+    /// pointing out of the tree.
+    Outside,
+    /// Absent, unreadable, or matched by the read-denial floor.
+    Missing,
+}
+
+/// Resolve `rel` under `root`, refusing anything that escapes or is denied.
+///
+/// Both sides are canonicalized by the same call before comparison, and the
+/// comparison runs on the canonical (verbatim, `\?\`-prefixed on Windows)
+/// forms — never on a display-converted one. `utils::paths::display_string`
+/// is a PARTIAL conversion, so converting each side once and then comparing
+/// flips a legitimate path from admitted to refused.
+///
+/// `canonicalize` is a pure lookup: it never creates the directory it is
+/// asked about, which is what makes it safe on a diagnostic surface.
+fn resolve_in_workspace(root: &std::path::Path, rel: &str) -> Result<PathBuf, PathRefusal> {
+    let canonical_root = root.canonicalize().map_err(|_| PathRefusal::Missing)?;
+
+    let trimmed = rel.trim();
+    let candidate = if trimmed.is_empty() || trimmed == "." {
+        canonical_root.clone()
+    } else {
+        // `Path::join` with an absolute operand REPLACES the base rather than
+        // appending to it, so an absolute `rel_path` would silently escape
+        // here. The containment test below catches it either way; rejecting
+        // it outright keeps the stated reason honest.
+        let joined = std::path::Path::new(trimmed);
+        if joined.is_absolute() {
+            return Err(PathRefusal::Outside);
+        }
+        canonical_root.join(joined)
+    };
+
+    // Resolves symlinks, so a link inside the root pointing outside it fails
+    // containment rather than passing on its spelling.
+    let canonical = candidate.canonicalize().map_err(|_| PathRefusal::Missing)?;
+    if !canonical.starts_with(&canonical_root) {
+        return Err(PathRefusal::Outside);
+    }
+
+    // The same floor `file_read` and the OS sandbox drivers enforce: Aleph
+    // own credential surface plus the operator `[sandbox] deny_read_globs`.
+    // Reusing that reader is the point — a second denial list here would be a
+    // second answer to "may this be read", and the two would drift.
+    let denied = crate::builtin_tools::file_ops::get_denied_paths();
+    if crate::builtin_tools::file_ops::path_is_denied(&canonical, &denied) {
+        return Err(PathRefusal::Missing);
+    }
+    Ok(canonical)
+}
+
+/// Map a [`PathRefusal`] onto the wire.
+fn workspace_refusal(id: Option<Value>, refusal: &PathRefusal, rel_path: &str) -> JsonRpcResponse {
+    match refusal {
+        PathRefusal::Outside => JsonRpcResponse::error(
+            id,
+            PERMISSION_DENIED,
+            "Path resolves outside the project workspace".to_string(),
+        ),
+        PathRefusal::Missing => JsonRpcResponse::error(
+            id,
+            RESOURCE_NOT_FOUND,
+            format!("No such path in this workspace: {rel_path}"),
+        ),
+    }
+}
+
+/// Handle `projects.workspace.list`.
+///
+/// An unbound room answers `{"root_bound": false, "entries": []}` rather than
+/// an error: not having chosen a folder is a state, not a failure, and the
+/// Panel renders a bind prompt for it. A room the caller cannot see is
+/// refused by `gate_project` with the same not-found shape a nonexistent room
+/// produces.
+pub async fn handle_workspace_list(
+    request: JsonRpcRequest,
+    store: Arc<ProjectStore>,
+) -> JsonRpcResponse {
+    let params: WorkspaceListParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let project = match gate_project(&store, request.id.clone(), &params.project_id) {
+        Ok(p) => p,
+        Err(denial) => return denial,
+    };
+    let Some(root) = project.workspace_path.as_ref() else {
+        return JsonRpcResponse::success(
+            request.id,
+            json!({ "root_bound": false, "entries": Vec::<WorkspaceEntry>::new() }),
+        );
+    };
+
+    let rel = params.rel_path.unwrap_or_default();
+    let dir = match resolve_in_workspace(root, &rel) {
+        Ok(p) => p,
+        Err(refusal) => return workspace_refusal(request.id, &refusal, &rel),
+    };
+
+    let Ok(reader) = std::fs::read_dir(&dir) else {
+        return workspace_refusal(request.id, &PathRefusal::Missing, &rel);
+    };
+
+    let denied = crate::builtin_tools::file_ops::get_denied_paths();
+    let mut entries: Vec<WorkspaceEntry> = Vec::new();
+    for item in reader.flatten() {
+        // Per-entry, and on the canonical form: a denied file must not appear
+        // in a listing it would be refused from reading. An entry that cannot
+        // be canonicalized (a broken symlink, a race with a delete) is
+        // skipped rather than reported — this surface describes what is
+        // readable, and a name it cannot resolve is not.
+        let Ok(canonical) = item.path().canonicalize() else {
+            continue;
+        };
+        if crate::builtin_tools::file_ops::path_is_denied(&canonical, &denied) {
+            continue;
+        }
+        let Ok(meta) = item.metadata() else {
+            continue;
+        };
+        entries.push(WorkspaceEntry {
+            name: item.file_name().to_string_lossy().into_owned(),
+            is_dir: meta.is_dir(),
+            size: if meta.is_dir() { 0 } else { meta.len() },
+        });
+    }
+    // Directories first, then by name — a stable order, so a listing does not
+    // reshuffle between two reads of an unchanged directory.
+    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({ "root_bound": true, "entries": entries }),
+    )
+}
+
+/// Handle `projects.workspace.read`.
+///
+/// Text only, capped at [`WORKSPACE_READ_MAX_BYTES`]. A binary file is
+/// refused rather than lossily decoded: this feeds a text preview, and
+/// replacement characters would misrepresent the file contents as damaged.
+pub async fn handle_workspace_read(
+    request: JsonRpcRequest,
+    store: Arc<ProjectStore>,
+) -> JsonRpcResponse {
+    let params: WorkspaceReadParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let project = match gate_project(&store, request.id.clone(), &params.project_id) {
+        Ok(p) => p,
+        Err(denial) => return denial,
+    };
+    // An unbound room has no root under which anything could resolve, so
+    // every rel_path is genuinely absent. Same shape as a denied one.
+    let Some(root) = project.workspace_path.as_ref() else {
+        return workspace_refusal(request.id, &PathRefusal::Missing, &params.rel_path);
+    };
+
+    let file = match resolve_in_workspace(root, &params.rel_path) {
+        Ok(p) => p,
+        Err(refusal) => return workspace_refusal(request.id, &refusal, &params.rel_path),
+    };
+    if file.is_dir() {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "That path is a directory; use projects.workspace.list".to_string(),
+        );
+    }
+
+    let Ok(bytes) = std::fs::read(&file) else {
+        return workspace_refusal(request.id, &PathRefusal::Missing, &params.rel_path);
+    };
+    let sniff = bytes.len().min(WORKSPACE_BINARY_SNIFF_BYTES);
+    if bytes[..sniff].contains(&0) {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "Binary file; this surface previews text only".to_string(),
+        );
+    }
+
+    let truncated = bytes.len() > WORKSPACE_READ_MAX_BYTES;
+    // Truncate on a char boundary. Cutting mid-sequence would emit a
+    // replacement character that reads as corruption IN the file rather than
+    // as a truncation OF it — the caller cannot tell those apart.
+    let content = if truncated {
+        let mut cut = WORKSPACE_READ_MAX_BYTES;
+        // A continuation byte (0b10xxxxxx) means the cut landed inside a
+        // multi-byte sequence; walk back to the start of it.
+        while cut > 0 && (bytes[cut] & 0xC0) == 0x80 {
+            cut -= 1;
+        }
+        String::from_utf8_lossy(&bytes[..cut]).into_owned()
+    } else {
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({ "content": content, "truncated": truncated }),
+    )
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1751,6 +2011,319 @@ mod tests {
                 .current_session_key
                 .is_none(),
             "a refused caller must not have claimed the room's session"
+        );
+    }
+
+    // ========================================================================
+    // projects.workspace.list / .read
+    // ========================================================================
+
+    /// Bind `project` to a fresh temp tree containing a couple of files and a
+    /// subdirectory. Returns the guard — dropping it deletes the tree, so it
+    /// must outlive every assertion (see the scratch-guard criterion: a guard
+    /// bound to a returning frame deletes the tree before the caller uses it).
+    fn bound_room(store: &ProjectStore, project: &Project) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("README.md"), "hello room").unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src").join("main.rs"), "fn main() {}").unwrap();
+        store
+            .bind_workspace(&project.id, Some(dir.path()))
+            .expect("bind");
+        dir
+    }
+
+    fn ws_entries(resp: &JsonRpcResponse) -> Vec<String> {
+        let body = resp.result.as_ref().expect("success");
+        body["entries"]
+            .as_array()
+            .expect("entries array")
+            .iter()
+            .map(|e| e["name"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_member_lists_the_bound_root_and_a_stranger_gets_the_not_found_shape() {
+        let (store, _users, project, _g) = room();
+        let _tree = bound_room(&store, &project);
+
+        let member = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_workspace_list(
+                    rpc(
+                        "projects.workspace.list",
+                        json!({ "project_id": project.id }),
+                    ),
+                    store.clone(),
+                )
+                .await
+            })
+            .await;
+        let names = ws_entries(&member);
+        assert!(names.contains(&"README.md".to_string()), "got {names:?}");
+        assert!(names.contains(&"src".to_string()), "got {names:?}");
+        assert_eq!(
+            member.result.as_ref().unwrap()["root_bound"],
+            json!(true),
+            "a bound room reports itself bound"
+        );
+
+        // A stranger must not be able to tell a room they cannot see from one
+        // that does not exist.
+        let stranger = CALLER_USER
+            .scope(Some("u-mallory".to_string()), async {
+                handle_workspace_list(
+                    rpc(
+                        "projects.workspace.list",
+                        json!({ "project_id": project.id }),
+                    ),
+                    store.clone(),
+                )
+                .await
+            })
+            .await;
+        let absent = CALLER_USER
+            .scope(Some("u-mallory".to_string()), async {
+                handle_workspace_list(
+                    rpc("projects.workspace.list", json!({ "project_id": "p-nope" })),
+                    store.clone(),
+                )
+                .await
+            })
+            .await;
+        assert_eq!(err_of(&stranger).0, err_of(&absent).0);
+        assert_eq!(
+            err_of(&stranger).1,
+            err_of(&absent).1.replace("p-nope", &project.id),
+            "refusal must not be distinguishable from absence"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unbound_room_reports_unbound_rather_than_failing() {
+        let (store, _users, project, _g) = room();
+        let resp = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_workspace_list(
+                    rpc(
+                        "projects.workspace.list",
+                        json!({ "project_id": project.id }),
+                    ),
+                    store.clone(),
+                )
+                .await
+            })
+            .await;
+        let body = resp.result.as_ref().expect("not an error");
+        assert_eq!(body["root_bound"], json!(false));
+        assert_eq!(body["entries"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn a_relative_escape_and_an_absolute_path_are_both_refused_as_outside() {
+        let (store, _users, project, _g) = room();
+        let _tree = bound_room(&store, &project);
+
+        for probe in ["../outside", "src/../../outside"] {
+            let resp = CALLER_USER
+                .scope(Some("u-bob".to_string()), async {
+                    handle_workspace_list(
+                        rpc(
+                            "projects.workspace.list",
+                            json!({ "project_id": project.id, "rel_path": probe }),
+                        ),
+                        store.clone(),
+                    )
+                    .await
+                })
+                .await;
+            assert!(resp.result.is_none(), "{probe} must not succeed");
+        }
+
+        // An absolute path would REPLACE the base in `Path::join`, so this is
+        // the case a naive join gets wrong.
+        // Built from MAIN_SEPARATOR rather than written with a literal
+        // backslash: the point is "an absolute path for this platform", and
+        // spelling it twice invites one of the two to rot.
+        let abs = if cfg!(windows) {
+            format!("C:{}Windows", std::path::MAIN_SEPARATOR)
+        } else {
+            "/etc".to_string()
+        };
+        let resp = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_workspace_list(
+                    rpc(
+                        "projects.workspace.list",
+                        json!({ "project_id": project.id, "rel_path": abs }),
+                    ),
+                    store.clone(),
+                )
+                .await
+            })
+            .await;
+        assert_eq!(err_of(&resp).0, PERMISSION_DENIED);
+    }
+
+    #[tokio::test]
+    async fn read_returns_the_file_and_a_directory_is_refused_as_a_param_error() {
+        let (store, _users, project, _g) = room();
+        let _tree = bound_room(&store, &project);
+
+        let ok = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_workspace_read(
+                    rpc(
+                        "projects.workspace.read",
+                        json!({ "project_id": project.id, "rel_path": "README.md" }),
+                    ),
+                    store.clone(),
+                )
+                .await
+            })
+            .await;
+        let body = ok.result.as_ref().expect("success");
+        assert_eq!(body["content"], json!("hello room"));
+        assert_eq!(body["truncated"], json!(false));
+
+        let dir = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_workspace_read(
+                    rpc(
+                        "projects.workspace.read",
+                        json!({ "project_id": project.id, "rel_path": "src" }),
+                    ),
+                    store.clone(),
+                )
+                .await
+            })
+            .await;
+        assert_eq!(err_of(&dir).0, INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn an_oversized_file_truncates_on_a_char_boundary_and_says_so() {
+        let (store, _users, project, _g) = room();
+        let tree = bound_room(&store, &project);
+        // Multi-byte characters, sized so the 64 KiB cut lands INSIDE one.
+        // A byte-wise cut would emit a replacement char, which the caller
+        // cannot tell from corruption in the file itself.
+        let big = "四".repeat(WORKSPACE_READ_MAX_BYTES);
+        std::fs::write(tree.path().join("big.txt"), &big).unwrap();
+
+        let resp = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_workspace_read(
+                    rpc(
+                        "projects.workspace.read",
+                        json!({ "project_id": project.id, "rel_path": "big.txt" }),
+                    ),
+                    store.clone(),
+                )
+                .await
+            })
+            .await;
+        let body = resp.result.as_ref().expect("success");
+        assert_eq!(body["truncated"], json!(true));
+        let content = body["content"].as_str().unwrap();
+        assert!(content.len() <= WORKSPACE_READ_MAX_BYTES);
+        assert!(
+            !content.contains('\u{FFFD}'),
+            "truncation must not manufacture a replacement character"
+        );
+        assert!(content.starts_with('四'));
+    }
+
+    #[tokio::test]
+    async fn a_binary_file_is_refused_rather_than_lossily_decoded() {
+        let (store, _users, project, _g) = room();
+        let tree = bound_room(&store, &project);
+        std::fs::write(tree.path().join("blob.bin"), [0x89, 0x50, 0x00, 0x01]).unwrap();
+
+        let resp = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_workspace_read(
+                    rpc(
+                        "projects.workspace.read",
+                        json!({ "project_id": project.id, "rel_path": "blob.bin" }),
+                    ),
+                    store.clone(),
+                )
+                .await
+            })
+            .await;
+        assert_eq!(err_of(&resp).0, INVALID_PARAMS);
+    }
+
+    /// The read-denial floor has to bind this surface too, or a room bound to
+    /// a tree containing Aleph's own credential store would browse it in
+    /// plain text — the exact half-applied-floor asymmetry `path_utils`
+    /// exists to close.
+    ///
+    /// Points `ALEPH_HOME` inside the bound tree so `get_denied_paths`'s
+    /// config-dir entries resolve to real files under it.
+    ///
+    /// Lock order is roster (taken by `room()`) THEN `ALEPH_HOME`, matching
+    /// every other site in the tree — two orders would be an ABBA deadlock,
+    /// the failure mode `HomeEnvGuards`'s doc records hanging a whole `--lib`
+    /// run. The roster lock is not optional here even though this test is
+    /// about paths: `ProjectStore::create` republishes the PROCESS-GLOBAL
+    /// roster projection, so creating a room outside the guard silently
+    /// revokes every other in-flight test's membership. An earlier draft of
+    /// this test did exactly that, and the symptom landed on a sibling —
+    /// an unrelated read failing `gate_project` roughly one run in seven.
+    #[tokio::test]
+    async fn a_denied_path_is_absent_from_the_listing_and_reads_as_not_found() {
+        let (store, _users, project, _roster) = room();
+        let tree = tempfile::tempdir().unwrap();
+        let state = tree.path().join(".alephstate");
+        std::fs::create_dir(&state).unwrap();
+        std::fs::write(state.join("secrets.vault"), "ENCRYPTED").unwrap();
+        std::fs::write(state.join("notes.txt"), "not a secret").unwrap();
+        let _home = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(&state);
+        store
+            .bind_workspace(&project.id, Some(tree.path()))
+            .expect("bind");
+
+        let listed = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_workspace_list(
+                    rpc(
+                        "projects.workspace.list",
+                        json!({ "project_id": project.id, "rel_path": ".alephstate" }),
+                    ),
+                    store.clone(),
+                )
+                .await
+            })
+            .await;
+        let names = ws_entries(&listed);
+        assert!(
+            !names.contains(&"secrets.vault".to_string()),
+            "the vault must not appear in a listing it cannot be read from: {names:?}"
+        );
+        assert!(
+            names.contains(&"notes.txt".to_string()),
+            "only the denied entry is hidden, not the whole directory: {names:?}"
+        );
+
+        let read = CALLER_USER
+            .scope(Some("u-bob".to_string()), async {
+                handle_workspace_read(
+                    rpc(
+                        "projects.workspace.read",
+                        json!({ "project_id": project.id, "rel_path": ".alephstate/secrets.vault" }),
+                    ),
+                    store.clone(),
+                )
+                .await
+            })
+            .await;
+        assert_eq!(
+            err_of(&read).0,
+            RESOURCE_NOT_FOUND,
+            "a denied file must be indistinguishable from an absent one"
         );
     }
 }

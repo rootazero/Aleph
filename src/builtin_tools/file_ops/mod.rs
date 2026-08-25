@@ -10,7 +10,7 @@ mod edit_match;
 mod image_read;
 mod ops;
 mod path_utils;
-pub(crate) use path_utils::{check_and_resolve_path, get_denied_paths};
+pub(crate) use path_utils::{check_and_resolve_path, get_denied_paths, path_is_denied};
 pub(crate) mod read;
 mod read_cache;
 mod search;
