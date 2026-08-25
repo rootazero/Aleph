@@ -101,7 +101,8 @@ const GLOB_CACHE_MAX: usize = 512;
 /// does not compile (cached too, so a bad pattern is not re-compiled on every
 /// resolve). `regex::Regex` clones are cheap (`Arc`-backed).
 fn cached_glob_regex(pattern: &str) -> Option<regex::Regex> {
-    use std::sync::{Mutex, OnceLock};
+    use crate::sync_primitives::Mutex;
+    use std::sync::OnceLock;
     static CACHE: OnceLock<Mutex<HashMap<String, Option<regex::Regex>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     {

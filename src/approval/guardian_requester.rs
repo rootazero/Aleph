@@ -37,7 +37,6 @@
 //! through the existing gate seam; zero lines in `src/harness/`.
 
 use async_trait::async_trait;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::providers::adapter::RequestPayload;
@@ -45,7 +44,7 @@ use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester, ApprovalResponse};
 use crate::sandbox::exec_approval::ApprovalAction;
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Mutex};
 use crate::thinker::prompt_builder::SystemPromptPart;
 
 use crate::exec::masker::SecretMasker;

@@ -105,7 +105,22 @@ pub async fn run_node_approval(
         // reverse RPC, outside any tool dispatch.
         tool_call_id: None,
     }) {
+        // Mirrors operator_requester::request_approval (APPROVAL-R3-003):
+        // publish failure is fatal — the center operator was never notified,
+        // so a "waiting" card never appeared on their surface. Deny the
+        // approval and remove the pending entry so the node's await does
+        // NOT spin for the full DEFAULT_APPROVAL_TIMEOUT_MS against a
+        // notification nobody will ever act on.
         tracing::warn!(error = %e, "failed to publish ApprovalRequested for node approval");
+        manager.resolve(
+            &approval_id,
+            ApprovalDecisionType::Deny,
+            Some("unavailable".to_string()),
+        );
+        return (
+            "unavailable",
+            Some("approval notification could not be delivered to the operator surface".to_string()),
+        );
     }
 
     let resolved = manager
