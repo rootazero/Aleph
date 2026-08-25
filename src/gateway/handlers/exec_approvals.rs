@@ -143,10 +143,58 @@ async fn approval_addressable_by_caller(
     let Some(key) = SessionKey::from_key_string(&record.session_key) else {
         return false;
     };
-    matches!(
-        sessions.get_metadata(&key).await,
-        Ok(Some(meta)) if visibility::session_visible(&meta)
-    )
+    let Ok(Some(meta)) = sessions.get_metadata(&key).await else {
+        return false;
+    };
+    if let Some(originator) = originator_narrows_within_room(record, &meta) {
+        return crate::gateway::caller_identity::current_caller_user().as_deref()
+            == Some(originator);
+    }
+    visibility::session_visible(&meta)
+}
+
+/// Whether `record`'s `originator_user_id` should REPLACE (not merely add to)
+/// the plain roster-wide `session_visible` check above — i.e. whether the
+/// value can be trusted as an Aleph principal at all, rather than a raw
+/// channel-platform id from a DIFFERENT producer of the same field.
+///
+/// `ExecApprovalRecord::originator_user_id` has two producers that write two
+/// different id namespaces into the same field: `teams::broadcast::member_run_metadata`
+/// stamps an Aleph `u-*` user id (the room's speaker), while
+/// `inbound_router::executor` stamps a raw, un-normalized channel-platform
+/// sender id — and that second producer's value can reach THIS gate too, via
+/// `OperatorApprovalRequester`'s fallback leg
+/// (`FallbackApprovalRequester`, when a channel-routed run's channel becomes
+/// momentarily unregistered). Comparing a raw channel id against
+/// `current_caller_user()` (always Aleph `u-*`) can never match, so if this
+/// function narrowed on scope alone it would make that fallback card
+/// admin-only — a real regression for the (already correct, already tested)
+/// case where a paired channel member resolves their own fallback card via
+/// plain session ownership.
+///
+/// So the check is scope-gated AND resolution-gated: `Some(originator)` only
+/// when the session is a Project (room) — the ONE case `session_visible` is
+/// roster-wide rather than an exact owner match, which is precisely the case
+/// D3 ("route to the speaker, not the whole room") needs narrowed — AND the
+/// originator resolves against THAT room's roster, via the same
+/// `projects::roster::is_member` predicate `owner_and_scope_visible_to`
+/// already uses for this scope kind. A raw channel-platform id is never on
+/// any room's roster, so the fallback case above is untouched: `None` here
+/// keeps exactly today's `session_visible` behaviour for it.
+fn originator_narrows_within_room<'a>(
+    record: &'a crate::exec::manager::ExecApprovalRecord,
+    meta: &crate::gateway::session_store::types::SessionMetadata,
+) -> Option<&'a str> {
+    let originator = record.originator_user_id.as_deref()?;
+    let project_id = match meta
+        .scope_id
+        .as_deref()
+        .and_then(crate::scope::ScopeId::parse)
+    {
+        Some(crate::scope::ScopeId::Project(p)) => p,
+        _ => return None,
+    };
+    crate::projects::roster::is_member(&project_id, originator).then_some(originator)
 }
 
 /// Handle exec.approval.resolve
@@ -265,6 +313,26 @@ mod tests {
             .expect("get_or_create");
     }
 
+    /// Like `create_session`, but a Project (room) scope rather than personal
+    /// — the ONE case `visibility::session_visible` is roster-wide rather
+    /// than an exact owner match, and so the ONE case the originator gate
+    /// (Ruling P13/P15) narrows.
+    async fn create_project_session(
+        sessions: &Arc<dyn SessionStore>,
+        session_key: &str,
+        creator: &str,
+        project_id: &str,
+    ) {
+        let key = SessionKey::from_key_string(session_key).expect("valid session_key fixture");
+        let attribution = crate::scope::ScopeAttribution {
+            owner_user_id: creator.to_string(),
+            scope: crate::scope::ScopeId::Project(project_id.to_string()),
+        };
+        crate::scope::with_scope(Some(attribution), sessions.get_or_create(&key))
+            .await
+            .expect("get_or_create");
+    }
+
     /// Park an approval on `session_key` and return its id. Goes through the
     /// manager's real `create` + `register_pending` pair, so the entry is the
     /// same shape a tool call parks.
@@ -293,6 +361,32 @@ mod tests {
         let (id, rx, _timeout) = manager.register_pending(record);
         // The waiting tool call is what holds this receiver; leaking it keeps
         // the entry resolvable for the duration of the test.
+        std::mem::forget(rx);
+        id
+    }
+
+    /// Like `park_approval`, but with an explicit originator — the shape
+    /// `OperatorApprovalRequester` now produces (Ruling P13/P15's Link 1)
+    /// when a run seeded `TURN_ORIGINATOR`.
+    fn park_approval_from(
+        manager: &Arc<ExecApprovalManager>,
+        session_key: &str,
+        originator: &str,
+    ) -> String {
+        let request = ExecApprovalRequest {
+            id: uuid::Uuid::new_v4().to_string(),
+            command: "rm -rf ./build".to_string(),
+            cwd: None,
+            analysis: CommandAnalysis::not_a_command(),
+            agent_id: "main".to_string(),
+            session_key: session_key.to_string(),
+            reason: Some("non-idempotent".to_string()),
+            originator_user_id: Some(originator.to_string()),
+            grant_key: None,
+            allowed_decisions: crate::exec::allowed_decisions::session_max(),
+        };
+        let record = manager.create(&request, 120_000);
+        let (id, rx, _timeout) = manager.register_pending(record);
         std::mem::forget(rx);
         id
     }
@@ -555,6 +649,223 @@ mod tests {
             manager.get_pending(&bobs).is_some(),
             "a refused resolve must not have touched the entry"
         );
+    }
+
+    // -- Originator gate within a room (Ruling P13/P15) --
+    //
+    // A Project-scoped session is visible to its WHOLE roster (地雷 E) — the
+    // one case `session_visible` is too coarse for D3's "route to the
+    // speaker" requirement. These pin `originator_narrows_within_room`'s
+    // three-way split: narrow when the originator is a real Aleph principal
+    // on THIS room's roster, leave every other combination exactly as it was.
+
+    /// Roster: alice (creator), bob, carol. Bob's card is stamped with his
+    /// own id as originator (what `OperatorApprovalRequester` now does per
+    /// Link 1) — he must still be able to resolve it.
+    #[tokio::test]
+    async fn project_originator_resolves_their_own_card() {
+        let manager = temp_manager();
+        let (_tmp, sess) = sessions();
+        let guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::projects::roster::publish(crate::projects::roster::RosterSnapshot::from_pairs([
+            ("p-room".to_string(), "u-alice".to_string()),
+            ("p-room".to_string(), "u-bob".to_string()),
+            ("p-room".to_string(), "u-carol".to_string()),
+        ]));
+        create_project_session(&sess, "agent:main:main", "u-alice", "p-room").await;
+        let id = park_approval_from(&manager, "agent:main:main", "u-bob");
+
+        let response = as_member(
+            "u-bob",
+            handle_approval_resolve(resolve_request(&id), manager, sess),
+        )
+        .await;
+
+        assert!(
+            response.is_success(),
+            "the originator must resolve their own card: {:?}",
+            response.error
+        );
+        drop(guard);
+    }
+
+    /// Same room, same card — carol is a real room member (plain
+    /// `session_visible` would admit her, that is the whole D3 defect) but
+    /// is NOT the originator, so she must be refused.
+    #[tokio::test]
+    async fn project_originator_narrows_out_a_different_room_member() {
+        let manager = temp_manager();
+        let (_tmp, sess) = sessions();
+        let guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::projects::roster::publish(crate::projects::roster::RosterSnapshot::from_pairs([
+            ("p-room".to_string(), "u-alice".to_string()),
+            ("p-room".to_string(), "u-bob".to_string()),
+            ("p-room".to_string(), "u-carol".to_string()),
+        ]));
+        create_project_session(&sess, "agent:main:main", "u-alice", "p-room").await;
+        let id = park_approval_from(&manager, "agent:main:main", "u-bob");
+
+        let response = as_member(
+            "u-carol",
+            handle_approval_resolve(resolve_request(&id), manager, sess),
+        )
+        .await;
+
+        assert!(
+            !response.is_success(),
+            "a different room member must not resolve bob's card"
+        );
+        drop(guard);
+    }
+
+    /// Same room, same card — an admin bypasses the narrowing entirely, via
+    /// the existing role short-circuit at the top of
+    /// `approval_addressable_by_caller` (unchanged, checked first).
+    #[tokio::test]
+    async fn project_originator_admin_still_resolves_regardless() {
+        let manager = temp_manager();
+        let (_tmp, sess) = sessions();
+        let guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::projects::roster::publish(crate::projects::roster::RosterSnapshot::from_pairs([
+            ("p-room".to_string(), "u-alice".to_string()),
+            ("p-room".to_string(), "u-bob".to_string()),
+        ]));
+        create_project_session(&sess, "agent:main:main", "u-alice", "p-room").await;
+        let id = park_approval_from(&manager, "agent:main:main", "u-bob");
+
+        let response =
+            as_operator(handle_approval_resolve(resolve_request(&id), manager, sess)).await;
+
+        assert!(
+            response.is_success(),
+            "an admin must resolve regardless of originator: {:?}",
+            response.error
+        );
+        drop(guard);
+    }
+
+    /// The namespace-mismatch case Ruling P15 called out explicitly: a raw
+    /// channel-platform id (e.g. a Telegram numeric id — never a Project
+    /// roster member) landing in `originator_user_id` on a Project-scoped
+    /// session must NOT narrow away a legitimate room member. This is the
+    /// case a bare `ScopeId::Project` check (without the roster-resolution
+    /// inner discriminator) would get wrong.
+    #[tokio::test]
+    async fn a_raw_channel_id_originator_on_a_project_session_does_not_refuse_a_room_member() {
+        let manager = temp_manager();
+        let (_tmp, sess) = sessions();
+        let guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::projects::roster::publish(crate::projects::roster::RosterSnapshot::from_pairs([
+            ("p-room".to_string(), "u-alice".to_string()),
+            ("p-room".to_string(), "u-bob".to_string()),
+        ]));
+        create_project_session(&sess, "agent:main:main", "u-alice", "p-room").await;
+        // "123456789" is a raw channel-platform sender id (the shape
+        // `inbound_router::executor` stamps), not an Aleph `u-*` user id —
+        // it is not, and cannot be, on any room's roster.
+        let id = park_approval_from(&manager, "agent:main:main", "123456789");
+
+        let response = as_member(
+            "u-bob",
+            handle_approval_resolve(resolve_request(&id), manager, sess),
+        )
+        .await;
+
+        assert!(
+            response.is_success(),
+            "a raw, non-roster originator id must not narrow a room's visibility: {:?}",
+            response.error
+        );
+        drop(guard);
+    }
+
+    /// Absent originator, Project scope: unchanged from today — plain
+    /// roster-wide `session_visible`. `originator_narrows_within_room`
+    /// returns `None` on `record.originator_user_id.as_deref()?` and the
+    /// caller falls straight through to the pre-existing check.
+    #[tokio::test]
+    async fn project_session_without_an_originator_keeps_todays_roster_wide_visibility() {
+        let manager = temp_manager();
+        let (_tmp, sess) = sessions();
+        let guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::projects::roster::publish(crate::projects::roster::RosterSnapshot::from_pairs([
+            ("p-room".to_string(), "u-alice".to_string()),
+            ("p-room".to_string(), "u-bob".to_string()),
+        ]));
+        create_project_session(&sess, "agent:main:main", "u-alice", "p-room").await;
+        let id = park_approval(&manager, "agent:main:main"); // originator: None
+
+        let response = as_member(
+            "u-bob",
+            handle_approval_resolve(resolve_request(&id), manager, sess),
+        )
+        .await;
+
+        assert!(
+            response.is_success(),
+            "no originator on a room session must keep today's roster-wide visibility: {:?}",
+            response.error
+        );
+        drop(guard);
+    }
+
+    /// The list surface shares the same predicate — carol must not see bob's
+    /// originator-gated card in her pending list either, the same asymmetric
+    /// shape as the operator-escalation pair above (hidden ⇒ also
+    /// unresolvable, not merely the other way round).
+    #[tokio::test]
+    async fn the_pending_list_hides_a_room_members_originator_gated_card_from_a_different_member() {
+        let manager = temp_manager();
+        let (_tmp, sess) = sessions();
+        let guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::projects::roster::publish(crate::projects::roster::RosterSnapshot::from_pairs([
+            ("p-room".to_string(), "u-alice".to_string()),
+            ("p-room".to_string(), "u-bob".to_string()),
+            ("p-room".to_string(), "u-carol".to_string()),
+        ]));
+        create_project_session(&sess, "agent:main:main", "u-alice", "p-room").await;
+        let bobs_card = park_approval_from(&manager, "agent:main:main", "u-bob");
+
+        let bobs_view = as_member(
+            "u-bob",
+            handle_approvals_pending(
+                JsonRpcRequest::with_id("exec.approvals.pending", None, json!(1)),
+                manager.clone(),
+                sess.clone(),
+            ),
+        )
+        .await;
+        let carols_view = as_member(
+            "u-carol",
+            handle_approvals_pending(
+                JsonRpcRequest::with_id("exec.approvals.pending", None, json!(1)),
+                manager,
+                sess,
+            ),
+        )
+        .await;
+
+        assert!(
+            pending_ids(&bobs_view).contains(&bobs_card),
+            "bob still sees his own originator-gated card"
+        );
+        assert!(
+            !pending_ids(&carols_view).contains(&bobs_card),
+            "carol, a different room member, must not see bob's card"
+        );
+        drop(guard);
     }
 
     /// A member's list names only their own sessions' cards. Deliberately

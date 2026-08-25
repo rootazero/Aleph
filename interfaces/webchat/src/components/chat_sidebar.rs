@@ -5,20 +5,17 @@
 //
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
-use serde::Deserialize;
+
 use std::sync::Arc;
 
 use crate::api::chat::ChatApi;
-use crate::api::team_chat::{TeamChatApi, TeamMessageItem};
 use crate::api::teams::{TeamSummary, TeamsApi};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 use crate::state::layout::WorkspaceState;
 use crate::state::sessions::SessionMap;
 use crate::views::chat::agent_identity::agent_color_for_id;
-use crate::views::chat::state::{
-    ChatMessage, ChatState, ContextUsage, MemberStatus, TeamMemberView,
-};
+use crate::views::chat::state::{ChatState, ContextUsage};
 // The topic grammar is the protocol crate's, not a view module's: the server
 // classifies delivery from the same parser (`event_visibility`).
 use aleph_protocol::team_topic::{parse_team_topic, TeamTopicKind};
@@ -37,19 +34,7 @@ use web_sys::HtmlInputElement;
 /// restored the folder and dropped the tier and the mode while the server kept
 /// enforcing them.
 use crate::api::sessions::SessionRow as SessionEntry;
-
-/// An agent entry returned by the backend (agents.list).
-#[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize)]
-struct AgentEntry {
-    id: String,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    emoji: Option<String>,
-    #[serde(default)]
-    is_default: bool,
-}
+use crate::components::team_chat_entry::{enter_team_chat, AgentEntry};
 
 /// Should a `run.session_updated` frame re-hydrate the open transcript from
 /// `chat.history`?
@@ -86,51 +71,6 @@ fn session_update_needs_rehydrate(
         return false;
     }
     origin_run_id.is_none_or(|run| !started_here(run))
-}
-
-/// The server stores the user's own group-chat messages under this reserved
-/// `from_agent` handle (mirror of `teams::broadcast::RESERVED_USER_HANDLE`). On
-/// history replay they must render as right-aligned user bubbles, not as
-/// attributed agent bubbles.
-const RESERVED_USER_HANDLE: &str = "user";
-
-/// Map one replayed `teams.chat.history` item to a chat bubble.
-///
-/// The render class comes from the server's `kind` (`user` | `agent` |
-/// `system`) — one classification, derived once, next to the store that knows
-/// the message's recipients and type. `from_agent` is only consulted as the
-/// pre-`kind` fallback so a Panel pointed at an older core still splits its own
-/// messages out of the agent bubbles. `index` seeds a stable dom id.
-fn team_history_item_to_message(index: usize, item: TeamMessageItem) -> ChatMessage {
-    let role = match item.kind.as_str() {
-        "user" => "user",
-        "system" => "system",
-        // Legacy core (no `kind`, defaulted to "agent"): fall back to the
-        // handle check so own messages don't replay as agent bubbles.
-        _ if item.from_agent == RESERVED_USER_HANDLE => "user",
-        _ => "assistant",
-    };
-    ChatMessage {
-        id: format!("team-hist-{index}"),
-        role: role.to_string(),
-        content: item.content,
-        tool_calls: Vec::new(),
-        is_streaming: false,
-        is_intermediate: false,
-        error: None,
-        model_info: None,
-        timestamp: Some(item.created_at),
-        iteration: None,
-        is_final: true,
-        text_finalized: true,
-        // Only agent bubbles carry attribution; user and system rows must stay
-        // out of the Telegram-style grouping pass.
-        agent_id: (role == "assistant").then_some(item.from_agent),
-        plan_archive: None,
-        // `teams.chat.history` is the legacy group-broadcast surface (not a
-        // P2 project room) — it carries no `author_user_id`.
-        author_user_id: None,
-    }
 }
 
 /// Pick the gauge occupancy for a freshly-loaded session: the most recent
@@ -846,60 +786,13 @@ pub fn ChatSidebar() -> impl IntoView {
         unread_groups.update(|s| {
             s.remove(&team_id);
         });
+        // Snapshot the roster source BEFORE the suspension point. `agents` is
+        // owned by this component, and reading a component-owned signal after
+        // an `.await` is the disposed-read shape `disposed_reads` rejects —
+        // the previous inline version read it post-await behind `try_`.
+        let known_agents = agents.try_get_untracked();
         leptos::task::spawn_local(async move {
-            // 1. Fetch team detail (members list).
-            let detail = match TeamsApi::get(&dash, &team_id).await {
-                Ok(d) => d,
-                Err(e) => {
-                    web_sys::console::error_1(&format!("teams.get failed: {e}").into());
-                    return;
-                }
-            };
-            // 2. Build id→AgentEntry map from current agents signal for name/emoji resolution.
-            //    `agents` is owned by this component; if it was disposed while
-            //    `teams.get` was in flight, bail rather than panic.
-            let Some(agent_list) = agents.try_get_untracked() else {
-                return;
-            };
-            let agent_map: std::collections::HashMap<String, AgentEntry> =
-                agent_list.into_iter().map(|a| (a.id.clone(), a)).collect();
-            let roster: Vec<TeamMemberView> = detail
-                .members
-                .iter()
-                .map(|m| {
-                    let entry = agent_map.get(&m.agent_id);
-                    let name = entry
-                        .and_then(|a| a.name.clone())
-                        .unwrap_or_else(|| m.agent_id.clone());
-                    let emoji = entry.and_then(|a| a.emoji.clone());
-                    TeamMemberView {
-                        agent_id: m.agent_id.clone(),
-                        name,
-                        emoji,
-                        role: m.role.clone(),
-                        is_leader: m.role == "leader",
-                        status: MemberStatus::Idle,
-                    }
-                })
-                .collect();
-            // 3. Enter team mode.
-            chat.clear_session();
-            chat.team_id.set(Some(team_id.clone()));
-            chat.team_members.set(roster);
-            // 4. Replay durable chat history as bubbles.
-            match TeamChatApi::history(&dash, &team_id).await {
-                Ok(items) => {
-                    let messages: Vec<ChatMessage> = items
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, it)| team_history_item_to_message(i, it))
-                        .collect();
-                    chat.messages.set(messages);
-                }
-                Err(e) => {
-                    web_sys::console::warn_1(&format!("teams.chat.history failed: {e}").into());
-                }
-            }
+            enter_team_chat(dash, chat, known_agents, team_id).await;
         });
     };
 
@@ -1910,64 +1803,6 @@ fn format_session_subtitle(session: &SessionEntry) -> String {
             format!("{msg_count} msgs - {month:02}-{day:02}")
         }
         None => format!("{msg_count} messages"),
-    }
-}
-
-#[cfg(test)]
-mod team_history_tests {
-    use super::{team_history_item_to_message, RESERVED_USER_HANDLE};
-    use crate::api::team_chat::TeamMessageItem;
-
-    fn item(from_agent: &str) -> TeamMessageItem {
-        kinded(from_agent, "agent")
-    }
-
-    fn kinded(from_agent: &str, kind: &str) -> TeamMessageItem {
-        TeamMessageItem {
-            from_agent: from_agent.to_string(),
-            content: "hello".to_string(),
-            msg_type: "message".to_string(),
-            kind: kind.to_string(),
-            created_at: 0,
-        }
-    }
-
-    #[test]
-    fn user_handle_replays_as_right_aligned_user_bubble() {
-        // Regression: the user's own group-chat messages were replayed as
-        // left-aligned agent bubbles (role "assistant" + agent_id Some("user")).
-        // They must mirror single chat: role "user", no agent_id → right-aligned
-        // accent bubble.
-        let m = team_history_item_to_message(0, kinded(RESERVED_USER_HANDLE, "user"));
-        assert_eq!(m.role, "user");
-        assert_eq!(m.agent_id, None);
-    }
-
-    #[test]
-    fn legacy_core_without_kind_still_splits_own_messages() {
-        // `kind` defaults to "agent" against an older core; the handle fallback
-        // is what keeps the user's own replayed rows right-aligned.
-        let m = team_history_item_to_message(0, item(RESERVED_USER_HANDLE));
-        assert_eq!(m.role, "user");
-        assert_eq!(m.agent_id, None);
-    }
-
-    #[test]
-    fn agent_handle_replays_as_attributed_agent_bubble() {
-        let m = team_history_item_to_message(3, item("risk_analyst"));
-        assert_eq!(m.role, "assistant");
-        assert_eq!(m.agent_id.as_deref(), Some("risk_analyst"));
-        assert_eq!(m.id, "team-hist-3");
-    }
-
-    #[test]
-    fn system_kind_replays_as_unattributed_notice_row() {
-        // A broadcaster notice ("depth cap reached, your turn") must replay as
-        // the same centered chip it showed live — not as a bubble from an agent
-        // literally named "system".
-        let m = team_history_item_to_message(1, kinded("system", "system"));
-        assert_eq!(m.role, "system");
-        assert_eq!(m.agent_id, None);
     }
 }
 

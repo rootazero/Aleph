@@ -150,6 +150,7 @@ impl MessageRouter {
             recipients,
             reply_to: req.reply_to,
             attachments: req.attachments,
+            author_user_id: None,
         };
 
         let msg = self.msg_store.send_message(new_msg).await?;
@@ -228,6 +229,7 @@ impl MessageRouter {
             }],
             reply_to: Some(thread_id.to_string()),
             attachments: vec![],
+            author_user_id: None,
         };
 
         match self
@@ -514,6 +516,7 @@ mod tests {
             }],
             reply_to: Some("thread-x".into()),
             attachments: vec![],
+            author_user_id: None,
         };
 
         let first = msg_store
@@ -573,6 +576,7 @@ mod tests {
             }],
             reply_to: Some(content.into()),
             attachments: vec![],
+            author_user_id: None,
         };
 
         let a = msg_store

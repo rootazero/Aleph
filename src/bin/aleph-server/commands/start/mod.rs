@@ -1956,6 +1956,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         &mut server,
         &project_store,
         &auth_bundle.security_store,
+        &event_bus,
         args.daemon,
     );
 
@@ -2112,6 +2113,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             agent_result.message_store.clone(),
             Some(Arc::clone(&agent_manager)),
             &event_bus,
+            &auth_bundle.security_store,
         );
     }
 

@@ -218,6 +218,11 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "session_collaborate",
             "session_turn",
             "session_read",
+            // A project room is the HUMAN-side collaboration container: a
+            // roster of people, a shared session, its own memory partition.
+            // It sits with team coordination rather than agent management
+            // because its members are principals, not personas.
+            "project_manage",
         ],
     },
     // -- Infrastructure --

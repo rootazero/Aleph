@@ -20,6 +20,8 @@
 //! second source of truth — read its module doc before touching it.
 
 pub mod attribution_backfill;
+pub mod authz;
+pub mod events;
 pub mod roster;
 mod run_context;
 mod store;

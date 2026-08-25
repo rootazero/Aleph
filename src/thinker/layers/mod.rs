@@ -19,6 +19,9 @@ mod soul;
 // --- Agent role layer ---
 mod agent_role;
 
+// --- Project-room layer ---
+mod room_roster;
+
 // --- Profile layer ---
 pub mod profile;
 
@@ -91,6 +94,10 @@ mod session_context_guide;
 pub use citation_standards::CitationStandardsLayer;
 pub use guidelines::GuidelinesLayer;
 pub use role::RoleLayer;
+pub use room_roster::RoomRosterLayer;
+// The bridge pre-renders the member line so the cap, the owner mark and the
+// display-name sanitiser keep one owner — same shape as `sanitize_identity_content`.
+pub(crate) use room_roster::render_members as render_room_roster;
 pub use special_actions::SpecialActionsLayer;
 
 pub use agent_catalog::AgentCatalogLayer;

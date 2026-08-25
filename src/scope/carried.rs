@@ -116,6 +116,31 @@ impl CarriedAttribution {
         self.scope.as_ref()
     }
 
+    /// Override the carried room author with a speaker the caller knows
+    /// explicitly.
+    ///
+    /// `capture()` reads `room_author` from [`super::current_room_author`],
+    /// which is only ever seeded by [`super::with_room_author`] — and nothing
+    /// on `teams.chat.send`'s path scopes that around this handler, because
+    /// it learns who is speaking (the gateway caller's identity) BEFORE any
+    /// run or task-local nest exists. Without this override the carried
+    /// `room_author` stays `None`, and `ambient_room_author()` inside the
+    /// spawned fan-out then falls back to the scope's `owner_user_id` — a
+    /// project room's CREATOR, identically for every member. A message from
+    /// Bob in Alice's room would silently resolve its actor to Alice:
+    /// confidently wrong, not merely missing (see the type-level doc above).
+    ///
+    /// `with_speaker` only overwrites when `author.is_some()`, so a call with
+    /// no known speaker keeps whatever `capture()` already read — this never
+    /// widens what was captured, and never blanks a value `capture()` found.
+    #[must_use]
+    pub fn with_speaker(mut self, author: Option<String>) -> Self {
+        if author.is_some() {
+            self.room_author = author;
+        }
+        self
+    }
+
     /// Re-establish all six around `fut`, inside the spawned task.
     ///
     /// Boxed: `AgentRuntime::run`'s state machine is already large, and nesting
@@ -219,6 +244,75 @@ mod tests {
             Some("u-bob".to_string()),
             "the speaker must cross the spawn; falling back to u-alice is the \
              room's creator, which is a confident answer about the wrong person"
+        );
+    }
+
+    /// `teams.chat.send`'s actual shape: nothing seeds `with_room_author`
+    /// around this handler (it resolves the speaker itself, before any run
+    /// exists), so `capture()` alone carries `room_author: None` — and inside
+    /// the spawn, `ambient_room_author()` would fall back to the room's
+    /// CREATOR (`u-alice`) for a message Bob just sent. `with_speaker` is the
+    /// fix: the handler passes the speaker it already resolved, and that
+    /// speaker — not the room owner — is what the fan-out sees.
+    ///
+    /// This is Ruling P1's project-scope case: the one `ambient_owner()`
+    /// alone gets confidently wrong (see `visibility::ambient_actor`'s doc).
+    #[tokio::test]
+    async fn with_speaker_overrides_the_room_owner_fallback_when_nothing_seeded_an_author() {
+        let room = ScopeAttribution {
+            owner_user_id: "u-alice".to_string(),
+            scope: crate::scope::ScopeId::Project("p-room".into()),
+        };
+
+        // No `with_room_author` around `capture()` — the handler-level shape.
+        let carried = with_scope(Some(room), async {
+            assert_eq!(
+                crate::scope::current_room_author(),
+                None,
+                "sanity: nothing seeded an author before capture in this shape"
+            );
+            let carrier = CarriedAttribution::capture().with_speaker(Some("u-bob".to_string()));
+            tokio::spawn(carrier.reestablish(async { crate::scope::ambient_room_author() }))
+                .await
+                .unwrap()
+        })
+        .await;
+
+        assert_eq!(
+            carried,
+            Some("u-bob".to_string()),
+            "with_speaker must make the actual speaker (u-bob) cross the spawn; \
+             without it this resolves to u-alice, the room's creator — a \
+             confident answer about the wrong person, not a missing one"
+        );
+    }
+
+    /// `with_speaker(None)` (no resolved speaker — an unattributed/internal
+    /// caller) must be a no-op: it must not blank a `room_author` that
+    /// `capture()` already found from a live `with_room_author` scope. Only
+    /// `Some(author)` may override.
+    #[tokio::test]
+    async fn with_speaker_none_never_blanks_a_captured_author() {
+        let room = ScopeAttribution {
+            owner_user_id: "u-alice".to_string(),
+            scope: crate::scope::ScopeId::Project("p-room".into()),
+        };
+
+        let carried = with_scope(
+            Some(room),
+            crate::scope::with_room_author(Some("u-bob".to_string()), async {
+                let carrier = CarriedAttribution::capture().with_speaker(None);
+                tokio::spawn(carrier.reestablish(async { crate::scope::ambient_room_author() }))
+                    .await
+                    .unwrap()
+            }),
+        )
+        .await;
+
+        assert_eq!(
+            carried,
+            Some("u-bob".to_string()),
+            "with_speaker(None) must never widen/blank what capture() already carried"
         );
     }
 

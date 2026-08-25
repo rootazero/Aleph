@@ -101,6 +101,11 @@ impl Lane {
             // The `.usage` suffix isn't in the Query heuristic; keep it out of
             // Mutate so it isn't idempotency-guarded for nothing.
             "teams.usage" => Some(Self::Query),
+            // projects.workspace.read is a pure read of one file under a room
+            // bound directory. Its `.read` suffix matches no Query token, so
+            // without this line it lands in Mutate and gets idempotency-guarded
+            // for nothing. Its `.list` sibling passes on the suffix heuristic.
+            "projects.workspace.read" => Some(Self::Query),
             // The rest of the group-chat reading surface. `teams.chat.history`
             // already passes on its `.history` suffix, but its siblings do not:
             // `.thread`, `.list_tasks` and `.list_templates` match no Query

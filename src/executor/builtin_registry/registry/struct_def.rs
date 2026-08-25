@@ -124,6 +124,13 @@ pub struct BuiltinToolRegistry {
     /// enroll idempotent and a deregister sticky.
     pub(crate) node_security_store:
         Arc<tokio::sync::OnceCell<Arc<crate::gateway::security::SecurityStore>>>,
+    /// Gateway event bus, injected at startup via `set_gateway_event_bus`.
+    /// `project_manage` publishes `projects.changed` through it so a room
+    /// renamed by the model and one renamed by a click are the same event to
+    /// every connected client. Absent in a headless or partially-booted
+    /// process, where a change still lands but nobody live-refreshes.
+    pub(crate) gateway_event_bus:
+        Arc<tokio::sync::OnceCell<Arc<crate::gateway::event_bus::GatewayEventBus>>>,
     /// Memory browse tool instance (optional - requires `memory_db`)
     pub(crate) memory_browse_tool: Option<crate::builtin_tools::MemoryBrowseTool>,
     /// Memory explore tool instance (optional - requires `memory_db` + embedder)

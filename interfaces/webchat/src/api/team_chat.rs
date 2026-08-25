@@ -8,7 +8,26 @@ use serde_json::{json, Value};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TeamChatSendResponse {
-    pub run_id: String,
+    /// `None` exactly when `observed` is `true`: the multi-human mention
+    /// gate (spec §6.2) decided not to mint a fan-out run for this send, so
+    /// there is no run to bind a Stop button to. `#[serde(default)]` on the
+    /// other two fields, not on this one — an older core always sends a
+    /// (non-null) `run_id` string, so this still deserializes unchanged
+    /// against that shape.
+    pub run_id: Option<String>,
+    /// Whether the multi-human mention gate decided this message was
+    /// observed rather than activated (persisted + broadcast, no run
+    /// minted). `#[serde(default)]` — an older core never sends this field,
+    /// and a missing field must read as "not observed" (byte-identical to
+    /// the pre-P3 always-activates behavior), not fail the whole send.
+    #[serde(default)]
+    pub observed: bool,
+    /// The persisted transcript row's id, if the user message was durably
+    /// stored. `#[serde(default)]` for the same older-core compatibility —
+    /// and `None` legitimately covers a persist failure the server already
+    /// warned about (the turn still proceeds with no id to hand back).
+    #[serde(default)]
+    pub message_id: Option<String>,
 }
 
 /// One durable thread item from `teams.chat.thread`. Mirrors the backend
@@ -36,6 +55,16 @@ pub struct TeamMessageItem {
     #[serde(default = "default_history_kind")]
     pub kind: String,
     pub created_at: i64,
+    /// The human speaker's raw id, for a `kind == "user"` row (spec §6.2
+    /// humanization). `None` for agent/system rows and for a Panel talking
+    /// to an older core that never sent this field. Mirrors the live
+    /// `team.<id>.message` event's `author_user_id` (Task 2).
+    #[serde(default)]
+    pub author_user_id: Option<String>,
+    /// Resolved display name for `author_user_id`. `None` exactly when
+    /// `author_user_id` is `None`.
+    #[serde(default)]
+    pub author_display_name: Option<String>,
 }
 
 fn default_history_kind() -> String {
@@ -45,7 +74,12 @@ fn default_history_kind() -> String {
 pub struct TeamChatApi;
 
 impl TeamChatApi {
-    /// Hand the user's requirement to the team leader (spawns the orchestration run).
+    /// Hand the user's message to the team. Usually spawns the leader's
+    /// orchestration run (`response.run_id` is `Some`); once a SECOND human
+    /// has spoken in the thread, a message that does not @-mention a roster
+    /// member or `@all`/`@everyone` is only observed — persisted and
+    /// broadcast, `response.observed == true`, `response.run_id == None`
+    /// (spec §6.2). Single-human threads always activate, unchanged.
     pub async fn send(
         state: &DashboardState,
         team_id: &str,
@@ -97,6 +131,56 @@ impl TeamChatApi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn send_response_deserializes_observed_null_run_id() {
+        // Observe mode (spec §6.2): `run_id` is JSON `null`, not absent —
+        // Task 2's handler always emits the key.
+        let j = r#"{"run_id": null, "observed": true, "message_id": "m1"}"#;
+        let resp: TeamChatSendResponse = serde_json::from_str(j).unwrap();
+        assert_eq!(resp.run_id, None);
+        assert!(resp.observed);
+        assert_eq!(resp.message_id, Some("m1".to_string()));
+    }
+
+    #[test]
+    fn send_response_deserializes_activated_run() {
+        let j = r#"{"run_id": "r1", "observed": false, "message_id": "m1"}"#;
+        let resp: TeamChatSendResponse = serde_json::from_str(j).unwrap();
+        assert_eq!(resp.run_id, Some("r1".to_string()));
+        assert!(!resp.observed);
+    }
+
+    #[test]
+    fn send_response_defaults_observed_and_message_id_for_older_core() {
+        // Pre-P3 shape: only `run_id`, always a non-null string. Must still
+        // deserialize — `observed` and `message_id` default rather than
+        // failing the whole send.
+        let j = r#"{"run_id": "r1"}"#;
+        let resp: TeamChatSendResponse = serde_json::from_str(j).unwrap();
+        assert_eq!(resp.run_id, Some("r1".to_string()));
+        assert!(!resp.observed);
+        assert_eq!(resp.message_id, None);
+    }
+
+    #[test]
+    fn history_item_carries_author_fields_for_a_human_row() {
+        let j = r#"{"from_agent":"user","content":"hi","msg_type":"message","kind":"user",
+                    "created_at":1,"author_user_id":"u-alice","author_display_name":"Alice"}"#;
+        let it: TeamMessageItem = serde_json::from_str(j).unwrap();
+        assert_eq!(it.author_user_id, Some("u-alice".to_string()));
+        assert_eq!(it.author_display_name, Some("Alice".to_string()));
+    }
+
+    #[test]
+    fn history_item_defaults_author_fields_when_absent() {
+        // Older core (pre-P3): no author fields on the wire at all.
+        let j = r#"{"from_agent":"risk_analyst","content":"hi","msg_type":"message",
+                    "kind":"agent","created_at":1}"#;
+        let it: TeamMessageItem = serde_json::from_str(j).unwrap();
+        assert_eq!(it.author_user_id, None);
+        assert_eq!(it.author_display_name, None);
+    }
 
     #[test]
     fn deserializes_history_item() {

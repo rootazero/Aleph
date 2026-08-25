@@ -773,6 +773,12 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // offline nodes, and the `revoked_at` flag that makes a deregister
         // stick. Without it `node_manage` degrades to a clear "not injected".
         tool_registry.set_node_security_store(security_store.clone());
+        // …and the bus, so `project_manage`'s writes announce themselves on the
+        // same `projects.changed` topic the `projects.*` RPC handlers publish
+        // to. Without it a room renamed in words still changes on disk, but no
+        // open sidebar or room page learns of it until a reload — the "one
+        // verb, two faces, only one publishes" asymmetry.
+        tool_registry.set_gateway_event_bus(event_bus.clone());
 
         // Capture default provider before provider_registry is moved into engine
         default_prov = Some(provider_registry.default_provider());
@@ -1672,6 +1678,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 use alephcore::teams::broadcast::BroadcastConfig;
                 let chat_ctx = gateway_ctx.clone();
                 let chat_msg_store = message_store.clone();
+                // Author-stamping (multi-user teamchat P3): resolves the
+                // human-readable display name for the `.message` event's
+                // `author_display_name` field. Same injection shape as the
+                // other cloned handles below.
+                let chat_security_store = security_store.clone();
                 // Resolve a cheap provider (haiku → default) for first-message
                 // team auto-naming, mirroring single chat's auto-topic provider.
                 let chat_topic_provider: Option<Arc<dyn alephcore::providers::AiProvider>> =
@@ -1731,6 +1742,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         let bus = chat_event_bus.clone();
                         let coord = chat_coord_store.clone();
                         let bcast = chat_broadcast_cfg.clone();
+                        let sec = chat_security_store.clone();
                         async move {
                             alephcore::gateway::handlers::teams::handle_chat_send(
                                 req,
@@ -1742,6 +1754,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                                 Some(bus),
                                 coord,
                                 bcast,
+                                sec,
                             )
                             .await
                         }
