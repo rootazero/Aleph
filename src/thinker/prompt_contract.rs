@@ -102,6 +102,10 @@ const CONDITIONALLY_SILENT: &[(&str, &str)] = &[
     ("graph_topology", "a session governed by a loop-graph"),
     ("standing_goal", "an active standing goal"),
     ("execution_plan", "a scratchpad plan with at least one item"),
+    (
+        "room_roster",
+        "a project-room session with two or more members",
+    ),
     ("language", "[general] language configured"),
 ];
 
