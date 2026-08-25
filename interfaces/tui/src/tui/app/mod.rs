@@ -825,6 +825,11 @@ pub struct AppState {
     pub ctrl_c_count: u8,
     pub spinner_frame: usize,
     pub should_quit: bool,
+
+    /// Per-message rendered-line cache for the chat area — see
+    /// `widgets::chat_area::LineCache`. Not part of any serialized/exported
+    /// state; purely a render-time optimization.
+    pub chat_line_cache: crate::tui::widgets::chat_area::LineCache,
 }
 
 impl AppState {
@@ -886,6 +891,8 @@ impl AppState {
             ctrl_c_count: 0,
             spinner_frame: 0,
             should_quit: false,
+
+            chat_line_cache: crate::tui::widgets::chat_area::LineCache::default(),
         }
     }
 

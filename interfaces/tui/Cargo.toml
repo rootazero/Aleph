@@ -24,6 +24,7 @@ path = "src/main.rs"
 # Aleph dependencies
 aleph-client = { path = "../../shared/client" }
 aleph-protocol = { path = "../../shared/protocol" }
+shared-ui-logic = { path = "../../shared/ui_logic", default-features = false }
 
 # Async runtime
 tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "io-util", "signal", "net"] }

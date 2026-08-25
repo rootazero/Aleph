@@ -362,6 +362,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "shared-ui-logic",
  "textwrap",
  "tokio",
  "tracing",
