@@ -312,30 +312,66 @@ pub(crate) fn MessageList() -> impl IntoView {
                                     TimelineRow::DaySeparator { label, .. } => view! {
                                         <DaySeparator label=label />
                                     }.into_any(),
-                                    TimelineRow::Message { message, clock } => {
-                                        if let Some(p) = message.plan_archive.clone() {
-                                            view! { <PlanArchiveCell plan=p /> }.into_any()
-                                        } else if message.role == "system" {
+                                    TimelineRow::Message { id, has_plan_archive, role, clock, .. } => {
+                                        if has_plan_archive {
+                                            // Sunk plan archive — snapshot lookup is fine: a
+                                            // finished/superseded plan capsule never streams.
+                                            let lookup_id = id.clone();
+                                            let snapshot = chat.messages.with_untracked(|m| {
+                                                m.iter().find(|x| x.id == lookup_id).cloned()
+                                            });
+                                            match snapshot.and_then(|m| m.plan_archive.clone()) {
+                                                Some(p) => view! { <PlanArchiveCell plan=p /> }.into_any(),
+                                                None => ().into_any(),
+                                            }
+                                        } else if role == "system" {
                                             // Group-chat notice from the broadcaster
                                             // (storm-guard explanation, member failure).
                                             // Nobody's turn — a centered chip, never a
                                             // bubble attributed to an agent called "system".
-                                            view! { <SystemNoticeRow message=message /> }.into_any()
-                                        } else if message.role == "tool" {
+                                            // Snapshot lookup: a system notice never streams.
+                                            let lookup_id = id.clone();
+                                            let snapshot = chat.messages.with_untracked(|m| {
+                                                m.iter().find(|x| x.id == lookup_id).cloned()
+                                            });
+                                            // ChatMessage has no `Default` impl (out of scope
+                                            // to add one) — a lookup miss renders nothing
+                                            // rather than a synthesized placeholder message.
+                                            match snapshot {
+                                                Some(m) => view! { <SystemNoticeRow message=m /> }.into_any(),
+                                                None => ().into_any(),
+                                            }
+                                        } else if role == "tool" {
                                             // Trace-less history fallback: a run with no
                                             // replayable trace persists its tool call/result
                                             // as standalone `role="tool"` rows. Render them
                                             // as a compact muted line, not a raw-JSON bubble.
                                             // (Live runs never reach here — their tool calls
-                                            // flow through ToolCard / ToolLine.)
-                                            view! { <ToolFallbackRow message=message /> }.into_any()
+                                            // flow through ToolCard / ToolLine.) Snapshot
+                                            // lookup: a trace-less history row never streams.
+                                            let lookup_id = id.clone();
+                                            let snapshot = chat.messages.with_untracked(|m| {
+                                                m.iter().find(|x| x.id == lookup_id).cloned()
+                                            });
+                                            match snapshot {
+                                                Some(m) => view! { <ToolFallbackRow message=m /> }.into_any(),
+                                                None => ().into_any(),
+                                            }
                                         } else {
+                                            let lookup_id = id.clone();
+                                            let message = Memo::new(move |_| {
+                                                chat.messages.with(|m| m.iter().find(|x| x.id == lookup_id).cloned())
+                                            });
                                             view! { <MessageBubble message=message clock=clock /> }.into_any()
                                         }
                                     }
-                                    TimelineRow::Narration { message } => view! {
-                                        <NarrationRow message=message />
-                                    }.into_any(),
+                                    TimelineRow::Narration { id, .. } => {
+                                        let lookup_id = id.clone();
+                                        let message = Memo::new(move |_| {
+                                            chat.messages.with(|m| m.iter().find(|x| x.id == lookup_id).cloned())
+                                        });
+                                        view! { <NarrationRow message=message /> }.into_any()
+                                    }
                                     TimelineRow::ToolLine { run_id, tool } => view! {
                                         <div class="px-1">
                                             <ToolCard run_id=run_id tool_id=tool.tool_id.clone() tool_name=tool.tool_name />
@@ -655,17 +691,47 @@ fn ToolLineApproval(tool_id: String) -> impl IntoView {
 
 /// Single message bubble. `clock` is a pre-resolved "HH:MM" label (empty for
 /// undated/legacy rows) shown in the hover action bar.
+///
+/// `message` is a per-row `Memo` (minted by the `<For>` children closure,
+/// keyed by the row's stable `id` — see `timeline::row_key`) rather than an
+/// owned snapshot: the closure that builds this component's view tree runs
+/// once per stable key, so anything that needs to keep showing *current*
+/// content as the underlying message streams has to read `message`
+/// reactively instead of capturing a value at closure-run time. Structural
+/// facts that cannot change after a message is created (`role`, `agent_id`,
+/// `id`) are still read once — see the "structural, read once" locals below.
 #[component]
-fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
+fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl IntoView {
     let i18n = use_i18n();
-    let is_user = message.role == "user";
-    let has_error = message.error.is_some();
-    let has_tools = !message.tool_calls.is_empty();
 
-    let bubble_align = if is_user {
-        "flex justify-end"
-    } else {
-        "flex justify-start"
+    // Early exit if the row's id no longer resolves to a message (should not
+    // happen — ids are stamped once — but a lookup miss must render nothing
+    // rather than panic). A one-time check, not a reactive closure: the rest
+    // of this component's structural shell (team layout, avatar, action bar)
+    // is built once, the same way `bubble_align` is — see the module-level
+    // note in `MessageBubble`'s doc comment.
+    if message.with_untracked(|m| m.is_none()) {
+        return ().into_any();
+    }
+
+    let is_user = move || message.with(|m| m.as_ref().is_some_and(|m| m.role == "user"));
+    let has_error = move || message.with(|m| m.as_ref().is_some_and(|m| m.error.is_some()));
+    let has_tools = move || message.with(|m| m.as_ref().is_some_and(|m| !m.tool_calls.is_empty()));
+    let is_streaming = move || message.with(|m| m.as_ref().is_some_and(|m| m.is_streaming));
+    let is_intermediate = move || message.with(|m| m.as_ref().is_some_and(|m| m.is_intermediate));
+
+    // `bubble_align`/`bubble_class` are reactive closures (not plain values
+    // computed once): `bubble_class` depends on `has_error`, which can flip
+    // true after the bubble has already mounted (a run failing mid-stream),
+    // and both are consumed purely as CSS class *attributes* — Leptos updates
+    // those in place without unmounting the element, so recomputing them per
+    // token costs a cheap string rebuild, not a remount.
+    let bubble_align = move || {
+        if is_user() {
+            "flex justify-end"
+        } else {
+            "flex justify-start"
+        }
     };
     // `min-w-0` lets a flex child shrink below its content's intrinsic width so
     // wide children (code blocks, tables) scroll internally via `overflow-x:auto`
@@ -676,66 +742,82 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
     // *final answer* (a left bubble). A run's intermediate steps flow
     // bubble-less and dense as `NarrationRow` / `ToolLine` / `ExploreGroup`
     // rows instead (the opencode / claude-code transcript look).
-    let bubble_style = if is_user {
-        "min-w-0 max-w-[80%] rounded-2xl px-3.5 py-2 msg-glass-user"
-    } else if has_error {
-        // Standalone final answer that errored — keep the bubble, full width
-        // so long-form prose/markdown reads comfortably.
-        "min-w-0 w-full rounded-2xl px-4 py-3 msg-glass-danger text-danger"
-    } else {
-        // Standalone final answer — the conversational reply keeps its bubble
-        // but spans the full column; 80% crowded long markdown answers.
-        "min-w-0 w-full rounded-2xl px-4 py-3 msg-glass text-text-primary"
-    };
-    let bubble_class = bubble_style.to_string();
-
-    let message_run_id = run_id_from_message_id(&message.id);
-    let run_for_cost = message_run_id.clone();
-
-    let tool_calls_view = has_tools.then(|| {
-        view! { <ToolCallsBlock run_id=message_run_id tools=message.tool_calls.clone() /> }
-    });
-
-    let content = message.content.clone();
-    // Stable key for the typewriter reveal clock — survives the per-token
-    // remount of a streaming bubble so the reveal sweep stays continuous, while
-    // still distinguishing two steps that share the id `assistant-{run}`
-    // (see `timeline::reveal_key`).
-    let message_id = timeline::reveal_key(&message);
-    let is_streaming = message.is_streaming;
-    let error = message.error.clone();
-    let model_info = message.model_info.clone();
-
-    let error_view = error.map(|err| {
-        view! {
-            <div class="mt-2 text-xs text-danger/80">{err}</div>
+    let bubble_class = move || {
+        if is_user() {
+            "min-w-0 max-w-[80%] rounded-2xl px-3.5 py-2 msg-glass-user".to_string()
+        } else if has_error() {
+            // Standalone final answer that errored — keep the bubble, full width
+            // so long-form prose/markdown reads comfortably.
+            "min-w-0 w-full rounded-2xl px-4 py-3 msg-glass-danger text-danger".to_string()
+        } else {
+            // Standalone final answer — the conversational reply keeps its bubble
+            // but spans the full column; 80% crowded long markdown answers.
+            "min-w-0 w-full rounded-2xl px-4 py-3 msg-glass text-text-primary".to_string()
         }
-    });
+    };
 
-    // Model info indicator (shows fallback when applicable)
-    let model_view = if !is_user {
-        model_info.map(|info| {
-            if info.is_fallback {
-                let original = info.original_model.unwrap_or_default();
-                view! {
-                    <div class="mt-1.5 text-[10px] leading-tight font-mono flex items-center gap-1">
-                        <span style="text-decoration: line-through; opacity: 0.4;">{original}</span>
-                        <span class="text-text-tertiary">{"\u{2192}"}</span>
-                        <span style="color: #fde047;">{info.model}</span>
-                    </div>
-                }
-                .into_any()
-            } else {
-                view! {
-                    <div class="mt-1.5 text-[10px] leading-tight font-mono text-text-tertiary">
-                        {info.model}
-                    </div>
-                }
-                .into_any()
-            }
+    // Structural facts: `id` never changes after a message is created (same
+    // invariant `TimelineRow::Message`'s field split relies on), so this is a
+    // one-time, untracked read rather than a reactive closure.
+    let message_run_id =
+        message.with_untracked(|m| m.as_ref().map(|m| run_id_from_message_id(&m.id)));
+    let run_for_cost = message_run_id.clone().unwrap_or_default();
+
+    // Reactive: a message that streams into an assistant final-answer bubble
+    // can gain tool calls after this row first mounts (the pre-Task-4 code
+    // effectively re-read this on every token via the row's full remount —
+    // this closure is what keeps that behavior without the remount).
+    let tool_calls_view = move || {
+        if !has_tools() {
+            return None;
+        }
+        message.with(|m| {
+            m.as_ref().map(|m| {
+                let run_id = run_id_from_message_id(&m.id);
+                let tools = m.tool_calls.clone();
+                view! { <ToolCallsBlock run_id=run_id tools=tools /> }
+            })
         })
-    } else {
-        None
+    };
+
+    let error_view = move || {
+        message
+            .with(|m| m.as_ref().and_then(|m| m.error.clone()))
+            .map(|err| {
+                view! {
+                    <div class="mt-2 text-xs text-danger/80">{err}</div>
+                }
+            })
+    };
+
+    // Model info indicator (shows fallback when applicable). Reactive: it
+    // lands after the bubble mounts (attached once the run resolves).
+    let model_view = move || {
+        if is_user() {
+            return None;
+        }
+        message
+            .with(|m| m.as_ref().and_then(|m| m.model_info.clone()))
+            .map(|info| {
+                if info.is_fallback {
+                    let original = info.original_model.unwrap_or_default();
+                    view! {
+                        <div class="mt-1.5 text-[10px] leading-tight font-mono flex items-center gap-1">
+                            <span style="text-decoration: line-through; opacity: 0.4;">{original}</span>
+                            <span class="text-text-tertiary">{"\u{2192}"}</span>
+                            <span style="color: #fde047;">{info.model}</span>
+                        </div>
+                    }
+                    .into_any()
+                } else {
+                    view! {
+                        <div class="mt-1.5 text-[10px] leading-tight font-mono text-text-tertiary">
+                            {info.model}
+                        </div>
+                    }
+                    .into_any()
+                }
+            })
     };
 
     // ---- G4: per-bubble hover actions (Copy + Retry) ----
@@ -756,12 +838,11 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
     // mislabel the viewer's own history on every fresh room visit.
     // `use_context` (not `expect_context`): a storybook/test mount without
     // `UserDirectoryState` provided simply renders no label.
-    let author_user_id = message.author_user_id.clone();
     let author_label = move || {
-        if !is_user {
+        if !is_user() {
             return None;
         }
-        let author = author_user_id.clone()?;
+        let author = message.with(|m| m.as_ref().and_then(|m| m.author_user_id.clone()))?;
         let dir = use_context::<UserDirectoryState>()?;
         if dir.my_user_id.get().as_deref() == Some(author.as_str()) {
             return None;
@@ -775,84 +856,89 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
     // still in flight, or for a run core could not price: an absent figure is
     // honest, "$0.00" is not. `≈` whenever `cost_status != complete`, so a
     // partially-priced run is never passed off as exact.
-    let cost_view = (!is_user).then_some({
-        move || {
-            let cost = chat.run_costs.with(|m| m.get(&run_for_cost).cloned())?;
-            let money = cost.cost_label();
-            let tokens = cost.tokens_label();
-            if money.is_none() && tokens.is_none() {
-                return None;
-            }
-            // Prefix reuse is the one cache number a user can act on: a session
-            // that keeps re-creating its prefix is paying 1.25x for history it
-            // already sent. Shown cumulatively as well as per-run, because the
-            // first run of any session necessarily reads 0%.
-            let cache = match (cost.prefix_reuse(), chat.session_prefix_reuse()) {
-                (Some(run), Some(session)) => format!(
-                    " · cache {} read / {} created · prefix reuse {:.0}% (session {:.0}%)",
-                    cost.cache_read_tokens,
-                    cost.cache_creation_tokens,
-                    run * 100.0,
-                    session * 100.0
-                ),
-                _ => String::new(),
-            };
-            let title = format!(
-                "input {} · output {} · total {} tokens{}{}",
-                cost.input_tokens,
-                cost.output_tokens,
-                cost.total_tokens,
-                cache,
-                if cost.is_exact() {
-                    String::new()
-                } else {
-                    format!(" · cost {}", cost.status.as_deref().unwrap_or("unknown"))
-                }
-            );
-            // Read-only meta line: the full token/cost breakdown it used to
-            // open lived in the right pane's inspector, which no longer exists.
-            // The `title` hover still carries the exact figures.
-            Some(view! {
-                <div class="mt-1 text-[10px] leading-tight font-mono text-text-tertiary \
-                            flex items-center gap-1.5 tabular-nums"
-                     title=title>
-                    {money}
-                    {tokens.map(|t| view! { <span class="opacity-70">{t}</span> })}
-                </div>
-            })
+    let cost_view = move || {
+        if is_user() {
+            return None;
         }
-    });
+        let cost = chat.run_costs.with(|m| m.get(&run_for_cost).cloned())?;
+        let money = cost.cost_label();
+        let tokens = cost.tokens_label();
+        if money.is_none() && tokens.is_none() {
+            return None;
+        }
+        // Prefix reuse is the one cache number a user can act on: a session
+        // that keeps re-creating its prefix is paying 1.25x for history it
+        // already sent. Shown cumulatively as well as per-run, because the
+        // first run of any session necessarily reads 0%.
+        let cache = match (cost.prefix_reuse(), chat.session_prefix_reuse()) {
+            (Some(run), Some(session)) => format!(
+                " · cache {} read / {} created · prefix reuse {:.0}% (session {:.0}%)",
+                cost.cache_read_tokens,
+                cost.cache_creation_tokens,
+                run * 100.0,
+                session * 100.0
+            ),
+            _ => String::new(),
+        };
+        let title = format!(
+            "input {} · output {} · total {} tokens{}{}",
+            cost.input_tokens,
+            cost.output_tokens,
+            cost.total_tokens,
+            cache,
+            if cost.is_exact() {
+                String::new()
+            } else {
+                format!(" · cost {}", cost.status.as_deref().unwrap_or("unknown"))
+            }
+        );
+        // Read-only meta line: the full token/cost breakdown it used to
+        // open lived in the right pane's inspector, which no longer exists.
+        // The `title` hover still carries the exact figures.
+        Some(view! {
+            <div class="mt-1 text-[10px] leading-tight font-mono text-text-tertiary \
+                        flex items-center gap-1.5 tabular-nums"
+                 title=title>
+                {money}
+                {tokens.map(|t| view! { <span class="opacity-70">{t}</span> })}
+            </div>
+        })
+    };
 
     // Team chat: Layout A — avatar disc outside the bubble + agent name above.
     // Only when message.agent_id is Some (team message). Zero regression on the
     // single-agent path (agent_id is None → layout_a is None).
     //
+    // Structural, read once: `agent_id` never changes after a message is
+    // created, so this whole branch selection is decided once rather than
+    // re-derived reactively (unlike `tool_calls_view`/`error_view`/etc. above,
+    // which read genuinely-mutable fields).
+    //
     // `show_header` is read from the precomputed attribution map (O(1)); the
     // map is folded once per messages-change in `MessageList`. Falls back to
     // showing the header if the context is absent (e.g. storybook mount).
-    let layout_a = message.agent_id.as_ref().map(|aid| {
-        let members = chat.team_members.get_untracked();
-        let member = members.iter().find(|m| &m.agent_id == aid);
-        let name = member
-            .map(|m| m.name.clone())
-            .unwrap_or_else(|| aid.clone());
-        // Avatar glyph: the member's emoji if present and non-empty, else a
-        // monogram derived from the name (computed at render below).
-        let emoji = member
-            .and_then(|m| m.emoji.clone())
-            .filter(|e| !e.is_empty());
-        let color = crate::views::chat::agent_identity::agent_color_for_id(aid);
+    let layout_a = message.with_untracked(|m| {
+        m.as_ref().and_then(|m| {
+            m.agent_id.as_ref().map(|aid| {
+                let members = chat.team_members.get_untracked();
+                let member = members.iter().find(|mm| &mm.agent_id == aid);
+                let name = member
+                    .map(|mm| mm.name.clone())
+                    .unwrap_or_else(|| aid.clone());
+                // Avatar glyph: the member's emoji if present and non-empty, else a
+                // monogram derived from the name (computed at render below).
+                let emoji = member
+                    .and_then(|mm| mm.emoji.clone())
+                    .filter(|e| !e.is_empty());
+                let color = crate::views::chat::agent_identity::agent_color_for_id(aid);
 
-        let show_header = use_context::<AttributionMap>().is_none_or(|m| {
-            m.0.get_untracked()
-                .get(&message.id)
-                .copied()
-                .unwrap_or(true)
-        });
-        (name, emoji, color, show_header)
+                let show_header = use_context::<AttributionMap>()
+                    .is_none_or(|am| am.0.get_untracked().get(&m.id).copied().unwrap_or(true));
+                (name, emoji, color, show_header)
+            })
+        })
     });
 
-    let copy_text = content.clone();
     // One-shot click feedback — flip green + checkmark, auto-revert after a beat
     // so the user gets a clear "it worked" signal on an otherwise silent action.
     let copied = RwSignal::new(false);
@@ -862,6 +948,11 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
             Some(w) => w,
             None => return,
         };
+        // Read the latest content at click time (untracked — this is an
+        // imperative event handler, not a reactive render), so Copy always
+        // grabs what's currently on screen even mid-stream.
+        let copy_text =
+            message.with_untracked(|m| m.as_ref().map(|m| m.content.clone()).unwrap_or_default());
         // Modern API — navigator.clipboard.writeText(text)
         let clipboard = win.navigator().clipboard();
         let _promise = clipboard.write_text(&copy_text);
@@ -880,24 +971,22 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
         );
     };
     // Retry only makes sense on a finalized assistant turn — streaming /
-    // intermediate / error messages are noise.
-    let show_retry = !is_user && !is_streaming && !has_error && !message.is_intermediate;
-    let actions_align = if is_user { "right-2" } else { "left-2" };
+    // intermediate / error messages are noise. Reactive: `is_streaming`
+    // flips false when the run finishes, and the button must appear then.
+    let show_retry = move || !is_user() && !is_streaming() && !has_error() && !is_intermediate();
+    // Structural, read once: `is_user` never changes after a message is
+    // created, so the alignment side of the hover action bar is fixed here.
+    let actions_align = if is_user() { "right-2" } else { "left-2" };
     let action_class = format!(
         "absolute -bottom-3 {actions_align} flex items-center gap-1 \
          opacity-0 group-hover:opacity-100 focus-within:opacity-100 \
          transition-opacity"
     );
 
-    // One-shot rise+fade as the bubble mounts. Gated to non-streaming: the
-    // keyed <For> recreates a streaming bubble on every token, so applying
-    // the entrance there would replay it per chunk. User + finalized
-    // assistant bubbles mount once, so it plays exactly once.
-    let wrapper_class = if is_streaming {
-        format!("{bubble_align} group relative")
-    } else {
-        format!("{bubble_align} group relative aleph-msg-in")
-    };
+    // One-shot rise+fade as the bubble mounts. Safe unconditionally now: the
+    // row no longer remounts per token (stable `<For>` key, see
+    // `timeline::row_key`), so this only ever plays once per bubble.
+    let wrapper_class = move || format!("{} group relative aleph-msg-in", bubble_align());
 
     // Decompose layout_a so values can be used in a single view! without double-move.
     let is_team_msg = layout_a.is_some();
@@ -950,7 +1039,15 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
                                 // Assistant text — always the paced renderer; it
                                 // keeps sweeping past stream completion and falls
                                 // back to full Markdown for history/finished text.
-                                <TypewriterRenderer content=content message_id=message_id is_streaming=is_streaming />
+                                // Reactive: `content` is the field that streams,
+                                // so this fragment (unlike the structural layout
+                                // around it) is rebuilt on every message change.
+                                {move || message.with(|m| m.as_ref().map(|m| {
+                                    let content = m.content.clone();
+                                    let message_id = timeline::reveal_key(m);
+                                    let is_streaming = m.is_streaming;
+                                    view! { <TypewriterRenderer content=content message_id=message_id is_streaming=is_streaming /> }
+                                }))}
                                 {error_view}
                                 {model_view}
                                 {cost_view}
@@ -971,7 +1068,12 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
                         })}
                         <div class=bubble_class>
                             {tool_calls_view}
-                            {if is_user {
+                            {if is_user() {
+                                // Structural, decided once: user messages never
+                                // stream, so a one-time content snapshot is safe.
+                                let content = message.with_untracked(|m| {
+                                    m.as_ref().map(|m| m.content.clone()).unwrap_or_default()
+                                });
                                 view! {
                                     <div class="whitespace-pre-wrap break-words text-sm leading-relaxed">
                                         {content}
@@ -980,8 +1082,16 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
                             } else {
                                 // Assistant text — always the paced renderer; it keeps
                                 // sweeping past stream completion and falls back to
-                                // full Markdown for history/finished text.
-                                view! { <TypewriterRenderer content=content message_id=message_id is_streaming=is_streaming /> }.into_any()
+                                // full Markdown for history/finished text. Reactive
+                                // for the same reason as the team-layout branch above.
+                                view! {
+                                    {move || message.with(|m| m.as_ref().map(|m| {
+                                        let content = m.content.clone();
+                                        let message_id = timeline::reveal_key(m);
+                                        let is_streaming = m.is_streaming;
+                                        view! { <TypewriterRenderer content=content message_id=message_id is_streaming=is_streaming /> }
+                                    }))}
+                                }.into_any()
                             }}
                             {error_view}
                             {model_view}
@@ -1034,8 +1144,7 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
                         }.into_any()
                     }}
                 </button>
-                {if show_retry {
-                    Some(view! {
+                {move || show_retry().then(|| view! {
                         <button
                             class=move || {
                                 let base = "px-1.5 h-6 rounded-md border shadow-sm transition-colors \
@@ -1066,27 +1175,37 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
                             </svg>
                             <span>{t!(i18n, chat.retry)}</span>
                         </button>
-                    })
-                } else {
-                    None
-                }}
+                    })}
             </div>
         </div>
     }
+    .into_any()
 }
 
 /// Mid-turn narration — borderless inline process monologue, permanently retained in the conversation stream.
+///
+/// `message` is a per-row `Memo`, same reasoning as `MessageBubble` — see
+/// its doc comment.
 #[component]
-fn NarrationRow(message: ChatMessage) -> impl IntoView {
-    let content = message.content.clone();
-    // Per-step reveal identity, NOT the bare id — consecutive steps of one run
-    // share the id `assistant-{run}` (see `timeline::reveal_key`).
-    let message_id = timeline::reveal_key(&message);
-    let is_streaming = message.is_streaming;
-    view! {
-        <div class="px-1 py-0.5 text-sm text-text-secondary leading-relaxed aleph-step-narration">
-            <TypewriterRenderer content=content message_id=message_id is_streaming=is_streaming />
-        </div>
+fn NarrationRow(message: Memo<Option<ChatMessage>>) -> impl IntoView {
+    // A lookup miss (should not happen — ids are stamped once) renders
+    // nothing rather than panicking.
+    move || {
+        message.with(|m| {
+            m.as_ref().map(|m| {
+                let content = m.content.clone();
+                // Per-step reveal identity, NOT the bare id — consecutive
+                // steps of one run share the id `assistant-{run}` (see
+                // `timeline::reveal_key`).
+                let message_id = timeline::reveal_key(m);
+                let is_streaming = m.is_streaming;
+                view! {
+                    <div class="px-1 py-0.5 text-sm text-text-secondary leading-relaxed aleph-step-narration">
+                        <TypewriterRenderer content=content message_id=message_id is_streaming=is_streaming />
+                    </div>
+                }
+            })
+        })
     }
 }
 

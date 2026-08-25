@@ -28,13 +28,33 @@ pub enum TimelineRow {
     /// string) used for `<For>` keying; `label` is the rendered text
     /// ("Today" / "Yesterday" / "YYYY-MM-DD").
     DaySeparator { key: String, label: String },
-    /// A message plus its resolved clock label ("HH:MM", or empty when the
-    /// message carries no timestamp — e.g. legacy history rows).
-    Message { message: ChatMessage, clock: String },
+    /// A message plus its resolved clock label and the small structural
+    /// facts a row needs before it can render — NOT the growing `content`.
+    /// `<For>`'s children closure runs once per stable key (see `row_key`);
+    /// content itself is fetched reactively inside the rendered component so
+    /// it keeps updating without a remount. `has_plan_archive`/`role` gate
+    /// which component this row renders as (`PlanArchiveCell` /
+    /// `SystemNoticeRow` / `ToolFallbackRow` / `MessageBubble`) — a decision
+    /// made once, at closure-run time, since a message's role/archive-ness
+    /// doesn't change after creation.
+    Message {
+        id: String,
+        role: String,
+        has_plan_archive: bool,
+        is_streaming: bool,
+        is_intermediate: bool,
+        tool_call_count: usize,
+        has_model_info: bool,
+        clock: String,
+    },
     /// An intermediate turn's narration text: no bubble, no strip — rendered
     /// inline, no-frame. Also covers the streaming cursor placeholder (empty
     /// content, still streaming, no tool calls yet).
-    Narration { message: ChatMessage },
+    ///
+    /// Carries only what `row_key` and the rendered `NarrationRow` need
+    /// reactively (just `id`); content is fetched the same way as `Message`
+    /// rows.
+    Narration { id: String, is_streaming: bool },
     /// A single non-readonly tool call from an intermediate turn, rendered as
     /// one line item.
     ToolLine { run_id: String, tool: ToolCallEntry },
@@ -87,7 +107,10 @@ pub fn build_rows(
                 !m.content.trim().is_empty() || (m.is_streaming && m.tool_calls.is_empty());
             if has_narration {
                 flush_explore(&mut rows, &mut acc);
-                rows.push(TimelineRow::Narration { message: m.clone() });
+                rows.push(TimelineRow::Narration {
+                    id: m.id.clone(),
+                    is_streaming: m.is_streaming,
+                });
             }
             for t in &m.tool_calls {
                 if is_explore_tool(&t.tool_name) {
@@ -136,7 +159,13 @@ pub fn build_rows(
             None => String::new(),
         };
         rows.push(TimelineRow::Message {
-            message: m.clone(),
+            id: m.id.clone(),
+            role: m.role.clone(),
+            has_plan_archive: m.plan_archive.is_some(),
+            is_streaming: m.is_streaming,
+            is_intermediate: m.is_intermediate,
+            tool_call_count: m.tool_calls.len(),
+            has_model_info: m.model_info.is_some(),
             clock,
         });
     }
@@ -226,25 +255,28 @@ fn is_step(m: &ChatMessage) -> bool {
 
 /// Stable `<For>` key for a timeline row.
 ///
-/// Mirrors the composite key the flat list used (id + volatile fields) so a
-/// streaming bubble still re-renders per token; separators key on their day.
+/// A streaming `Message`/`Narration` row's key does NOT include content
+/// length — it stays stable while content grows so the row's DOM subtree is
+/// never unmounted/remounted per token (see `messages.rs`'s per-row `Memo`
+/// lookup for how the rendered content still updates without a remount).
+/// The key changes only on a structural transition (streaming ends, a tool
+/// call is added, etc.); separators key on their day.
 #[must_use]
 pub fn row_key(row: &TimelineRow) -> String {
     match row {
         TimelineRow::DaySeparator { key, .. } => format!("sep:{key}"),
-        TimelineRow::Message { message: m, clock } => format!(
-            "{}:{}:{}:{}:{}:{}:{}",
-            m.id,
-            m.content.len(),
-            m.is_streaming,
-            m.is_intermediate,
-            m.tool_calls.len(),
-            m.model_info.is_some(),
+        TimelineRow::Message {
+            id,
+            is_streaming,
+            is_intermediate,
+            tool_call_count,
+            has_model_info,
             clock,
+            ..
+        } => format!(
+            "{id}:{is_streaming}:{is_intermediate}:{tool_call_count}:{has_model_info}:{clock}",
         ),
-        TimelineRow::Narration { message: m } => {
-            format!("narr:{}:{}:{}", m.id, m.content.len(), m.is_streaming)
-        }
+        TimelineRow::Narration { id, is_streaming } => format!("narr:{id}:{is_streaming}"),
         TimelineRow::ToolLine { run_id, tool } => format!(
             "tool:{run_id}:{}:{}:{:?}",
             tool.tool_id, tool.status, tool.duration_ms
@@ -762,7 +794,7 @@ mod tests {
         let msgs = vec![msg_empty_step("r1", 1)];
         let rows = derive_timeline(&msgs, "Today", "Yesterday");
         assert!(matches!(rows.as_slice(),
-            [TimelineRow::Narration { message }] if message.is_streaming));
+            [TimelineRow::Narration { is_streaming, .. }] if *is_streaming));
     }
 
     #[test]
@@ -786,17 +818,42 @@ mod tests {
         ];
         let rows = derive_timeline(&msgs, "Today", "Yesterday");
         assert!(rows.iter().any(|r| matches!(r,
-            TimelineRow::Message { message, .. }
-                if message.id == "assistant-r-r" && !message.tool_calls.is_empty())));
+            TimelineRow::Message { id, tool_call_count, .. }
+                if id == "assistant-r-r" && *tool_call_count > 0)));
     }
 
     #[test]
-    fn row_key_narration_changes_on_content_growth() {
+    fn row_key_narration_is_stable_across_content_growth() {
+        // Content growth alone (the common case: a token arriving mid-stream)
+        // must NOT change the key — that's what let the DOM subtree survive
+        // across tokens instead of remounting every one.
         let m1 = msg_step("intermediate-r1-1", 1, "partial", true);
         let m2 = msg_step("intermediate-r1-1", 1, "partial more", true);
+        let rows1 = vec![TimelineRow::Narration {
+            id: m1.id.clone(),
+            is_streaming: m1.is_streaming,
+        }];
+        let rows2 = vec![TimelineRow::Narration {
+            id: m2.id.clone(),
+            is_streaming: m2.is_streaming,
+        }];
+        assert_eq!(row_key(&rows1[0]), row_key(&rows2[0]));
+    }
+
+    #[test]
+    fn row_key_narration_changes_when_streaming_ends() {
+        let m1 = msg_step("intermediate-r1-1", 1, "text", true);
+        let mut m2 = m1.clone();
+        m2.is_streaming = false;
         assert_ne!(
-            row_key(&TimelineRow::Narration { message: m1 }),
-            row_key(&TimelineRow::Narration { message: m2 })
+            row_key(&TimelineRow::Narration {
+                id: m1.id.clone(),
+                is_streaming: m1.is_streaming
+            }),
+            row_key(&TimelineRow::Narration {
+                id: m2.id.clone(),
+                is_streaming: m2.is_streaming
+            })
         );
     }
 
@@ -840,8 +897,8 @@ mod tests {
             }
         );
         match &rows[1] {
-            TimelineRow::Message { message, clock } => {
-                assert_eq!(message.id, "a");
+            TimelineRow::Message { id, clock, .. } => {
+                assert_eq!(id, "a");
                 assert_eq!(clock, "T1500");
             }
             _ => panic!("expected message row"),
@@ -965,7 +1022,13 @@ mod tests {
         };
         assert_eq!(row_key(&sep), "sep:5");
         let m = TimelineRow::Message {
-            message: msg("x", Some(1000)),
+            id: "x".into(),
+            role: "assistant".into(),
+            has_plan_archive: false,
+            is_streaming: false,
+            is_intermediate: false,
+            tool_call_count: 0,
+            has_model_info: false,
             clock: "T1000".into(),
         };
         assert!(row_key(&m).starts_with("x:"));
