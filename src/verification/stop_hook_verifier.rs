@@ -14,8 +14,13 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 use crate::verification::extension_stop_gate::LAST_MESSAGE_ENV_CAP;
-use crate::verification::stop_hooks::{execute_stop_hooks_arc, StopHookContext, StopHookHandler};
+use crate::verification::stop_hooks::{StopHookContext, StopHookHandler, execute_stop_hooks_arc};
 use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, VerifierVerdict};
+
+// `LAST_MESSAGE_ENV_CAP` is a BYTE budget (env-var size); the truncation
+// must be byte-boundary-safe, not char-counted. The previous inline
+// `char_indices().take(cap)` truncated to `cap` *characters*, which for
+// non-ASCII `final_text` could produce strings ~3× the documented cap.
 
 pub struct StopHookVerifier {
     hooks: Arc<Vec<Arc<dyn StopHookHandler>>>,
@@ -43,14 +48,7 @@ impl TurnVerifier for StopHookVerifier {
         }
         let hctx = StopHookContext {
             final_text: ctx.final_text.map(|s| {
-                let cap = LAST_MESSAGE_ENV_CAP;
-                let end = s
-                    .char_indices()
-                    .take(cap)
-                    .last()
-                    .map(|(i, c)| i + c.len_utf8())
-                    .unwrap_or(0);
-                s[..end.min(s.len())].to_string()
+                crate::utils::text_format::truncate_bytes(s, LAST_MESSAGE_ENV_CAP).to_string()
             }),
             iterations: ctx.iterations,
             tool_calls_made: ctx.tool_calls_made,

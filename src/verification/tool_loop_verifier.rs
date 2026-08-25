@@ -40,6 +40,8 @@
 //! presence/absence of text — no model reasoning, so this stays scaffolding
 //! (R10-safe), never a completion judge.
 
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
@@ -63,12 +65,9 @@ impl ToolLoopVerifier {
 /// of distinct/total means the model is revisiting a small set of calls
 /// (thrash); a high ratio means genuine fan-out / exploration.
 fn distinct_count(calls: &[ToolCallSummary]) -> usize {
-    let mut seen: Vec<(&str, u64)> = Vec::with_capacity(calls.len());
+    let mut seen: HashSet<(&str, u64)> = HashSet::with_capacity(calls.len());
     for c in calls {
-        let key = (c.name.as_str(), c.args_hash);
-        if !seen.contains(&key) {
-            seen.push(key);
-        }
+        seen.insert((c.name.as_str(), c.args_hash));
     }
     seen.len()
 }
