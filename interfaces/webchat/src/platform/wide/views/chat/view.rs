@@ -268,9 +268,31 @@ pub fn ChatView() -> impl IntoView {
 /// shared pending-attachments list. Mirrors the per-file logic used by the
 /// paperclip input — kept as a free fn so the drop handler stays tight.
 fn ingest_dropped_file(file: web_sys::File, attachments: RwSignal<Vec<PendingAttachment>>) {
+    use super::composer::attachments::{MAX_ATTACHMENT_COUNT, MAX_ATTACHMENT_SIZE_BYTES};
+
     let name = file.name();
     let mime_type = file.type_();
     let size = file.size() as u64;
+    if size > MAX_ATTACHMENT_SIZE_BYTES {
+        web_sys::console::warn_1(
+            &format!(
+                "skipping dropped file '{name}': {size} bytes exceeds the {} MB limit",
+                MAX_ATTACHMENT_SIZE_BYTES / (1024 * 1024)
+            )
+            .into(),
+        );
+        return;
+    }
+    let accepted = attachments.with_untracked(|list| list.len());
+    if accepted >= MAX_ATTACHMENT_COUNT {
+        web_sys::console::warn_1(
+            &format!(
+                "skipping dropped file '{name}': already at the {MAX_ATTACHMENT_COUNT}-file limit"
+            )
+            .into(),
+        );
+        return;
+    }
     let Ok(reader) = web_sys::FileReader::new() else {
         return;
     };
