@@ -30,7 +30,11 @@ pub fn safe_freeze_offset(text: &str, prev_safe: usize) -> Option<usize> {
 
         let bare = trimmed.trim();
         let is_all_backticks = !bare.is_empty() && bare.chars().all(|c| c == '`');
-        let leading_ticks = trimmed.trim_start().chars().take_while(|&c| c == '`').count();
+        let leading_ticks = trimmed
+            .trim_start()
+            .chars()
+            .take_while(|&c| c == '`')
+            .count();
 
         match fence_marker {
             Some(open_len) if is_all_backticks && bare.chars().count() >= open_len => {
@@ -163,5 +167,31 @@ mod tests {
         let text = "````\n```\nafter\n";
         let result = safe_freeze_offset(text, 0);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn dangling_reference_link_def_pins_the_freeze_point() {
+        let text = "See [foo] below.\n\n[foo]: https://example.com\nmore text\n";
+        let result = safe_freeze_offset(text, 0);
+        // Safe only through the blank line before the definition — the
+        // definition line and everything after it stay unfrozen because no
+        // blank line has confirmed the definition is closed.
+        assert_eq!(result, Some("See [foo] below.\n\n".len()));
+    }
+
+    #[test]
+    fn blank_line_after_reference_link_def_clears_the_pin() {
+        let text = "See [foo] below.\n\n[foo]: https://example.com\n\nmore text\n";
+        let result = safe_freeze_offset(text, 0);
+        assert_eq!(result, Some(text.len()));
+    }
+
+    #[test]
+    fn reference_link_def_inside_a_fence_is_just_code() {
+        // A `[x]:`-shaped line inside a fence is code content, not a real
+        // reference-link definition — the fence rule takes priority.
+        let text = "```\n[foo]: not a real link def, just code\n```\nafter\n";
+        let result = safe_freeze_offset(text, 0);
+        assert_eq!(result, Some(text.len()));
     }
 }
