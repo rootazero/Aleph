@@ -18,25 +18,28 @@ use crate::tui::theme::DEFAULT_THEME;
 
 use super::tool_block::render_tool_block;
 
-/// Memoization slot for the fully-rendered chat line list.
-///
-/// `build_all_lines` re-runs `markdown_to_lines` for every assistant turn
-/// (per character, on a streaming tick) and the main loop calls `draw` at
-/// 50 ms (≈20 fps). Without a cache the terminal is paying for an O(history)
-/// markdown parse every frame, and a long conversation means hundreds of
-/// short-line allocations per tick on top of the parse itself.
-///
-/// The fingerprint folds three pieces of state that together uniquely
-/// identify the rendered output: content width, number of messages, and a
-/// 64-bit hash over the per-message `(variant, content, len, spinner)`
-/// triple. Streaming text changes the per-message content hash, which
-/// invalidates the cache; an idle tick (the common case) re-uses the last
-/// frame's Vec and skips the parse entirely.
-///
-/// `thread_local!` (rather than a field on `AppState`) because this widget
-/// only ever runs on the main loop thread and the cache is purely an
-/// optimisation — leaking a single Vec into the TLS slot on shutdown is
-/// strictly cheaper than the refactor `Rc<RefCell<...>>` would require.
+// Memoization slot for the fully-rendered chat line list.
+//
+// `build_all_lines` re-runs `markdown_to_lines` for every assistant turn
+// (per character, on a streaming tick) and the main loop calls `draw` at
+// 50 ms (≈20 fps). Without a cache the terminal is paying for an O(history)
+// markdown parse every frame, and a long conversation means hundreds of
+// short-line allocations per tick on top of the parse itself.
+//
+// The fingerprint folds three pieces of state that together uniquely
+// identify the rendered output: content width, number of messages, and a
+// 64-bit hash over the per-message `(variant, content, len, spinner)`
+// triple. Streaming text changes the per-message content hash, which
+// invalidates the cache; an idle tick (the common case) re-uses the last
+// frame's Vec and skips the parse entirely.
+//
+// `thread_local!` (rather than a field on `AppState`) because this widget
+// only ever runs on the main loop thread and the cache is purely an
+// optimisation — leaking a single Vec into the TLS slot on shutdown is
+// strictly cheaper than the refactor `Rc<RefCell<...>>` would require.
+//
+// (Plain `//` not `///` because rustc emits `unused_doc_comments` on a
+// private static.)
 thread_local! {
     static CHAT_LINES_CACHE: RefCell<Option<(ChatLinesFingerprint, Vec<Line<'static>>)>> =
         const { RefCell::new(None) };

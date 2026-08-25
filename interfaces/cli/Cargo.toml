@@ -41,7 +41,7 @@ toml = "0.8"
 async-trait = "0.1"
 
 # CLI interface
-clap = { version = "4.4", features = ["derive"] }
+clap = { version = "4.4", features = ["derive", "env"] }
 clap_complete = "4"
 
 

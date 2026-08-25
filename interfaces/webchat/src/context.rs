@@ -876,10 +876,11 @@ impl DashboardState {
         // subscribe_events / unsubscribe_events on the same `event_handlers`
         // Mutex would otherwise re-enter the lock on the same thread and
         // deadlock (Wasm is single-threaded — no `try_lock` escape hatch).
+        // Bind the `&Arc<Mutex<...>>` to a let first so the `MutexGuard`
+        // borrows from a named location rather than a chain temporary.
+        let store = self.event_handlers.with_value(std::clone::Clone::clone);
         let handlers = {
-            let guard = self
-                .event_handlers
-                .with_value(std::clone::Clone::clone)
+            let guard = store
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             guard.iter().flatten().cloned().collect::<Vec<_>>()
