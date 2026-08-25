@@ -58,6 +58,13 @@ struct KeychainCertStore: CertStore {
     private let service = "ai.aleph.panel"
     private let account = "pinned-certs"
 
+    /// Serializes load/modify/save so two concurrent `pin()` calls (one per
+    /// sub-resource TLS challenge for the same host, for instance) cannot
+    /// race the read-then-write and drop a fingerprint. `lookup()` rides the
+    /// same queue so a writer cannot interleave between a reader's load and
+    /// the matching decision.
+    private static let io = DispatchQueue(label: "ai.aleph.panel.cert-store")
+
     private var baseQuery: [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
@@ -91,18 +98,20 @@ struct KeychainCertStore: CertStore {
         if updateStatus == errSecItemNotFound {
             var addQuery = baseQuery
             addQuery[kSecValueData as String] = data
-            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
             SecItemAdd(addQuery as CFDictionary, nil)
         }
     }
 
     func lookup(_ host: String) -> String? {
-        loadMap()[host]
+        Self.io.sync { loadMap()[host] }
     }
 
     func pin(_ host: String, _ fp: String) {
-        var map = loadMap()
-        map[host] = fp
-        saveMap(map)
+        Self.io.sync {
+            var map = loadMap()
+            map[host] = fp
+            saveMap(map)
+        }
     }
 }
