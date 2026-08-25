@@ -857,6 +857,27 @@ mod tests {
         (scratch, store, base)
     }
 
+    /// Drive an async front door to completion on a REAL Tokio runtime.
+    ///
+    /// [`ToolResultStore::purge_all`] hands its blocking I/O to
+    /// `tokio::task::spawn_blocking`, which panics outside a runtime —
+    /// and `futures::executor::block_on` is not one. These tests used it
+    /// (correct while `purge_all` was a sync body in an async wrapper) and
+    /// began panicking with "there is no reactor running" the moment the
+    /// offload landed.
+    ///
+    /// A runtime rather than a call to `purge_all_sync`: production reaches
+    /// this through the async door (`scoped::dispatch`, `sandbox::workspace`),
+    /// so that is the door the test should knock on. `spawn_blocking` is served
+    /// by the blocking pool, which a current-thread runtime has too.
+    fn block_on(fut: impl std::future::Future<Output = ()>) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test tokio runtime")
+            .block_on(fut);
+    }
+
     /// Two session-scoped handles over one shared store — the production shape
     /// (boot installs one store; each run narrows it with `for_session`).
     fn shared_pair(name: &str) -> (Arc<ToolResultStore>, Arc<ToolResultStore>, PathBuf) {
@@ -954,7 +975,7 @@ mod tests {
             "one offloaded blob present before purge"
         );
 
-        futures::executor::block_on(store.purge_all());
+        block_on(store.purge_all());
 
         assert_eq!(
             txt_count(&base),
@@ -1019,7 +1040,7 @@ mod tests {
         assert!(b_blob.exists());
         assert!(marker_path(&a_marker).exists());
 
-        futures::executor::block_on(a.purge_all());
+        block_on(a.purge_all());
 
         assert!(
             !marker_path(&a_marker).exists(),
@@ -1286,7 +1307,7 @@ mod tests {
         );
 
         // The breaker fires on the CHILD handle.
-        futures::executor::block_on(child.purge_all());
+        block_on(child.purge_all());
 
         assert!(
             !parent_blob.exists(),
