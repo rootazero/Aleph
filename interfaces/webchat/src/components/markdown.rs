@@ -291,6 +291,18 @@ fn extend_stable_prefix(
     cached_offset: usize,
     revealed_prefix: &str,
 ) -> (String, usize) {
+    // A cached offset can outlive the content it was computed against:
+    // `set_step_text` replaces a still-streaming bubble's content wholesale
+    // (shorter authoritative text can replace a longer streamed preview)
+    // without necessarily flipping `is_streaming`, so `cached_offset` may no
+    // longer be a valid boundary into `revealed_prefix`. Treat that as "no
+    // cache" rather than trusting a stale offset — falls back to full
+    // reprocessing of `revealed_prefix` from scratch, per this module's
+    // "never wrong in the unsafe direction" contract. (`get(..0)` is always
+    // `Some("")`, so this recurses at most once.)
+    if revealed_prefix.get(..cached_offset).is_none() {
+        return extend_stable_prefix("", 0, revealed_prefix);
+    }
     match shared_ui_logic::markdown_stream::safe_freeze_offset(revealed_prefix, cached_offset) {
         Some(new_offset) if new_offset > cached_offset => {
             let delta = &revealed_prefix[cached_offset..new_offset];
@@ -545,5 +557,29 @@ mod tests {
         let (html, offset) = extend_stable_prefix("<cached>", 0, "```rust\n");
         assert_eq!(html, "<cached>");
         assert_eq!(offset, 0);
+    }
+
+    #[test]
+    fn extend_stable_prefix_falls_back_safely_when_cached_offset_outlives_shrunk_content() {
+        // set_step_text can replace a still-streaming bubble's content with
+        // shorter authoritative text without flipping is_streaming — the
+        // stale cached_html must be discarded, not reused, once the cached
+        // offset no longer fits the new content.
+        let stale_cached_html = "<p>this describes text that no longer exists</p>";
+        let (html, offset) = extend_stable_prefix(stale_cached_html, 60, "short\n");
+        assert_eq!(offset, "short\n".len());
+        assert!(
+            !html.contains("no longer exists"),
+            "must discard stale cached html, not reuse it"
+        );
+    }
+
+    #[test]
+    fn extend_stable_prefix_does_not_panic_when_cached_offset_exceeds_shrunk_len() {
+        // Regression: must not panic (byte-index-out-of-bounds) when a
+        // wholesale content replacement leaves cached_offset pointing past
+        // the end of the new, shorter text.
+        let (_html, offset) = extend_stable_prefix("<cached>", 100, "ab\n");
+        assert!(offset <= "ab\n".len());
     }
 }
