@@ -1266,6 +1266,20 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
 
+            // Project rooms (R8 conversational face). The store is the same
+            // process-global catalogue the `projects.*` RPC handlers use, so
+            // both faces read and write one table. Security store and event
+            // bus are optional: without them org-admin escalation does not
+            // apply and mutations do not announce themselves, and both
+            // absences fail in the safe direction.
+            "project_manage" => Box::pin(async move {
+                let tool = crate::builtin_tools::project_manage::ProjectManageTool::new(
+                    crate::projects::ProjectStore::shared(),
+                    self.node_security_store.get().map(Arc::clone),
+                    self.gateway_event_bus.get().map(Arc::clone),
+                );
+                tool.call_json(arguments).await
+            }),
             // Channel directory tool (deferred — same ChannelRegistry cell)
             "channel_directory" => Box::pin(async move {
                 let cr = self.channel_registry_cell.get().ok_or_else(|| {

@@ -773,6 +773,12 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // offline nodes, and the `revoked_at` flag that makes a deregister
         // stick. Without it `node_manage` degrades to a clear "not injected".
         tool_registry.set_node_security_store(security_store.clone());
+        // …and the bus, so `project_manage`'s writes announce themselves on the
+        // same `projects.changed` topic the `projects.*` RPC handlers publish
+        // to. Without it a room renamed in words still changes on disk, but no
+        // open sidebar or room page learns of it until a reload — the "one
+        // verb, two faces, only one publishes" asymmetry.
+        tool_registry.set_gateway_event_bus(event_bus.clone());
 
         // Capture default provider before provider_registry is moved into engine
         default_prov = Some(provider_registry.default_provider());

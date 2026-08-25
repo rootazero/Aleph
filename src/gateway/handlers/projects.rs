@@ -118,7 +118,7 @@ pub struct ProjectView {
 }
 
 impl ProjectView {
-    fn render(p: Project, member_ids: Vec<String>) -> Self {
+    pub(crate) fn render(p: Project, member_ids: Vec<String>) -> Self {
         Self {
             id: p.id,
             name: p.name,
