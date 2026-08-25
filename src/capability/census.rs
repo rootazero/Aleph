@@ -90,7 +90,7 @@
 //! round-7 indistinguishable-default shape verbatim — was classified as a lazy
 //! cache and left off the roster. `rustfmt` decides where that line break goes,
 //! so a same-line matcher makes roster membership a function of line length.
-//! `a_writer_split_across_lines_is_still_a_writer` fails by name if it regresses.
+//! `the_writer_recogniser_reads_across_line_breaks` fails by name if it regresses.
 //!
 //! ⚠️ The parameter-use test is **textual and non-transitive**. It asks whether
 //! the initialiser mentions a parameter *by name*, so
