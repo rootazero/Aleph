@@ -755,7 +755,12 @@ mod tests {
     /// census's single first-caller-wins member, ruled to stay a raw
     /// `OnceLock` rather than migrate onto [`super::CapabilitySlot`] — fitting
     /// it to [`super::CapabilitySlot::install`] would need either a different
-    /// `Outcome` shape or a changed call site. See this module's doc ("Why
+    /// `Outcome` shape or a changed call site, and the second one would change
+    /// WHICH caller's config wins the initialisation. The ruling and its full
+    /// reasoning live at the static itself (`providers::route_handle::GLOBAL`,
+    /// adjudicated 2026-08-25) so that a migrator who opens the code before the
+    /// docs still finds it; this comment is a pointer, not a second account.
+    /// See this module's doc ("Why
     /// form 2 is a rule and not an exemption") and
     /// `route_handle_global_is_selected_by_the_first_caller_wins_arm_alone`
     /// below for why it genuinely belongs to this census while staying off

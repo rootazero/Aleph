@@ -280,10 +280,14 @@ impl<T: Send + Sync + 'static> SlotStatus for MutableCapabilitySlot<T> {
 /// `census::route_handle_global_is_selected_by_the_first_caller_wins_arm_alone`
 /// for why it genuinely belongs to the handle census while staying off this
 /// list. Fitting it to [`CapabilitySlot::install`] would need either a
-/// different `Outcome` shape or a changed call site; Task 13 adjudicates it,
-/// not this list. `census::every_installed_global_is_a_capability_slot` names
-/// it as the one deliberate exception rather than excluding it silently, so a
-/// second bare handle appearing anywhere else still fails that guard.
+/// different `Outcome` shape or a changed call site — and the second one would
+/// change which caller's config wins the initialisation. **Adjudicated
+/// 2026-08-25: it stays raw**, and the full reasoning lives at the static
+/// itself (`providers::route_handle::GLOBAL`), not only here, so a migrator who
+/// reaches the code before the doc still finds the ruling.
+/// `census::every_installed_global_is_a_capability_slot` names it as the one
+/// deliberate exception rather than excluding it silently, so a second bare
+/// handle appearing anywhere else still fails that guard.
 ///
 /// Every entry below is a call through a `pub(crate) fn … -> &'static dyn
 /// SlotStatus` accessor in the slot's own module (`const fn`, so this array
