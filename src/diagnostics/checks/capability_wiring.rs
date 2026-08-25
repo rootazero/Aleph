@@ -42,6 +42,24 @@ use crate::diagnostics::finding::{Finding, Severity};
 
 const ID: &str = "core/capability-wiring";
 
+/// Tag on the cold-process finding. `Severity::Info` alone is indistinguishable
+/// downstream from `Finding::ok` — `Finding::is_problem()` is `severity >
+/// Info`, so `report.ok()`, the `--json` lint surface, the CLI exit code, and
+/// the human `[ok]` render all read this finding as a pass unless something
+/// else carries the "I don't know" signal. `media_codecs::TAG_CODECS_UNKNOWN`
+/// is the precedent: severity stays `Info` (crying wolf with `Warning`/`Error`
+/// on a healthy cold process would be worse), and the tag is what lets
+/// "unknown" stay distinguishable from "fine" for a consumer that checks for
+/// it.
+///
+/// `pub(crate)`, not private: `gateway::shutdown_forensics`'s
+/// `booted_is_false_before_mark_boot_and_true_after` test asserts this tag
+/// (see that test's doc for why the assertion has to live there), and a
+/// hand-copied string literal there would be the same drift risk F3
+/// eliminated for the `concurrency-limiter` slot id — a rename here would
+/// silently break the cross-module assertion instead of failing to compile.
+pub(crate) const TAG_WIRING_UNKNOWN: &str = "capability-wiring-unknown";
+
 /// Severity is derived from the failure direction, never hand-assigned per
 /// slot — a hand-assigned table is a second source of truth about what a
 /// missing handle costs.
@@ -76,8 +94,17 @@ fn severity_for(m: MissingSemantics) -> Severity {
 /// not be, without first checking whether that particular handle already has
 /// a voice elsewhere. Read a slot's own declaration before adding a second
 /// exception here — do not extend this list without one.
+///
+/// The comparison is keyed off
+/// `gateway::execution_engine::concurrency_handle::concurrency_limiter_slot().id()`,
+/// not a second literal `"gateway/concurrency-limiter"` — same shape as
+/// `providers::route_handle`'s exemption in `capability::census`. A literal
+/// here would break the exception in production on a rename while a test
+/// that compares the same literal to itself stayed green.
 fn describe(slot_id: &str, missing: MissingSemantics) -> String {
-    if slot_id == "gateway/concurrency-limiter" {
+    use crate::gateway::execution_engine::concurrency_handle::concurrency_limiter_slot;
+
+    if slot_id == concurrency_limiter_slot().id() {
         return "a closed gate, but not a silent one: `self_config`'s live-apply \
                 already downgrades the `execution` config section to `Restart` \
                 when this handle is absent. What that downgrade cannot say is \
@@ -130,7 +157,8 @@ impl HealthCheck for CapabilityWiringCheck {
             .with_fix_hint(
                 "Run `aleph doctor` (it asks the running gateway over `diagnostics.run`) \
                  rather than `aleph-server doctor`.",
-            )];
+            )
+            .with_tag(TAG_WIRING_UNKNOWN)];
         }
 
         let mut findings: Vec<Finding> = Vec::new();
@@ -208,36 +236,34 @@ mod tests {
     /// every other `FailsClosed` member gets.
     #[test]
     fn the_concurrency_limiter_exception_does_not_use_the_generic_fails_closed_sentence() {
+        // Derived from the real accessor, not a second hand-copied literal:
+        // a rename of the slot id must move both the production `if` and this
+        // assertion together, not leave the test comparing a stale literal to
+        // itself.
+        let id =
+            crate::gateway::execution_engine::concurrency_handle::concurrency_limiter_slot().id();
         let generic = describe("some/other-slot", MissingSemantics::FailsClosed);
-        let exception = describe("gateway/concurrency-limiter", MissingSemantics::FailsClosed);
+        let exception = describe(id, MissingSemantics::FailsClosed);
         assert_ne!(generic, exception);
         assert!(exception.contains("Restart"));
         assert!(!exception.contains("says nothing"));
     }
 
-    /// The process-truth rule. A test binary never runs `aleph-server start`,
-    /// so this exercises exactly the cold-process branch that
-    /// `aleph-server doctor` takes.
-    #[tokio::test]
-    async fn a_process_that_never_booted_reports_info_not_a_pass() {
-        // Guard: if some other test in this binary called `mark_boot`, this
-        // assertion is meaningless. Skip loudly rather than pass quietly.
-        if crate::gateway::shutdown_forensics::booted() {
-            eprintln!("SKIP: mark_boot() was called by another test in this binary");
-            return;
-        }
-        let findings = CapabilityWiringCheck::new().run(Posture::Inspect).await;
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].severity, Severity::Info);
-        assert!(
-            findings[0].detail.contains("did not"),
-            "the cold-process finding must say this process did not boot, not that \
-             the wiring is broken; got: {}",
-            findings[0].detail
-        );
-        assert!(findings[0]
-            .fix_hint
-            .as_deref()
-            .is_some_and(|h| h.contains("aleph doctor")));
-    }
+    // The process-truth rule (cold process -> Info, tagged `TAG_WIRING_UNKNOWN`,
+    // not a pass) is NOT tested here. `booted()` is backed by a process-global
+    // `OnceLock` (`gateway::shutdown_forensics::BOOT_INSTANT`) that, once set by
+    // ANY test in this lib binary, stays set for the rest of that process's
+    // life — and that module's own doc declares its
+    // `booted_is_false_before_mark_boot_and_true_after` test "THE ONLY TEST IN
+    // THE LIB BINARY THAT MAY TOUCH `BOOT_INSTANT`", precisely because a second
+    // reader of `booted()` is only correct when it wins an unspecified libtest
+    // ordering race against that one. A prior version of this test carried an
+    // `if booted() { skip }` guard for that race; measured across the full
+    // suite the guard's `eprintln!` was swallowed by cargo's output capture on
+    // a pass, so it deterministically skipped 8/8 runs and the assertions
+    // below never executed. See
+    // `gateway::shutdown_forensics::tests::booted_is_false_before_mark_boot_and_true_after`,
+    // which now carries this check's cold-process assertion at its top, before
+    // `mark_boot()` runs — guaranteed by program order within one test
+    // function, not by test scheduling.
 }

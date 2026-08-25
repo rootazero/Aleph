@@ -264,18 +264,69 @@ mod tests {
     ///
     /// ⚠️ THIS IS THE ONLY TEST IN THE LIB BINARY THAT MAY TOUCH `BOOT_INSTANT`,
     /// and that is why `mark_boot_is_idempotent` was folded into it rather than
-    /// left beside it. The brief asked for a second test and told me to grep
-    /// first; the grep says `mark_boot_is_idempotent` already called
-    /// `mark_boot()`. A separate `assert!(!booted())` would therefore have gone
-    /// red only when the other test won the libtest race — a flaky guard, which
-    /// teaches people to re-run rather than to look. Its assertions are kept
-    /// verbatim below, so nothing was traded away for the determinism.
-    #[test]
-    fn booted_is_false_before_mark_boot_and_true_after() {
+    /// left beside it, and why (as of task 12's fix round) the cold-process
+    /// half of `diagnostics::checks::capability_wiring::CapabilityWiringCheck`
+    /// is asserted here too rather than in that module's own test file. The
+    /// brief asked for a second test and told me to grep first; the grep says
+    /// `mark_boot_is_idempotent` already called `mark_boot()`. A separate
+    /// `assert!(!booted())` — or a separate call into `CapabilityWiringCheck`
+    /// — would therefore only be correct when it won the libtest race against
+    /// THIS test, which is exactly what happened: measured across the full
+    /// suite, the check's own cold-process test lost that race 8/8 runs and
+    /// silently skipped instead of asserting anything. Its assertions are kept
+    /// verbatim below (both the original ones and the check's), so nothing was
+    /// traded away for the determinism — everything that needs "boot has not
+    /// run yet" to be true now runs inside the one test function where that is
+    /// guaranteed by program order, not by test scheduling.
+    #[tokio::test]
+    async fn booted_is_false_before_mark_boot_and_true_after() {
         // The negative half is the meaningful assertion and it is only sound
         // because of the invariant in the doc above: nothing else in this
         // binary reaches the marker, so no ordering can have set it already.
         assert!(!booted());
+
+        // `CapabilityWiringCheck`'s cold-process branch. Must run before
+        // `mark_boot()` below — see the doc above for why this is the only
+        // place that assertion can be made deterministic.
+        {
+            use crate::diagnostics::check::{HealthCheck, Posture};
+            use crate::diagnostics::checks::capability_wiring::TAG_WIRING_UNKNOWN;
+            use crate::diagnostics::checks::CapabilityWiringCheck;
+            use crate::diagnostics::finding::Severity;
+
+            let findings = CapabilityWiringCheck::new().run(Posture::Inspect).await;
+            assert_eq!(findings.len(), 1);
+            // Tag is the load-bearing assertion, same as
+            // `media_codecs::tests::unknown_is_neither_ok_nor_a_warning`:
+            // `Severity::Info` alone is indistinguishable downstream from
+            // `Finding::ok` (`is_problem()` is `severity > Info`), so
+            // `report.ok()`, the `--json` lint surface, and the CLI exit code
+            // all read a bare Info the same as a pass. The tag is what a
+            // consumer must check to tell "unknown" from "fine".
+            assert!(
+                findings[0].has_tag(TAG_WIRING_UNKNOWN),
+                "the cold-process finding must carry a tag distinct from a \
+                 pass — severity alone reads the same as healthy to every \
+                 machine consumer (report.ok(), --json, the CLI exit code); \
+                 got tags: {:?}",
+                findings[0].tags
+            );
+            // Secondary: severity is still Info, not Warning/Error — crying
+            // wolf about a perfectly healthy machine is the mistake this
+            // check exists to avoid on the OTHER side of the same coin.
+            assert_eq!(findings[0].severity, Severity::Info);
+            assert!(
+                findings[0].detail.contains("did not"),
+                "the cold-process finding must say this process did not boot, \
+                 not that the wiring is broken; got: {}",
+                findings[0].detail
+            );
+            assert!(findings[0]
+                .fix_hint
+                .as_deref()
+                .is_some_and(|h| h.contains("aleph doctor")));
+        }
+
         mark_boot();
         assert!(booted());
 
