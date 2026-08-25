@@ -2,12 +2,18 @@
 //!
 //! # Why this check is three-state
 //!
-//! `aleph-server doctor` builds a **fresh** `DiagnosticEngine` in a cold
-//! process where no capability has been installed; `diagnostics.run` executes
-//! inside the daemon where they are live. Same battery, two processes, two
-//! truths. Reporting the cold process's empty roster as broken would cry wolf
-//! on a healthy machine; reporting it as healthy would be the mistake this
-//! whole round exists to remove ("unknown" must never read as "healthy").
+//! A capability roster is a fact about *one process*. `diagnostics.run` and
+//! the `doctor` builtin execute inside the daemon, where the handles are live;
+//! a `DiagnosticEngine` built anywhere else sees an empty roster that means
+//! nothing. Reporting that empty roster as broken would cry wolf on a healthy
+//! machine; reporting it as healthy would be the mistake this whole round
+//! exists to remove ("unknown" must never read as "healthy").
+//!
+//! Registration answers this first: only
+//! `DiagnosticEngine::with_capability_wiring_check()` attaches this check, and
+//! only the two in-daemon callers invoke it, so the offline `aleph-server
+//! doctor` no longer asks a question it structurally cannot answer. The
+//! three-state verdict below is what remains for the paths that *do* run it.
 //!
 //! So the verdict keys on `shutdown_forensics::booted()`:
 //!
@@ -63,20 +69,34 @@
 //! that entry point the wiring question is unanswerable every single time,
 //! not occasionally.
 //!
-//! **Consequence, stated up front rather than left for a caller to
-//! discover**: a `aleph-server doctor` run on an otherwise pristine machine
-//! now exits non-zero every time, permanently, because this finding alone
-//! makes `report.ok()` false. Grepped this repo's CI workflows, `justfile`,
-//! and packaging scripts for any consumer of that exit code before making
-//! this change; there is none. The exit code was already unreliable as a
-//! "boot health" signal for this reason: `core/duplicate-instance` and
-//! `core/config-parse` already flip it to non-zero on unrelated, common,
-//! genuinely-actionable conditions (a stray config key, another instance
-//! running) — this finding adds a third, always-true-on-this-path reason,
-//! not a new category of flakiness. A caller who wants a clean pass/fail on
-//! "is the daemon actually healthy" was always pointed at the wrong command;
-//! `aleph doctor` against the live gateway is the one that answers that
-//! question, and it never takes this branch.
+//! # The consequence that paragraph used to accept, and why it is now gone
+//!
+//! `Warning` keeps this finding out of `report.ok()`, and for one round this
+//! check was registered in `DiagnosticEngine::default_registry()` — the
+//! offline registry `aleph-server doctor` builds. Since that command is by
+//! definition a cold process, the cold branch fired on every invocation, so
+//! `report.ok()` was always false and the command exited 1 on every machine,
+//! forever. The argument accepted at the time was that the exit code was
+//! already unreliable, because `core/duplicate-instance` and
+//! `core/config-parse` can also flip it. That argument does not survive the
+//! distinction it elides: those two flip on a *condition* an operator can
+//! clear, while this one flipped *unconditionally*. An always-true predicate
+//! is not a weaker gate, it is not a gate — and the exit code's documented
+//! purpose (`bin/aleph-server/commands/doctor.rs`: "so CI can gate on it")
+//! means a CI consumer could never have been added.
+//!
+//! The fix was not to lower the severity back to `Info` — that reopens the
+//! invisibility defect this section exists to explain. It was to stop
+//! registering, on an offline path, a check whose own `fix_hint` reads *"Run
+//! `aleph doctor` ... rather than `aleph-server doctor`"*. The check is now
+//! attached by `DiagnosticEngine::with_capability_wiring_check()`, which only
+//! the two in-daemon callers invoke; see that builder's doc.
+//!
+//! The cold branch below therefore stays as **defence in depth**, not because
+//! it is on the default path any more: that builder is reachable in principle
+//! from a process that never booted, and `gateway::shutdown_forensics`'s
+//! `booted_is_false_before_mark_boot_and_true_after` asserts it. Do not delete
+//! it as unreachable.
 //!
 //! The tag stays regardless of this severity change — see
 //! [`TAG_WIRING_UNKNOWN`]'s doc — because `Warning` is shared with

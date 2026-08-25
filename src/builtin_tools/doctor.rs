@@ -122,7 +122,12 @@ impl AlephTool for DoctorTool {
         if let (Some(config), Some(vault)) = (self.config.as_ref(), self.token_manager.as_ref()) {
             engine = engine.with_runtime_checks(Arc::clone(config), Arc::clone(vault));
         }
-        engine = engine.with_extension_usage_check(self.mcp.clone());
+        engine = engine
+            .with_extension_usage_check(self.mcp.clone())
+            // Daemon-side: this process booted, so `core/capability-wiring` can
+            // actually answer here. It is deliberately absent from
+            // `default_registry()` — see that builder's doc.
+            .with_capability_wiring_check();
         let posture = if args.fix {
             Posture::Fix
         } else {
@@ -163,9 +168,18 @@ mod tests {
     /// Registered-check count. Asserted rather than derived so adding a check
     /// is a deliberate edit here too — the alternative (`>= 1`) would let a
     /// check silently drop out of `default_registry`.
-    /// Counts every check in `default_registry()` plus `ext/idle-extensions`,
-    /// which the tool appends unconditionally (with `mcp: None` here, so it
-    /// reports the MCP category as unenumerable rather than being absent).
+    /// Counts every check in `default_registry()` plus the two this tool
+    /// appends unconditionally: `ext/idle-extensions` (with `mcp: None` here,
+    /// so it reports the MCP category as unenumerable rather than being
+    /// absent) and `core/capability-wiring`.
+    ///
+    /// The total is unchanged from the round in which `core/capability-wiring`
+    /// lived inside `default_registry()` — it moved from one side of the sum
+    /// to the other. That is the right outcome and not a coincidence to lean
+    /// on: this count alone can no longer tell "the daemon path still has it"
+    /// from "it vanished and something else appeared", so
+    /// [`the_daemon_path_still_reports_capability_wiring`] asserts the
+    /// identity directly.
     const REGISTERED_CHECKS: usize = 15;
 
     fn inspect_args() -> DoctorArgs {
@@ -188,6 +202,35 @@ mod tests {
         assert!(out.summary.contains("error(s)"));
         assert!(out.summary.len() < out.report.render_human().len());
         assert_eq!(out.ok, out.report.ok());
+    }
+
+    /// Item 0: `core/capability-wiring` was moved out of `default_registry()`
+    /// so the offline `aleph-server doctor` stops exiting 1 unconditionally.
+    /// This is the other half — the daemon-side battery must still report it,
+    /// and a count assertion cannot say so (the total did not move).
+    #[tokio::test]
+    async fn the_daemon_path_still_reports_capability_wiring() {
+        let _home = IsolatedAlephHome::new();
+        let wiring_id = alephcore_capability_wiring_id();
+        let out = DoctorTool::default().call(inspect_args()).await.unwrap();
+        assert!(
+            out.report.findings.iter().any(|f| f.check_id == wiring_id),
+            "the `doctor` builtin runs inside the daemon, where the capability \
+             roster is a real fact; it must still ask. Findings seen: {:?}",
+            out.report
+                .findings
+                .iter()
+                .map(|f| f.check_id)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Read off the check rather than spelled again, so a rename breaks the
+    /// build instead of leaving an assertion comparing a stale literal to
+    /// itself.
+    fn alephcore_capability_wiring_id() -> &'static str {
+        use crate::diagnostics::check::HealthCheck;
+        crate::diagnostics::checks::CapabilityWiringCheck::new().id()
     }
 
     #[tokio::test]
