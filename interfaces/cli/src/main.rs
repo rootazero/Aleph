@@ -648,7 +648,7 @@ async fn dispatch_providers(
                 config,
                 &name,
                 &r#type,
-                &api_key,
+                api_key.as_deref(),
                 base_url.as_deref(),
                 &models,
                 json,

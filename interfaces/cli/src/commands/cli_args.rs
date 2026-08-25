@@ -633,9 +633,11 @@ pub enum ProvidersAction {
         /// Provider type (e.g., openai, anthropic, ollama)
         #[arg(long)]
         r#type: String,
-        /// API key
-        #[arg(long)]
-        api_key: String,
+        /// API key. Read in this order: `--api-key` flag, `ALEPH_PROVIDER_API_KEY`
+        /// env var, then a hidden interactive prompt (rpassword). Skip `--api-key`
+        /// in shell history to keep the credential off `ps`/history.
+        #[arg(long, env = "ALEPH_PROVIDER_API_KEY", hide_env_values = true)]
+        api_key: Option<String>,
         /// Base URL (optional)
         #[arg(long)]
         base_url: Option<String>,
