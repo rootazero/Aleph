@@ -453,7 +453,18 @@ impl ToolResultStore {
     /// the denial breaker trips — the hole this countermeasure exists to close.
     /// Widening stays inside INV-ISO (epochs of one base key are one trust
     /// domain); it never touches another agent or conversation.
-    pub fn purge_all(&self) {
+    /// Sync body of [`Self::purge_all`], moved off the async executor.
+    ///
+    /// `purge_all` is reached at the gate-trip edge (denial circuit breaker)
+    /// from two async sites: `confirm_with_memory` in `scoped/dispatch.rs`
+    /// and the elevation-gate in `sandbox/workspace`. Both run on the
+    /// tool-dispatch path; a synchronous walk of `base_dir` plus FTS5
+    /// deletes would hold the runtime thread for as many milliseconds as
+    /// there are sessions worth of blobs, and every sibling call in the
+    /// harness's parallel batch pays that stall. The public `purge_all`
+    /// hands the work to `spawn_blocking`; this private body holds the
+    /// actual filesystem + index delete.
+    fn purge_all_sync(&self) {
         let idx = self.index();
         for key in self.read_scope_keys() {
             // 1. Remove this key's offloaded `.txt` blobs (the
@@ -486,6 +497,22 @@ impl ToolResultStore {
                 }
             }
         }
+    }
+
+    /// Async front door — fires-and-forgets the blocking I/O onto the
+    /// runtime's blocking pool. See [`Self::purge_all_sync`] for the
+    /// rationale (sync-blocking-on-Tokio at the gate-trip edge, which
+    /// stalls every sibling in the harness's parallel batch).
+    pub async fn purge_all(&self) {
+        let inner = self.inner.clone();
+        let session = self.session.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            // `purge_all` only consults `inner`/`session` on `self`, so
+            // rebuilding a view here is equivalent to calling the method.
+            let view = ToolResultStore { inner, session };
+            view.purge_all_sync();
+        })
+        .await;
     }
 
     /// One-shot TTL GC pass over the **shared blob root**: remove per-session
@@ -927,7 +954,7 @@ mod tests {
             "one offloaded blob present before purge"
         );
 
-        store.purge_all();
+        futures::executor::block_on(store.purge_all());
 
         assert_eq!(
             txt_count(&base),
@@ -992,7 +1019,7 @@ mod tests {
         assert!(b_blob.exists());
         assert!(marker_path(&a_marker).exists());
 
-        a.purge_all();
+        futures::executor::block_on(a.purge_all());
 
         assert!(
             !marker_path(&a_marker).exists(),
@@ -1259,7 +1286,7 @@ mod tests {
         );
 
         // The breaker fires on the CHILD handle.
-        child.purge_all();
+        futures::executor::block_on(child.purge_all());
 
         assert!(
             !parent_blob.exists(),

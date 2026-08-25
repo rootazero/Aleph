@@ -28,7 +28,6 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
-use crate::sandbox::Sandbox;
 use crate::sandbox::capabilities::{NetworkPolicy, SandboxCapabilities};
 use crate::sandbox::command::{SandboxCommand, SandboxDenialHint, SandboxError, SandboxOutput};
 use crate::sandbox::dns;
@@ -36,6 +35,7 @@ use crate::sandbox::driver::OsSandboxDriverTrait;
 use crate::sandbox::exec_approval::denial_ledger;
 use crate::sandbox::exec_approval::gate::{ApprovalGate, ApprovalOutcome};
 use crate::sandbox::hooks::{SandboxHookContext, SandboxHookResult, SandboxHooks};
+use crate::sandbox::Sandbox;
 use crate::session::service::SessionId;
 
 mod approval;
@@ -402,7 +402,8 @@ impl Sandbox for WorkspaceSandbox {
                                     &store,
                                     led_key.as_str(),
                                 )
-                                .purge_all();
+                                .purge_all()
+                                .await;
                                 tracing::warn!(
                                     session = %led_key,
                                     "denial circuit-breaker tripped at elevation gate — \
