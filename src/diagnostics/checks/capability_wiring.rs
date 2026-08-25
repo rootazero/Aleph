@@ -13,7 +13,7 @@
 //!
 //! | booted | roster | verdict |
 //! |---|---|---|
-//! | false | — | `Info`: this process did not boot; ask the daemon |
+//! | false | — | `Warning`, tagged: this process did not boot; ask the daemon |
 //! | true | complete | ok |
 //! | true | holes | one finding per slot, severity from `MissingSemantics` |
 //!
@@ -21,6 +21,69 @@
 //! boot and the installs come after, so "booted but incomplete" is a real
 //! failure state (boot died or early-returned) that nothing could observe
 //! before.
+//!
+//! # Why the cold row is `Warning`, not `Info` (fix round 2, F1 follow-up)
+//!
+//! The first fix round shipped `Info` + a tag
+//! (`TAG_WIRING_UNKNOWN`), citing `media_codecs::TAG_CODECS_UNKNOWN` as
+//! precedent. There is a second precedent in the same directory,
+//! `idle_extensions`, which answers the identical "unknown must not read as
+//! healthy" problem with `Warning` instead — and it is the more applicable
+//! one here. The criterion that separates them: **does the rest of the
+//! report become misleading if this line is read as fine?** For
+//! `media_codecs`, no — a missing `gst-inspect-1.0` is an isolated,
+//! environment-specific gap, uncommon, and unrelated to every other check in
+//! the battery. For this check's cold branch, the answer measured against
+//! the real render is yes, in a way `media_codecs` never has to face:
+//!
+//! - `render_human` (`DiagnosticReport::render_human`) only ever maps
+//!   `Severity::Info` to the tag `"ok"` — identical to a check that actually
+//!   ran and found nothing wrong — and it only prints a finding's `detail`
+//!   text when `Finding::is_problem()` is true (`severity > Info`). At
+//!   `Info`, this finding's title is the ONLY signal a human running
+//!   `aleph-server doctor` without `--json` ever sees, sitting in a wall of
+//!   30+ genuinely-healthy `[ok] core/sqlite-integrity ...` lines from a real
+//!   report. `render_human` never prints `Finding::tags` at all, so
+//!   `TAG_WIRING_UNKNOWN` — the *entire* fix from round 1 — is invisible
+//!   outside `--json`. The "unknown must not read as healthy" rule, applied
+//!   to the surface most people actually read, was still being broken.
+//! - `report.ok()`, the `--json` lint surface, and `aleph-server doctor`'s
+//!   exit code all read `Info` as "no unresolved problem", exactly the
+//!   `report.ok() == true` / exit 0 / "no unresolved problems" outcome F1's
+//!   review measured — the reason F1 was raised in the first place. The tag
+//!   does not change any of these, because none of them look at tags
+//!   (`is_problem()` is severity-only, by design — see `Finding::redacted`'s
+//!   doc for the same "one field every consumer reads" argument stated for a
+//!   different purpose).
+//!
+//! This is `idle_extensions`' hazard, not `media_codecs`': a cold
+//! `aleph-server doctor` is not a rare misconfiguration, it is the entire
+//! and permanent behaviour of one of this project's two doctor entry points
+//! (`aleph-server doctor` vs `aleph doctor` against a live daemon), and on
+//! that entry point the wiring question is unanswerable every single time,
+//! not occasionally.
+//!
+//! **Consequence, stated up front rather than left for a caller to
+//! discover**: a `aleph-server doctor` run on an otherwise pristine machine
+//! now exits non-zero every time, permanently, because this finding alone
+//! makes `report.ok()` false. Grepped this repo's CI workflows, `justfile`,
+//! and packaging scripts for any consumer of that exit code before making
+//! this change; there is none. The exit code was already unreliable as a
+//! "boot health" signal for this reason: `core/duplicate-instance` and
+//! `core/config-parse` already flip it to non-zero on unrelated, common,
+//! genuinely-actionable conditions (a stray config key, another instance
+//! running) — this finding adds a third, always-true-on-this-path reason,
+//! not a new category of flakiness. A caller who wants a clean pass/fail on
+//! "is the daemon actually healthy" was always pointed at the wrong command;
+//! `aleph doctor` against the live gateway is the one that answers that
+//! question, and it never takes this branch.
+//!
+//! The tag stays regardless of this severity change — see
+//! [`TAG_WIRING_UNKNOWN`]'s doc — because `Warning` is shared with
+//! `core/config-parse`, `core/duplicate-instance`, and this check's own
+//! `IndistinguishableDefault`/`ConsumerDecides` booted-branch holes; severity
+//! alone still cannot tell a consumer "the check could not run at all" from
+//! "the check ran and found a real gap".
 //!
 //! # Why the roster loop is a three-way match, not a two-way one
 //!
@@ -42,15 +105,14 @@ use crate::diagnostics::finding::{Finding, Severity};
 
 const ID: &str = "core/capability-wiring";
 
-/// Tag on the cold-process finding. `Severity::Info` alone is indistinguishable
-/// downstream from `Finding::ok` — `Finding::is_problem()` is `severity >
-/// Info`, so `report.ok()`, the `--json` lint surface, the CLI exit code, and
-/// the human `[ok]` render all read this finding as a pass unless something
-/// else carries the "I don't know" signal. `media_codecs::TAG_CODECS_UNKNOWN`
-/// is the precedent: severity stays `Info` (crying wolf with `Warning`/`Error`
-/// on a healthy cold process would be worse), and the tag is what lets
-/// "unknown" stay distinguishable from "fine" for a consumer that checks for
-/// it.
+/// Tag on the cold-process finding. Severity (`Warning`, see the module doc's
+/// "Why the cold row is `Warning`, not `Info`" section) already keeps this
+/// finding out of `report.ok()`; the tag is still needed because `Warning`
+/// alone does not say WHICH problem this is — `core/config-parse` and
+/// `core/duplicate-instance` are also `Warning`, for unrelated reasons, and a
+/// consumer that wants to react specifically to "the wiring question could
+/// not be answered" (as opposed to "a real gap was found") needs a signal
+/// severity cannot carry.
 ///
 /// `pub(crate)`, not private: `gateway::shutdown_forensics`'s
 /// `booted_is_false_before_mark_boot_and_true_after` test asserts this tag
@@ -148,7 +210,12 @@ impl HealthCheck for CapabilityWiringCheck {
         if !crate::gateway::shutdown_forensics::booted() {
             return vec![Finding::problem(
                 ID,
-                Severity::Info,
+                // See the module doc's "Why the cold row is `Warning`, not
+                // `Info`" section: `Info` renders identically to a genuine
+                // pass in both the human render (`[ok]`, detail suppressed)
+                // and every machine consumer (`report.ok()`, `--json`,
+                // the CLI exit code) — none of which look at `Finding::tags`.
+                Severity::Warning,
                 "Wiring is not observable from this process",
                 "This process did not run `aleph-server start`, so no capability handle \
                  was installed here. Reporting the empty roster either way would be \
@@ -249,8 +316,9 @@ mod tests {
         assert!(!exception.contains("says nothing"));
     }
 
-    // The process-truth rule (cold process -> Info, tagged `TAG_WIRING_UNKNOWN`,
-    // not a pass) is NOT tested here. `booted()` is backed by a process-global
+    // The process-truth rule (cold process -> Warning, tagged
+    // `TAG_WIRING_UNKNOWN`, not a pass) is NOT tested here. `booted()` is
+    // backed by a process-global
     // `OnceLock` (`gateway::shutdown_forensics::BOOT_INSTANT`) that, once set by
     // ANY test in this lib binary, stays set for the rest of that process's
     // life — and that module's own doc declares its

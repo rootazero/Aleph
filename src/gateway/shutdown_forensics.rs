@@ -296,25 +296,38 @@ mod tests {
 
             let findings = CapabilityWiringCheck::new().run(Posture::Inspect).await;
             assert_eq!(findings.len(), 1);
-            // Tag is the load-bearing assertion, same as
-            // `media_codecs::tests::unknown_is_neither_ok_nor_a_warning`:
-            // `Severity::Info` alone is indistinguishable downstream from
-            // `Finding::ok` (`is_problem()` is `severity > Info`), so
-            // `report.ok()`, the `--json` lint surface, and the CLI exit code
-            // all read a bare Info the same as a pass. The tag is what a
-            // consumer must check to tell "unknown" from "fine".
+            // BOTH assertions are load-bearing, for two different reasons —
+            // see `capability_wiring`'s module doc, "Why the cold row is
+            // `Warning`, not `Info`" (fix round 2). Severity carries the
+            // headline signal: `Info` renders identically to a genuine pass
+            // in `report.ok()`, `--json`, the CLI exit code, AND — measured
+            // against the real human render, not assumed — the `[ok]` tag
+            // with `detail` suppressed (`render_human` only prints `detail`
+            // when `is_problem()`, i.e. `severity > Info`, and never prints
+            // `Finding::tags` at all). `media_codecs::TAG_CODECS_UNKNOWN`
+            // stays `Info` because a missing probe tool is rare and isolated;
+            // this branch is the entire, permanent behaviour of one of the
+            // two doctor entry points, closer to `idle_extensions`' `Warning`
+            // for an unenumerable category.
+            assert_eq!(
+                findings[0].severity,
+                Severity::Warning,
+                "the cold-process finding must not be Severity::Info — Info \
+                 renders as [ok] with detail suppressed in render_human, and \
+                 leaves report.ok()/--json/the CLI exit code reading a pass"
+            );
+            // The tag is still required because Warning alone does not say
+            // WHICH problem this is: core/config-parse and
+            // core/duplicate-instance are also Warning, for unrelated
+            // reasons, and a consumer that wants to react specifically to
+            // "the wiring question could not be answered" needs a signal
+            // severity cannot carry.
             assert!(
                 findings[0].has_tag(TAG_WIRING_UNKNOWN),
-                "the cold-process finding must carry a tag distinct from a \
-                 pass — severity alone reads the same as healthy to every \
-                 machine consumer (report.ok(), --json, the CLI exit code); \
-                 got tags: {:?}",
+                "the cold-process finding must carry a tag distinguishing it \
+                 from other Warning findings; got tags: {:?}",
                 findings[0].tags
             );
-            // Secondary: severity is still Info, not Warning/Error — crying
-            // wolf about a perfectly healthy machine is the mistake this
-            // check exists to avoid on the OTHER side of the same coin.
-            assert_eq!(findings[0].severity, Severity::Info);
             assert!(
                 findings[0].detail.contains("did not"),
                 "the cold-process finding must say this process did not boot, \
