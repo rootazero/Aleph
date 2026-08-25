@@ -1420,6 +1420,23 @@ pub fn after() {}
             .iter()
             .map(|(file, _)| (*file, 0usize))
             .collect();
+        // Swapping a scalar for a map drops whatever the scalar could see that
+        // the map cannot, and that loss is invisible because the map is
+        // strictly better at the thing being fixed. Here it is duplicate rows:
+        // two entries for one file collapse to one key and every check below
+        // passes. Granting nothing extra is not the point — a list that
+        // misdescribes itself is exactly what the registered-cut mechanism
+        // exists to catch one level down.
+        assert_eq!(
+            per_file.len(),
+            KNOWN_UNMIGRATED_CUTS.len(),
+            "KNOWN_UNMIGRATED_CUTS has {} rows but only {} distinct files, so \
+             at least one file is registered twice. Merge the duplicates: the \
+             per-file check below cannot see them, and a list that does not \
+             describe itself is the defect this list exists to record.",
+            KNOWN_UNMIGRATED_CUTS.len(),
+            per_file.len()
+        );
         let mut matched: Vec<&str> = Vec::new();
         for (file, at) in &known {
             let hits = per_file
