@@ -87,6 +87,12 @@ pub fn PhoneMemory() -> impl IntoView {
 
     // Note-window loader — connect-gated (cold-boot lesson) + per-agent.
     // Also re-runs when `reload_nonce` is bumped (manual Retry from the error cell).
+    //
+    // The `agent_at_fire` snapshot guards against a stale-response race: a
+    // fast user tap that switches agent_id twice in quick succession issues
+    // two list_facts RPCs in flight, and Leptos's single-thread executor does
+    // not guarantee the older one finishes last. Without the snapshot check
+    // a slow A→B→C switch could paint the C view with B's (or A's) notes.
     Effect::new(move || {
         st.reload_nonce.get();
         if dashboard.is_connected.get() {
@@ -95,16 +101,27 @@ pub fn PhoneMemory() -> impl IntoView {
                 st.loaded.set(false);
                 st.error.set(None);
                 match MemoryApi::list_facts(&dashboard, &agent, NOTE_WINDOW, 0).await {
-                    Ok((facts, _total)) => st.window.set(facts),
+                    Ok((facts, _total)) => {
+                        // Drop the response if the user has navigated to a
+                        // different agent while the request was in flight.
+                        if mem.agent_id.get_untracked() == agent {
+                            st.window.set(facts);
+                        }
+                    }
                     Err(e) => {
-                        st.error
-                            .set(Some(crate::components::admin_refusal::settings_load_error(
-                                i18n,
-                                &e,
-                                |e| e.to_string(),
-                            )))
+                        if mem.agent_id.get_untracked() == agent {
+                            st.error
+                                .set(Some(crate::components::admin_refusal::settings_load_error(
+                                    i18n,
+                                    &e,
+                                    |e| e.to_string(),
+                                )))
+                        }
                     }
                 }
+                // `loaded` reflects the request we actually issued, not the
+                // currently-displayed agent — a newer request will overwrite
+                // loaded=true when it lands.
                 st.loaded.set(true);
                 st.page.set(0);
             });
