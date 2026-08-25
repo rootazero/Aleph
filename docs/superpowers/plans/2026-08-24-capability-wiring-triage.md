@@ -147,6 +147,13 @@ a comment noting that Task 3's migration is what moved it (209 measured
 preceded Task 3, the same way that comment already warns not to confuse 213
 with the pre-fix 276).
 
+**Superseded — the floor is now `>= 193`, not 209.** Fix round 4
+(`8d963222a`) taught `LexState` to lex raw strings, 16 more files stopped
+returning early, and the number came down again for the same reason 276 came
+down to 213. See "Row 1" under *Adjudication — Task 13* at the end of this
+file for the verified provenance chain and for today's re-measurement (196).
+Do not quote the 209 below as current.
+
 **Done in Fix round 1** (see below): the plan author authorised editing
 `src/utils/source_scan.rs` for this. Re-measured with the shipped Rust
 extractor (not the plan author's Python replication, which disagreed —
@@ -207,6 +214,15 @@ Checked and clean: `grep -rn` for the same three patterns
 (`.split`/`.find`/`.split_once("#[cfg(test)]")`) across `interfaces/cli/`,
 `shared/`, and `desktop/` returns zero hits — the four sites above are the
 complete cross-crate list, not a sample of it.
+
+> ⚠️ **False, and corrected in Task 13.** Three literal spellings are a list of
+> the shapes that existed the day the grep was written, not the class. Searching
+> for the *shape* — a string literal opening with `#[cfg(test)]` after any
+> leading `\n`/`\r\n` escapes — finds two more outside `alephcore`
+> (`i18n_census.rs:155`, which is the correct item-walking extractor, and
+> `components/admin_refusal.rs:628`, a genuinely different shape) and **five**
+> inside it that `alephcore`'s own guard 3 had never seen. See "New row 6" and
+> "New row 7" under *Adjudication — Task 13*.
 
 ### Site 1 is the interesting one: it is itself a census guard, and it is blind
 
@@ -319,7 +335,7 @@ two lines this round's own new tests account for.
 ### Guard states, confirmed rather than assumed
 
 - **Guard 1** (`production_prefix_agrees_with_the_old_cut_where_the_old_cut_was_right`): `ok`, unaffected — it does not call `strip_comment_lines`.
-- **Guard 2** (`production_prefix_recovers_code_the_old_cut_discarded`): `ok`, floor unchanged at `>= 209` — it compares `production_prefix` against `old_prefix_cut` directly, neither of which calls `strip_comment_lines`.
+- **Guard 2** (`production_prefix_recovers_code_the_old_cut_discarded`): `ok`, floor unchanged at `>= 209` (later `>= 193`, see the Task 13 adjudication) — it compares `production_prefix` against `old_prefix_cut` directly, neither of which calls `strip_comment_lines`.
 - **Guard 3** (`no_module_hand_rolls_the_cfg_test_prefix_cut`): `ok`, offender count still 0 — confirmed rather than assumed, per the instruction: none of its three literal patterns (`split("#[cfg(test)]")`, `find("#[cfg(test)]")`, `split_once("#[cfg(test)]")`) begin with `*`, so widening the bare-`*` predicate cannot change what this guard's own whole-file scan matches.
 
 ## Fix round 3 — `strip_comment_lines` made stateful; `is_block_comment_continuation` deleted
@@ -465,5 +481,189 @@ anywhere in the guard corpus.
 ### Guard 1/2/3 — re-confirmed
 
 - **Guard 1**: `ok`, unaffected (still does not call `strip_comment_lines`).
-- **Guard 2**: `ok`, floor unchanged at `>= 209` (still does not call `strip_comment_lines`).
+- **Guard 2**: `ok`, floor unchanged at `>= 209` (later `>= 193`, see the Task 13 adjudication; still does not call `strip_comment_lines`).
 - **Guard 3**: `ok`, offender count still 0 (none of its three literal patterns begin with `*`; the stateful rewrite changes nothing about what text those patterns match).
+
+---
+
+# Adjudication — Task 13 (2026-08-25)
+
+Every row above is now dispositioned. Two of them changed verdict on contact
+with the code, one claim above turned out to be false, and the widened search
+that proved it false found a sixth row nobody had opened. Each is below with
+what was measured, not what was expected.
+
+## Row 1 — the stale floor. Verdict: CLOSED, and it was stale a second time.
+
+The row above says the fix landed at `>= 209`. **The floor in the code is
+`>= 193`.** It moved again in `8d963222a` (fix round 4) when `LexState` learned
+to lex raw strings: a `r#"{ … }"#` payload inside a `#[cfg(test)]` item stopped
+feeding its braces to `end_of_item`, 16 files stopped returning early, and the
+tail of their test modules stopped being counted as recovered production code.
+That is the same direction as the 276 → 213 move — a number coming down because
+the extractor stopped MIS-recognising a shape — and the doc comment above the
+assertion says so, step by step.
+
+What was verified is the provenance, not the integer: the assertion's failure
+message carries the unbroken chain `193 ← 209 ← 213 ← 276` with the reason for
+each step, and the doc comment above it explains each move's mechanism and the
+counter-checks (`compared` 2 235 → 2 251 moving the other way in step, `worst`
+unchanged at 62 222 bytes). That is a measurement. A floor that had simply
+dropped to 193 with no account would be a released ratchet, and the two are
+told apart by reading the message, not the number.
+
+**Re-measured today: the actual value is 196, against a floor of 193.**
+Obtained by mutating the floor to `>= 999_999` and reading `saw {recovered}`
+from the panic (mutation diffed before the run). The floor is therefore three
+files of slack below the measurement.
+
+**It was deliberately NOT re-pinned to 196**, and that is the one judgement
+call in this row. Every number in this floor's chain is an explained
+measurement, and I could not fully explain 196. Three files were added under
+`src/` since `8d963222a` (`capability/census.rs`, `capability/mod.rs`,
+`diagnostics/checks/capability_wiring.rs`) and the count rose by exactly three —
+but that agreement is a coincidence, not a mechanism: only **one** of the three
+(`capability/mod.rs`) is in today's recovering set. So at least two of the three
+new recoveries come from the 50 modified files or from the extractor refactor in
+Task 12, and `production_prefix` itself was refactored in that window
+(`partition_on_cfg_test`), so "unchanged file ⇒ unchanged verdict" cannot be
+assumed either. Pinning 196 would put an unexplained number into a chain whose
+whole value is that every number in it is explained. Left at 193, with this
+paragraph as the record of the gap.
+
+**The right way to close that gap is a guard this round does not have**: a
+tree-wide assertion that no `#[cfg(test)]` code leaks into the production half.
+Fix round 4 verified exactly that property *by hand, once* ("every one of them
+at or after its own file's `#[cfg(test)]` attribute … by an independent
+formatting oracle"), and nothing keeps it true. It was scoped and abandoned
+here for a measured reason: the obvious oracle — "no `#[test]` attribute
+survives into the production half" — has **2 267** violations in `src/` today,
+because 120-odd whole-test files carry no `#[cfg(test)]` of their own (their
+parent declares them `#[cfg(test)] mod x;`). `cfg_test_portion`'s doc already
+declares that blind spot. A correct version needs module-graph resolution.
+Recorded as follow-up, not attempted.
+
+## Rows 2–5 — the four cross-crate sites. Three CONNECT, one REPORT.
+
+The recommendation above was "mint a shared crate, a human decides." The spec
+settles the crate question (non-goal 1, 不拆 crate) — but the premise under it
+turned out to be wrong for three of the four rows.
+
+**`aleph-panel` already owns a correct answer to this question.**
+`interfaces/webchat/src/i18n_census.rs::production_lines` is `pub(crate)`, walks
+`#[cfg(test)]`-gated **items** rather than cutting at the first marker, strips
+whole-line comments, and normalises `\r`. Its own doc records why it is
+item-walking: the cut version hid **2 266 lines** including two whole view
+modules. Three of the four sites live in that same crate, so their fix crosses
+no crate boundary and mints nothing.
+
+| # | Site | Verdict | What was done |
+|---|---|---|---|
+| 1 | `interfaces/webchat/src/disposed_reads.rs:411` | **CONNECT** | now calls `i18n_census::production_lines`; the annotation look-back still reads RAW lines, because the `// window-listener-permanent:` note is a comment `production_lines` strips |
+| 2 | `interfaces/tui/src/tui/commands.rs:1159` | **REPORT + marker + self-check** | `aleph-tui` has no in-crate extractor and cannot reach `alephcore`'s. Keeps the cut, gains the three-part marker D3 asks for and an assertion over the discarded region |
+| 3 | `.../settings/network/cluster.rs:546` | **CONNECT** | as row 1; the hand-rolled comment filter went with it |
+| 4 | `.../canvas/shape_view.rs:965` | **CONNECT** | as row 1 — and this is the iframe-sandbox guard, so its blindness was a security guard's blindness |
+
+The crate-boundary ruling D3 asks to make durable is now recorded **once**, on
+`production_lines` itself, rather than three times at three call sites: what
+`alephcore::utils::source_scan` is, why `aleph-panel` cannot reach it (wasm
+frontend; R1/R3; spec non-goal 1), and that this is therefore a deliberate
+second implementation kept to one per crate instead of one per guard.
+
+### Measured: none of the four was wrong today, all four were blind
+
+Every occurrence of each guard's own needle was listed and each hidden one read
+by hand. Production hits hidden from the naive cut: **zero**, in all four. The
+hidden occurrences are the scanners' own literals and prose. So this was not a
+live bug — it was four guards reporting a clean pass over a region they had not
+read, in the one direction (`under`-scan) that a prefix cut can fail.
+
+Sizes of that unread region: 13 files in `interfaces/webchat/src` and 5 in
+`interfaces/tui/src` carry more than one `#[cfg(test)]` occurrence, discarding
+between 728 and 48 825 bytes each.
+
+### And a rule, so the fix is not three edits that can be undone one at a time
+
+`i18n_census::no_guard_in_this_crate_hand_rolls_the_cfg_test_cut` now scans the
+whole `aleph-panel` source tree for the shape. One named, size-pinned exemption
+(`components/admin_refusal.rs`, below). The shared walker
+`disposed_reads::rust_sources` deliberately skips `disposed_reads.rs` — for the
+*other* guard's reason — so that file is added back explicitly, with an
+assertion that it is still there; otherwise the new rule would silently not
+cover one of the three files it was written for.
+
+### The tui self-check flagged itself, and only falsification showed it
+
+Worth recording because it is the failure D7 names. The first version skipped an
+occurrence only when the character immediately before it was `"`. That covers
+the scanner's own `line.find("BtwTurn::resolve(")`, and it does **not** cover the
+assertion message, where the needle sits inside a literal but behind a backtick.
+So the guard reported its own failure text as an offender. It is now an
+"is this offset inside a double-quoted literal on this line" check — per line and
+resetting at each newline, so a miscount costs one line instead of silently
+blanking the rest of the file, which is the unbounded version's failure mode and
+the one Task 1's round-3 notes above already paid for.
+
+## New row 6 — the ledger's completeness claim is false. Verdict: REPORT.
+
+Above: *"the four sites above are the complete cross-crate list, not a sample of
+it."* That claim rests on `grep`-ing three literal spellings
+(`.split(`/`.find(`/`.split_once("#[cfg(test)]")`). Searching for the **shape**
+instead — a string literal that opens with the attribute, after any leading
+`\n`/`\r\n` escapes — finds two more outside `alephcore`:
+
+* `interfaces/webchat/src/i18n_census.rs:155` — **not a defect.** This is
+  `production_lines` itself, the item-walking extractor rows 1/3/4 now use.
+* `interfaces/webchat/src/components/admin_refusal.rs:628` —
+  `.or_else(|| body[1..].find("\n#[cfg(test)]"))`. A genuinely different shape:
+  it bounds one **function body** (the next `\npub fn `, with the attribute as a
+  fallback for the last function in the file), not a file's production region.
+  Its failure mode is a window that runs long, not a scan that stops early.
+  Left in place and named as the single exemption in the new rule, rather than
+  migrated — that file carries eight `#[cfg(test)]` markers and rewiring its
+  offset arithmetic is a separate piece of work.
+
+## New row 7 — `alephcore`'s own guard 3 had the same enumeration bug. Verdict: CONNECT (the guard).
+
+`no_module_hand_rolls_the_cfg_test_prefix_cut` searched for those same three
+spellings, which is a list of the shapes that existed the day it was written.
+Measured against the tree with the shape rule instead, **five live sites in
+`src/` used a spelling none of the three could match**, all of them older than
+Task 3:
+
+| Site | Spelling |
+|---|---|
+| `src/gateway/btw/guard_tests.rs:154` | `const ATTR` + `find(ATTR)` |
+| `src/gateway/continuation_lifecycle.rs:684` | same shape, an already-drifted copy of the one above |
+| `src/gateway/execution_engine/run_loop/tests.rs:521` | `.split("#[cfg(test)]\nmod tests")` |
+| `src/session/steer_signal.rs:534` | `.split("#[cfg(test)]\nmod ")` |
+| `src/harness/tests/budget.rs:648` | `.position(\|l\| l.starts_with("#[cfg(test)]"))` |
+
+Guard 3 reported **zero offenders** throughout, which is what a list of
+spellings eventually reports. Its detector is now the shape rule. The five are
+**registered, not migrated** — migrating each is a behaviour question rather
+than a rename (two of them cut only at `#[cfg(test)] mod`, deliberately *not* at
+a gated `use`; one drives the R10 harness line ratchet, whose number would move)
+and Task 13's scope fence forbids re-opening Task 3's fix rounds. They live in
+`KNOWN_UNMIGRATED_CUTS` with a reason each, and the assertion pins the list's
+size so it can only shrink deliberately: a sixth site fails as an offender, and
+deleting a row without migrating fails too.
+
+Guard 3's own doc previously opened *"The rule, not an exemption list"* while
+the code was three literals. That sentence is corrected in place.
+
+## Row 8 — `providers::route_handle::GLOBAL` (D4). Verdict: stays raw, ruling in the code.
+
+The ruling now lives on the `static` itself: first-caller-wins over a `cfg`
+parameter, `CapabilitySlot::install` takes a value rather than a thunk, so
+migrating would either reshape `Outcome` or move the computation before the race
+is decided — and that second one changes which caller's config wins, on the path
+every request's failover walk reads. It also tells a reader not to take
+`1 raw, 45 slots` for unfinished work.
+
+`capability::census`'s Guard A doc and `capability::ALL_SLOTS`'s doc now point
+at the static instead of restating the reasoning, and `ALL_SLOTS`'s stale line
+("Task 13 adjudicates it, not this list") is replaced by the adjudication.
+Nothing about the exemption's enforcement moved: the named predicate at
+`census.rs:782` is unchanged, and the `exempted.len() == 1` assertion that
+forbids widening it is untouched.
