@@ -244,17 +244,49 @@ impl EventHandler for TeamNotifier {
                     // Claim the terminal notification exactly once per team.
                     // Under concurrent dispatch the final tasks finish in the
                     // same instant and each observes `team_work_finished()`;
-                    // only the first handler to insert the id proceeds. The
-                    // guard is dropped before the await — no lock held across
-                    // `.await`.
-                    let first_claim = {
+                    // only the first handler to insert the id proceeds.
+                    //
+                    // TOCTOU hardening: a `TeamTaskUpdated` (non-settled) may
+                    // interleave between our pre-lock `team_work_finished()`
+                    // check and the insert below, claiming a new task on the
+                    // team. The pre-lock check therefore can read `true` for
+                    // a team that is mid-wave. To close that, capture the
+                    // insert outcome (claim lost vs. won) while the lock is
+                    // held, drop the guard before awaiting, then re-check
+                    // `team_work_finished()` after the lock is released.
+                    // Rolling back the insert if the team picked up new work
+                    // in the gap lets the next settled moment fire the
+                    // notification afresh. The non-settled-updated arm above
+                    // is the only path that can interleave here (handlers run
+                    // on spawned tasks, so concurrent dispatch is real).
+                    //
+                    // `std::sync::MutexGuard` is not `Send`, so the lock MUST
+                    // be released before any `.await` — hence the explicit
+                    // lock scoping around `won_claim` only.
+                    let won_claim = {
                         let mut done = self
                             .completed_teams
                             .lock()
                             .unwrap_or_else(|e| e.into_inner());
                         done.insert(team_id.clone())
                     };
-                    if !first_claim {
+                    if !won_claim {
+                        // Another handler beat us to the claim — the leader
+                        // has already been notified (or will be shortly by
+                        // the winning handler).
+                        return Ok(vec![]);
+                    }
+                    // Lock-free re-check: if the team is no longer fully
+                    // settled (a new task arrived in the window between our
+                    // first check and the lock acquisition), roll back our
+                    // insert so the next settled moment fires the
+                    // notification afresh.
+                    if !self.team_work_finished(team_id).await {
+                        let mut done = self
+                            .completed_teams
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        done.remove(team_id);
                         return Ok(vec![]);
                     }
                     let summary = result_summary.as_deref().unwrap_or("");
