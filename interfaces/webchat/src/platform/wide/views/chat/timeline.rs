@@ -259,24 +259,33 @@ fn is_step(m: &ChatMessage) -> bool {
 /// length — it stays stable while content grows so the row's DOM subtree is
 /// never unmounted/remounted per token (see `messages.rs`'s per-row `Memo`
 /// lookup for how the rendered content still updates without a remount).
-/// The key changes only on a structural transition (streaming ends, a tool
-/// call is added, etc.); separators key on their day.
+///
+/// `is_streaming` is deliberately excluded too, alongside `role`/
+/// `has_plan_archive`: those don't change after a message is created so
+/// omitting them is a no-op, but `is_streaming` DOES change exactly once per
+/// bubble (true → false at stream completion) — and `messages.rs`'s
+/// `MessageBubble` already reads it reactively (the typewriter renderer, the
+/// retry button, the bubble's error styling all update in place without a
+/// remount). Keying on it would force one extra unmount/remount right at
+/// that transition, which would replay the bubble's one-shot entrance
+/// animation a second time — the exact bug this row model exists to avoid,
+/// just moved from "every token" to "once, at the end". So the key changes
+/// only on a structural transition that isn't already handled reactively
+/// (a tool call added, the model-info badge appearing, a day/clock change);
+/// separators key on their day.
 #[must_use]
 pub fn row_key(row: &TimelineRow) -> String {
     match row {
         TimelineRow::DaySeparator { key, .. } => format!("sep:{key}"),
         TimelineRow::Message {
             id,
-            is_streaming,
             is_intermediate,
             tool_call_count,
             has_model_info,
             clock,
             ..
-        } => format!(
-            "{id}:{is_streaming}:{is_intermediate}:{tool_call_count}:{has_model_info}:{clock}",
-        ),
-        TimelineRow::Narration { id, is_streaming } => format!("narr:{id}:{is_streaming}"),
+        } => format!("{id}:{is_intermediate}:{tool_call_count}:{has_model_info}:{clock}",),
+        TimelineRow::Narration { id, .. } => format!("narr:{id}"),
         TimelineRow::ToolLine { run_id, tool } => format!(
             "tool:{run_id}:{}:{}:{:?}",
             tool.tool_id, tool.status, tool.duration_ms
@@ -841,11 +850,17 @@ mod tests {
     }
 
     #[test]
-    fn row_key_narration_changes_when_streaming_ends() {
+    fn row_key_narration_is_stable_when_streaming_ends() {
+        // The row's entrance-animation-bearing outer wrapper is only created
+        // once, at mount — the key must NOT change when streaming ends, or
+        // the row remounts and the animation replays a second time.
+        // `MessageBubble`/`NarrationRow` already read `is_streaming`
+        // reactively (the typewriter renderer, the retry button), so the
+        // key doesn't need to force a remount to reflect it.
         let m1 = msg_step("intermediate-r1-1", 1, "text", true);
         let mut m2 = m1.clone();
         m2.is_streaming = false;
-        assert_ne!(
+        assert_eq!(
             row_key(&TimelineRow::Narration {
                 id: m1.id.clone(),
                 is_streaming: m1.is_streaming
@@ -855,6 +870,28 @@ mod tests {
                 is_streaming: m2.is_streaming
             })
         );
+    }
+
+    #[test]
+    fn row_key_message_is_stable_when_streaming_ends() {
+        // Same rationale as the Narration-side test above, for the Message
+        // variant: two rows differing only in `is_streaming` (true vs
+        // false), everything else identical, must key the same.
+        let base = TimelineRow::Message {
+            id: "assistant-r1".into(),
+            role: "assistant".into(),
+            has_plan_archive: false,
+            is_streaming: true,
+            is_intermediate: false,
+            tool_call_count: 0,
+            has_model_info: false,
+            clock: "T1000".into(),
+        };
+        let mut done = base.clone();
+        if let TimelineRow::Message { is_streaming, .. } = &mut done {
+            *is_streaming = false;
+        }
+        assert_eq!(row_key(&base), row_key(&done));
     }
 
     #[test]
