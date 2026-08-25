@@ -520,6 +520,15 @@ pub async fn project_of_session_key(&self, key: &str) -> Option<String>;
   3. 项目页五 tab 各一条效果断言（kanban 列出 room 团队 / workspace 列出绑定目录 / memory 列出分区事实 / `projects.changed` 改名实时刷新侧栏）；
   4. 房间 prompt：agent 回复能正确称呼发言人（transcript 投影生效的行为证据）。
   结果逐条记录（PASS/FAIL + 证据行），FAIL 不许收摊。
+
+  **结果（2026-08-25）：`qa/teamchat_rooms/run.sh`，43 条断言，0 失败。** 夹具是 Node 而非 Python——本机没有可用的 `python3`（PATH 上只有 WindowsApps 的 stub），uv 的 CPython 没有 `websockets`，也没有网络装一个；Node 自带 WHATWG WebSocket 客户端与 HTTP server，理由写在 `run.sh` 头部。三个真实身份：operator 走 loopback，两个 `member` 各自用 `gateway.ticket.create` 的一次性票从局域网地址连回来（loopback 在 `resolve_connect_auth` 第一行就短路成 operator，所以第二、第三个身份结构上只能走 LAN 腿）。
+
+  - **场景 1（两真人一 agent 的团队线程）PASS**——房间 run 里模型的 `team_create` 落成 `scope_id == project:<id>`；alice 首发激活（`run_id != null, observed == false`）；bob 不带 @ 旁听（`run_id == null, observed == true`，且 3 秒内无 agent 行）；bob `@coder` 重新激活；两条 socket **各自**收到 `team.<id>.message` 且带 `author_user_id` + `author_display_name`（逐 socket 问两遍——投递面对每条连接单独裁决）；旁听消息同样实时广播。
+  - **场景 2（发言人审批路由）PASS**——member run 的 `file_ops:delete` 卡列给 bob、不列给 alice（并断言 alice 那边是「服务端答了没有」而非「服务端拒了我」）、operator 也看得到；`record.originator_user_id == u-bob`；bob 自己 `allow-once` 之后**目标文件真的消失**。
+  - **场景 3（项目页 tab）PASS**——kanban：成员的 `teams.list` 带房间 scope 戳；workspace：列出绑定目录 + 读出文件 + 越界路径被拒；memory：房间 run 写的笔记从 `main__p-<id>` 读得回来；`projects.rename` 的 `projects.changed` 帧实时到达**两条**成员 socket。
+  - **场景 4（房间 prompt）PASS**——`<room_context>` 同时点名 alice 与 bob（含**没说过话**的那位）并标出房主；用户回合带 `[QA Alice]:` 前缀到达模型；agent 的回复在耐久 transcript 里点名了发言人。
+  - **它抓到一条既存缺陷（非本轮引入），已修**：`TURN_ORIGINATOR` 在 `orchestrator::dispatch` 的 harness spawn 处被丢弃 ⇒ run 内部举起的每一张审批卡 `originator_user_id` 恒 `None`，静默解除频道按钮回调闸与房间收窄两个消费者。详见 FEATURE_LOCATOR §5.22 第八轮「真机 QA」与 `src/gateway/CLAUDE.md` 地雷 C3。守卫 `dispatch.rs::the_harness_spawn_reestablishes_the_run_tree_originator`，已用变异证过 RED。
+  - **一条产品行为，不是缺陷**：`member` 角色 run 里**每一个非幂等工具**都停在审批卡上（`team_create` / `note_manage` 皆然，120 s 后 `ApprovalExpired`）。夹具替 operator 答这两张卡——那既是真实运维动作，也顺带证明升级路径真的到得了人。
 - [ ] **Step 5: 提交** `docs: record multiuser team-chat and P3 round`（文档单独一笔）
 
 ---

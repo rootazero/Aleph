@@ -509,6 +509,26 @@ a channel-driven or scheduled run — still routes the old way, because there is
 no speaker to route to. Falling back to the owner there is a wrong-but-honest
 addressee, not a widened one: it is the same principal the run would have
 reached before.
+
+**And the wire it rides on was cut, for every card, since before any of this
+(found by `qa/teamchat_rooms`, fixed 2026-08-25).** `TURN_ORIGINATOR` is scoped
+**once per run tree** at `run_agent_loop`, while `TURN_CONTEXT` is re-scoped at
+the tool chokepoint by `ScopedToolService::execute`. Between the two sits
+`orchestrator::dispatch`'s harness `tokio::spawn`, which hand-rolled a list of
+task-locals to re-establish — agent id, project root, scope, room author — and
+that list never learned about the originator. So `TURN_CONTEXT` survived the
+boundary and `TURN_ORIGINATOR` did not, and every
+`ExecApprovalRecord::originator_user_id` raised from inside a run was `None`.
+That silently disarmed **both** consumers: the channel button-callback gate in
+`ManagerCallbackSink::handle_callback` ("only the human who asked may press the
+button" — the group-chat bypass it exists to close) and the room narrowing in
+`approval_addressable_by_caller`. Neither degraded loudly; both fell back to
+the pre-existing "any paired user / any session owner" rule, which is what they
+were written to replace. **A lost task-local and a run that never had one are
+the same `None`**, which is why no in-process test could see it and a
+two-process real-machine run could: `run_agent_loop` logged `Some(u-…)` and
+`OperatorApprovalRequester` logged `None`, one spawn apart. Guarded at source by
+`dispatch.rs::the_harness_spawn_reestablishes_the_run_tree_originator`.
 **刻意不做 · session grants do NOT survive into an unattended continuation
 (评估于 2026-08-07, 用户裁定)。** In `confirm_with_memory` the `if self.unattended`
 auto-deny sits **before** the session-grant short-circuit, so an action a human

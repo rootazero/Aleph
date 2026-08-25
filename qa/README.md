@@ -42,6 +42,16 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # `bootstrap_ticket` is ever read, so a ticket redeemed over
                                  # 127.0.0.1 creates no device row, silently and successfully.
 
+./qa/teamchat_rooms/run.sh       # §5.22 round-8: three humans in one project room. A model's
+                                 # `team_create` inside a room lands room-scoped; the activation
+                                 # gate flips on the SECOND human (plain message observed,
+                                 # @-mention dispatches, both broadcast live to the other socket);
+                                 # a member run's approval card is addressable by the human who
+                                 # SPOKE and not by the room's other member; `<room_context>` names
+                                 # both members including the silent one; and each project-page tab
+                                 # has a server-side effect. Same 0.0.0.0 + LAN-leg reason as
+                                 # `multiuser_audit`. Node, not Python — see its run.sh header.
+
 ./qa/channels/run.sh             # both phases below
 ./qa/channels/run.sh reach       # feishu / line / qq really come up; msteams is the control.
 ./qa/channels/run.sh errors      # Lark throttle / refusal, via mock_lark.py's /__inject queue

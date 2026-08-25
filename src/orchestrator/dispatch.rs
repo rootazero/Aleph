@@ -970,6 +970,30 @@ impl Orchestrator {
         // so every member's message would be labelled with whoever created the
         // session, on a path with no error anywhere.
         let room_author = crate::scope::current_room_author();
+        // Fourth capture at the same boundary, for the same reason, and it was
+        // the one this list did not know about. `TURN_ORIGINATOR` is scoped
+        // ONCE per run tree (`run_agent_loop`), so unlike `TURN_CONTEXT` — which
+        // `ScopedToolService::execute` re-scopes at the tool chokepoint and
+        // therefore survives — it dies here and nothing downstream restores it.
+        //
+        // Measured, not reasoned: a real-machine run of `qa/teamchat_rooms`
+        // logged `originator=Some(u-…)` inside `run_agent_loop` and
+        // `orig=None` inside `OperatorApprovalRequester`, one spawn apart. The
+        // consequence is that `ExecApprovalRecord::originator_user_id` is
+        // `None` on EVERY card raised from inside a run, which silently
+        // disarms both of its consumers: the channel button-callback gate
+        // (`ManagerCallbackSink::handle_callback`, "only the human who asked
+        // may press the button") and the room narrowing in
+        // `approval_addressable_by_caller` (a team member's parked call is then
+        // routed by session ownership alone — in a room, the CREATOR).
+        //
+        // Deliberately captured here rather than added to
+        // `CarriedAttribution`: this site does not use that carrier (it
+        // re-derives the scope from `FlowRequest`'s explicit fields on
+        // purpose), and the four sites that DO use it re-enter through
+        // `run_loop`, which re-seeds the originator from request metadata. A
+        // sixth carrier field would have zero consumers (R10).
+        let originator = crate::tools::turn_context::current_originator();
 
         tokio::spawn(async move {
             let _lock = SessionLockGuard {
@@ -1015,22 +1039,25 @@ impl Orchestrator {
                         scope_attr,
                         crate::scope::with_room_author(
                             room_author,
-                            harness.run(
-                                session_key,
-                                spec_clone,
-                                input_clone,
-                                sandbox_clone,
-                                event_tx,
-                                cancel_clone,
-                                tool_service_override,
-                                trace_sink,
-                                interaction_manifest,
-                                workspace_override,
-                                max_iterations_override,
-                                transient_context,
-                                think_level,
-                                envelope,
-                                model_directive,
+                            crate::tools::turn_context::with_originator(
+                                originator,
+                                harness.run(
+                                    session_key,
+                                    spec_clone,
+                                    input_clone,
+                                    sandbox_clone,
+                                    event_tx,
+                                    cancel_clone,
+                                    tool_service_override,
+                                    trace_sink,
+                                    interaction_manifest,
+                                    workspace_override,
+                                    max_iterations_override,
+                                    transient_context,
+                                    think_level,
+                                    envelope,
+                                    model_directive,
+                                ),
                             ),
                         ),
                     ),
@@ -1066,6 +1093,75 @@ impl Orchestrator {
 #[cfg(test)]
 mod outcome_tests {
     use super::*;
+
+    /// The harness spawn must re-establish `TURN_ORIGINATOR`.
+    ///
+    /// Source-level, because the thing being asserted is unobservable at
+    /// runtime from inside one process: a lost task-local reads exactly like a
+    /// run that never had one (both are `None`), which is why this went four
+    /// rounds undetected and only a two-process real-machine run
+    /// (`qa/teamchat_rooms`) could see it — `run_agent_loop` logged
+    /// `Some(u-…)`, `OperatorApprovalRequester` logged `None`, one
+    /// `tokio::spawn` apart.
+    ///
+    /// The requirement is derived, not asserted: the first half proves the run
+    /// loop really does scope this task-local once per run tree (if that ever
+    /// stops being true, this guard says so instead of silently outliving its
+    /// subject), and only then is the spawn required to carry it.
+    ///
+    /// **Scope, stated so it is not mistaken for more:** this checks ONE
+    /// task-local. It deliberately does not derive the full set of `with_*`
+    /// combinators wrapping `run_agent_loop_inner` — several of those
+    /// (`with_fs_scope`, `with_exec_workspace`, `with_pending_media`) reach the
+    /// harness through explicit arguments instead, and an auto-derived list
+    /// would need an exemption entry per case, i.e. exactly the name list this
+    /// shape is supposed to replace. Whether each of those is genuinely carried
+    /// is a separate question this guard does not answer.
+    #[test]
+    fn the_harness_spawn_reestablishes_the_run_tree_originator() {
+        // Comments are documentation, code is the subject — without this the
+        // prose above would satisfy the assertion below.
+        let code_of = |src: &str| {
+            src.replace('\r', "")
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        // `run_loop/mod.rs` declares its tests as a SEPARATE FILE
+        // (`#[cfg(test)] mod tests;`, at the top), so the usual
+        // split-on-`#[cfg(test)]` idiom would cut the production body away
+        // entirely and leave seven lines of `use`. It cost this guard one red
+        // run to notice; there is nothing to strip here, the whole file is
+        // production.
+        let run_loop = code_of(include_str!("../gateway/execution_engine/run_loop/mod.rs"));
+        assert!(
+            run_loop.contains("with_originator("),
+            "run_agent_loop no longer scopes TURN_ORIGINATOR; this guard is \
+             now describing a requirement that does not exist — delete it or \
+             follow the task-local to its new home"
+        );
+
+        // This file DOES declare an inline test module, and that module holds
+        // the very literal being searched for, so the prefix split is
+        // load-bearing here. Unanchored and CRLF-safe: `"\n#[cfg(test)]\n"`
+        // matches nothing on a Windows checkout.
+        let me = code_of(include_str!("dispatch.rs"));
+        let me = me.split("#[cfg(test)]").next().unwrap_or("");
+        let spawn_at = me
+            .find("tokio::spawn(async move {")
+            .expect("the harness spawn is the subject of this guard");
+        let spawn_block = &me[spawn_at..];
+        assert!(
+            spawn_block.contains("with_originator("),
+            "the harness task spawn drops TURN_ORIGINATOR. Every approval \
+             record raised from inside a run then carries \
+             `originator_user_id: None`, which disarms BOTH of its consumers: \
+             the channel button-callback gate (only the human who asked may \
+             press the button) and the room narrowing in \
+             `approval_addressable_by_caller`."
+        );
+    }
 
     #[test]
     fn flow_outcome_default_is_completed_clean_run() {
