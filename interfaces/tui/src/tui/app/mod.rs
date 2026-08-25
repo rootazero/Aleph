@@ -755,6 +755,13 @@ pub struct AppState {
     pub last_run_duration: Option<Duration>,
     pub current_run_uses_agent_trace: bool,
     pub current_run_trace_summary_applied: bool,
+    /// True while [`Self::load_trace_replay`] is projecting a persisted trace
+    /// onto the live state. The summary-side arms of `apply_agent_trace_event`
+    /// (`SessionCompleted` / `ProviderUsage`) check this so the replay's
+    /// finished-run accounting does not bleed into the current session's
+    /// status-bar counters — a passive replay must not move the tokens/cache
+    /// numbers the user is looking at.
+    pub replaying_trace: bool,
     /// Bytes of the current turn's assistant text already appended by
     /// `ResponseChunk` deltas.
     ///
@@ -867,6 +874,7 @@ impl AppState {
             run_started_at: None,
             last_run_duration: None,
             current_run_uses_agent_trace: false,
+            replaying_trace: false,
             turn_streamed_len: 0,
             run_rendered_assistant_text: false,
             current_run_trace_summary_applied: false,

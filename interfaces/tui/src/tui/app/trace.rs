@@ -316,13 +316,19 @@ impl AppState {
                     }
                 }
 
-                if !self.current_run_trace_summary_applied {
+                if !self.current_run_trace_summary_applied && !self.replaying_trace {
                     self.update_total_tokens_from_trace(*total_tokens);
                     self.current_run_trace_summary_applied = true;
                 }
                 self.current_run = None;
                 self.run_started_at = None;
-                self.dismiss_pending_approval();
+                // The replay must not tear down UI overlays the live run
+                // owns — an open /btw overlay would be dissolved by its own
+                // historical trace landing, which is confusing. The dismissal
+                // runs only on the live path.
+                if !self.replaying_trace {
+                    self.dismiss_pending_approval();
+                }
                 self.current_run_uses_agent_trace = false;
                 self.mark_current_assistant_complete();
                 Action::ScrollToBottomIfAutoScroll
@@ -394,9 +400,29 @@ impl AppState {
         self.scroll_to_bottom();
         self.add_system_message(summary);
 
+        // Replay must not move the live run's status-bar counters.
+        // `apply_agent_trace_event` is shared with the live path, which uses
+        // its `SessionCompleted` / `ProviderUsage` arms to bump `total_tokens`
+        // and `cache_stat` — those side effects are correct for a finished
+        // run that just ended, but the replay is showing a historical run
+        // whose accounting has nothing to do with the conversation on
+        // screen. Save/restore is the cheap fix; toggling a flag is the
+        // localised one. We do both: the flag is the runtime guard (cheap,
+        // branch), the save/restore is the safety net in case a future arm
+        // touches another counter without remembering to check the flag.
+        let saved_total = self.total_tokens;
+        let saved_cache_stat = self.cache_stat;
+        let saved_cache_agent = self.cache_stat_agent.clone();
+        let saved_cache_root = self.cache_root_agent.clone();
+        self.replaying_trace = true;
         for trace in &replay.traces {
             let _ = self.apply_agent_trace_event(&trace.event);
         }
+        self.replaying_trace = false;
+        self.total_tokens = saved_total;
+        self.cache_stat = saved_cache_stat;
+        self.cache_stat_agent = saved_cache_agent;
+        self.cache_root_agent = saved_cache_root;
 
         if replay.traces.is_empty() {
             self.add_system_message("Replay has no structured trace events.".to_string());

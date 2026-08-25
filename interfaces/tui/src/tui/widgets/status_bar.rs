@@ -13,13 +13,7 @@ use ratatui::{
 
 use crate::tui::app::SessionKnobs;
 use crate::tui::slash::{SessionKnob, ToolProgressMode};
-use crate::tui::theme::DEFAULT_THEME;
-
-/// Braille spinner frames for the working indicator (matches the tool-block set).
-const RUN_SPINNER: &[&str] = &[
-    "\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283c}", "\u{2834}", "\u{2826}", "\u{2827}",
-    "\u{2807}", "\u{280f}",
-];
+use crate::tui::theme::{DEFAULT_THEME, SPINNER_FRAMES};
 
 pub struct StatusBar<'a> {
     pub model: &'a str,
@@ -76,8 +70,8 @@ impl StatusBar<'_> {
         // cancel. Falls back to the help hint when idle.
         let trailing = match self.run_elapsed {
             Some(elapsed) => {
-                let frame = self.spinner_frame % RUN_SPINNER.len();
-                let spinner = RUN_SPINNER.get(frame).copied().unwrap_or("");
+                let frame = self.spinner_frame % SPINNER_FRAMES.len();
+                let spinner = SPINNER_FRAMES.get(frame).copied().unwrap_or("");
                 Span::styled(
                     format!(
                         " {spinner} Working {}s \u{00b7} Ctrl+C to interrupt ",

@@ -336,7 +336,7 @@ pub(super) async fn btw_abort_or_close(state: &mut AppState, client: &AlephClien
 /// Execute a local slash command (TUI-only, no Gateway RPC needed).
 pub(super) async fn execute_local_command(
     state: &mut AppState,
-    textarea: &TextArea<'_>,
+    _textarea: &TextArea<'_>,
     client: &AlephClient,
     cmd: LocalCommand,
 ) {
@@ -390,9 +390,6 @@ pub(super) async fn execute_local_command(
         LocalCommand::Sessions => execute_sessions(state, client).await,
         LocalCommand::Providers { query } => execute_providers(state, client, query).await,
     }
-
-    // Ensure textarea still has focus hint after command execution
-    let _ = textarea;
 }
 
 // ---------------------------------------------------------------------------
