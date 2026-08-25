@@ -71,7 +71,7 @@ pub(crate) fn sanitize_filename(name: &str) -> String {
     // of these would either fail to create on Windows or, worse, redirect a
     // write to the device. Map them to the fallback like every other
     // unrecoverable shape.
-    if trimmed.is_empty() || is_windows_reserved_name(&trimmed) {
+    if trimmed.is_empty() || is_windows_reserved_name(trimmed) {
         FALLBACK_FILENAME.to_string()
     } else {
         trimmed.to_string()
