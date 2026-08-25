@@ -24,8 +24,7 @@ use super::super::vec;
 use super::super::SqliteMemoryBackend;
 
 use super::helpers::{
-    body_text_sha256, collect_edges_between, load_note_content_from_disk,
-    row_to_entry,
+    body_text_sha256, collect_edges_between, load_note_content_from_disk, row_to_entry,
 };
 
 macro_rules! lock_conn {
