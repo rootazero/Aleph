@@ -769,15 +769,23 @@ mod tests {
     /// that survives further migration: `raw` and `slots` move against each
     /// other as handles migrate (today: 1 raw, all of it
     /// `route_handle::GLOBAL`, + 45 slots), and only the sum is invariant.
+    ///
+    /// Neither of those two assertions can see the exemption ITSELF growing:
+    /// widen the filter below to also swallow a second raw handle and
+    /// `offenders` empties by construction, the sum is untouched, and both
+    /// assertions stay green. An exemption that can grow silently is a
+    /// licence, not a named exception, so a third assertion pins its SIZE —
+    /// exactly one match, by name — independent of the other two.
     #[test]
     fn every_installed_global_is_a_capability_slot() {
         let sites = capability_handles();
+        let is_the_route_handle_global_exemption = |s: &&HandleSite| {
+            s.file.ends_with("src/providers/route_handle.rs") && s.name == "GLOBAL"
+        };
         let offenders: Vec<String> = sites
             .iter()
             .filter(|s| !s.is_slot)
-            .filter(|s| {
-                !(s.file.ends_with("src/providers/route_handle.rs") && s.name == "GLOBAL")
-            })
+            .filter(|s| !is_the_route_handle_global_exemption(s))
             .map(|s| format!("{}::{} ({})", s.file, s.name, s.container))
             .collect();
         assert!(
@@ -801,6 +809,28 @@ mod tests {
              recogniser blind spots) or a handle genuinely left the corpus — \
              investigate before editing this number.",
             raw + slots
+        );
+
+        let exempted: Vec<String> = sites
+            .iter()
+            .filter(|s| !s.is_slot)
+            .filter(|s| is_the_route_handle_global_exemption(s))
+            .map(|s| format!("{}::{}", s.file, s.name))
+            .collect();
+        assert_eq!(
+            exempted.len(),
+            1,
+            "the route_handle::GLOBAL exemption above matched {} raw handle(s), \
+             not exactly one: {exempted:?}. This assertion FORBIDS widening \
+             that filter: it exists for the one member ruled exempt \
+             (providers/route_handle.rs::GLOBAL, see this test's doc and \
+             `route_handle_global_is_selected_by_the_first_caller_wins_arm_alone`), \
+             and a broader predicate would make `offenders` empty by \
+             construction while a second, genuinely unmigrated handle rode \
+             along unnoticed. If a new raw handle needs the same treatment, \
+             that is a decision for a human to write here explicitly — name \
+             it, do not generalise the predicate to catch it.",
+            exempted.len()
         );
     }
 
@@ -1367,12 +1397,23 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// ```
     ///
     /// The discriminating experiment, for whoever repeats it: split the
-    /// signature **and** delete that accessor's `#[allow(dead_code)]`. If this
-    /// function sees the accessor,
-    /// `every_roster_accessor_still_carries_the_expiring_allow` fires and NAMES
-    /// it; if it were blind, that guard would pass and
-    /// `every_migrated_slot_has_a_roster_accessor` would name the static
-    /// instead. One green proves nothing on its own.
+    /// signature. If this function still sees the accessor,
+    /// `every_migrated_slot_has_a_roster_accessor` stays green; if it were
+    /// blind, that guard fires and names the static — the same message it
+    /// prints for a genuinely missing accessor, since a blind parser cannot
+    /// tell the two apart.
+    ///
+    /// This used to be a two-guard cross-check: splitting the signature
+    /// **and** deleting that accessor's `#[allow(dead_code)]` made
+    /// `every_roster_accessor_still_carries_the_expiring_allow` fire and NAME
+    /// it if this function saw the accessor, so a green on one guard and a
+    /// red on the other pinned down which side broke. That guard was deleted
+    /// along with the last permit once `ALL_SLOTS` landed (see
+    /// `the_expiring_allow_is_gone_once_the_roster_exists`), so there is no
+    /// permit left to delete and no second guard left to react — only the
+    /// blind direction still fires. A green here no longer independently
+    /// proves the parser saw the split form; it proves only that nothing
+    /// reported the static as unwired.
     ///
     /// ⚠️ **`parse_static_decl` and the slot arm of `take_census` ARE
     /// line-based** — both read `static NAME: Container<` from a single line.
@@ -1382,10 +1423,10 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// verified for both a raw handle and a slot, census unchanged at 46. Any
     /// other wrap is not a fixed point of rustfmt, so `cargo fmt --check`
     /// rejects it. And if one ever does slip through, it fails LOUDLY: the
-    /// handle leaves the census and
-    /// `the_capability_handle_inventory_is_the_size_we_measured` reds on the
-    /// total. Do not "fix" those two by making them span lines without first
-    /// producing a wrap that actually breaks them.
+    /// handle leaves the census and `every_installed_global_is_a_capability_slot`'s
+    /// `raw + slots == 46` assertion reds on the total. Do not "fix" those two
+    /// by making them span lines without first producing a wrap that actually
+    /// breaks them.
     ///
     /// The `#[allow(dead_code)]` scan below is line-based too, and survives that
     /// same real wrap (the attribute still sits directly above the line carrying
@@ -1530,9 +1571,9 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
              with slots > accessors, a slot DECLARATION stopped being \
              recognised: `parse_static_decl` and the slot arm of `take_census` \
              read `static NAME: Container<` from ONE line. Check \
-             `the_capability_handle_inventory_is_the_size_we_measured` in the \
-             same run — it will be red too, and its message is the accurate \
-             one.\n\
+             `every_installed_global_is_a_capability_slot` in the same run — \
+             its `raw + slots == 46` assertion will be red too, and its \
+             message is the accurate one.\n\
              \n\
              (If you expected 'missing accessor', that is the loop above.)",
             accessors.len(),

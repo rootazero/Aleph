@@ -834,12 +834,12 @@ fn the_policy_handle_reports_whether_it_was_installed() {
 
 /// The roster's entry point for these two handles.
 ///
-/// Task 11 assembles `ALL_SLOTS` from accessors like these rather than from 46
-/// `pub static`s, so the accessor — not the static — is the thing that must
-/// keep working. Asserting through it also means the ids are pinned on the path
-/// the roster actually walks: a slot renamed in one place and not the other
-/// shows up here instead of as a roster entry quietly describing the wrong
-/// handle.
+/// [`crate::capability::ALL_SLOTS`] assembles from accessors like these rather
+/// than from one `pub static` per handle, so the accessor — not the static —
+/// is the thing that must keep working. Asserting through it also means the
+/// ids are pinned on the path the roster actually walks: a slot renamed in
+/// one place and not the other shows up here instead of as a roster entry
+/// quietly describing the wrong handle.
 #[test]
 fn the_slot_accessors_expose_both_handles_to_the_roster() {
     use crate::capability::{MissingSemantics, SlotStatus};
