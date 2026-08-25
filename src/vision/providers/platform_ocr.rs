@@ -9,7 +9,7 @@ use crate::sync_primitives::Arc;
 
 use crate::vision::error::VisionError;
 use crate::vision::provider::VisionProvider;
-use crate::vision::types::{ImageInput, OcrResult, VisionCapabilities, VisionResult};
+use crate::vision::types::{ImageFormat, ImageInput, OcrResult, VisionCapabilities, VisionResult};
 
 /// Vision provider backed by the platform-native OCR engine.
 ///
