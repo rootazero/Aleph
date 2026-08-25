@@ -1167,12 +1167,10 @@ mod tests {
     fn member_run_metadata_omits_originator_with_no_ambient_author() {
         let metadata = member_run_metadata("team-1", 0);
         assert!(
-            metadata.get("originator_user_id").is_none(),
+            !metadata.contains_key("originator_user_id"),
             "a bare call with no ambient author must not invent an originator"
         );
-        assert!(metadata
-            .get(crate::gateway::execution_engine::AUTHOR_USER_KEY)
-            .is_none());
+        assert!(!metadata.contains_key(crate::gateway::execution_engine::AUTHOR_USER_KEY));
     }
 
     /// The single-human path is unchanged: when the room's only speaker IS the

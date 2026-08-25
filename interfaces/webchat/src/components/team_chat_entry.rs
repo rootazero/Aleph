@@ -64,7 +64,7 @@ pub(crate) fn team_history_item_to_message(index: usize, item: TeamMessageItem) 
     // and `MessageBubble` rendering a P2 project-room peer message gets:
     // `messages.rs`'s `author_label` suppresses the label for the viewer's
     // own id and otherwise resolves it via `UserDirectoryState`.
-    let author_user_id = (role == "user").then(|| item.author_user_id).flatten();
+    let author_user_id = (role == "user").then_some(item.author_user_id).flatten();
     ChatMessage {
         id: format!("team-hist-{index}"),
         role: role.to_string(),

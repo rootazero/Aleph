@@ -10,9 +10,11 @@
 //!
 //! Three states this must keep distinct, because collapsing any two of them
 //! tells the reader something untrue:
-//!   * not bound      — a state, with an action (bind a folder in Settings)
-//!   * bound + empty  — the folder really has nothing in it
-//!   * refused        — the caller may not read this
+//!
+//! * not bound — a state, with an action (bind a folder in Settings)
+//! * bound + empty — the folder really has nothing in it
+//! * refused — the caller may not read this
+//!
 //! The server keeps them apart on the wire (`root_bound`, an empty `entries`,
 //! an error), so the only way to lose the distinction is here.
 
