@@ -1135,10 +1135,65 @@ mod tests {
     /// `"\n#[cfg(test)]\n"` matches nothing there — which would silently turn
     /// the whole file into "production" and let a test's own literals satisfy
     /// the census.
+    ///
+    /// # The cut is hand-rolled here, and what that costs
+    ///
+    /// `src.split("#[cfg(test)]").next()` is a PREFIX cut: it stops at the
+    /// first `#[cfg(test)]` marker in the file, so production code below a
+    /// gated `use`, helper `fn` or `mod` is never scanned. The failure is
+    /// one-directional — a prefix cut can only ever under-scan — and therefore
+    /// silent: a second `BtwTurn::resolve(` hidden down there leaves
+    /// `hits.len() == 1` and this census reports the invariant intact.
+    ///
+    /// The single source for this question is
+    /// `alephcore::utils::source_scan::production_prefix`, which walks gated
+    /// ITEMS and lexes strings, char literals and block comments across lines.
+    /// **`aleph-tui` cannot call it**: it is a separate workspace crate that
+    /// does not depend on the server library `alephcore`, and the
+    /// capability-wiring spec's non-goal 1 (不拆 crate — `alephcore` stays one
+    /// crate this round) rules out moving the two functions somewhere both
+    /// crates could reach. `aleph-panel` solved the same problem in-crate with
+    /// `i18n_census::production_lines`; this crate has no second source-level
+    /// guard to share such a helper with, so it carries the cut and the
+    /// self-check below instead.
+    ///
+    /// The self-check is what makes the blindness loud rather than green: it
+    /// scans the discarded remainder for the same needle and fails if one is
+    /// hiding there. It cannot tell production from test code past the cut —
+    /// nothing textual can — so it reports the line and asks for a human
+    /// classification rather than guessing one.
+    /// Is byte offset `at` inside a double-quoted literal on this one line?
+    ///
+    /// Deliberately per line: a Rust literal can span lines, but tracking that
+    /// needs a lexer, and this crate has none. Resetting at each newline bounds
+    /// a miscount to the line it happens on — the failure the unbounded version
+    /// produces (an odd quote desynchronising and blanking everything after it)
+    /// is silent, and this one is not.
+    fn inside_a_literal(line: &str, at: usize) -> bool {
+        let mut quotes = 0usize;
+        let mut escaped = false;
+        for (i, c) in line.char_indices() {
+            if i >= at {
+                break;
+            }
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match c {
+                '\\' => escaped = true,
+                '"' => quotes += 1,
+                _ => {}
+            }
+        }
+        quotes % 2 == 1
+    }
+
     #[test]
     fn this_client_resolves_a_side_question_in_exactly_one_place() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut hits: Vec<String> = Vec::new();
+        let mut unclassifiable: Vec<String> = Vec::new();
         let mut files_scanned = 0usize;
 
         let mut stack = vec![root];
@@ -1165,9 +1220,43 @@ mod tests {
                         hits.push(format!("{}: {}", path.display(), line.trim()));
                     }
                 }
+
+                // Everything the prefix cut threw away. A needle in here is
+                // invisible to the census above, which would still say "exactly
+                // one" — see this test's doc for why the cut is hand-rolled at
+                // all. Occurrences inside a string literal are skipped: this
+                // scanner's own `line.find(..)` argument and the failure message
+                // below both name the needle, and a scan that flags its own text
+                // is a scan nobody can keep green. That check is per line and
+                // resets at each newline, so a miscount costs one line rather
+                // than the rest of the file.
+                let discarded = &source[production.len()..];
+                for line in discarded.lines() {
+                    if line.trim_start().starts_with("//") {
+                        continue;
+                    }
+                    let Some(at) = line.find("BtwTurn::resolve(") else {
+                        continue;
+                    };
+                    if inside_a_literal(line, at) {
+                        continue;
+                    }
+                    unclassifiable.push(format!("{}: {}", path.display(), line.trim()));
+                }
             }
         }
 
+        assert!(
+            unclassifiable.is_empty(),
+            "a `BtwTurn::resolve(` call sits past this file's first \
+             `#[cfg(test)]` marker, where the prefix cut above cannot see it. \
+             This scan cannot tell whether it is production code or a test's \
+             own call, and guessing is how a census goes quietly green. \
+             Classify it by hand: if it is production, this client now resolves \
+             a side question in two places and the census's `== 1` was passing \
+             because it was blind.\n  {}",
+            unclassifiable.join("\n  ")
+        );
         assert!(files_scanned > 5, "the scan found nothing to scan");
         assert_eq!(
             hits.len(),
