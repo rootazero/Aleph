@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 
-use crate::diagnostics::check::{HealthCheck, Posture};
+use crate::diagnostics::check::{HealthCheck, Posture, Presence};
 use crate::diagnostics::finding::{Finding, Severity};
 use crate::loop_graph::LoopGraphStore;
 
@@ -46,12 +46,20 @@ impl HealthCheck for LoopGraphCheck {
 
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
         let path = self.data_dir.join(DB_FILENAME);
-        if !path.exists() {
-            return vec![Finding::ok(
-                ID,
-                "No graph yet",
-                "loop_graph.db absent — no governance topology declared (zero cost).",
-            )];
+        // "absent" below has to mean absent. `Path::exists()` also returns
+        // false when the filesystem refuses to answer, and "zero cost" is the
+        // one sentence that stops an operator looking at a graph DB they
+        // cannot stat.
+        match Presence::of(ID, "Loop graph state", &path) {
+            Err(f) => return vec![f],
+            Ok(Presence::Absent) => {
+                return vec![Finding::ok(
+                    ID,
+                    "No graph yet",
+                    "loop_graph.db absent — no governance topology declared (zero cost).",
+                )]
+            }
+            Ok(Presence::Present) => {}
         }
         /// Outcome of the blocking store probe (`open` + `lint` + emptiness
         /// check), one enum so a single `spawn_blocking` covers all three
@@ -107,7 +115,7 @@ impl HealthCheck for LoopGraphCheck {
         };
         if findings.is_empty() {
             // "Nothing is wrong" and "nothing is declared" are different
-            // answers, and only one of them is reassuring. The `!path.exists()`
+            // answers, and only one of them is reassuring. The presence
             // branch above cannot tell them apart in production: the daemon
             // creates `loop_graph.db` unconditionally at boot
             // (`builtin_registry/builder/constructor`), so the file is always
@@ -186,5 +194,18 @@ mod tests {
         let rendered = format!("{findings:?}");
         assert!(rendered.contains("No topology declared"), "{rendered}");
         assert!(!rendered.contains("Topology sound"), "{rendered}");
+    }
+
+    /// "Zero cost" is a reassuring sentence, and `Path::exists()` produces it
+    /// for a graph DB that is there and cannot be stat'd. See
+    /// `check::tests::unanswerable` for the fixture.
+    #[tokio::test]
+    async fn an_unreadable_graph_db_is_not_reported_as_no_graph_yet() {
+        let findings = LoopGraphCheck::new(PathBuf::from("aleph\u{0}data"))
+            .run(Posture::Inspect)
+            .await;
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].is_problem(), "{:?}", findings[0]);
+        assert_ne!(findings[0].title, "No graph yet");
     }
 }

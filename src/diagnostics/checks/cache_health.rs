@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 
-use crate::diagnostics::check::{HealthCheck, Posture};
+use crate::diagnostics::check::{HealthCheck, Posture, Presence};
 use crate::diagnostics::finding::{Finding, Severity};
 
 const ID: &str = "core/cache-health";
@@ -110,12 +110,18 @@ impl HealthCheck for CacheHealthCheck {
     }
 
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
-        if !self.db_path.exists() {
-            return vec![Finding::ok(
-                ID,
-                "No trace database yet",
-                "state.db absent — no agent has run, so no cache telemetry exists.",
-            )];
+        // A stat error is not absence: "no agent has run" is a reassuring
+        // sentence, and the filesystem never said it.
+        match Presence::of(ID, "Prompt cache health", &self.db_path) {
+            Err(f) => return vec![f],
+            Ok(Presence::Absent) => {
+                return vec![Finding::ok(
+                    ID,
+                    "No trace database yet",
+                    "state.db absent — no agent has run, so no cache telemetry exists.",
+                )]
+            }
+            Ok(Presence::Present) => {}
         }
         // rusqlite is synchronous — keep the query off the async executor.
         let db = self.db_path.clone();
@@ -259,5 +265,17 @@ mod tests {
         let (_dir, check) = db_with_alarms(&[(json, now() - 3 * WINDOW_SECS)]);
         let findings = check.run(Posture::Inspect).await;
         assert_eq!(findings[0].severity, Severity::Info);
+    }
+
+    /// "No agent has run" is a claim about history that a stat error cannot
+    /// support. See `check::tests::unanswerable` for the fixture.
+    #[tokio::test]
+    async fn an_unreadable_trace_db_is_not_reported_as_no_trace_database_yet() {
+        let findings = CacheHealthCheck::new(PathBuf::from("aleph\u{0}state.db"))
+            .run(Posture::Inspect)
+            .await;
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].is_problem(), "{:?}", findings[0]);
+        assert_ne!(findings[0].title, "No trace database yet");
     }
 }

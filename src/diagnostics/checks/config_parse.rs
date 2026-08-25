@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 
 use crate::config::Config;
-use crate::diagnostics::check::{HealthCheck, Posture};
+use crate::diagnostics::check::{HealthCheck, Posture, Presence};
 use crate::diagnostics::finding::{Finding, Severity};
 
 const ID: &str = "core/config-parse";
@@ -66,12 +66,20 @@ impl HealthCheck for ConfigParseCheck {
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
         let display = self.config_path.display().to_string();
 
-        if !self.config_path.exists() {
-            return vec![Finding::ok(
-                ID,
-                "Using default config",
-                format!("{display} not present; built-in defaults are in effect."),
-            )];
+        // "Not present; defaults are in effect" is the RIGHT SYMPTOM WITH
+        // THE WRONG CAUSE when the file is sitting right there and cannot be
+        // read: the daemon also falls back to defaults in that case, so the
+        // operator is sent looking for a file that exists.
+        match Presence::of(ID, "Config file state", &self.config_path) {
+            Err(f) => return vec![f],
+            Ok(Presence::Absent) => {
+                return vec![Finding::ok(
+                    ID,
+                    "Using default config",
+                    format!("{display} not present; built-in defaults are in effect."),
+                )]
+            }
+            Ok(Presence::Present) => {}
         }
 
         match Config::load_from_file_reporting_dead_keys(&self.config_path) {
@@ -233,5 +241,20 @@ allowed_hosts = ["api.example.com"]
             !rendered.contains(&format!("k{}", MAX_LISTED_PATHS)),
             "the summarised tail must not still be listed: {rendered}"
         );
+    }
+
+    /// The right symptom with the wrong cause. A config file that exists but
+    /// cannot be read ALSO makes the daemon fall back to defaults — so
+    /// "not present; built-in defaults are in effect" describes what the
+    /// operator is experiencing and sends them looking for a missing file
+    /// that is sitting right there.
+    #[tokio::test]
+    async fn an_unreadable_config_file_is_not_reported_as_not_present() {
+        let findings = ConfigParseCheck::new(PathBuf::from("aleph\u{0}config.toml"))
+            .run(Posture::Inspect)
+            .await;
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].is_problem(), "{:?}", findings[0]);
+        assert_ne!(findings[0].title, "Using default config");
     }
 }
