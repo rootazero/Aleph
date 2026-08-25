@@ -72,10 +72,7 @@ pub fn BatchBar(
         let sel = selected.get();
         let a = agent.get();
         let ids = page_ids.get();
-        !ids.is_empty()
-            && ids
-                .iter()
-                .all(|r| sel.contains(&a, &r.partition, &r.id))
+        !ids.is_empty() && ids.iter().all(|r| sel.contains(&a, &r.partition, &r.id))
     });
     let over_cap = Signal::derive(move || plan_export(count.get()).is_capped());
     let busy = Signal::derive(move || exporting.get().is_some());

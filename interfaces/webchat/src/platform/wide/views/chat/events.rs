@@ -4,7 +4,6 @@
 // judges: the TUI has to answer the same question and cannot see this crate,
 // and two copies of a delivery predicate is two answers — the wrong one
 // renders a user their own message twice.
-use aleph_protocol::peer_message_is_renderable;
 use super::state::{
     ChatState, ContextUsage, ModelInfo, ProviderRetryNotice, RunCost, ToolSettlement,
 };
@@ -14,6 +13,7 @@ use crate::state::layout::WorkspaceState;
 use crate::state::notifications::{AskOptionView, AskQuestionView, PendingAskView};
 use crate::state::sessions::SessionMap;
 use crate::state::user_directory::UserDirectoryState;
+use aleph_protocol::peer_message_is_renderable;
 use leptos::prelude::*;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -1585,7 +1585,6 @@ mod projection_tests {
 
     #[test]
     fn resolve_target_routes_background_run_to_registry() {
-
         let owner = Owner::new();
         owner.set();
         let sessions = crate::state::sessions::SessionMap::new();

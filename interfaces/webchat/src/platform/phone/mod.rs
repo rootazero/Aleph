@@ -98,7 +98,10 @@ mod switch_state {
     #[test]
     fn the_stylesheet_still_keys_the_on_state_off_aria_pressed() {
         let css = std::fs::read_to_string(
-            src_dir().parent().expect("src has a parent").join("styles/ios.css"),
+            src_dir()
+                .parent()
+                .expect("src has a parent")
+                .join("styles/ios.css"),
         )
         .expect("styles/ios.css is readable");
         assert!(

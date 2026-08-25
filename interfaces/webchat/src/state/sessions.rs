@@ -954,7 +954,10 @@ mod tests {
             singleton.session_key.set(Some("sess-a".into()));
             let second = map.ensure_active(singleton, "agent-a", || "New chat".into());
             assert_eq!(second, first);
-            assert_eq!(singleton.session_key.get_untracked().as_deref(), Some("sess-a"));
+            assert_eq!(
+                singleton.session_key.get_untracked().as_deref(),
+                Some("sess-a")
+            );
         });
     }
 
@@ -985,7 +988,10 @@ mod tests {
                 "Topic A".into()
             });
             assert_eq!(again, first);
-            assert_eq!(labels_built, 1, "the label closure ran for a tab that already existed");
+            assert_eq!(
+                labels_built, 1,
+                "the label closure ran for a tab that already existed"
+            );
             assert_eq!(map.active_conv(), Some(first));
         });
     }
@@ -1049,4 +1055,3 @@ mod tests {
         });
     }
 }
-

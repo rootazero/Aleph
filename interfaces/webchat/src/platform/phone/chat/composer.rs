@@ -80,8 +80,7 @@ pub fn PhoneComposer() -> impl IntoView {
     //     error flips `phase` to `Error` without touching `active_run_id`.
     //     Without this arm, a tap on Send during that window would fire a
     //     second concurrent `ChatApi::send` against the still-active run.
-    let running =
-        move || chat.phase.get().is_busy() || chat.active_run_id.get().is_some();
+    let running = move || chat.phase.get().is_busy() || chat.active_run_id.get().is_some();
 
     // A draft is text OR staged files. Attachments-only used to be
     // unsendable here: the guard was text-only, so a photo with no caption
@@ -151,7 +150,6 @@ pub fn PhoneComposer() -> impl IntoView {
         let dash = dashboard;
         spawn_local(async move {
             let res = ChatApi::send(
-
                 &dash,
                 &text,
                 session_key.as_deref(),

@@ -877,9 +877,8 @@ async fn dispatch_marketplace(
     // that is registered and empty, with nothing on screen saying a second
     if matches!(method, "plugin.marketplace.add") && !json {
         let params = serde_json::to_value(MarketplaceUpdateParams { name: added_name })?;
-        let synced: CliResult<serde_json::Value> = client
-            .call("plugin.marketplace.update", Some(params))
-            .await;
+        let synced: CliResult<serde_json::Value> =
+            client.call("plugin.marketplace.update", Some(params)).await;
         match synced {
             Ok(_) => println!("Fetched its contents."),
             // Registered but not fetched is a real state, and saying so beats

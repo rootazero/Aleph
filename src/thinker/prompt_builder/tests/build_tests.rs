@@ -641,7 +641,10 @@ fn basic_path_strategy_weld_renders_when_resolved_context_has_no_strategy() {
     let interaction = InteractionManifest::new(InteractionParadigm::Background);
     let security = SecurityContext::permissive();
     let resolved = ContextAggregator::resolve(&interaction, &security);
-    assert!(resolved.strategy.is_none(), "fixture must start strategy-free");
+    assert!(
+        resolved.strategy.is_none(),
+        "fixture must start strategy-free"
+    );
 
     let builder = PromptBuilder::new(PromptConfig::default())
         .with_resolved_context(resolved)

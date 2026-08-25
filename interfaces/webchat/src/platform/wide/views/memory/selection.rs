@@ -200,7 +200,10 @@ mod tests {
     fn the_same_path_in_two_partitions_is_two_independent_rows() {
         let mut s = AgentSelection::default();
         s.toggle("main", RowRef::new("main", "preference/coding-style"));
-        s.toggle("main", RowRef::new("main__u-owner", "preference/coding-style"));
+        s.toggle(
+            "main",
+            RowRef::new("main__u-owner", "preference/coding-style"),
+        );
 
         assert_eq!(s.len_for("main"), 2, "two partitions, two rows");
         assert!(s.contains("main", "main", "preference/coding-style"));

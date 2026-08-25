@@ -685,8 +685,7 @@ fn apply_history(state: &mut AppState, result: &Value, mode: AttachMode) {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let mapped: Vec<app::ChatMessage> =
-        rows.iter().filter_map(history_message_from_json).collect();
+    let mapped: Vec<app::ChatMessage> = rows.iter().filter_map(history_message_from_json).collect();
 
     // The server's copy is in hand, so it is now safe to drop what was on
     // screen. Doing this before the call — the obvious place — turns a
@@ -1495,7 +1494,10 @@ mod active_run_tests {
     /// asked, nothing is running" rather than as a run nothing can ever settle.
     #[test]
     fn an_empty_string_is_not_a_run() {
-        assert_eq!(active_run_from_history(&json!({ "active_run": "" })), Some(None));
+        assert_eq!(
+            active_run_from_history(&json!({ "active_run": "" })),
+            Some(None)
+        );
     }
 }
 
@@ -1537,7 +1539,11 @@ mod attach_mode_tests {
             timestamp: crate::tui::app::row_timestamp(None),
         });
 
-        apply_history(&mut state, &history(&["from the server"]), AttachMode::Append);
+        apply_history(
+            &mut state,
+            &history(&["from the server"]),
+            AttachMode::Append,
+        );
 
         assert_eq!(
             user_rows(&state),
@@ -1577,7 +1583,10 @@ mod attach_mode_tests {
             .split("pub(super) async fn attach_session")
             .nth(1)
             .expect("attach_session must exist");
-        let body = attach.split("\nfn apply_history").next().unwrap_or_default();
+        let body = attach
+            .split("\nfn apply_history")
+            .next()
+            .unwrap_or_default();
         // Self-protection: a scanner that matched nothing would agree with
         // everything below. Pin that this really is the function's body.
         assert!(

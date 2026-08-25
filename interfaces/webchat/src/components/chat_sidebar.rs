@@ -9,7 +9,6 @@ use leptos_router::hooks::use_navigate;
 use std::sync::Arc;
 
 use crate::api::chat::ChatApi;
-
 use crate::api::teams::{TeamSummary, TeamsApi};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};

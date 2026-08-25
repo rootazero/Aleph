@@ -110,11 +110,7 @@ fn extract_embedded_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
     // §2.2 says the prefix family is variable and the first 32 bits
     // (`64:ff9b:0000`) are the constant identifier. Match the upper 32
     // bits only; the lower 64 bits hold the embedded IPv4 per the spec.
-    if segments[0] == 0x0064
-        && segments[1] == 0xff9b
-        && segments[2] == 0
-        && segments[3] == 0
-    {
+    if segments[0] == 0x0064 && segments[1] == 0xff9b && segments[2] == 0 && segments[3] == 0 {
         return Some(Ipv4Addr::new(
             octets[12], octets[13], octets[14], octets[15],
         ));

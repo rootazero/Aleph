@@ -1030,7 +1030,10 @@ mod tests {
     #[test]
     fn a_brace_expression_does_not_run_to_the_end_of_the_line() {
         assert_eq!(balanced_from("<p>{a}</p><p class=\"x\">{b}</p>", 3), "a");
-        assert_eq!(balanced_from("{outer {inner} rest} tail", 0), "outer {inner} rest");
+        assert_eq!(
+            balanced_from("{outer {inner} rest} tail", 0),
+            "outer {inner} rest"
+        );
         assert_eq!(
             balanced_from("{\"}\" is a literal}", 0),
             "\"}\" is a literal",

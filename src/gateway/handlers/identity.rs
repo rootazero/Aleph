@@ -538,7 +538,10 @@ mod tests {
         .await;
         assert!(resp.is_error(), "oversize write must fail");
         let err = resp.error.unwrap();
-        assert_eq!(err.code, INVALID_PARAMS, "operator mistake → INVALID_PARAMS");
+        assert_eq!(
+            err.code, INVALID_PARAMS,
+            "operator mistake → INVALID_PARAMS"
+        );
         assert!(err.message.contains("exceeds maximum size"));
         // And the file must NOT have been written.
         assert!(!tmp.path().join("main").join("SOUL.md").exists());
@@ -570,11 +573,9 @@ mod tests {
         assert!(resp.is_error());
         let err = resp.error.unwrap();
         assert_eq!(
-            err.code,
-            INTERNAL_ERROR,
+            err.code, INTERNAL_ERROR,
             "filesystem failure must be INTERNAL_ERROR, got {:?}: {}",
-            err.code,
-            err.message
+            err.code, err.message
         );
         assert!(
             err.message.starts_with("Failed to create agent directory")

@@ -1203,7 +1203,9 @@ mod tests {
                 .result
                 .as_ref()
                 .and_then(|r| r.get("pending"))
-                .unwrap_or_else(|| panic!("chat.history response carried no \"pending\" key: {response:?}"));
+                .unwrap_or_else(|| {
+                    panic!("chat.history response carried no \"pending\" key: {response:?}")
+                });
             assert_eq!(
                 pending,
                 &json!([{ "run_id": "queued-1", "ahead": 0 }]),

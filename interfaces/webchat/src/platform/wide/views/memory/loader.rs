@@ -253,7 +253,11 @@ mod tests {
     fn merging_appends_the_next_page_after_the_loaded_one() {
         let merged = merge_note_page(&[fact("a"), fact("b")], vec![fact("c")], Some(3));
         assert_eq!(
-            merged.facts.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+            merged
+                .facts
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
             vec!["a", "b", "c"]
         );
         assert_eq!(merged.total, Some(3));
@@ -266,7 +270,11 @@ mod tests {
         // also let one batch operation select it twice.
         let merged = merge_note_page(&[fact("a"), fact("b")], vec![fact("b"), fact("c")], Some(3));
         assert_eq!(
-            merged.facts.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+            merged
+                .facts
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
             vec!["a", "b", "c"]
         );
     }

@@ -285,10 +285,11 @@ pub(crate) fn fit_dynamic_suffix_with_content(
     budget: &TokenBudget,
 ) -> String {
     let original_chars = dynamic.chars().count();
-    let char_limit = budget.max_total_chars.saturating_sub(stable.chars().count());
-    let notice_reserve =
-        usize::from(budget.truncation_warning != TruncationWarning::Off)
-            * TRUNCATION_NOTICE_RESERVE;
+    let char_limit = budget
+        .max_total_chars
+        .saturating_sub(stable.chars().count());
+    let notice_reserve = usize::from(budget.truncation_warning != TruncationWarning::Off)
+        * TRUNCATION_NOTICE_RESERVE;
     let mut upper = original_chars;
     if char_limit < original_chars {
         upper = char_limit.saturating_sub(notice_reserve);
@@ -586,15 +587,21 @@ mod tests {
         // Non-finite seeds are ignored; finite ones clamp to the same band
         // `ContextBudget::observe_actual_usage` clamps live observations to.
         assert_eq!(
-            TokenBudget::default().with_estimate_factor(f64::NAN).estimate_factor,
+            TokenBudget::default()
+                .with_estimate_factor(f64::NAN)
+                .estimate_factor,
             1.0
         );
         assert_eq!(
-            TokenBudget::default().with_estimate_factor(100.0).estimate_factor,
+            TokenBudget::default()
+                .with_estimate_factor(100.0)
+                .estimate_factor,
             crate::context::budget::CALIBRATION_MAX
         );
         assert_eq!(
-            TokenBudget::default().with_estimate_factor(0.01).estimate_factor,
+            TokenBudget::default()
+                .with_estimate_factor(0.01)
+                .estimate_factor,
             crate::context::budget::CALIBRATION_MIN
         );
     }

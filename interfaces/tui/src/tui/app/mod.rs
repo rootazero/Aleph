@@ -745,7 +745,6 @@ pub struct AppState {
     session_reconciled: bool,
 
     // -- Run tracking --
-
     pub current_run: Option<String>,
     /// Start of the active run, on the monotonic clock. Set to now on
     /// `RunAccepted`; on [`AppState::adopt_active_run`] it is BACK-DATED by the

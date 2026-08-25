@@ -49,9 +49,11 @@ pub fn PhoneChat() -> impl IntoView {
     // creating the conversation after the optimistic user bubble is pushed
     // would erase it. At mount the singleton is either untouched (cold boot) or
     // the conversation already exists and this is a no-op.
-    sessions.ensure_active(chat, &chat.agent_id.get_untracked().unwrap_or_default(), || {
-        t_string!(i18n, chat.new_chat).to_string()
-    });
+    sessions.ensure_active(
+        chat,
+        &chat.agent_id.get_untracked().unwrap_or_default(),
+        || t_string!(i18n, chat.new_chat).to_string(),
+    );
 
     // Ask the Gateway to forward stream.* once connected (poll up to ~5s).
     {

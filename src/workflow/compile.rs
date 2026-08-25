@@ -15,6 +15,7 @@
 //! already-minted task id.
 
 use serde_json::json;
+use tracing::warn;
 
 use crate::agents::swarm::tasks::acceptance::LEAD_REVIEW_METADATA_KEY;
 use crate::agents::swarm::tasks::{
@@ -544,7 +545,7 @@ async fn cancel_partial(store: &dyn CoordTaskStore, ids: &[CoordTaskId]) {
                     WORKFLOW_NOTIFIED_BY_KEY: NOTIFIED_BY_CANCEL,
                 }),
             );
-            let _ = store
+            if let Err(e) = store
                 .update_task(
                     anchor,
                     CoordTaskUpdate {
@@ -552,11 +553,18 @@ async fn cancel_partial(store: &dyn CoordTaskStore, ids: &[CoordTaskId]) {
                         ..Default::default()
                     },
                 )
-                .await;
+                .await
+            {
+                warn!(
+                    anchor = %anchor,
+                    error = %e,
+                    "cancel_partial: anchor notified-stamp failed"
+                );
+            }
         }
     }
     for id in ids {
-        let _ = store
+        if let Err(e) = store
             .update_task(
                 id,
                 CoordTaskUpdate {
@@ -564,7 +572,10 @@ async fn cancel_partial(store: &dyn CoordTaskStore, ids: &[CoordTaskId]) {
                     ..Default::default()
                 },
             )
-            .await;
+            .await
+        {
+            warn!(task = %id, error = %e, "cancel_partial: status cancel failed");
+        }
     }
 }
 
