@@ -37,7 +37,9 @@
 //! surface.
 
 mod kanban;
+mod memory;
 mod settings;
+mod workspace;
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -54,7 +56,9 @@ use crate::state::layout::WorkspaceState;
 use crate::state::sessions::SessionMap;
 use crate::state::user_directory::UserDirectoryState;
 use kanban::KanbanTab;
+use memory::MemoryTab;
 use settings::SettingsTab;
+use workspace::WorkspaceTab;
 
 /// Sub-tab inside a project room page. `Kanban` is live (P3 Task 8);
 /// `Workspace` / `Memory` are still rendered as bare placeholders.
@@ -231,9 +235,12 @@ fn ProjectRoomPage(project_id: String) -> impl IntoView {
                         RoomSubTab::Kanban => view! {
                             <KanbanTab project=p.clone() />
                         }.into_any(),
-                        RoomSubTab::Workspace | RoomSubTab::Memory => {
-                            view! { <PlaceholderTab /> }.into_any()
-                        }
+                        RoomSubTab::Workspace => view! {
+                            <WorkspaceTab project=p.clone() />
+                        }.into_any(),
+                        RoomSubTab::Memory => view! {
+                            <MemoryTab project=p.clone() />
+                        }.into_any(),
                     }}
                 </div>
             })}
@@ -301,14 +308,26 @@ fn RoomTabButton(current: RwSignal<RoomSubTab>, target: RoomSubTab) -> impl Into
     }
 }
 
-#[component]
-fn PlaceholderTab() -> impl IntoView {
-    let i18n = use_i18n();
-    view! {
-        <div class="px-6 py-10 text-center text-sm text-text-tertiary">
-            {t!(i18n, project_room.coming_soon)}
-        </div>
+/// The agent a room's surfaces run under.
+///
+/// One rule, shared by the room chat (which opens the room's session with it)
+/// and the Memory tab (which reads the partition that session writes into). A
+/// second rule would let the two disagree, and the disagreement would be
+/// silent: the tab would read a partition nobody in the room writes to and
+/// render an empty list.
+///
+/// The open conversation's agent wins when there is one, so a room opened
+/// under a named agent keeps it; otherwise the server's default agent. An
+/// unreachable agent list yields an empty id, which the server rejects — a
+/// visible failure rather than a wrong-partition read.
+pub(crate) async fn room_agent_id(dash: &DashboardState, chat: Option<ChatState>) -> String {
+    if let Some(agent) = chat.and_then(|c| c.agent_id.get_untracked()) {
+        return agent;
     }
+    AgentsApi::list(dash)
+        .await
+        .map(|r| r.default_id)
+        .unwrap_or_default()
 }
 
 /// The room's live chat surface: resolves the room's server-side session,
@@ -341,13 +360,7 @@ pub async fn enter_project_room(
     project_name: String,
     locale: crate::i18n::Locale,
 ) {
-    let agent_id = match chat.agent_id.get_untracked() {
-        Some(a) => a,
-        None => AgentsApi::list(&dash)
-            .await
-            .map(|r| r.default_id)
-            .unwrap_or_default(),
-    };
+    let agent_id = room_agent_id(&dash, Some(chat)).await;
     // The room's canonical session, shared with every other member. `agent_id`
     // is only this Panel's proposal — a room somebody already opened answers
     // with the key it has.
