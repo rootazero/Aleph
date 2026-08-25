@@ -61,7 +61,10 @@ pub enum MissingSemantics {
     /// (`spend` policy reads as "no ceiling" — the round-7 shape.)
     IndistinguishableDefault { reads_as: &'static str },
     /// A read yields `None` and every consumer decides for itself what that
-    /// means. (`GLOBAL_SESSION_SERVICE`: 9 consumers, one silently returns.)
+    /// means. A per-handle census (how many, which ones agree) belongs on
+    /// the handle's own `static`, not here — this is a general enum, and a
+    /// count copied into it is a second figure nothing keeps in sync with
+    /// the first.
     ConsumerDecides,
     /// Fails closed — safe, but the feature is dead and says nothing.
     FailsClosed,
