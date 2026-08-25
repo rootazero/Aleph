@@ -183,6 +183,13 @@ fn html_escape(s: &str) -> String {
 /// innerHTML.
 fn sanitize_link_url(url: &str) -> String {
     let trimmed = url.trim();
+    // Protocol-relative URLs (`//evil.com/x`) contain no colon, so a
+    // `split_once(':')` check alone lets them through — yet a browser still
+    // navigates them by inheriting the panel's scheme. Reject them up-front
+    // so a `[label](//evil.com)` cannot redirect off-origin under `target=_blank`.
+    if trimmed.starts_with("//") {
+        return "#disallowed-protocol-relative".to_string();
+    }
     if let Some((scheme, _)) = trimmed.split_once(':') {
         let scheme = scheme.to_lowercase();
         if scheme == "http" || scheme == "https" || scheme == "mailto" {
@@ -435,7 +442,7 @@ pub fn MarkdownRenderer(content: String) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_markdown, render_streaming};
+    use super::{render_markdown, render_streaming, sanitize_link_url};
 
     // ⚠️ Host-test safety: render_markdown with a *language-tagged* fence
     // calls is_dark_mode() → web_sys::window(), which panics off-wasm.
@@ -474,5 +481,29 @@ mod tests {
         let html = render_streaming("```<script>alert(1)</script>\ncode\n```");
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn sanitize_link_rejects_dangerous_schemes() {
+        // `javascript:` is the obvious one — click-to-exec under the
+        // panel origin.
+        assert!(sanitize_link_url("javascript:alert(1)").starts_with("#disallowed-"));
+        // `data:` can carry an inline HTML body that XSS-pivots on click.
+        assert!(sanitize_link_url("data:text/html,<script>alert(1)</script>")
+            .starts_with("#disallowed-"));
+        // Protocol-relative URLs contain no colon, so a naïve
+        // `split_once(':')` lets them through — yet the browser still
+        // navigates them, inheriting the panel's scheme. Reject up-front.
+        assert!(sanitize_link_url("//evil.example/path").starts_with("#disallowed-"));
+    }
+
+    #[test]
+    fn sanitize_link_keeps_allowed_schemes() {
+        assert_eq!(sanitize_link_url("https://example.com"), "https://example.com");
+        assert_eq!(sanitize_link_url("http://example.com"), "http://example.com");
+        assert_eq!(sanitize_link_url("mailto:a@b"), "mailto:a@b");
+        // Relative links must survive — they only resolve once the panel
+        // routes them.
+        assert_eq!(sanitize_link_url("/docs/page"), "/docs/page");
     }
 }
