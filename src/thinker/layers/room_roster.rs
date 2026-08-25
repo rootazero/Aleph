@@ -103,6 +103,58 @@ pub(crate) fn render_members(owner_user_id: Option<&str>, member_ids: &[String])
     Some(parts.join(", "))
 }
 
+/// The `<room_context>` member line for the run whose task-locals are live
+/// right now, or `None` when that run is not in a project room.
+///
+/// Lives here, beside the renderer, because it has **two** callers and they sit
+/// in different subsystems: `harness_bridge::prompt_build` (the gateway turn)
+/// and `agents::subagent_spawner::child_environment_context` (a delegated
+/// child). Both depend on `thinker`, and `thinker` already depends on
+/// `projects` — so this is the side that can be depended upon by both without
+/// a new edge. It was private to `prompt_build` until 2026-08-25, which is
+/// precisely why the child path rendered an empty block for its whole
+/// existence: `ResolvedContext` has two construction sites and only one of them
+/// had a reader for this field. Do not re-inline a copy at a call site.
+///
+/// Reads `ProjectStore` directly rather than the `roster::` projection: that
+/// projection stores members in a `HashSet` and exposes only `is_member`, and
+/// a set iterated into a **cached prefix** would re-key the whole conversation
+/// on every process restart. The store returns `ORDER BY added_at`, which is
+/// the same bytes every turn.
+///
+/// A catalogue read failure renders nothing. The alternative — a partial
+/// roster — is worse than silence here: the model would introduce a room to
+/// itself with people missing and no sign that any were.
+#[must_use]
+pub(crate) fn ambient_line() -> Option<String> {
+    let crate::scope::ScopeId::Project(project_id) = crate::scope::current_scope()?.scope else {
+        return None;
+    };
+    let store = crate::projects::ProjectStore::shared();
+    let members = match store.members(&project_id) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::debug!(
+                error = %e,
+                project = %project_id,
+                "projects: roster read failed; the room prompt block is omitted this turn"
+            );
+            return None;
+        }
+    };
+    // A room of one is a room in name only, and naming its single member tells
+    // the model nothing the transcript does not already show.
+    if members.len() < 2 {
+        return None;
+    }
+    let owner = store
+        .get(&project_id)
+        .ok()
+        .flatten()
+        .and_then(|p| p.owner_user_id);
+    render_members(owner.as_deref(), &members)
+}
+
 pub struct RoomRosterLayer;
 
 impl PromptLayer for RoomRosterLayer {

@@ -60,7 +60,22 @@ impl PromptLayer for ExtraFilesLayer {
             // into the markdown header the LLM reads. `sanitize_identity_content`
             // already strips injection patterns + invisible Unicode from
             // `content`; mirror that treatment for `name`.
-            let safe_name = sanitize_identity_content(&file.name, "");
+            //
+            // `sanitize_identity_content(name, content)` returns the sanitized
+            // CONTENT — `name` only labels the `[BLOCKED: …]` message. Passing
+            // `""` as the content therefore sanitized the empty string and
+            // rendered a header with NO NAME AT ALL, which is what shipped
+            // between 44cf6b9e6 and this fix: every extra-file section reached
+            // the model as a bare `### `. So the name goes in the CONTENT slot,
+            // and the label is a constant — routing the untrusted name through
+            // the label would put it back into the one string this call emits
+            // un-scanned.
+            const NAME_LABEL: &str = "an extra-context file name";
+            let safe_name = sanitize_identity_content(NAME_LABEL, &file.name);
+            // A markdown header is one line by construction. `sanitize_identity_content`
+            // normalises CRLF but does not remove LF, and a newline here would
+            // let a configured name forge a second `###` section.
+            let safe_name = safe_name.replace('\n', " ");
             let safe = sanitize_identity_content(&file.name, &file.content);
             sections.push(format!("### {}\n{}", safe_name, safe));
         }
