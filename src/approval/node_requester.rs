@@ -14,6 +14,7 @@
 use crate::exec::analysis::CommandAnalysis;
 use crate::exec::decision::ApprovalRequest;
 use crate::exec::manager::{ExecApprovalManager, DEFAULT_APPROVAL_TIMEOUT_MS};
+use crate::exec::socket::ApprovalDecisionType;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::events::GatewayEventFrame;
 use crate::sandbox::exec_approval::gate::ApprovalOutcome;
