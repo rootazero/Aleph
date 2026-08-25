@@ -146,6 +146,28 @@ pub(crate) fn is_chinese(c: char) -> bool {
 /// hard-coded copy, so the count is the same 11 either way. That is the whole
 /// argument for closing a blind spot the day you find it rather than writing
 /// down that it exists.
+///
+/// # This is the crate's single answer, and why it is a second one
+///
+/// Every source-level guard in this crate that needs "production code only"
+/// asks here — the copy census, `disposed_reads`'s window-listener guard,
+/// `views/settings/network/cluster.rs`'s role-gate pin and
+/// `views/canvas/shape_view.rs`'s iframe-sandbox pin. Each of those three
+/// used to hand-roll `src.split("#[cfg(test)]").next()`, i.e. the blind cut
+/// this function's doc above already argues against, and each was blind in
+/// exactly the way described there.
+///
+/// The server crate answers the same question in
+/// `alephcore::utils::source_scan::{production_prefix, cfg_test_portion}`,
+/// which is more careful still (it lexes raw strings, char literals and block
+/// comments across lines). **This crate cannot call it**: `aleph-panel` is a
+/// wasm frontend and does not depend on `alephcore`, and adding that edge to
+/// reach two functions would pull the whole server library into the frontend
+/// (R1/R3). Moving the functions into a crate both already share was
+/// considered and ruled out by the capability-wiring spec, non-goal 1 — 不拆
+/// crate: `alephcore` stays a single crate this round. So this is a deliberate
+/// second implementation of one question, kept to ONE per crate rather than
+/// one per guard, and this doc is where that decision is recorded.
 pub(crate) fn production_lines(src: &str) -> Vec<(usize, String)> {
     let src = src.replace('\r', "");
     let lines: Vec<&str> = src.split('\n').collect();
@@ -741,6 +763,34 @@ fn census() -> Vec<(PathBuf, usize)> {
     rows
 }
 
+/// Does `line` contain a string literal that OPENS with `#[cfg(test)]`?
+///
+/// Leading `\n` / `\r\n` escapes are stepped over, because the line-anchored
+/// spelling (`find("\n#[cfg(test)]")`) is the same cut with a CRLF story
+/// attached. Anything where the attribute sits further into the literal is
+/// prose or a fixture — an assertion message saying "the #[cfg(test)] split
+/// matched nothing" is not a second cut — so the offset is the whole
+/// discriminator, and it needs no list of method names to stay accurate when
+/// someone reaches for `splitn` or `match_indices` next.
+///
+/// Every `"` on the line is tried, including closing ones. That over-matches
+/// in the loud direction only: the worst it can do is flag a literal that
+/// genuinely starts with the attribute, which is the thing being flagged.
+fn opens_a_cfg_test_literal(line: &str) -> bool {
+    const ATTR: &str = "#[cfg(test)]";
+    let bytes = line.as_bytes();
+    for (quote, _) in line.match_indices('"') {
+        let mut j = quote + 1;
+        while j + 1 < bytes.len() && bytes[j] == b'\\' && matches!(bytes[j + 1], b'n' | b'r') {
+            j += 2;
+        }
+        if line[j..].starts_with(ATTR) {
+            return true;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1093,5 +1143,133 @@ mod tests {
             rows.len(),
             worst.join(", "),
         );
+    }
+    /// One author for "where does production code end", crate-wide.
+    ///
+    /// [`production_lines`] is that author. Three guards used to hand-roll
+    /// `src.split("#[cfg(test)]").next()` instead — `disposed_reads`'s
+    /// window-listener rule, `views/settings/network/cluster.rs`'s role-gate
+    /// pin, `views/canvas/shape_view.rs`'s iframe-sandbox pin — and all three
+    /// were blind in the direction that reports success: a prefix cut can only
+    /// ever UNDER-scan, so a `#[cfg(test)]` on anything above the trailing test
+    /// module truncated the file there and everything below went unseen. That
+    /// is the same defect [`production_lines`]'s own doc records costing 2 266
+    /// lines on the copy census. All three now delegate; this guard is what
+    /// keeps the fourth one from being written.
+    ///
+    /// # What this scan does NOT reach
+    ///
+    /// It is textual and it keys on ONE property: a string literal whose first
+    /// characters are the attribute. Indirection through a named constant is
+    /// still caught — the `const ATTR: &str = "#[cfg(test)]";` line is itself a
+    /// literal opening with the attribute — but a needle assembled from pieces
+    /// (`concat!`, two constants joined) is not, and neither is a cut that
+    /// never spells the attribute at all, e.g. one that searches for
+    /// `"mod tests {"`. Named rather than approximated: closing those needs
+    /// the value flow, and a guard that states what it cannot see is worth more
+    /// than one that implies it sees everything.
+    ///
+    /// # The one exemption
+    ///
+    /// `components/admin_refusal.rs` bounds a single function's BODY (`the
+    /// next \npub fn `, with `\n#[cfg(test)]` as a fallback for the last one
+    /// in the file), not a file's production region. Its failure mode is a
+    /// window that runs long, not a scan that stops early, and it is named
+    /// here rather than swallowed by a narrower predicate — a predicate that
+    /// stopped matching it would stop matching the real thing too. The size is
+    /// pinned so this exemption cannot grow into a licence.
+    #[test]
+    fn no_guard_in_this_crate_hand_rolls_the_cfg_test_cut() {
+        let root = crate::disposed_reads::src_dir();
+        let mut files = crate::disposed_reads::rust_sources(&root);
+        // `rust_sources` drops `disposed_reads.rs` deliberately: its RED
+        // fixtures are the exact shape ITS OWN rule forbids. That reason does
+        // not apply to this rule, and that file is one of the three this guard
+        // exists to hold in place, so put it back explicitly rather than fork
+        // the walker into a second answer to "where is this crate's source".
+        let disposed = root.join("disposed_reads.rs");
+        assert!(
+            disposed.is_file(),
+            "disposed_reads.rs moved — this guard was silently not scanning \
+             one of the three files it was written for"
+        );
+        files.push(disposed);
+        assert!(
+            files.len() > 300,
+            "only {} sources — the walk is broken, not the code",
+            files.len()
+        );
+
+        let mut offenders = Vec::new();
+        for path in &files {
+            let rel = path
+                .strip_prefix(&root)
+                .unwrap_or(path)
+                .display()
+                .to_string()
+                .replace('\\', "/");
+            if rel == "i18n_census.rs" {
+                continue; // defines the replacement; its fixtures are the old shape
+            }
+            let Ok(raw) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            for (n, line) in raw.replace('\r', "").split('\n').enumerate() {
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                if opens_a_cfg_test_literal(line) {
+                    offenders.push(format!("{rel}:{}", n + 1));
+                }
+            }
+        }
+
+        let (exempted, rest): (Vec<String>, Vec<String>) = offenders
+            .into_iter()
+            .partition(|o| o.starts_with("components/admin_refusal.rs:"));
+        assert!(
+            rest.is_empty(),
+            "these cut production code at the first `#[cfg(test)]` marker \
+             instead of calling `i18n_census::production_lines`, which walks \
+             gated ITEMS. The cut only under-scans, so it reports a clean pass \
+             for whatever it could not see:\n  {}",
+            rest.join("\n  ")
+        );
+        assert_eq!(
+            exempted.len(),
+            1,
+            "the admin_refusal exemption matched {} lines, not exactly one: \
+             {exempted:?}. It is named for ONE call site that bounds a \
+             function body rather than a file's production region. A second \
+             one is a decision for a human to write here explicitly — name it, \
+             do not widen the exemption to swallow it.",
+            exempted.len()
+        );
+    }
+
+    /// The detector, on both shapes and on the prose it must not flag.
+    #[test]
+    fn the_cfg_test_literal_detector_reads_the_offset_not_the_method() {
+        assert!(opens_a_cfg_test_literal(r##"    .split("#[cfg(test)]")"##));
+        assert!(opens_a_cfg_test_literal(
+            r##"    let p = src.split("#[cfg(test)]\nmod ").next();"##
+        ));
+        assert!(opens_a_cfg_test_literal(
+            r##"    .or_else(|| body[1..].find("\n#[cfg(test)]"))"##
+        ));
+        assert!(opens_a_cfg_test_literal(
+            r##"    .position(|l| l.starts_with("#[cfg(test)]"))"##
+        ));
+        // Prose and fixtures: the attribute is inside the literal, not at its
+        // start. Flagging these would make the guard an allowlist maintenance
+        // job within a round.
+        assert!(!opens_a_cfg_test_literal(
+            r##"    "the #[cfg(test)] split matched nothing — this test would be","##
+        ));
+        assert!(!opens_a_cfg_test_literal(
+            r##"    let src = "pub fn a() {}\n#[cfg(test)]\nmod t {}";"##
+        ));
+        assert!(!opens_a_cfg_test_literal("#[cfg(test)]"));
+        assert!(!opens_a_cfg_test_literal("mod tests {"));
     }
 }

@@ -541,17 +541,17 @@ mod tests {
     /// `users.update` re-stamps a live connection's role.
     #[test]
     fn the_cluster_page_holds_no_client_side_role_gate() {
-        let src = include_str!("cluster.rs");
-        let production = src
-            .split("#[cfg(test)]")
-            .next()
-            .expect("split always yields at least one segment");
-        // Comments are excluded on purpose: the module doc above names the
-        // deleted predicate so a reader can find this decision, and that
-        // mention must not be what keeps the pin green.
-        let code: String = production
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
+        // `production_lines` is this crate's one answer to "where does
+        // production code end" — it walks `#[cfg(test)]` ITEMS instead of
+        // cutting at the first marker, and it drops whole-line comments on
+        // the way out. Both matter here: the module doc above names the
+        // deleted predicate, and that mention must not be what keeps the pin
+        // green; and a `#[cfg(test)]` on anything but the trailing test module
+        // used to truncate this scan there, which is a green that means "I
+        // could not see you".
+        let code: String = crate::i18n_census::production_lines(include_str!("cluster.rs"))
+            .into_iter()
+            .map(|(_, line)| line)
             .collect::<Vec<_>>()
             .join("\n");
         assert!(

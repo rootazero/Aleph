@@ -406,16 +406,38 @@ mod window_listener_tests {
             let Ok(raw) = std::fs::read_to_string(path) else {
                 continue;
             };
-            // CRLF checkouts: anchor nothing to a bare `\n`.
+            // CRLF checkouts: anchor nothing to a bare `\n`. `production_lines`
+            // normalises `\r` itself; this copy exists because the annotation
+            // look-back below indexes the RAW file and its line numbers have to
+            // line up with the ones `production_lines` reports.
             let src = raw.replace('\r', "");
-            let prod = src.split("#[cfg(test)]").next().unwrap_or(&src);
-            let lines: Vec<&str> = prod.lines().collect();
-            for (i, line) in lines.iter().enumerate() {
-                if line.trim_start().starts_with("//") || !line.contains("window_event_listener(") {
+            let lines: Vec<&str> = src.split('\n').collect();
+
+            // `i18n_census::production_lines` is this crate's one answer to
+            // "where does production code end". It walks `#[cfg(test)]` ITEMS
+            // and drops whole-line comments; this scan used to cut at the first
+            // `#[cfg(test)]` marker instead, which could only ever UNDER-scan —
+            // a gated `use`, helper `fn` or `mod` anywhere above the trailing
+            // test module truncated the file there, and every
+            // `window_event_listener(` below it went unseen and was reported as
+            // a clean pass. The census's own doc records that same cut hiding
+            // 2 266 lines when it was found on the other guard.
+            let production = crate::i18n_census::production_lines(&src);
+            let prod_text: String = production
+                .iter()
+                .map(|(_, line)| line.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            for (lineno, line) in &production {
+                if !line.contains("window_event_listener(") {
                     continue;
                 }
                 checked += 1;
 
+                // The look-back reads RAW lines on purpose: the annotation is a
+                // `//` comment, and `production_lines` has already removed it.
+                let i = lineno - 1;
                 let permanent = lines[i.saturating_sub(6)..i]
                     .iter()
                     .any(|l| l.contains("window-listener-permanent:"));
@@ -435,11 +457,11 @@ mod window_listener_tests {
 
                 let removed = bound
                     .as_ref()
-                    .is_some_and(|n| prod.contains(&format!("{n}.remove()")));
+                    .is_some_and(|n| prod_text.contains(&format!("{n}.remove()")));
 
                 if !removed {
                     let rel = path.strip_prefix(src_dir()).unwrap_or(path);
-                    offenders.push(format!("{}:{}", rel.display(), i + 1));
+                    offenders.push(format!("{}:{}", rel.display(), lineno));
                 }
             }
         }
