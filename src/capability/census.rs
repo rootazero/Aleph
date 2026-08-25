@@ -1396,24 +1396,44 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// ) -> &'static dyn SlotStatus {
     /// ```
     ///
-    /// The discriminating experiment, for whoever repeats it: split the
-    /// signature. If this function still sees the accessor,
-    /// `every_migrated_slot_has_a_roster_accessor` stays green; if it were
-    /// blind, that guard fires and names the static — the same message it
-    /// prints for a genuinely missing accessor, since a blind parser cannot
-    /// tell the two apart.
+    /// The discriminating experiment, for whoever repeats it: split an
+    /// EXISTING accessor's signature — reformat it, do not delete it — and
+    /// confirm `every_migrated_slot_has_a_roster_accessor` stays green. If
+    /// this function is blind to the split form, that guard fires and names
+    /// the static — the same message it prints for a genuinely missing
+    /// accessor, since a blind parser cannot tell the two apart. That is why
+    /// the accessor must stay present: with it gone, a red would be
+    /// ambiguous between "blind" and "missing", and would prove nothing
+    /// about this function. With it present, the accessor's existence is not
+    /// in question, so a red can only mean this function failed to find it —
+    /// blindness is what remains once "missing" is ruled out by construction.
     ///
-    /// This used to be a two-guard cross-check: splitting the signature
+    /// This used to be a two-sided cross-check: splitting the signature
     /// **and** deleting that accessor's `#[allow(dead_code)]` made
     /// `every_roster_accessor_still_carries_the_expiring_allow` fire and NAME
-    /// it if this function saw the accessor, so a green on one guard and a
-    /// red on the other pinned down which side broke. That guard was deleted
-    /// along with the last permit once `ALL_SLOTS` landed (see
-    /// `the_expiring_allow_is_gone_once_the_roster_exists`), so there is no
-    /// permit left to delete and no second guard left to react — only the
-    /// blind direction still fires. A green here no longer independently
-    /// proves the parser saw the split form; it proves only that nothing
-    /// reported the static as unwired.
+    /// it if this function saw the accessor, so which of the two guards fired
+    /// told you which side broke, without trusting either green alone —
+    /// closed with "one green proves nothing on its own." That guard was
+    /// deleted along with the last permit once `ALL_SLOTS` gave every
+    /// accessor a real caller (see
+    /// `the_expiring_allow_is_gone_once_the_roster_exists`): no permit left
+    /// to delete, no second guard left to fire on the "sees it" side. What
+    /// is lost is the general disambiguation — a red on
+    /// `every_migrated_slot_has_a_roster_accessor` alone still cannot tell
+    /// "this function is blind" apart from "the accessor does not exist",
+    /// because it never could; the two-guard version never fixed that either,
+    /// it just gave the OTHER guard something to say instead. What survives
+    /// is this one experiment, where "does not exist" is excluded by not
+    /// deleting anything, and a green is proof this function saw the split
+    /// form, which is why repeating it below still matters.
+    ///
+    /// Re-verified 2026-08-25 against the real wrap, not a hand-typed one:
+    /// renamed an EXISTING accessor to the over-width name in the `ignore`
+    /// block below (kept its body, only the name and its one `ALL_SLOTS`
+    /// caller changed), ran `cargo fmt`, confirmed it produced exactly that
+    /// wrap, and confirmed `every_migrated_slot_has_a_roster_accessor` stayed
+    /// green — this function is not blind to it. Reverted the rename and the
+    /// caller.
     ///
     /// ⚠️ **`parse_static_decl` and the slot arm of `take_census` ARE
     /// line-based** — both read `static NAME: Container<` from a single line.
