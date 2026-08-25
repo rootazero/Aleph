@@ -1177,6 +1177,27 @@ pub fn after() {}
     /// MIS-recognising one? Only the second is alarming — but the third has
     /// now fired twice, so "the number went down" is never by itself the
     /// answer.
+    ///
+    /// # It drifts UPWARD on documentation churn, so "it went up" says nothing either
+    ///
+    /// Re-measured 2026-08-25: the actual value is **196** and this floor is
+    /// deliberately still 193. Today's extractor reproduces 193 exactly on the
+    /// `8d963222a` corpus, so the extractor is exonerated and the whole +3 is
+    /// corpus drift — but only ONE of the three is a real recovery
+    /// (`capability/mod.rs`, which genuinely holds a mid-file
+    /// `#[cfg(test)] pub(crate) mod census;`). The other two,
+    /// `extension/manager_global.rs` and `mcp/sampling_bridge.rs`, recover only
+    /// because they gained DOC COMMENTS that mention the attribute, and
+    /// `old_prefix_cut` below is an unanchored whole-text match that truncates
+    /// on prose exactly as it does on code. Writing a sentence about
+    /// `#[cfg(test)]` therefore moves this number.
+    ///
+    /// So 193, 194 and 196 are all correct, under three different predicates:
+    /// the last explained measurement, the count of genuine recoveries, and
+    /// what the assertion below literally computes. The floor stays at the
+    /// first of those, because every number in the chain above is one somebody
+    /// explained. **State the predicate beside whatever number you write here**
+    /// — that, not the integer, is what makes this a measurement.
     #[test]
     fn production_prefix_recovers_code_the_old_cut_discarded() {
         let mut recovered = 0usize;
@@ -1237,6 +1258,19 @@ pub fn after() {}
     /// `"mod tests {"`, say. Both need value flow rather than text. Named here
     /// rather than left implied: a scanner that does not say what it misses
     /// gets read as one that misses nothing.
+    ///
+    /// # There is a byte-identical twin, deliberately
+    ///
+    /// `interfaces/webchat/src/i18n_census.rs` carries the same function for
+    /// `aleph-panel`'s copy of this rule. It is a second implementation for the
+    /// same reason `production_lines` is: that crate cannot depend on
+    /// `alephcore` (wasm frontend, R1/R3) and the capability-wiring spec's
+    /// non-goal 1 (不拆 crate) rules out a shared crate. Two copies of one
+    /// predicate can drift, so both carry the same unit cases
+    /// (`the_cfg_test_literal_detector_reads_the_offset_not_the_method`) and
+    /// each doc names the other. If you change one, change both — this copy is
+    /// the load-bearing one: it scans the whole `src/` tree and adjudicates the
+    /// registered exemptions below.
     fn opens_a_cfg_test_literal(line: &str) -> bool {
         const ATTR: &str = "#[cfg(test)]";
         let bytes = line.as_bytes();
@@ -1377,18 +1411,67 @@ pub fn after() {}
             rest.join("\n  ")
         );
 
-        let known: Vec<String> = known.into_iter().map(|(_, at)| at).collect();
-        assert_eq!(
-            known.len(),
-            KNOWN_UNMIGRATED_CUTS.len(),
-            "the registered-cut list is out of date. It matched {} lines, not \
-             {}: {known:?}. If you migrated one onto `production_prefix`, \
-             delete its row from `KNOWN_UNMIGRATED_CUTS` — the list may only \
-             shrink, and it can only shrink if someone is made to notice. If a \
-             registered file grew a SECOND hand-rolled cut, that is a new one: \
-             migrate it, do not let the file's row cover it.",
-            known.len(),
-            KNOWN_UNMIGRATED_CUTS.len()
+        // Per FILE, not a total. A total is a scalar aggregate over two
+        // independent events, and they cancel: migrate one registered site
+        // while another registered file grows a second hand-rolled cut and
+        // `5 == 5` still holds, so the message below — which anticipates both
+        // events separately — could never fire on both at once.
+        let mut per_file: std::collections::BTreeMap<&str, usize> = KNOWN_UNMIGRATED_CUTS
+            .iter()
+            .map(|(file, _)| (*file, 0usize))
+            .collect();
+        let mut matched: Vec<&str> = Vec::new();
+        for (file, at) in &known {
+            let hits = per_file
+                .get_mut(file.as_str())
+                .expect("`known` was partitioned by membership in this very map");
+            *hits += 1;
+            matched.push(at);
+        }
+        let wrong: Vec<String> = per_file
+            .iter()
+            .filter(|(_, hits)| **hits != 1)
+            .map(|(file, hits)| format!("{file}: {hits} matching line(s), expected exactly 1"))
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "the registered-cut list no longer describes the tree:\n  {}\n\
+             0 means that site was migrated onto `production_prefix` — delete \
+             its row, the list may only shrink and it can only shrink if \
+             someone is made to notice. More than 1 means a registered file \
+             grew a SECOND hand-rolled cut: migrate that one, do not let the \
+             file's existing row cover it. Matched lines were: {matched:?}",
+            wrong.join("\n  ")
         );
+    }
+    /// The detector, on both shapes and on the prose it must not flag.
+    ///
+    /// Byte-for-byte the cases `aleph-panel`'s twin carries, so a change to one
+    /// copy that is not made to the other shows up as a diff between two test
+    /// bodies rather than as silence. See `opens_a_cfg_test_literal`'s doc for
+    /// why there are two copies at all.
+    #[test]
+    fn the_cfg_test_literal_detector_reads_the_offset_not_the_method() {
+        assert!(opens_a_cfg_test_literal(r##"    .split("#[cfg(test)]")"##));
+        assert!(opens_a_cfg_test_literal(
+            r##"    let p = src.split("#[cfg(test)]\nmod ").next();"##
+        ));
+        assert!(opens_a_cfg_test_literal(
+            r##"    .or_else(|| body[1..].find("\n#[cfg(test)]"))"##
+        ));
+        assert!(opens_a_cfg_test_literal(
+            r##"    .position(|l| l.starts_with("#[cfg(test)]"))"##
+        ));
+        // Prose and fixtures: the attribute is inside the literal, not at its
+        // start. Flagging these would make the guard an allowlist maintenance
+        // job within a round.
+        assert!(!opens_a_cfg_test_literal(
+            r##"    "the #[cfg(test)] split matched nothing — this test would be","##
+        ));
+        assert!(!opens_a_cfg_test_literal(
+            r##"    let src = "pub fn a() {}\n#[cfg(test)]\nmod t {}";"##
+        ));
+        assert!(!opens_a_cfg_test_literal("#[cfg(test)]"));
+        assert!(!opens_a_cfg_test_literal("mod tests {"));
     }
 }

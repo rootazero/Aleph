@@ -776,6 +776,18 @@ fn census() -> Vec<(PathBuf, usize)> {
 /// Every `"` on the line is tried, including closing ones. That over-matches
 /// in the loud direction only: the worst it can do is flag a literal that
 /// genuinely starts with the attribute, which is the thing being flagged.
+///
+/// # There is a byte-identical twin, deliberately
+///
+/// `alephcore`'s `utils::source_scan` carries the same function for the server
+/// crate's copy of this rule — the load-bearing one, since it scans the whole
+/// `src/` tree and adjudicates five registered exemptions. Two copies exist for
+/// the same reason [`production_lines`] is a second implementation: this crate
+/// cannot depend on `alephcore`, and the capability-wiring spec's non-goal 1
+/// (不拆 crate) rules out a shared crate. Both carry the same unit cases
+/// (`the_cfg_test_literal_detector_reads_the_offset_not_the_method`), so a
+/// change made to one copy and not the other shows up as a diff between two
+/// test bodies rather than as silence.
 fn opens_a_cfg_test_literal(line: &str) -> bool {
     const ATTR: &str = "#[cfg(test)]";
     let bytes = line.as_bytes();
