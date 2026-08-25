@@ -67,10 +67,11 @@ pub trait SessionService: Send + Sync + 'static {
 /// they do NOT converge.
 ///
 /// ⚠️ Recount rather than inherit that nine. `MissingSemantics::ConsumerDecides`
-/// quotes the same figure in its own doc ("9 consumers, one silently returns"),
-/// so it now exists in two files with nothing keeping them equal — the shape
-/// this round exists to remove, one level up. The named sites below are the
-/// checkable part; the count is a snapshot.
+/// used to quote the same figure in its own doc — that duplicate was removed
+/// (Task 15), so this comment is now the count's only home. That does not
+/// retire the warning: the count is a snapshot of a live measurement, not a
+/// constant, and a single stale number is still stale. The named sites below
+/// are the checkable part; the count is a snapshot.
 ///
 /// `tools/scoped/dispatch.rs` takes a `let … else` and silently returns;
 /// `builtin_tools/sessions/compact_tool.rs` turns the same `None` into an
