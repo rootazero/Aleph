@@ -318,20 +318,37 @@ mod tests {
 
     // The process-truth rule (cold process -> Warning, tagged
     // `TAG_WIRING_UNKNOWN`, not a pass) is NOT tested here. `booted()` is
-    // backed by a process-global
-    // `OnceLock` (`gateway::shutdown_forensics::BOOT_INSTANT`) that, once set by
-    // ANY test in this lib binary, stays set for the rest of that process's
+    // backed by a process-global `OnceLock`
+    // (`gateway::shutdown_forensics::BOOT_INSTANT`) that, once set by ANY
+    // test in this lib binary, stays set for the rest of that process's
     // life — and that module's own doc declares its
-    // `booted_is_false_before_mark_boot_and_true_after` test "THE ONLY TEST IN
-    // THE LIB BINARY THAT MAY TOUCH `BOOT_INSTANT`", precisely because a second
-    // reader of `booted()` is only correct when it wins an unspecified libtest
-    // ordering race against that one. A prior version of this test carried an
-    // `if booted() { skip }` guard for that race; measured across the full
-    // suite the guard's `eprintln!` was swallowed by cargo's output capture on
-    // a pass, so it deterministically skipped 8/8 runs and the assertions
-    // below never executed. See
+    // `booted_is_false_before_mark_boot_and_true_after` test "THE ONLY TEST
+    // IN THE LIB BINARY THAT MAY TOUCH `BOOT_INSTANT`", precisely because a
+    // second reader of `booted()` is only correct when it wins an
+    // unspecified libtest ordering race against that one.
+    //
+    // A prior version of this test carried an `if booted() { skip }` guard
+    // for that race. What actually got measured, TWICE, with different
+    // results — corrected here rather than restated, because the first
+    // number did not reproduce under the invocation it was attributed to:
+    // isolated to just the two relevant tests (a filtered run, effectively
+    // racing two tests against each other in a small pool), the guard hit
+    // SKIP 8/8 times, with the real assertions never executing. Under the
+    // actual CI-shaped invocation (`cargo test -p alephcore --lib`, the full
+    // suite, unfiltered, default thread count), it hit SKIP 0/2 times — both
+    // runs executed the real assertions. (n=2, not padded further; treat it
+    // as "did not reproduce in two tries" rather than a settled rate.) So
+    // the defect this fix removes was not "the test never runs" — it is
+    // invocation-dependent, and by this repo's own criteria that is the
+    // worse shape: a guard that passes for real under CI and silently skips
+    // under a narrower, filtered run teaches a reader that the assertion
+    // ran when it may not have.
+    //
+    // The fix's mechanism does not depend on which of those numbers is
+    // "the" rate — see
     // `gateway::shutdown_forensics::tests::booted_is_false_before_mark_boot_and_true_after`,
-    // which now carries this check's cold-process assertion at its top, before
-    // `mark_boot()` runs — guaranteed by program order within one test
-    // function, not by test scheduling.
+    // which now carries this check's cold-process assertion at its top,
+    // before `mark_boot()` runs. That removes the race by program order
+    // within one test function, not by winning or losing test scheduling
+    // under any particular invocation.
 }

@@ -271,13 +271,22 @@ mod tests {
     /// `mark_boot_is_idempotent` already called `mark_boot()`. A separate
     /// `assert!(!booted())` — or a separate call into `CapabilityWiringCheck`
     /// — would therefore only be correct when it won the libtest race against
-    /// THIS test, which is exactly what happened: measured across the full
-    /// suite, the check's own cold-process test lost that race 8/8 runs and
-    /// silently skipped instead of asserting anything. Its assertions are kept
-    /// verbatim below (both the original ones and the check's), so nothing was
-    /// traded away for the determinism — everything that needs "boot has not
-    /// run yet" to be true now runs inside the one test function where that is
-    /// guaranteed by program order, not by test scheduling.
+    /// THIS test. What that race actually did, measured twice with different
+    /// results (see `capability_wiring`'s own module doc for the fuller
+    /// account and why the first number did not reproduce under the
+    /// invocation it was attributed to): isolated to just the two relevant
+    /// tests, the check's own cold-process test lost the race 8/8 times and
+    /// silently skipped; under the full, unfiltered suite (the actual
+    /// CI-shaped invocation) it lost 0/2 times (not padded further). So the
+    /// defect removed here is not "it always loses" — it is
+    /// invocation-dependent, which is the worse shape: a guard that runs for
+    /// real under CI and silently skips under a narrower run teaches a
+    /// reader that the assertion ran when it may not have. Its assertions
+    /// are kept verbatim below (both the original ones and the check's), so
+    /// nothing was traded away by folding them in — everything that needs
+    /// "boot has not run yet" to be true now runs inside the one test
+    /// function where that is guaranteed by program order, not by which
+    /// invocation happens to be running.
     #[tokio::test]
     async fn booted_is_false_before_mark_boot_and_true_after() {
         // The negative half is the meaningful assertion and it is only sound
@@ -350,6 +359,181 @@ mod tests {
         mark_boot();
         let second = BOOT_INSTANT.get().expect("boot recorded").elapsed();
         assert!(second >= first);
+    }
+
+    /// Byte range of every `#[test]`/`#[tokio::test(...)]`-attributed
+    /// function body in `text`, paired with the function's name.
+    ///
+    /// `text` must already be comment-stripped
+    /// (`source_scan::strip_comment_lines`) — otherwise a doc comment that
+    /// happens to contain the literal text `#[test]` could manufacture a
+    /// span. This is a text scan, not a parser: it locates the attribute,
+    /// then the next `fn` token, and bails if a `{` or `;` appears in
+    /// between (a sign the attribute did not apply to the function it
+    /// looked like it did — e.g. an intervening item). Good enough for the
+    /// one census below, which only asks "does this specific body contain
+    /// this specific literal call", not anything requiring full parsing.
+    fn test_fn_bodies(text: &str) -> Vec<(String, std::ops::Range<usize>)> {
+        let bytes = text.as_bytes();
+        let mut out = Vec::new();
+        for marker in ["#[test]", "#[tokio::test]", "#[tokio::test("] {
+            let mut from = 0usize;
+            while let Some(rel) = text[from..].find(marker) {
+                let at = from + rel;
+                from = at + marker.len();
+                let Some(fn_at) = text[from..].find("fn ").map(|r| from + r) else {
+                    continue;
+                };
+                if text[from..fn_at].contains(['{', ';']) {
+                    continue; // the attribute did not reach a function
+                }
+                let name_start = fn_at + 3;
+                let mut j = name_start;
+                while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                    j += 1;
+                }
+                if j == name_start {
+                    continue;
+                }
+                let name = text[name_start..j].to_string();
+                let Some(open) = text[j..].find('{').map(|r| j + r) else {
+                    continue;
+                };
+                let Some(close) = matching_brace(bytes, open) else {
+                    continue;
+                };
+                out.push((name, open..close + 1));
+            }
+        }
+        out
+    }
+
+    /// Blank the payload of every `"..."`-delimited string literal in
+    /// `text` (replaced with spaces, same length and byte offsets), leaving
+    /// every other character untouched — so a panic message that quotes the
+    /// literal text `mark_boot()` (this census's own violation message
+    /// does exactly that) does not get misread as a call to it. Handles the
+    /// common escaped-quote case (`"say \"hi\""`).
+    ///
+    /// Always UTF-8-safe: `"` and `\` are ASCII bytes, which by construction
+    /// never occur inside a multi-byte UTF-8 sequence, so every blanked
+    /// range starts and ends on a character boundary.
+    ///
+    /// Known gap, not reachable in this corpus as of writing this guard: a
+    /// raw string (`r#"..."#`) containing an embedded, unescaped `"` closes
+    /// early under this scan. The failure direction is under-blanking, not
+    /// over-matching, so a genuine violation inside such a literal would
+    /// still surface — only with a slightly wrong reported span.
+    fn blank_string_literals(text: &str) -> String {
+        let bytes = text.as_bytes();
+        let mut out = bytes.to_vec();
+        let mut i = 0usize;
+        while i < bytes.len() {
+            if bytes[i] != b'"' {
+                i += 1;
+                continue;
+            }
+            let start = i + 1;
+            let mut j = start;
+            while j < bytes.len() {
+                if bytes[j] == b'\\' && j + 1 < bytes.len() {
+                    j += 2;
+                    continue;
+                }
+                if bytes[j] == b'"' {
+                    break;
+                }
+                j += 1;
+            }
+            let end = j.min(bytes.len());
+            for b in out.iter_mut().take(end).skip(start) {
+                *b = b' ';
+            }
+            i = end + 1;
+        }
+        String::from_utf8(out).unwrap_or_else(|_| text.to_string())
+    }
+
+    /// Index of the `}` matching the `{` at `open`, by depth counting.
+    fn matching_brace(bytes: &[u8], open: usize) -> Option<usize> {
+        let mut depth = 0i32;
+        for (i, &b) in bytes.iter().enumerate().skip(open) {
+            match b {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// The invariant declared on `booted_is_false_before_mark_boot_and_true_after`
+    /// ("THIS IS THE ONLY TEST IN THE LIB BINARY THAT MAY TOUCH
+    /// `BOOT_INSTANT`") was enforced by nothing but that comment until this
+    /// guard. It became load-bearing for a second thing when task 12's fix
+    /// round folded `CapabilityWiringCheck`'s cold-process assertion into
+    /// the same test: gutting or deleting that one function now silently
+    /// drops coverage from two places, with no compile error pointing at
+    /// either. This census is the source-level enforcement the doc comment
+    /// was making a claim about but not backing.
+    ///
+    /// Scoped to `#[test]`/`#[tokio::test]` function bodies specifically
+    /// (via `test_fn_bodies`, comment-stripped first), so the two
+    /// legitimate PRODUCTION callers — `commands::start::start_server`'s
+    /// `mark_boot()` and `CapabilityWiringCheck::run`'s `booted()` — are
+    /// never in scope; neither is a test function, so the scan never visits
+    /// their bodies. Only test code answers to this rule.
+    #[test]
+    fn no_test_outside_the_one_designated_function_touches_boot_instant() {
+        const ALLOWED: &str = "booted_is_false_before_mark_boot_and_true_after";
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let sources = crate::utils::source_scan::rust_sources_under(&root);
+        assert!(
+            sources.len() > 100,
+            "the source walk found only {} files under src/ — this census \
+             scanned nothing, which is not the same as finding nothing wrong",
+            sources.len()
+        );
+
+        let mut scanned_test_fns = 0usize;
+        let mut violations: Vec<String> = Vec::new();
+        for (rel, text) in sources {
+            let stripped = crate::utils::source_scan::strip_comment_lines(&text);
+            for (name, body) in test_fn_bodies(&stripped) {
+                scanned_test_fns += 1;
+                if name == ALLOWED {
+                    continue;
+                }
+                let body_text = blank_string_literals(&stripped[body]);
+                if body_text.contains("mark_boot()") || body_text.contains("booted()") {
+                    violations.push(format!("{rel}::{name}"));
+                }
+            }
+        }
+        // Self-counting: a broken function-span scan that silently finds
+        // zero test functions would report the same "no violations" verdict
+        // as a genuinely clean repo. This repo has 12,000+ `#[test]` and
+        // 4,700+ `#[tokio::test]` items; 1,000 is a floor with margin for
+        // both, not a number tuned to today's count.
+        assert!(
+            scanned_test_fns > 1000,
+            "only found {scanned_test_fns} test functions across src/ — the \
+             census's function-span scan is broken, not confirming a clean \
+             repo"
+        );
+        assert!(
+            violations.is_empty(),
+            "these tests call mark_boot()/booted() outside the one function \
+             that may (`gateway::shutdown_forensics::tests::{ALLOWED}` — see \
+             its doc for why a second caller is a libtest-ordering race, not \
+             a correctness bug): {violations:?}"
+        );
     }
 
     #[cfg(unix)]
