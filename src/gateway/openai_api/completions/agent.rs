@@ -341,6 +341,16 @@ pub async fn handle(
                 };
                 if let Some(svc) = crate::session::service::global_session_service() {
                     let _ = svc.emit_event(&session_key, event).await;
+                } else {
+                    // Same class as the main-path producers (Task 7a): this is
+                    // the sole writer for client-supplied history on the
+                    // OpenAI-compat path. No handle means this replayed
+                    // message never reaches `messages`.
+                    tracing::warn!(
+                        session_key = %session_key,
+                        role = msg.role.as_str(),
+                        "session/service capability absent; dropped a replayed history message — see `aleph doctor`"
+                    );
                 }
             }
         }
