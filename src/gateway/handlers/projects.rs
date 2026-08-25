@@ -156,22 +156,22 @@ fn project_not_found(id: Option<Value>, project_id: &str) -> JsonRpcResponse {
 
 /// The single admission point for every addressed `projects.*` handler.
 ///
-/// Fails closed on a store error: a caller must never be admitted because the
-/// check itself could not complete.
+/// A thin wrapper over [`crate::projects::authz::project_for`], which is the
+/// shared derivation: this face supplies the ambient caller, the tool face
+/// supplies its own. Fails closed on a store error, and answers a refusal
+/// with the same not-found shape absence produces — see that module's doc.
 #[allow(clippy::result_large_err)] // house shape for Result<_, JsonRpcResponse> gates
 fn gate_project(
     store: &ProjectStore,
     id: Option<Value>,
     project_id: &str,
 ) -> Result<Project, JsonRpcResponse> {
-    match store.get(project_id) {
-        Ok(Some(p)) if visibility::project_visible(&p.id) => Ok(p),
-        Ok(_) => Err(project_not_found(id, project_id)),
-        Err(e) => {
-            tracing::warn!(project_id = %project_id, error = %e, "projects: gate failed closed");
-            Err(project_not_found(id, project_id))
-        }
-    }
+    crate::projects::authz::project_for(
+        store,
+        project_id,
+        visibility::visible_owner_filter().as_deref(),
+    )
+    .ok_or_else(|| project_not_found(id, project_id))
 }
 
 /// Separate a room's owner from its ordinary members. Assumes
@@ -181,24 +181,23 @@ fn gate_project(
 ///
 /// Org admins pass for any room (spec §6.3: owner changes are an admin
 /// operation). An unrestricted caller — cron, A2A, an in-process test — passes
-/// unconditionally, the same first arm every P1 predicate opens with.
+/// unconditionally, the same first arm every P1 predicate opens with. The
+/// admin lookup lives here rather than in `authz` so that module depends on
+/// nothing but the project row.
 #[allow(clippy::result_large_err)] // house shape for Result<_, JsonRpcResponse> gates
 fn require_owner(
     users: &SecurityStore,
     id: Option<Value>,
     project: &Project,
 ) -> Result<(), JsonRpcResponse> {
-    let Some(caller) = visibility::visible_owner_filter() else {
-        return Ok(());
-    };
-    if caller == visibility::owner_or_legacy(project.owner_user_id.as_deref()) {
-        return Ok(());
-    }
-    let is_admin = matches!(
-        users.get_user(&caller),
-        Ok(Some(u)) if u.role == UserRole::Admin && u.status == UserStatus::Active
-    );
-    if is_admin {
+    let actor = visibility::visible_owner_filter();
+    let is_admin = actor.as_deref().is_some_and(|caller| {
+        matches!(
+            users.get_user(caller),
+            Ok(Some(u)) if u.role == UserRole::Admin && u.status == UserStatus::Active
+        )
+    });
+    if crate::projects::authz::is_owner(project, actor.as_deref(), is_admin) {
         return Ok(());
     }
     Err(JsonRpcResponse::error(
