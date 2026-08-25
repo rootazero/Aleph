@@ -361,100 +361,12 @@ mod tests {
         assert!(second >= first);
     }
 
-    /// Byte range of every `#[test]`/`#[tokio::test(...)]`-attributed
-    /// function body in `text`, paired with the function's name.
-    ///
-    /// `text` must already be comment-stripped
-    /// (`source_scan::strip_comment_lines`) — otherwise a doc comment that
-    /// happens to contain the literal text `#[test]` could manufacture a
-    /// span. This is a text scan, not a parser: it locates the attribute,
-    /// then the next `fn` token, and bails if a `{` or `;` appears in
-    /// between (a sign the attribute did not apply to the function it
-    /// looked like it did — e.g. an intervening item). Good enough for the
-    /// one census below, which only asks "does this specific body contain
-    /// this specific literal call", not anything requiring full parsing.
-    fn test_fn_bodies(text: &str) -> Vec<(String, std::ops::Range<usize>)> {
-        let bytes = text.as_bytes();
-        let mut out = Vec::new();
-        for marker in ["#[test]", "#[tokio::test]", "#[tokio::test("] {
-            let mut from = 0usize;
-            while let Some(rel) = text[from..].find(marker) {
-                let at = from + rel;
-                from = at + marker.len();
-                let Some(fn_at) = text[from..].find("fn ").map(|r| from + r) else {
-                    continue;
-                };
-                if text[from..fn_at].contains(['{', ';']) {
-                    continue; // the attribute did not reach a function
-                }
-                let name_start = fn_at + 3;
-                let mut j = name_start;
-                while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
-                    j += 1;
-                }
-                if j == name_start {
-                    continue;
-                }
-                let name = text[name_start..j].to_string();
-                let Some(open) = text[j..].find('{').map(|r| j + r) else {
-                    continue;
-                };
-                let Some(close) = matching_brace(bytes, open) else {
-                    continue;
-                };
-                out.push((name, open..close + 1));
-            }
-        }
-        out
-    }
-
-    /// Blank the payload of every `"..."`-delimited string literal in
-    /// `text` (replaced with spaces, same length and byte offsets), leaving
-    /// every other character untouched — so a panic message that quotes the
-    /// literal text `mark_boot()` (this census's own violation message
-    /// does exactly that) does not get misread as a call to it. Handles the
-    /// common escaped-quote case (`"say \"hi\""`).
-    ///
-    /// Always UTF-8-safe: `"` and `\` are ASCII bytes, which by construction
-    /// never occur inside a multi-byte UTF-8 sequence, so every blanked
-    /// range starts and ends on a character boundary.
-    ///
-    /// Known gap, not reachable in this corpus as of writing this guard: a
-    /// raw string (`r#"..."#`) containing an embedded, unescaped `"` closes
-    /// early under this scan. The failure direction is under-blanking, not
-    /// over-matching, so a genuine violation inside such a literal would
-    /// still surface — only with a slightly wrong reported span.
-    fn blank_string_literals(text: &str) -> String {
-        let bytes = text.as_bytes();
-        let mut out = bytes.to_vec();
-        let mut i = 0usize;
-        while i < bytes.len() {
-            if bytes[i] != b'"' {
-                i += 1;
-                continue;
-            }
-            let start = i + 1;
-            let mut j = start;
-            while j < bytes.len() {
-                if bytes[j] == b'\\' && j + 1 < bytes.len() {
-                    j += 2;
-                    continue;
-                }
-                if bytes[j] == b'"' {
-                    break;
-                }
-                j += 1;
-            }
-            let end = j.min(bytes.len());
-            for b in out.iter_mut().take(end).skip(start) {
-                *b = b' ';
-            }
-            i = end + 1;
-        }
-        String::from_utf8(out).unwrap_or_else(|_| text.to_string())
-    }
-
     /// Index of the `}` matching the `{` at `open`, by depth counting.
+    ///
+    /// Sound only on text that has already been through
+    /// [`crate::utils::source_scan::code_text`]: raw braces written inside a string
+    /// literal are gone from that text, so nothing but real block structure
+    /// is counted.
     fn matching_brace(bytes: &[u8], open: usize) -> Option<usize> {
         let mut depth = 0i32;
         for (i, &b) in bytes.iter().enumerate().skip(open) {
@@ -472,67 +384,274 @@ mod tests {
         None
     }
 
-    /// The invariant declared on `booted_is_false_before_mark_boot_and_true_after`
-    /// ("THIS IS THE ONLY TEST IN THE LIB BINARY THAT MAY TOUCH
-    /// `BOOT_INSTANT`") was enforced by nothing but that comment until this
-    /// guard. It became load-bearing for a second thing when task 12's fix
-    /// round folded `CapabilityWiringCheck`'s cold-process assertion into
-    /// the same test: gutting or deleting that one function now silently
-    /// drops coverage from two places, with no compile error pointing at
-    /// either. This census is the source-level enforcement the doc comment
-    /// was making a claim about but not backing.
+    /// Every spelling that reaches the `BOOT_INSTANT` slot: the two public
+    /// functions, plus the static itself — `install`/`decline` go through
+    /// the static directly, so a census that watched only the two functions
+    /// would not see a test that reached past them.
     ///
-    /// Scoped to `#[test]`/`#[tokio::test]` function bodies specifically
-    /// (via `test_fn_bodies`, comment-stripped first), so the two
-    /// legitimate PRODUCTION callers — `commands::start::start_server`'s
-    /// `mark_boot()` and `CapabilityWiringCheck::run`'s `booted()` — are
-    /// never in scope; neither is a test function, so the scan never visits
-    /// their bodies. Only test code answers to this rule.
-    #[test]
-    fn no_test_outside_the_one_designated_function_touches_boot_instant() {
-        const ALLOWED: &str = "booted_is_false_before_mark_boot_and_true_after";
+    /// This array is literal payload sitting inside the region that
+    /// [`no_test_outside_the_one_designated_function_touches_boot_instant`]
+    /// scans, so it doubles as that test's live positive control for
+    /// payload removal: swapping [`crate::utils::source_scan::code_text`]
+    /// there for plain comment-stripping makes this very line the named
+    /// offender (falsified 2026-08-25, RED). A scanner's own strings are
+    /// inside its corpus — here that is wired up as an alarm instead of
+    /// being worked around with an exemption.
+    ///
+    /// It is NOT a control for
+    /// [`the_only_files_naming_the_boot_slot_are_the_owner_the_boot_site_and_the_reader`],
+    /// and assuming otherwise is the easy mistake: that test's verdict is a
+    /// set equality over FILES, and this file is already in the set, so
+    /// extra hits inside it change nothing (measured: that swap leaves it
+    /// GREEN). The two failure directions are not symmetric either — losing
+    /// payload removal can only ADD apparent hits, which is the loud
+    /// direction. The dangerous direction is OVER-blanking, where a
+    /// desynchronised scan reports a clean read of text it never saw; that
+    /// is what `code_text`'s raw-string lexing prevents, and what
+    /// `source_scan`'s own
+    /// `code_text_survives_a_raw_string_with_an_embedded_quote` pins.
+    const BOOT_SLOT_MARKERS: [&str; 3] = ["mark_boot()", "booted()", "BOOT_INSTANT"];
 
+    /// The module that owns the slot.
+    const OWNING_FILE: &str = "src/gateway/shutdown_forensics.rs";
+    /// The one production caller of `mark_boot()`.
+    const BOOT_SITE_FILE: &str = "src/bin/aleph-server/commands/start/mod.rs";
+    /// The one production reader of `booted()`.
+    const READER_FILE: &str = "src/diagnostics/checks/capability_wiring.rs";
+    /// Every file in `src/` permitted to name a [`BOOT_SLOT_MARKERS`]
+    /// spelling at all. Asserted as an EQUALITY, in both directions — see
+    /// [`the_only_files_naming_the_boot_slot_are_the_owner_the_boot_site_and_the_reader`].
+    const BOOT_SLOT_FILES: [&str; 3] = [OWNING_FILE, BOOT_SITE_FILE, READER_FILE];
+
+    /// The one test function allowed to touch the slot.
+    const ALLOWED_TEST: &str = "booted_is_false_before_mark_boot_and_true_after";
+
+    /// The first [`BOOT_SLOT_MARKERS`] spelling `code` contains, if any.
+    /// `code` must already be [`crate::utils::source_scan::code_text`] output.
+    fn boot_slot_spelling(code: &str) -> Option<&'static str> {
+        BOOT_SLOT_MARKERS.into_iter().find(|m| code.contains(m))
+    }
+
+    /// `code` with every `fn <name> … }` definition removed whole
+    /// (signature through matching brace), paired with the removed spans.
+    ///
+    /// The caller checks the span count rather than trusting it: "removed
+    /// nothing" and "removed the thing" produce the same clean verdict
+    /// downstream, so the count is the only thing that tells them apart.
+    fn without_fn(code: &str, name: &str) -> (String, Vec<String>) {
+        let needle = format!("fn {name}");
+        let bytes = code.as_bytes();
+        let mut kept = String::new();
+        let mut removed = Vec::new();
+        let mut from = 0usize;
+        while let Some(rel) = code[from..].find(&needle) {
+            let at = from + rel;
+            let Some(open) = code[at..].find('{').map(|r| at + r) else {
+                break;
+            };
+            let Some(close) = matching_brace(bytes, open) else {
+                break;
+            };
+            kept.push_str(&code[from..at]);
+            removed.push(code[at..=close].to_string());
+            from = close + 1;
+        }
+        kept.push_str(&code[from..]);
+        (kept, removed)
+    }
+
+    /// Every `.rs` file under `src/`, as `(repo-relative path, contents)`.
+    fn src_tree() -> Vec<(String, String)> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let sources = crate::utils::source_scan::rust_sources_under(&root);
+        crate::utils::source_scan::rust_sources_under(&root)
+    }
+
+    /// **The assumption the invariant below rests on.**
+    ///
+    /// `booted_is_false_before_mark_boot_and_true_after` asserts
+    /// `!booted()` before anything in the process has recorded boot. That
+    /// is only sound while the set of things that CAN record boot is small
+    /// and known — otherwise a test that calls some ordinary production
+    /// function could set the slot transitively, and no text scan of test
+    /// bodies would ever see it. Pinning the file set is what keeps that
+    /// reasoning checkable: the whole `src/` tree names the slot in
+    /// exactly three files, so the transitive surface is enumerable, and a
+    /// fourth file appearing is a design event that has to be looked at.
+    ///
+    /// Asserted as set EQUALITY, deliberately, so it fires in both
+    /// directions. A new file is the case above. A file dropping out means
+    /// this pin has outlived its subject and must shrink — the force that
+    /// an exemption list normally lacks, which is why this is a statement
+    /// of the invariant rather than an allowlist for it.
+    ///
+    /// # What this cannot see
+    ///
+    /// A renaming import (`use …::mark_boot as mb; mb();`) and a
+    /// macro-generated call are invisible to any text scan. Neither is
+    /// hypothetically excluded — they are simply outside what this
+    /// instrument measures, and saying so is cheaper than implying
+    /// coverage it does not have.
+    #[test]
+    fn the_only_files_naming_the_boot_slot_are_the_owner_the_boot_site_and_the_reader() {
+        let sources = src_tree();
+        // Self-check. A lower bound on a quantity that only grows during
+        // ordinary work costs nothing to set close to the truth: growth can
+        // never trip it, and the tension a tight bound normally carries
+        // belongs to ceilings, not floors. 2,447 files measured
+        // 2026-08-25; 2,000 leaves 18% for a genuine consolidation while
+        // still catching a walk that came back with a fraction of the tree.
         assert!(
-            sources.len() > 100,
+            sources.len() > 2_000,
             "the source walk found only {} files under src/ — this census \
-             scanned nothing, which is not the same as finding nothing wrong",
+             scanned a fraction of the tree, which is not the same as \
+             finding nothing wrong",
             sources.len()
         );
 
-        let mut scanned_test_fns = 0usize;
+        let mut found: Vec<String> = sources
+            .into_iter()
+            .filter(|(_, text)| {
+                boot_slot_spelling(&crate::utils::source_scan::code_text(text)).is_some()
+            })
+            .map(|(rel, _)| rel)
+            .collect();
+        found.sort();
+        let mut expected: Vec<String> = BOOT_SLOT_FILES.iter().map(|f| (*f).to_string()).collect();
+        expected.sort();
+        assert_eq!(
+            found, expected,
+            "the set of files naming the boot slot changed. A file that \
+             APPEARED widens the transitive surface the one designated test \
+             depends on — see this test's doc. A file that DISAPPEARED means \
+             BOOT_SLOT_FILES now over-permits and must shrink to match."
+        );
+    }
+
+    /// **The invariant.** The doc on
+    /// `booted_is_false_before_mark_boot_and_true_after` declares that it is
+    /// the only test in the lib binary that may touch the slot; that was
+    /// enforced by nothing but the comment until this guard, and it became
+    /// load-bearing for a second thing when `CapabilityWiringCheck`'s
+    /// cold-process assertion was folded into the same function.
+    ///
+    /// # How the region is derived, and why not by parsing test functions
+    ///
+    /// The previous version of this census walked from each
+    /// `#[test]`/`#[tokio::test]` attribute to the following `fn` and bailed
+    /// if it met a `{` or `;` on the way. Nine real test functions in this
+    /// repo carry a `;` between the two — inside `#[ignore = "…; use
+    /// integration tests"]`, or a trailing `// TODO(windows): …;` comment on
+    /// a code line, which whole-line comment stripping does not remove. All
+    /// nine were skipped in silence. It then blanked string literals with an
+    /// alternating-quote walk that desynchronised on
+    /// `tokenize(r#"--role "unclosed role"#)` and blanked everything after
+    /// it to the end of the scanned text.
+    ///
+    /// Both gaps are properties of hand-rolled parsing, so this version does
+    /// none. Files outside [`BOOT_SLOT_FILES`] may not name the slot at all
+    /// (checked by the test above), which covers every test in them without
+    /// knowing where any function starts — including the 120 files under
+    /// `src/` that carry test attributes but no `#[cfg(test)]` of their own
+    /// (measured 2026-08-25; typically a whole test module that a parent
+    /// declares with `#[cfg(test)] mod x;`), for which a region scan finds
+    /// no test code at all and would report them clean without looking. Inside the three permitted files, the test region comes from
+    /// [`crate::utils::source_scan::cfg_test_portion`] — the other half of the same walk
+    /// that produces `production_prefix`, so the two cannot disagree about
+    /// where test code begins — and only ONE function is located by name,
+    /// with the count of hits asserted.
+    ///
+    /// # Scope
+    ///
+    /// The invariant is about the LIB test binary, which is the only process
+    /// where the designated test's `!booted()` can be raced. `src/bin/…` and
+    /// `tests/…` compile into their own binaries and cannot reach this
+    /// process's `BOOT_INSTANT` at all. `src/bin/aleph-server/…/start/mod.rs`
+    /// is still scanned here, deliberately: it is the boot site, so it is
+    /// where a test would most plausibly reach for `mark_boot()`, and a RED
+    /// there is the loud direction. A separate crate (`aleph-tui`,
+    /// `aleph-cli`, …) could call the two public functions without this
+    /// census seeing it, and equally without any effect on this binary.
+    #[test]
+    fn no_test_outside_the_one_designated_function_touches_boot_instant() {
+        use crate::utils::source_scan::{cfg_test_portion, code_text, production_prefix};
+
+        let sources = src_tree();
         let mut violations: Vec<String> = Vec::new();
-        for (rel, text) in sources {
-            let stripped = crate::utils::source_scan::strip_comment_lines(&text);
-            for (name, body) in test_fn_bodies(&stripped) {
-                scanned_test_fns += 1;
-                if name == ALLOWED {
-                    continue;
+        let mut files_checked = 0usize;
+
+        for file in BOOT_SLOT_FILES {
+            let (_, text) = sources
+                .iter()
+                .find(|(rel, _)| rel == file)
+                .unwrap_or_else(|| panic!("{file} is pinned by this census but is not on disk"));
+
+            // Self-check: this file really does still name the slot in
+            // production. Ground truth beats a magnitude floor — if the walk
+            // or the lexer breaks, this fires here, at a place where the
+            // answer is known, instead of downstream as a clean verdict.
+            let production = code_text(&production_prefix(text));
+            assert!(
+                boot_slot_spelling(&production).is_some(),
+                "self-check: {file} no longer names the boot slot in its \
+                 production half. Either the scan is broken, or this file \
+                 does not belong in BOOT_SLOT_FILES any more"
+            );
+
+            // Self-check: the partition actually split this file. An empty
+            // test portion and a clean test portion are the same verdict.
+            let tests = cfg_test_portion(text);
+            assert!(
+                !tests.trim().is_empty(),
+                "self-check: {file} yielded an empty #[cfg(test)] portion — \
+                 the region scan is broken, not confirming a clean file"
+            );
+
+            let mut region = code_text(&tests);
+            if file == OWNING_FILE {
+                let (rest, removed) = without_fn(&region, ALLOWED_TEST);
+                assert_eq!(
+                    removed.len(),
+                    1,
+                    "self-check: expected exactly one definition of \
+                     {ALLOWED_TEST} in {file}, found {}. Zero means the \
+                     excision removed nothing and this census is about to \
+                     approve a region it never looked at",
+                    removed.len()
+                );
+                // The other half of what this guard is for: gutting the
+                // designated function drops coverage in two places with no
+                // compile error pointing at either.
+                let body = &removed[0];
+                for spelling in [BOOT_SLOT_MARKERS[0], BOOT_SLOT_MARKERS[1]] {
+                    assert!(
+                        body.contains(spelling),
+                        "self-check: {ALLOWED_TEST} no longer contains \
+                         `{spelling}`. It is the only test that may, and two \
+                         separate assertions depend on it still doing so"
+                    );
                 }
-                let body_text = blank_string_literals(&stripped[body]);
-                if body_text.contains("mark_boot()") || body_text.contains("booted()") {
-                    violations.push(format!("{rel}::{name}"));
+                region = rest;
+            }
+
+            for line in region.lines() {
+                if let Some(spelling) = boot_slot_spelling(line) {
+                    violations.push(format!("{file}: `{spelling}` in `{}`", line.trim()));
                 }
             }
+            files_checked += 1;
         }
-        // Self-counting: a broken function-span scan that silently finds
-        // zero test functions would report the same "no violations" verdict
-        // as a genuinely clean repo. This repo has 12,000+ `#[test]` and
-        // 4,700+ `#[tokio::test]` items; 1,000 is a floor with margin for
-        // both, not a number tuned to today's count.
-        assert!(
-            scanned_test_fns > 1000,
-            "only found {scanned_test_fns} test functions across src/ — the \
-             census's function-span scan is broken, not confirming a clean \
-             repo"
+
+        assert_eq!(
+            files_checked,
+            BOOT_SLOT_FILES.len(),
+            "self-check: not every pinned file was reached"
         );
         assert!(
             violations.is_empty(),
-            "these tests call mark_boot()/booted() outside the one function \
-             that may (`gateway::shutdown_forensics::tests::{ALLOWED}` — see \
-             its doc for why a second caller is a libtest-ordering race, not \
-             a correctness bug): {violations:?}"
+            "these test-side lines reach the boot slot outside the one \
+             function that may (`gateway::shutdown_forensics::tests::\
+             {ALLOWED_TEST}` — see its doc for why a second toucher is a \
+             libtest-ordering race, not a correctness bug): {violations:#?}"
         );
     }
 

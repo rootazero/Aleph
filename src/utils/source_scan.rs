@@ -50,9 +50,42 @@
 /// outer attribute before reaching them.
 #[must_use]
 pub fn production_prefix(src: &str) -> String {
+    partition_on_cfg_test(src).0
+}
+
+/// The other half: every line [`production_prefix`] removes — each
+/// `#[cfg(test)]` attribute line, the item it applies to, and the blank
+/// lines between them.
+///
+/// # Why this shares one walk with `production_prefix`
+///
+/// The two halves are one partition, so they must have one author. Written
+/// as a second scan they would be a second answer to "where does test code
+/// begin", free to drift from the first — the shape this repo has paid for
+/// before. Here the walk emits both halves in one pass and neither can
+/// disagree with the other about a line.
+///
+/// # What this does NOT cover
+///
+/// A file that is test-only because its PARENT declares it under
+/// `#[cfg(test)] mod x;` (`src/memory/ripple/tests.rs` and 119 others,
+/// measured 2026-08-25) carries no `#[cfg(test)]` of its own, so this
+/// function returns the empty string for it — the file is entirely test
+/// code and this walk cannot tell. Answering that needs module-graph
+/// resolution, which lives with the caller, not here. A caller that must
+/// not be blind to those files should scan them whole rather than ask for
+/// their "test portion".
+#[must_use]
+pub fn cfg_test_portion(src: &str) -> String {
+    partition_on_cfg_test(src).1
+}
+
+/// One walk, both halves: `(production, cfg-test)`.
+fn partition_on_cfg_test(src: &str) -> (String, String) {
     let normalized = src.replace('\r', "");
     let lines: Vec<&str> = normalized.split('\n').collect();
     let mut out: Vec<&str> = Vec::with_capacity(lines.len());
+    let mut test: Vec<&str> = Vec::new();
     let mut i = 0usize;
     while i < lines.len() {
         if !lines[i].trim_start().starts_with("#[cfg(test)]") {
@@ -66,11 +99,16 @@ pub fn production_prefix(src: &str) -> String {
             item += 1;
         }
         if item >= lines.len() {
-            break; // dangling attribute at EOF
+            // Dangling attribute at EOF. It is not production; it applies to
+            // no item, so the test half is where it belongs.
+            test.extend_from_slice(&lines[i..]);
+            break;
         }
-        i = end_of_item(&lines, item);
+        let end = end_of_item(&lines, item);
+        test.extend_from_slice(&lines[i..end]);
+        i = end;
     }
-    out.join("\n")
+    (out.join("\n"), test.join("\n"))
 }
 
 /// Index of the first line AFTER the item beginning at `start`.
@@ -404,6 +442,39 @@ pub fn strip_comment_lines(src: &str) -> String {
         .join("\n")
 }
 
+/// `src` reduced to the code a compiler would see: comment text removed,
+/// and the *payload* of every string, byte-string, C-string, raw-string and
+/// char literal removed too, each literal leaving a delimiter sentinel in
+/// place (see [`code_only`]). Line structure is preserved.
+///
+/// # Why a census wants this and not just [`strip_comment_lines`]
+///
+/// A scanner's own message strings, marker constants, and fixtures are
+/// inside the corpus it scans. Comment-stripping alone leaves them there,
+/// so a guard looking for the literal text `foo()` finds its OWN
+/// `"...foo()..."` and either fires on itself or grows an exemption for
+/// itself — and an exemption is the thing that later hides a real hit.
+/// Removing literal payloads deletes the whole problem class instead of
+/// naming its instances.
+///
+/// The naive alternative — walking `"` characters and blanking between
+/// alternating pairs — desynchronises on the first raw string carrying an
+/// odd number of embedded quotes (`tokenize(r#"--role "unclosed role"#)`,
+/// `src/group_chat/channel.rs`), after which the "inside a literal" region
+/// runs to the end of the scanned text and swallows every subsequent line
+/// into blanks. That is the silent-approval direction: a guard reports a
+/// clean scan of text it never looked at. [`LexState`] lexes raw strings
+/// properly, which is why this composition is safe where that one is not.
+#[must_use]
+pub fn code_text(src: &str) -> String {
+    let mut state = LexState::default();
+    src.replace('\r', "")
+        .lines()
+        .map(|line| code_only(line, &mut state))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Walk `root` for `.rs` files, returning `(repo-relative path, contents)`.
 ///
 /// Test-only. Aleph already has 12+ independent copies of this walk in
@@ -644,6 +715,72 @@ pub fn after() {}
 
     /// CRLF checkouts are real on Windows; a `\n`-anchored scan matches
     /// nothing there and the guard silently covers the test module too.
+    /// The two halves are one partition: every line is in exactly one of
+    /// them, and together they reconstruct the file. Asserted rather than
+    /// assumed, because the whole point of deriving the test half from this
+    /// walk is that it cannot disagree with the production half.
+    #[test]
+    fn the_two_halves_partition_the_file() {
+        let src = "pub fn a() {}\n\n#[cfg(test)]\nmod tests {\n    fn t() {}\n}\n\npub fn b() {}\n";
+        let prod = production_prefix(src);
+        let tests = cfg_test_portion(src);
+        assert!(prod.contains("pub fn a()") && prod.contains("pub fn b()"));
+        assert!(!prod.contains("mod tests"));
+        assert!(
+            tests.contains("#[cfg(test)]")
+                && tests.contains("mod tests")
+                && tests.contains("fn t()")
+        );
+        assert!(!tests.contains("pub fn a()") && !tests.contains("pub fn b()"));
+        let mut all: Vec<&str> = prod.lines().chain(tests.lines()).collect();
+        let mut original: Vec<&str> = src.trim_end_matches('\n').lines().collect();
+        all.sort_unstable();
+        original.sort_unstable();
+        assert_eq!(all, original, "every line must land in exactly one half");
+    }
+
+    /// A file whose test code is reached only through a parent's
+    /// `#[cfg(test)] mod x;` carries no attribute of its own, so its test
+    /// portion is empty. Declared, not accidental — a caller that treats an
+    /// empty portion as "nothing to check" would be blind to 120 files in
+    /// this repo.
+    #[test]
+    fn a_file_with_no_cfg_test_attribute_has_an_empty_test_portion() {
+        let src = "use super::*;\n\n#[test]\nfn t() {}\n";
+        assert_eq!(production_prefix(src), src);
+        assert!(cfg_test_portion(src).is_empty());
+    }
+
+    /// The shape that desynchronises an alternating-quote blanker: a raw
+    /// string carrying an odd number of embedded quotes. Everything after
+    /// it must remain visible — the failure this guards against is the
+    /// scanner silently approving text it blanked away.
+    #[test]
+    fn code_text_survives_a_raw_string_with_an_embedded_quote() {
+        let src = "fn t() {\n    let x = tokenize(r#\"--role \"unclosed role\"#);\n    danger_marker();\n}\n";
+        let code = code_text(src);
+        assert!(
+            code.contains("danger_marker()"),
+            "code after an odd-quote raw string must stay visible; got:\n{code}"
+        );
+        assert!(
+            !code.contains("unclosed role"),
+            "the raw string's payload must be gone; got:\n{code}"
+        );
+    }
+
+    /// The reason a census wants payloads gone: its own marker strings and
+    /// messages are inside the corpus it scans.
+    #[test]
+    fn code_text_removes_literal_payloads_but_keeps_the_code_around_them() {
+        let src =
+            "fn t() {\n    let m = \"danger_marker()\";\n    let c = '{';\n    real_call();\n}\n";
+        let code = code_text(src);
+        assert!(!code.contains("danger_marker()"), "got:\n{code}");
+        assert!(code.contains("real_call()"), "got:\n{code}");
+        assert!(code.contains("let m ="), "got:\n{code}");
+    }
+
     #[test]
     fn crlf_input_is_handled() {
         let src = "pub fn a() {}\r\n#[cfg(test)]\r\nmod tests {\r\n    fn t() {}\r\n}\r\n";
