@@ -145,4 +145,39 @@ if [ "$RC" != "0" ]; then
   echo "--- mock log tail ---"
   tail -40 "$QA_ROOT/mock.log"
 fi
+
+# HOLD=1 — keep the gateway up after the assertions so a BROWSER can be pointed
+# at the state they just built.
+#
+# Why this mode has to exist: every assertion above is an RPC round-trip, so it
+# proves the SERVER answers correctly and says nothing at all about whether the
+# Panel's Kanban / Workspace / Memory components render that answer. Those three
+# tabs were placeholders until this round, and "the RPC returns the team" and
+# "the tab draws the team" are two different claims — the second one has no
+# in-process test that can reach it (`aleph-panel --lib` renders components, not
+# a live gateway).
+#
+# Loopback is always operator and credential-free, so a browser on this machine
+# needs no ticket; that is also why the LAN-leg member checks above use a real
+# credential and this does not.
+#
+# The values seeded above are deliberately ones no other machine could produce
+# — "QA Room Renamed", "QA Room Team", "QA workspace" in README.md, the
+# `qa-room-note` fact. They are the assertion AND the proof that the page being
+# read is this fixture's, not some other server that happens to be listening.
+if [ "${HOLD:-0}" = "1" ]; then
+  echo
+  echo "=== HOLD: gateway is still up ==="
+  echo "  Panel:     http://127.0.0.1:$GATEWAY_PORT/"
+  echo "  Room:      \"QA Room Renamed\" (renamed by the last phase)"
+  echo "  Expect  -> Kanban:    a team card named \"QA Room Team\""
+  echo "          -> Workspace: README.md, whose body contains \"QA workspace\""
+  echo "          -> Memory:    a note titled \"QA Room Note\""
+  echo "  scratch:   $QA_ROOT"
+  echo "  Ctrl-C to tear down."
+  # `wait` alone would return as soon as ANY child settles; this parks until the
+  # server itself exits or the trap fires.
+  while kill -0 "$SERVER_PID" 2>/dev/null; do sleep 2; done
+fi
+
 exit "$RC"
