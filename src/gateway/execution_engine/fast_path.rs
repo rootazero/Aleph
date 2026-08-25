@@ -79,6 +79,14 @@ where
                     },
                 )
                 .await;
+        } else {
+            // Sole producer on this path — fast path bypasses `seed_session`
+            // and main-path `add_message`. No handle means neither the user's
+            // command nor its reply reaches `messages`.
+            warn!(
+                session_key = %request.session_key.to_key_string(),
+                "session/service capability absent; dropped UserMessage + AssistantMessage — see `aleph doctor`"
+            );
         }
         let _ = emitter
             .emit(StreamEvent::RunComplete {
@@ -190,6 +198,14 @@ where
                     },
                 )
                 .await;
+        } else {
+            // Sole producer on this path — same as the success branch above.
+            // No handle means neither the user's command nor its error echo
+            // reaches `messages`.
+            warn!(
+                session_key = %request.session_key.to_key_string(),
+                "session/service capability absent; dropped UserMessage + AssistantMessage — see `aleph doctor`"
+            );
         }
         let _ = emitter
             .emit(StreamEvent::ResponseChunk {
