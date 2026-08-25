@@ -93,7 +93,14 @@ pub fn compute_next_every(
 #[must_use]
 pub fn apply_min_gap(next_run_ms: i64, last_ended_ms: Option<i64>) -> i64 {
     match last_ended_ms {
-        Some(ended) => next_run_ms.max(ended + MIN_REFIRE_GAP_MS),
+        // `saturating_add` mirrors `compute_staggered_next`'s style in
+        // `cron/stagger.rs` and prevents an overflowing add (e.g. an
+        // `i64::MAX` sentinel in `last_duration_ms` paired with a real
+        // timestamp) from wrapping to a huge negative in release or
+        // panicking in debug. Saturating pins the floor at `i64::MAX`,
+        // which still beats `next_run_ms` and yields a sensible
+        // 'never refire' state.
+        Some(ended) => next_run_ms.max(ended.saturating_add(MIN_REFIRE_GAP_MS)),
         None => next_run_ms,
     }
 }

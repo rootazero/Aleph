@@ -26,17 +26,17 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() {
         return 0.0;
     }
-    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 || dot.is_nan() || norm_a.is_nan() || norm_b.is_nan() {
+    let dot: f64 = a.iter().zip(b).map(|(x, y)| f64::from(*x) * f64::from(*y)).sum();
+    let norm_a: f64 = a.iter().map(|x| f64::from(*x) * f64::from(*x)).sum::<f64>().sqrt();
+    let norm_b: f64 = b.iter().map(|x| f64::from(*x) * f64::from(*x)).sum::<f64>().sqrt();
+    if norm_a == 0.0 || norm_b == 0.0 || !norm_a.is_finite() || !norm_b.is_finite() {
         return 0.0;
     }
     let sim = dot / (norm_a * norm_b);
-    if sim.is_nan() {
-        0.0
+    if sim.is_finite() {
+        sim as f32
     } else {
-        sim
+        0.0
     }
 }
 
@@ -158,11 +158,18 @@ impl DedupEngine {
     }
 
     /// Remove dedup records older than `retention_ms` milliseconds.
-    pub async fn cleanup(&self, retention_ms: u64) {
-        let Some(c) = &self.conn else { return };
+    ///
+    /// Returns the number of rows deleted, mirroring the `*History` reapers
+    /// (`CronHistoryReaper`, `HeartbeatHistoryReaper`). Callers surface the
+    /// count in operator-visible logs so an empty reaper is distinguishable
+    /// from a broken one.
+    pub async fn cleanup(&self, retention_ms: u64) -> Result<usize, String> {
+        let Some(c) = &self.conn else {
+            return Ok(0);
+        };
         let conn = c.lock().await;
         let cutoff = chrono::Utc::now().timestamp_millis() - retention_ms as i64;
-        let _ = cleanup_dedup_records(&conn, cutoff);
+        cleanup_dedup_records(&conn, cutoff)
     }
 }
 
