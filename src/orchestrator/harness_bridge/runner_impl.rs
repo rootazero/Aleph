@@ -443,7 +443,8 @@ impl HarnessRunner for AgentHarnessRunner {
         // Seed the prompt-side token gate from the same calibration carry-over
         // the history budget seeds from below, so both sides estimate with the
         // accuracy the EWMA converged to under this model's tokenizer.
-        let prompt_estimate_factor = calibration_seed_for_model(&CALIBRATION_CARRYOVER, &gauge_model);
+        let prompt_estimate_factor =
+            calibration_seed_for_model(&CALIBRATION_CARRYOVER, &gauge_model);
 
         // Run-start recall (ONCE, pre-loop) → fenced String for the builder;
         // also backfills routing_attribution.task_emb for the observer (symmetry).
@@ -1189,8 +1190,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 )
             });
             let prompt_token_budget = prompt_token_budget.as_ref().map(|cfg| cfg.token_budget);
-            let prompt_estimate_factor =
-                calibration_seed_for_model(&CALIBRATION_CARRYOVER, &model);
+            let prompt_estimate_factor = calibration_seed_for_model(&CALIBRATION_CARRYOVER, &model);
             let system_prompt = self
                 .build_system_prompt(
                     &agent_id,

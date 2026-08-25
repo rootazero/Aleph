@@ -9,8 +9,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::api::chat::ChatApi;
-use crate::api::team_chat
-::{TeamChatApi, TeamMessageItem};
+use crate::api::team_chat::{TeamChatApi, TeamMessageItem};
 use crate::api::teams::{TeamSummary, TeamsApi};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
@@ -515,7 +514,6 @@ pub fn ChatSidebar() -> impl IntoView {
                                         &id,
                                         t_string!(i18n, chat.new_chat).to_string(),
                                     );
-
                                 }
                             }
                             agents.set(list);

@@ -122,8 +122,7 @@ pub struct SpawnerBase {
     /// **prompt** budget onto the model it will actually run on (`resolved_
     /// model` below) exactly as the main loop re-keys its own every run.
     /// `None` (tests / legacy callers) keeps the chain-minimum derivation.
-    pub context_budget_refiner:
-        Option<crate::orchestrator::deps_builder::ContextBudgetRefiner>,
+    pub context_budget_refiner: Option<crate::orchestrator::deps_builder::ContextBudgetRefiner>,
     /// The parent runner's configured per-provider context-window override,
     /// fed to [`Self::context_budget_refiner`] exactly as the main loop feeds
     /// its own refinement.
@@ -531,10 +530,9 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             .model
             .map(str::to_string)
             .or_else(|| req.agent_def.model_hint.clone());
-        let token_budget = base
-            .context_budget_config
-            .as_ref()
-            .map_or_else(crate::thinker::prompt_budget::TokenBudget::default, |cfg| {
+        let token_budget = base.context_budget_config.as_ref().map_or_else(
+            crate::thinker::prompt_budget::TokenBudget::default,
+            |cfg| {
                 // Re-key the chain-minimum budget onto the model this child
                 // will actually run on — the same refinement the main loop
                 // applies (runner_impl), so a child pinned to a narrow model
@@ -553,7 +551,8 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 crate::thinker::prompt_budget::TokenBudget::from_context_window(
                     refined.token_budget,
                 )
-            });
+            },
+        );
         // Seed the prompt token gate from the cross-run calibration
         // carry-over under the child's own model — the same factor the main
         // loop seeds its prompt gate with, so a model whose tokenizer the

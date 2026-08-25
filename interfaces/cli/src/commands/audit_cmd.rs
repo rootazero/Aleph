@@ -40,7 +40,11 @@ pub fn parse_since(spec: &str) -> Result<i64, String> {
         Some('h') => (&spec[..spec.len() - 1], 3600),
         Some('d') => (&spec[..spec.len() - 1], 86_400),
         Some(c) if c.is_ascii_digit() => (spec, 1),
-        _ => return Err(format!("unrecognised --since unit in {spec:?}; use s, m, h or d")),
+        _ => {
+            return Err(format!(
+                "unrecognised --since unit in {spec:?}; use s, m, h or d"
+            ))
+        }
     };
     let n: i64 = digits
         .parse()
@@ -135,8 +139,10 @@ pub async fn query(
 /// (`strftime('%s')`), unlike most of this repo's millisecond timestamps, so
 /// the conversion is spelled out here rather than inferred at the call site.
 fn format_timestamp(secs: i64) -> String {
-    chrono::DateTime::from_timestamp(secs, 0)
-        .map_or_else(|| secs.to_string(), |t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+    chrono::DateTime::from_timestamp(secs, 0).map_or_else(
+        || secs.to_string(),
+        |t| t.format("%Y-%m-%d %H:%M:%S").to_string(),
+    )
 }
 
 fn humanize_secs(secs: i64) -> String {

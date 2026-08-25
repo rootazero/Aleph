@@ -196,9 +196,9 @@ pub const MAX_SKILL_FILE_BYTES: u64 = 1024 * 1024;
 fn trust_for_source(source: &SkillSource) -> TrustLevel {
     match source {
         SkillSource::Bundled => TrustLevel::Trusted,
-        SkillSource::Plugin(_)
-        | SkillSource::Workspace
-        | SkillSource::Global => TrustLevel::Community,
+        SkillSource::Plugin(_) | SkillSource::Workspace | SkillSource::Global => {
+            TrustLevel::Community
+        }
     }
 }
 

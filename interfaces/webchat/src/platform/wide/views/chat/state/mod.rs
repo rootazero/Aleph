@@ -2659,7 +2659,10 @@ mod step_tests {
         chat.start_assistant_message("run-a");
         assert_eq!(chat.phase.get_untracked(), ChatPhase::Thinking);
 
-        chat.set_send_error(ChatSendError::new(ChatSendErrorCode::CloudSendFailed, "boom"));
+        chat.set_send_error(ChatSendError::new(
+            ChatSendErrorCode::CloudSendFailed,
+            "boom",
+        ));
 
         assert_eq!(chat.phase.get_untracked(), ChatPhase::Error);
         assert_eq!(

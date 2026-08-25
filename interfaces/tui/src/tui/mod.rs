@@ -278,7 +278,6 @@ fn next_backoff(current: Duration) -> Duration {
     }
 }
 
-
 /// The main event loop. Separated from `run()` so terminal restoration
 /// happens even if this function returns an error.
 async fn main_loop<'c>(
@@ -742,8 +741,14 @@ mod reconnect_tests {
     /// back in ten seconds.
     #[test]
     fn the_wait_stops_growing_at_the_ceiling() {
-        assert_eq!(next_backoff(Duration::from_secs(10)), Duration::from_secs(15));
-        assert_eq!(next_backoff(Duration::from_secs(15)), Duration::from_secs(15));
+        assert_eq!(
+            next_backoff(Duration::from_secs(10)),
+            Duration::from_secs(15)
+        );
+        assert_eq!(
+            next_backoff(Duration::from_secs(15)),
+            Duration::from_secs(15)
+        );
     }
 
     /// The side-question repair is actually reached when a reconnect succeeds.

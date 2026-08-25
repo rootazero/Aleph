@@ -1522,7 +1522,8 @@ mod tests {
         &arm[..end]
     }
 
-    const BOOT_FULL: &str = "async fn bring_target_online(handle: &tauri::AppHandle) -> BootOutcome {";
+    const BOOT_FULL: &str =
+        "async fn bring_target_online(handle: &tauri::AppHandle) -> BootOutcome {";
     const REMOTE_ARM: &str = "connection::ConnectionTarget::Remote(url) => {";
 
     /// The full app must honour a persisted `Remote` target across restarts.

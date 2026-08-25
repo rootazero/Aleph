@@ -1152,7 +1152,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            backend.notes_citing("default", "raw-fact-only").await.unwrap(),
+            backend
+                .notes_citing("default", "raw-fact-only")
+                .await
+                .unwrap(),
             vec!["preference/typescript".to_string()],
             "the note quotes this raw in a fact; only `notes_provenance` knows"
         );

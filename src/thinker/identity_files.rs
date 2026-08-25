@@ -337,7 +337,8 @@ pub fn write_identity_file(
     // large prior file (up to 1 MB) doesn't stall the runtime. The follow-up
     // `std::fs::write` stays on the current thread because by then the
     // blocking work is done and the write itself is on the agent's hot path.
-    let backup_path = tokio::task::block_in_place(|| backup_identity_file(agent_dir, file_name, &path));
+    let backup_path =
+        tokio::task::block_in_place(|| backup_identity_file(agent_dir, file_name, &path));
 
     std::fs::write(&path, content).map_err(|e| format!("Failed to write {file_name}: {e}"))?;
 
@@ -474,8 +475,8 @@ mod tests {
         // primitive the two write surfaces use; `IdentityFiles::load` is
         // the only reader the prompt layer ever sees.
         let dir = TempDir::new().unwrap();
-        let initial = write_identity_file(dir.path(), "SOUL.md", "you are aleph v1")
-            .expect("initial write");
+        let initial =
+            write_identity_file(dir.path(), "SOUL.md", "you are aleph v1").expect("initial write");
         assert!(initial.backup_path.is_none(), "first write has no prior");
 
         let files_v1 = IdentityFiles::load(dir.path(), &IdentityFilesConfig::default());
@@ -483,8 +484,8 @@ mod tests {
 
         // Overwrite — the prior version must be snapshotted before the
         // loader can ever observe the new copy.
-        let second = write_identity_file(dir.path(), "SOUL.md", "you are aleph v2")
-            .expect("second write");
+        let second =
+            write_identity_file(dir.path(), "SOUL.md", "you are aleph v2").expect("second write");
         assert!(
             second.backup_path.is_some(),
             "overwrite must snapshot the prior version"
@@ -502,7 +503,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn workspace_file_names_match_spec() {
         assert_eq!(IDENTITY_FILE_NAMES.len(), 5);
         assert_eq!(IDENTITY_FILE_NAMES[0], "SOUL.md");
@@ -794,12 +795,9 @@ mod tests {
 
         // And exactly at the cap is still accepted.
         let exact = "y".repeat(MAX_IDENTITY_FILE_SIZE);
-        write_identity_file(dir.path(), "SOUL.md", &exact)
-            .expect("exact-cap write should succeed");
+        write_identity_file(dir.path(), "SOUL.md", &exact).expect("exact-cap write should succeed");
         assert_eq!(
-            std::fs::metadata(dir.path().join("SOUL.md"))
-                .unwrap()
-                .len(),
+            std::fs::metadata(dir.path().join("SOUL.md")).unwrap().len(),
             MAX_IDENTITY_FILE_SIZE as u64
         );
     }

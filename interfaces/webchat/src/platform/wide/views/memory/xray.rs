@@ -56,8 +56,8 @@ pub fn RetrievalXray(
             // Scoped to the agent the console is showing. The Settings twin
             // sends no agent at all and therefore always x-rays the default
             // one — a trace of a different population than the rows on screen.
-            let res = MemoryConfigApi::retrieve_with_trace(&state, Some(&agent), &q, XRAY_LIMIT)
-                .await;
+            let res =
+                MemoryConfigApi::retrieve_with_trace(&state, Some(&agent), &q, XRAY_LIMIT).await;
             let _ = result.try_set(Some(Loadable::from_rpc(res)));
         });
     };

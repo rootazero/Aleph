@@ -190,10 +190,7 @@ impl MemoryTraceTool {
         if safe.is_empty() {
             return Vec::new();
         }
-        let file = self
-            .note_memory_dir
-            .join(agent)
-            .join(format!("{safe}.md"));
+        let file = self.note_memory_dir.join(agent).join(format!("{safe}.md"));
         let Ok(content) = tokio::fs::read_to_string(&file).await else {
             return Vec::new();
         };

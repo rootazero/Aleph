@@ -454,7 +454,9 @@ impl Default for LeakDetector {
 /// never allocates per-match.
 fn redact_all_matches<'c>(content: &'c str, matches: &[&'c str], replacement: &str) -> String {
     debug_assert!(
-        matches.windows(2).all(|w| w[0].as_ptr() as usize + w[0].len() <= w[1].as_ptr() as usize),
+        matches
+            .windows(2)
+            .all(|w| w[0].as_ptr() as usize + w[0].len() <= w[1].as_ptr() as usize),
         "matches must be non-overlapping and in start order"
     );
     let mut out = String::with_capacity(content.len());

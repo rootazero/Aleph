@@ -238,13 +238,7 @@ impl AlephClient {
         // Generation 0: the first socket, and the one every later reconnect
         // supersedes.
         tokio::spawn(Self::read_loop(
-            read,
-            pending,
-            event_tx,
-            connected,
-            write,
-            generation,
-            0,
+            read, pending, event_tx, connected, write, generation, 0,
         ));
 
         info!("Connected to Gateway");
@@ -615,10 +609,7 @@ impl AlephClient {
     /// there is one writer and no second copy to disagree.
     #[must_use]
     pub fn role(&self) -> String {
-        self.role
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.role.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Record what a handshake just granted.
@@ -921,7 +912,11 @@ mod tests {
                     "id": req["id"],
                     "result": { "ok": true },
                 });
-                if ws2.send(Message::Text(reply.to_string().into())).await.is_err() {
+                if ws2
+                    .send(Message::Text(reply.to_string().into()))
+                    .await
+                    .is_err()
+                {
                     break;
                 }
             }

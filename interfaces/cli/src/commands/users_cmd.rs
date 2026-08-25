@@ -43,8 +43,8 @@ pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult
     // Parsed through the shared contract type rather than by string lookup: a
     // renamed column used to render as a table of dashes, which reads like a
     // field with no value rather than like a broken client.
-    let parsed: UserListResult =
-        serde_json::from_value(result.clone()).map_err(|e| aleph_client::CliError::Other(e.to_string()))?;
+    let parsed: UserListResult = serde_json::from_value(result.clone())
+        .map_err(|e| aleph_client::CliError::Other(e.to_string()))?;
     let rows: Vec<Vec<String>> = parsed
         .users
         .iter()

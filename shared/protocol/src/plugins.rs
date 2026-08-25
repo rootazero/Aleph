@@ -471,11 +471,22 @@ mod tests {
             unavailable_reason: None,
         })
         .unwrap();
-        let mut keys: Vec<&str> = wire.as_object().unwrap().keys().map(String::as_str).collect();
+        let mut keys: Vec<&str> = wire
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
         keys.sort_unstable();
         assert_eq!(
             keys,
-            ["description", "installable", "marketplace", "name", "version"],
+            [
+                "description",
+                "installable",
+                "marketplace",
+                "name",
+                "version"
+            ],
             "renaming a column here must break both renderers at compile time, \
              not print a row of dashes"
         );
@@ -530,7 +541,13 @@ mod tests {
     #[test]
     fn a_browse_result_keeps_problems_separate_from_an_empty_catalogue() {
         let quiet = serde_json::to_value(MarketplaceBrowseResult::default()).unwrap();
-        assert_eq!(quiet.get("problems").and_then(|v| v.as_array()).map(Vec::len), Some(0));
+        assert_eq!(
+            quiet
+                .get("problems")
+                .and_then(|v| v.as_array())
+                .map(Vec::len),
+            Some(0)
+        );
 
         let noisy = MarketplaceBrowseResult {
             plugins: vec![],
@@ -623,13 +640,7 @@ mod tests {
         keys.sort_unstable();
         assert_eq!(
             keys,
-            [
-                "name",
-                "removable",
-                "source",
-                "type",
-                "unremovable_reason"
-            ],
+            ["name", "removable", "source", "type", "unremovable_reason"],
             "the handler used to build this row as a json! literal, so a \
              renamed key could not go red on either side"
         );
