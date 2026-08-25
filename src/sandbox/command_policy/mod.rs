@@ -318,11 +318,16 @@ impl CommandPolicy {
 /// make this function allocate O(stdin.len()) just to feed
 /// [`CommandPolicy::evaluate`], which itself only consumes a
 /// `2 * MAX_SCAN_BYTES`-byte window (head/mid/tail). Pre-truncating here
-/// keeps memory bounded at the same ceiling `evaluate` already assumes;
-/// anything past it is dropped, and the OS sandbox remains the backstop.
+/// keeps memory bounded at the same ceiling `evaluate` already assumes,
+/// and the OS sandbox remains the backstop.
 /// The cap is well above any realistic program/args line, so an argv that
 /// genuinely exceeds it would itself be a more interesting incident than
 /// any policy scan missing it.
+///
+/// **What gets dropped is the MIDDLE, never the tail.** `evaluate`'s own
+/// head/mid/tail windowing operates on whatever this function returns, so a
+/// byte discarded here is a byte the hard filter can never see — which is why
+/// "keep the first N" was a bypass rather than a budget.
 #[must_use]
 pub fn command_text(cmd: &SandboxCommand) -> String {
     const CAP: usize = 2 * MAX_SCAN_BYTES;
@@ -339,26 +344,66 @@ pub fn command_text(cmd: &SandboxCommand) -> String {
     // regardless of `stdin.len()`, closing the O(stdin.len()) allocation a
     // single command could otherwise use to OOM the daemon.
     if s.len() >= CAP {
-        s.truncate(CAP);
+        // `String::truncate` PANICS off a char boundary, and argv is arbitrary
+        // UTF-8 — so floor to one rather than trusting CAP to land cleanly.
+        s.truncate(floor_boundary(&s, CAP));
         return s;
     }
     if let Some(stdin) = &cmd.stdin {
         if let Ok(text) = std::str::from_utf8(stdin) {
             s.push('\n');
             let remaining = CAP - s.len();
-            if text.len() > remaining {
-                // Keep the FIRST `remaining` bytes of the stdin. `evaluate`
-                // will then window head/mid/tail over the now-bounded text, so
-                // the "dangerous tail of a large stdin" shape (cargo failing
-                // after MiBs of progress) is still caught by the same scan
-                // pass that would have caught it on an un-truncated input.
-                s.push_str(&text[..remaining]);
-            } else {
+            if text.len() <= remaining {
                 s.push_str(text);
+            } else {
+                // Keep the head AND the tail.
+                //
+                // This used to keep only the head, arguing that `evaluate`
+                // windows head/mid/tail over the result so a dangerous tail was
+                // still caught. That argument does not hold: `evaluate` windows
+                // over the buffer IT IS GIVEN, and bytes dropped here are not in
+                // it. The tail of a large stdin was therefore unreachable by the
+                // hard filter, which is a bypass with a trivial recipe —
+                // `bash -s` with a megabyte of padding ahead of the payload.
+                //
+                // The two halves are joined by a newline-fenced marker rather
+                // than spliced directly: an abutted head and tail can FORGE a
+                // match that exists in neither (`…of=` + `/dev/sda`), and the
+                // rules treat a newline as a statement boundary. The marker also
+                // makes the elision visible in any log that prints this text.
+                const ELISION: &str = "\n…[stdin truncated]…\n";
+                let budget = remaining.saturating_sub(ELISION.len());
+                let head_len = budget / 2;
+                let head_end = floor_boundary(text, head_len);
+                let tail_start = ceil_boundary(text, text.len() - (budget - head_len));
+                s.push_str(&text[..head_end]);
+                s.push_str(ELISION);
+                s.push_str(&text[tail_start..]);
             }
         }
     }
     s
+}
+
+/// Largest char boundary `<= i`. `str::floor_char_boundary` is still unstable,
+/// and a raw `&s[..i]` on a multi-byte payload is a panic in the one code path
+/// whose whole job is to survive hostile input.
+fn floor_boundary(s: &str, mut i: usize) -> usize {
+    if i >= s.len() {
+        return s.len();
+    }
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// Smallest char boundary `>= i`.
+fn ceil_boundary(s: &str, mut i: usize) -> usize {
+    while i < s.len() && !s.is_char_boundary(i) {
+        i += 1;
+    }
+    i
 }
 
 /// `SandboxBeforeHook` that evaluates each command against a [`CommandPolicy`]
