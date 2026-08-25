@@ -6,6 +6,8 @@
 
 use std::path::Path;
 
+use super::paths::is_windows_reserved_name;
+
 /// Longest sanitized filename kept, in characters. Keeps the value comfortably
 /// under filesystem and `Content-Disposition` limits downstream.
 pub(crate) const MAX_FILENAME_CHARS: usize = 200;
@@ -63,7 +65,13 @@ pub(crate) fn sanitize_filename(name: &str) -> String {
     // so the recorded name matches what any filesystem would keep. This also
     // turns a residual ".." into the fallback.
     let trimmed = cleaned.trim().trim_end_matches('.').trim_end();
-    if trimmed.is_empty() {
+    // Windows reserves a small set of device names (CON, PRN, AUX, NUL,
+    // COM1-9, LPT1-9) at the filesystem layer — case-insensitively and on the
+    // stem only, so "CON.txt" stays allowed. A sanitized name that lands on one
+    // of these would either fail to create on Windows or, worse, redirect a
+    // write to the device. Map them to the fallback like every other
+    // unrecoverable shape.
+    if trimmed.is_empty() || is_windows_reserved_name(&trimmed) {
         FALLBACK_FILENAME.to_string()
     } else {
         trimmed.to_string()
@@ -132,5 +140,24 @@ mod tests {
     fn a_plain_name_passes_through_untouched() {
         assert_eq!(sanitize_filename("chart.png"), "chart.png");
         assert_eq!(sanitize_filename("季度复盘.md"), "季度复盘.md");
+    }
+
+    /// Windows reserves a small set of device names at the FS layer regardless
+    /// of extension. A sanitized name landing on one would either fail to
+    /// create or, worse, redirect to a device — both silently for a caller that
+    /// only sees the returned string.
+    #[test]
+    fn windows_reserved_device_names_become_the_fallback() {
+        for raw in ["CON", "con", "Con", "PRN", "AUX", "NUL", "COM1", "LPT9"] {
+            assert_eq!(
+                sanitize_filename(raw),
+                FALLBACK_FILENAME,
+                "{raw:?} must map to the fallback"
+            );
+        }
+        // Reserved set applies to the stem; "CON.txt" is a regular file on
+        // Windows and must pass through.
+        assert_eq!(sanitize_filename("CON.txt"), "CON.txt");
+        assert_eq!(sanitize_filename("con.log"), "con.log");
     }
 }

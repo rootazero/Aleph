@@ -638,15 +638,34 @@ pub fn plugin_skill_dirs() -> Vec<PathBuf> {
 }
 
 /// True when `agent_id` is a single safe path component (non-empty, no path
-/// separators, no parent refs, no NUL). Mirrors [`get_agent_config_dir`]'s
-/// guard so skill discovery can build `~/.aleph/agents/<id>/skills` without
-/// risking traversal outside the agents root.
+/// separators, no parent refs, no NUL, not a Windows reserved device name).
+/// Mirrors [`get_agent_config_dir`]'s guard so skill discovery can build
+/// `~/.aleph/agents/<id>/skills` without risking traversal outside the agents
+/// root.
 fn is_safe_agent_id(agent_id: &str) -> bool {
     !agent_id.is_empty()
         && !agent_id.contains('/')
         && !agent_id.contains('\\')
         && !agent_id.contains("..")
         && !agent_id.contains('\0')
+        && !is_windows_reserved_name(agent_id)
+}
+
+/// Bare names Windows reserves at the filesystem layer regardless of
+/// extension: the four classic devices plus COM1-9 and LPT1-9. Matching is
+/// case-insensitive on the base part only — `CON.txt` is a normal file, the
+/// reserved check applies to the stem, never to `name.ext` as a whole.
+///
+/// Lives here (not in `utils::filename`) so the agent-id validator and the
+/// filename sanitizer share one source of truth. `pub(crate)` for the latter.
+pub(crate) fn is_windows_reserved_name(name: &str) -> bool {
+    // The reserved set is exactly 23 names; the base lookup is O(23).
+    const RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    let stem = name.rsplit_once('.').map_or(name, |(b, _)| b);
+    RESERVED.iter().any(|r| stem.eq_ignore_ascii_case(r))
 }
 
 /// Append each plugin's `skills` directory found under `plugins_root` to `dirs`
@@ -890,14 +909,10 @@ pub fn get_canvas_root() -> Result<PathBuf> {
 ///
 /// The directory is created if it doesn't exist.
 pub fn get_agent_config_dir(agent_id: &str) -> Result<PathBuf> {
-    if agent_id.contains('/')
-        || agent_id.contains('\\')
-        || agent_id.contains("..")
-        || agent_id.is_empty()
-        || agent_id.contains('\0')
-    {
+    if !is_safe_agent_id(agent_id) {
         return Err(AlephError::config(format!(
-            "Invalid agent ID '{agent_id}': must not contain path separators, '..', or null bytes"
+            "Invalid agent ID '{agent_id}': must be a single path component with no traversal \
+             and not match a Windows reserved device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)"
         )));
     }
 
@@ -1827,6 +1842,21 @@ mod tests {
         assert!(get_agent_config_dir("a\\b").is_err());
         assert!(get_agent_config_dir("a..b").is_err());
         assert!(get_agent_config_dir("a\0b").is_err());
+        assert!(get_agent_config_dir("CON").is_err());
+        assert!(get_agent_config_dir("con").is_err());
+        assert!(get_agent_config_dir("COM1").is_err());
+        assert!(get_agent_config_dir("lpt9").is_err());
+    }
+
+    #[test]
+    fn test_is_safe_agent_id_rejects_reserved_names() {
+        assert!(!is_safe_agent_id("CON"));
+        assert!(!is_safe_agent_id("con"));
+        assert!(!is_safe_agent_id("COM1"));
+        assert!(!is_safe_agent_id("LPT9"));
+        // Plain agents stay allowed.
+        assert!(is_safe_agent_id("researcher"));
+        assert!(is_safe_agent_id("my-agent_01"));
     }
 
     #[test]

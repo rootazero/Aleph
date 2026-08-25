@@ -25,6 +25,18 @@ pub(crate) fn remember<V>(
     value: V,
     cap: usize,
 ) {
+    // `cap=0` is technically a "hard bound" — the cache ends up empty — but
+    // every insert is immediately evicted and the value is silently lost, so
+    // it reads as a working cache that just never holds anything. Catch the
+    // programmer error in tests; in release builds, fall through (the
+    // existing behavior) so an existing cap=0 call site cannot panic in prod.
+    debug_assert!(
+        cap > 0,
+        "fifo_cache cap must be > 0; cap=0 silently swallows every insert"
+    );
+    if cap == 0 {
+        return;
+    }
     if !map.contains_key(&key) {
         order.push_back(key.clone());
     }
