@@ -578,13 +578,26 @@ mod tests {
     fn build_all_lines_invalidates_on_content_change() {
         let mut state = AppState::new("test".into(), "claude".into());
         state.ensure_assistant_message();
+        if let ChatMessage::Assistant { is_streaming, .. } = state.current_assistant_mut() {
+            // Must be non-streaming: `build_all_lines_cached` never caches a
+            // streaming message (its spinner/tool content can change every
+            // tick without `content_len` changing), so a still-streaming
+            // message here would make the first call below a no-op cache
+            // insert and the test would pass regardless of whether
+            // `content_len` invalidation actually works.
+            *is_streaming = false;
+        }
         let mut cache = LineCache::default();
-        let _ = build_all_lines_cached(
+        let _first = build_all_lines_cached(
             &state.messages,
             state.verbose,
             state.spinner_frame,
             80,
             &mut cache,
+        );
+        assert!(
+            !cache.entries.is_empty(),
+            "the message must actually be cached before we test invalidation"
         );
         if let ChatMessage::Assistant { content, .. } = state.current_assistant_mut() {
             content.push_str("new text");
