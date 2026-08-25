@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// A pending server-trust approval raised by `PanelWebView`'s TLS-challenge
 /// handler. Carries the display facts plus the one-shot `decide` callback that
@@ -37,6 +38,8 @@ final class AppState: ObservableObject {
     private let probe: ReachabilityProbing
     private let envURL: () -> String?
 
+    private static let logger = Logger(subsystem: "ai.aleph.panel", category: "AppState")
+
     init(
         store: ConnectionStoring,
         probe: ReachabilityProbing,
@@ -53,7 +56,7 @@ final class AppState: ObservableObject {
     func resolve() async {
         if let env = envURL(), !env.isEmpty,
            case .success(let target) = PairingTarget.parse(env) {
-            try? store.save(target.url)
+            Self.persist(store: store, logger: Self.logger, url: target.url)
             await connectOrPair(target)
             return
         }
@@ -72,7 +75,7 @@ final class AppState: ObservableObject {
             screen = .pairing(message: Self.message(for: error))
         case .success(let target):
             if await probe.probe(target) {
-                try? store.save(target.url)
+                Self.persist(store: store, logger: Self.logger, url: target.url)
                 screen = .connected(target.url)
             } else {
                 // `unreachableMessage` names the resolved origin and says what
@@ -105,7 +108,20 @@ final class AppState: ObservableObject {
     }
 
     /// Raise a server-trust approval sheet (called from the webview's TLS hook).
+    ///
+    /// WKWebView can dispatch multiple server-trust challenges for the same
+    /// `host:port` (main document + WASM/asset sub-resources, in particular),
+    /// and the shell can only show one sheet at a time. If a prior challenge
+    /// is still awaiting the user's decision when a second arrives, the second
+    /// overwrites the first here — and the first's `completionHandler` is then
+    /// never called, which strands that load forever. Fail-closed on the new
+    /// one instead: the held challenge is cancelled, and the user keeps the
+    /// single sheet they were already looking at.
     func presentCertPrompt(_ request: CertPromptRequest) {
+        if pendingCert != nil {
+            request.decide(false)
+            return
+        }
         pendingCert = request
     }
 
@@ -142,6 +158,20 @@ final class AppState: ObservableObject {
         case .invalidURL: return "That doesn't look like a valid address"
         case .unsupportedScheme(let s): return "Unsupported scheme: \(s)"
         case .noHost: return "Address is missing a host"
+        }
+    }
+
+    /// Persist the chosen target. A keychain failure here is not fatal — the
+    /// shell still navigates to the panel for this session — but if it goes
+    /// silent the user thinks pairing worked and loses the setting on the
+    /// next launch. Log the OSStatus so the failure surfaces in Console.app /
+    /// `log stream` (the only diagnostic the AppState has; the pairing UI
+    /// stays in the dark by design).
+    private static func persist(store: ConnectionStoring, logger: Logger, url: URL) {
+        do {
+            try store.save(url)
+        } catch {
+            logger.error("Keychain save failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 }
