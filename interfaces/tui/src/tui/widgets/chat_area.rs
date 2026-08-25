@@ -13,7 +13,7 @@ use ratatui::{
 };
 
 use crate::tui::app::{AppState, ChatMessage, Focus};
-use crate::tui::markdown::markdown_to_lines;
+use crate::tui::markdown::{markdown_to_lines, markdown_to_lines_incremental};
 use crate::tui::theme::DEFAULT_THEME;
 
 use super::tool_block::render_tool_block;
@@ -28,6 +28,18 @@ use super::tool_block::render_tool_block;
 #[derive(Debug, Default)]
 pub struct LineCache {
     entries: HashMap<usize, CachedEntry>,
+    /// Fine-grained incremental cache for the ONE currently-streaming
+    /// message's markdown conversion (see `markdown_to_lines_incremental`).
+    /// Distinct from `entries` above: that whole-message cache deliberately
+    /// never caches a streaming message (its content grows every tick), so
+    /// this is the only cache the streaming message gets, and it caches at
+    /// the safe-prefix-offset granularity rather than the whole message.
+    streaming_markdown_cache: Option<(usize, Vec<Line<'static>>)>,
+    /// The message index this `streaming_markdown_cache` belongs to. Reset
+    /// (along with the cache above) whenever the streaming message changes
+    /// — e.g. a new turn starts streaming — so the new message doesn't
+    /// inherit a stale safe-offset from the previous one.
+    streaming_message_idx: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -140,6 +152,7 @@ fn build_all_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
                     state.spinner_frame,
                     width,
                     &mut lines,
+                    None,
                 );
             }
             ChatMessage::System { content } => {
@@ -171,6 +184,20 @@ fn build_all_lines_cached(
     width: u16,
     cache: &mut LineCache,
 ) -> Vec<Line<'static>> {
+    let streaming_idx = messages.iter().position(|m| {
+        matches!(
+            m,
+            ChatMessage::Assistant {
+                is_streaming: true,
+                ..
+            }
+        )
+    });
+    if cache.streaming_message_idx != streaming_idx {
+        cache.streaming_markdown_cache = None;
+        cache.streaming_message_idx = streaming_idx;
+    }
+
     let mut lines: Vec<Line<'static>> = Vec::new();
     for (idx, message) in messages.iter().enumerate() {
         let (kind, content_len) = message_kind_and_len(message);
@@ -208,6 +235,11 @@ fn build_all_lines_cached(
                         spinner_frame,
                         width,
                         &mut buf,
+                        if *is_streaming {
+                            Some(&mut cache.streaming_markdown_cache)
+                        } else {
+                            None
+                        },
                     );
                 }
                 ChatMessage::System { content } => {
@@ -288,6 +320,7 @@ fn render_assistant_message(
     spinner_frame: usize,
     width: u16,
     lines: &mut Vec<Line<'static>>,
+    streaming_cache: Option<&mut Option<(usize, Vec<Line<'static>>)>>,
 ) {
     let prefix_style = Style::default().fg(DEFAULT_THEME.assistant);
 
@@ -348,7 +381,13 @@ fn render_assistant_message(
     // Content (markdown rendered)
     if !content.is_empty() {
         let content_width = width.saturating_sub(2);
-        let md_lines = markdown_to_lines(content, content_width);
+        let md_lines = match streaming_cache {
+            Some(cache) => {
+                let (_offset, lines) = markdown_to_lines_incremental(content, content_width, cache);
+                lines
+            }
+            None => markdown_to_lines(content, content_width),
+        };
         for md_line in md_lines {
             let mut spans = vec![Span::styled("\u{2503} ", prefix_style)];
             spans.extend(md_line.spans);

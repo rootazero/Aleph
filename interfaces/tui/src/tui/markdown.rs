@@ -95,6 +95,73 @@ pub fn markdown_to_lines(text: &str, width: u16) -> Vec<Line<'static>> {
     result
 }
 
+/// Incremental variant of [`markdown_to_lines`] for a still-growing message.
+///
+/// `cache` holds `(safe_offset, lines_for_that_prefix)` from the previous
+/// call. Only the text from `safe_offset` to the new
+/// `shared_ui_logic::markdown_stream::safe_freeze_offset` boundary is
+/// re-converted; the rest of the cached `Vec<Line>` is reused as-is. Falls
+/// back to a full re-run of [`markdown_to_lines`] on the very first call
+/// (`cache == None`) and whenever no further safe progress exists (the
+/// cached lines are still returned unchanged in that case).
+///
+/// Returns `(new_safe_offset, full_lines_for_the_whole_text)` — the second
+/// element is what callers render; the first is what they should pass back
+/// in `cache` (already stored into `*cache` by this function) on the next
+/// call.
+///
+/// **Note on the cost model**: unlike Panel's HTML-string cache (which only
+/// re-processes the newly-safe delta and appends pre-rendered HTML), this
+/// re-runs `markdown_to_lines` on the whole safe prefix `text[..new_offset]`
+/// when the boundary advances, because `markdown_to_lines` returns
+/// `Vec<Line<'static>>` with wrapped/styled spans that aren't trivially
+/// concatenable the way HTML strings are (a `Line` wrapped at a width
+/// boundary can differ depending on what came before it in the same
+/// paragraph). This still avoids reprocessing whenever the boundary DOESN'T
+/// advance (the common case — most ticks arrive between safe-offset
+/// advances), and the tail-only reprocessing (`text[new_offset..]` /
+/// `text[prev_offset..]`) is always bounded by "how far behind the safe
+/// boundary trails," not by total message length. If profiling after this
+/// ships shows the prefix reformat is still too costly for very long
+/// streaming messages, that's a Phase 2 candidate — not attempted here
+/// (YAGNI).
+pub fn markdown_to_lines_incremental(
+    text: &str,
+    width: u16,
+    cache: &mut Option<(usize, Vec<Line<'static>>)>,
+) -> (usize, Vec<Line<'static>>) {
+    let (prev_offset, prev_lines) = cache.clone().unwrap_or((0, Vec::new()));
+    match shared_ui_logic::markdown_stream::safe_freeze_offset(text, prev_offset) {
+        Some(new_offset) if new_offset > prev_offset => {
+            // The safe prefix grew. Re-run full conversion ONLY on the safe
+            // prefix (cheap relative to the whole growing text as long as
+            // fences close reasonably often) and append the tail from
+            // markdown_to_lines run on just the remainder, matching
+            // markdown_to_lines's own fence-tracking semantics (it always
+            // starts a fresh scan at `in_code_block = false`, which is valid
+            // exactly at a safe-offset boundary by construction).
+            let mut lines = markdown_to_lines(&text[..new_offset], width);
+            let tail = &text[new_offset..];
+            if !tail.is_empty() {
+                lines.extend(markdown_to_lines(tail, width));
+            }
+            *cache = Some((new_offset, lines.clone()));
+            (new_offset, lines)
+        }
+        _ => {
+            // No new safe progress: reformat only the tail past the cached
+            // safe offset and append it to the cached prefix lines.
+            let mut lines = prev_lines.clone();
+            let tail = &text[prev_offset..];
+            if !tail.is_empty() {
+                lines.extend(markdown_to_lines(tail, width));
+            }
+            *cache = Some((prev_offset, prev_lines));
+            (prev_offset, lines)
+        }
+    }
+}
+
 /// Check if a line is a list item (starts with `- ` or `* `)
 fn is_list_item(line: &str) -> bool {
     let trimmed = line.trim_start();
@@ -621,5 +688,30 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(all_text.contains("fn main()"), "code should still appear");
+    }
+
+    #[test]
+    fn incremental_and_full_conversion_produce_identical_lines() {
+        let text = "line one\n```rust\nfn f() {}\n```\nline two\n";
+        let full = markdown_to_lines(text, 80);
+
+        let mut cache: Option<(usize, Vec<Line<'static>>)> = None;
+        let (_offset, incremental) = markdown_to_lines_incremental(text, 80, &mut cache);
+        assert_eq!(full, incremental);
+    }
+
+    #[test]
+    fn incremental_conversion_reuses_the_cache_on_a_second_call_with_more_text() {
+        let mut cache: Option<(usize, Vec<Line<'static>>)> = None;
+        let first_text = "line one\n";
+        let (offset1, lines1) = markdown_to_lines_incremental(first_text, 80, &mut cache);
+        assert!(offset1 > 0);
+        assert_eq!(cache.as_ref().map(|(o, _)| *o), Some(offset1));
+
+        let grown_text = "line one\nline two\n";
+        let (offset2, lines2) = markdown_to_lines_incremental(grown_text, 80, &mut cache);
+        assert!(offset2 >= offset1);
+        assert_eq!(lines2, markdown_to_lines(grown_text, 80));
+        let _ = lines1; // only asserted for the offset progression above
     }
 }
