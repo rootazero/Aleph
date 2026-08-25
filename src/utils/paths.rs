@@ -637,24 +637,63 @@ pub fn plugin_skill_dirs() -> Vec<PathBuf> {
         .clone()
 }
 
+/// Why `agent_id` is not a usable single path component, or `None` when it is.
+///
+/// Returns the reason rather than a bare bool because the caller that REPORTS a
+/// rejection has to explain it, and one fused sentence listing every rule is
+/// wrong for whichever rule actually fired: a NUL byte used to be answered with
+/// a lecture about path traversal and Windows device names, which names neither
+/// what the operator did nor what to change. A boolean is enough to block a
+/// call; it is not enough to explain one.
+///
+/// Order is the order an operator would want to hear about: the cheapest,
+/// most specific fault first.
+fn unsafe_agent_id_reason(agent_id: &str) -> Option<&'static str> {
+    if agent_id.is_empty() {
+        return Some("must not be empty");
+    }
+    if agent_id.contains('\0') {
+        return Some("must not contain null bytes");
+    }
+    if agent_id.contains('/') || agent_id.contains('\\') {
+        return Some("must be a single path component, with no '/' or '\\' separator");
+    }
+    if agent_id.contains("..") {
+        return Some("must not contain '..' (path traversal)");
+    }
+    if is_windows_reserved_name(agent_id) {
+        return Some(
+            "must not match a Windows reserved device name \
+             (CON, PRN, AUX, NUL, COM1-9, LPT1-9)",
+        );
+    }
+    None
+}
+
 /// True when `agent_id` is a single safe path component (non-empty, no path
 /// separators, no parent refs, no NUL, not a Windows reserved device name).
 /// Mirrors [`get_agent_config_dir`]'s guard so skill discovery can build
 /// `~/.aleph/agents/<id>/skills` without risking traversal outside the agents
 /// root.
+///
+/// Derived from [`unsafe_agent_id_reason`] so the predicate and the explanation
+/// can never disagree about what is safe.
 fn is_safe_agent_id(agent_id: &str) -> bool {
-    !agent_id.is_empty()
-        && !agent_id.contains('/')
-        && !agent_id.contains('\\')
-        && !agent_id.contains("..")
-        && !agent_id.contains('\0')
-        && !is_windows_reserved_name(agent_id)
+    unsafe_agent_id_reason(agent_id).is_none()
 }
 
 /// Bare names Windows reserves at the filesystem layer regardless of
 /// extension: the four classic devices plus COM1-9 and LPT1-9. Matching is
-/// case-insensitive on the base part only — `CON.txt` is a normal file, the
-/// reserved check applies to the stem, never to `name.ext` as a whole.
+/// case-insensitive and applies to the STEM, so `CON.txt` is reserved too.
+///
+/// That last clause is the whole point and this doc used to deny it, claiming
+/// "`CON.txt` is a normal file". It is not: Win32 strips the extension when it
+/// resolves a device name, so `CON.txt`, `CON.log` and `C:\anywhere\CON.txt`
+/// all open the console device. A file "created" under such a name is written
+/// to a device instead — silently, for a caller that only sees a returned
+/// string. The stem check has always been correct; only the sentence
+/// describing it was wrong, and it was copied into a test that then pinned the
+/// misconception.
 ///
 /// Lives here (not in `utils::filename`) so the agent-id validator and the
 /// filename sanitizer share one source of truth. `pub(crate)` for the latter.
@@ -909,10 +948,9 @@ pub fn get_canvas_root() -> Result<PathBuf> {
 ///
 /// The directory is created if it doesn't exist.
 pub fn get_agent_config_dir(agent_id: &str) -> Result<PathBuf> {
-    if !is_safe_agent_id(agent_id) {
+    if let Some(reason) = unsafe_agent_id_reason(agent_id) {
         return Err(AlephError::config(format!(
-            "Invalid agent ID '{agent_id}': must be a single path component with no traversal \
-             and not match a Windows reserved device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)"
+            "Invalid agent ID '{agent_id}': {reason}"
         )));
     }
 

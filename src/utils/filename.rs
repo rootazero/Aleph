@@ -67,11 +67,12 @@ pub(crate) fn sanitize_filename(name: &str) -> String {
     let trimmed = cleaned.trim().trim_end_matches('.').trim_end();
     // Windows reserves a small set of device names (CON, PRN, AUX, NUL,
     // COM1-9, LPT1-9) at the filesystem layer — case-insensitively and on the
-    // stem only, so "CON.txt" stays allowed. A sanitized name that lands on one
-    // of these would either fail to create on Windows or, worse, redirect a
-    // write to the device. Map them to the fallback like every other
-    // unrecoverable shape.
-    if trimmed.is_empty() || is_windows_reserved_name(&trimmed) {
+    // STEM, which means "CON.txt" is reserved as well: Win32 drops the
+    // extension when resolving a device, so that name opens the console rather
+    // than creating a file. A sanitized name that lands on one of these would
+    // either fail to create or, worse, redirect a write to the device. Map them
+    // to the fallback like every other unrecoverable shape.
+    if trimmed.is_empty() || is_windows_reserved_name(trimmed) {
         FALLBACK_FILENAME.to_string()
     } else {
         trimmed.to_string()
@@ -155,9 +156,31 @@ mod tests {
                 "{raw:?} must map to the fallback"
             );
         }
-        // Reserved set applies to the stem; "CON.txt" is a regular file on
-        // Windows and must pass through.
-        assert_eq!(sanitize_filename("CON.txt"), "CON.txt");
-        assert_eq!(sanitize_filename("con.log"), "con.log");
+        // The reserved set applies to the STEM, and an extension does not
+        // rescue it: Win32 resolves `CON.txt` to the console device, so a
+        // "file" written under that name goes to the device. This pair used to
+        // assert the opposite — the misconception travelled from the SSOT's doc
+        // comment (`utils::paths::is_windows_reserved_name`) into a test, where
+        // it then read as a deliberate carve-out rather than an error.
+        for raw in ["CON.txt", "con.log", "NUL.md", "LPT9.tar"] {
+            assert_eq!(
+                sanitize_filename(raw),
+                FALLBACK_FILENAME,
+                "{raw:?} resolves to a device on Windows and must map to the fallback"
+            );
+        }
+        // KNOWN GAP, recorded rather than silently widened: the stem is taken
+        // at the LAST dot, so `con.tar.gz` yields the stem `con.tar` and passes.
+        // Win32 resolves a device from the name up to the FIRST dot, so that
+        // one is a device too. Switching to `split_once` is the fail-safe
+        // direction (a false positive is a file called `unnamed`; a false
+        // negative is a write redirected to a device) but it also widens what
+        // `is_safe_agent_id` rejects, so it wants its own change and its own
+        // argument — not a line smuggled into a test repair.
+        assert_eq!(sanitize_filename("con.tar.gz"), "con.tar.gz");
+        // A name that merely STARTS with a reserved word is a normal file —
+        // the check is equality on the stem, not a prefix match.
+        assert_eq!(sanitize_filename("CONTACTS.txt"), "CONTACTS.txt");
+        assert_eq!(sanitize_filename("console.log"), "console.log");
     }
 }
