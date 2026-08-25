@@ -112,6 +112,15 @@ pub fn init_global(service: SharedCronService) {
     let _ = GLOBAL_CRON.install(service);
 }
 
+/// Record that boot reached this slot and had nothing to install.
+///
+/// Boot has two such arms — `[cron] enabled = false`, and `CronService::new`
+/// failing — and they need different sentences: the first is a setting, the
+/// second is a fault. `because` is quoted verbatim to an operator.
+pub fn decline_global(because: &'static str) {
+    GLOBAL_CRON.decline(because);
+}
+
 /// Read the global service, if initialized.
 #[must_use]
 pub fn global() -> Option<SharedCronService> {

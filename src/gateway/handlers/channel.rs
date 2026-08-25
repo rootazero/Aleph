@@ -154,6 +154,15 @@ pub fn set_telegram_tool_registry(registry: Arc<crate::tool_metadata::ToolCatalo
     let _ = TELEGRAM_TOOL_REGISTRY.install(registry);
 }
 
+/// Record that boot reached this slot and had nothing to install.
+///
+/// The `else` half of [`set_telegram_tool_registry`]. Absence is mute (see the
+/// static above): slash commands simply vanish from a restarted Telegram
+/// channel. `because` is quoted verbatim to an operator.
+pub fn decline_telegram_tool_registry(because: &'static str) {
+    TELEGRAM_TOOL_REGISTRY.decline(because);
+}
+
 /// The handle above, type-erased for the roster — see
 /// [`crate::spend::global_ledger_slot`] for why this shape.
 pub(crate) const fn telegram_tool_registry_slot() -> &'static dyn SlotStatus {

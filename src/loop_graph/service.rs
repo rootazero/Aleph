@@ -64,9 +64,21 @@ static DEBOUNCE: OnceCell<Mutex<HashMap<String, Stamp>>> = OnceCell::new();
 /// Install the cron handle that powers watcher pokes. Called once at boot
 /// next to `loop_graph::init_global`; absent (None / never called) the
 /// trigger degrades to a no-op and watchers rely on their own cadence.
+///
+/// `None` is a decline, not a nothing: the caller looked, found no cron
+/// service, and continued. The `else` arm below is the only place that
+/// difference is recorded — `notify_node_settled`'s "watchers paired but no
+/// cron trigger handle" log names the miss but not its cause.
 pub fn init_cron_trigger(svc: Option<SharedCronService>) {
     if let Some(s) = svc {
         let _ = CRON_TRIGGER.install(s);
+    } else {
+        CRON_TRIGGER.decline(
+            "the tool registry was built without a cron service: either \
+             `[cron] enabled = false`, or `CronService::new` failed at boot \
+             (\"Failed to initialize cron service\" is logged then). Watchers \
+             fall back to their own cadence.",
+        );
     }
 }
 

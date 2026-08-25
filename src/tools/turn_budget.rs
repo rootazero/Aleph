@@ -103,6 +103,17 @@ pub fn set_global_turn_result_budget(budget: Arc<TurnResultBudget>) {
     let _ = GLOBAL_BUDGET.install(budget);
 }
 
+/// Record that boot reached this slot and had nothing to install.
+///
+/// This slot `FailsOpen` (see the static above): absence removes a bound while
+/// every caller keeps behaving as though it were enforced. That is the shape
+/// that most needs a reason attached. `because` is quoted verbatim to an
+/// operator.
+#[inline]
+pub fn decline_global_turn_result_budget(because: &'static str) {
+    GLOBAL_BUDGET.decline(because);
+}
+
 /// Read the process-wide `TurnResultBudget`, if installed.
 ///
 /// ⚠️ `None` says nothing about whether boot reached this slot. Ask

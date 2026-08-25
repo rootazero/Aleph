@@ -240,7 +240,9 @@
 //! is recorded here rather than silently absorbed. A gap that lives only in a
 //! round's ledger is a gap the next reader never sees.
 
-use crate::utils::source_scan::{production_prefix, rust_sources_under, strip_comment_lines};
+use crate::utils::source_scan::{
+    cfg_test_portion, production_prefix, rust_sources_under, strip_comment_lines,
+};
 
 /// One process-global container `static`, as the rule sees it.
 pub(crate) struct HandleSite {
@@ -1702,5 +1704,493 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
                  would fire before any roster exists: {src}"
             );
         }
+    }
+
+    // =====================================================================
+    // Conditional installs (Task 14)
+    // =====================================================================
+
+    /// Production lines of `text`, comment-free, each paired with its ORIGINAL
+    /// 1-based line number.
+    ///
+    /// `production_prefix` first, then `strip_comment_lines` — the order this
+    /// repo's `source_scan` doc requires, because dropping comment lines first
+    /// can discard production code that shares a line with a delimiter.
+    ///
+    /// Both of those functions DROP lines rather than blanking them, so an
+    /// index into the result is not a line number. Reporting one as if it were
+    /// is not cosmetic: the first draft of this guard named
+    /// `src/bin/aleph-server/main.rs:16` for a site at line 79, and a
+    /// coordinate that points at unrelated code is worse than none — the reader
+    /// concludes the guard is broken and stops reading it. Recovered by a
+    /// two-pointer walk: the kept lines are a subsequence of the original ones,
+    /// content unchanged, so each match resyncs the cursor.
+    fn prod_lines(text: &str) -> (Vec<usize>, Vec<String>) {
+        let original: Vec<String> = text.replace('\r', "").lines().map(str::to_string).collect();
+        let kept: Vec<String> = strip_comment_lines(&production_prefix(text))
+            .lines()
+            .map(str::to_string)
+            .collect();
+        let mut nums = Vec::with_capacity(kept.len());
+        let mut cursor = 0usize;
+        for line in &kept {
+            while cursor < original.len() && &original[cursor] != line {
+                cursor += 1;
+            }
+            nums.push(cursor + 1);
+            cursor += 1;
+        }
+        (nums, kept)
+    }
+
+    fn indent_of(line: &str) -> usize {
+        line.len() - line.trim_start().len()
+    }
+
+    /// `(body, index_of_closing_line)` for the block opening at `start`.
+    ///
+    /// The block ends at the first line that starts with `}` at an indent <=
+    /// the opener's — the block's own syntactic terminus. NOT a line budget:
+    /// a fixed-size window reads into whatever follows, and this repo has
+    /// shipped a guard that passed because its 400-character window read the
+    /// neighbouring declaration.
+    fn block_at(lines: &[String], start: usize) -> (String, usize) {
+        let indent = indent_of(&lines[start]);
+        let mut body = vec![lines[start].clone()];
+        for (offset, line) in lines[start + 1..].iter().enumerate() {
+            if !line.trim().is_empty()
+                && indent_of(line) <= indent
+                && line.trim_start().starts_with('}')
+            {
+                return (body.join("\n"), start + 1 + offset);
+            }
+            body.push(line.clone());
+        }
+        (body.join("\n"), lines.len().saturating_sub(1))
+    }
+
+    /// Is `line` a call to the free/associated function `name`?
+    ///
+    /// Rejects an identifier byte before the name (so `handle_plugins_install(`
+    /// is not a call to `install`) and rejects a `.` (so `x.install(` — a method
+    /// on a value — is not a call to the module-level wrapper).
+    fn calls(line: &str, name: &str) -> bool {
+        let bytes = line.as_bytes();
+        let mut from = 0usize;
+        while let Some(rel) = line[from..].find(name) {
+            let at = from + rel;
+            let after = at + name.len();
+            let ok_before = at == 0 || (!is_ident_byte(bytes[at - 1]) && bytes[at - 1] != b'.');
+            if ok_before && line[after..].starts_with('(') {
+                return true;
+            }
+            from = after;
+        }
+        false
+    }
+
+    fn is_fn_definition(line: &str) -> bool {
+        let t = strip_visibility(line.trim_start()).trim_start();
+        let t = t.strip_prefix("async ").unwrap_or(t);
+        let t = t.strip_prefix("const ").unwrap_or(t);
+        t.starts_with("fn ")
+    }
+
+    /// Names of the `pub`-ish fns that install a capability slot, derived
+    /// crate-wide.
+    ///
+    /// Two conditions, both properties of the code: the body calls `.install(`,
+    /// **and** the file declares a `CapabilitySlot` / `MutableCapabilitySlot`
+    /// static. The second is what keeps `service::platform::install`,
+    /// `ResolverScope::install`, `runtimes::bootstrap::install` and
+    /// `security::audit::install_global` — four unrelated functions that share a
+    /// name with a real wrapper — out of the set.
+    ///
+    /// ⚠️ Keyed on the bare NAME, so two wrappers called `init_global` in
+    /// different modules are one entry. Direction: over-see for the call-site
+    /// scan (a same-named non-slot call can be examined), and over-see for the
+    /// hazard rule below (two modules' single sites read as one module's two).
+    /// Both fail loudly — a demanded `decline` that should not be there, or a
+    /// forbidden one that is — rather than going quiet.
+    fn install_wrapper_names() -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        for (_, text) in rust_sources_under(&manifest_src()) {
+            if !text.contains("CapabilitySlot") {
+                continue;
+            }
+            let (_, lines) = prod_lines(&text);
+            let declares_slot = lines.iter().any(|l| {
+                let t = strip_visibility(l.trim_start());
+                t.starts_with("static ") && t.contains("CapabilitySlot<")
+            });
+            if !declares_slot {
+                continue;
+            }
+            for i in 0..lines.len() {
+                if !is_fn_definition(&lines[i]) {
+                    continue;
+                }
+                let t = strip_visibility(lines[i].trim_start()).trim_start();
+                let t = t.strip_prefix("async ").unwrap_or(t);
+                let Some(rest) = t.strip_prefix("fn ") else {
+                    continue;
+                };
+                let Some(name) = rest.split('(').next() else {
+                    continue;
+                };
+                let name = name.split('<').next().unwrap_or(name).trim();
+                if name.is_empty() {
+                    continue;
+                }
+                let (body, _) = block_at(&lines, i);
+                if body.contains(".install(") {
+                    out.insert(name.to_string());
+                }
+            }
+        }
+        out
+    }
+
+    fn manifest_src() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
+    }
+
+    /// Files that only exist in a `cfg(test)` build, derived from the parents
+    /// that declare them.
+    ///
+    /// `production_prefix` works one file at a time, so a file whose ENTIRE
+    /// contents are test code — because its parent wrote `#[cfg(test)] mod
+    /// tests;` — is fully "production" to any scanner that only asks the file
+    /// itself. `src/spend/tests.rs` is the case this module's own roster
+    /// recogniser already had to reason about; this makes the exclusion a rule
+    /// instead of a per-guard workaround.
+    fn test_only_module_files() -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        for (rel, text) in rust_sources_under(&manifest_src()) {
+            for line in cfg_test_portion(&text).lines() {
+                let t = strip_visibility(line.trim_start()).trim_start();
+                let Some(rest) = t.strip_prefix("mod ") else {
+                    continue;
+                };
+                let Some(name) = rest.strip_suffix(';') else {
+                    continue; // `mod tests {` is inline, not a separate file
+                };
+                let name = name.trim();
+                if name.is_empty() || !name.bytes().all(is_ident_byte) {
+                    continue;
+                }
+                let dir = rel
+                    .strip_suffix("/mod.rs")
+                    .or_else(|| rel.strip_suffix(".rs"))
+                    .unwrap_or(&rel);
+                out.insert(format!("{dir}/{name}.rs"));
+                out.insert(format!("{dir}/{name}/mod.rs"));
+            }
+        }
+        out
+    }
+
+    /// The sibling arms of the construct that governs the install at `site`.
+    ///
+    /// Three-way on purpose, and the middle case is the whole point:
+    ///
+    /// * `None` — nothing conditional encloses this install. Skip it.
+    /// * `Some("")` — a conditional encloses it and there is NO other arm.
+    ///   **This is the defect the task exists to close** (`if cond { install() }`
+    ///   with no `else`), so it must reach the caller as an examined site with
+    ///   no decline, never as a skip. The first draft of this function folded it
+    ///   into `None`; the guard then went green while being structurally unable
+    ///   to find a missing `else`, and the two real remaining sites
+    ///   (`src/config/load.rs`) were invisible to it.
+    /// * `Some(text)` — the sibling arms, to be searched for a `decline`.
+    ///
+    /// ## Shapes this does not read, and why they are `None` rather than loud
+    ///
+    /// The opener is the first strictly-shallower line. Three shapes reach it
+    /// that this scan cannot judge: an install inside an `else` / `} else if`
+    /// arm, a braceless match arm (`Ok(x) => install(x),`), and a bare
+    /// `match x {` directly above the call. A draft returned `Some("")` for all
+    /// three so they would surface as offenders a human must look at. Measured
+    /// against the real tree, that produced exactly two hits and BOTH were
+    /// false:
+    ///
+    /// * `src/config/load.rs` — `init_metrics_runtime` sits in `Config::load`'s
+    ///   no-config-file arm. Its sibling arm installs the same handle too, one
+    ///   call deeper (`load_from_file` → `load_from_file_reporting_dead_keys`),
+    ///   so nothing is absent and no textual rule can see that. It is also one
+    ///   of the two decline-then-install hazards, so a `decline` added to
+    ///   satisfy a red here would be a defect, not a fix.
+    /// * `src/bin/aleph-server/commands/service/mod.rs` — `platform::install()`
+    ///   is the OS service installer, sharing a bare name with
+    ///   `identity::ledger::install`. The over-see this module's wrapper-set doc
+    ///   warns about, landing.
+    ///
+    /// A red that is wrong twice out of twice teaches the reader to stop reading
+    /// the guard, so these three shapes are `None`. Direction: **under-see** —
+    /// an install in an `else` arm whose sibling does NOT install would be
+    /// skipped. Zero such sites in `src/` as of 2026-08-25.
+    fn governing_alternative(lines: &[String], site: usize) -> Option<String> {
+        let my = indent_of(&lines[site]);
+        let mut opener = None;
+        for j in (0..site).rev() {
+            if lines[j].trim().is_empty() {
+                continue;
+            }
+            if indent_of(&lines[j]) >= my {
+                continue;
+            }
+            opener = Some(j);
+            break; // first shallower line decides; do not keep walking out
+        }
+        let g = opener?;
+        let t = lines[g].trim_start();
+
+        if t.starts_with("if ") || t.starts_with("if let ") {
+            let (_, first_close) = block_at(lines, g);
+            if !lines
+                .get(first_close)
+                .is_some_and(|l| l.trim_start().starts_with("} else"))
+            {
+                // Conditional, and no alternative exists to hold a `decline`.
+                return Some(String::new());
+            }
+            let mut out = Vec::new();
+            let mut cur = first_close;
+            loop {
+                let (body, c) = block_at(lines, cur);
+                out.push(body);
+                if lines
+                    .get(c)
+                    .is_some_and(|l| l.trim_start().starts_with("} else"))
+                {
+                    cur = c;
+                } else {
+                    break;
+                }
+            }
+            return Some(out.join("\n"));
+        }
+
+        // A `match` arm: the alternative is every OTHER arm of the same match.
+        if t.ends_with("=> {") {
+            let arm_indent = indent_of(&lines[g]);
+            let mut head = None;
+            for j in (0..g).rev() {
+                if lines[j].trim().is_empty() {
+                    continue;
+                }
+                if indent_of(&lines[j]) >= arm_indent {
+                    continue;
+                }
+                head = Some(j);
+                break;
+            }
+            let m = head?;
+            if !lines[m].contains("match ") {
+                return None;
+            }
+            let (_, m_close) = block_at(lines, m);
+            let (_, arm_close) = block_at(lines, g);
+            let mut out = Vec::new();
+            for (offset, line) in lines[m + 1..m_close.min(lines.len())].iter().enumerate() {
+                let idx = m + 1 + offset;
+                if idx >= g && idx <= arm_close {
+                    continue; // the install's own arm is not its own alternative
+                }
+                out.push(line.clone());
+            }
+            return Some(out.join("\n"));
+        }
+
+        // Governed by something this scan does not parse — see the doc above
+        // for the two measured instances and why loud was the wrong answer.
+        None
+    }
+
+    struct CondSite {
+        wrapper: String,
+        at: String,
+        declines: bool,
+    }
+
+    /// Every conditional capability install either says why it was skipped, or
+    /// is one of the pairs that structurally cannot.
+    ///
+    /// Two rules, and the second is the reason this is not a one-sided check:
+    ///
+    /// 1. A wrapper with exactly ONE conditional call site MUST have a
+    ///    `decline` in the governing alternative. Absent it, "deliberately not
+    ///    configured" and "wiring gap" are the same reading, which is the
+    ///    silence this whole round exists to remove.
+    /// 2. A wrapper with TWO OR MORE conditional call sites must have NO
+    ///    `decline` anywhere among them. Two conditional sites means
+    ///    decline-then-install is reachable in one process, and
+    ///    `capability::Outcome` cannot describe that sequence — first writer
+    ///    wins, so the stamp would keep saying `Declined` about an installed
+    ///    handle. Pinned by
+    ///    `capability::tests::decline_then_install_is_the_one_pair_this_type_cannot_describe`.
+    ///    Today's only member is `init_defaults_override`
+    ///    (`src/config/load.rs`, the two mutually-exclusive paths of
+    ///    `Config::load`, which runs many times per process).
+    ///
+    /// Rule 2 keeps rule 1 from rotting in the dangerous direction: adding a
+    /// second conditional site next to an existing `decline` makes that decline
+    /// hazardous, and this goes red at the named line instead of leaving a
+    /// sentence in front of an operator describing a state the process has left.
+    ///
+    /// ## What this cannot see
+    ///
+    /// * **Multi-CALL, single-site.** Rule 2 approximates reachability by
+    ///   counting sites. One conditional site inside a function that runs many
+    ///   times per process reaches the same hazard and is not detected.
+    ///   Direction: under-see. No such site exists in `src/` today (every
+    ///   conditional install is on a once-per-process boot path).
+    /// * **Which slot was declined.** The check is `contains("decline")` over
+    ///   the alternative, so an arm that declines a DIFFERENT handle satisfies
+    ///   it. Deriving the expected `decline_*` name from the install wrapper's
+    ///   name was rejected: `ensure_dream_daemon_with_orientation` /
+    ///   `decline_dream_daemon` already breaks the convention, so the rule
+    ///   would need an exception list on day one.
+    /// * **Conditionals above the nearest one.** The opener is the first
+    ///   strictly-shallower line, matching this scan's stated rule; an install
+    ///   nested three blocks inside a gate is judged against the innermost.
+    #[test]
+    fn no_conditional_capability_install_is_silent() {
+        let wrappers = install_wrapper_names();
+        assert!(
+            wrappers.len() >= 30,
+            "derived only {} install wrappers; >=30 expected. A derivation that \
+             stopped matching makes this guard pass by finding nothing.",
+            wrappers.len()
+        );
+        let test_only = test_only_module_files();
+        assert!(
+            !test_only.is_empty(),
+            "derived zero test-only module files; the exclusion silently stopped \
+             running and this guard is now reading test fixtures as boot code"
+        );
+
+        let mut sites: Vec<CondSite> = Vec::new();
+        for (rel, text) in rust_sources_under(&manifest_src()) {
+            if rel.starts_with("src/capability/") || test_only.contains(&rel) {
+                continue;
+            }
+            let present: Vec<&String> = wrappers.iter().filter(|w| text.contains(*w)).collect();
+            if present.is_empty() {
+                continue;
+            }
+            let (nums, lines) = prod_lines(&text);
+            for i in 0..lines.len() {
+                if is_fn_definition(&lines[i]) {
+                    continue;
+                }
+                let Some(w) = present.iter().find(|w| calls(&lines[i], w)) else {
+                    continue;
+                };
+                let Some(alt) = governing_alternative(&lines, i) else {
+                    continue; // unconditional install: nothing to explain
+                };
+                sites.push(CondSite {
+                    wrapper: (*w).clone(),
+                    at: format!("{rel}:{}", nums[i]),
+                    declines: alt.contains("decline"),
+                });
+            }
+        }
+
+        assert!(
+            sites.len() >= 15,
+            "examined only {} conditional installs; 19 were measured on \
+             2026-08-25. Zero-or-few is how this guard reports 'all clear' about \
+             sites it never read.",
+            sites.len()
+        );
+
+        let mut per_wrapper: std::collections::BTreeMap<&str, Vec<&CondSite>> =
+            std::collections::BTreeMap::new();
+        for s in &sites {
+            per_wrapper.entry(&s.wrapper).or_default().push(s);
+        }
+
+        let mut silent: Vec<String> = Vec::new();
+        let mut hazardous: Vec<String> = Vec::new();
+        let mut exempt: Vec<&str> = Vec::new();
+        for (w, group) in &per_wrapper {
+            if group.len() >= 2 {
+                exempt.push(w);
+                for s in group {
+                    if s.declines {
+                        hazardous.push(format!("{} ({w})", s.at));
+                    }
+                }
+            } else if !group[0].declines {
+                silent.push(format!("{} ({w})", group[0].at));
+            }
+        }
+
+        assert!(
+            silent.is_empty(),
+            "these conditional capability installs never say why they were \
+             skipped — add an `else` (or a sibling match arm) that calls the \
+             slot's `decline(because)`:\n  {}",
+            silent.join("\n  ")
+        );
+        assert!(
+            hazardous.is_empty(),
+            "the wrappers {exempt:?} each have two or more conditional install \
+             sites, so decline-then-install is reachable within one process and \
+             the stamp would outlive the state it describes — drop the decline \
+             at these sites and record the reason in a comment instead:\n  {}",
+            hazardous.join("\n  ")
+        );
+    }
+
+    /// The block/alternative readers do what the guard above claims, on input
+    /// small enough to check by eye.
+    ///
+    /// Written because the guard's green cannot distinguish "every site
+    /// declines" from "`governing_alternative` returns `None` everywhere" —
+    /// the second reads as "no conditional installs found", and the
+    /// `sites.len() >= 15` floor is the only other thing standing between that
+    /// and a silent pass.
+    #[test]
+    fn the_alternative_reader_finds_each_shape_it_claims() {
+        let lines = |s: &str| -> Vec<String> { s.lines().map(str::to_string).collect() };
+
+        let if_else = lines(
+            "fn boot() {\n    if let Some(x) = maybe {\n        install_it(x);\n    } else {\n        decline_it(\"why\");\n    }\n}",
+        );
+        let alt = governing_alternative(&if_else, 2).expect("if/else must be read");
+        assert!(alt.contains("decline_it"), "got: {alt}");
+
+        let if_only = lines("fn boot() {\n    if cond {\n        install_it(x);\n    }\n}");
+        assert!(
+            governing_alternative(&if_only, 2).as_deref() == Some(""),
+            "an `if` with no `else` is GOVERNED with no alternative — folding it \
+             into `None` is what made the first draft of this guard unable to \
+             find a missing `else` at all"
+        );
+
+        let match_arms = lines(
+            "fn boot() {\n    match build() {\n        Ok(v) => {\n            install_it(v);\n        }\n        Err(e) => {\n            decline_it(\"why\");\n        }\n    }\n}",
+        );
+        let alt = governing_alternative(&match_arms, 3).expect("match arm must be read");
+        assert!(alt.contains("decline_it"), "got: {alt}");
+        assert!(
+            !alt.contains("install_it"),
+            "an arm is not its own alternative; got: {alt}"
+        );
+
+        let unconditional = lines("fn boot() {\n    install_it(x);\n}");
+        assert!(
+            governing_alternative(&unconditional, 1).is_none(),
+            "an unconditional install must not be examined"
+        );
+
+        // The name matcher's two rejections, which are what keep four unrelated
+        // `install` functions out of the wrapper set's call-site scan.
+        assert!(calls("    foo::install_it(x);", "install_it"));
+        assert!(!calls("    handle_plugins_install_it(x);", "install_it"));
+        assert!(!calls("    thing.install_it(x);", "install_it"));
     }
 }

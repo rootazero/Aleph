@@ -53,6 +53,18 @@ pub fn init_extension_manager(manager: Arc<ExtensionManager>) -> Result<(), Arc<
     }
 }
 
+/// Record that boot reached this slot and had nothing to install.
+///
+/// The `Err(e)` arm of boot's `ExtensionManager::with_defaults()` match, which
+/// today only prints to a non-daemon console. `because` is quoted verbatim to
+/// an operator.
+///
+/// ⚠️ NOT for [`init_extension_manager`]'s own `Err(rejected)` arm: that means
+/// a manager is already installed, which is the opposite of a decline.
+pub fn decline_extension_manager(because: &'static str) {
+    EXTENSION_MANAGER.decline(because);
+}
+
 /// Borrow the process-global extension manager, if it has been registered.
 pub fn try_extension_manager() -> Option<&'static Arc<ExtensionManager>> {
     EXTENSION_MANAGER.get()

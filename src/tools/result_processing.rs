@@ -57,13 +57,13 @@ pub const DEFAULT_RESULT_BUDGET_TOKENS: usize = 8_000;
 ///    deliberately returned without installing — see its doc for why that is
 ///    the right behaviour.
 ///
-/// Case 2 is a decline with a reason already written down, so it is the
-/// clearest [`crate::capability::CapabilitySlot::decline`] candidate this batch
-/// met. It is left for Task 14 on purpose: converting it stamps an outcome and
-/// is a behaviour change, not a rewrite. ⚠️ Task 14's stated search shape is
-/// "boot's conditional-install `else` arms" and this arm is NOT in boot — it is
-/// an early `return` inside this library setter, one call away — so a walk of
-/// boot's call sites will not find it.
+/// Case 2 now stamps [`crate::capability::CapabilitySlot::decline`] inside the
+/// setter, so the two are no longer indistinguishable: case 1 leaves NO outcome
+/// (nothing reached the slot) and case 2 leaves `Declined` naming the window.
+/// ⚠️ It had to be closed here rather than in boot: the arm is an early
+/// `return` inside this library setter, one call away from the boot call site,
+/// so a walk of boot's `else` arms does not reach it. Case 1 is still silent by
+/// construction and correctly so — a CLI one-shot never boots a gateway.
 static RESULT_BUDGET_CEILING: CapabilitySlot<usize> = CapabilitySlot::new(
     "tools/result-budget-ceiling",
     MissingSemantics::IndistinguishableDefault {
@@ -80,9 +80,28 @@ static RESULT_BUDGET_CEILING: CapabilitySlot<usize> = CapabilitySlot::new(
 /// byte-for-byte as it does today.
 pub fn set_global_result_budget_ceiling(ceiling: usize) {
     if ceiling >= DEFAULT_RESULT_BUDGET_TOKENS {
+        // Not a failure — a decision, and the one an operator is most likely to
+        // mistake for a wiring gap, because the resulting read (`usize::MAX`)
+        // is byte-for-byte what a boot that never got here leaves behind.
+        RESULT_BUDGET_CEILING.decline(
+            "this model's context window needs no per-result clamp: the ceiling \
+             derived from `[context_budget] token_budget` is at or above the \
+             8_000-token default, and this knob only ever clamps DOWN. A \
+             smaller-window model (or a smaller `token_budget`) installs one.",
+        );
         return;
     }
     let _ = RESULT_BUDGET_CEILING.install(ceiling);
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// Distinct from the in-setter decline above: this is for boot's outer
+/// `Err(e)` arm, where the `ToolResultStore` failed to open and Layers 2 and 3
+/// are disabled together, so no ceiling was even derived. `because` is quoted
+/// verbatim to an operator.
+pub fn decline_global_result_budget_ceiling(because: &'static str) {
+    RESULT_BUDGET_CEILING.decline(because);
 }
 
 /// The handle above, type-erased for the roster — see

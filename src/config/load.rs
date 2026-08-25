@@ -75,6 +75,20 @@ impl Config {
         }
     }
 
+    /// Record that argv parsing reached this slot with no `--config` to pin.
+    ///
+    /// The absence and the pin read identically through [`Self::effective_path`]
+    /// (see this slot's `reads_as`), so an operator debugging "my `--config`
+    /// was ignored" cannot tell "no flag was passed" from "the flag was passed
+    /// and the pin never happened". This is what separates them. `because` is
+    /// quoted verbatim to an operator.
+    ///
+    /// ⚠️ NOT for [`Self::set_effective_path`]'s own `Err(rejected)` arm: that
+    /// means a pin is already in place, which is the opposite of a decline.
+    pub fn decline_effective_path(because: &'static str) {
+        EFFECTIVE_CONFIG_PATH.decline(because);
+    }
+
     /// The config file this process reads and writes: the `--config` override
     /// once [`Self::set_effective_path`] has pinned one, else
     /// [`Self::default_path`].
@@ -175,6 +189,19 @@ impl Config {
         // Load defaults override BEFORE parsing config.toml
         // because serde calls fn default_*() during deserialization,
         // and those functions need to read from the defaults-override slot.
+        // ⚠️ DELIBERATELY UNSTAMPED — no `else { decline(..) }` here.
+        //
+        // This is one of two conditional installs of `DEFAULTS_OVERRIDE`; the
+        // other is on `Self::load`'s no-config-file path below. They are
+        // mutually exclusive within one call, and that is NOT enough:
+        // `Config::load` runs many times per process, so "config dir missing on
+        // the first load, present on a later one" reaches decline-then-install
+        // in a single process lifetime — the sequence
+        // `capability::Outcome` cannot describe (first writer wins, so the
+        // stamp would keep saying `Declined` about an installed handle). A
+        // `because` an operator reads about a state the process already left is
+        // worse than the silence. Pinned by
+        // `capability::mod::tests::decline_then_install_is_the_one_pair_this_type_cannot_describe`.
         if let Some(ref dir) = config_dir {
             let defaults_path = dir.join("defaults.toml");
             let defaults = crate::config::defaults_override::load_defaults_override(&defaults_path);
@@ -305,6 +332,9 @@ impl Config {
             );
             // Load defaults override BEFORE Self::default() so serde default
             // functions can read from the defaults-override slot during construction.
+            // ⚠️ DELIBERATELY UNSTAMPED — see the twin of this block in
+            // `load_from_file_reporting_dead_keys` above for why these two
+            // conditional installs get no `else { decline(..) }`.
             if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
                 let defaults_path = config_dir.join("defaults.toml");
                 let defaults =

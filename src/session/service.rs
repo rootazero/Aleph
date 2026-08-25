@@ -98,6 +98,17 @@ pub fn set_global_session_service(svc: Arc<dyn SessionService>) {
     let _ = GLOBAL_SESSION_SERVICE.install(svc);
 }
 
+/// Record that boot reached this slot and had nothing to install.
+///
+/// The `else` half of [`set_global_session_service`]. Nine consumers each pick
+/// their own meaning for a missing handle (see the static above); this is the
+/// one place that can tell them it was a decision. `because` is quoted verbatim
+/// to an operator.
+#[inline]
+pub fn decline_global_session_service(because: &'static str) {
+    GLOBAL_SESSION_SERVICE.decline(because);
+}
+
 /// Fetch the process-wide `SessionService`, if one has been installed.
 ///
 /// ⚠️ `None` here says nothing about whether boot reached this slot — that is

@@ -33,7 +33,9 @@ pub use runtime::*;
 // the gateway. The gateway re-exports the registration helpers and adds the
 // RPC-shaped accessor below.
 
-pub use crate::extension::{init_extension_manager, is_extension_manager_initialized};
+pub use crate::extension::{
+    decline_extension_manager, init_extension_manager, is_extension_manager_initialized,
+};
 
 /// Get the extension manager.
 ///

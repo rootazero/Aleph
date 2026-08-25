@@ -371,6 +371,17 @@ pub(super) async fn initialize_extension_manager(daemon: bool) {
             }
         }
         Err(e) => {
+            // Warn-and-continue is a decline that never got stamped: without
+            // this the plugin/skill/hook surface is simply absent, and every
+            // reader of the manager sees the same `None` a boot that died
+            // earlier would leave.
+            alephcore::gateway::decline_extension_manager(
+                "`ExtensionManager::with_defaults()` failed, so no plugin, skill \
+                 or hook is loaded this boot — the accompanying \"Failed to \
+                 initialize extension manager\" message names the cause. Check \
+                 that the extension tree under `$ALEPH_HOME` (else `~/.aleph`) \
+                 is readable.",
+            );
             if !daemon {
                 eprintln!("Warning: Failed to initialize extension manager: {e}. Plugin tools will be unavailable.");
             }

@@ -69,6 +69,16 @@ pub fn register_sampling_llm(provider: Arc<dyn AiProvider>) {
     let _ = SAMPLING_LLM.install(provider);
 }
 
+/// Record that boot reached this slot and had nothing to install.
+///
+/// The `else` half of [`register_sampling_llm`]. The MCP manager declares the
+/// sampling capability at boot regardless; this is the one place that can say
+/// the declaration was never made true, and why. `because` is quoted verbatim
+/// to an operator.
+pub fn decline_sampling_llm(because: &'static str) {
+    SAMPLING_LLM.decline(because);
+}
+
 /// Whether a sampling provider has been registered.
 #[must_use]
 pub fn sampling_llm_registered() -> bool {

@@ -55,7 +55,8 @@ pub mod watcher;
 pub use error::*;
 pub use loader::PluginLoader;
 pub use manager_global::{
-    init_extension_manager, is_extension_manager_initialized, try_extension_manager,
+    decline_extension_manager, init_extension_manager, is_extension_manager_initialized,
+    try_extension_manager,
 };
 pub use manifest::*;
 pub use registry::*;

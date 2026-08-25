@@ -794,6 +794,17 @@ pub fn set_global_session_event_store(store: Arc<dyn SessionEventStore>) {
     let _ = GLOBAL_EVENT_STORE.install(store);
 }
 
+/// Record that boot reached this slot and had nothing to install.
+///
+/// The `else` half of [`set_global_session_event_store`]: boot's install is
+/// conditional, and without this the five consumers named on the static above
+/// cannot tell "this deployment has no session-event log" from "boot died
+/// before line 455". `because` is quoted verbatim to an operator.
+#[inline]
+pub fn decline_global_session_event_store(because: &'static str) {
+    GLOBAL_EVENT_STORE.decline(because);
+}
+
 /// Fetch the process-wide session event store, if one has been installed.
 ///
 /// ⚠️ `None` says nothing about whether boot reached this slot. Ask

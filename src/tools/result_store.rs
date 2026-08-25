@@ -119,6 +119,14 @@ pub fn set_global_tool_result_store(store: Arc<ToolResultStore>) {
     }
 }
 
+/// Record that boot reached this slot and had nothing to install.
+///
+/// The `Err(e)` arm of boot's `ToolResultStore::new("global")` match, which
+/// today only logs a warning. `because` is quoted verbatim to an operator.
+pub fn decline_global_tool_result_store(because: &'static str) {
+    GLOBAL_STORE.decline(because);
+}
+
 /// Read the process-wide `ToolResultStore`, if installed.
 ///
 /// ⚠️ `None` says nothing about whether boot reached this slot. Ask

@@ -158,7 +158,9 @@ pub use execution_adapter::ExecutionAdapter;
 pub use handlers::events::{
     handle_list as handle_events_list, handle_subscribe, handle_unsubscribe, SubscriptionManager,
 };
-pub use handlers::plugins::{init_extension_manager, is_extension_manager_initialized};
+pub use handlers::plugins::{
+    decline_extension_manager, init_extension_manager, is_extension_manager_initialized,
+};
 pub use hot_reload::{
     ConfigEvent, ConfigWatcher, ConfigWatcherConfig, ConfigWatcherError, ReloadMode,
 };
@@ -185,7 +187,8 @@ pub use context::GatewayContext;
 pub use inter_agent_policy::AgentToAgentPolicy;
 pub use projection_reconciler::{ProjectionReconciler, ReconcileReport};
 pub use resume_coordinator::{
-    global_resume_coordinator, set_global_resume_coordinator, ResumeCoordinator, ResumeReport,
+    decline_global_resume_coordinator, global_resume_coordinator, set_global_resume_coordinator,
+    ResumeCoordinator, ResumeReport,
 };
 pub use webhook_receiver::{
     WebhookHandler, WebhookMount, WebhookMountTable, WebhookReceiver, WEBHOOK_ROUTE_PREFIX,

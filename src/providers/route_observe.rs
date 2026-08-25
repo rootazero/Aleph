@@ -407,6 +407,16 @@ pub fn set_global_route_observability(obs: RouteObservability) {
     let _ = GLOBAL.install(obs);
 }
 
+/// Record that boot reached this slot and had nothing to install.
+///
+/// Boot installs this from inside `initialize_orchestrator`, which is gated on
+/// a default provider plus a session service; without it `route_status` renders
+/// config-only output that looks like a healthy chain with no history.
+/// `because` is quoted verbatim to an operator.
+pub fn decline_global_route_observability(because: &'static str) {
+    GLOBAL.decline(because);
+}
+
 /// The boot-registered bundle, if the production chain has been assembled.
 /// `None` in tests / before boot — callers degrade to config-only output.
 pub fn global_route_observability() -> Option<&'static RouteObservability> {

@@ -54,6 +54,17 @@ pub fn set_global_resume_coordinator(coordinator: Arc<ResumeCoordinator>) {
     let _ = GLOBAL_RESUME_COORDINATOR.install(coordinator);
 }
 
+/// Record that boot reached this slot and had nothing to install.
+///
+/// The doc above explains why the handle must not be installed under the
+/// narrower `[resume] enabled` condition. This is the other half of the same
+/// argument: when the *wider* condition is also unmet, say so, because the only
+/// other symptom is an `agent.resume` rejection that reads exactly like the
+/// feature not existing. `because` is quoted verbatim to an operator.
+pub fn decline_global_resume_coordinator(because: &'static str) {
+    GLOBAL_RESUME_COORDINATOR.decline(because);
+}
+
 /// The handle above, type-erased for the roster — see
 /// [`crate::spend::global_ledger_slot`] for why this shape.
 pub(crate) const fn global_resume_coordinator_slot() -> &'static dyn SlotStatus {

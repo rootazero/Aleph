@@ -74,7 +74,9 @@ pub use protocol::IncludeContext;
 pub use redact::redact_mcp_error;
 pub use resources::ResourceContent;
 pub use sampling::{SamplingCallback, SamplingHandler};
-pub use sampling_bridge::{register_sampling_llm, sampling_llm_registered, serve_sampling};
+pub use sampling_bridge::{
+    decline_sampling_llm, register_sampling_llm, sampling_llm_registered, serve_sampling,
+};
 pub use tool_bridge::spawn_tool_bridge;
 #[cfg(test)]
 pub(crate) use tool_bridge::CAPABILITY_READ_BUILTIN_NAMES;

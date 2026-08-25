@@ -97,6 +97,17 @@ pub fn install_locale(locale: Locale) {
     let _ = INSTALLED_LOCALE.install(locale);
 }
 
+/// Record that boot reached this slot and had nothing to install.
+///
+/// Boot installs this from inside `initialize_orchestrator`, which is itself
+/// gated on a default provider plus a session service — so on a
+/// provider-less deployment nothing here runs at all and every human-facing
+/// string silently falls back to English. `because` is quoted verbatim to an
+/// operator.
+pub fn decline_locale(because: &'static str) {
+    INSTALLED_LOCALE.decline(because);
+}
+
 /// The handle above, type-erased for the roster — see
 /// [`crate::spend::global_ledger_slot`] for why this shape.
 pub(crate) const fn installed_locale_slot() -> &'static dyn SlotStatus {

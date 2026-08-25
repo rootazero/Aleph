@@ -60,6 +60,16 @@ pub fn register_session_end_mcp(mcp: Arc<super::MemoryContextProvider>) {
     let _ = SESSION_END_MCP.install(mcp);
 }
 
+/// Record that boot reached this slot and had nothing to install.
+///
+/// The `else` half of [`register_session_end_mcp`]. All five handles in this
+/// file are registered from one branch of `agent_init`, so they share one
+/// absence and one reason; each still gets its own function because a roster
+/// consumer reads them one at a time. `because` is quoted verbatim.
+pub fn decline_session_end_mcp(because: &'static str) {
+    SESSION_END_MCP.decline(because);
+}
+
 /// Read the registered MCP, if any. Used by
 /// `emit_session_end_raw` to evict per-session snapshots.
 pub fn session_end_mcp() -> Option<Arc<super::MemoryContextProvider>> {
@@ -98,6 +108,16 @@ pub fn register_session_end_summarizer(
     let _ = SESSION_END_SUMMARIZER.install(summarizer);
 }
 
+/// Record that boot reached this slot and had nothing to install.
+///
+/// The `else` half of [`register_session_end_summarizer`]. See the static above
+/// for the second-order cost this silence hides — `HybridAssembler::assemble`
+/// reporting "ready" about a snapshot that is never coming. `because` is quoted
+/// verbatim to an operator.
+pub fn decline_session_end_summarizer(because: &'static str) {
+    SESSION_END_SUMMARIZER.decline(because);
+}
+
 /// Read the registered `SessionEndSummarizer`, if any.
 pub fn session_end_summarizer(
 ) -> Option<Arc<crate::memory::session_search_summary::end_hook::SessionEndSummarizer>> {
@@ -127,6 +147,16 @@ pub fn register_session_reflector(
     reflector: Arc<crate::memory::session_reflection::SessionReflector>,
 ) {
     let _ = SESSION_REFLECTOR.install(reflector);
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// The `else` half of [`register_session_reflector`], and the handle whose
+/// absence is hardest to see: the reflector self-gates on substance and
+/// cooldown, so "no lesson tonight" is a legitimate installed outcome that
+/// looks identical. `because` is quoted verbatim to an operator.
+pub fn decline_session_reflector(because: &'static str) {
+    SESSION_REFLECTOR.decline(because);
 }
 
 /// Read the registered `SessionReflector`, if any.
@@ -161,6 +191,15 @@ pub fn register_session_end_compression(
     compression: Arc<crate::memory::compression::CompressionService>,
 ) {
     let _ = SESSION_END_COMPRESSION.install(compression);
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// The `else` half of [`register_session_end_compression`]. What is lost is the
+/// immediacy of the session-end flush, silently — the periodic path still
+/// consolidates. `because` is quoted verbatim to an operator.
+pub fn decline_session_end_compression(because: &'static str) {
+    SESSION_END_COMPRESSION.decline(because);
 }
 
 /// Read the registered `CompressionService`, if any. Used by
@@ -199,6 +238,16 @@ pub(crate) const fn open_loop_inject_slot() -> &'static dyn SlotStatus {
 /// Enable/disable open-loop injection. Idempotent; first call wins.
 pub fn set_open_loop_inject(enabled: bool) {
     let _ = OPEN_LOOP_INJECT.install(enabled);
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// Note the asymmetry the static above spells out: `set_open_loop_inject(false)`
+/// is an INSTALL, not an absence. This function is for the arms that never
+/// reach the setter at all — the reflection block being off, or no agent engine
+/// having been built. `because` is quoted verbatim to an operator.
+pub fn decline_open_loop_inject(because: &'static str) {
+    OPEN_LOOP_INJECT.decline(because);
 }
 
 /// Whether last session's open loops should be injected into curated context.

@@ -61,6 +61,15 @@ pub fn set_global(refresher: Arc<CodexTokenRefresher>) {
     let _ = GLOBAL.install(refresher);
 }
 
+/// Record that boot reached this slot and had nothing to install.
+///
+/// `FailsClosed` absence is mute by construction (see the static above), so an
+/// operator whose long task died on a stale token has no other way to learn
+/// that the refresher was never wired. `because` is quoted verbatim.
+pub fn decline_global(because: &'static str) {
+    GLOBAL.decline(because);
+}
+
 /// The handle above, type-erased for the roster — see
 /// [`crate::spend::global_ledger_slot`] for why this shape.
 pub(crate) const fn global_slot() -> &'static dyn SlotStatus {

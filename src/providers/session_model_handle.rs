@@ -213,6 +213,18 @@ pub fn set_pinnable_providers(names: impl IntoIterator<Item = String>) {
     let _ = PINNABLE_PROVIDERS.install(names.into_iter().collect());
 }
 
+/// Record that boot reached this slot and had nothing to install.
+///
+/// This is one of the repo's three `FailsOpen` handles: with no published set,
+/// `select_model(provider=…)` validates nothing and the paragraph above
+/// describes what follows. Boot installs it from inside
+/// `initialize_orchestrator`, which is gated on a default provider plus a
+/// session service — so a provider-less deployment leaves the gate open and
+/// says nothing. `because` is quoted verbatim to an operator.
+pub fn decline_pinnable_providers(because: &'static str) {
+    PINNABLE_PROVIDERS.decline(because);
+}
+
 /// Whether `provider` can be pinned, plus the valid set for the error message.
 ///
 /// `None` means "no set was published" (tests, pre-boot) — callers must treat

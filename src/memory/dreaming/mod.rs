@@ -644,14 +644,32 @@ pub fn ensure_dream_daemon_with_orientation(
     embedder: Option<Arc<dyn EmbeddingProvider>>,
     note_memory_dir: Option<PathBuf>,
 ) {
+    // Four distinct reasons this function can return without a daemon, and one
+    // that is not a reason at all. Each gets its own `because`: an operator
+    // reading "dreaming did not start" needs to know WHICH of these it was,
+    // and a sentence true of all four is actionable for none.
     if cfg!(test) {
+        DREAM_DAEMON.decline(
+            "built with cfg(test): the nightly daemon never starts under the \
+             test harness, so no unit test can be woken by a real cycle",
+        );
         return;
     }
 
-    if !config.enabled || !config.dreaming.enabled {
+    if !config.enabled {
+        DREAM_DAEMON.decline("memory is off for this deployment: `[memory] enabled = false`");
         return;
     }
 
+    if !config.dreaming.enabled {
+        DREAM_DAEMON.decline(
+            "memory is on but nightly dreaming is off: `[memory.dreaming] enabled = false`",
+        );
+        return;
+    }
+
+    // NOT a decline: the daemon is already installed, so the outcome is
+    // `Installed` and stamping over it would report a live capability missing.
     if DREAM_DAEMON.get().is_some() {
         return;
     }
@@ -660,6 +678,11 @@ pub fn ensure_dream_daemon_with_orientation(
         Ok(handle) => handle,
         Err(_) => {
             warn!("DreamDaemon not started: no Tokio runtime available");
+            DREAM_DAEMON.decline(
+                "no Tokio runtime on the calling thread: the daemon needs a \
+                 runtime handle to spawn its nightly task, and boot reached \
+                 this from a blocking context",
+            );
             return;
         }
     };
@@ -668,6 +691,10 @@ pub fn ensure_dream_daemon_with_orientation(
         Ok(d) => d,
         Err(err) => {
             warn!(error = %err, "DreamDaemon not started: invalid config");
+            DREAM_DAEMON.decline(
+                "`[memory.dreaming]` did not validate — the \"DreamDaemon not \
+                 started: invalid config\" warning names the failing field",
+            );
             return;
         }
     };
@@ -707,6 +734,16 @@ pub fn ensure_dream_daemon_with_orientation(
         daemon.start_background_task_with_handle(handle);
         info!("DreamDaemon background task started");
     }
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// For the arms OUTSIDE this module: boot's agent-engine branch is what calls
+/// [`ensure_dream_daemon_with_orientation`] at all, so a deployment with no
+/// provider registry never reaches any of the five reasons that function
+/// records. `because` is quoted verbatim to an operator.
+pub fn decline_dream_daemon(because: &'static str) {
+    DREAM_DAEMON.decline(because);
 }
 
 /// Daily insight summary record.

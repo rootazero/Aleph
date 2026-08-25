@@ -216,6 +216,16 @@ pub fn install_manual_compaction(wiring: ManualCompactWiring) {
     let _ = MANUAL_WIRING.install(wiring);
 }
 
+/// Record that boot reached this slot and had nothing to install.
+///
+/// Boot installs this from inside `initialize_orchestrator`, which is gated on
+/// a default provider plus a session service. Absent, every `/compact` surface
+/// truncates instead of summarising and reports success. `because` is quoted
+/// verbatim to an operator.
+pub fn decline_manual_compaction(because: &'static str) {
+    MANUAL_WIRING.decline(because);
+}
+
 /// The summarizer provider installed at boot, if any.
 #[must_use]
 pub fn manual_summarizer() -> Option<Arc<dyn AiProvider>> {
