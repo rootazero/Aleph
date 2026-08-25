@@ -277,6 +277,31 @@ fn render_streaming(content: &str) -> String {
     html
 }
 
+/// Extend a cached stable-prefix render with newly-revealed text.
+///
+/// `revealed_prefix` is the full text revealed so far (`content` truncated
+/// to the typewriter's current `revealed` char count) — NOT just the new
+/// characters, since [`shared_ui_logic::markdown_stream::safe_freeze_offset`]
+/// needs to see any fence/reference-link-def state spanning the cached
+/// boundary and the newly-revealed text. Returns the extended
+/// `(html, new_safe_offset)`; when no further progress is safe, `html` is
+/// unchanged and `new_safe_offset == cached_offset`.
+fn extend_stable_prefix(
+    cached_html: &str,
+    cached_offset: usize,
+    revealed_prefix: &str,
+) -> (String, usize) {
+    match shared_ui_logic::markdown_stream::safe_freeze_offset(revealed_prefix, cached_offset) {
+        Some(new_offset) if new_offset > cached_offset => {
+            let delta = &revealed_prefix[cached_offset..new_offset];
+            let mut html = cached_html.to_string();
+            html.push_str(&render_streaming(delta));
+            (html, new_offset)
+        }
+        _ => (cached_html.to_string(), cached_offset),
+    }
+}
+
 /// A Leptos component for streaming content — lightweight rendering without full Markdown parse.
 ///
 /// Tracks code fences and escapes HTML, but does not process Markdown syntax.
@@ -389,9 +414,29 @@ pub fn TypewriterRenderer(
         } else {
             // Still sweeping — advance on each ~30fps animation tick.
             clock.tick.track();
+            let id = message_id.get_value();
+            if !is_streaming {
+                // Reveal hasn't caught up but the stream already ended —
+                // finalize may have swapped `content` wholesale, so a cached
+                // prefix could describe text that's no longer there. Drop it
+                // and fall back to an uncached render for this tick; the
+                // cache rebuilds itself from the next call onward.
+                clock.clear_stable_prefix(&id);
+                return content.with_value(|c| {
+                    let shown: String = c.chars().take(revealed).collect();
+                    render_streaming_with_cursor(&shown)
+                });
+            }
             content.with_value(|c| {
-                let shown: String = c.chars().take(revealed).collect();
-                render_streaming_with_cursor(&shown)
+                let revealed_prefix: String = c.chars().take(revealed).collect();
+                let (cached_html, cached_offset) = clock.stable_prefix_for(&id).unwrap_or_default();
+                let (html, safe_offset) =
+                    extend_stable_prefix(&cached_html, cached_offset, &revealed_prefix);
+                if safe_offset != cached_offset {
+                    clock.set_stable_prefix(&id, html.clone(), safe_offset);
+                }
+                let tail = &revealed_prefix[safe_offset..];
+                format!("{html}{}{STREAMING_CURSOR_HTML}", render_streaming(tail))
             })
         }
     };
@@ -435,7 +480,7 @@ pub fn MarkdownRenderer(content: String) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_markdown, render_streaming};
+    use super::{extend_stable_prefix, render_markdown, render_streaming};
 
     // ⚠️ Host-test safety: render_markdown with a *language-tagged* fence
     // calls is_dark_mode() → web_sys::window(), which panics off-wasm.
@@ -474,5 +519,31 @@ mod tests {
         let html = render_streaming("```<script>alert(1)</script>\ncode\n```");
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn extend_stable_prefix_appends_only_the_new_safe_delta() {
+        let (html, offset) = extend_stable_prefix("", 0, "line one\nline two\n");
+        assert_eq!(offset, "line one\nline two\n".len());
+        assert!(html.contains("line one"));
+        assert!(html.contains("line two"));
+
+        // Simulate the next tick: more text arrived, cache reused.
+        let (html2, offset2) =
+            extend_stable_prefix(&html, offset, "line one\nline two\nline three\n");
+        assert_eq!(offset2, "line one\nline two\nline three\n".len());
+        assert!(html2.starts_with(&html), "must extend, not rebuild");
+        assert!(html2.contains("line three"));
+    }
+
+    #[test]
+    fn extend_stable_prefix_no_ops_when_no_safe_progress_exists() {
+        // `cached_offset` must be a value `safe_freeze_offset` could actually
+        // have returned — i.e. a complete-line boundary (here: 0, "nothing
+        // cached yet"). An unclosed fence with no other complete line makes
+        // no further progress safe, so the cache must pass through unchanged.
+        let (html, offset) = extend_stable_prefix("<cached>", 0, "```rust\n");
+        assert_eq!(html, "<cached>");
+        assert_eq!(offset, 0);
     }
 }
