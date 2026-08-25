@@ -421,6 +421,19 @@ mod tests {
     /// Every file in `src/` permitted to name a [`BOOT_SLOT_MARKERS`]
     /// spelling at all. Asserted as an EQUALITY, in both directions — see
     /// [`the_only_files_naming_the_boot_slot_are_the_owner_the_boot_site_and_the_reader`].
+    ///
+    /// Listing a file here has a cost worth naming, because neither test
+    /// will report it: inside a listed file a SECOND PRODUCTION toucher is
+    /// invisible, since the equality above only asks whether a file names
+    /// the slot at all, and
+    /// [`no_test_outside_the_one_designated_function_touches_boot_instant`]
+    /// scans only that file's `cfg_test_portion`. That granularity is the
+    /// intended one rather than a gap someone missed: `booted()` is a pure
+    /// read that cannot install anything, `mark_boot()` is an idempotent
+    /// install, and the race being guarded is a TEST setting the slot
+    /// before the designated test reads it — not a count of production call
+    /// sites. The case that does matter, a toucher in a file that is NOT
+    /// listed, is RED either way.
     const BOOT_SLOT_FILES: [&str; 3] = [OWNING_FILE, BOOT_SITE_FILE, READER_FILE];
 
     /// The one test function allowed to touch the slot.
@@ -551,14 +564,19 @@ mod tests {
     /// none. Files outside [`BOOT_SLOT_FILES`] may not name the slot at all
     /// (checked by the test above), which covers every test in them without
     /// knowing where any function starts — including the 120 files under
-    /// `src/` that carry test attributes but no `#[cfg(test)]` of their own
-    /// (measured 2026-08-25; typically a whole test module that a parent
-    /// declares with `#[cfg(test)] mod x;`), for which a region scan finds
-    /// no test code at all and would report them clean without looking. Inside the three permitted files, the test region comes from
-    /// [`crate::utils::source_scan::cfg_test_portion`] — the other half of the same walk
-    /// that produces `production_prefix`, so the two cannot disagree about
-    /// where test code begins — and only ONE function is located by name,
-    /// with the count of hits asserted.
+    /// `src/` for which `cfg_test_portion` returns nothing while the file
+    /// does contain tests, so a region scan finds no test code in them at
+    /// all and would report them clean without looking. (Measured
+    /// 2026-08-25 against that function itself rather than a proxy: a raw
+    /// substring search for `#[cfg(test)]` answers a different question and
+    /// gives 111. Typically each is a whole test module that a parent
+    /// declares with `#[cfg(test)] mod x;`.)
+    ///
+    /// Inside the three permitted files, the test region comes from
+    /// [`crate::utils::source_scan::cfg_test_portion`] — the other half of
+    /// the same walk that produces `production_prefix`, so the two cannot
+    /// disagree about where test code begins — and only ONE function is
+    /// located by name, with the count of hits asserted.
     ///
     /// # Scope
     ///
