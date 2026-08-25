@@ -394,7 +394,11 @@ fn compress_console_messages(output: &str, budget_tokens: Option<usize>) -> Stri
 
 /// Char-safe cap for a single snapshot line (never slice on a byte boundary).
 fn cap_line(s: &str) -> String {
-    if s.chars().count() <= MAX_SNAPSHOT_LINE_CHARS {
+    // Byte-length fast path: each UTF-8 char is at least one byte, so
+    // `s.len() <= MAX_SNAPSHOT_LINE_CHARS` implies the char count fits and we
+    // can skip the O(n) `chars().count()` walk that this used to do for every
+    // snapshot line (the overwhelmingly common short-line case).
+    if s.len() <= MAX_SNAPSHOT_LINE_CHARS || s.chars().count() <= MAX_SNAPSHOT_LINE_CHARS {
         return s.to_string();
     }
     let kept: String = s.chars().take(MAX_SNAPSHOT_LINE_CHARS).collect();
