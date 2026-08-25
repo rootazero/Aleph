@@ -242,7 +242,25 @@ impl ConflictResolver {
         }
 
         let id = tool.id.clone();
-        tools.insert(id.clone(), tool);
+        // Id collisions are not caught by the canonical-name conflict
+        // detection above (that loop only consults `tool.name`, not
+        // `tool.id`). The id derivation paths (`skill:{id}`,
+        // `plugin:{plugin_id}:{tool_name}`, `ToolSource::format_tool_id`)
+        // are deterministic, so a skill installed in two locations, a
+        // plugin manifest with duplicate entries, or a hot-reload that
+        // forgot to call `ToolCatalog::clear` can all produce a second
+        // tool with the same id. Silently overwriting would lose the
+        // first registration without any observable signal — surface a
+        // warn so an operator can see the duplicate and the resolution
+        // path (last-writer-wins) keeps the system making forward
+        // progress instead of erroring out at boot.
+        if let Some(prev) = tools.insert(id.clone(), tool) {
+            tracing::warn!(
+                tool_id = %id,
+                prev_name = %prev.name,
+                "duplicate tool id; overwriting previous registration (last-writer-wins)",
+            );
+        }
         id
     }
 }
