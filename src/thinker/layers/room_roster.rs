@@ -175,15 +175,27 @@ mod tests {
         assert!(out.is_empty(), "no resolved context at all");
     }
 
+    /// What a member's id renders as *right now*.
+    ///
+    /// `scope::directory` is a process-global map another test may have
+    /// published into, so pinning the raw id here holds only in a filtered run
+    /// — which is how these two assertions passed alone and failed in the full
+    /// `--lib` pass. What this module owns is the owner mark, the order and the
+    /// join; resolving the name is `speaker_label`'s job and has its own tests.
+    fn label(id: &str) -> String {
+        crate::thinker::nudges::speaker_label(id)
+    }
+
     #[test]
     fn a_room_names_its_members_and_marks_the_owner() {
         let line = render_members(Some("u-alice"), &ids(&["u-alice", "u-bob"]))
             .expect("a non-empty roster renders");
-        assert_eq!(line, "u-alice (owner), u-bob");
+        let expected = format!("{} (owner), {}", label("u-alice"), label("u-bob"));
+        assert_eq!(line, expected);
 
         let out = render(&ctx_with(Some(&line)));
         assert!(out.starts_with("<room_context>\n"));
-        assert!(out.contains("u-alice (owner), u-bob"));
+        assert!(out.contains(&expected));
         assert!(out.trim_end().ends_with("</room_context>"));
     }
 
@@ -197,7 +209,8 @@ mod tests {
     #[test]
     fn an_absent_owner_marks_nobody() {
         let line = render_members(Some("u-ghost"), &ids(&["u-alice", "u-bob"])).unwrap();
-        assert_eq!(line, "u-alice, u-bob");
+        assert_eq!(line, format!("{}, {}", label("u-alice"), label("u-bob")));
+        assert!(!line.contains("(owner)"));
     }
 
     /// Past the cap the count is stated, not swallowed: "and N more" is the

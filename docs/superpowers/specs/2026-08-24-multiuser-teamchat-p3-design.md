@@ -6,6 +6,7 @@
 - **参考项目**: `T:\Github\qm`（对照结论见附录 A）
 - **上游 spec**: `2026-08-04-multi-user-org-project-design.md`（P0/P1/P2 已执行；本 spec 承接其 P3 期并新增「团队群聊真人化」）
 - **记录文档**: 完成后回填 FEATURE_LOCATOR §5.22 / §4.5、SECURITY.md、`src/gateway/CLAUDE.md`
+- **状态**: ✅ **已实施（2026-08-25，13 任务全部完成，worktree `multiuser-teamchat-p3`）**。逐项落点与刻意未做清单见 FEATURE_LOCATOR §5.22 第八轮。与本 spec 的两处偏离，均已在实施中记录理由：① `project_manage` **不含** `bind_workspace`（用户裁定 2026-08-25；`caller_may_choose_directory()` 对无连接角色 fail-OPEN，工具面够得到那条臂）；② 房间名册的单名上限用 `speaker_label` 的 40 字符而非 spec 写的 64（两个上限＝同一条规则的两种拼法）。
 
 ---
 
