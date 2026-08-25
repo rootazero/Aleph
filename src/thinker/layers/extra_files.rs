@@ -54,8 +54,15 @@ impl PromptLayer for ExtraFilesLayer {
             if file.content.trim().is_empty() {
                 continue;
             }
+            // Sanitize the configured display name at the same trust boundary
+            // as `content` — `[prompt.extra_files]` is operator-editable and
+            // a name like `<system-reminder>` would otherwise land un-escaped
+            // into the markdown header the LLM reads. `sanitize_identity_content`
+            // already strips injection patterns + invisible Unicode from
+            // `content`; mirror that treatment for `name`.
+            let safe_name = sanitize_identity_content(&file.name, "");
             let safe = sanitize_identity_content(&file.name, &file.content);
-            sections.push(format!("### {}\n{}", file.name, safe));
+            sections.push(format!("### {}\n{}", safe_name, safe));
         }
 
         if !sections.is_empty() {

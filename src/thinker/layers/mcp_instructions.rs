@@ -46,7 +46,14 @@ impl PromptLayer for McpInstructionsLayer {
 
         for item in &non_empty {
             output.push_str("### ");
-            output.push_str(&item.server_name);
+            // Sanitize server_name at the same trust boundary as `instructions`:
+            // it crosses from the MCP registry (an external source) into a
+            // markdown header that the LLM reads. An un-sanitized name
+            // containing `<system-reminder>` or `<|im_start|>` would survive
+            // into the prompt and break the contract the Light pass enforces
+            // on `instructions` immediately below.
+            let safe_name = sanitize_for_prompt(&item.server_name, SanitizeLevel::Light);
+            output.push_str(&safe_name);
             output.push('\n');
             // Server-supplied free text crossing a trust boundary: sanitized,
             // AND length-capped. This layer only passes the string through and
