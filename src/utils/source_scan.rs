@@ -1208,7 +1208,102 @@ pub fn after() {}
         );
     }
 
-    /// Guard 3 — no second author. The rule, not an exemption list.
+    /// Does `line` hold a string literal that OPENS with `#[cfg(test)]`?
+    ///
+    /// This replaced three literal patterns —
+    /// `split("#[cfg(test)]")` / `find("#[cfg(test)]")` /
+    /// `split_once("#[cfg(test)]")` — that named the three spellings present
+    /// on the day guard 3 was written and were therefore blind to every other
+    /// one. Measured 2026-08-25, five live sites in `src/` used a spelling
+    /// none of the three matched: two through a `const ATTR`, two through a
+    /// longer needle (`"#[cfg(test)]\nmod "`), one through
+    /// `starts_with("#[cfg(test)]")`. Guard 3 reported zero offenders the
+    /// whole time, which is what a list of spellings always eventually
+    /// reports.
+    ///
+    /// The discriminator is the literal's OFFSET, not the method called on it,
+    /// so `splitn` / `match_indices` / whatever comes next is covered without
+    /// anyone adding a row. Leading `\n` / `\r\n` escapes are stepped over —
+    /// the line-anchored spelling is the same cut with a CRLF story attached.
+    /// An attribute further inside a literal is prose or a fixture (an
+    /// assertion message reading "the #[cfg(test)] split matched nothing" is
+    /// not a second cut), and there are 11 such lines in `src/` that must not
+    /// be flagged.
+    ///
+    /// # What it cannot see
+    ///
+    /// A needle assembled from pieces (`concat!`, two constants joined), and a
+    /// cut that never spells the attribute at all — one keying on
+    /// `"mod tests {"`, say. Both need value flow rather than text. Named here
+    /// rather than left implied: a scanner that does not say what it misses
+    /// gets read as one that misses nothing.
+    fn opens_a_cfg_test_literal(line: &str) -> bool {
+        const ATTR: &str = "#[cfg(test)]";
+        let bytes = line.as_bytes();
+        for (quote, _) in line.match_indices('"') {
+            let mut j = quote + 1;
+            while j + 1 < bytes.len() && bytes[j] == b'\\' && matches!(bytes[j + 1], b'n' | b'r') {
+                j += 2;
+            }
+            if line[j..].starts_with(ATTR) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Files that still hand-roll the cut, and why each is still here.
+    ///
+    /// Task 3 migrated 36 sites onto [`production_prefix`] and closed with
+    /// "zero offenders". That was true of the three spellings it searched for.
+    /// Widening the search to the rule (above) found these five, all older
+    /// than that round. They are registered rather than migrated because
+    /// migrating each is a behaviour question of its own, not a rename:
+    ///
+    /// **This list may only shrink**, and the assertion below pins its size so
+    /// that shrinking is the only silent direction — a sixth site fails loudly
+    /// as an offender, and removing a row without migrating fails too.
+    const KNOWN_UNMIGRATED_CUTS: &[(&str, &str)] = &[
+        (
+            "src/gateway/btw/guard_tests.rs",
+            "const ATTR + find(ATTR), but it requires the attribute to be \
+             followed by `mod` (stepping over a visibility qualifier), so it \
+             deliberately does NOT stop at a `#[cfg(test)] use`. That is a \
+             different rule from production_prefix's, argued in its own doc.",
+        ),
+        (
+            "src/gateway/continuation_lifecycle.rs",
+            "the same const-ATTR shape as guard_tests.rs, minus the visibility \
+             handling — two copies of one idea, already drifted. Converging \
+             them is worth doing and is not a rename.",
+        ),
+        (
+            "src/gateway/execution_engine/run_loop/tests.rs",
+            "splits on the longer needle `\"#[cfg(test)]\\nmod tests\"`, which \
+             is a narrower cut than the naive one and not equivalent to \
+             production_prefix on a file with a gated non-mod item.",
+        ),
+        (
+            "src/session/steer_signal.rs",
+            "splits on `\"#[cfg(test)]\\nmod \"` — same shape as run_loop's.",
+        ),
+        (
+            "src/harness/tests/budget.rs",
+            "counts budgeted LINES for the R10 harness ratchet rather than \
+             extracting text. Swapping the cut moves that ratchet's number, \
+             which is a decision for whoever owns the ratchet.",
+        ),
+    ];
+
+    /// Guard 3 — no second author.
+    ///
+    /// The detector is a rule ([`opens_a_cfg_test_literal`]), not a list of
+    /// spellings; the list it does carry ([`KNOWN_UNMIGRATED_CUTS`]) is five
+    /// registered sites the rule found and Task 3's three-spelling search never
+    /// could, size-pinned so it cannot grow into a licence. Read both docs
+    /// before touching either: the previous version of this comment claimed
+    /// "the rule, not an exemption list" while the code was three literals, and
+    /// that is the direction this file exists to make impossible.
     ///
     /// Scans WHOLE files on purpose — not [`production_prefix`]. 25 of the 32
     /// offending files hold their occurrence inside a same-file
@@ -1246,9 +1341,9 @@ pub fn after() {}
     /// direction where the guard silently approves.
     ///
     /// The needle search still runs on the RAW line, never on `code_only`'s
-    /// output: the patterns this guard hunts ARE string literals
-    /// (`split("#[cfg(test)]")`), and `code_only` removes literal contents
-    /// by design. `code_only` decides only whether the line is code at all.
+    /// output: the thing this guard hunts IS a string literal, and `code_only`
+    /// removes literal contents by design. `code_only` decides only whether the
+    /// line is code at all.
     #[test]
     fn no_module_hand_rolls_the_cfg_test_prefix_cut() {
         let tests_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
@@ -1265,20 +1360,35 @@ pub fn after() {}
                 if code_only(line, &mut state).trim().is_empty() {
                     continue;
                 }
-                let t = line.trim_start();
-                if t.contains(r##"split("#[cfg(test)]")"##)
-                    || t.contains(r##"find("#[cfg(test)]")"##)
-                    || t.contains(r##"split_once("#[cfg(test)]")"##)
-                {
-                    offenders.push(format!("{rel}:{}", n + 1));
+                if opens_a_cfg_test_literal(line) {
+                    offenders.push((rel.clone(), format!("{rel}:{}", n + 1)));
                 }
             }
         }
+
+        let (known, rest): (Vec<_>, Vec<_>) = offenders
+            .into_iter()
+            .partition(|(file, _)| KNOWN_UNMIGRATED_CUTS.iter().any(|(f, _)| f == file));
+        let rest: Vec<String> = rest.into_iter().map(|(_, at)| at).collect();
         assert!(
-            offenders.is_empty(),
+            rest.is_empty(),
             "these hand-roll the production-prefix cut instead of calling \
              `utils::source_scan::production_prefix`:\n  {}",
-            offenders.join("\n  ")
+            rest.join("\n  ")
+        );
+
+        let known: Vec<String> = known.into_iter().map(|(_, at)| at).collect();
+        assert_eq!(
+            known.len(),
+            KNOWN_UNMIGRATED_CUTS.len(),
+            "the registered-cut list is out of date. It matched {} lines, not \
+             {}: {known:?}. If you migrated one onto `production_prefix`, \
+             delete its row from `KNOWN_UNMIGRATED_CUTS` — the list may only \
+             shrink, and it can only shrink if someone is made to notice. If a \
+             registered file grew a SECOND hand-rolled cut, that is a new one: \
+             migrate it, do not let the file's row cover it.",
+            known.len(),
+            KNOWN_UNMIGRATED_CUTS.len()
         );
     }
 }
