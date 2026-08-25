@@ -30,6 +30,70 @@ use super::engine::ExecutionEngine;
 // Agent loop execution
 // ============================================================================
 
+/// This run's scope attribution: what the producer stamped, corrected by what
+/// the gateway itself knows about the session key.
+///
+/// [`crate::scope::scope_from_metadata`] reads a map some producer wrote.
+/// `projects.current_session_key` is written by exactly one function
+/// ([`crate::projects::ProjectStore::claim_session_key`]), so a key it names is
+/// a room **by declaration** rather than by inference — and when the two
+/// disagree, the declaration is the one that knows.
+///
+/// The disagreement is not hypothetical and does not heal. A room is opened
+/// (`projects.room_session` claims the key) before anyone speaks, and whoever
+/// speaks first creates the row. A producer that never heard of rooms stamps
+/// that row `personal:<first speaker>`; `stamp_attribution` is create-only and
+/// `attribution_backfill`'s predicate is `owner_user_id IS NULL AND scope_id IS
+/// NULL`, so the wrong stamp is permanent and the room goes invisible to every
+/// other member — including its owner — while `projects.list` keeps listing it.
+///
+/// `handlers::agent::resolve_attribution` already asks this question for ONE
+/// producer, the Panel's `agent.run` / `chat.send`, and keeps asking it there
+/// because it can also *refuse*: a non-member gets `ProjectNotFound`, the same
+/// refusal a named foreign project gets. This function cannot refuse — it runs
+/// after admission, on a request that is already going to execute — so it only
+/// corrects the filing. The six producers that never pass through that handler
+/// (the channel inbound router, cron, heartbeat, the teams dispatcher,
+/// `session_send`, A2A) get the correction here.
+///
+/// Only the scope is replaced. `owner_user_id` still names whoever spoke: for a
+/// project-scoped row visibility is decided by the roster
+/// ([`crate::gateway::visibility::owner_and_scope_visible_to`]), so overwriting
+/// the owner would buy nothing and lose the attribution.
+///
+/// A catalogue failure reads as "not a room", matching
+/// `handlers::agent::room_claiming`'s ruling for the same lookup: a degraded
+/// SQLite must not turn into a mis-scoped turn *or* a refused one. The cost is
+/// bounded — the row is then stamped the way it is stamped today.
+fn request_scope(request: &RunRequest) -> Option<crate::scope::ScopeAttribution> {
+    let stamped = crate::scope::scope_from_metadata(&request.metadata);
+    let Some(pid) = room_claiming(&request.session_key) else {
+        return stamped;
+    };
+    let mut attr = stamped?;
+    attr.scope = crate::scope::ScopeId::Project(pid);
+    Some(attr)
+}
+
+/// The project that has claimed `session_key` as its room conversation.
+///
+/// Twin of `handlers::agent::room_claiming`, deliberately not shared with it:
+/// that one lives on the admission path and its `None` feeds a branch that may
+/// refuse, this one lives after admission and its `None` means "leave the
+/// producer's stamp alone". Both read the same column through the same store
+/// method, which is the part that must not be duplicated.
+fn room_claiming(session_key: &crate::routing::session_key::SessionKey) -> Option<String> {
+    match crate::projects::ProjectStore::shared()
+        .project_for_session_key(&session_key.to_key_string())
+    {
+        Ok(pid) => pid,
+        Err(e) => {
+            tracing::warn!(error = %e, "projects: room claim lookup failed; leaving the producer's scope stamp alone");
+            None
+        }
+    }
+}
+
 /// Establishes this run's scope attribution (owner/scope) and this turn's
 /// speaker as task-locals for `fut`'s duration, both derived from
 /// `request.metadata` — see [`crate::scope::stamp_metadata`] and
@@ -52,7 +116,7 @@ where
 {
     let author = request.metadata.get(super::AUTHOR_USER_KEY).cloned();
     crate::scope::with_scope(
-        crate::scope::scope_from_metadata(&request.metadata),
+        request_scope(request),
         crate::scope::with_room_author(author, fut),
     )
     .await
@@ -227,7 +291,7 @@ pub(super) async fn ensure_session_under_request_scope(
     request: &RunRequest,
 ) {
     crate::scope::with_scope(
-        crate::scope::scope_from_metadata(&request.metadata),
+        request_scope(request),
         agent.ensure_session(&request.session_key),
     )
     .await;

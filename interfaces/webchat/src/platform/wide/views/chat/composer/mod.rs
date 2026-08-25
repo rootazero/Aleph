@@ -239,13 +239,32 @@ pub(crate) fn InputArea() -> impl IntoView {
             // stretch where the user most needs to see something happening.
             chat.phase.set(ChatPhase::Thinking);
             spawn_local(async move {
-                if let Err(e) =
-                    crate::api::team_chat::TeamChatApi::send(&dash, &team_id, &team_text).await
-                {
-                    // The fan-out never started, so no `settled` event is coming
-                    // — drop back to idle or the composer hangs on "thinking".
-                    chat.phase.set(ChatPhase::Idle);
-                    chat.set_send_error(ChatSendError::classify(e));
+                match crate::api::team_chat::TeamChatApi::send(&dash, &team_id, &team_text).await {
+                    Ok(resp) => {
+                        // Both send outcomes (activated or observed) fire the
+                        // SAME live `team.<id>.message` echo of this bubble —
+                        // remember the id so `team_events` recognizes and
+                        // skips it rather than rendering a duplicate.
+                        if let Some(mid) = resp.message_id {
+                            chat.remember_own_team_message(mid);
+                        }
+                        if resp.observed {
+                            // Multi-human mention gate (spec §6.2): no roster
+                            // member was addressed, so no run was minted — no
+                            // `team.<id>.fanout` event is ever coming to flip
+                            // this back to idle. The bubble is already up
+                            // (pushed optimistically above); observe mode
+                            // just never becomes a Stop button.
+                            chat.phase.set(ChatPhase::Idle);
+                        }
+                    }
+                    Err(e) => {
+                        // The fan-out never started, so no `settled` event is
+                        // coming — drop back to idle or the composer hangs on
+                        // "thinking".
+                        chat.phase.set(ChatPhase::Idle);
+                        chat.set_send_error(ChatSendError::classify(e));
+                    }
                 }
                 is_sending.set(false);
             });
@@ -492,8 +511,19 @@ pub(crate) fn InputArea() -> impl IntoView {
             spawn_local(async move {
                 match crate::api::team_chat::TeamChatApi::send(&dash, &team_id, &joined).await {
                     // The bubble goes up only once the group has the message —
-                    // same contract as the single-agent loop below.
-                    Ok(_) => chat.push_user_message(&joined),
+                    // same contract as the single-agent loop below. Remember
+                    // the id (both send outcomes fire the same live
+                    // `team.<id>.message` echo) so `team_events` skips it
+                    // rather than rendering a duplicate. `observed` needs no
+                    // extra handling here — unlike the typed-send branch
+                    // above, this path never sets a `Thinking` phase to
+                    // revert, so there is nothing else to settle.
+                    Ok(resp) => {
+                        if let Some(mid) = resp.message_id {
+                            chat.remember_own_team_message(mid);
+                        }
+                        chat.push_user_message(&joined);
+                    }
                     Err(e) => {
                         chat.set_send_error(ChatSendError::classify(e));
                         chat.requeue_front(batch);

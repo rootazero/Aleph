@@ -266,6 +266,18 @@ impl BuiltinToolRegistry {
         }
     }
 
+    /// Inject the gateway event bus so `project_manage`'s mutations announce
+    /// themselves on the same channel the `projects.*` RPC face uses.
+    ///
+    /// Without it the tool still works and still writes; it just cannot tell
+    /// anyone, which leaves the "one verb, two faces, only one publishes"
+    /// asymmetry this injection exists to close.
+    pub fn set_gateway_event_bus(&self, bus: Arc<crate::gateway::event_bus::GatewayEventBus>) {
+        if self.gateway_event_bus.set(bus).is_ok() {
+            info!("GatewayEventBus injected — `project_manage` mutations now publish projects.changed");
+        }
+    }
+
     /// Get a handle to the `MemoryContextProvider` `OnceCell` for deferred
     /// injection from the server builder.
     #[must_use]

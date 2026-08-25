@@ -132,6 +132,10 @@ pub trait MessageStore: Send + Sync {
 
     /// Hard-delete all messages (and their recipients) for a team. Returns rows deleted.
     async fn delete_team_messages(&self, team_id: &str) -> crate::error::Result<usize>;
+
+    /// Distinct human authors ever seen in this team's transcript (rows where
+    /// `author_user_id IS NOT NULL`). Agent/system rows are excluded.
+    async fn distinct_human_authors(&self, team_id: &str) -> crate::error::Result<Vec<String>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -177,7 +181,8 @@ impl SqliteMessageStore {
                 reply_to   TEXT,
                 thread_id  TEXT,
                 created_at TEXT NOT NULL,
-                expires_at TEXT
+                expires_at TEXT,
+                author_user_id TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_team_messages_thread
@@ -201,6 +206,16 @@ impl SqliteMessageStore {
             "#,
         )
         .map_err(db_err)?;
+
+        // Additive migration for stores created before this column existed.
+        // `ADD COLUMN` has no `IF NOT EXISTS` in SQLite, so a duplicate-column
+        // error is the expected (and ignored) outcome on an already-migrated
+        // database — the `CREATE TABLE` batch above has already proven the
+        // file is otherwise usable.
+        let _ = conn.execute(
+            "ALTER TABLE team_messages ADD COLUMN author_user_id TEXT",
+            [],
+        );
 
         Ok(())
     }
@@ -264,8 +279,8 @@ impl SqliteMessageStore {
 
         tx.execute(
             r#"
-            INSERT INTO team_messages (id, team_id, from_agent, msg_type, subject, content, reply_to, thread_id, created_at, expires_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            INSERT INTO team_messages (id, team_id, from_agent, msg_type, subject, content, reply_to, thread_id, created_at, expires_at, author_user_id)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             "#,
             params![
                 id,
@@ -278,6 +293,7 @@ impl SqliteMessageStore {
                 thread_id,
                 now_str,
                 expires_at_str,
+                input.author_user_id,
             ],
         )
         .map_err(db_err)?;
@@ -315,6 +331,7 @@ impl SqliteMessageStore {
             attachments: input.attachments,
             created_at: now,
             expires_at: Some(expires_at),
+            author_user_id: input.author_user_id,
         })
     }
 
@@ -362,8 +379,8 @@ impl SqliteMessageStore {
 
         tx.execute(
             r#"
-            INSERT INTO team_messages (id, team_id, from_agent, msg_type, subject, content, reply_to, thread_id, created_at, expires_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            INSERT INTO team_messages (id, team_id, from_agent, msg_type, subject, content, reply_to, thread_id, created_at, expires_at, author_user_id)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             "#,
             params![
                 id,
@@ -376,6 +393,7 @@ impl SqliteMessageStore {
                 resolved_thread_id,
                 now_str,
                 expires_at_str,
+                input.author_user_id,
             ],
         )
         .map_err(db_err)?;
@@ -411,6 +429,7 @@ impl SqliteMessageStore {
             attachments: input.attachments,
             created_at: now,
             expires_at: Some(expires_at),
+            author_user_id: input.author_user_id,
         }))
     }
 
@@ -427,6 +446,7 @@ impl SqliteMessageStore {
             thread_id: row.get(7)?,
             created_at_str: row.get(8)?,
             expires_at_str: row.get(9)?,
+            author_user_id: row.get(10)?,
         })
     }
 
@@ -536,6 +556,7 @@ struct RawMessage {
     thread_id: Option<String>,
     created_at_str: String,
     expires_at_str: Option<String>,
+    author_user_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -636,7 +657,7 @@ impl MessageStore for SqliteMessageStore {
             let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
             let sql = format!(
                 "SELECT id, team_id, from_agent, msg_type, subject, content, \
-                 reply_to, thread_id, created_at, expires_at \
+                 reply_to, thread_id, created_at, expires_at, author_user_id \
                  FROM team_messages WHERE id IN ({placeholders}) ORDER BY created_at ASC"
             );
             let params: Vec<&dyn rusqlite::types::ToSql> = ids
@@ -671,6 +692,7 @@ impl MessageStore for SqliteMessageStore {
                 attachments,
                 created_at: parse_rfc3339(&raw.created_at_str)?,
                 expires_at: parse_rfc3339_opt(&raw.expires_at_str)?,
+                author_user_id: raw.author_user_id,
             });
         }
 
@@ -703,7 +725,7 @@ impl MessageStore for SqliteMessageStore {
                 .prepare_cached(
                     r#"
                     SELECT id, team_id, from_agent, msg_type, subject, content,
-                           reply_to, thread_id, created_at, expires_at
+                           reply_to, thread_id, created_at, expires_at, author_user_id
                     FROM team_messages
                     WHERE thread_id = ?1 AND team_id = ?2
                     ORDER BY created_at ASC
@@ -740,6 +762,7 @@ impl MessageStore for SqliteMessageStore {
                 attachments,
                 created_at: parse_rfc3339(&raw.created_at_str)?,
                 expires_at: parse_rfc3339_opt(&raw.expires_at_str)?,
+                author_user_id: raw.author_user_id,
             });
         }
 
@@ -839,7 +862,7 @@ impl MessageStore for SqliteMessageStore {
                 .prepare_cached(
                     r#"
                     SELECT id, team_id, from_agent, msg_type, subject, content,
-                           reply_to, thread_id, created_at, expires_at
+                           reply_to, thread_id, created_at, expires_at, author_user_id
                     FROM team_messages
                     WHERE team_id = ?1
                     ORDER BY created_at DESC, id DESC
@@ -877,6 +900,7 @@ impl MessageStore for SqliteMessageStore {
                 attachments,
                 created_at: parse_rfc3339(&raw.created_at_str)?,
                 expires_at: parse_rfc3339_opt(&raw.expires_at_str)?,
+                author_user_id: raw.author_user_id,
             });
         }
         Ok(messages)
@@ -899,6 +923,25 @@ impl MessageStore for SqliteMessageStore {
             .map_err(db_err)?;
         Ok(n)
     }
+
+    async fn distinct_human_authors(&self, team_id: &str) -> crate::error::Result<Vec<String>> {
+        let conn = self.conn.lock().await;
+
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT DISTINCT author_user_id FROM team_messages \
+                 WHERE team_id = ?1 AND author_user_id IS NOT NULL",
+            )
+            .map_err(db_err)?;
+
+        let authors = stmt
+            .query_map(params![team_id], |row| row.get::<_, String>(0))
+            .map_err(db_err)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_err)?;
+
+        Ok(authors)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -920,6 +963,7 @@ mod tests {
             recipients,
             reply_to: None,
             attachments: vec![],
+            author_user_id: None,
         }
     }
 
@@ -1060,6 +1104,7 @@ mod tests {
                 recipients: vec![to_recipient("agent-a")],
                 reply_to: Some(msg1.id.clone()),
                 attachments: vec![],
+                author_user_id: None,
             })
             .await
             .unwrap();
@@ -1142,6 +1187,7 @@ mod tests {
                 recipients: vec![cc_recipient("agent-b")],
                 reply_to: None,
                 attachments: vec![],
+                author_user_id: None,
             })
             .await
             .unwrap();
@@ -1193,6 +1239,7 @@ mod tests {
                 recipients: vec![to_recipient("agent-b")],
                 reply_to: None,
                 attachments: vec![],
+                author_user_id: None,
             })
             .await
             .unwrap();
@@ -1235,6 +1282,7 @@ mod tests {
                 recipients: vec![to_recipient("agent-b")],
                 reply_to: None,
                 attachments: vec!["artifact-1".to_string(), "artifact-2".to_string()],
+                author_user_id: None,
             })
             .await
             .unwrap();
@@ -1267,6 +1315,7 @@ mod tests {
                     recipients: vec![],
                     reply_to: None,
                     attachments: vec![],
+                    author_user_id: None,
                 })
                 .await
                 .expect("send");
@@ -1295,6 +1344,7 @@ mod tests {
                 recipients: vec![],
                 reply_to: None,
                 attachments: vec![],
+                author_user_id: None,
             })
             .await
             .expect("send");
@@ -1320,6 +1370,7 @@ mod tests {
                     recipients: vec![to_recipient("carol")],
                     reply_to: None,
                     attachments: vec![],
+                    author_user_id: None,
                 })
                 .await
                 .expect("send team-A message");
@@ -1334,6 +1385,7 @@ mod tests {
                 recipients: vec![to_recipient("alice")],
                 reply_to: None,
                 attachments: vec![],
+                author_user_id: None,
             })
             .await
             .expect("send team-B message");
@@ -1369,11 +1421,77 @@ mod tests {
                     recipients: vec![],
                     reply_to: None,
                     attachments: vec![],
+                    author_user_id: None,
                 })
                 .await
                 .expect("send");
         }
         let got = store.list_team_messages("t", 2).await.expect("list");
         assert_eq!(got.len(), 2, "limit caps result count");
+    }
+
+    #[tokio::test]
+    async fn author_round_trips_and_distinct_counts_only_humans() {
+        let store = SqliteMessageStore::new_in_memory().await;
+
+        let mut msg = make_msg("t1", "user", vec![]);
+        msg.author_user_id = Some("u-alice".into());
+        store
+            .send_message_with_ttl(msg, Duration::days(1))
+            .await
+            .unwrap();
+
+        let mut agent = make_msg("t1", "coder", vec![]);
+        agent.author_user_id = None;
+        store
+            .send_message_with_ttl(agent, Duration::days(1))
+            .await
+            .unwrap();
+
+        let mut bob = make_msg("t1", "user", vec![]);
+        bob.author_user_id = Some("u-bob".into());
+        store
+            .send_message_with_ttl(bob, Duration::days(1))
+            .await
+            .unwrap();
+
+        let history = store.list_team_messages("t1", 10).await.unwrap();
+        assert_eq!(
+            history
+                .iter()
+                .filter(|m| m.author_user_id.is_some())
+                .count(),
+            2,
+            "only the two human-authored rows carry author_user_id"
+        );
+
+        let mut authors = store.distinct_human_authors("t1").await.unwrap();
+        authors.sort();
+        assert_eq!(authors, vec!["u-alice".to_string(), "u-bob".to_string()]);
+
+        // Isolation: a different team must not see t1's authors.
+        assert!(store.distinct_human_authors("t2").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn schema_migration_is_idempotent_on_existing_db() {
+        // Open the same on-disk database twice — the second `migrate()` call
+        // must not fail even though `team_messages` (and its `author_user_id`
+        // column) already exist. SQLite's `ALTER TABLE ADD COLUMN` has no `IF
+        // NOT EXISTS`, so this is the regression test for the
+        // duplicate-column tolerance in `migrate()`.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("messages.db");
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            let store = SqliteMessageStore::new(conn);
+            store.migrate().await.unwrap();
+        }
+
+        // Re-open the same file and migrate again.
+        let conn2 = Connection::open(&path).unwrap();
+        let store2 = SqliteMessageStore::new(conn2);
+        store2.migrate().await.unwrap();
     }
 }

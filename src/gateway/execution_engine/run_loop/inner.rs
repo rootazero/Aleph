@@ -109,11 +109,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // Unbound rooms take this branch too, which is new and deliberate: a
         // room with no folder still belongs in the sidebar's recency order,
         // and by id there is nothing to look up by path anyway.
-        let room_id = crate::scope::scope_from_metadata(&request.metadata).and_then(|attr| {
-            match attr.scope {
-                crate::scope::ScopeId::Project(id) => Some(id),
-                _ => None,
-            }
+        // Via `request_scope`, not `scope_from_metadata`: a key the room
+        // claimed is the room's even when the producer stamped it personal,
+        // and a recency order derived from the other answer would leave a room
+        // out of the sidebar's ordering for turns its own row counted.
+        let room_id = super::request_scope(request).and_then(|attr| match attr.scope {
+            crate::scope::ScopeId::Project(id) => Some(id),
+            _ => None,
         });
         if let Some(project_id) = room_id {
             tokio::task::spawn_blocking(move || {

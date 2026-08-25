@@ -219,6 +219,7 @@ pub(in crate::commands::start) fn register_teams_handlers(
     msg_store: Option<Arc<dyn alephcore::teams::messages::MessageStore>>,
     agent_manager: Option<Arc<alephcore::AgentManager>>,
     event_bus: &Arc<alephcore::gateway::event_bus::GatewayEventBus>,
+    security_store: &Arc<alephcore::gateway::security::SecurityStore>,
 ) {
     use alephcore::gateway::handlers::teams;
 
@@ -443,15 +444,19 @@ pub(in crate::commands::start) fn register_teams_handlers(
     }
 
     // teams.chat.history — replay durable group-chat transcript as attribution
-    // bubbles. Only registered when the message store is wired at boot.
+    // bubbles. Only registered when the message store is wired at boot. Also
+    // takes the security store, same injection point `teams.chat.send` uses,
+    // to resolve each human row's `author_user_id` to a display name.
     if let Some(ms) = msg_store.clone() {
         let ts = Arc::clone(store);
+        let sec = Arc::clone(security_store);
         server
             .handlers_mut()
             .register("teams.chat.history", move |req| {
                 let ts = Arc::clone(&ts);
                 let ms = Arc::clone(&ms);
-                async move { teams::handle_chat_history(req, ts, ms).await }
+                let sec = Arc::clone(&sec);
+                async move { teams::handle_chat_history(req, ts, ms, sec).await }
             });
     }
 

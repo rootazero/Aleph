@@ -30,6 +30,7 @@ pub mod extensions;
 pub mod fetch;
 pub mod fs;
 pub mod generation_providers;
+pub mod kanban;
 pub mod logs;
 pub mod mcp;
 pub mod memory;

@@ -1442,6 +1442,53 @@ mod tests {
         assert!(out.message.contains("Ship the goal feature"));
     }
 
+    /// Pins the P1/P2 scope stamp (`with_owner_scope` at the `set` creation
+    /// arm): a goal created inside a room run's `scope::with_scope` nest
+    /// lands `scope_id == "project:<id>"` — not just the unit test on
+    /// `with_owner_scope` itself in `goal/types.rs`, but the actual tool
+    /// call path the Kanban board's write side runs through.
+    #[tokio::test]
+    async fn a_goal_created_inside_a_room_run_lands_in_project_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(GoalStore::open(&dir.path().join("g.db")).unwrap());
+        let handle = Arc::new(RwLock::new("sess-room".to_string()));
+        let tool = GoalTool::new(store.clone()).with_session_key_handle(Some(handle));
+
+        let mut set = args(GoalAction::Set);
+        set.objective = Some("ship the kanban board".into());
+        let attr = crate::scope::ScopeAttribution {
+            owner_user_id: "u-alice".to_string(),
+            scope: crate::scope::ScopeId::Project("p-x".to_string()),
+        };
+        let out = crate::scope::with_scope(Some(attr), tool.call(set))
+            .await
+            .unwrap();
+        assert!(out.success);
+
+        let saved = store.get("sess-room").unwrap().unwrap();
+        assert_eq!(saved.scope_id.as_deref(), Some("project:p-x"));
+        assert_eq!(saved.owner_user_id.as_deref(), Some("u-alice"));
+    }
+
+    /// The room-outside twin: no ambient scope ⇒ current (pre-P2) behavior —
+    /// unscoped, `owner_user_id`/`scope_id` both `None`.
+    #[tokio::test]
+    async fn a_goal_created_outside_any_room_stays_unscoped() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(GoalStore::open(&dir.path().join("g.db")).unwrap());
+        let handle = Arc::new(RwLock::new("sess-personal".to_string()));
+        let tool = GoalTool::new(store.clone()).with_session_key_handle(Some(handle));
+
+        let mut set = args(GoalAction::Set);
+        set.objective = Some("just for me".into());
+        let out = tool.call(set).await.unwrap();
+        assert!(out.success);
+
+        let saved = store.get("sess-personal").unwrap().unwrap();
+        assert_eq!(saved.scope_id, None);
+        assert_eq!(saved.owner_user_id, None);
+    }
+
     #[tokio::test]
     async fn update_complete_marks_status() {
         let (tool, _d) = tool_with_session("sess-B");

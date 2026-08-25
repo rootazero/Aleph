@@ -496,11 +496,18 @@ impl AgentHarnessRunner {
                     .collect::<Vec<_>>()
             })
         };
+        // Resolved BEFORE the bail-out below, not beside the other
+        // `resolved_context` fields further down, because the bail-out is a
+        // list of "is there anything to say" and a room's roster is one of the
+        // things there can be to say. A bare agent in a room — no SOUL.md, no
+        // AGENTS.md, no skills, no MCP — would otherwise be the one deployment
+        // where the block silently never renders.
+        let room_roster = room_roster_line();
 
         // Skip prompt assembly entirely when there is nothing to inject:
         // no memory, no AgentDef, no eligible skills, no identity files, no
         // extra files, no MCP server instructions, no runtime capabilities, and
-        // no delegatable agents to advertise.
+        // no delegatable agents to advertise, and no room roster.
         if curated_text.is_none()
             && memory_text.is_none()
             && agent_def.is_none()
@@ -510,6 +517,7 @@ impl AgentHarnessRunner {
             && mcp_instructions.is_none()
             && runtime_capabilities.is_none()
             && available_agents.is_none()
+            && room_roster.is_none()
         {
             return None;
         }
@@ -666,6 +674,7 @@ impl AgentHarnessRunner {
             sandbox,
             self.tool_catalog.as_ref(),
             envelope,
+            room_roster,
         )
         .await;
         builder = builder.with_resolved_context(resolved_context);
@@ -760,6 +769,10 @@ async fn resolve_prompt_context(
     sandbox: &dyn Sandbox,
     tool_catalog: Option<&Arc<crate::tool_metadata::ToolCatalog>>,
     envelope: &crate::thinker::TurnEnvelope,
+    // `room_roster`: resolved by the caller, ahead of its "is there anything
+    // to inject at all" bail-out. Passed in rather than re-read here so the
+    // bail-out and the rendered block cannot answer differently.
+    room_roster: Option<String>,
 ) -> crate::thinker::context::ResolvedContext {
     let default_manifest;
     let manifest_ref = match channel_manifest {
@@ -849,6 +862,19 @@ async fn resolve_prompt_context(
     resolved_context.graph_topology =
         crate::loop_graph::service::render_session_topology(session_key_str);
     resolved_context.timer_loop = timer_loop;
+    // Who else is in this room. Read from the scope task-local rather than the
+    // session key: the key→room mapping only exists once `projects.room_session`
+    // has claimed it, while the scope is what `run_loop::request_scope` resolved
+    // for THIS run — the same answer the session row was stamped with. Dead
+    // task-local (a path that spawned away from its scope) renders nothing
+    // rather than a wrong roster.
+    //
+    // Two indexed reads against a catalogue that holds tens of rows, and only
+    // for a project session; a personal turn pays one enum match. Sync like
+    // `render_session_topology` above, for the same reason: it is a rusqlite
+    // lookup, and making it async would spread through every caller of the
+    // store.
+    resolved_context.room_roster = room_roster;
     // Render the welded Strategy into its two prompt surfaces: the full
     // `<strategy>` body for the Stable `StrategyLayer` (cacheable head) and
     // the guardrail-only echo for the Dynamic `StrategyPointerLayer` (per-
@@ -930,6 +956,46 @@ pub(crate) fn resolve_max_iterations(
         .unwrap_or(FALLBACK_MAX_ITERATIONS)
 }
 
+/// The `<room_context>` member line for this run, or `None` when the run is
+/// not in a project room.
+///
+/// Reads `ProjectStore` directly rather than the `roster::` projection: that
+/// projection stores members in a `HashSet` and exposes only `is_member`, and
+/// a set iterated into a **cached prefix** would re-key the whole conversation
+/// on every process restart. The store returns `ORDER BY added_at`, which is
+/// the same bytes every turn.
+///
+/// A catalogue read failure renders nothing. The alternative — a partial
+/// roster — is worse than silence here: the model would introduce a room to
+/// itself with people missing and no sign that any were.
+fn room_roster_line() -> Option<String> {
+    let crate::scope::ScopeId::Project(project_id) = crate::scope::current_scope()?.scope else {
+        return None;
+    };
+    let store = crate::projects::ProjectStore::shared();
+    let members = match store.members(&project_id) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::debug!(
+                error = %e,
+                project = %project_id,
+                "projects: roster read failed; the room prompt block is omitted this turn"
+            );
+            return None;
+        }
+    };
+    // A room of one is a room in name only, and naming its single member tells
+    // the model nothing the transcript does not already show.
+    if members.len() < 2 {
+        return None;
+    }
+    let owner = store
+        .get(&project_id)
+        .ok()
+        .flatten()
+        .and_then(|p| p.owner_user_id);
+    crate::thinker::layers::render_room_roster(owner.as_deref(), &members)
+}
 /// Merge the curated-memory and wiki-orientation envelopes into the single
 /// pre-rendered stable string `CuratedMemoryLayer` injects verbatim. Both are
 /// already self-contained XML blocks, so a newline join suffices; either side

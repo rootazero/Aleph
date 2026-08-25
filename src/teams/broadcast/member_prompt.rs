@@ -16,6 +16,7 @@ pub fn build_member_input(
     agent_id: &str,
     role: &str,
     roster: &str,
+    human_roster: &str,
     transcript: &str,
     is_leader: bool,
     team_name: &str,
@@ -33,15 +34,29 @@ pub fn build_member_input(
          ——被 reject 就按反馈重做再交。你仍可自由 @ 其他成员协作,但讨论要服务于把任务做完,而不是只在群里闲聊。"
             .to_string()
     };
+    // Empty `human_roster` — no human-authored row has been seen in the visible
+    // transcript window yet, or the identity store was unavailable and
+    // `speaker::resolve_labels_for_messages` degraded to an empty map — omits this
+    // clause entirely rather than rendering it with an empty value. This is the
+    // UNCOMMON case: once a human has actually spoken, `human_roster` is non-empty
+    // and the clause DOES render (see `non_empty_human_roster_renders_its_own_clause`
+    // below). Nothing here makes the prompt byte-identical to before this parameter
+    // existed — the closing bullet's "或任何真人参与者" addition below is
+    // unconditional and always differs from the pre-this-task prompt.
+    let human_roster_line = if human_roster.is_empty() {
+        String::new()
+    } else {
+        format!("真人参与者:{human_roster}。")
+    };
     format!(
         "你是团队群聊里的成员 `{agent_id}`({role}),team_id: `{team_id}`。\n\
-         群成员名册:{roster}。{leader_block}\n\n\
+         群成员名册:{roster}。{human_roster_line}{leader_block}\n\n\
          下面是群聊记录(每行 `[发言人]: 内容`):\n{transcript}\n\n\
          请以你的身份在群里回应。约定:\n\
          - 要不要发言、说什么由你判断;与你无关可以简短跳过。\n\
          - 想让某成员接话,在回复里 `@<agent_id>`(用名册里的 id);`@all` 叫全员。\n\
          - 调任何团队工具(task_create / task_submit / team_status 等,以你实际可用的工具为准)时,team_id 必须填 `{team_id}`。\n\
-         - 不要 @ 自己,也不要 @ user。"
+         - 不要 @ 自己,也不要 @ user 或任何真人参与者。"
     )
 }
 
@@ -56,6 +71,7 @@ mod tests {
             "alice",
             "researcher",
             "bob (writer), leader (leader)",
+            "",
             "[user]: @alice 查下 X",
             false,
             "Squad",
@@ -74,6 +90,66 @@ mod tests {
             out.contains("task_submit"),
             "member told to submit via task_submit"
         );
+        assert!(
+            out.contains("不要 @ 自己,也不要 @ user 或任何真人参与者。"),
+            "member is told never to @ any human participant"
+        );
+    }
+
+    /// Empty `human_roster` — no human-authored row has been seen in the visible
+    /// window, or the identity store was unavailable — must omit the "真人参与者:"
+    /// clause entirely, not print it with an empty value. This is the UNCOMMON
+    /// path: once a human has spoken, `human_roster` is non-empty and the clause
+    /// renders (`non_empty_human_roster_renders_its_own_clause`). The prompt is
+    /// NOT byte-identical to before this parameter existed either way — the
+    /// closing bullet's "或任何真人参与者" addition (asserted below) is
+    /// unconditional.
+    #[test]
+    fn empty_human_roster_omits_the_clause() {
+        let out = build_member_input(
+            "team-xyz",
+            "alice",
+            "researcher",
+            "bob (writer), leader (leader)",
+            "",
+            "[user]: @alice 查下 X",
+            false,
+            "Squad",
+            None,
+            "查下 X",
+        );
+        assert!(
+            !out.contains("真人参与者:"),
+            "empty human_roster must not render the clause at all: {out}"
+        );
+        // The unconditional closing-bullet addition ("或任何真人参与者") still
+        // applies regardless of whether human_roster is empty this turn.
+        assert!(
+            out.contains("不要 @ 自己,也不要 @ user 或任何真人参与者。"),
+            "closing bullet must still warn against @-ing any human participant: {out}"
+        );
+    }
+
+    /// A non-empty `human_roster` renders as its own clause right after the
+    /// agent roster, telling the member which humans are in the room.
+    #[test]
+    fn non_empty_human_roster_renders_its_own_clause() {
+        let out = build_member_input(
+            "team-xyz",
+            "alice",
+            "researcher",
+            "bob (writer), leader (leader)",
+            "Alice(human), u-bob(human)",
+            "[Alice]: @alice 查下 X",
+            false,
+            "Squad",
+            None,
+            "查下 X",
+        );
+        assert!(
+            out.contains("真人参与者:Alice(human), u-bob(human)。"),
+            "human roster clause missing or malformed: {out}"
+        );
     }
 
     /// The shared convention block reaches workers too, so it must not name a
@@ -90,6 +166,7 @@ mod tests {
             "alice",
             "researcher",
             "bob (writer), leader (leader)",
+            "",
             "[user]: @alice 查下 X",
             false,
             "Squad",
@@ -109,6 +186,7 @@ mod tests {
             "leader",
             "leader",
             "alice (researcher)",
+            "",
             "[user]: 这事谁跟进",
             true,
             "Squad",

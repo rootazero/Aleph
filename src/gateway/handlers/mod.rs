@@ -36,6 +36,7 @@
 //! | workspace | Workspace isolation management |
 //! | daemon | Daemon status, shutdown, logs |
 //! | teams | Team management (list, get, disband, delete) |
+//! | kanban | Structured, scope-filterable goal/loop listing for the project Kanban tab |
 
 pub mod acp_config;
 pub mod activity;
@@ -86,6 +87,7 @@ pub mod heartbeat;
 pub mod hooks_admin;
 pub mod identity;
 pub mod insights;
+pub mod kanban;
 pub mod logs;
 pub mod markdown_skills;
 pub mod mcp;
@@ -530,29 +532,42 @@ impl HandlerRegistry {
         // `projects.*` usable in test harnesses that boot via
         // `HandlerRegistry::new()` directly (under `cfg(test)` the shared
         // handle is in-memory, so this never touches the developer's home).
+        //
+        // `default_event_bus` is inert like `default_security_store` — this
+        // registry has no live subscriber, so a `projects.changed` frame
+        // published through it goes nowhere. Real wiring uses the SAME
+        // `GatewayEventBus` the socket layer forwards from (see
+        // `commands/start/mod.rs`).
         {
             let default_store = crate::projects::ProjectStore::shared();
+            let default_event_bus = Arc::new(GatewayEventBus::new());
             let s = default_store.clone();
             registry.register("projects.list", move |req| {
                 let s = s.clone();
                 async move { projects::handle_list(req, s).await }
             });
             let s = default_store.clone();
+            let b = default_event_bus.clone();
             registry.register("projects.add", move |req| {
                 let s = s.clone();
-                async move { projects::handle_add(req, s).await }
+                let b = b.clone();
+                async move { projects::handle_add(req, s, b).await }
             });
             let s = default_store.clone();
+            let b = default_event_bus.clone();
             registry.register("projects.create_blank", move |req| {
                 let s = s.clone();
-                async move { projects::handle_create_blank(req, s).await }
+                let b = b.clone();
+                async move { projects::handle_create_blank(req, s, b).await }
             });
             let s = default_store.clone();
             let u = default_security_store.clone();
+            let b = default_event_bus.clone();
             registry.register("projects.remove", move |req| {
                 let s = s.clone();
                 let u = u.clone();
-                async move { projects::handle_remove(req, s, u).await }
+                let b = b.clone();
+                async move { projects::handle_remove(req, s, u, b).await }
             });
             let s = default_store.clone();
             registry.register("projects.touch", move |req| {
@@ -565,49 +580,71 @@ impl HandlerRegistry {
                 async move { projects::handle_get(req, s).await }
             });
             let s = default_store.clone();
+            let b = default_event_bus.clone();
             registry.register("projects.create", move |req| {
                 let s = s.clone();
-                async move { projects::handle_create(req, s).await }
+                let b = b.clone();
+                async move { projects::handle_create(req, s, b).await }
             });
             let s = default_store.clone();
             let u = default_security_store.clone();
+            let b = default_event_bus.clone();
             registry.register("projects.rename", move |req| {
                 let s = s.clone();
                 let u = u.clone();
-                async move { projects::handle_rename(req, s, u).await }
+                let b = b.clone();
+                async move { projects::handle_rename(req, s, u, b).await }
             });
             let s = default_store.clone();
             let u = default_security_store.clone();
+            let b = default_event_bus.clone();
             registry.register("projects.archive", move |req| {
                 let s = s.clone();
                 let u = u.clone();
-                async move { projects::handle_archive(req, s, u).await }
+                let b = b.clone();
+                async move { projects::handle_archive(req, s, u, b).await }
             });
             let s = default_store.clone();
             let u = default_security_store.clone();
+            let b = default_event_bus.clone();
             registry.register("projects.bind_workspace", move |req| {
                 let s = s.clone();
                 let u = u.clone();
-                async move { projects::handle_bind_workspace(req, s, u).await }
+                let b = b.clone();
+                async move { projects::handle_bind_workspace(req, s, u, b).await }
             });
             let s = default_store.clone();
             let u = default_security_store.clone();
+            let b = default_event_bus.clone();
             registry.register("projects.member.add", move |req| {
                 let s = s.clone();
                 let u = u.clone();
-                async move { projects::handle_member_add(req, s, u).await }
+                let b = b.clone();
+                async move { projects::handle_member_add(req, s, u, b).await }
             });
             let s = default_store.clone();
             let u = default_security_store.clone();
+            let b = default_event_bus;
             registry.register("projects.member.remove", move |req| {
                 let s = s.clone();
                 let u = u.clone();
-                async move { projects::handle_member_remove(req, s, u).await }
+                let b = b.clone();
+                async move { projects::handle_member_remove(req, s, u, b).await }
             });
             let s = default_store.clone();
             registry.register("projects.member.list", move |req| {
                 let s = s.clone();
                 async move { projects::handle_member_list(req, s).await }
+            });
+            let s = default_store.clone();
+            registry.register("projects.workspace.list", move |req| {
+                let s = s.clone();
+                async move { projects::handle_workspace_list(req, s).await }
+            });
+            let s = default_store.clone();
+            registry.register("projects.workspace.read", move |req| {
+                let s = s.clone();
+                async move { projects::handle_workspace_read(req, s).await }
             });
             let s = default_store;
             registry.register("projects.room_session", move |req| {
@@ -855,6 +892,15 @@ impl HandlerRegistry {
         // need two-phase wiring; if the daemon was never initialized (memory
         // disabled or simulated mode), it simply returns an error.
         registry.register("dreaming.run_now", dreaming::handle_run_now);
+
+        // Kanban data plane — structured goal/loop listing for the project
+        // Kanban tab (design doc 2026-08-24-multiuser-teamchat-p3 §B1). Both
+        // read a process-global store (`goal::global()` / `looping::global()`,
+        // installed unconditionally at boot) so, like `dreaming.run_now`
+        // above, they need no two-phase wiring. See `kanban.rs`'s module doc
+        // for the `scope_id` filter's visibility rule.
+        registry.register("goal.list", kanban::handle_list);
+        registry.register("loop.list", kanban::handle_loop_list);
 
         // Background sub-agent tree snapshot — reads the process-global
         // BackgroundAgentTracker (no per-boot state), but P1 (spec §11-1c)

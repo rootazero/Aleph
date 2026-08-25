@@ -294,6 +294,17 @@ pub struct ResolvedContext {
     /// `harness_bridge::prompt_build`; `None` (the common case) leaves the
     /// prompt byte-identical.
     pub graph_topology: Option<String>,
+    /// The room's member list, rendered by `RoomRosterLayer` (priority 105,
+    /// **Stable**) as `<room_context>`. Populated in the harness bridge from
+    /// `ProjectStore` when — and only when — this run's scope is
+    /// `ScopeId::Project`. `None` for every personal or org session, which
+    /// keeps the prompt of a single-human deployment byte-identical.
+    ///
+    /// Holds the already-rendered line rather than the raw ids so the cap, the
+    /// owner mark and the display-name sanitiser have exactly one owner
+    /// (`layers::room_roster::render_members`) — the same shape
+    /// `execution_plan` and `strategy` use.
+    pub room_roster: Option<String>,
     /// Active timer-loop summary (watch prompt + status), rendered by
     /// `TimerLoopLayer` (priority 1753) as `<timer_loop>`. Populated from
     /// the loop registry in the harness bridge; `None` (no active loop)
@@ -406,6 +417,7 @@ impl ContextAggregator {
             execution_plan: None,
             standing_goal: None,
             graph_topology: None,
+            room_roster: None,
             timer_loop: None,
             strategy: None,
             strategy_guardrails: None,

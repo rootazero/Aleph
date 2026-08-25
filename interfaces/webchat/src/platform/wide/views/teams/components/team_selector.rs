@@ -204,6 +204,7 @@ mod tests {
             members_preview: Vec::new(),
             last_message: None,
             last_message_at: None,
+            scope_id: None,
         }
     }
 

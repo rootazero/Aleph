@@ -49,7 +49,31 @@ pub fn subscribe_team_events(dashboard: &DashboardState, chat: ChatState) -> usi
                 let Some(text) = data.get("text").and_then(|t| t.as_str()) else {
                     return;
                 };
-                push_bubble(chat, "assistant", text, Some(agent_id));
+                // A human send (spec §6.2 P3) carries `author_user_id` and NO
+                // `agent_id` — `TeamFanoutEmitter::publish` is the only
+                // injector of `agent_id`, and it never runs on the human send
+                // path (`handle_chat_send` builds this payload directly). An
+                // unattributed/legacy send has `author_user_id: null`, which
+                // `as_str()` reads as absent, so it falls through to the
+                // agent-attributed branch below exactly as before this field
+                // existed.
+                if let Some(author_user_id) = data.get("author_user_id").and_then(|a| a.as_str()) {
+                    // Self-echo dedup, keyed by the server-issued
+                    // `message_id` — NOT "am I the author": a second browser
+                    // tab for the same human still needs this echo. The
+                    // composer already pushed this bubble optimistically
+                    // when it sent (see `ChatState::remember_own_team_message`).
+                    if data
+                        .get("message_id")
+                        .and_then(|m| m.as_str())
+                        .is_some_and(|mid| chat.is_own_team_message(mid))
+                    {
+                        return;
+                    }
+                    push_bubble(chat, "user", text, None, Some(author_user_id.to_string()));
+                    return;
+                }
+                push_bubble(chat, "assistant", text, Some(agent_id), None);
             }
             TeamTopicKind::System => {
                 let Some(text) = data.get("text").and_then(|t| t.as_str()) else {
@@ -57,7 +81,7 @@ pub fn subscribe_team_events(dashboard: &DashboardState, chat: ChatState) -> usi
                 };
                 // No `agent_id`: a system notice is nobody's turn, so it must
                 // not join the Telegram-style attribution grouping.
-                push_bubble(chat, "system", text, None);
+                push_bubble(chat, "system", text, None, None);
             }
             TeamTopicKind::Activity => {
                 let status = match data.get("status").and_then(|s| s.as_str()) {
@@ -159,9 +183,21 @@ pub fn subscribe_team_events(dashboard: &DashboardState, chat: ChatState) -> usi
     })
 }
 
-/// Append one non-streaming bubble to the transcript. `agent_id` is `Some` for
-/// attributed member replies and `None` for system notices.
-fn push_bubble(chat: ChatState, role: &str, text: &str, agent_id: Option<String>) {
+/// Append one non-streaming bubble to the transcript.
+///
+/// `agent_id` is `Some` for attributed member replies and `None` for system
+/// notices or a human bubble. `author_user_id` is `Some` for a human message
+/// (spec §6.2 P3) — mutually exclusive with `agent_id`, mirroring
+/// `ChatMessage::author_user_id`'s doc: a row carries at most one kind of
+/// attribution. Reuses the same field, and the same `MessageBubble`
+/// rendering, a P2 project-room peer message gets (`push_peer_user_message`).
+fn push_bubble(
+    chat: ChatState,
+    role: &str,
+    text: &str,
+    agent_id: Option<String>,
+    author_user_id: Option<String>,
+) {
     let seq = chat.messages.with_untracked(|m| m.len());
     chat.messages.update(|msgs| {
         msgs.push(ChatMessage {
@@ -179,8 +215,7 @@ fn push_bubble(chat: ChatState, role: &str, text: &str, agent_id: Option<String>
             text_finalized: true,
             agent_id,
             plan_archive: None,
-            // Legacy group broadcast (not a P2 project room).
-            author_user_id: None,
+            author_user_id,
         });
     });
 }

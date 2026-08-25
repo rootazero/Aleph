@@ -169,6 +169,7 @@ mod tests {
             }],
             reply_to: None,
             attachments: vec![],
+            author_user_id: None,
         }
     }
 
