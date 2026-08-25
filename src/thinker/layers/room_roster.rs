@@ -38,6 +38,24 @@
 //! newlines, each of which is a speaker-forgery vector rather than an
 //! aesthetic complaint. A second, laxer spelling here would reopen every one
 //! of them.
+//!
+//! ## It is NOT the same list as the team prompt's `真人参与者`
+//!
+//! `teams::broadcast::member_prompt` renders its own line of human names, and
+//! in a room-created team a member run is project-scoped, so both can appear in
+//! one request. They are different populations answering different questions
+//! and neither is derivable from the other:
+//!
+//! * that one is **who has spoken** in this team's visible transcript window,
+//!   projected from `distinct_human_authors` over the messages;
+//! * this one is **who is on the room's roster**, including the members who
+//!   have never said anything — which is precisely the fact a transcript
+//!   cannot carry — plus which of them owns the room.
+//!
+//! In a room where everyone happens to have spoken the two render the same
+//! names, and that overlap is the reason this note exists rather than being
+//! left for a reader to work out. Suppressing either one to remove the
+//! redundancy would drop information the other never had.
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
