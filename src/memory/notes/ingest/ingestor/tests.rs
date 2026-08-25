@@ -594,17 +594,17 @@ async fn an_apply_clears_abandoned_staging_trees_before_staging_its_own() {
     std::fs::create_dir_all(dead.join("preference")).unwrap();
     // rust-doctor-disable-next-line unwrap-in-production
     std::fs::create_dir_all(live.join("preference")).unwrap();
-    // rust-doctor-disable-next-line unwrap-in-production
     std::fs::write(
         dead.join("preference/a.md"),
         "staged by a process that died",
     )
-    .unwrap();
     // rust-doctor-disable-next-line unwrap-in-production
+    .unwrap();
     std::fs::write(
         live.join("preference/b.md"),
         "staged by a sibling still working",
     )
+    // rust-doctor-disable-next-line unwrap-in-production
     .unwrap();
     let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7_200);
     filetime::set_file_mtime(&dead, filetime::FileTime::from_system_time(two_hours_ago))
