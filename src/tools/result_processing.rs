@@ -86,10 +86,8 @@ pub fn set_global_result_budget_ceiling(ceiling: usize) {
 }
 
 /// The handle above, type-erased for the roster — see
-/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
-/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
-#[allow(dead_code)]
-pub(crate) fn result_budget_ceiling_slot() -> &'static dyn SlotStatus {
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn result_budget_ceiling_slot() -> &'static dyn SlotStatus {
     &RESULT_BUDGET_CEILING
 }
 

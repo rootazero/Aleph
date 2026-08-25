@@ -255,7 +255,6 @@ pub(crate) struct HandleSite {
 struct LazySite {
     file: String,
     name: String,
-    container: String,
     /// Form 2 found at least one `get_or_init` / `get_or_try_init` call on this
     /// static. Distinguishes "the arm looked and said no" from "the arm never
     /// reached it" — which is the difference between a correct exclusion and a
@@ -699,7 +698,6 @@ fn take_census() -> Census {
                 c.lazy.push(LazySite {
                     file: rel.clone(),
                     name,
-                    container,
                     saw_install_call: v.saw_call,
                     saw_parameterised_get_or_init: v.declined_on_use,
                 });
@@ -750,123 +748,105 @@ pub(crate) fn capability_handles() -> Vec<HandleSite> {
 mod tests {
     use super::*;
 
-    /// Every container `static` in `src/`, selected or not — the population the
-    /// count assertion partitions.
-    fn population() -> usize {
-        let c = take_census();
-        c.written.len() + c.first_caller.len() + c.slots.len() + c.lazy.len()
+    /// Guard A — the class is closed. A new bare install-once static is a new
+    /// handle nobody can observe.
+    ///
+    /// `providers/route_handle.rs::GLOBAL` is the one deliberate exception: the
+    /// census's single first-caller-wins member, ruled to stay a raw
+    /// `OnceLock` rather than migrate onto [`super::CapabilitySlot`] — fitting
+    /// it to [`super::CapabilitySlot::install`] would need either a different
+    /// `Outcome` shape or a changed call site. See this module's doc ("Why
+    /// form 2 is a rule and not an exemption") and
+    /// `route_handle_global_is_selected_by_the_first_caller_wins_arm_alone`
+    /// below for why it genuinely belongs to this census while staying off
+    /// the offender list. Named rather than silently swallowed by a weaker
+    /// predicate — the same rule the rest of this module follows for every
+    /// other named exclusion.
+    ///
+    /// The offender scan alone cannot see the census itself shrinking (fewer
+    /// sites means fewer offenders, not more), so the total is pinned too —
+    /// the SUM, never a bare count of either side, because that is the form
+    /// that survives further migration: `raw` and `slots` move against each
+    /// other as handles migrate (today: 1 raw, all of it
+    /// `route_handle::GLOBAL`, + 45 slots), and only the sum is invariant.
+    #[test]
+    fn every_installed_global_is_a_capability_slot() {
+        let sites = capability_handles();
+        let offenders: Vec<String> = sites
+            .iter()
+            .filter(|s| !s.is_slot)
+            .filter(|s| {
+                !(s.file.ends_with("src/providers/route_handle.rs") && s.name == "GLOBAL")
+            })
+            .map(|s| format!("{}::{} ({})", s.file, s.name, s.container))
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "these are written at runtime but are not CapabilitySlots, so nothing \
+             can tell 'never installed' from 'installed with this value':\n  {}",
+            offenders.join("\n  ")
+        );
+
+        let (raw, slots) = (
+            sites.iter().filter(|s| !s.is_slot).count(),
+            sites.iter().filter(|s| s.is_slot).count(),
+        );
+        assert_eq!(
+            raw + slots,
+            46,
+            "capability handle total drifted: {raw} raw + {slots} slots = {}, not \
+             46. Never assert either side alone: raw shrinks and slots grows as \
+             migration proceeds, so only the SUM is stable. A drift here means \
+             either a census recogniser regressed (see the module doc's \
+             recogniser blind spots) or a handle genuinely left the corpus — \
+             investigate before editing this number.",
+            raw + slots
+        );
     }
 
-    /// The inventory this round migrates. Asserted, not printed: a census that
-    /// silently shrinks and a census that stopped matching look identical.
+    /// Guard B — the roster is complete. A slot missing from `ALL_SLOTS` is
+    /// invisible to the `core/capability-wiring` diagnostic, which is the same
+    /// silence as before this round.
+    ///
+    /// Compares COUNTS, not names: a slot's `id()` (e.g. `"spend/policy"`) is
+    /// deliberately not its static's name (`GLOBAL_POLICY`), so there is no
+    /// shared key to compare `declared` and `rostered` element-by-element. The
+    /// count equality is the real check, self-referential against the live
+    /// census rather than a hand-carried figure; the `>= 40` floor beneath it
+    /// exists only so the equality cannot pass vacuously at `0 == 0` if both
+    /// sides went blind at once.
+    ///
+    /// ⚠️ `declared` is keyed on `{file}::{name}`, not on the bare static
+    /// name: six of today's 45 slots are named `GLOBAL` (this module's own doc
+    /// walks through why that name collides so often), so a `BTreeSet` keyed
+    /// on `name` alone collapses those six into one and undercounts by five —
+    /// measured, not guessed against: first-written this test compared bare
+    /// names and asserted `40 == 45` against a correctly-sized roster.
     #[test]
-    fn the_capability_handle_inventory_is_the_size_we_measured() {
-        let c = take_census();
-        let (written, first, slots, lazy) = (
-            c.written.len(),
-            c.first_caller.len(),
-            c.slots.len(),
-            c.lazy.len(),
-        );
-
-        // ONE write, not one per line. libtest prints its own progress lines to
-        // the same stderr from another thread, and it spliced one of them into
-        // the MIDDLE of a per-line `eprintln!` on the first run here -- which
-        // silently dropped a handle from the grep-extracted inventory and cost
-        // an hour chasing a census defect that did not exist. The inventory is a
-        // cross-task interface; it must not be reassembled from interleaved
-        // output.
-        let mut report = format!(
-            "--- capability handles: {} raw, {slots} slots ---\n",
-            written + first
-        );
-        for s in c.written.iter() {
-            report.push_str(&format!(
-                "  RAW  {:14} {:32} {}\n",
-                s.container, s.name, s.file
-            ));
-        }
-        for s in c.first_caller.iter() {
-            report.push_str(&format!(
-                "  RAW  {:14} {:32} {}\n",
-                s.container, s.name, s.file
-            ));
-        }
-        for s in c.slots.iter() {
-            report.push_str(&format!(
-                "  SLOT {:14} {:32} {}\n",
-                s.container, s.name, s.file
-            ));
-        }
-        for s in &c.lazy {
-            report.push_str(&format!(
-                "  LAZY {:14} {:32} {}\n",
-                s.container, s.name, s.file
-            ));
-        }
-        report.push_str(&format!(
-            "--- candidates {} = written {written} + first-caller-wins {first} + slots {slots} \
-             + lazy caches {lazy} ---",
-            written + first + slots + lazy
-        ));
-        eprintln!("{report}");
-
-        // Self-count: the rule must DISCRIMINATE. A predicate stuck at "always
-        // installed" would select everything and a predicate stuck at "never
-        // installed" would select nothing; the count below catches both, but
-        // only this one names which way the recogniser broke.
-        assert!(
-            lazy > 0,
-            "the rule excluded no lazy caches at all — the install predicates \
-             are answering the same thing for every static"
-        );
-        assert!(
-            first > 0,
-            "the first-caller-wins arm selected nothing. It is the arm that \
-             cannot be reached by a setter search, so a silent regression here \
-             looks exactly like a corpus with no such handles"
-        );
-
+    fn every_declared_slot_is_in_the_roster() {
+        let declared: std::collections::BTreeSet<String> = capability_handles()
+            .into_iter()
+            .filter(|s| s.is_slot)
+            .map(|s| format!("{}::{}", s.file, s.name))
+            .collect();
+        let rostered: std::collections::BTreeSet<String> = crate::capability::ALL_SLOTS
+            .iter()
+            .map(|s| s.id().to_string())
+            .collect();
         assert_eq!(
-            written + first + slots,
-            46,
-            "the rule selected {} handles, not 46. 46 was measured on 2026-08-24 \
-             over {} container statics, decomposed as written {written} + \
-             first-caller-wins {first} + slots {slots}, with {lazy} lazy caches \
-             excluded by derivation.\n\
-             \n\
-             ⚠️⚠️ THIS 46 IS NOT THE SPECIFICATION'S 46. The numbers agree; the \
-             ROSTERS DO NOT. Read this before concluding the spec was right and \
-             this census changed nothing — that conclusion is wrong, and the \
-             coincidence is the third one around this number in one task.\n\
-             \n\
-             The decomposition is the tell: AS FIRST DERIVED on 2026-08-24, \
-             BEFORE ANY MIGRATION, the spec's 46 was 46 WRITTEN handles and this \
-             one was 45 written + 1 first-caller-wins. Migration moves members \
-             from `written` into `slots`, so compare the SUM printed above, not \
-             those two figures. Three members differ:\n\
-             \n\
-               OUT  extension/template.rs::FILE_REF_REGEX — a compiled-regex cache \
-             in a ZERO-parameter fn whose own comment says the regex is a \
-             compile-time constant and a parse failure is a programmer error. It \
-             was on the spec's roster only because `get_or_try_init` sat in the \
-             writer set, which is where a fallible initialiser had to go before \
-             install form 2 existed.\n\
-               IN   metrics/mod.rs::METRICS_RUNTIME — a real handle no setter \
-             search saw, because rustfmt put its `.set(` on the next line.\n\
-               SAME BUT FOR A DIFFERENT REASON  providers/route_handle.rs::GLOBAL \
-             — on the spec's roster by a NAME COLLISION. Seven container statics \
-             in src/ are called GLOBAL; six are `.set(` in their own files (nine \
-             sites across six files), and a corpus-wide word-boundary search \
-             cannot tell the seventh from them. It is now selected by derivation, \
-             so a rename can no longer drop it silently.\n\
-             \n\
-             Arithmetic: the spec's 46, −1 FILE_REF_REGEX, +1 METRICS_RUNTIME = \
-             46. GLOBAL does not move the count — it was already counted, wrongly. \
-             Investigate before editing this number; the module doc carries the \
-             full derivation.",
-            written + first + slots,
-            population()
+            declared.len(),
+            rostered.len(),
+            "declared slots: {declared:?}\nroster ids: {rostered:?}\n\
+             every CapabilitySlot::new() must be reachable from ALL_SLOTS"
+        );
+        assert!(
+            rostered.len() >= 40,
+            "roster has {} entries; 45 were measured on 2026-08-25 (the census \
+             decomposes as 1 raw -- route_handle::GLOBAL, staying raw by ruling, \
+             see every_installed_global_is_a_capability_slot above -- + 45 \
+             slots). A shrinking roster and a broken scan look identical in a \
+             green report.",
+            rostered.len()
         );
     }
 
@@ -1560,60 +1540,22 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         );
     }
 
-    /// The `#[allow(dead_code)]` on every roster accessor is an exemption with
-    /// an expiry, so this is the force that makes it shrink.
+    /// The permits are gone once the roster exists.
     ///
-    /// ⚠️ **WHEN THE ROSTER LANDS THIS MUST BE 0 AND THIS ASSERTION MUST BE
-    /// DELETED.** Deleting the attributes is part of wiring the roster, not a
-    /// follow-up: an `#[allow(dead_code)]` left on an accessor whose consumer
-    /// exists would later mask a genuinely unwired handle — the same defect
-    /// `every_migrated_slot_has_a_roster_accessor` guards, arriving through the
-    /// permit instead of through the omission.
+    /// This used to be one half of a matched pair. The sibling,
+    /// `every_roster_accessor_still_carries_the_expiring_allow`, asserted the
+    /// permits were still PRESENT — it could catch a partial removal but not
+    /// total inaction, and total inaction was the hazard the exemption was
+    /// written against: ~46 permits shipped, each one able to mask a
+    /// genuinely unwired handle. It fired the moment `ALL_SLOTS` landed, by
+    /// design, and was deleted in the same change that removed the last
+    /// `#[allow(dead_code)]`: keeping a guard that is now permanently red is
+    /// not "documentation of intent", it is a red CI the next contributor has
+    /// to explain away. This guard is what remains — proof the removal was
+    /// total, and the one that keeps working after the sibling is gone.
     ///
-    /// Deliberately NOT phrased as "if `ALL_SLOTS` exists": that name appears
-    /// nowhere in `src/` and in no brief, so a roster called `SLOT_ROSTER` would
-    /// leave such a guard green forever with ~46 permits shipped. This one is
-    /// non-vacuous today and announces its own expiry — the day the attributes
-    /// come off it goes red at a named line.
-    #[test]
-    fn every_roster_accessor_still_carries_the_expiring_allow() {
-        // The 1:1 accessor/slot invariant deliberately does NOT live here — see
-        // `every_migrated_slot_has_a_roster_accessor`, which survives this test.
-        let accessors = roster_accessors();
-        assert!(
-            !accessors.is_empty(),
-            "the accessor scan found none, so this guard is about to report \
-             that no permit is missing — which is also what it reports when \
-             every permit is missing. Check the recogniser first."
-        );
-        let bare: Vec<String> = accessors
-            .iter()
-            .filter(|a| !a.allows_dead_code)
-            .map(|a| format!("{} ({})", a.name, a.file))
-            .collect();
-        assert!(
-            bare.is_empty(),
-            "these roster accessors have no `#[allow(dead_code)]`: {bare:?}\n\n\
-             If the roster does NOT exist yet, this is a build error waiting to \
-             happen: CI runs `cargo clippy -p alephcore -- -D warnings`, so an \
-             unconsumed `pub(crate) fn` is an error, not a warning.\n\n\
-             If the roster DOES now exist, this is the expiry firing as \
-             designed: remove the attribute from EVERY accessor and delete this \
-             test in the same commit. A half-removed set is the worst state — \
-             the remaining permits would mask genuinely unwired handles."
-        );
-    }
-
-    /// The permits are gone once the roster exists — the half of the expiry the
-    /// guard above cannot see.
-    ///
-    /// `every_roster_accessor_still_carries_the_expiring_allow` asserts the
-    /// permits are PRESENT, so it fires only once someone has already begun
-    /// removing them. It catches partial removal and misses total inaction —
-    /// and total inaction is the hazard the exemption was written against:
-    /// ~46 permits shipped, each one able to mask a genuinely unwired handle.
-    /// Proven by mutation, not argued: a roster added with both permits left in
-    /// place left the whole suite green before this test existed.
+    /// Proven by mutation, not argued: a roster added with every permit left
+    /// in place left the whole suite green before this test existed.
     ///
     /// The trigger is the roster's TYPE SHAPE, never its name — see
     /// `roster_collections` for why `if ALL_SLOTS exists` would have been
@@ -1647,10 +1589,9 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
             "a roster now exists:\n  {}\n\nbut these accessors still carry \
              `#[allow(dead_code)]`:\n  {}\n\nThe permit's stated reason — \"no \
              production caller yet\" — has expired. Remove it from EVERY \
-             accessor and delete `every_roster_accessor_still_carries_the_expiring_allow` \
-             in the same commit. A permit left on an accessor whose consumer \
-             exists silences a real `dead_code`, which is how a handle that \
-             nothing wires reaches the roster looking wired.",
+             accessor with a permit. A permit left on an accessor whose \
+             consumer exists silences a real `dead_code`, which is how a \
+             handle that nothing wires reaches the roster looking wired.",
             rosters.join("\n  "),
             permits.join("\n  ")
         );

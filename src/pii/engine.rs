@@ -126,10 +126,8 @@ static PII_ENGINE: CapabilitySlot<Arc<RwLock<PiiEngine>>> =
     CapabilitySlot::new("pii/engine", MissingSemantics::FailsOpen);
 
 /// The handle above, type-erased for the roster — see
-/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
-/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
-#[allow(dead_code)]
-pub(crate) fn pii_engine_slot() -> &'static dyn SlotStatus {
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn pii_engine_slot() -> &'static dyn SlotStatus {
     &PII_ENGINE
 }
 

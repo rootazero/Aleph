@@ -44,10 +44,8 @@ pub fn set_confirmation_requester(requester: Arc<dyn ApprovalRequester>) {
 }
 
 /// The handle above, type-erased for the roster — see
-/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
-/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
-#[allow(dead_code)]
-pub(crate) fn confirmation_requester_slot() -> &'static dyn SlotStatus {
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn confirmation_requester_slot() -> &'static dyn SlotStatus {
     &CONFIRMATION_REQUESTER
 }
 
@@ -72,10 +70,8 @@ pub fn set_config_approval_requester(requester: Arc<dyn ApprovalRequester>) {
 }
 
 /// The handle above, type-erased for the roster — see
-/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
-/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
-#[allow(dead_code)]
-pub(crate) fn config_approval_requester_slot() -> &'static dyn SlotStatus {
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn config_approval_requester_slot() -> &'static dyn SlotStatus {
     &CONFIG_APPROVAL_REQUESTER
 }
 
@@ -102,10 +98,8 @@ pub fn set_mcp_tool_registry(registry: Arc<crate::tools::ToolHandlerRegistry>) {
 }
 
 /// The handle above, type-erased for the roster — see
-/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
-/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
-#[allow(dead_code)]
-pub(crate) fn mcp_tool_registry_slot() -> &'static dyn SlotStatus {
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn mcp_tool_registry_slot() -> &'static dyn SlotStatus {
     &MCP_TOOL_REGISTRY
 }
 

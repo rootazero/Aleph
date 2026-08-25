@@ -264,6 +264,82 @@ impl<T: Send + Sync + 'static> SlotStatus for MutableCapabilitySlot<T> {
     }
 }
 
+/// Every capability slot in the process, for the `core/capability-wiring`
+/// diagnostic.
+///
+/// Hand-written on purpose: `linkme`/`inventory` would add a dependency and
+/// link-section magic for one feature (R3), and this list's completeness is
+/// enforced by `census::every_declared_slot_is_in_the_roster`, which fails BY
+/// ID when a new slot is not listed. The list is a data structure; the rule
+/// is the guard.
+///
+/// 45 entries, not 46: `providers::route_handle::GLOBAL` is the census's one
+/// first-caller-wins member and by ruling stays a raw `OnceLock` rather than
+/// migrating onto [`CapabilitySlot`] — see this module's `census` submodule
+/// doc ("Why form 2 is a rule and not an exemption") and
+/// `census::route_handle_global_is_selected_by_the_first_caller_wins_arm_alone`
+/// for why it genuinely belongs to the handle census while staying off this
+/// list. Fitting it to [`CapabilitySlot::install`] would need either a
+/// different `Outcome` shape or a changed call site; Task 13 adjudicates it,
+/// not this list. `census::every_installed_global_is_a_capability_slot` names
+/// it as the one deliberate exception rather than excluding it silently, so a
+/// second bare handle appearing anywhere else still fails that guard.
+///
+/// Every entry below is a call through a `pub(crate) fn … -> &'static dyn
+/// SlotStatus` accessor in the slot's own module (`const fn`, so this array
+/// can be a `static` rather than a `LazyLock`), never a `pub` re-export of the
+/// slot itself — see `spend::global_ledger_slot`'s doc for why: exposing 45
+/// statics to answer one question would widen the crate's surface by 45 items,
+/// and erasure at the accessor means a roster consumer gets exactly `id` /
+/// `missing` / `outcome`, never the value.
+pub static ALL_SLOTS: &[&'static dyn SlotStatus] = &[
+    crate::metrics::metrics_runtime_slot(),
+    crate::pii::engine::pii_engine_slot(),
+    crate::tasks::cron::global_cron_slot(),
+    crate::tools::result_store::global_tool_result_store_slot(),
+    crate::tools::turn_budget::global_turn_result_budget_slot(),
+    crate::tools::result_processing::result_budget_ceiling_slot(),
+    crate::tools::in_flight::global_in_flight_tool_calls_slot(),
+    crate::context::compact::manual::manual_wiring_slot(),
+    crate::extension::manager_global::extension_manager_slot(),
+    crate::memory::dreaming::dream_daemon_slot(),
+    crate::identity::ledger::ledger_slot(),
+    crate::identity::ledger::writer_slot(),
+    crate::loop_graph::service::cron_trigger_slot(),
+    crate::loop_graph::global_slot(),
+    crate::loop_graph::event_bus_slot(),
+    crate::config::load::effective_config_path_slot(),
+    crate::config::defaults_override::defaults_override_slot(),
+    crate::looping::global_slot(),
+    crate::providers::route_observe::global_route_observability_slot(),
+    crate::providers::session_model_handle::pin_sink_slot(),
+    crate::providers::session_model_handle::pinnable_providers_slot(),
+    crate::mcp::sampling_bridge::sampling_llm_slot(),
+    crate::spend::global_ledger_slot(),
+    crate::spend::global_policy_slot(),
+    crate::gateway::security::shared_token::global_shared_token_manager_slot(),
+    crate::gateway::channel_policy::channel_config_snapshot_slot(),
+    crate::gateway::shutdown_forensics::boot_instant_slot(),
+    crate::gateway::resume_coordinator::global_resume_coordinator_slot(),
+    crate::gateway::execution_engine::tool_service_builder::confirmation_requester_slot(),
+    crate::gateway::execution_engine::tool_service_builder::config_approval_requester_slot(),
+    crate::gateway::execution_engine::tool_service_builder::mcp_tool_registry_slot(),
+    crate::gateway::execution_engine::concurrency_handle::concurrency_limiter_slot(),
+    crate::gateway::codex_token_refresher::global_slot(),
+    crate::gateway::i18n::installed_locale_slot(),
+    crate::gateway::handlers::channel::telegram_tool_registry_slot(),
+    crate::gateway::runtime_footer::global_footer_config_slot(),
+    crate::goal::global_slot(),
+    crate::thinker::memory_context_provider::session_end_mcp_slot(),
+    crate::thinker::memory_context_provider::session_end_summarizer_slot(),
+    crate::thinker::memory_context_provider::session_reflector_slot(),
+    crate::thinker::memory_context_provider::session_end_compression_slot(),
+    crate::thinker::memory_context_provider::open_loop_inject_slot(),
+    crate::strategy::global_slot(),
+    crate::session::store::global_session_event_store_slot(),
+    crate::session::service::global_session_service_slot(),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -97,10 +97,8 @@ static PIN_SINK: CapabilitySlot<std::sync::Arc<dyn SessionPinSink>> =
     CapabilitySlot::new("providers/session-pin-sink", MissingSemantics::FailsClosed);
 
 /// The handle above, type-erased for the roster — see
-/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
-/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
-#[allow(dead_code)]
-pub(crate) fn pin_sink_slot() -> &'static dyn SlotStatus {
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn pin_sink_slot() -> &'static dyn SlotStatus {
     &PIN_SINK
 }
 
@@ -193,10 +191,8 @@ static PINNABLE_PROVIDERS: CapabilitySlot<std::collections::BTreeSet<String>> =
     CapabilitySlot::new("providers/pinnable-set", MissingSemantics::FailsOpen);
 
 /// The handle above, type-erased for the roster — see
-/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
-/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
-#[allow(dead_code)]
-pub(crate) fn pinnable_providers_slot() -> &'static dyn SlotStatus {
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn pinnable_providers_slot() -> &'static dyn SlotStatus {
     &PINNABLE_PROVIDERS
 }
 

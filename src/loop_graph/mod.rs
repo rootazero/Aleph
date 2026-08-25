@@ -73,15 +73,12 @@ static EVENT_BUS: CapabilitySlot<TopologyEventBus> =
     CapabilitySlot::new("loop-graph/event-bus", MissingSemantics::FailsClosed);
 
 /// The handles above, type-erased for the roster — see
-/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
-/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
-#[allow(dead_code)]
-pub(crate) fn global_slot() -> &'static dyn SlotStatus {
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn global_slot() -> &'static dyn SlotStatus {
     &GLOBAL
 }
 
-#[allow(dead_code)]
-pub(crate) fn event_bus_slot() -> &'static dyn SlotStatus {
+pub(crate) const fn event_bus_slot() -> &'static dyn SlotStatus {
     &EVENT_BUS
 }
 

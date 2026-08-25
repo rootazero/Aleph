@@ -86,10 +86,8 @@ pub fn global_in_flight_tool_calls() -> Option<InFlightToolCalls> {
 }
 
 /// The handle above, type-erased for the roster — see
-/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
-/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
-#[allow(dead_code)]
-pub(crate) fn global_in_flight_tool_calls_slot() -> &'static dyn SlotStatus {
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn global_in_flight_tool_calls_slot() -> &'static dyn SlotStatus {
     &GLOBAL_REGISTRY
 }
 

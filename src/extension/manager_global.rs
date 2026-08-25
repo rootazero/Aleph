@@ -29,10 +29,8 @@ static EXTENSION_MANAGER: CapabilitySlot<Arc<ExtensionManager>> =
     CapabilitySlot::new("extension/manager", MissingSemantics::ConsumerDecides);
 
 /// The handle above, type-erased for the roster — see
-/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
-/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
-#[allow(dead_code)]
-pub(crate) fn extension_manager_slot() -> &'static dyn SlotStatus {
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn extension_manager_slot() -> &'static dyn SlotStatus {
     &EXTENSION_MANAGER
 }
 

@@ -48,10 +48,8 @@ static SESSION_END_MCP: CapabilitySlot<Arc<super::MemoryContextProvider>> =
     CapabilitySlot::new("memory/session-end-mcp", MissingSemantics::FailsClosed);
 
 /// The five handles in this file, type-erased for the roster — see
-/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
-/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
-#[allow(dead_code)]
-pub(crate) fn session_end_mcp_slot() -> &'static dyn SlotStatus {
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn session_end_mcp_slot() -> &'static dyn SlotStatus {
     &SESSION_END_MCP
 }
 
@@ -88,8 +86,7 @@ static SESSION_END_SUMMARIZER: CapabilitySlot<
     MissingSemantics::FailsClosed,
 );
 
-#[allow(dead_code)]
-pub(crate) fn session_end_summarizer_slot() -> &'static dyn SlotStatus {
+pub(crate) const fn session_end_summarizer_slot() -> &'static dyn SlotStatus {
     &SESSION_END_SUMMARIZER
 }
 
@@ -120,8 +117,7 @@ pub fn session_end_summarizer(
 static SESSION_REFLECTOR: CapabilitySlot<Arc<crate::memory::session_reflection::SessionReflector>> =
     CapabilitySlot::new("memory/session-reflector", MissingSemantics::FailsClosed);
 
-#[allow(dead_code)]
-pub(crate) fn session_reflector_slot() -> &'static dyn SlotStatus {
+pub(crate) const fn session_reflector_slot() -> &'static dyn SlotStatus {
     &SESSION_REFLECTOR
 }
 
@@ -155,8 +151,7 @@ static SESSION_END_COMPRESSION: CapabilitySlot<
     MissingSemantics::FailsClosed,
 );
 
-#[allow(dead_code)]
-pub(crate) fn session_end_compression_slot() -> &'static dyn SlotStatus {
+pub(crate) const fn session_end_compression_slot() -> &'static dyn SlotStatus {
     &SESSION_END_COMPRESSION
 }
 
@@ -197,8 +192,7 @@ static OPEN_LOOP_INJECT: CapabilitySlot<bool> = CapabilitySlot::new(
     },
 );
 
-#[allow(dead_code)]
-pub(crate) fn open_loop_inject_slot() -> &'static dyn SlotStatus {
+pub(crate) const fn open_loop_inject_slot() -> &'static dyn SlotStatus {
     &OPEN_LOOP_INJECT
 }
 
@@ -216,8 +210,9 @@ pub fn open_loop_inject() -> bool {
 mod tests {
     use super::*;
 
-    /// All five handles reach the roster under the ids Task 11 will read, and
-    /// the one that carries a `reads_as` sentence carries the right one.
+    /// All five handles reach the roster under the ids
+    /// [`crate::capability::ALL_SLOTS`] reads, and the one that carries a
+    /// `reads_as` sentence carries the right one.
     ///
     /// No runtime tie on `OPEN_LOOP_INJECT` on purpose: `curated.rs`'s tests
     /// call `set_open_loop_inject(true)`, so "an uninstalled read is false"

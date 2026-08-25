@@ -58,10 +58,8 @@ static SAMPLING_LLM: CapabilitySlot<Arc<dyn AiProvider>> =
     CapabilitySlot::new("mcp/sampling-llm", MissingSemantics::FailsClosed);
 
 /// The handle above, type-erased for the roster — see
-/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
-/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
-#[allow(dead_code)]
-pub(crate) fn sampling_llm_slot() -> &'static dyn SlotStatus {
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn sampling_llm_slot() -> &'static dyn SlotStatus {
     &SAMPLING_LLM
 }
 

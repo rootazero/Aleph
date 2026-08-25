@@ -229,10 +229,8 @@ pub fn set_global_config(cfg: RuntimeFooterConfig) {
 }
 
 /// The handle above, type-erased for the roster — see
-/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
-/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
-#[allow(dead_code)]
-pub(crate) fn global_footer_config_slot() -> &'static dyn SlotStatus {
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn global_footer_config_slot() -> &'static dyn SlotStatus {
     &GLOBAL_FOOTER_CONFIG
 }
 

@@ -41,15 +41,13 @@ static GLOBAL_SHARED_TOKEN_MANAGER: CapabilitySlot<Arc<SharedTokenManager>> = Ca
 );
 
 /// The handle above, type-erased for the roster — see
-/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
-/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
+/// [`crate::spend::global_ledger_slot`] for why this shape.
 ///
 /// A free function rather than a third associated item on
 /// [`SharedTokenManager`], so that all twelve accessors in this batch have one
 /// shape: the roster reads the return type, and a reader comparing files
 /// should not have to notice that this one is spelled differently.
-#[allow(dead_code)]
-pub(crate) fn global_shared_token_manager_slot() -> &'static dyn SlotStatus {
+pub(crate) const fn global_shared_token_manager_slot() -> &'static dyn SlotStatus {
     &GLOBAL_SHARED_TOKEN_MANAGER
 }
 

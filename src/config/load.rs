@@ -29,10 +29,8 @@ static EFFECTIVE_CONFIG_PATH: CapabilitySlot<PathBuf> = CapabilitySlot::new(
 );
 
 /// The handle above, type-erased for the roster — see
-/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
-/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
-#[allow(dead_code)]
-pub(crate) fn effective_config_path_slot() -> &'static dyn SlotStatus {
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn effective_config_path_slot() -> &'static dyn SlotStatus {
     &EFFECTIVE_CONFIG_PATH
 }
 

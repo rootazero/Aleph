@@ -427,15 +427,12 @@ static WRITER: CapabilitySlot<mpsc::Sender<LedgerJob>> =
     CapabilitySlot::new("identity/ledger-writer", MissingSemantics::FailsClosed);
 
 /// The handles above, type-erased for the roster — see
-/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
-/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
-#[allow(dead_code)]
-pub(crate) fn ledger_slot() -> &'static dyn SlotStatus {
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn ledger_slot() -> &'static dyn SlotStatus {
     &LEDGER
 }
 
-#[allow(dead_code)]
-pub(crate) fn writer_slot() -> &'static dyn SlotStatus {
+pub(crate) const fn writer_slot() -> &'static dyn SlotStatus {
     &WRITER
 }
 

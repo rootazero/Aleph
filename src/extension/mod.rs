@@ -34,7 +34,7 @@ pub mod capability;
 pub mod registrar;
 
 mod error;
-mod manager_global;
+pub(crate) mod manager_global;
 pub mod manifest;
 pub mod mcp_config;
 mod plugin_ops;

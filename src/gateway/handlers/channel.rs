@@ -155,10 +155,8 @@ pub fn set_telegram_tool_registry(registry: Arc<crate::tool_metadata::ToolCatalo
 }
 
 /// The handle above, type-erased for the roster — see
-/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
-/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
-#[allow(dead_code)]
-pub(crate) fn telegram_tool_registry_slot() -> &'static dyn SlotStatus {
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn telegram_tool_registry_slot() -> &'static dyn SlotStatus {
     &TELEGRAM_TOOL_REGISTRY
 }
 

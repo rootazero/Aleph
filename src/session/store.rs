@@ -804,10 +804,8 @@ pub fn global_session_event_store() -> Option<Arc<dyn SessionEventStore>> {
 }
 
 /// The handle above, type-erased for the roster — see
-/// [`crate::spend::global_ledger_slot`] for why this shape, and why the
-/// `#[allow(dead_code)]` expires with Task 11 rather than outliving it.
-#[allow(dead_code)]
-pub(crate) fn global_session_event_store_slot() -> &'static dyn SlotStatus {
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn global_session_event_store_slot() -> &'static dyn SlotStatus {
     &GLOBAL_EVENT_STORE
 }
 

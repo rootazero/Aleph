@@ -110,11 +110,8 @@ pub fn global_session_service() -> Option<Arc<dyn SessionService>> {
 
 /// The handle above, type-erased for the roster — see
 /// [`crate::spend::global_ledger_slot`] for why this is a `pub(crate) fn`
-/// returning `&'static dyn SlotStatus` rather than a `pub static`, and why the
-/// `#[allow(dead_code)]` is an exemption that expires when Task 11's roster
-/// lands rather than a follow-up.
-#[allow(dead_code)]
-pub(crate) fn global_session_service_slot() -> &'static dyn SlotStatus {
+/// returning `&'static dyn SlotStatus` rather than a `pub static`.
+pub(crate) const fn global_session_service_slot() -> &'static dyn SlotStatus {
     &GLOBAL_SESSION_SERVICE
 }
 
@@ -138,11 +135,10 @@ mod tests {
 
     /// The roster's entry point for this handle.
     ///
-    /// Task 11 assembles its roster from accessors like this one rather than
-    /// from one `pub static` per migrated handle, so the accessor — not the
-    /// static — is the thing that must keep working. Asserting through it pins the id on the path the
-    /// roster actually walks, and gives the `#[allow(dead_code)]` its precise
-    /// meaning: no PRODUCTION caller yet, as opposed to no caller at all.
+    /// [`crate::capability::ALL_SLOTS`] assembles from accessors like this one
+    /// rather than from one `pub static` per migrated handle, so the accessor
+    /// — not the static — is the thing that must keep working. Asserting
+    /// through it pins the id on the path the roster actually walks.
     #[test]
     fn the_accessor_exposes_this_handle_to_the_roster() {
         assert_eq!(global_session_service_slot().id(), "session/service");

@@ -469,30 +469,30 @@ pub fn current_policy() -> crate::config::types::policies::SpendPolicy {
 
 /// The two handles above, type-erased for the roster.
 ///
-/// `pub(crate) fn` rather than `pub static`: the roster this round builds needs
-/// one `&dyn SlotStatus` per handle, and making 46 statics public to assemble it
-/// would widen the crate's surface by 46 items to answer one question. Erasing
-/// at the accessor also means a roster consumer gets exactly `id` / `missing` /
-/// `outcome` and can never reach the value — a diagnostic has no business
-/// reading the ledger.
+/// `pub(crate) fn` rather than `pub static`: the roster built in
+/// [`crate::capability::ALL_SLOTS`] needs one `&dyn SlotStatus` per handle, and
+/// making 45 statics public to assemble it would widen the crate's surface by
+/// 45 items to answer one question. Erasing at the accessor also means a
+/// roster consumer gets exactly `id` / `missing` / `outcome` and can never
+/// reach the value — a diagnostic has no business reading the ledger.
 ///
-/// ⚠️ `#[allow(dead_code)]` because the roster that consumes these does not
-/// exist yet, and this crate's lib target builds warning-free — without the
-/// attribute every migrated handle would add two warnings to a clean build, and
-/// a build with 92 warnings in it is a build nobody reads. The attribute is
-/// removable the moment the roster lands: it is wrong to keep an `allow` whose
-/// stated reason has expired, so deleting these two lines is part of wiring
-/// `ALL_SLOTS`, not a follow-up. Tests do reach these functions
-/// (`spend::tests::the_slot_accessors_expose_both_handles_to_the_roster`), so
-/// the `allow` is silencing exactly one thing: "no PRODUCTION caller yet".
-#[allow(dead_code)]
-pub(crate) fn global_ledger_slot() -> &'static dyn SlotStatus {
+/// `const fn`, not merely `fn`: `ALL_SLOTS` is a `static` array of trait
+/// objects, and a `static` initializer must be a constant expression, so every
+/// accessor it calls has to be callable at compile time. The body is nothing
+/// but an unsizing coercion of an already-`'static` reference, so `const` adds
+/// no restriction the body did not already meet.
+///
+/// These carried `#[allow(dead_code)]` from the day they were written until
+/// `ALL_SLOTS` landed and gave them their first production caller — see that
+/// static's doc, and `census::every_installed_global_is_a_capability_slot` /
+/// `census::every_declared_slot_is_in_the_roster` for the guards that close
+/// the round these two handles anchor.
+pub(crate) const fn global_ledger_slot() -> &'static dyn SlotStatus {
     &GLOBAL_LEDGER
 }
 
-/// See [`global_ledger_slot`], including why this carries an `allow`.
-#[allow(dead_code)]
-pub(crate) fn global_policy_slot() -> &'static dyn SlotStatus {
+/// See [`global_ledger_slot`].
+pub(crate) const fn global_policy_slot() -> &'static dyn SlotStatus {
     &GLOBAL_POLICY
 }
 
