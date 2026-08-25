@@ -1119,6 +1119,37 @@ mod tests {
         );
     }
 
+    /// Is byte offset `at` inside a double-quoted literal on this one line?
+    ///
+    /// Deliberately per line: a Rust literal can span lines, but tracking that
+    /// needs a lexer, and this crate has none. Resetting at each newline bounds
+    /// a miscount to the line it happens on — the failure the unbounded version
+    /// produces (an odd quote desynchronising and blanking everything after it)
+    /// is silent, and this one is not.
+    ///
+    /// Whoever gives this crate a lexer should delete this function. Nothing
+    /// is lost by that: the crate-boundary ruling this module carries lives on
+    /// the census below, on its `#[test]`, not up here.
+    fn inside_a_literal(line: &str, at: usize) -> bool {
+        let mut quotes = 0usize;
+        let mut escaped = false;
+        for (i, c) in line.char_indices() {
+            if i >= at {
+                break;
+            }
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match c {
+                '\\' => escaped = true,
+                '"' => quotes += 1,
+                _ => {}
+            }
+        }
+        quotes % 2 == 1
+    }
+
     /// This client asks "is this a side question?" in exactly one place.
     ///
     /// A source-level census, because the failure it guards against is not a
@@ -1162,33 +1193,6 @@ mod tests {
     /// hiding there. It cannot tell production from test code past the cut —
     /// nothing textual can — so it reports the line and asks for a human
     /// classification rather than guessing one.
-    /// Is byte offset `at` inside a double-quoted literal on this one line?
-    ///
-    /// Deliberately per line: a Rust literal can span lines, but tracking that
-    /// needs a lexer, and this crate has none. Resetting at each newline bounds
-    /// a miscount to the line it happens on — the failure the unbounded version
-    /// produces (an odd quote desynchronising and blanking everything after it)
-    /// is silent, and this one is not.
-    fn inside_a_literal(line: &str, at: usize) -> bool {
-        let mut quotes = 0usize;
-        let mut escaped = false;
-        for (i, c) in line.char_indices() {
-            if i >= at {
-                break;
-            }
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            match c {
-                '\\' => escaped = true,
-                '"' => quotes += 1,
-                _ => {}
-            }
-        }
-        quotes % 2 == 1
-    }
-
     #[test]
     fn this_client_resolves_a_side_question_in_exactly_one_place() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
