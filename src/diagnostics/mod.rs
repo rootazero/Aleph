@@ -81,6 +81,7 @@ impl DiagnosticEngine {
             Arc::new(checks::BrowserRuntimeCheck::new()),
             Arc::new(checks::MediaCodecsCheck::new()),
             Arc::new(checks::DuplicateInstanceCheck::new()),
+            Arc::new(checks::CapabilityWiringCheck::new()),
         ];
         Ok(Self::new(checks))
     }

@@ -163,10 +163,11 @@ mod tests {
     /// Registered-check count. Asserted rather than derived so adding a check
     /// is a deliberate edit here too — the alternative (`>= 1`) would let a
     /// check silently drop out of `default_registry`.
-    /// 13 from `default_registry()` + `ext/idle-extensions`, which the tool
-    /// appends unconditionally (with `mcp: None` here, so it reports the MCP
+    /// 14 from `default_registry()` (13 plus `core/capability-wiring`, added
+    /// in task 12) + `ext/idle-extensions`, which the tool appends
+    /// unconditionally (with `mcp: None` here, so it reports the MCP
     /// category as unenumerable rather than being absent).
-    const REGISTERED_CHECKS: usize = 14;
+    const REGISTERED_CHECKS: usize = 15;
 
     fn inspect_args() -> DoctorArgs {
         DoctorArgs::default()

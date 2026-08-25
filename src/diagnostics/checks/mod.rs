@@ -8,6 +8,7 @@
 pub mod browser_runtime;
 pub mod cache_health;
 pub mod cache_hit_rate;
+pub mod capability_wiring;
 pub mod config_parse;
 pub mod data_dir;
 pub mod disk_space;
@@ -24,6 +25,7 @@ pub mod vault;
 pub use browser_runtime::BrowserRuntimeCheck;
 pub use cache_health::CacheHealthCheck;
 pub use cache_hit_rate::CacheHitRateCheck;
+pub use capability_wiring::CapabilityWiringCheck;
 pub use config_parse::ConfigParseCheck;
 pub use data_dir::DataDirCheck;
 pub use disk_space::DiskSpaceCheck;
