@@ -1996,11 +1996,41 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
                     continue;
                 }
                 let (body, _) = block_at(&lines, i);
-                for (map, wrappers, method) in [
-                    (&mut hop.installs, &w.installs, "install"),
-                    (&mut hop.declines, &w.declines, "decline"),
-                ] {
-                    let slots = slots_in(&body, wrappers, &statics, &rel, method);
+                let installs = slots_in(&body, &w.installs, &statics, &rel, "install");
+                // ⚠️ SUBTRACT THE OVERLAP. A function's hop sets are whole-body
+                // unions — nothing here knows which internal branch produced
+                // which slot — so a function that installs a handle in one gate
+                // and declines it in that gate's `else` would otherwise be
+                // registered as a *decliner* of a handle it installs, and could
+                // then satisfy any gate arm in this binary that merely names it.
+                //
+                // That is not a hypothetical shape, and it is not a badly
+                // written function: it is exactly what "own your gate, decline
+                // in your own `else`" produces. Measured 2026-08-25, five of the
+                // eight install-side entries were self-decliners
+                // (`register_agent_handlers` 7/7, `start_server` 25/8,
+                // `initialize_channels`, `initialize_extension_manager`, `main`).
+                // Forced: replacing `agent_init`'s seven simulated-mode declines
+                // with one call to `register_agent_handlers` — the INSTALLER —
+                // took the gate rule from naming all seven to naming one.
+                //
+                // Costs the shipped case nothing: `decline_orchestrator_slots`
+                // installs none of the four handles it declines. Fails loud — a
+                // self-declining wiring function stops satisfying gates it
+                // should never have satisfied.
+                //
+                // ⚠️ `block_at` ends at the fn's own syntactic terminus, so a
+                // nested fn or closure counts as part of the enclosing body —
+                // which is why `start_server`'s install set is 25 slots wide.
+                // Harmless today (nothing calls `start_server` from inside a
+                // gate arm) and it is the same whole-body union one scale up,
+                // so the subtraction above covers it too.
+                let declines: std::collections::BTreeSet<String> =
+                    slots_in(&body, &w.declines, &statics, &rel, "decline")
+                        .difference(&installs)
+                        .cloned()
+                        .collect();
+                for (map, slots) in [(&mut hop.installs, installs), (&mut hop.declines, declines)] {
                     if slots.is_empty() {
                         continue;
                     }
@@ -2017,26 +2047,40 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
 
     /// The `(name, slots)` pairs a gate in `file` may hop through.
     ///
-    /// **Two restrictions, both forced by measurement rather than chosen.**
+    /// **Two restrictions. The first is forced by measurement; the second is
+    /// reasoned, and saying which is which matters because an earlier draft of
+    /// this doc credited the first one's evidence to the second.**
     ///
-    /// 1. **Binary targets only.** A gate in the library gets no hop. Measured
-    ///    2026-08-25: hopping symmetrically inside `lib` took the gate count from
-    ///    15 to 77 and produced **61 offenders, every one of them false** —
-    ///    because `ExecutionEngine::new` installs `gateway/concurrency-limiter`,
-    ///    and once a hop is keyed on a bare fn name, `new(` appears in almost
-    ///    every `if`/`else` body in the crate. What makes the boot binary
+    /// 1. **Binary targets only — measured.** A gate in the library gets no hop.
+    ///    Hopping symmetrically inside `lib` takes the gate count from 15 to 77
+    ///    and produces **61 offenders, every one of them false**, because
+    ///    `ExecutionEngine::new` installs `gateway/concurrency-limiter` and, once
+    ///    a hop is keyed on a bare fn name, `new(` appears in almost every
+    ///    `if`/`else` body in the crate — ~918 `fn new(` definitions under
+    ///    `src/`, exactly one of them slot-bearing. What makes a binary
     ///    different is not its path: `src/bin/<name>/` is its own crate, so a
     ///    function defined there can only be called from that binary, and a gate
     ///    there is the last word on what this process wires. A library function
     ///    is a component that does not know its callers — the same argument this
     ///    round used when it refused to decline `src/executor/`'s handles from
     ///    `agent_init`.
-    /// 2. **Unique names only.** A name defined more than once in the target is
-    ///    not hopped at all, rather than hopped loosely. Elsewhere in these
-    ///    guards an ambiguous name is demoted to "at least one slot declined";
-    ///    here demotion would still *assert* something about a call the scan
-    ///    cannot resolve, which is how the 61 arrived. A hop it cannot resolve is
-    ///    a hop it must not take.
+    /// 2. **Unique names only — reasoned, not measured, and it counts
+    ///    SLOT-BEARING definitions.** `one_hop` only creates an entry when a
+    ///    body yields a non-empty slot set, so `defs` counts the definitions of
+    ///    that name which install or decline something, not the definitions of
+    ///    that name. A second `fn decline_orchestrator_slots` with an empty body
+    ///    does **not** suppress the hop (forced 2026-08-25). That is the better
+    ///    of the two behaviours — refusing to hop because of an unrelated
+    ///    same-named function would be a false offender — but it is not what an
+    ///    earlier draft of this sentence said.
+    ///
+    ///    Measured 2026-08-25: all **8** install-side entries in
+    ///    `bin:aleph-server` have `defs == 1`, so this filter has never excluded
+    ///    anything. It is belt-and-braces against a future collision, and it
+    ///    contributed **nothing** to the 61 above: running the symmetric hop with
+    ///    the filter and without it gives 77 gates / 61 offenders either way,
+    ///    because `new` is slot-bearing exactly once. Restriction 1 is the whole
+    ///    of that argument.
     ///
     /// Direction of both: under-see.
     fn hoppable<'a>(
@@ -2564,6 +2608,29 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     ///   own `else` (`loop_graph/service.rs`), and that `if`/`else` is one of the
     ///   gates below. It reads "never reached" on a provider-less boot because
     ///   its *caller* never runs, not because the slot lacks a decline.
+    ///
+    /// * **A decline that is itself conditional.** `span_calls` is lexical over
+    ///   the else-chain's text, so a decline nested under a further `if` inside
+    ///   the `else` still reads as present: both `if args.daemon { decline_… }`
+    ///   and `if !args.daemon { decline_… }` are green. Pre-existing — it is a
+    ///   property of the whole gate rule and applies to all sixteen gates, not
+    ///   something the hop introduced — but it IS a removal shape for the class
+    ///   the hop was built to close, so "the class is closed" carries this
+    ///   qualifier. Requiring the call at the alternative's own indent costs
+    ///   more than it buys.
+    ///
+    ///   ⚠️ Not hypothetical at the orchestrator gate specifically: the comment
+    ///   immediately above that `else` says, verbatim, that the diagnostic there
+    ///   must NOT be gated on `!args.daemon` because daemon is the production
+    ///   path. The file already knows someone will be tempted to write exactly
+    ///   that wrapper right there, and prose is the only thing in the way.
+    ///
+    /// * **Anything outside `alephcore`.** Every guard in this module walks
+    ///   `CARGO_MANIFEST_DIR/src`, so `interfaces/tui`, `interfaces/cli` and
+    ///   `interfaces/webchat` are outside all of them. Pre-existing and not this
+    ///   round's, but named here because a reader who has just been told the
+    ///   rule covers "binary targets" will otherwise assume it covers the other
+    ///   binaries. It covers `src/bin/*` only.
     ///
     /// * **`match` gates.** This opens `if` / `if let` only. A `match` whose one
     ///   arm installs two handles and whose other declines one satisfies
