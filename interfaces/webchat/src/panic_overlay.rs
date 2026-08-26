@@ -138,7 +138,7 @@ fn strip_credentials(url: &str) -> String {
     }
     let joined = kept.join("&");
     if joined.is_empty() {
-        format!("{path}")
+        format!("{path}{fragment}")
     } else {
         format!("{path}?{joined}{fragment}")
     }

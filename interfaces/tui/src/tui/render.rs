@@ -21,7 +21,7 @@ use crate::tui::widgets::{
 };
 
 /// Render the full TUI layout: chat area, input area, status bar, and overlays.
-pub fn render(frame: &mut Frame, state: &AppState, textarea: &TextArea) {
+pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
     let input_h = input_height(textarea, 3, 8);
 
     let chunks = Layout::vertical([

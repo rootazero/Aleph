@@ -78,11 +78,19 @@ pub struct TypewriterClock {
     /// (the backend already coalesces to a single final chunk in instant mode;
     /// this keeps the Panel honest if a stray streamed delta still arrives).
     pub instant: RwSignal<bool>,
-    /// `message_id → reveal cursor`. Persists across the per-token remount of a
-    /// streaming bubble (the keyed `<For>` recreates the bubble on every delta)
-    /// so the reveal is continuous, not reset each token. Also persists *past*
-    /// stream completion so the sweep can finish revealing the final text.
+    /// `message_id → reveal cursor`. Persists across `TypewriterRenderer` being
+    /// re-invoked (its caller wraps it in a `{move || message.with(...)}`
+    /// closure that rebuilds it reactively whenever the message's content
+    /// changes — the row itself no longer remounts per token) so the reveal is
+    /// continuous, not reset each token. Also persists *past* stream completion
+    /// so the sweep can finish revealing the final text.
     reveals: RwSignal<HashMap<String, Reveal>>,
+    /// `message_id → (already-rendered HTML for the safe prefix, chars that
+    /// prefix represents)`. Separate from `reveals` (not folded into
+    /// [`Reveal`]) because `Reveal` is deliberately `Copy`/allocation-free;
+    /// this cache holds an owned `String` and is invalidated independently
+    /// (see [`TypewriterClock::clear_stable_prefix`]).
+    stable_prefixes: RwSignal<std::collections::HashMap<String, (String, usize)>>,
 }
 
 impl Default for TypewriterClock {
@@ -99,6 +107,7 @@ impl TypewriterClock {
             cps: RwSignal::new(DEFAULT_CPS),
             instant: RwSignal::new(false),
             reveals: RwSignal::new(HashMap::new()),
+            stable_prefixes: RwSignal::new(HashMap::new()),
         }
     }
 
@@ -137,12 +146,20 @@ impl TypewriterClock {
             cps,
             instant,
         );
+        let mut pruned: Vec<String> = Vec::new();
         self.reveals.update_untracked(|m| {
             if is_new {
-                prune_stale(m, now);
+                pruned = prune_stale(m, now);
             }
             m.insert(id.to_string(), next);
         });
+        if !pruned.is_empty() {
+            self.stable_prefixes.update_untracked(|m| {
+                for k in &pruned {
+                    m.remove(k);
+                }
+            });
+        }
         next.revealed
     }
 
@@ -174,6 +191,34 @@ impl TypewriterClock {
         self.reveals.update_untracked(|m| {
             m.remove(id);
         });
+        self.clear_stable_prefix(id);
+    }
+
+    /// Cached `(html, safe_offset)` for `id`'s already-rendered prefix, if
+    /// any. `safe_offset` is a byte offset into the message's content, per
+    /// [`shared_ui_logic::markdown_stream::safe_freeze_offset`].
+    #[must_use]
+    pub fn stable_prefix_for(&self, id: &str) -> Option<(String, usize)> {
+        self.stable_prefixes.with_untracked(|m| m.get(id).cloned())
+    }
+
+    /// Replace `id`'s cached stable prefix.
+    pub fn set_stable_prefix(&self, id: &str, html: String, safe_offset: usize) {
+        self.stable_prefixes.update_untracked(|m| {
+            m.insert(id.to_string(), (html, safe_offset));
+        });
+    }
+
+    /// Drop `id`'s cached stable prefix. Called from [`Self::finish`] and
+    /// whenever a caller observes `is_streaming == false` for a still-
+    /// sweeping message: `finalize_answer`/`set_step_text` can swap a
+    /// message's `content` wholesale rather than append to it, and a cached
+    /// HTML prefix computed against the old content would then describe text
+    /// that no longer exists at that offset.
+    pub fn clear_stable_prefix(&self, id: &str) {
+        self.stable_prefixes.update_untracked(|m| {
+            m.remove(id);
+        });
     }
 
     /// Reveal the whole message NOW (the user clicked a sweeping bubble).
@@ -203,15 +248,26 @@ impl TypewriterClock {
 /// bubble heartbeats `last_ms` every animation frame regardless).
 const STALE_CURSOR_MS: f64 = 60_000.0;
 
-/// Drop cursors nothing has advanced for [`STALE_CURSOR_MS`]. Pure so the
-/// bound is host-testable. `now` going backwards (clock adjustment) yields a
-/// negative age and prunes nothing, which is the safe direction.
-fn prune_stale(map: &mut HashMap<String, Reveal>, now: f64) {
-    map.retain(|_, r| {
-        // Spelled through `partial_cmp` because the age can be NaN on a
-        // degenerate clock: only a definite `Greater` prunes, so NaN keeps.
-        (now - r.last_ms).partial_cmp(&STALE_CURSOR_MS) != Some(std::cmp::Ordering::Greater)
-    });
+/// Drop cursors nothing has advanced for [`STALE_CURSOR_MS`], returning the
+/// ids removed so callers can prune dependent bookkeeping (see
+/// [`TypewriterClock::advance_for`], which uses this to also drop the
+/// pruned ids' cached stable prefixes). Pure so the bound is host-testable.
+/// `now` going backwards (clock adjustment) yields a negative age and prunes
+/// nothing, which is the safe direction.
+fn prune_stale(map: &mut HashMap<String, Reveal>, now: f64) -> Vec<String> {
+    let stale: Vec<String> = map
+        .iter()
+        .filter(|(_, r)| {
+            // Spelled through `partial_cmp` because the age can be NaN on a
+            // degenerate clock: only a definite `Greater` prunes, so NaN keeps.
+            (now - r.last_ms).partial_cmp(&STALE_CURSOR_MS) == Some(std::cmp::Ordering::Greater)
+        })
+        .map(|(k, _)| k.clone())
+        .collect();
+    for k in &stale {
+        map.remove(k);
+    }
+    stale
 }
 
 /// Worst-case seconds the reveal is allowed to trail the text that has already
@@ -347,7 +403,7 @@ pub fn advance_reveal(prev: Reveal, total: usize, now: f64, cps: u32, instant: b
 
 #[cfg(test)]
 mod tests {
-    use super::{advance_reveal, prune_stale, Reveal, STALE_CURSOR_MS};
+    use super::{advance_reveal, prune_stale, Reveal, TypewriterClock, STALE_CURSOR_MS};
     use std::collections::HashMap;
 
     /// Cursor anchored at `t=0` with nothing revealed — the first-sight state.
@@ -476,6 +532,43 @@ mod tests {
         )]);
         prune_stale(&mut map, 0.0);
         assert_eq!(map.len(), 1, "a negative age must never prune");
+    }
+
+    #[test]
+    fn stable_prefix_round_trips() {
+        let clock = TypewriterClock::new();
+        assert_eq!(clock.stable_prefix_for("m1"), None);
+        clock.set_stable_prefix("m1", "<p>hi</p>".to_string(), 5);
+        assert_eq!(
+            clock.stable_prefix_for("m1"),
+            Some(("<p>hi</p>".to_string(), 5))
+        );
+    }
+
+    #[test]
+    fn finish_clears_the_stable_prefix_too() {
+        let clock = TypewriterClock::new();
+        clock.set_stable_prefix("m1", "<p>hi</p>".to_string(), 5);
+        clock.finish("m1");
+        assert_eq!(clock.stable_prefix_for("m1"), None);
+    }
+
+    #[test]
+    fn clear_stable_prefix_is_a_no_op_on_a_missing_id() {
+        let clock = TypewriterClock::new();
+        clock.clear_stable_prefix("does-not-exist"); // must not panic
+    }
+
+    #[test]
+    fn stale_cursor_pruning_also_drops_its_stable_prefix() {
+        let clock = TypewriterClock::new();
+        // First sight of "orphan" — advance_for creates a cursor.
+        let _ = clock.advance_for("orphan", 10, 0.0, 200, false);
+        clock.set_stable_prefix("orphan", "<p>partial</p>".to_string(), 4);
+        // Advance a different id far enough in the future that "orphan" is
+        // stale (> STALE_CURSOR_MS old) — this triggers prune_stale.
+        let _ = clock.advance_for("fresh", 10, 100_000.0, 200, false);
+        assert_eq!(clock.stable_prefix_for("orphan"), None);
     }
 
     #[test]

@@ -284,6 +284,43 @@ fn render_streaming(content: &str) -> String {
     html
 }
 
+/// Extend a cached stable-prefix render with newly-revealed text.
+///
+/// `revealed_prefix` is the full text revealed so far (`content` truncated
+/// to the typewriter's current `revealed` char count) — NOT just the new
+/// characters, since [`shared_ui_logic::markdown_stream::safe_freeze_offset`]
+/// needs to see any fence/reference-link-def state spanning the cached
+/// boundary and the newly-revealed text. Returns the extended
+/// `(html, new_safe_offset)`; when no further progress is safe, `html` is
+/// unchanged and `new_safe_offset == cached_offset`.
+fn extend_stable_prefix(
+    cached_html: &str,
+    cached_offset: usize,
+    revealed_prefix: &str,
+) -> (String, usize) {
+    // A cached offset can outlive the content it was computed against:
+    // `set_step_text` replaces a still-streaming bubble's content wholesale
+    // (shorter authoritative text can replace a longer streamed preview)
+    // without necessarily flipping `is_streaming`, so `cached_offset` may no
+    // longer be a valid boundary into `revealed_prefix`. Treat that as "no
+    // cache" rather than trusting a stale offset — falls back to full
+    // reprocessing of `revealed_prefix` from scratch, per this module's
+    // "never wrong in the unsafe direction" contract. (`get(..0)` is always
+    // `Some("")`, so this recurses at most once.)
+    if revealed_prefix.get(..cached_offset).is_none() {
+        return extend_stable_prefix("", 0, revealed_prefix);
+    }
+    match shared_ui_logic::markdown_stream::safe_freeze_offset(revealed_prefix, cached_offset) {
+        Some(new_offset) if new_offset > cached_offset => {
+            let delta = &revealed_prefix[cached_offset..new_offset];
+            let mut html = cached_html.to_string();
+            html.push_str(&render_streaming(delta));
+            (html, new_offset)
+        }
+        _ => (cached_html.to_string(), cached_offset),
+    }
+}
+
 /// A Leptos component for streaming content — lightweight rendering without full Markdown parse.
 ///
 /// Tracks code fences and escapes HTML, but does not process Markdown syntax.
@@ -316,9 +353,11 @@ fn now_ms() -> Option<f64> {
 /// `is_streaming`**: it keeps advancing after the backend finishes until it has
 /// revealed the whole final text, so a response that generates faster than `cps`
 /// still animates instead of dumping on completion. The per-message cursor lives
-/// in the clock keyed on `message_id`, so it survives the per-token remount of a
-/// streaming bubble (the keyed `<For>` recreates the bubble on every delta) and
-/// the sweep stays continuous.
+/// in the clock keyed on `message_id`, so it survives `TypewriterRenderer` being
+/// re-invoked (its caller wraps it in a `{move || message.with(...)}` closure
+/// that rebuilds this fragment reactively whenever the message's content
+/// changes — the row itself no longer remounts per token) and the sweep stays
+/// continuous.
 ///
 /// Routing:
 /// - No cursor and not streaming → a message loaded from history (never streamed
@@ -396,9 +435,29 @@ pub fn TypewriterRenderer(
         } else {
             // Still sweeping — advance on each ~30fps animation tick.
             clock.tick.track();
+            let id = message_id.get_value();
+            if !is_streaming {
+                // Reveal hasn't caught up but the stream already ended —
+                // finalize may have swapped `content` wholesale, so a cached
+                // prefix could describe text that's no longer there. Drop it
+                // and fall back to an uncached render for this tick; the
+                // cache rebuilds itself from the next call onward.
+                clock.clear_stable_prefix(&id);
+                return content.with_value(|c| {
+                    let shown: String = c.chars().take(revealed).collect();
+                    render_streaming_with_cursor(&shown)
+                });
+            }
             content.with_value(|c| {
-                let shown: String = c.chars().take(revealed).collect();
-                render_streaming_with_cursor(&shown)
+                let revealed_prefix: String = c.chars().take(revealed).collect();
+                let (cached_html, cached_offset) = clock.stable_prefix_for(&id).unwrap_or_default();
+                let (html, safe_offset) =
+                    extend_stable_prefix(&cached_html, cached_offset, &revealed_prefix);
+                if safe_offset != cached_offset {
+                    clock.set_stable_prefix(&id, html.clone(), safe_offset);
+                }
+                let tail = &revealed_prefix[safe_offset..];
+                format!("{html}{}{STREAMING_CURSOR_HTML}", render_streaming(tail))
             })
         }
     };
@@ -442,7 +501,7 @@ pub fn MarkdownRenderer(content: String) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_markdown, render_streaming, sanitize_link_url};
+    use super::{extend_stable_prefix, render_markdown, render_streaming, sanitize_link_url};
 
     // ⚠️ Host-test safety: render_markdown with a *language-tagged* fence
     // calls is_dark_mode() → web_sys::window(), which panics off-wasm.
@@ -505,5 +564,55 @@ mod tests {
         // Relative links must survive — they only resolve once the panel
         // routes them.
         assert_eq!(sanitize_link_url("/docs/page"), "/docs/page");
+    }
+
+    #[test]
+    fn extend_stable_prefix_appends_only_the_new_safe_delta() {
+        let (html, offset) = extend_stable_prefix("", 0, "line one\nline two\n");
+        assert_eq!(offset, "line one\nline two\n".len());
+        assert!(html.contains("line one"));
+        assert!(html.contains("line two"));
+
+        // Simulate the next tick: more text arrived, cache reused.
+        let (html2, offset2) =
+            extend_stable_prefix(&html, offset, "line one\nline two\nline three\n");
+        assert_eq!(offset2, "line one\nline two\nline three\n".len());
+        assert!(html2.starts_with(&html), "must extend, not rebuild");
+        assert!(html2.contains("line three"));
+    }
+
+    #[test]
+    fn extend_stable_prefix_no_ops_when_no_safe_progress_exists() {
+        // `cached_offset` must be a value `safe_freeze_offset` could actually
+        // have returned — i.e. a complete-line boundary (here: 0, "nothing
+        // cached yet"). An unclosed fence with no other complete line makes
+        // no further progress safe, so the cache must pass through unchanged.
+        let (html, offset) = extend_stable_prefix("<cached>", 0, "```rust\n");
+        assert_eq!(html, "<cached>");
+        assert_eq!(offset, 0);
+    }
+
+    #[test]
+    fn extend_stable_prefix_falls_back_safely_when_cached_offset_outlives_shrunk_content() {
+        // set_step_text can replace a still-streaming bubble's content with
+        // shorter authoritative text without flipping is_streaming — the
+        // stale cached_html must be discarded, not reused, once the cached
+        // offset no longer fits the new content.
+        let stale_cached_html = "<p>this describes text that no longer exists</p>";
+        let (html, offset) = extend_stable_prefix(stale_cached_html, 60, "short\n");
+        assert_eq!(offset, "short\n".len());
+        assert!(
+            !html.contains("no longer exists"),
+            "must discard stale cached html, not reuse it"
+        );
+    }
+
+    #[test]
+    fn extend_stable_prefix_does_not_panic_when_cached_offset_exceeds_shrunk_len() {
+        // Regression: must not panic (byte-index-out-of-bounds) when a
+        // wholesale content replacement leaves cached_offset pointing past
+        // the end of the new, shorter text.
+        let (_html, offset) = extend_stable_prefix("<cached>", 100, "ab\n");
+        assert!(offset <= "ab\n".len());
     }
 }

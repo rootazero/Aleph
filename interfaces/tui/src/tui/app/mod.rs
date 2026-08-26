@@ -832,6 +832,11 @@ pub struct AppState {
     pub ctrl_c_count: u8,
     pub spinner_frame: usize,
     pub should_quit: bool,
+
+    /// Per-message rendered-line cache for the chat area — see
+    /// `widgets::chat_area::LineCache`. Not part of any serialized/exported
+    /// state; purely a render-time optimization.
+    pub chat_line_cache: crate::tui::widgets::chat_area::LineCache,
 }
 
 impl AppState {
@@ -894,6 +899,8 @@ impl AppState {
             ctrl_c_count: 0,
             spinner_frame: 0,
             should_quit: false,
+
+            chat_line_cache: crate::tui::widgets::chat_area::LineCache::default(),
         }
     }
 
@@ -1520,6 +1527,11 @@ impl AppState {
         self.session_snapshot = None;
         self.model_name.clone_from(&self.default_model_name);
         self.messages.clear();
+        // The cache is keyed by positional index into `messages`, which is
+        // about to be repopulated from scratch — a stale entry whose (kind,
+        // len, width) happens to match new content at the same index must
+        // not survive.
+        self.chat_line_cache = crate::tui::widgets::chat_area::LineCache::default();
         // The run left behind (if any) still belongs to the OLD session, and
         // nothing extra needs to be recorded for that here: its own
         // `RunAccepted` already taught `run_sessions` which session it is
@@ -1596,6 +1608,11 @@ impl AppState {
     /// Clear the chat screen (keep session state).
     pub fn clear_screen(&mut self) {
         self.messages.clear();
+        // The cache is keyed by positional index into `messages`, which is
+        // about to be repopulated from scratch — a stale entry whose (kind,
+        // len, width) happens to match new content at the same index must
+        // not survive.
+        self.chat_line_cache = crate::tui::widgets::chat_area::LineCache::default();
         self.scroll_offset = 0;
         self.auto_scroll = true;
         self.add_system_message("Screen cleared.".to_string());

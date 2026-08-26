@@ -690,6 +690,11 @@ fn apply_history(state: &mut AppState, result: &Value, mode: AttachMode) {
     // blank screen.
     if mode == AttachMode::Replace {
         state.messages.clear();
+        // The cache is keyed by positional index into `messages`, which is
+        // about to be repopulated from scratch — a stale entry whose (kind,
+        // len, width) happens to match new content at the same index must
+        // not survive.
+        state.chat_line_cache = crate::tui::widgets::chat_area::LineCache::default();
     }
 
     // Render the server transcript verbatim (no local dedup/store).
