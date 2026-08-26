@@ -2819,6 +2819,31 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         out
     }
 
+    /// Does this `impl` line name exactly `ty` as its target?
+    ///
+    /// **This is what makes [`TYPES`]'s order irrelevant, and that is the
+    /// point.** `"impl<T: 'static> MutableCapabilitySlot<T>"` CONTAINS the
+    /// substring `"CapabilitySlot<"`, so the `contains` test this replaces
+    /// required the array to be written longest-name-first — a requirement
+    /// nothing expressed and only a reader could know. Written the other way
+    /// round, both inherent impls collapsed onto `CapabilitySlot`: the guard
+    /// named `CapabilitySlot::{update,load}`, which are innocent, AND stopped
+    /// recording `MutableCapabilitySlot::*` at all, masking the real orphan.
+    /// Loud, and misleading in the loud direction — a reader who "resolves"
+    /// the two false accusations disarms the guard against the one instance it
+    /// was written for.
+    ///
+    /// A comment would have described the hazard; the left boundary removes
+    /// it. The right boundary is the `<` itself.
+    fn names_type(line: &str, ty: &str) -> bool {
+        line.match_indices(&format!("{ty}<")).any(|(at, _)| {
+            line[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+        })
+    }
+
     /// Every `pub` method on the two slot types has a production call site.
     ///
     /// # The blind spot this closes
@@ -2865,6 +2890,30 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     #[test]
     fn every_public_slot_method_has_a_production_caller() {
         const TYPES: [&str; 2] = ["MutableCapabilitySlot", "CapabilitySlot"];
+
+        // Asserted, not documented: this array may be written in either order.
+        // The version of this guard that used `contains` was silently
+        // order-sensitive, and reordering it made the guard accuse two
+        // innocent methods while hiding the real orphan.
+        let mut reversed = TYPES;
+        reversed.reverse();
+        for (line, want) in [
+            ("impl<T: 'static> MutableCapabilitySlot<T> {", "MutableCapabilitySlot"),
+            ("impl<T: 'static> CapabilitySlot<T> {", "CapabilitySlot"),
+            ("impl<T: Send + Sync> SlotStatus for MutableCapabilitySlot<T> {", "MutableCapabilitySlot"),
+        ] {
+            for order in [TYPES, reversed] {
+                assert_eq!(
+                    order.iter().find(|ty| names_type(line, ty)).copied(),
+                    Some(want),
+                    "`{line}` must resolve to {want} whatever order TYPES is written in"
+                );
+            }
+        }
+        // And the boundary really is a boundary, in both directions.
+        assert!(!names_type("impl<T> MutableCapabilitySlot<T> {", "CapabilitySlot"));
+        assert!(names_type("impl<T> CapabilitySlot<T> {", "CapabilitySlot"));
+
         let sources = rust_sources_under(&manifest_src());
 
         // Declarations, read out of the inherent impls.
@@ -2886,7 +2935,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
                 current = if t.contains(" for ") {
                     None
                 } else {
-                    TYPES.iter().find(|ty| t.contains(&format!("{ty}<"))).copied()
+                    TYPES.iter().find(|ty| names_type(t, ty)).copied()
                 };
                 continue;
             }
