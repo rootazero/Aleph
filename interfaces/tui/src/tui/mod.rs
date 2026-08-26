@@ -278,6 +278,21 @@ fn next_backoff(current: Duration) -> Duration {
     }
 }
 
+/// Whether a pure `Action::Tick` (no gateway/terminal event) needs a redraw.
+///
+/// A tick that only bumped the spinner counter with nothing on screen
+/// depending on it (`has_active_run == false`) changes nothing visible and
+/// can skip the draw entirely — the per-message line cache (see
+/// `widgets::chat_area::LineCache`) already makes an idle draw cheap, but
+/// cheap is not free, and a genuinely idle terminal has no reason to redraw
+/// 20 times a second. `connection_state_changed` covers the one other thing
+/// a pure tick can affect: the status dot flips on the disconnect/reconnect
+/// edge (see the tick handler's own comment on why the edge, not the level,
+/// matters).
+fn should_redraw_after_tick(has_active_run: bool, connection_state_changed: bool) -> bool {
+    has_active_run || connection_state_changed
+}
+
 /// The main event loop. Separated from `run()` so terminal restoration
 /// happens even if this function returns an error.
 async fn main_loop<'c>(
@@ -300,19 +315,41 @@ async fn main_loop<'c>(
     let mut reconnecting: Option<ReconnectAttempt<'c>> = None;
     let mut backoff = Duration::ZERO;
     let mut reported_reconnect_failure = false;
+    // Starts `true` so the first frame always draws — never delayed behind a
+    // wait for the first event. Cleared right after each draw; only actions
+    // that changed something visible set it back to `true` (see
+    // `should_redraw_after_tick` for the one arm, `Action::Tick`, that
+    // decides for itself instead of redrawing unconditionally).
+    let mut needs_redraw = true;
     loop {
         // Settled by the reconnect branch below; read after the select, where
         // `reconnecting` is no longer borrowed.
         let mut reconnect_outcome: Option<CliResult<()>> = None;
-        // Draw
-        terminal.draw(|f| render::render(f, state, textarea))?;
+        // Draw only when something visible changed since the last frame.
+        if needs_redraw {
+            terminal.draw(|f| render::render(f, state, textarea))?;
+            needs_redraw = false;
+        }
 
         // Wait for next event
         let action = tokio::select! {
             Some(te) = term_events.recv() => {
+                // A terminal event always represents something the user
+                // needs to see reflected on screen (a keystroke landing in
+                // the composer, a resize reflowing the layout, a paste)
+                // even when the handler's returned Action is None — Action
+                // describes what the loop should do NEXT, not whether
+                // visible state changed. Set here, at the source, rather
+                // than inferred from the returned Action's value.
+                needs_redraw = true;
                 keys::handle_terminal_event(state, textarea, &te)
             }
             Some(ge) = gateway_events.recv() => {
+                // Same reasoning as the terminal branch above: a gateway
+                // frame can mutate visible state (e.g. the /btw overlay,
+                // the AskUser dialog, a streamed chunk) while returning
+                // Action::None.
+                needs_redraw = true;
                 state.handle_gateway_event(ge)
             }
             _ = tick_interval.tick() => {
@@ -329,6 +366,10 @@ async fn main_loop<'c>(
         // which that branch still has borrowed.
         if let Some(outcome) = reconnect_outcome {
             reconnecting = None;
+            // A reconnect completing or failing always changes visible
+            // state: the status dot flips and/or a system message is
+            // appended below.
+            needs_redraw = true;
             match outcome {
                 Ok(()) => {
                     backoff = Duration::ZERO;
@@ -392,6 +433,7 @@ async fn main_loop<'c>(
             }
             Action::Tick => {
                 state.spinner_frame = state.spinner_frame.wrapping_add(1);
+                let was_connected = state.is_connected;
                 // Reflect the live connection state in the status dot even while
                 // idle (no in-flight call). The gateway-event channel never
                 // yields None on a WS drop — the client keeps an ownership anchor
@@ -422,6 +464,22 @@ async fn main_loop<'c>(
                 if state.current_run.is_some() && state.spinner_frame.is_multiple_of(20) {
                     approval::poll_approvals(state, client).await;
                 }
+                needs_redraw = should_redraw_after_tick(
+                    // `state.dialog` (the AskUser overlay) is OR'd in for the
+                    // same reason as `btw`: `StreamEvent::AskUser` is exempt
+                    // from the cross-session run-id guard by design (see
+                    // `events::run_scoped_id`) so a background/delegated
+                    // run's clarification can reach an otherwise-idle screen
+                    // — `an_ask_user_from_another_sessions_run_is_still_shown`
+                    // exercises exactly this with `current_run` staying
+                    // `None` throughout. Its `Action::None` return means the
+                    // tick that shows it for the first time has to be the one
+                    // that decides to redraw, not some later action.
+                    state.current_run.is_some()
+                        || state.btw.active_run_id().is_some()
+                        || state.dialog.is_some(),
+                    state.is_connected != was_connected,
+                );
             }
 
             // -- Chat --
@@ -653,7 +711,7 @@ async fn main_loop<'c>(
 
 #[cfg(test)]
 mod tests {
-    use super::{model_caption, ModelCaption};
+    use super::{model_caption, should_redraw_after_tick, ModelCaption};
     use aleph_client::CliError;
     use aleph_protocol::jsonrpc::{ADMIN_REQUIRED_MESSAGE, AUTH_REQUIRED};
     use aleph_protocol::providers::ProviderInfo;
@@ -712,6 +770,21 @@ mod tests {
             .as_ref()
             .unwrap()
             .contains("no response in 30s"));
+    }
+
+    #[test]
+    fn tick_with_no_active_run_and_no_connection_change_does_not_redraw() {
+        assert!(!should_redraw_after_tick(false, false));
+    }
+
+    #[test]
+    fn tick_with_an_active_run_redraws_to_animate_the_spinner() {
+        assert!(should_redraw_after_tick(true, false));
+    }
+
+    #[test]
+    fn tick_with_a_connection_state_change_redraws_even_when_idle() {
+        assert!(should_redraw_after_tick(false, true));
     }
 }
 
