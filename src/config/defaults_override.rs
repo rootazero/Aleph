@@ -92,8 +92,13 @@ static DEFAULTS_OVERRIDE: CapabilitySlot<DefaultsOverride> = CapabilitySlot::new
 /// to `DefaultsOverride` is a compile error here rather than a silently
 /// widened default.
 ///
-/// ⚠️ **This is the one BEHAVIOUR change in the batch, and it is a fix.** The
-/// old accessor was `get_or_init(DefaultsOverride::default)`, which **latched**
+/// ⚠️ **This is the one BEHAVIOUR change in this file's batch, and it is a
+/// fix.** The round makes exactly one other, in [`crate::spend`]'s
+/// `global_ledger` — the same `get_or_init` latch on a different handle, and
+/// that file says so too. (Both sentences used to claim to be the only one;
+/// read at the level of the round, which is how a later reader reads them,
+/// they contradict.) The old accessor was
+/// `get_or_init(DefaultsOverride::default)`, which **latched**
 /// the empty default into the cell on first read. `Config::load` calls
 /// [`init_defaults_override`] only when `get_config_dir()` succeeds (`load.rs`,
 /// inside `if let Some(ref dir) = config_dir`) but calls

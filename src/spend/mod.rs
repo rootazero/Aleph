@@ -375,8 +375,12 @@ static GLOBAL_LEDGER: CapabilitySlot<Arc<dyn SpendLedger>> = CapabilitySlot::new
 /// caller shares one in-memory ledger, so spend recorded through it
 /// accumulates) while leaving `GLOBAL_LEDGER.outcome()` honestly `None`.
 ///
-/// ⚠️ One deliberate behavioural delta, and it is the only one in this
-/// migration: the old `GLOBAL_LEDGER.get_or_init` LATCHED the fallback into the
+/// ⚠️ One deliberate behavioural delta, and it is the only one **this file's**
+/// migration makes. The round makes exactly one other, in
+/// [`crate::config::defaults_override`], and it is the same latch on a
+/// different handle — that file says so too. (Both sentences used to read "the
+/// only one", which at the level a later reader reads them is a
+/// contradiction.) Here: the old `GLOBAL_LEDGER.get_or_init` LATCHED the fallback into the
 /// handle, so any read before boot made the subsequent `install_ledger` a
 /// silent no-op. Now boot's install wins. In production nothing reads before
 /// `start/mod.rs` installs the durable backend, so the window is theoretical
