@@ -192,6 +192,16 @@ impl<T: Send + Sync + 'static> SlotStatus for CapabilitySlot<T> {
 /// future call site must remember rather than something the type enforces.
 /// That is the discipline-instead-of-construction failure the module doc opens
 /// with. Re-ask if `update`'s return ever stops being load-bearing.
+///
+/// ⚠️ **No `decline` here, deliberately.** The symmetric method existed with
+/// zero callers in the whole workspace — production *or* test — and was
+/// withdrawn (R10) rather than left as a hook for later. It has no reachable
+/// caller by construction, not by omission: `spend::install_policy` is called
+/// unconditionally at boot, so this slot has no `else` arm for a decline to
+/// live in, and it is the only member of the type. Restore it in the same
+/// change that adds a conditional install, not before —
+/// `census::every_public_slot_method_has_a_production_caller` will name it the
+/// moment it goes back in without one.
 pub struct MutableCapabilitySlot<T: 'static> {
     id: &'static str,
     missing: MissingSemantics,
@@ -238,10 +248,6 @@ impl<T: 'static> MutableCapabilitySlot<T> {
             }
             None => false,
         }
-    }
-
-    pub fn decline(&'static self, because: &'static str) {
-        let _ = self.outcome.set(Outcome::Declined { because });
     }
 
     #[inline]

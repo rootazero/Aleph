@@ -241,7 +241,7 @@
 //! round's ledger is a gap the next reader never sees.
 
 use crate::utils::source_scan::{
-    cfg_test_portion, production_prefix, rust_sources_under, strip_comment_lines,
+    cfg_test_portion, code_text, production_prefix, rust_sources_under, strip_comment_lines,
 };
 
 /// One process-global container `static`, as the rule sees it.
@@ -2791,6 +2791,179 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
              own file, so the handles they speak for read as a bare 'never \
              reached' — either wire them where the install is skipped, or delete \
              them (R10):\n  {orphans:?}"
+        );
+    }
+
+    /// Whitespace removed around `.` and `::`, so a call split across lines
+    /// reads the same as one written inline.
+    ///
+    /// `GLOBAL_POLICY\n        .update(policy)` is the shape this exists for:
+    /// the round's own review had to hand-write a newline-tolerant scan to
+    /// answer the same question about the same static.
+    fn tighten(src: &str) -> String {
+        let mut out = String::with_capacity(src.len());
+        let mut gap = false;
+        for c in src.chars() {
+            if c.is_whitespace() {
+                gap = true;
+                continue;
+            }
+            if gap {
+                if c != '.' && !out.ends_with('.') && !out.ends_with(':') {
+                    out.push(' ');
+                }
+                gap = false;
+            }
+            out.push(c);
+        }
+        out
+    }
+
+    /// Every `pub` method on the two slot types has a production call site.
+    ///
+    /// # The blind spot this closes
+    ///
+    /// [`every_decline_wrapper_has_a_production_caller`] is the round's guard
+    /// for exactly this class, and it could not see
+    /// `MutableCapabilitySlot::decline` — zero callers anywhere, production or
+    /// test. Two correct rules left a gap between them: that guard's subject is
+    /// the derived set of `decline_*` **wrapper functions** in slot modules,
+    /// and its scan skips `src/capability/` outright so the census cannot audit
+    /// itself. A `decline` **method on the slot type** is outside both.
+    ///
+    /// # Why this is receiver-typed and not name-based
+    ///
+    /// The obvious cheap rule — "does `.decline(` appear anywhere" — is green
+    /// on precisely the instance that motivated it: `CapabilitySlot::decline`
+    /// has 29 call sites, and a name-only scan cannot tell them from the
+    /// `MutableCapabilitySlot` method of the same name with none. So call sites
+    /// are resolved against the statics **declared with that type**, read out
+    /// of the tree by the same `static NAME: …Slot<` shape the roster guards
+    /// use, plus the `Type::method(` path form.
+    ///
+    /// # What it can and cannot see
+    ///
+    /// - *Sees*: `pub fn` / `pub const fn` in the INHERENT impls of
+    ///   `CapabilitySlot` / `MutableCapabilitySlot`, and their calls anywhere
+    ///   in the production half of `src/**` — including inside
+    ///   `src/capability/` itself, because `SlotStatus`'s forwarding body is a
+    ///   genuine dispatch path and not self-audit.
+    /// - *Blind to* trait-impl methods (`SlotStatus::{id,missing,outcome}`).
+    ///   They are not `pub fn`, and their consumer is `&dyn SlotStatus` in the
+    ///   diagnostic — a different question, already answered by
+    ///   `every_declared_slot_is_in_the_roster`.
+    /// - *Blind to* a call through a `&'static` handle passed as a parameter
+    ///   (`fn f(h: &'static MutableCapabilitySlot<T>) { h.update(..) }`). There
+    ///   is no such indirection today — `spend` calls every method directly on
+    ///   the static, and its doc records that the injectable
+    ///   `update_policy_into(handle, ..)` seam was REMOVED. If one returns,
+    ///   this guard over-reports rather than under-reports, which is the
+    ///   direction a reader can act on.
+    /// - *Blind to* a method that is called only from the `#[cfg(test)]` half.
+    ///   That is deliberate: R10 asks for a **production** consumer, which is
+    ///   also what [`every_decline_wrapper_has_a_production_caller`] asks.
+    #[test]
+    fn every_public_slot_method_has_a_production_caller() {
+        const TYPES: [&str; 2] = ["MutableCapabilitySlot", "CapabilitySlot"];
+        let sources = rust_sources_under(&manifest_src());
+
+        // Declarations, read out of the inherent impls.
+        let mod_rs = sources
+            .iter()
+            .find(|(rel, _)| rel == "src/capability/mod.rs")
+            .map(|(_, t)| code_text(&production_prefix(t)))
+            .expect("src/capability/mod.rs must be readable");
+        let mut declared: Vec<(&'static str, String)> = Vec::new();
+        let mut current: Option<&'static str> = None;
+        for line in mod_rs.lines() {
+            if line.starts_with('}') {
+                current = None;
+            }
+            let t = line.trim_start();
+            if t.starts_with("impl") {
+                // `impl<..> Trait for Type` is a trait impl: its methods are
+                // reached through the trait object, not by name here.
+                current = if t.contains(" for ") {
+                    None
+                } else {
+                    TYPES.iter().find(|ty| t.contains(&format!("{ty}<"))).copied()
+                };
+                continue;
+            }
+            let Some(ty) = current else { continue };
+            let Some(rest) = t
+                .strip_prefix("pub const fn ")
+                .or_else(|| t.strip_prefix("pub fn "))
+            else {
+                continue;
+            };
+            let name = rest.split(['(', '<']).next().unwrap_or("").trim();
+            if !name.is_empty() {
+                declared.push((ty, name.to_string()));
+            }
+        }
+
+        // Receivers: the statics actually declared with each type.
+        let mut receivers: std::collections::BTreeMap<&'static str, Vec<String>> =
+            std::collections::BTreeMap::new();
+        for (_, text) in &sources {
+            for line in production_prefix(text).lines() {
+                let t = strip_visibility(line.trim_start());
+                let Some(rest) = t.strip_prefix("static ") else {
+                    continue;
+                };
+                let Some((name, after)) = rest.split_once(':') else {
+                    continue;
+                };
+                let head = after.split_once('<').map_or(after, |(h, _)| h).trim();
+                let head = head.rsplit("::").next().unwrap_or(head);
+                if let Some(ty) = TYPES.iter().find(|ty| **ty == head) {
+                    receivers
+                        .entry(ty)
+                        .or_default()
+                        .push(name.trim().to_string());
+                }
+            }
+        }
+
+        let corpus: String = sources
+            .iter()
+            .map(|(_, t)| tighten(&code_text(&production_prefix(t))))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Self-counts. MEASURED by raising these floors and reading the
+        // failure message, not estimated: 10 public methods (5 per type),
+        // 45 `CapabilitySlot` statics, 1 `MutableCapabilitySlot`.
+        assert!(
+            declared.len() >= 8,
+            "parsed only {} public slot method(s) out of src/capability/mod.rs — a \
+             guard that found no declarations passes by examining nothing",
+            declared.len()
+        );
+        for ty in TYPES {
+            assert!(
+                receivers.get(ty).is_some_and(|r| !r.is_empty()),
+                "no `static _: {ty}<..>` found; call sites for its methods cannot be \
+                 resolved, so this guard would pass every one of them blindly"
+            );
+        }
+
+        let mut orphans: Vec<String> = Vec::new();
+        for (ty, method) in &declared {
+            let by_path = corpus.contains(&format!("{ty}::{method}("));
+            let by_receiver = receivers.get(ty).is_some_and(|rs| {
+                rs.iter().any(|r| corpus.contains(&format!("{r}.{method}(")))
+            });
+            if !by_path && !by_receiver {
+                orphans.push(format!("{ty}::{method}"));
+            }
+        }
+        assert!(
+            orphans.is_empty(),
+            "these public slot methods have no production call site — R10 says \
+             withdraw, not leave a hook for later. Delete them, or land them in \
+             the same change as the caller that needs them:\n  {orphans:?}"
         );
     }
 
