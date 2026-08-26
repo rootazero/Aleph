@@ -3510,6 +3510,11 @@
 | **间歇失败** | 红一次、绿两次；**单独跑必过** | 共享进程级状态的签名。**不是回归**，但也不是没事 |
 | **真回归** | 每次都红，**包括孤立跑** | 唯一的发现 |
 
+**本仓在册的实测观测**（都是**观测**，不是诊断；诊断没做就别写成做了）：
+
+- **F-2 · 挂住** —— `builtin_tools::desktop::tests::test_desktop_reports_legacy_snapshot_as_unsupported`，2026-08-26 在 capability-wiring 轮基线树上挂住 22 分钟零 CPU，同一次会话在该轮 HEAD 上通过。详见 §7.2。
+- **F-4 · 间歇失败（新，2026-08-26）** —— `gateway::handlers::chat::tests::visibility_guards::history_serves_the_durable_execution_list`，全量 `--lib` 跑 8 次红 1 次（`8baa2bb49`，macOS）。⚠️ **它在 2026-08-23 被记成「Windows-only 红，未诊断」，而这次是 macOS**——所以两种可能都要写下来：要么当初那个平台限定**太窄**，要么这是**同名的第二个机制**。**一份带平台限定的缺陷报告，说的是它在哪里被找过，不是它在哪里存在。** 唯一被廉价排除掉的假设：这条测试持有 `IsolatedAlephHome`（经 `AlephHomeEnvGuard::acquire_and_set` 拿 `ALEPH_HOME_TEST_GUARD`），所以**它不是 `ALEPH_HOME` 隔离那一类**——记下来是为了下一个人不用把这个假设再推一遍。未诊断，Task 17 报开放。
+
 - **⚠️ 四分类器的 BUILD-ERROR 桶里装着两种东西，而它们的处置相反。** 分类顺序必须是 `running 0 tests` ⇒ VACUOUS → `test result: FAILED` ⇒ RED → `test result: ok` ⇒ GREEN → 剩下的才是 BUILD-ERROR，**因为 cargo 对测试失败也打 `error:`、对真 RED 也打 `0 passed`**。而「没有 `test result:` 行」既是构建失败**也是跑挂了**——落进 BUILD-ERROR 时**先看有没有编译错误行**，没有就是挂了。这一类最贵的地方不在当次运行：**下一个去量基线的人会把这段时间再赔一遍**，因为挂的那条测试和它周围的一切在报告里长得一模一样。
 - **⚠️ 分类器是一件仪器，而一件没有在它将被用到的每个 crate 上跑过的仪器有一段未测量的量程。** 本轮那把是从 `alephcore` 的运行里写出来的，然后用在五个 crate 上。已知两处失准：`aleph-panel --lib` 里一次失败可以经 **wasm-bindgen 的 panic hook** 中止（panic-in-panic，SIGABRT）并且**一行 `test result:` 都不打**，于是被读成 BUILD-ERROR 而它其实是 RED——**在 `aleph-panel` 里，把"没有 `test result:` 行"读成 BUILD-ERROR 之前先查 SIGABRT**；而一次带过滤器的运行打出 `1 filtered out`，单独看就是**穿着 GREEN 外衣的 VACUOUS**，所以**把 GREEN 当成覆盖之前先看过滤计数**。
 - **一条把跳过理由打进 harness 会吞掉的那个流的 skip 守卫，等于为"没有运行"报告成功。** cargo 在 PASS 时捕获 stdout 与 stderr，所以那条唯一会告诉人的通道恰好在它要紧的时候是关的。非对称很重要：**跳过 8/8 说明这条测试是死的**（修复删掉了一具尸体）；**有时跳过更糟**——它在本地通过、在 CI 跳过，主动教人相信那条断言跑过了。修法是**把断言折进拥有那个进程级量的那一条测试里**，让顺序变成一个函数内的程序序而不是 libtest 的调度。**一条只在赢了竞态时才变红的守卫，教人重跑，不教人去看。**
