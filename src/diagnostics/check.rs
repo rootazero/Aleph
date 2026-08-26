@@ -224,6 +224,42 @@ pub(crate) fn unknown_finding(
     )
 }
 
+/// [`unknown_finding`] specialised to "a `spawn_blocking` probe never came
+/// back", which is the only way a check can be left with no answer at all.
+///
+/// A [`tokio::task::JoinError`] means the probe panicked or was cancelled: the
+/// check learned *nothing* about its subject. Folding that into the subject's
+/// own empty answer — `None`, `0`, an empty listing — is the [`Presence`]
+/// defect one layer up, and it is worse there than at a `stat` call, because
+/// the empty answer of a *singleton* probe is the reassuring one. `core/
+/// instance-lock` rendered `[ok] No lock held` and `core/duplicate-instance`
+/// rendered `[ok] Single instance` for a probe that had panicked; the second
+/// of those is the reassuring line in front of the exact condition
+/// `PROCESS_MANAGEMENT.md` names as vault data loss.
+///
+/// One helper rather than the arm spelled per check, so "the probe did not
+/// run" keeps meaning the same severity everywhere. `subject` is the noun
+/// phrase [`unknown_finding`] titles with — see [`Presence::of`].
+///
+/// # Errors
+///
+/// The ready-made `Warning` finding whenever the task did not complete.
+// The `Err` IS the finding this check will report; see `Presence::of`.
+#[allow(clippy::result_large_err)]
+pub(crate) fn settle_probe<T>(
+    check_id: &'static str,
+    subject: &str,
+    probe: Result<T, tokio::task::JoinError>,
+) -> Result<T, Finding> {
+    probe.map_err(|e| {
+        unknown_finding(
+            check_id,
+            subject,
+            format!("the {subject} probe task did not complete: {e}"),
+        )
+    })
+}
+
 /// [`unknown_finding`] specialised to "the filesystem refused to answer about
 /// this path", which is the only way [`Presence::of`] and [`DirListing::of`]
 /// fail.
@@ -340,5 +376,31 @@ mod tests {
         assert_eq!(f.severity, Severity::Warning);
         assert_eq!(f.title, "Free disk space unknown");
         assert!(f.is_problem(), "an unknown must never read as a pass");
+    }
+
+    /// Uses a real `JoinError` from a real panicked task rather than a
+    /// hand-built one, so it exercises the arm production takes — same shape
+    /// as `browser_runtime`'s `a_probe_that_could_not_run_is_not_a_missing_prerequisite`.
+    #[tokio::test]
+    async fn a_probe_that_did_not_run_is_not_an_answer() {
+        let joined: Result<usize, tokio::task::JoinError> =
+            tokio::task::spawn_blocking(|| panic!("probe blew up")).await;
+        assert!(joined.is_err(), "precondition: the task must have failed");
+
+        let f = settle_probe("core/test", "Widget count", joined)
+            .err()
+            .expect("a task that did not complete must not settle into a count");
+        assert_eq!(f.severity, Severity::Warning);
+        assert_eq!(f.title, "Widget count unknown");
+        assert!(f.is_problem(), "an unknown must never render as [ok]");
+    }
+
+    /// The success direction, so the helper is not "always an error" by
+    /// accident — a wrapper that never yields `Ok` would pass the test above
+    /// and break every caller.
+    #[tokio::test]
+    async fn a_probe_that_did_run_settles_into_its_value() {
+        let joined = tokio::task::spawn_blocking(|| 7usize).await;
+        assert_eq!(settle_probe("core/test", "Widget count", joined).ok(), Some(7));
     }
 }

@@ -28,7 +28,7 @@
 use async_trait::async_trait;
 
 use crate::browser::{find_chromium, BrowserError};
-use crate::diagnostics::check::{unknown_finding, HealthCheck, Posture};
+use crate::diagnostics::check::{settle_probe, unknown_finding, HealthCheck, Posture};
 use crate::diagnostics::finding::Finding;
 
 const ID: &str = "browser/runtime";
@@ -157,14 +157,12 @@ fn settle<T>(
     subject: &str,
     probe: Result<Result<T, String>, tokio::task::JoinError>,
 ) -> Result<T, Finding> {
-    match probe {
-        Ok(Ok(v)) => Ok(v),
-        Ok(Err(why)) => Err(unknown_finding(ID, subject, why)),
-        Err(e) => Err(unknown_finding(
-            ID,
-            subject,
-            format!("the {subject} probe task did not complete: {e}"),
-        )),
+    // The outer `Result` — "did the task come back at all" — is not this
+    // file's question to answer: `check::settle_probe` owns it for every
+    // check, so the sentence a panicked probe produces has one author.
+    match settle_probe(ID, subject, probe)? {
+        Ok(v) => Ok(v),
+        Err(why) => Err(unknown_finding(ID, subject, why)),
     }
 }
 
