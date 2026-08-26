@@ -90,6 +90,100 @@ mod presence_discipline {
         ),
     ];
 
+    /// Does `line` use `marker` as a token, rather than as the tail of a longer
+    /// identifier?
+    ///
+    /// Whether a left boundary is required is DERIVED from the marker itself
+    /// rather than carried as a per-entry flag, so a marker added later cannot
+    /// forget to declare which kind it is: a marker that opens with an
+    /// identifier character needs one, a marker that opens with punctuation
+    /// does not. `.exists()` opens with `.`, so `path.exists()` must still
+    /// match even though `h` precedes the dot. `Err(_` and `read_dir` open with
+    /// a letter, so `ParseErr(_)` and a hypothetical `spread_dir` must not.
+    ///
+    /// This exists because the widened `Err(` marker fired on
+    /// `enum FakeEnum { ParseErr(u32) }` — no `Result`, no discarded error,
+    /// nothing to do with the rule. Measured across `src/`, three real
+    /// occurrences of that lexical shape exist today (`UnwrapErr(SysRng)`, in
+    /// `gateway/security/{crypto,canvas_caps,artifact_caps}.rs`), none of them
+    /// inside this directory — so the class is real rather than hypothetical,
+    /// and tightening changes nothing about today's verdict.
+    ///
+    /// A rule that is LOOSER in the tree than in its doc is worse than one that
+    /// is tighter: a guard that can fire on innocent code gets edited around by
+    /// whoever it blocks, or gets cited as evidence for something it did not
+    /// see. Both cost more than missing a spelling.
+    ///
+    /// All occurrences on the line are considered, not just the first — a
+    /// `match` arm list can hold an innocent lookalike and a real offender on
+    /// one line.
+    fn uses_marker(line: &str, marker: &str) -> bool {
+        fn ident(c: char) -> bool {
+            c.is_alphanumeric() || c == '_'
+        }
+        let needs_left_boundary = marker.chars().next().is_some_and(ident);
+        line.match_indices(marker).any(|(at, _)| {
+            !needs_left_boundary || line[..at].chars().next_back().is_none_or(|c| !ident(c))
+        })
+    }
+
+    /// The guard's one permanent NEGATIVE case: proof it stays quiet when it
+    /// should, not just that it fires when it should.
+    ///
+    /// Every falsification of this guard so far has been "break the production
+    /// code, watch it go RED". None of them could show the other half, because
+    /// a green scan of a directory that contains no lookalikes proves nothing
+    /// about lookalikes. Asserting on the predicate is the level where both
+    /// halves are expressible: `uses_marker` is the scan's *only* decision, so
+    /// a predicate that is right on these inputs is a scanner that is right on
+    /// them.
+    ///
+    /// That equivalence was checked once rather than argued: the whole
+    /// lookalike set below was planted into `vault.rs` as real production text
+    /// — `enum FakeEnum { ParseErr(u32), IoErr(u32) }` with matching arms,
+    /// `UnwrapErr(SysRng)`, `fn spread_dir()` — and the scanner stayed GREEN,
+    /// while the five real spellings planted across five files each went RED
+    /// naming their file. A permanent file-level negative is deliberately NOT
+    /// kept: it would mean shipping a fixture inside
+    /// `src/diagnostics/checks/`, i.e. production code whose only purpose is
+    /// to be scanned. Stated so the narrower standing guarantee is not read as
+    /// the wider one-off check.
+    ///
+    /// The lookalikes are not invented: `ParseErr(_)` is the plant that
+    /// exposed the bug, and `UnwrapErr(` occurs three times in `src/` today.
+    #[test]
+    fn the_marker_matcher_fires_on_real_spellings_and_stays_quiet_on_lookalikes() {
+        // Fires — every spelling the rule claims to cover.
+        for (line, marker) in [
+            ("        Err(_) => ChromiumProbe::Missing,", "Err(_"),
+            ("        Err(_e) => Ok(NodeProbe::Missing),", "Err(_"),
+            ("        Err(_err) => 0,", "Err(_"),
+            ("        Err(..) => Ok(()),", "Err(..)"),
+            ("        Result::Err(_) => 0,", "Err(_"),
+            ("        Ok(v) => v, Err(_) => 0,", "Err(_"),
+            ("Err(_) => 0,", "Err(_"),
+            ("    let e = std::fs::read_dir(dir);", "read_dir"),
+            ("    if !self.vault_path.exists() {", ".exists()"),
+        ] {
+            assert!(uses_marker(line, marker), "must flag `{marker}` in: {line}");
+        }
+
+        // Stays quiet — the tail of a longer identifier is not the token.
+        for (line, marker) in [
+            ("        ParseErr(_) => 0,", "Err(_"),
+            ("        IoErr(_e) => 0,", "Err(_"),
+            ("        MyErr(..) => 0,", "Err(..)"),
+            ("    let _: UnwrapErr(SysRng);", "Err(_"),
+            ("    fn spread_dir() {}", "read_dir"),
+            ("    let x = 0;", "Err(_"),
+        ] {
+            assert!(
+                !uses_marker(line, marker),
+                "must NOT flag `{marker}` in: {line}"
+            );
+        }
+    }
+
     /// A check must never dress "I could not look" as "there is nothing there".
     ///
     /// Eight production sites across **eight** files in this directory did
@@ -147,6 +241,10 @@ mod presence_discipline {
     ///   gets cited as evidence.
     /// - *Blind to* runtime behaviour generally: this is a spelling rule. It
     ///   cannot see a new conflating API, only the shapes that were used here.
+    /// - Markers are matched as tokens, not as bare substrings — see
+    ///   [`uses_marker`]. That is a deliberate trade in the safe direction: the
+    ///   rule now misses an `Err(_)` written with a zero-width character before
+    ///   it, and no longer accuses `ParseErr(_)` of anything.
     /// - **No allowlist, by construction.** If a site genuinely needs a bare
     ///   `.exists()`, the answer is that `check::Presence` is missing a case —
     ///   extend it there, where every check inherits the fix.
@@ -180,7 +278,7 @@ mod presence_discipline {
             }
             for line in prod.lines() {
                 for (marker, replacement) in CONFLATING {
-                    if line.contains(marker) {
+                    if uses_marker(line, marker) {
                         offenders.push(format!(
                             "{rel}: `{}` — `{marker}` cannot tell absence from a refusal to \
                              look. Use {replacement}.",
