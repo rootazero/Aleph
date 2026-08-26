@@ -350,7 +350,21 @@ async fn main_loop<'c>(
                 // the AskUser dialog, a streamed chunk) while returning
                 // Action::None.
                 needs_redraw = true;
-                state.handle_gateway_event(ge)
+                let mut action = state.handle_gateway_event(ge);
+                // Coalesce a burst: chunks already queued behind this one
+                // are state mutations that need ONE draw, not one draw
+                // each. Draining costs zero added latency (these events
+                // already arrived — nothing is waited for) and collapses a
+                // high-rate token stream into far fewer terminal draws. The
+                // first frame of a run is unaffected: the loop-top draw
+                // fires immediately after this branch either way.
+                while let Ok(queued) = gateway_events.try_recv() {
+                    let next = state.handle_gateway_event(queued);
+                    if !matches!(next, Action::None) {
+                        action = next;
+                    }
+                }
+                action
             }
             _ = tick_interval.tick() => {
                 Action::Tick
