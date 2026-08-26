@@ -290,14 +290,16 @@ fn render_streaming(content: &str) -> String {
 /// to the typewriter's current `revealed` char count) — NOT just the new
 /// characters, since [`shared_ui_logic::markdown_stream::safe_freeze_offset`]
 /// needs to see any fence/reference-link-def state spanning the cached
-/// boundary and the newly-revealed text. Returns the extended
-/// `(html, new_safe_offset)`; when no further progress is safe, `html` is
-/// unchanged and `new_safe_offset == cached_offset`.
+/// boundary and the newly-revealed text. Mutates `cached_html` /
+/// `cached_offset` in place and returns whether the boundary advanced: the
+/// no-progress path is deliberately copy-free (the old signature returned
+/// fresh copies, which made every no-advance animation frame an O(prefix)
+/// `String` clone).
 fn extend_stable_prefix(
-    cached_html: &str,
-    cached_offset: usize,
+    cached_html: &mut String,
+    cached_offset: &mut usize,
     revealed_prefix: &str,
-) -> (String, usize) {
+) -> bool {
     // A cached offset can outlive the content it was computed against:
     // `set_step_text` replaces a still-streaming bubble's content wholesale
     // (shorter authoritative text can replace a longer streamed preview)
@@ -305,19 +307,19 @@ fn extend_stable_prefix(
     // longer be a valid boundary into `revealed_prefix`. Treat that as "no
     // cache" rather than trusting a stale offset — falls back to full
     // reprocessing of `revealed_prefix` from scratch, per this module's
-    // "never wrong in the unsafe direction" contract. (`get(..0)` is always
-    // `Some("")`, so this recurses at most once.)
-    if revealed_prefix.get(..cached_offset).is_none() {
-        return extend_stable_prefix("", 0, revealed_prefix);
+    // "never wrong in the unsafe direction" contract.
+    if revealed_prefix.get(..*cached_offset).is_none() {
+        cached_html.clear();
+        *cached_offset = 0;
     }
-    match shared_ui_logic::markdown_stream::safe_freeze_offset(revealed_prefix, cached_offset) {
-        Some(new_offset) if new_offset > cached_offset => {
-            let delta = &revealed_prefix[cached_offset..new_offset];
-            let mut html = cached_html.to_string();
-            html.push_str(&render_streaming(delta));
-            (html, new_offset)
+    match shared_ui_logic::markdown_stream::safe_freeze_offset(revealed_prefix, *cached_offset) {
+        Some(new_offset) if new_offset > *cached_offset => {
+            let delta = &revealed_prefix[*cached_offset..new_offset];
+            cached_html.push_str(&render_streaming(delta));
+            *cached_offset = new_offset;
+            true
         }
-        _ => (cached_html.to_string(), cached_offset),
+        _ => false,
     }
 }
 
@@ -450,14 +452,13 @@ pub fn TypewriterRenderer(
             }
             content.with_value(|c| {
                 let revealed_prefix: String = c.chars().take(revealed).collect();
-                let (cached_html, cached_offset) = clock.stable_prefix_for(&id).unwrap_or_default();
-                let (html, safe_offset) =
-                    extend_stable_prefix(&cached_html, cached_offset, &revealed_prefix);
-                if safe_offset != cached_offset {
-                    clock.set_stable_prefix(&id, html.clone(), safe_offset);
+                let (mut cached_html, mut cached_offset) =
+                    clock.stable_prefix_for(&id).unwrap_or_default();
+                if extend_stable_prefix(&mut cached_html, &mut cached_offset, &revealed_prefix) {
+                    clock.set_stable_prefix(&id, cached_html.clone(), cached_offset);
                 }
-                let tail = &revealed_prefix[safe_offset..];
-                format!("{html}{}{STREAMING_CURSOR_HTML}", render_streaming(tail))
+                let tail = &revealed_prefix[cached_offset..];
+                format!("{cached_html}{}{STREAMING_CURSOR_HTML}", render_streaming(tail))
             })
         }
     };
@@ -568,17 +569,23 @@ mod tests {
 
     #[test]
     fn extend_stable_prefix_appends_only_the_new_safe_delta() {
-        let (html, offset) = extend_stable_prefix("", 0, "line one\nline two\n");
+        let mut html = String::new();
+        let mut offset = 0;
+        assert!(extend_stable_prefix(&mut html, &mut offset, "line one\nline two\n"));
         assert_eq!(offset, "line one\nline two\n".len());
         assert!(html.contains("line one"));
         assert!(html.contains("line two"));
 
         // Simulate the next tick: more text arrived, cache reused.
-        let (html2, offset2) =
-            extend_stable_prefix(&html, offset, "line one\nline two\nline three\n");
-        assert_eq!(offset2, "line one\nline two\nline three\n".len());
-        assert!(html2.starts_with(&html), "must extend, not rebuild");
-        assert!(html2.contains("line three"));
+        let before = html.clone();
+        assert!(extend_stable_prefix(
+            &mut html,
+            &mut offset,
+            "line one\nline two\nline three\n"
+        ));
+        assert_eq!(offset, "line one\nline two\nline three\n".len());
+        assert!(html.starts_with(&before), "must extend, not rebuild");
+        assert!(html.contains("line three"));
     }
 
     #[test]
@@ -587,7 +594,9 @@ mod tests {
         // have returned — i.e. a complete-line boundary (here: 0, "nothing
         // cached yet"). An unclosed fence with no other complete line makes
         // no further progress safe, so the cache must pass through unchanged.
-        let (html, offset) = extend_stable_prefix("<cached>", 0, "```rust\n");
+        let mut html = "<cached>".to_string();
+        let mut offset = 0;
+        assert!(!extend_stable_prefix(&mut html, &mut offset, "```rust\n"));
         assert_eq!(html, "<cached>");
         assert_eq!(offset, 0);
     }
@@ -598,8 +607,9 @@ mod tests {
         // shorter authoritative text without flipping is_streaming — the
         // stale cached_html must be discarded, not reused, once the cached
         // offset no longer fits the new content.
-        let stale_cached_html = "<p>this describes text that no longer exists</p>";
-        let (html, offset) = extend_stable_prefix(stale_cached_html, 60, "short\n");
+        let mut html = "<p>this describes text that no longer exists</p>".to_string();
+        let mut offset = 60;
+        extend_stable_prefix(&mut html, &mut offset, "short\n");
         assert_eq!(offset, "short\n".len());
         assert!(
             !html.contains("no longer exists"),
@@ -612,7 +622,9 @@ mod tests {
         // Regression: must not panic (byte-index-out-of-bounds) when a
         // wholesale content replacement leaves cached_offset pointing past
         // the end of the new, shorter text.
-        let (_html, offset) = extend_stable_prefix("<cached>", 100, "ab\n");
+        let mut html = "<cached>".to_string();
+        let mut offset = 100;
+        extend_stable_prefix(&mut html, &mut offset, "ab\n");
         assert!(offset <= "ab\n".len());
     }
 }
