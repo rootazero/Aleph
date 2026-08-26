@@ -50,7 +50,7 @@ pub use vault::VaultCheck;
 #[cfg(test)]
 mod presence_discipline {
     use crate::utils::source_scan::{
-        code_text, production_prefix, rust_sources_under, strip_comment_lines,
+        code_text, production_code_lines, production_prefix, rust_sources_under,
     };
 
     /// Spellings that answer "is it there?" with `false` for BOTH "it is not
@@ -195,7 +195,14 @@ mod presence_discipline {
         guard: String,
         /// Everything the arm evaluates, block braces included.
         body: String,
-        /// 1-based line of the `Err(` token, so an offender can be opened.
+        /// 1-based line of the `Err(` token **in the file itself**, so an
+        /// offender can be opened.
+        ///
+        /// This is why the scan reads `production_code_lines` rather than
+        /// `strip_comment_lines(production_prefix(..))`: both of those delete
+        /// lines, so counting `'\n'` in their output produced a number that
+        /// pointed at innocent code — 19 lines short on the first real
+        /// offender, in a directory that is ~40% doc comment.
         line: usize,
     }
 
@@ -464,7 +471,7 @@ mod presence_discipline {
     ///   asks about the error rather than about the value.
     ///
     /// - *Blind to* a trailing comment on a code line. This scans
-    ///   `strip_comment_lines`, not `code_text`, because `code_text` blanks
+    ///   `production_code_lines`, not `code_text`, because `code_text` blanks
     ///   string INTERIORS — and `format!("… {e}")` is how almost every correct
     ///   arm in this directory carries its error, so scanning `code_text` here
     ///   reported all sixteen of them as offenders. `strip_comment_lines` drops
@@ -473,8 +480,8 @@ mod presence_discipline {
     ///   under-see direction on a rule whose over-see direction is a false
     ///   accusation, which is the trade this directory already made once.
     ///
-    /// CRLF-safe by the same route as its sibling: `production_prefix` and
-    /// `strip_comment_lines` both drop `\r` first.
+    /// CRLF-safe by the same route as its sibling: `production_code_lines`
+    /// drops `\r` before anything else.
     #[test]
     fn no_check_folds_a_bound_error_into_an_answer() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -487,7 +494,7 @@ mod presence_discipline {
         let mut arms_examined = 0usize;
 
         for (rel, text) in &sources {
-            for arm in err_arms(&strip_comment_lines(&production_prefix(text))) {
+            for arm in err_arms(&production_code_lines(text)) {
                 arms_examined += 1;
                 if mentions(&arm.guard, &arm.binding) {
                     continue;

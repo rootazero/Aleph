@@ -57,7 +57,7 @@
 /// outer attribute before reaching them.
 #[must_use]
 pub fn production_prefix(src: &str) -> String {
-    partition_on_cfg_test(src).0
+    partition_on_cfg_test(src, Removed::Dropped).0
 }
 
 /// The other half: every line [`production_prefix`] removes — each
@@ -84,11 +84,22 @@ pub fn production_prefix(src: &str) -> String {
 /// their "test portion".
 #[must_use]
 pub fn cfg_test_portion(src: &str) -> String {
-    partition_on_cfg_test(src).1
+    partition_on_cfg_test(src, Removed::Dropped).1
+}
+
+/// What the production half does with a line that belongs to the test half.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Removed {
+    /// Delete it — the output is text only, and offsets into it are not line
+    /// numbers of anything.
+    Dropped,
+    /// Replace it with an empty line, so the output still numbers like the
+    /// file it came from.
+    Blanked,
 }
 
 /// One walk, both halves: `(production, cfg-test)`.
-fn partition_on_cfg_test(src: &str) -> (String, String) {
+fn partition_on_cfg_test(src: &str, removed: Removed) -> (String, String) {
     let normalized = src.replace('\r', "");
     let lines: Vec<&str> = normalized.split('\n').collect();
     let mut out: Vec<&str> = Vec::with_capacity(lines.len());
@@ -109,10 +120,16 @@ fn partition_on_cfg_test(src: &str) -> (String, String) {
             // Dangling attribute at EOF. It is not production; it applies to
             // no item, so the test half is where it belongs.
             test.extend_from_slice(&lines[i..]);
+            if removed == Removed::Blanked {
+                out.resize(lines.len(), "");
+            }
             break;
         }
         let end = end_of_item(&lines, item);
         test.extend_from_slice(&lines[i..end]);
+        if removed == Removed::Blanked {
+            out.resize(end, "");
+        }
         i = end;
     }
     (out.join("\n"), test.join("\n"))
@@ -440,11 +457,52 @@ pub fn strip_comment_lines(src: &str) -> String {
     let mut state = LexState::default();
     src.replace('\r', "")
         .lines()
-        .filter(|line| {
-            let entered_in_str = state.in_str;
-            let code = code_only(line, &mut state);
-            entered_in_str || line.trim().is_empty() || !code.trim().is_empty()
-        })
+        .filter(|line| line_is_code(line, &mut state))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Does this line carry anything but comment?
+///
+/// One author for the predicate, because [`strip_comment_lines`] and
+/// [`production_code_lines`] ask exactly this question and answer it
+/// differently only in what they do with a `false` — drop the line, or blank
+/// it. `state` must be threaded in line order: [`code_only`] is what advances
+/// it, and `in_str` is read BEFORE that call on purpose (see
+/// [`strip_comment_lines`]'s doc).
+fn line_is_code(line: &str, state: &mut LexState) -> bool {
+    let entered_in_str = state.in_str;
+    let code = code_only(line, state);
+    entered_in_str || line.trim().is_empty() || !code.trim().is_empty()
+}
+
+/// The production half with comment-only lines blanked — **and line numbers
+/// that still match the file the reader will open**.
+///
+/// `strip_comment_lines(production_prefix(src))` answers the same question
+/// about the TEXT and is the right call whenever only the text matters. Both
+/// of those DELETE lines, though, so an offset into their output is not a line
+/// number of anything: `production_prefix` removes each `#[cfg(test)]` item and
+/// `strip_comment_lines` removes each comment-only line.
+///
+/// This exists because a guard reported one anyway.
+/// `diagnostics::checks::presence_discipline::no_check_folds_a_bound_error_into_an_answer`
+/// counted `'\n'` in the stripped text and printed the result as a file line
+/// "so an offender can be opened" — in a directory that is ~40% doc comment,
+/// off by 19 lines on the first real offender. The number pointed at innocent
+/// code, which is worse than printing no number: a reader who opens it
+/// concludes the guard is broken.
+///
+/// Blanking rather than deleting keeps every other property the two callers
+/// rely on — the same predicate decides comment lines, and the same walk
+/// decides test items, so this cannot drift from either.
+#[must_use]
+pub fn production_code_lines(src: &str) -> String {
+    let production = partition_on_cfg_test(src, Removed::Blanked).0;
+    let mut state = LexState::default();
+    production
+        .lines()
+        .map(|line| if line_is_code(line, &mut state) { line } else { "" })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -726,6 +784,40 @@ pub fn after() {}
     /// them, and together they reconstruct the file. Asserted rather than
     /// assumed, because the whole point of deriving the test half from this
     /// walk is that it cannot disagree with the production half.
+    /// The property `production_code_lines` exists for, stated against its
+    /// deleting counterpart so the difference is visible rather than asserted.
+    ///
+    /// A guard reported a line number off by 19 because it counted `'\n'` in
+    /// the deleting pair's output. Both halves are checked here: the line
+    /// numbering is preserved, and the pair it replaces really does move it.
+    #[test]
+    fn production_code_lines_numbers_like_the_file_and_the_deleting_pair_does_not() {
+        let src = "//! doc line\n//! doc line two\n\nfn a() {}\n\n#[cfg(test)]\nmod t {\n    fn x() {}\n}\n\nfn b() {}\n";
+        let kept = production_code_lines(src);
+        let deleted = strip_comment_lines(&production_prefix(src));
+
+        let at = |text: &str| {
+            text.lines()
+                .position(|l| l.contains("fn b()"))
+                .expect("the marker line must survive both")
+        };
+        assert_eq!(
+            kept.lines().count(),
+            src.lines().count(),
+            "blanking must not change the line count"
+        );
+        assert_eq!(at(&kept), at(src), "the marker must keep its file line");
+        assert_ne!(
+            at(&deleted),
+            at(src),
+            "precondition: the deleting pair really does renumber -- if this \
+             ever stops holding, the function above has no reason to exist"
+        );
+        // The removed regions are blank, not gone.
+        assert_eq!(kept.lines().next().unwrap(), "", "doc line blanked");
+        assert_eq!(kept.lines().nth(5).unwrap(), "", "#[cfg(test)] line blanked");
+    }
+
     #[test]
     fn the_two_halves_partition_the_file() {
         let src = "pub fn a() {}\n\n#[cfg(test)]\nmod tests {\n    fn t() {}\n}\n\npub fn b() {}\n";
