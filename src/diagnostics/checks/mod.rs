@@ -221,7 +221,7 @@ mod presence_discipline {
         })
     }
 
-    /// Logging macro invocations, removed.
+    /// Invocations of macros that only *emit* the error, removed.
     ///
     /// This is the whole point of the rule below: `tracing::warn!("{e}")`
     /// mentions the error without the error reaching anything the check
@@ -229,10 +229,31 @@ mod presence_discipline {
     /// answer as though it had not happened — so a rule that accepted any
     /// mention of the binding would have passed them.
     ///
-    /// `format!` is deliberately NOT in this list: it produces a value, and a
-    /// value is what "carrying the error" means.
+    /// `eprintln!` / `println!` are here for the same reason and were NOT in
+    /// the first version: a re-review re-ran the exact `stale_lock` mutation
+    /// with `eprintln!` substituted for `tracing::warn!` and the guard was
+    /// GREEN — a byte-equivalent reinstatement of the defect it was written
+    /// for, walking past it because the binding "reached" a macro the stripper
+    /// had not been told about. Nothing in this directory prints to stdio
+    /// today, so that was latent rather than live; it was also squarely inside
+    /// the rule's own stated question, which is what makes it a hole rather
+    /// than a documented edge.
+    ///
+    /// The list is closed on purpose and this is where it can rot: a macro
+    /// that only emits and is not named here reads as carrying the error. The
+    /// membership test is *"does this macro do anything with its argument
+    /// other than emit it"* — `format!` is the standing counter-example and is
+    /// deliberately absent, because it produces a value, and a value is what
+    /// "carrying the error" means.
+    ///
+    /// Only the `name!(` form is stripped: `warn! {…}` and `warn! (…)` are
+    /// not. rustfmt normalises the space form and the brace form is vanishingly
+    /// rare for these macros, so this is a stated limit rather than a hole
+    /// worth code.
     fn without_logging(body: &str) -> String {
-        const LOG_MACROS: [&str; 5] = ["trace!", "debug!", "info!", "warn!", "error!"];
+        const LOG_MACROS: [&str; 7] = [
+            "trace!", "debug!", "info!", "warn!", "error!", "eprintln!", "println!",
+        ];
         let mut out = String::with_capacity(body.len());
         let mut i = 0usize;
         let bytes: Vec<char> = body.chars().collect();
@@ -563,6 +584,17 @@ mod presence_discipline {
                 "match v { Ok(Some(s)) => Some(s), Ok(None) => None, Err(e) => { tracing::warn!(error = %e, \"vault read failed\"); None } }",
                 "providers_connectivity resolve_key: folded into None",
             ),
+            // The same defect emitted through stdio rather than `tracing`.
+            // This shape was GREEN until `eprintln!`/`println!` joined
+            // `LOG_MACROS`; a re-review found it by substituting one token.
+            (
+                "match p { Ok(h) => h, Err(e) => { eprintln!(\"lock probe failed: {e}\"); None } }",
+                "stale_lock via eprintln!: folded into None",
+            ),
+            (
+                "match p { Ok(h) => h, Err(e) => { println!(\"probe failed: {e}\"); 0 } }",
+                "folded into 0 via println!",
+            ),
         ] {
             let arms = err_arms(src);
             assert_eq!(arms.len(), 1, "{why}: expected exactly one bound Err arm");
@@ -604,6 +636,21 @@ mod presence_discipline {
                 );
             }
         }
+
+        // `println!` is a suffix of `eprintln!`; the left boundary is what
+        // keeps a user macro whose name merely ends in a listed one from being
+        // stripped, which would hide a real carry.
+        assert!(
+            mentions(
+                &without_logging("{ my_warn!(\"{e}\"); None }"),
+                "e"
+            ),
+            "a macro that is not in the list must keep its argument visible"
+        );
+        assert!(
+            !mentions(&without_logging("{ eprintln!(\"{e}\"); None }"), "e"),
+            "eprintln! must be stripped"
+        );
 
         // Not this rule's business: discarded at the pattern (CONFLATING's
         // job), and a named variant, which binds nothing to carry.
