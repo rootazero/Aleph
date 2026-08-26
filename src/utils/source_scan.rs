@@ -5,7 +5,12 @@
 //! That idiom cuts at the *first place a test attribute appears*, which is not
 //! a boundary. Measured on this repo AT `a95475edd` (1734 files carrying the
 //! attribute — state the commit, because this count moves: the round that
-//! added this module took it to 1739 by adding four files of its own):
+//! added this module took it to 1739, nine files gaining the attribute and
+//! four losing it; four of the nine are files this round created, including
+//! this one. An earlier revision of this sentence said "by adding four files
+//! of its own", which does not reach its own endpoint — 1734 + 4 is 1738 —
+//! and left the correct decomposition recorded only in FEATURE_LOCATOR, i.e.
+//! the comment was the copy that lied):
 //! 1458 have one trailing `mod tests {` and are cut correctly; **73** open with
 //! `#[cfg(test)] mod tests;` and lose the ENTIRE file; **203** carry a mid-file
 //! test item and are truncated arbitrarily. `src/utils/paths.rs` declares a
