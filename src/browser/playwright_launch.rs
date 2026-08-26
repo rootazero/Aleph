@@ -269,7 +269,12 @@ fn browser_state_dir(leaf: &str) -> Result<PathBuf, super::error::BrowserError> 
 ///
 /// The key is a profile name, which the config layer constrains; sanitize
 /// anyway so a name can never escape the directory.
-fn sanitize_session_key(session_key: &str) -> String {
+///
+/// `pub(super)` so the sibling `chrome_mcp` module can reuse it when it
+/// builds its per-profile user-data-dir; without this both paths would have
+/// to keep the same shape in sync to honour the BROWSER-R4-05 isolation
+/// guarantee.
+pub(super) fn sanitize_session_key(session_key: &str) -> String {
     let safe: String = session_key
         .chars()
         .map(|c| {

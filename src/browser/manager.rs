@@ -218,16 +218,26 @@ impl ProfileManager {
         // Only install the handle when the slot is empty or the
         // existing weak has been dropped (try_unwrap succeeds).
         let mut slot = LIVE_MANAGER.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(existing) = slot.as_ref() {
+        match slot.as_ref() {
             // The previous manager is still alive: refuse to steal the
             // handle. The caller (typically a test) can run its own
             // reaper locally; it does not need the global one.
-            if existing.strong_count() > 0 {
+            Some(existing) if existing.strong_count() > 0 => {
                 tracing::warn!(
                     "ProfileManager::spawn_idle_reaper: live manager already installed; \
                      refusing to claim the global reaper slot"
                 );
                 return;
+            }
+            // Slot empty OR previous weak handle is already dead — the
+            // latter means the prior daemon (or test) has fully torn down.
+            // Surface the steal so a future refactor that changes the
+            // install order shows up in logs instead of silently shadowing
+            // the live-config target.
+            Some(_) | None => {
+                tracing::info!(
+                    "ProfileManager::spawn_idle_reaper: claiming the global reaper slot"
+                );
             }
         }
         *slot = Some(Arc::downgrade(self));

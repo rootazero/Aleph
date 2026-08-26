@@ -124,9 +124,16 @@ fn default_user_data_dir_for(profile_name: &str) -> String {
     // implementation used, kept so a container without HOME still launches.
     let root = crate::utils::paths::get_config_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/.aleph"));
+    // BROWSER-R4-05: profile_name reaches us from operator config; without
+    // sanitization a name like `/tmp/x` would replace the root via
+    // `PathBuf::join` (absolute segments discard everything before them),
+    // handing Chrome an arbitrary `--user-data-dir` and defeating the
+    // per-profile isolation. Reuse the launch-config sanitizer that the
+    // sibling `playwright-cli` path already enforces.
+    let safe = super::playwright_launch::sanitize_session_key(profile_name);
     root.join("browser")
         .join("chrome-mcp")
-        .join(profile_name)
+        .join(safe)
         .join("user-data-dir")
         .to_string_lossy()
         .into_owned()
