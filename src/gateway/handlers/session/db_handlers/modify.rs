@@ -892,10 +892,7 @@ mod tests {
     #[test]
     fn every_session_knob_is_validated_on_patch() {
         let snapshot_src = include_str!("../../../session_snapshot.rs");
-        let production = snapshot_src
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap_or(snapshot_src);
+        let production = crate::utils::source_scan::production_prefix(snapshot_src);
 
         // Constants the snapshot decodes, in the order it decodes them.
         let read_by_snapshot: Vec<&str> = [

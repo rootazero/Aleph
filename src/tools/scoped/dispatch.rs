@@ -1118,6 +1118,16 @@ impl ScopedToolService {
         .await;
 
         let Some(session_svc) = crate::session::service::global_session_service() else {
+            // The identity-ledger record above still lands — this is the
+            // *session* copy of the same decision. Its neighbour ten lines
+            // down (missing ambient call identity) explains itself before
+            // returning; a silently-dropped approval/denial record deserves
+            // at least as much, and more: it's the audit record itself.
+            tracing::warn!(
+                tool = %name,
+                session_key = %turn.session_key,
+                "session/service capability absent; approval decision not persisted — see `aleph doctor`"
+            );
             return;
         };
         let session_id = &turn.session_key;

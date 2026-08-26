@@ -371,6 +371,27 @@ pub(super) async fn initialize_extension_manager(daemon: bool) {
             }
         }
         Err(e) => {
+            // Warn-and-continue is a decline that never got stamped: without
+            // this the plugin/skill/hook surface is simply absent, and every
+            // reader of the manager sees the same `None` a boot that died
+            // earlier would leave.
+            alephcore::gateway::decline_extension_manager(
+                "`ExtensionManager::with_defaults()` failed, so no plugin, skill \
+                 or hook is loaded this boot — the accompanying \"Failed to \
+                 initialize extension manager\" message names the cause. Check \
+                 that the extension tree under `$ALEPH_HOME` (else `~/.aleph`) \
+                 is readable.",
+            );
+            // NOT gated on `!daemon`: `tracing` routes to the log file in
+            // daemon mode, which is the production path, and the decline above
+            // promises the operator a message that names the cause. The
+            // `eprintln!` below cannot be that message — it is the interactive
+            // nicety, and in daemon mode it never runs, taking `{e}` with it.
+            // Same reasoning, written out, at `start/mod.rs`'s orchestrator arm.
+            tracing::warn!(
+                error = %e,
+                "Failed to initialize extension manager; plugins, skills and hooks unavailable"
+            );
             if !daemon {
                 eprintln!("Warning: Failed to initialize extension manager: {e}. Plugin tools will be unavailable.");
             }
@@ -563,14 +584,8 @@ mod tests {
             ("start/helpers.rs", include_str!("helpers.rs")),
             ("start/mod.rs", include_str!("mod.rs")),
         ] {
-            // CRLF-safe: this repo's Windows checkout has `\r\n` line
-            // endings and `include_str!` hands over the raw bytes, so a
-            // separator anchored as "\n#[cfg(test)]" would match nothing,
-            // leave `production` as the whole file, and let this very test
-            // module's own mention of the identifier satisfy the assertion.
-            // Strip `\r` first and split on an unanchored needle.
             let src = raw.replace('\r', "");
-            let production = src.split("#[cfg(test)]").next().unwrap_or(&src);
+            let production = alephcore::utils::source_scan::production_prefix(&src);
             // Non-vacuity: prove the bound actually cut something off in the
             // file that HAS a test module, so the split is doing real work.
             if label.ends_with("helpers.rs") {

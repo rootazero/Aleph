@@ -18,7 +18,7 @@ mod dead_keys;
 pub mod defaults_override;
 pub mod guides;
 pub mod live_apply;
-mod load;
+pub(crate) mod load;
 mod methods;
 mod migration;
 pub mod patcher;

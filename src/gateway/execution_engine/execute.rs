@@ -1011,6 +1011,16 @@ where
                             },
                         )
                         .await;
+                } else {
+                    // Degraded, not missing: the harness already emitted the
+                    // AssistantMessage row (see the SSOT comment above), so no
+                    // content is lost — only this stamp (Panel context gauge
+                    // + workspace trace) is, and the next turn restamps it.
+                    tracing::debug!(
+                        session_key = %request.session_key.to_key_string(),
+                        run_id = %run_id,
+                        "session/service capability absent; skipped run_id/occupancy stamp — see `aleph doctor`"
+                    );
                 }
 
                 // Notify UI that the session was updated (global bus, so

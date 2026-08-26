@@ -468,15 +468,7 @@ mod tests {
             let Ok(text) = std::fs::read_to_string(&file) else {
                 continue;
             };
-            // Split on the bare attribute: anchoring to a line start matches
-            // nothing on a CRLF checkout, which would silently widen the scan
-            // to the file's own test module.
-            let production = text
-                .replace('\r', "")
-                .split("#[cfg(test)]")
-                .next()
-                .unwrap_or_default()
-                .to_string();
+            let production = crate::utils::source_scan::production_prefix(&text);
             for chunk in production.split("fn ").skip(1) {
                 if !chunk.contains("default_plugins_dir()") || !chunk.contains("remove_dir_all") {
                     continue;

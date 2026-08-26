@@ -157,6 +157,15 @@ impl SimpleExecutionEngine {
                     },
                 )
                 .await;
+        } else {
+            // Sole producer on this path (Task 7a — replaces the direct
+            // messages-table write so MessageProjector is the single writer).
+            // No handle means this UserMessage never reaches `messages`, and
+            // no other surface will report the gap.
+            warn!(
+                session_key = %request.session_key.to_key_string(),
+                "session/service capability absent; dropped UserMessage — see `aleph doctor`"
+            );
         }
 
         // Announce the session the moment it's created (first message). Mirrors
@@ -235,6 +244,14 @@ impl SimpleExecutionEngine {
                             },
                         )
                         .await;
+                } else {
+                    // Sole producer on this path — see the UserMessage branch
+                    // above. No handle means this AssistantMessage never
+                    // reaches `messages`.
+                    warn!(
+                        session_key = %request.session_key.to_key_string(),
+                        "session/service capability absent; dropped AssistantMessage — see `aleph doctor`"
+                    );
                 }
 
                 let _ = emitter

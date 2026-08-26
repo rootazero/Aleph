@@ -54,6 +54,7 @@ pub use config::{
 
 pub use crate::tasks::shared::error::TaskError;
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
 use clock::{Clock, SystemClock};
 use service::ServiceState;
@@ -75,11 +76,49 @@ pub type SharedCronService = Arc<tokio::sync::Mutex<CronService>>;
 ///
 /// `None` until boot, so tests and early-boot read as "no cron subsystem" and
 /// the freeze skips the leg rather than failing.
-static GLOBAL_CRON: once_cell::sync::OnceCell<SharedCronService> = once_cell::sync::OnceCell::new();
+///
+/// `IndistinguishableDefault`, and this one came out OPPOSITE to the reflex
+/// reading, so the derivation is written down rather than the verdict.
+///
+/// The reflex answer is `FailsOpen` — both readers are enforcement paths for a
+/// walled principal, and a gate that stops gating is what that variant names.
+/// It is wrong, because the enforcement does not stop. `executor.rs`'s
+/// fire-time backstop reaches this handle only to make the disable DURABLE; the
+/// `return make_error_result(..)` that refuses the run sits outside the
+/// `if let Some(svc)`, so a walled owner's job is still refused at every fire
+/// with the handle absent.
+///
+/// What absence actually produces is a value: `users.update`'s deactivation
+/// freeze skips the cron leg and leaves `report.crons` at 0, which reads as
+/// "this principal owned no cron jobs" and is indistinguishable from the truth.
+/// The jobs stay enabled forever, retried and refused every tick, and the
+/// operator is told the freeze covered everything.
+static GLOBAL_CRON: CapabilitySlot<SharedCronService> = CapabilitySlot::new(
+    "cron/service",
+    MissingSemantics::IndistinguishableDefault {
+        reads_as: "\"this principal owns no cron jobs\" -- the deactivation \
+                   freeze skips the leg and reports crons: 0",
+    },
+);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn global_cron_slot() -> &'static dyn SlotStatus {
+    &GLOBAL_CRON
+}
 
 /// Install the global service at boot. Idempotent: a second call is ignored.
 pub fn init_global(service: SharedCronService) {
-    let _ = GLOBAL_CRON.set(service);
+    let _ = GLOBAL_CRON.install(service);
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// Boot has two such arms — `[cron] enabled = false`, and `CronService::new`
+/// failing — and they need different sentences: the first is a setting, the
+/// second is a fault. `because` is quoted verbatim to an operator.
+pub fn decline_global(because: &'static str) {
+    GLOBAL_CRON.decline(because);
 }
 
 /// Read the global service, if initialized.
@@ -968,7 +1007,7 @@ mod tests {
 
         let mut reaches_the_setter = 0usize;
         for (path, src) in SURFACES {
-            let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+            let production = crate::utils::source_scan::production_prefix(src);
             for field in ["next_job_id_on_success", "next_job_id_on_failure"] {
                 assert!(
                     !production.contains(&format!("{field} =")),
@@ -985,6 +1024,26 @@ mod tests {
             SURFACES.len(),
             "both write surfaces must call `set_chain` — a surface that stopped \
              doing so has either dropped the feature or grown its own path to it"
+        );
+    }
+
+    /// The `reads_as` sentence reaches an operator, and this one had to be
+    /// re-derived: the reflex verdict for a handle whose only readers are
+    /// enforcement paths is `FailsOpen`, and it is wrong here because the
+    /// fire-time refusal does not depend on this handle. See the static's doc.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = global_cron_slot();
+        assert_eq!(slot.id(), "cron/service");
+        let MissingSemantics::IndistinguishableDefault { reads_as } = slot.missing() else {
+            panic!(
+                "expected IndistinguishableDefault, got {:?}",
+                slot.missing()
+            );
+        };
+        assert!(
+            reads_as.contains("crons: 0"),
+            "must name the value users.update's freeze really reports; got {reads_as:?}"
         );
     }
 }

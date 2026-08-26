@@ -21,6 +21,7 @@ use futures::future::join_all;
 use once_cell::sync::OnceCell;
 use tracing::{info, warn};
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::loop_graph::types::EdgeKind;
 use crate::sync_primitives::Mutex;
 use crate::tasks::cron::SharedCronService;
@@ -37,7 +38,21 @@ const DEFAULT_AGENT: &str = crate::routing::DEFAULT_AGENT_ID;
 /// watcher run.
 const WATCH_DEBOUNCE: Duration = Duration::from_secs(60);
 
-static CRON_TRIGGER: OnceCell<SharedCronService> = OnceCell::new();
+/// `FailsClosed`, from the one reader: `notify_node_settled` logs
+/// *"watchers paired but no cron trigger handle"* by name and returns `false`,
+/// which releases the settle claim so the next observation of the same terminal
+/// row retries. Nothing is granted and the miss is named. The cost is real but
+/// bounded — [`init_cron_trigger`]'s own doc states it: watchers fall back to
+/// their own cadence.
+static CRON_TRIGGER: CapabilitySlot<SharedCronService> =
+    CapabilitySlot::new("loop-graph/cron-trigger", MissingSemantics::FailsClosed);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn cron_trigger_slot() -> &'static dyn SlotStatus {
+    &CRON_TRIGGER
+}
+
 /// watcher job id → its debounce [`Stamp`] (when, for which node's victory,
 /// and whether that run ever confirmed). The node half is what makes "held
 /// off by the debounce counts as reviewed" a true statement rather than a
@@ -49,9 +64,21 @@ static DEBOUNCE: OnceCell<Mutex<HashMap<String, Stamp>>> = OnceCell::new();
 /// Install the cron handle that powers watcher pokes. Called once at boot
 /// next to `loop_graph::init_global`; absent (None / never called) the
 /// trigger degrades to a no-op and watchers rely on their own cadence.
+///
+/// `None` is a decline, not a nothing: the caller looked, found no cron
+/// service, and continued. The `else` arm below is the only place that
+/// difference is recorded — `notify_node_settled`'s "watchers paired but no
+/// cron trigger handle" log names the miss but not its cause.
 pub fn init_cron_trigger(svc: Option<SharedCronService>) {
     if let Some(s) = svc {
-        let _ = CRON_TRIGGER.set(s);
+        let _ = CRON_TRIGGER.install(s);
+    } else {
+        CRON_TRIGGER.decline(
+            "the tool registry was built without a cron service: either \
+             `[cron] enabled = false`, or `CronService::new` failed at boot \
+             (\"Failed to initialize cron service\" is logged then). Watchers \
+             fall back to their own cadence.",
+        );
     }
 }
 
@@ -1379,6 +1406,26 @@ mod tests {
             debounce_pass(&missing_id, "goal:z2"),
             Debounce::Pass,
             "rollback must free the failed watcher's window"
+        );
+    }
+
+    /// The variant is the operator-facing severity of this handle going
+    /// missing (`FailsOpen` => Error and a non-zero `aleph doctor`;
+    /// `IndistinguishableDefault` / `ConsumerDecides` => Warning;
+    /// `FailsClosed` => Info), and it is DERIVED from the consumers named on
+    /// the static above. Pinned in the module that owns the handle, because
+    /// that is the only place a reclassification and a re-read of those
+    /// consumers can be made to happen together — the aggregate figure in
+    /// FEATURE_LOCATOR cannot tell a reclassification from a new slot.
+    /// `census::every_slot_pins_its_own_missing_semantics` requires this by
+    /// slot id.
+    #[test]
+    fn the_cron_trigger_slot_pins_its_missing_semantics() {
+        assert_eq!(cron_trigger_slot().id(), "loop-graph/cron-trigger");
+        assert!(
+            matches!(cron_trigger_slot().missing(), MissingSemantics::FailsClosed),
+            "`loop-graph/cron-trigger` is classified FailsClosed from its consumers; changing that \
+             means re-reading them, not re-typing this line"
         );
     }
 }

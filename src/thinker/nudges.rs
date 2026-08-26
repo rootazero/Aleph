@@ -832,10 +832,7 @@ mod tests {
     #[test]
     fn no_fenced_formatter_escapes_classification() {
         let src = include_str!("nudges.rs").replace('\r', "");
-        // Split on the bare attribute — never on `\n#[cfg(test)]\n`, which
-        // matches nothing on a CRLF checkout and silently widens the
-        // "production prefix" to the whole file, including this list.
-        let production = src.split("#[cfg(test)]").next().unwrap_or_default();
+        let production = crate::utils::source_scan::production_prefix(&src);
 
         let emitters: Vec<&str> = production
             .split("\npub fn ")

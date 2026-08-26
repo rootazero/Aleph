@@ -271,15 +271,7 @@ fn the_promote_branch_sits_between_the_redirect_and_the_admission() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src/gateway/execution_engine/execute.rs");
     let text = std::fs::read_to_string(&path).expect("execute.rs");
-    // Split on the bare attribute — never on `\n#[cfg(test)]\n`, which matches
-    // nothing on a CRLF checkout and silently widens the "production prefix" to
-    // the whole file.
-    let production = text
-        .replace('\r', "")
-        .split("#[cfg(test)]")
-        .next()
-        .unwrap_or_default()
-        .to_string();
+    let production = crate::utils::source_scan::production_prefix(&text);
 
     let redirect = production
         .find("redirect_to_side_session(&mut request)")
@@ -338,12 +330,7 @@ fn an_over_budget_principal_keeps_the_read_only_crossing() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src/gateway/execution_engine/execute.rs");
     let text = std::fs::read_to_string(&path).expect("execute.rs");
-    let production = text
-        .replace('\r', "")
-        .split("#[cfg(test)]")
-        .next()
-        .unwrap_or_default()
-        .to_string();
+    let production = crate::utils::source_scan::production_prefix(&text);
 
     let promote = production
         .find("btw::is_promote(&request.metadata)")

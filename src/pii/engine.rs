@@ -1,12 +1,12 @@
 //! Core PII detection and replacement engine
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::config::PiiAction;
 use crate::config::PrivacyConfig;
 use crate::pii::allowlist::PiiAllowlist;
 use crate::pii::rules::PiiRule;
 use crate::sync_primitives::{Arc, RwLock};
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
 use tracing::warn;
 
 /// Number of built-in rules prepended by [`crate::pii::rules::build_rules`].
@@ -104,8 +104,32 @@ impl FilterResult {
     }
 }
 
-/// Global PII engine singleton
-static PII_ENGINE: OnceLock<Arc<RwLock<PiiEngine>>> = OnceLock::new();
+/// Global PII engine singleton.
+///
+/// `FailsOpen`, and this is the highest-severity member of the whole roster —
+/// derived from the readers, which agree: `mcp::redact::redact_mcp_error`
+/// answers `None => text.to_string()`, so an MCP error echoes its arguments and
+/// headers to the model **unredacted**; `providers::http_provider` wraps its
+/// filtering pass in `if let Some(engine_lock)` with no `else`, so every
+/// outbound message leaves the process unmasked. Neither says a word. A
+/// redaction engine that was never installed is a gate that silently stopped
+/// gating, which is exactly what this variant names.
+///
+/// ⚠️ The third reader looks like a counter-example and is not:
+/// `security::runtime_guard::new_with_audit` does `PiiEngine::global()
+/// .or_else(|| Some(… PrivacyConfig::default() …))`, i.e. it substitutes a
+/// DEFAULT-configured engine. That is a second defect of a different shape
+/// (the operator's `[privacy]` rules silently replaced by the compiled ones),
+/// not evidence that absence is safe — and it covers only the guardrail
+/// pipeline, not the two paths above.
+static PII_ENGINE: CapabilitySlot<Arc<RwLock<PiiEngine>>> =
+    CapabilitySlot::new("pii/engine", MissingSemantics::FailsOpen);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn pii_engine_slot() -> &'static dyn SlotStatus {
+    &PII_ENGINE
+}
 
 /// Main PII filtering engine
 pub struct PiiEngine {
@@ -148,10 +172,26 @@ impl PiiEngine {
         }
     }
 
-    /// Initialize the global PII engine
+    /// Initialize the global PII engine.
+    ///
+    /// **No decline arm, and that is the answer rather than an omission.** The
+    /// capability-wiring round's hand-over listed "`PiiEngine::init`'s absence
+    /// when `[privacy]` is off" as a natural
+    /// [`crate::capability::CapabilitySlot::decline`] site. There is no such
+    /// absence: this installs an engine unconditionally, whatever `[privacy]`
+    /// says, so `[privacy]` off is an INSTALL of a disabled config — the same
+    /// asymmetry [`crate::thinker::memory_context_provider::set_open_loop_inject`]
+    /// documents for `false`. Boot calls this once, unconditionally
+    /// (`start/mod.rs`, right after the bind address resolves). Confirmed on a
+    /// live daemon 2026-08-25: `pii/engine` appears in none of the 22
+    /// not-installed findings a provider-less boot reports.
+    ///
+    /// Stated here rather than only in a report because a future reader asking
+    /// "why does the roster's one `FailsOpen`-and-highest-severity handle have
+    /// no decline?" will open this function, not the report.
     pub fn init(config: PrivacyConfig) {
         let engine = Arc::new(RwLock::new(Self::new(config)));
-        if PII_ENGINE.set(engine).is_err() {
+        if !PII_ENGINE.install(engine) {
             warn!("PiiEngine already initialized, ignoring duplicate init call");
         }
     }
@@ -747,7 +787,7 @@ mod tests {
     ///
     /// The engine is a **process** global and libtest runs in parallel, so the
     /// test cannot be written as "install mine first, then check mine survived"
-    /// — `test_reload_updates_rules` initialises the same `OnceLock`, and
+    /// — `test_reload_updates_rules` initialises the same slot, and
     /// whichever test the scheduler starts first decides whose config is live.
     /// Written that way it passed alone and failed at random in a full run,
     /// which is the worst shape a guard can have: the isolated run is the one
@@ -871,6 +911,26 @@ mod tests {
             !result.text.contains("[LOW]"),
             "Low-severity match should be discarded, but got: {}",
             result.text
+        );
+    }
+
+    /// The variant is the operator-facing severity of this handle going
+    /// missing (`FailsOpen` => Error and a non-zero `aleph doctor`;
+    /// `IndistinguishableDefault` / `ConsumerDecides` => Warning;
+    /// `FailsClosed` => Info), and it is DERIVED from the consumers named on
+    /// the static above. Pinned in the module that owns the handle, because
+    /// that is the only place a reclassification and a re-read of those
+    /// consumers can be made to happen together — the aggregate figure in
+    /// FEATURE_LOCATOR cannot tell a reclassification from a new slot.
+    /// `census::every_slot_pins_its_own_missing_semantics` requires this by
+    /// slot id.
+    #[test]
+    fn the_engine_slot_pins_its_missing_semantics() {
+        assert_eq!(pii_engine_slot().id(), "pii/engine");
+        assert!(
+            matches!(pii_engine_slot().missing(), MissingSemantics::FailsOpen),
+            "`pii/engine` is classified FailsOpen from its consumers; changing that \
+             means re-reading them, not re-typing this line"
         );
     }
 }

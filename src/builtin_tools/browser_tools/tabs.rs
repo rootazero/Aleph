@@ -378,11 +378,7 @@ mod tests {
     /// own assertion strings as production code — the exact failure CLAUDE.md
     /// §10 records having shipped twice.
     fn production_half(src: &str) -> String {
-        src.replace('\r', "")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap_or_default()
-            .to_string()
+        crate::utils::source_scan::production_prefix(src)
     }
 
     /// Byte ranges of `format!(…)` calls inside `text`, paren-balanced.

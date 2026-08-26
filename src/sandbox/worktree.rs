@@ -648,25 +648,12 @@ mod tests {
     #[test]
     fn worktree_sandbox_does_not_reach_for_a_configurable_policy() {
         let src = include_str!("worktree.rs").replace('\r', "");
-        // No leading `\n` on the separator: this file is checked out CRLF, and
-        // an anchored `"\n#[cfg(test)]\n"` matches nothing there — which would
-        // silently hand the whole file (tests included) to the scan below.
-        let production = src
-            .split("#[cfg(test)]")
-            .next()
-            .expect("split always yields a first element");
+        let production = crate::utils::source_scan::production_prefix(&src);
         assert!(
             production.len() < src.len(),
             "separator did not match — the scan below would cover this test module's own literals"
         );
-        let code: String = production
-            .lines()
-            .filter(|l| {
-                let t = l.trim_start();
-                !t.starts_with("//")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let code = crate::utils::source_scan::strip_comment_lines(&production);
 
         assert!(
             code.contains("hardline_only()"),

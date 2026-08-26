@@ -956,18 +956,22 @@ mod tests {
         );
     }
 
-    /// This file's production code (test module and comments stripped —
-    /// this very test names the forbidden token, and the scanner judges
-    /// code, not prose; `\r` stripped first, the CRLF-checkout criterion).
+    /// This file's production code (every `#[cfg(test)]`-gated item and every
+    /// whole-line comment removed — this very test names the forbidden token,
+    /// and the scanner judges code, not prose).
+    ///
+    /// Delegates to `i18n_census::production_lines`, this crate's one answer
+    /// to "where does production code end". It walks gated ITEMS rather than
+    /// cutting at the first `#[cfg(test)]` marker; the cut this replaced went
+    /// blind the moment any gated item preceded the trailing test module, and
+    /// went blind SILENTLY — a prefix cut can only ever under-scan, so the
+    /// missed `<iframe` reads as "no second iframe" rather than as an error.
+    /// `\r` stripping and the comment filter both live there now, so this
+    /// function is not a second author of either.
     fn production_code() -> String {
-        let src = include_str!("shape_view.rs").replace('\r', "");
-        let prod = src
-            .split("#[cfg(test)]")
-            .next()
-            .expect("split always yields a first piece")
-            .to_string();
-        prod.lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
+        crate::i18n_census::production_lines(include_str!("shape_view.rs"))
+            .into_iter()
+            .map(|(_, line)| line)
             .collect::<Vec<_>>()
             .join("\n")
     }

@@ -1093,7 +1093,7 @@ mod tests {
     #[test]
     fn stats_no_longer_advertises_a_duplicate_fact_count() {
         let src = std::fs::read_to_string("src/gateway/handlers/memory.rs").unwrap();
-        let production = src.split("#[cfg(test)]").next().unwrap();
+        let production = crate::utils::source_scan::production_prefix(&src);
         assert!(
             !production.contains("validFacts"),
             "handle_stats is emitting validFacts again"

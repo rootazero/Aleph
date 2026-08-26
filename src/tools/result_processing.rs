@@ -19,8 +19,8 @@
 //! why flattening first made both content-aware cleaners blind.
 
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::context::budget::pressure::{chars_for_token_budget, estimate_tokens_smart};
 use crate::context::retrieval::IndexOutcome;
 use crate::session::events::ToolImage;
@@ -41,7 +41,35 @@ pub const DEFAULT_RESULT_BUDGET_TOKENS: usize = 8_000;
 /// It lives here rather than as a `ToolService::execute` parameter on purpose:
 /// that signature's callers are in `harness/agent/act.rs`, and that tree is over
 /// its R10 line budget. A boot-installed ceiling costs the harness zero lines.
-static RESULT_BUDGET_CEILING: OnceLock<usize> = OnceLock::new();
+/// `IndistinguishableDefault`, and `reads_as` quotes what
+/// [`result_budget_ceiling`] ACTUALLY falls back to — `usize::MAX`, i.e. no
+/// ceiling at all. It is deliberately not the crate's `DEFAULT_RESULT_BUDGET_
+/// TOKENS`: that constant is the per-result *default budget*, a different
+/// number in a different role, and a diagnostic printing it here would tell an
+/// operator reads are clamped to 8 000 tokens when in fact nothing is clamped.
+///
+/// ⚠️ This handle has TWO production ways to end up uninstalled and they read
+/// identically:
+///
+/// 1. boot never called [`set_global_result_budget_ceiling`] (CLI one-shot,
+///    tests, any deployment with no `context_budget_config`); and
+/// 2. boot DID call it, with a large-window model's ceiling, and the setter
+///    deliberately returned without installing — see its doc for why that is
+///    the right behaviour.
+///
+/// Case 2 now stamps [`crate::capability::CapabilitySlot::decline`] inside the
+/// setter, so the two are no longer indistinguishable: case 1 leaves NO outcome
+/// (nothing reached the slot) and case 2 leaves `Declined` naming the window.
+/// ⚠️ It had to be closed here rather than in boot: the arm is an early
+/// `return` inside this library setter, one call away from the boot call site,
+/// so a walk of boot's `else` arms does not reach it. Case 1 is still silent by
+/// construction and correctly so — a CLI one-shot never boots a gateway.
+static RESULT_BUDGET_CEILING: CapabilitySlot<usize> = CapabilitySlot::new(
+    "tools/result-budget-ceiling",
+    MissingSemantics::IndistinguishableDefault {
+        reads_as: "usize::MAX — uncapped, byte-for-byte the pre-ceiling behaviour",
+    },
+);
 
 /// Install the process-wide per-result ceiling. Called once at boot.
 ///
@@ -52,12 +80,43 @@ static RESULT_BUDGET_CEILING: OnceLock<usize> = OnceLock::new();
 /// byte-for-byte as it does today.
 pub fn set_global_result_budget_ceiling(ceiling: usize) {
     if ceiling >= DEFAULT_RESULT_BUDGET_TOKENS {
+        // Not a failure — a decision, and the one an operator is most likely to
+        // mistake for a wiring gap, because the resulting read (`usize::MAX`)
+        // is byte-for-byte what a boot that never got here leaves behind.
+        RESULT_BUDGET_CEILING.decline(
+            "this model's context window needs no per-result clamp: the ceiling \
+             derived from `[context_budget] token_budget` is at or above the \
+             8_000-token default, and this knob only ever clamps DOWN. A \
+             smaller-window model (or a smaller `token_budget`) installs one.",
+        );
         return;
     }
-    let _ = RESULT_BUDGET_CEILING.set(ceiling);
+    let _ = RESULT_BUDGET_CEILING.install(ceiling);
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// Distinct from the in-setter decline above: this is for boot's outer
+/// `Err(e)` arm, where the `ToolResultStore` failed to open and Layers 2 and 3
+/// are disabled together, so no ceiling was even derived. `because` is quoted
+/// verbatim to an operator.
+pub fn decline_global_result_budget_ceiling(because: &'static str) {
+    RESULT_BUDGET_CEILING.decline(because);
+}
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn result_budget_ceiling_slot() -> &'static dyn SlotStatus {
+    &RESULT_BUDGET_CEILING
 }
 
 /// The installed ceiling, or `usize::MAX` (= uncapped) when boot installed none.
+///
+/// ⚠️ That `usize::MAX` is a legal value, not a signal: it is what a
+/// large-window model's deployment is *supposed* to see, and it is also what a
+/// boot that died before this line leaves behind. Ask
+/// [`result_budget_ceiling_slot`]`().outcome()` to tell the two apart; this
+/// function cannot and must not try.
 fn result_budget_ceiling() -> usize {
     RESULT_BUDGET_CEILING.get().copied().unwrap_or(usize::MAX)
 }
@@ -103,7 +162,7 @@ pub fn resolve_result_budget(name: &str, explicit: Option<usize>) -> Option<usiz
 }
 
 /// Pure core of [`resolve_result_budget`] with the ceiling passed in, so the
-/// cap semantics are unit-testable without touching the process-wide `OnceLock`.
+/// cap semantics are unit-testable without touching the process-wide slot.
 fn resolve_result_budget_under(
     name: &str,
     explicit: Option<usize>,
@@ -603,6 +662,39 @@ fn parse_marker_path(line: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    // ========================================================================
+    // The process-global handle, as a capability slot
+    // ========================================================================
+
+    /// See `session::service::tests::the_accessor_exposes_this_handle_to_the_roster`
+    /// for why this asserts through the accessor rather than the static.
+    ///
+    /// The `reads_as` half is the part with teeth. This is the only
+    /// `IndistinguishableDefault` in the batch, its sentence is what a
+    /// diagnostic prints verbatim when `outcome()` is `None`, and the brief's
+    /// table shipped a PLACEHOLDER for it (`"<compiled-in default ceiling>"`),
+    /// which would have pointed a reader at `DEFAULT_RESULT_BUDGET_TOKENS` —
+    /// a real constant, in a different role, that is not what an uninstalled
+    /// read yields. So this asserts the sentence names the actual fallback and
+    /// is not empty: a slot that lost it would still report an id and still
+    /// look fine.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = result_budget_ceiling_slot();
+        assert_eq!(slot.id(), "tools/result-budget-ceiling");
+        match slot.missing() {
+            MissingSemantics::IndistinguishableDefault { reads_as } => {
+                assert!(
+                    reads_as.contains("usize::MAX"),
+                    "the sentence a diagnostic prints must name what \
+                     `result_budget_ceiling()` really falls back to, got: \
+                     {reads_as:?}"
+                );
+            }
+            other => panic!("expected IndistinguishableDefault, got {other:?}"),
+        }
+    }
 
     /// A flattened builtin result must not get a fake "error preview".
     ///

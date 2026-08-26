@@ -107,6 +107,33 @@ impl RouteHandle {
 /// Process-global live handle. The daemon is an OS-level singleton (flock), so
 /// one cell per process is the whole world. Set once at boot from the loaded
 /// config; swapped in place thereafter via its interior [`ArcSwap`].
+///
+/// # Deliberately NOT a `CapabilitySlot` — adjudicated 2026-08-25
+///
+/// The capability-wiring round migrated 45 process-global handles onto
+/// [`crate::capability::CapabilitySlot`], so that "never installed" stops being
+/// indistinguishable from "installed with this value". This static is the one
+/// member that stayed raw, and the reason is in [`global_route_handle`] just
+/// below: it is **first-caller-wins over a `cfg` parameter**. `get_or_init`
+/// builds the state from whichever caller arrives first, and every later caller
+/// hands over a `cfg` that is ignored on purpose — the live state, hot-swapped
+/// since boot, is the truth.
+///
+/// `CapabilitySlot::install` takes the value, not a thunk over the caller's
+/// argument. Migrating would therefore mean either changing the slot's
+/// `Outcome` shape to carry a builder, or changing this call site so the value
+/// is computed before the race is decided — and that second one changes WHICH
+/// caller's config wins. That is a behaviour change wearing a refactor's
+/// clothes, on the path every request's failover walk reads.
+///
+/// So: leave it raw, and do not read `1 raw, 45 slots` in the census as
+/// unfinished work. The census names this static explicitly rather than
+/// swallowing it in a broad predicate — see
+/// `capability::census::every_installed_global_is_a_capability_slot` (whose
+/// third assertion pins the exemption at exactly one member, by name) and
+/// `capability::census::route_handle_global_is_selected_by_the_first_caller_wins_arm_alone`
+/// (which proves it is still chosen by that arm and by nothing else). A second
+/// raw handle appearing anywhere still fails that guard, as it should.
 static GLOBAL: OnceLock<Arc<RouteHandle>> = OnceLock::new();
 
 /// Get-or-initialise the global handle from `cfg`. The first caller (boot,

@@ -9,7 +9,7 @@
 //!
 //! The physical storage (blob root + FTS5 `index.db`) is process-wide: boot
 //! installs exactly one, and both the gateway `ScopedToolService` seam and the
-//! orchestrator `HarnessDeps` seam read it back from a `OnceLock`. The *handle*
+//! orchestrator `HarnessDeps` seam read it back from a `CapabilitySlot`. The *handle*
 //! is what carries the session scope — [`ToolResultStore::for_session`] clones
 //! the shared inner and stamps a session key onto it, so blobs land in a
 //! per-session subdirectory and index rows carry a `session_id` the reads and
@@ -30,6 +30,8 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use std::time::{Duration, SystemTime};
 
 use crate::sync_primitives::Arc;
@@ -67,7 +69,23 @@ pub const DEFAULT_TOOL_RESULT_SWEEP_INTERVAL: Duration = Duration::from_secs(60 
 // use `ScopedToolService::with_result_store` / `HarnessDeps.result_store`
 // directly; the global slot is `Option`-shaped and a `None` value means
 // "fall back to in-line truncation only".
-static GLOBAL_STORE: OnceLock<Arc<ToolResultStore>> = OnceLock::new();
+/// `FailsClosed`, and this is the one handle in this batch where the five
+/// production readers genuinely agree — checked rather than assumed:
+/// `ctx_search` returns an empty hit list, `browser_tools::offload_full_content`
+/// returns `None` so its caller says so instead of naming a file that does not
+/// exist, `tool_service_builder` and `subagent_spawner` leave the scoped
+/// service without a store, and `sandbox/workspace`'s denial circuit-breaker
+/// skips a `purge_all` that has nothing to purge. Every one of those is "the
+/// offload feature is off, fall back to in-line truncation" — the meaning this
+/// module's own comment above already assigns to `None`. Nothing unsafe
+/// happens; a capability is simply dead and silent.
+///
+/// ⚠️ One arm is worth a second look in Task 15 and is NOT what picked this
+/// variant: `ctx_search`'s note reads "No offloaded tool output is indexed in
+/// this session **yet**", which describes an empty session rather than an
+/// absent store. Same disposition, wrong sentence.
+static GLOBAL_STORE: CapabilitySlot<Arc<ToolResultStore>> =
+    CapabilitySlot::new("tools/result-store", MissingSemantics::FailsClosed);
 
 /// Install the process-wide `ToolResultStore`. Idempotent — subsequent calls
 /// are silently ignored so multiple boot paths cannot stomp each other.
@@ -83,9 +101,9 @@ static GLOBAL_STORE: OnceLock<Arc<ToolResultStore>> = OnceLock::new();
 /// and is dropped only when the process exits. Test boot paths that want
 /// deterministic GC should call [`ToolResultStore::sweep_stale`] directly.
 pub fn set_global_tool_result_store(store: Arc<ToolResultStore>) {
-    // `OnceLock::set` errors if a prior install won — in that case we
+    // `install` returns false if a prior install won — in that case we
     // intentionally do nothing (the existing sweeper is fine).
-    let installed_now = GLOBAL_STORE.set(store.clone()).is_ok();
+    let installed_now = GLOBAL_STORE.install(store.clone());
     if installed_now {
         // Sweep the blob root itself: per-session dirs are its *children*
         // (`blob_dir()` = `base_dir/<sanitized session>`). Rooting the sweep
@@ -101,9 +119,27 @@ pub fn set_global_tool_result_store(store: Arc<ToolResultStore>) {
     }
 }
 
+/// Record that boot reached this slot and had nothing to install.
+///
+/// The `Err(e)` arm of boot's `ToolResultStore::new("global")` match, which
+/// today only logs a warning. `because` is quoted verbatim to an operator.
+pub fn decline_global_tool_result_store(because: &'static str) {
+    GLOBAL_STORE.decline(because);
+}
+
 /// Read the process-wide `ToolResultStore`, if installed.
+///
+/// ⚠️ `None` says nothing about whether boot reached this slot. Ask
+/// [`global_tool_result_store_slot`]`().outcome()` for that.
+#[inline]
 pub fn global_tool_result_store() -> Option<Arc<ToolResultStore>> {
     GLOBAL_STORE.get().cloned()
+}
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn global_tool_result_store_slot() -> &'static dyn SlotStatus {
+    &GLOBAL_STORE
 }
 
 // =============================================================================
@@ -731,7 +767,8 @@ fn dir_is_stale(dir: &Path, now: SystemTime, cutoff: Duration) -> bool {
 /// Fire-and-forget: the task is detached (and keeps the store's shared inner
 /// alive). Multiple calls with the same store will spawn multiple sweepers —
 /// callers should invoke this once per store (the
-/// [`set_global_tool_result_store`] entry point enforces that via `OnceLock`).
+/// [`set_global_tool_result_store`] entry point enforces that: its slot
+/// installs once, and the sweeper is spawned only on the install that won).
 ///
 /// No-op if there is no running Tokio runtime — log at DEBUG and return so
 /// that non-async test bootstraps don't panic.
@@ -863,6 +900,19 @@ fn sanitize_for_filename(s: &str) -> String {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    // ========================================================================
+    // The process-global handle, as a capability slot
+    // ========================================================================
+
+    /// See `session::service::tests::the_accessor_exposes_this_handle_to_the_roster`
+    /// for why this asserts through the accessor rather than the static.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = global_tool_result_store_slot();
+        assert_eq!(slot.id(), "tools/result-store");
+        assert!(matches!(slot.missing(), MissingSemantics::FailsClosed));
+    }
 
     /// Build a test store rooted in a scratch directory instead of ~/.aleph/.
     ///

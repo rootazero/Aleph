@@ -642,29 +642,14 @@ mod tests {
     #[test]
     fn cost_status_unknown_has_no_source_path_to_a_priced_delta() {
         let src = include_str!("metering.rs").replace('\r', "");
-        // CRLF-safe (this repo's Windows checkout uses \r\n) and unanchored
-        // on purpose: an anchored "\n#[cfg(test)]" needle matches nothing
-        // once \r is stripped from a line that had it, silently turning
-        // "production" into the whole file — see CLAUDE.md §10 for the
-        // documented failure this avoids.
-        let production = src.split("#[cfg(test)]").next().unwrap_or(&src);
+        let production = crate::utils::source_scan::production_prefix(&src);
         assert!(
             production.len() < src.len(),
             "the #[cfg(test)] split matched nothing — this test would be \
              reading its own source, and the assertions below would be \
              checking their own doc comments instead of production code"
         );
-        // Strip `//` line comments before scanning: this file's own doc
-        // comments spell out `CostStatus::Unknown => crate::spend::Delta::Unpriced`
-        // in prose (see `record_spend_with`'s doc), and a naive `contains`
-        // would be satisfied by that sentence even if the match arm below
-        // it read something else — the bug's own explanation becoming its
-        // only search hit.
-        let production: String = production
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let production = crate::utils::source_scan::strip_comment_lines(&production);
         assert!(
             production.contains("CostStatus::Unknown => crate::spend::Delta::Unpriced"),
             "CostStatus::Unknown must map to the fieldless Delta::Unpriced \

@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn wait_for_resolves_its_tab_through_the_guarded_helper() {
         let src = include_str!("wait_for.rs").replace('\r', "");
-        let prod = src.split("#[cfg(test)]").next().unwrap_or(&src).to_string();
+        let prod = crate::utils::source_scan::production_prefix(&src);
         assert!(
             prod.contains("make_backend_and_tab_guarded(&self.manager"),
             "the production half of wait_for.rs no longer resolves through the guarded helper"

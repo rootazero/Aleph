@@ -9,10 +9,13 @@
 
 use async_trait::async_trait;
 
-use crate::diagnostics::check::{HealthCheck, Posture};
+use crate::diagnostics::check::{settle_probe, HealthCheck, Posture};
 use crate::diagnostics::finding::{Finding, Severity};
 
 const ID: &str = "core/duplicate-instance";
+/// Noun phrase the "unknown" finding is titled with — `"Duplicate instance
+/// unknown"`. See [`crate::diagnostics::check::unknown_finding`].
+const SUBJECT: &str = "Duplicate instance";
 
 /// Classification, pure so it can be unit tested without a process table:
 /// `other_instances` is the count of OTHER live `aleph-server` processes
@@ -73,11 +76,22 @@ impl HealthCheck for DuplicateInstanceCheck {
 
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
         // sysinfo does synchronous /proc I/O — keep it off the async executor.
-        let others = match tokio::task::spawn_blocking(count_other_instances).await {
+        // A panicked or cancelled probe counted nothing. Folding it into `0`
+        // fed `classify_other_instances(0)` — i.e. `[ok] Single instance`, the
+        // reassuring line in front of the one condition this check exists for.
+        // Sibling of the same fix in `core/instance-lock`; both go through
+        // `check::settle_probe`.
+        let others = match settle_probe(
+            ID,
+            SUBJECT,
+            tokio::task::spawn_blocking(count_other_instances).await,
+        ) {
             Ok(n) => n,
-            Err(e) => {
-                tracing::warn!("duplicate-instance probe task failed: {e}");
-                0
+            Err(finding) => {
+                return vec![finding.with_fix_hint(
+                    "Count them by hand before trusting this host with a vault: \
+                     pgrep -fa aleph-server",
+                )]
             }
         };
 
@@ -125,5 +139,21 @@ mod tests {
         // Killing processes is a human call — never mechanically repairable.
         assert!(!findings[0].repairable);
         assert!(findings[0].repair_outcome.is_none());
+    }
+
+    /// `classify_other_instances(0)` is `[ok] Single instance`, so a probe that
+    /// never ran must not be allowed to produce `0`.
+    ///
+    /// Pins this check's own `(ID, SUBJECT)` wiring — see the sibling test in
+    /// `stale_lock.rs` for why the shared `settle_probe` test is not enough.
+    #[tokio::test]
+    async fn a_process_scan_that_did_not_run_is_not_a_single_instance() {
+        let joined: Result<usize, tokio::task::JoinError> =
+            tokio::task::spawn_blocking(|| panic!("process scan blew up")).await;
+        let finding = settle_probe(ID, SUBJECT, joined)
+            .expect_err("a task that did not complete must not settle into a count of 0");
+        assert_eq!(finding.check_id, ID);
+        assert_eq!(finding.title, "Duplicate instance unknown");
+        assert!(finding.is_problem(), "an unknown must never render as [ok]");
     }
 }

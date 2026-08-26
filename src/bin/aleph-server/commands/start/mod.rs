@@ -38,7 +38,7 @@ use builder::{
 };
 
 mod orchestrator_init;
-use orchestrator_init::initialize_orchestrator;
+use orchestrator_init::{decline_orchestrator_slots, initialize_orchestrator};
 
 mod helpers;
 use helpers::{
@@ -453,12 +453,27 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // continuity after compaction evicts old turns from the context window.
     if let Some(store) = session_event_store_for_resume.clone() {
         alephcore::session::store::set_global_session_event_store(store);
+    } else {
+        alephcore::session::store::decline_global_session_event_store(
+            "the session_events SQLite service could not be built: opening or \
+             migrating `<config_dir>/data/sessions/session_events.db` failed \
+             (`build_sqlite_session_service` logs which of the two). \
+             `recall_events` search and boot-time resume are unavailable.",
+        );
     }
     // Install the session service process-wide so edge-path callers (simple
     // execution engine, openai-compat completions) can emit events through
     // the actor pipeline and thus through the MessageProjector.
     if let Some(svc) = session_service_for_orchestrator.clone() {
         alephcore::session::service::set_global_session_service(svc);
+    } else {
+        alephcore::session::service::decline_global_session_service(
+            "the session_events SQLite service could not be built, so there is \
+             no actor pipeline to publish: opening or migrating \
+             `<config_dir>/data/sessions/session_events.db` failed \
+             (`build_sqlite_session_service` logs which of the two). Edge-path \
+             callers fall back to writing the transcript directly.",
+        );
     }
 
     // Security store + vault construction (early — vault needed for API key
@@ -1078,6 +1093,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     Some(shared)
                 }
                 Err(e) => {
+                    alephcore::tasks::cron::decline_global(
+                        "`[cron] enabled = true` but the cron service failed to \
+                         start — the accompanying \"Failed to initialize cron \
+                         service\" message names the cause. No scheduled job \
+                         runs this boot.",
+                    );
+                    // NOT gated on `!args.daemon` — see the same fix in
+                    // `helpers.rs`'s extension-manager arm. The decline above
+                    // tells the operator an accompanying message names the
+                    // cause; in daemon mode the `eprintln!` below does not run,
+                    // so without this line that promise refers to nothing and
+                    // `{e}` is lost.
+                    tracing::warn!(error = %e, "Failed to initialize cron service; cron disabled");
                     if !args.daemon {
                         eprintln!(
                             "Warning: Failed to initialize cron service: {e}. Cron disabled."
@@ -1087,6 +1115,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 }
             }
         } else {
+            // A different sentence from the `Err` arm above on purpose: this one
+            // is a setting an operator chose, that one is a fault they need to
+            // fix. One `because` covering both would be actionable for neither.
+            alephcore::tasks::cron::decline_global(
+                "`[cron] enabled = false`: no scheduler runs in this process, so \
+                 the deactivation freeze in `users.update` reports `crons: 0` \
+                 whether or not the user owns any.",
+            );
             if !args.daemon {
                 println!("Cron service: disabled");
                 println!();
@@ -1693,6 +1729,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 }
             }
             Err(e) => {
+                // Safe to stamp even for the slots `initialize_orchestrator`
+                // installed before it failed: `decline` is first-writer-wins, so
+                // it is a no-op once `install` has stamped. The reverse order is
+                // the hazard, and it cannot arise here.
+                decline_orchestrator_slots(
+                    "assembling the Orchestrator failed partway through — the \
+                     accompanying \"Failed to assemble Orchestrator\" warning \
+                     names the error. Everything it installs after the failure \
+                     point is absent.",
+                );
                 tracing::warn!(error = %e, "Failed to assemble Orchestrator — flow composition disabled");
             }
         }
@@ -1700,6 +1746,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // `tracing` routes to the log file in daemon mode, so this diagnostic
         // must NOT be gated on `!args.daemon` — daemon is the production path
         // where a silently disabled orchestrator is hardest to notice.
+        //
+        // Four capability handles are installed INSIDE `initialize_orchestrator`,
+        // unconditionally, so nothing at their own call sites can record this
+        // absence: the conditional is here, one call frame up. One of the four
+        // (`providers/pinnable-set`) fails OPEN.
+        decline_orchestrator_slots(
+            "the Orchestrator was never assembled: this boot has no default \
+             provider, or no session service, or neither. Configure a provider \
+             under `[providers]` and set `[general] default_provider`.",
+        );
         tracing::info!("Orchestrator: skipped (no default provider or session service available)");
     }
 
@@ -1893,7 +1949,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             if !args.daemon {
                 println!("OAuth: Codex token auto-refresh enabled");
             }
+        } else {
+            alephcore::gateway::codex_token_refresher::decline_global(
+                "no `chatgpt` provider is configured, so there is no Codex OAuth \
+                 token to refresh. Add a `[providers.chatgpt]` section to enable \
+                 the hourly self-heal.",
+            );
         }
+    } else {
+        alephcore::gateway::codex_token_refresher::decline_global(
+            "no live provider registry was built this boot (no provider is \
+             configured), so there is nothing to hot-swap a refreshed Codex \
+             token into.",
+        );
     }
 
     // Background health prober for circuit-open providers (LiteLLM/Bifrost
@@ -2857,13 +2925,32 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             "Busy-queue: re-delivered messages queued before the restart"
                         );
                     }
+                } else {
+                    alephcore::gateway::decline_global_resume_coordinator(
+                        "boot built no execution adapter or no agent registry — a \
+                         deployment with no configured provider builds neither — \
+                         so nothing can re-trigger an interrupted run. \
+                         `agent.resume` and `aleph-server resume` report the \
+                         feature unavailable.",
+                    );
                 }
             });
             if !args.daemon {
                 println!("Projection reconciler + resume: boot scan spawned");
             }
-        } else if !args.daemon {
-            println!("Projection reconciler + resume: skipped (no session event store)");
+        } else {
+            // Different sentence from the one inside the spawn above: there the
+            // collaborators were missing, here there is no event log to resume
+            // FROM. Both end at the same absent handle and an `agent.resume`
+            // rejection that reads like the feature not existing.
+            alephcore::gateway::decline_global_resume_coordinator(
+                "no session_events store was built, so there is no interrupted-run \
+                 log to resume from — see the session-event-store decline for why \
+                 the SQLite service could not be opened.",
+            );
+            if !args.daemon {
+                println!("Projection reconciler + resume: skipped (no session event store)");
+            }
         }
     }
 
@@ -3231,6 +3318,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             }
         }
         Err(e) => {
+            // One fault, three slots. Each gets its own stamp because each has
+            // its own reader, and one of them (`tools/turn-budget`) FAILS OPEN:
+            // absent, every caller keeps behaving as though a turn cap were
+            // being enforced.
+            const WHY: &str = "the tool-result store could not be created under \
+                 `<config_dir>/data/tool_results/global/`, so Layer 2 (per-result \
+                 spill) and Layer 3 (per-turn budget) are both disabled — the \
+                 accompanying \"tool-result-budget store init failed\" warning \
+                 names the I/O error. Check the data directory is writable.";
+            alephcore::tools::result_store::decline_global_tool_result_store(WHY);
+            alephcore::tools::result_processing::decline_global_result_budget_ceiling(WHY);
+            alephcore::tools::turn_budget::decline_global_turn_result_budget(WHY);
             tracing::warn!(
                 error = %e,
                 "tool-result-budget store init failed; Layer 2 + Layer 3 disabled"
@@ -3566,18 +3665,14 @@ mod tests {
     #[test]
     fn boot_installs_the_spend_policy_and_the_spend_ledger() {
         let src = include_str!("mod.rs").replace('\r', "");
-        let production = src.split("#[cfg(test)]").next().unwrap_or(&src);
+        let production = alephcore::utils::source_scan::production_prefix(&src);
         assert!(
             production.len() < src.len(),
             "the #[cfg(test)] split matched nothing — this test would be \
              reading its own source, and would trivially pass by finding \
              its own doc comment"
         );
-        let production: String = production
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let production = alephcore::utils::source_scan::strip_comment_lines(&production);
         for call in ["install_policy(", "install_ledger("] {
             assert!(
                 production.contains(call),

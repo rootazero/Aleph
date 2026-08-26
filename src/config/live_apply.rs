@@ -329,17 +329,18 @@ mod tests {
     /// very next call — no restart, no new process — sees the new ceiling.
     ///
     /// Negative: when the section did not land, the verdict must downgrade
-    /// to `Restart` rather than lie. `GLOBAL_POLICY` is a `OnceLock`
-    /// (`spend::update_policy`'s handle) that this binary's other tests may
-    /// already have set by the time this test runs, in an order this crate
-    /// does not control, and a `OnceLock` cannot be uninstalled — see
-    /// `spend::update_policy_into`'s doc. So this exercises the downgrade
-    /// decision the same way `route_without_a_registered_chain_downgrades_to_restart`
+    /// to `Restart` rather than lie. `GLOBAL_POLICY` is a
+    /// `MutableCapabilitySlot` (`spend::update_policy`'s handle) that this
+    /// binary's other tests may already have installed by the time this test
+    /// runs, in an order this crate does not control, and a slot cannot be
+    /// uninstalled — see `spend::update_policy`'s doc. So this exercises the
+    /// downgrade decision the same way
+    /// `route_without_a_registered_chain_downgrades_to_restart`
     /// does for `route`: directly, against a synthetic empty `live_applied`,
     /// which is exactly what `apply_live_sections` produces when the arm's
     /// `update_policy` call returns `false` — pinned in isolation,
     /// independent of process-global ordering, by
-    /// `spend::tests::update_policy_into_reports_false_with_no_handle`.
+    /// `capability::tests::update_before_install_returns_false_and_changes_nothing`.
     /// ⚠️ Serialised with every other test that WRITES `GLOBAL_POLICY`.
     /// `apply_live_sections`'s spend arm calls `spend::update_policy`, which
     /// overwrites a process-wide `ArcSwap` shared by the whole `--lib` test

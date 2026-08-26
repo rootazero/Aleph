@@ -22,7 +22,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 
-use crate::diagnostics::check::{HealthCheck, Posture};
+use crate::diagnostics::check::{HealthCheck, Posture, Presence};
 use crate::diagnostics::finding::{Finding, Severity};
 use crate::secrets::SecretVault;
 
@@ -58,13 +58,23 @@ impl HealthCheck for VaultCheck {
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
         let display = self.vault_path.display().to_string();
 
-        // A missing vault is normal on a fresh install — no secrets stored yet.
-        if !self.vault_path.exists() {
-            return vec![Finding::ok(
-                ID,
-                "No vault yet",
-                format!("{display} not present; no secrets stored yet."),
-            )];
+        // A missing vault is normal on a fresh install — no secrets stored
+        // yet. A vault that is THERE and cannot be stat'd is the opposite of
+        // normal, and "no secrets stored yet" is the one sentence that stops
+        // an operator investigating a vault they cannot open. This repo
+        // already records vault data loss as an observed failure mode
+        // (multi-process contention -> HMAC failure -> vault data lost), so
+        // the two answers get two findings.
+        match Presence::of(ID, "Vault state", &self.vault_path) {
+            Err(f) => return vec![f],
+            Ok(Presence::Absent) => {
+                return vec![Finding::ok(
+                    ID,
+                    "No vault yet",
+                    format!("{display} not present; no secrets stored yet."),
+                )]
+            }
+            Ok(Presence::Present) => {}
         }
 
         // `open()` reads and decrypts the file synchronously — keep it off
@@ -146,5 +156,23 @@ mod tests {
         let findings = check.run(Posture::Fix).await;
         assert!(findings.iter().all(|f| f.repair_outcome.is_none()));
         assert!(path.exists(), "fix posture must not delete the vault file");
+    }
+
+    /// The worst instance of the class this round closed: "no secrets stored
+    /// yet" is the one sentence that stops an operator investigating a vault
+    /// they cannot open, and `Path::exists()` says exactly that when the
+    /// filesystem refuses to answer. See `check::tests::unanswerable` for why
+    /// the fixture is an interior NUL rather than a `chmod 000` directory.
+    #[tokio::test]
+    async fn an_unreadable_vault_is_not_reported_as_no_vault_yet() {
+        let check = VaultCheck::new(PathBuf::from("aleph\u{0}vault"));
+        let findings = check.run(Posture::Inspect).await;
+        assert_eq!(findings.len(), 1);
+        assert!(
+            findings[0].is_problem(),
+            "an unanswerable vault path must not render as a pass: {:?}",
+            findings[0]
+        );
+        assert_ne!(findings[0].title, "No vault yet");
     }
 }

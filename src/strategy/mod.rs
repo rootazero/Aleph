@@ -12,8 +12,7 @@ pub use render::{render_guardrails_only, render_strategy_summary, render_workflo
 pub use store::StrategyStore;
 pub use types::Strategy;
 
-use once_cell::sync::OnceCell;
-
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
 
 /// Composite-key prefix for a `/goal`-flow strategy, keyed by session.
@@ -60,13 +59,27 @@ pub fn team_key(team_id: &str) -> String {
 /// Process-global strategy store. Initialized once at daemon boot
 /// (`constructor.rs`); `None` until then so tests / early-boot read as "no
 /// strategy subsystem" and the prompt layers stay dormant.
-static GLOBAL: OnceCell<Arc<StrategyStore>> = OnceCell::new();
+///
+/// `ConsumerDecides`, like its two siblings: 15 production call sites, each
+/// deciding for itself. The welded strategy simply does not appear in the
+/// downstream prompt (`context_blocks.rs`, `teams::broadcast`), and
+/// `builtin_tools::goal` skips the mint step — a `/goal` flow then runs with no
+/// guardrails and reports success, because "no strategy subsystem" and "no
+/// strategy for this session" are the same `None`.
+static GLOBAL: CapabilitySlot<Arc<StrategyStore>> =
+    CapabilitySlot::new("strategy/store", MissingSemantics::ConsumerDecides);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn global_slot() -> &'static dyn SlotStatus {
+    &GLOBAL
+}
 
 /// Install the global store at boot. Idempotent: a second call is ignored.
 /// Holds an `Arc` (mirroring `goal::init_global`) so the boot constructor, the
 /// `strategy` tool, and the lifecycle clears all share one store instance.
 pub fn init_global(store: Arc<StrategyStore>) {
-    let _ = GLOBAL.set(store);
+    let _ = GLOBAL.install(store);
 }
 
 /// Read the global store, if initialized (a cheap `Arc` clone).
@@ -78,7 +91,7 @@ pub fn global() -> Option<Arc<StrategyStore>> {
 /// Test-only override. In production `init_global` is the only writer.
 #[cfg(test)]
 pub fn set_global_for_test(store: Arc<StrategyStore>) {
-    let _ = GLOBAL.set(store);
+    let _ = GLOBAL.install(store);
 }
 
 #[cfg(test)]
@@ -125,5 +138,25 @@ mod tests {
         let store = Arc::new(StrategyStore::open(&dir.path().join("strat.db")).unwrap());
         set_global_for_test(store);
         assert!(global().is_some());
+    }
+
+    /// The variant is the operator-facing severity of this handle going
+    /// missing (`FailsOpen` => Error and a non-zero `aleph doctor`;
+    /// `IndistinguishableDefault` / `ConsumerDecides` => Warning;
+    /// `FailsClosed` => Info), and it is DERIVED from the consumers named on
+    /// the static above. Pinned in the module that owns the handle, because
+    /// that is the only place a reclassification and a re-read of those
+    /// consumers can be made to happen together — the aggregate figure in
+    /// FEATURE_LOCATOR cannot tell a reclassification from a new slot.
+    /// `census::every_slot_pins_its_own_missing_semantics` requires this by
+    /// slot id.
+    #[test]
+    fn the_store_slot_pins_its_missing_semantics() {
+        assert_eq!(global_slot().id(), "strategy/store");
+        assert!(
+            matches!(global_slot().missing(), MissingSemantics::ConsumerDecides),
+            "`strategy/store` is classified ConsumerDecides from its consumers; changing that \
+             means re-reading them, not re-typing this line"
+        );
     }
 }

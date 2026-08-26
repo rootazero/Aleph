@@ -20,8 +20,8 @@
 ///     .with_meta("model", "gpt-4");
 /// // ... do work
 /// ```
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use std::collections::BTreeMap;
-use std::sync::OnceLock;
 use std::time::Instant;
 
 /// Default warning multiplier applied when no policy is configured.
@@ -30,9 +30,14 @@ const DEFAULT_WARNING_MULTIPLIER: f64 = 2.0;
 /// Live metrics knobs sourced from `[policies.metrics]` at config load.
 ///
 /// `StageTimer` is created via ad-hoc static `start()` calls with no config in
-/// scope, so the policy is bound process-wide once (write-once `OnceLock`,
-/// mirroring `config::defaults_override`). Reads before init — early startup,
-/// unit tests — fall back to the compiled defaults.
+/// scope, so the policy is bound process-wide once (a write-once capability
+/// slot). Reads before init — early startup, unit tests — fall back to the
+/// compiled defaults via `unwrap_or_default()`.
+///
+/// It no longer "mirrors `config::defaults_override`": that handle's fallback
+/// was extracted into its own `EMPTY_DEFAULTS_OVERRIDE` static because its
+/// accessor used to latch, and this one never latched — `unwrap_or_default()`
+/// builds a fresh value per read. Same variant, different fallback shape.
 #[derive(Clone, Copy)]
 struct MetricsRuntime {
     warning_multiplier: f64,
@@ -50,7 +55,30 @@ impl Default for MetricsRuntime {
     }
 }
 
-static METRICS_RUNTIME: OnceLock<MetricsRuntime> = OnceLock::new();
+/// `IndistinguishableDefault`, derived from the single reader below:
+/// [`metrics_runtime`] answers `.get().copied().unwrap_or_default()`, so an
+/// uninstalled handle hands every `StageTimer` the compiled
+/// `MetricsRuntime::default()` — warnings on, logging on, 2.0x threshold —
+/// and an operator who set `[policies.metrics] enable_warnings = false` keeps
+/// getting warnings with nothing anywhere saying why.
+///
+/// ⚠️ This handle is the reason the census is derived rather than grepped: it
+/// was absent from the specification's hand-written roster because rustfmt put
+/// its `.set(` on the line after the receiver. See
+/// `capability::census::tests::the_writer_recogniser_reads_across_line_breaks`.
+static METRICS_RUNTIME: CapabilitySlot<MetricsRuntime> = CapabilitySlot::new(
+    "metrics/runtime",
+    MissingSemantics::IndistinguishableDefault {
+        reads_as: "MetricsRuntime::default() -- warnings and stage logging on, \
+                   2.0x warning threshold, whatever [policies.metrics] said",
+    },
+);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn metrics_runtime_slot() -> &'static dyn SlotStatus {
+    &METRICS_RUNTIME
+}
 
 /// Bind the live metrics knobs from `[policies.metrics]`. Called once from
 /// `Config::load` so `StageTimer` honours user-configured thresholds instead of
@@ -63,14 +91,11 @@ pub fn init_metrics_runtime(policy: &crate::config::MetricsPolicy) {
         } else {
             DEFAULT_WARNING_MULTIPLIER
         };
-    if METRICS_RUNTIME
-        .set(MetricsRuntime {
-            warning_multiplier,
-            enable_logging: policy.enable_logging,
-            enable_warnings: policy.enable_warnings,
-        })
-        .is_err()
-    {
+    if !METRICS_RUNTIME.install(MetricsRuntime {
+        warning_multiplier,
+        enable_logging: policy.enable_logging,
+        enable_warnings: policy.enable_warnings,
+    }) {
         tracing::warn!(
             "metrics runtime already initialised; ignoring reload — the reloaded \
              [policies.metrics] values are silently inactive, restart the process to \
@@ -355,5 +380,34 @@ mod tests {
     fn test_timer_with_empty_metadata() {
         let timer = StageTimer::start("empty_meta_test");
         assert!(timer.metadata.is_none());
+    }
+
+    /// The `reads_as` sentence reaches an operator, so it is tied to the
+    /// fallback `metrics_runtime()` really returns rather than spot-read.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = metrics_runtime_slot();
+        assert_eq!(slot.id(), "metrics/runtime");
+        let MissingSemantics::IndistinguishableDefault { reads_as } = slot.missing() else {
+            panic!(
+                "expected IndistinguishableDefault, got {:?}",
+                slot.missing()
+            );
+        };
+        // Tied to the CONSTANT, not to the literal "2.0x": change
+        // DEFAULT_WARNING_MULTIPLIER and this names the stale sentence
+        // instead of agreeing with it.
+        assert!(
+            reads_as.contains(&format!("{DEFAULT_WARNING_MULTIPLIER:.1}x")),
+            "the sentence must name the real multiplier \
+             ({DEFAULT_WARNING_MULTIPLIER}); got {reads_as:?}"
+        );
+        let d = MetricsRuntime::default();
+        assert_eq!(d.warning_multiplier, DEFAULT_WARNING_MULTIPLIER);
+        assert!(
+            d.enable_logging && d.enable_warnings,
+            "the sentence claims logging and warnings are ON when nothing is \
+             installed; MetricsRuntime::default() no longer agrees"
+        );
     }
 }

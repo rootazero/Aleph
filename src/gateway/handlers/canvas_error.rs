@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn no_canvas_handler_writes_an_internal_error_code_of_its_own() {
         let src = include_str!("canvas.rs").replace('\r', "");
-        let production = src.split("#[cfg(test)]").next().unwrap_or(&src).to_string();
+        let production = crate::utils::source_scan::production_prefix(&src);
         // Self-check that the prefix really is the production half, not an
         // empty or test-only slice: the handler family must be in it.
         assert!(

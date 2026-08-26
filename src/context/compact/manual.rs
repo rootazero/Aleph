@@ -56,6 +56,7 @@
 //! their last ten turns twice. The summary therefore carries an explicit framing
 //! line saying what it covers, and rides at the position with the most attention.
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::context::compact::compactor::{deterministic_truncation, ContextCompactor};
 use crate::context::compact::event_snap::{snap_out_of_open_run, snap_past_tool_results};
@@ -106,8 +107,8 @@ pub struct ManualCompactOptions {
     /// Verbatim tail budget in tokens. `None` — every production caller — takes
     /// the operator setting (`[context_budget] manual_compact_keep_tokens`, else
     /// [`DEFAULT_KEEP_TOKENS`]). Present so the boundary logic can be driven at
-    /// its edges without installing the process-wide handle, which is a
-    /// `OnceLock` and therefore un-resettable per test.
+    /// its edges without installing the process-wide handle, which is
+    /// install-once and therefore un-resettable per test.
     pub keep_tokens: Option<usize>,
 }
 
@@ -183,12 +184,46 @@ pub struct ManualCompactWiring {
     pub summarizer_input_budget: usize,
 }
 
-static MANUAL_WIRING: std::sync::OnceLock<ManualCompactWiring> = std::sync::OnceLock::new();
+/// `IndistinguishableDefault`, derived across all three readers: two of them
+/// substitute a compiled constant ([`manual_keep_tokens`] →
+/// [`DEFAULT_KEEP_TOKENS`], [`manual_summarizer_input_budget`] →
+/// [`SUMMARIZER_INPUT_TOKEN_BUDGET`]) and the third returns no summarizer,
+/// which degrades `/compact` to deterministic truncation — "still a real
+/// compaction, just a blunt summary", as this module's own doc puts it.
+///
+/// Every one of those is a legal-looking answer. An operator who set
+/// `[context_budget] manual_compact_keep_tokens` gets the compiled number
+/// instead, a user who ran `/compact` gets a truncation where a summary was
+/// promised, and nothing on any surface distinguishes that from a deployment
+/// that was configured exactly this way.
+static MANUAL_WIRING: CapabilitySlot<ManualCompactWiring> = CapabilitySlot::new(
+    "context/manual-compact-wiring",
+    MissingSemantics::IndistinguishableDefault {
+        reads_as: "the compiled DEFAULT_KEEP_TOKENS and SUMMARIZER_INPUT_TOKEN_BUDGET, \
+                   and no summarizer -- /compact truncates instead of summarising",
+    },
+);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn manual_wiring_slot() -> &'static dyn SlotStatus {
+    &MANUAL_WIRING
+}
 
 /// Install the process-wide manual-compaction wiring. Idempotent: a second call
 /// is ignored (mirrors `set_global_session_service`).
 pub fn install_manual_compaction(wiring: ManualCompactWiring) {
-    let _ = MANUAL_WIRING.set(wiring);
+    let _ = MANUAL_WIRING.install(wiring);
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// Boot installs this from inside `initialize_orchestrator`, which is gated on
+/// a default provider plus a session service. Absent, every `/compact` surface
+/// truncates instead of summarising and reports success. `because` is quoted
+/// verbatim to an operator.
+pub fn decline_manual_compaction(because: &'static str) {
+    MANUAL_WIRING.decline(because);
 }
 
 /// The summarizer provider installed at boot, if any.
@@ -1358,5 +1393,42 @@ mod tests {
             None,
             "the compaction summary must never be mistaken for the user's task"
         );
+    }
+
+    /// The `reads_as` sentence names two compiled constants, so both are tied
+    /// to the arms that really return them.
+    ///
+    /// Premise stated out loud: `install_manual_compaction`'s only caller is
+    /// `bin/aleph-server/.../orchestrator_init.rs`, so nothing in the library
+    /// installs this handle and the fallback arms are observable here. If a
+    /// library test ever installs it, the assertion below names that rather
+    /// than going quietly vacuous.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = manual_wiring_slot();
+        assert_eq!(slot.id(), "context/manual-compact-wiring");
+        let MissingSemantics::IndistinguishableDefault { reads_as } = slot.missing() else {
+            panic!(
+                "expected IndistinguishableDefault, got {:?}",
+                slot.missing()
+            );
+        };
+        assert!(reads_as.contains("DEFAULT_KEEP_TOKENS"), "got {reads_as:?}");
+        assert!(
+            reads_as.contains("SUMMARIZER_INPUT_TOKEN_BUDGET"),
+            "got {reads_as:?}"
+        );
+        assert!(
+            MANUAL_WIRING.get().is_none(),
+            "a library test now installs the manual-compaction wiring; this \
+             guard's premise is gone and the three assertions below are about \
+             an installed handle, not an absent one"
+        );
+        assert_eq!(manual_keep_tokens(), DEFAULT_KEEP_TOKENS);
+        assert_eq!(
+            manual_summarizer_input_budget(),
+            SUMMARIZER_INPUT_TOKEN_BUDGET
+        );
+        assert!(manual_summarizer().is_none());
     }
 }

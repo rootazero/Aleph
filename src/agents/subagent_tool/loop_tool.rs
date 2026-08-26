@@ -2071,7 +2071,7 @@ mod tests {
         // with the test module inside `prod`, the `checked > 0` assertion below
         // is satisfied by these string literals, so deleting the real fan-out
         // would not have tripped the very check that exists to notice that.
-        let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let prod = crate::utils::source_scan::production_prefix(src);
         let lines: Vec<&str> = prod.lines().collect();
         let mut checked = 0usize;
         for (i, line) in lines.iter().enumerate() {

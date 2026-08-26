@@ -17,6 +17,7 @@ use std::collections::HashMap;
 
 use tokio::sync::Semaphore;
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::config::types::ResumeConfig;
 use crate::gateway::agent_instance::{AgentInstance, AgentRegistry};
 use crate::gateway::execution_adapter::ExecutionAdapter;
@@ -25,8 +26,15 @@ use crate::session::events::{now_ms, RunOutcome, SessionEvent, SessionEventRecor
 use crate::session::service::SessionId;
 use crate::session::store::SessionEventStore;
 
-static GLOBAL_RESUME_COORDINATOR: std::sync::OnceLock<Arc<ResumeCoordinator>> =
-    std::sync::OnceLock::new();
+/// `FailsClosed`: `handlers/resume.rs` turns a missing handle into
+/// `ResumeOutcome::Unavailable`. Nothing resumes and nothing is harmed — but
+/// the setter's own doc below already names the cost in this round's exact
+/// words: *"the only symptom would be a rejection, which is indistinguishable
+/// from the feature not existing"*. That sentence was written about installing
+/// the handle under too narrow a condition; it is equally true of not
+/// installing it at all, and until now there was no way to ask which happened.
+static GLOBAL_RESUME_COORDINATOR: CapabilitySlot<Arc<ResumeCoordinator>> =
+    CapabilitySlot::new("gateway/resume-coordinator", MissingSemantics::FailsClosed);
 
 /// Publish the process-wide coordinator so on-demand resume
 /// ([`ResumeCoordinator::resume_session`]) can reach the same instance the boot
@@ -42,7 +50,24 @@ static GLOBAL_RESUME_COORDINATOR: std::sync::OnceLock<Arc<ResumeCoordinator>> =
 /// Idempotent: a second call is ignored (mirrors
 /// [`crate::session::service::set_global_session_service`]).
 pub fn set_global_resume_coordinator(coordinator: Arc<ResumeCoordinator>) {
-    let _ = GLOBAL_RESUME_COORDINATOR.set(coordinator);
+    let _ = GLOBAL_RESUME_COORDINATOR.install(coordinator);
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// The doc above explains why the handle must not be installed under the
+/// narrower `[resume] enabled` condition. This is the other half of the same
+/// argument: when the *wider* condition is also unmet, say so, because the only
+/// other symptom is an `agent.resume` rejection that reads exactly like the
+/// feature not existing. `because` is quoted verbatim to an operator.
+pub fn decline_global_resume_coordinator(because: &'static str) {
+    GLOBAL_RESUME_COORDINATOR.decline(because);
+}
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn global_resume_coordinator_slot() -> &'static dyn SlotStatus {
+    &GLOBAL_RESUME_COORDINATOR
 }
 
 /// The process-wide coordinator, if one has been installed. `None` in tests and
@@ -948,6 +973,15 @@ impl ResumeCoordinator {
 mod tests {
     use super::*;
     use crate::session::events::{ToolOutput, TurnId};
+
+    /// See `session::service::tests::the_accessor_exposes_this_handle_to_the_roster`
+    /// for why this asserts through the accessor rather than the static.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = global_resume_coordinator_slot();
+        assert_eq!(slot.id(), "gateway/resume-coordinator");
+        assert!(matches!(slot.missing(), MissingSemantics::FailsClosed));
+    }
 
     fn rec(seq: u64, event: SessionEvent, created_at_ms: i64) -> SessionEventRecord {
         SessionEventRecord {

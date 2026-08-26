@@ -268,15 +268,7 @@ fn execute_redirects_before_it_admits() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src/gateway/execution_engine/execute.rs");
     let text = std::fs::read_to_string(&path).expect("execute.rs");
-    // Split on the bare attribute — never on `\n#[cfg(test)]\n`, which matches
-    // nothing on a CRLF checkout and silently widens the "production prefix" to
-    // the whole file.
-    let production = text
-        .replace('\r', "")
-        .split("#[cfg(test)]")
-        .next()
-        .unwrap_or_default()
-        .to_string();
+    let production = crate::utils::source_scan::production_prefix(&text);
 
     let redirect = production
         .find("redirect_to_side_session(&mut request)")
@@ -549,12 +541,7 @@ fn a_seeding_failure_cannot_return_without_announcing_itself() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src/gateway/execution_engine/execute.rs");
     let text = std::fs::read_to_string(&path).expect("execute.rs");
-    let production = text
-        .replace('\r', "")
-        .split("#[cfg(test)]")
-        .next()
-        .unwrap_or_default()
-        .to_string();
+    let production = crate::utils::source_scan::production_prefix(&text);
 
     assert!(
         !production.contains("self.seed_side_session(main, &request).await?"),
