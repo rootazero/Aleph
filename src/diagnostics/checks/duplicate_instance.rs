@@ -151,8 +151,7 @@ mod tests {
         let joined: Result<usize, tokio::task::JoinError> =
             tokio::task::spawn_blocking(|| panic!("process scan blew up")).await;
         let finding = settle_probe(ID, SUBJECT, joined)
-            .err()
-            .expect("a task that did not complete must not settle into a count of 0");
+            .expect_err("a task that did not complete must not settle into a count of 0");
         assert_eq!(finding.check_id, ID);
         assert_eq!(finding.title, "Duplicate instance unknown");
         assert!(finding.is_problem(), "an unknown must never render as [ok]");

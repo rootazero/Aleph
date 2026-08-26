@@ -175,8 +175,7 @@ mod tests {
         let joined: Result<Option<()>, tokio::task::JoinError> =
             tokio::task::spawn_blocking(|| panic!("holder probe blew up")).await;
         let finding = settle_probe(ID, SUBJECT, joined)
-            .err()
-            .expect("a task that did not complete must not settle into `no holder`");
+            .expect_err("a task that did not complete must not settle into `no holder`");
         assert_eq!(finding.check_id, ID);
         assert_eq!(finding.title, "Instance lock unknown");
         assert!(finding.is_problem(), "an unknown must never render as [ok]");

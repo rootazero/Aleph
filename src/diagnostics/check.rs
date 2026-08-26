@@ -388,8 +388,7 @@ mod tests {
         assert!(joined.is_err(), "precondition: the task must have failed");
 
         let f = settle_probe("core/test", "Widget count", joined)
-            .err()
-            .expect("a task that did not complete must not settle into a count");
+            .expect_err("a task that did not complete must not settle into a count");
         assert_eq!(f.severity, Severity::Warning);
         assert_eq!(f.title, "Widget count unknown");
         assert!(f.is_problem(), "an unknown must never render as [ok]");
