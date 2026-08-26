@@ -59,7 +59,22 @@ pub struct ClarificationResolveResponse {
     /// How many questions of this request are still unanswered. `0` means the
     /// parked tool was unblocked and the card is done; anything higher means
     /// the client should re-render from `clarification.pending`.
+    ///
+    /// **Important:** when `stale` is `true`, this `0` does NOT mean the
+    /// request is done — it means "no live entry matched your reply", which
+    /// can also happen for a reply that raced an advance or arrived after a
+    /// timeout / cancellation. The card in the client's window must NOT be
+    /// dropped on this signal alone; the client should re-render from
+    /// `clarification.pending` (which is the source of truth for what's
+    /// actually live on the server).
     pub pending_questions: usize,
+    /// Whether the reply was stale (no live waiter consumed it). When `true`,
+    /// `resolved` is `false` and the client SHOULD refresh from
+    /// `clarification.pending` rather than treat the card as resolved.
+    ///
+    /// Always `false` when `resolved` is `true`.
+    #[serde(default)]
+    pub stale: bool,
 }
 
 /// Response for clarification.pending
@@ -149,9 +164,28 @@ async fn handle_resolve(
     // `More` also carries a rendered text menu — that is for a *channel*. A
     // Panel re-renders from the structured `questions` view instead, so this
     // face passes on only the count.
-    let pending_questions = match outcome {
-        crate::clarification::ResolveOutcome::More { remaining, .. } => remaining,
-        _ => 0,
+    //
+    // Track `stale` explicitly so a client never reads `pending_questions == 0`
+    // on a stale reply as "card is done": the manager had no live entry to
+    // consume against, but the user's window may still have a card. Clients
+    // are instructed (see the `stale` field's docstring) to re-render from
+    // `clarification.pending` when `stale` is true.
+    let stale = matches!(
+        outcome,
+        crate::clarification::ResolveOutcome::Stale
+    );
+    let pending_questions = if stale {
+        0
+    } else {
+        match outcome {
+            crate::clarification::ResolveOutcome::More { remaining, .. } => remaining,
+            // `Done`: the parked tool was unblocked and the card IS done — 0
+            // is the truthful answer. `stale` is `false` in this arm.
+            crate::clarification::ResolveOutcome::Done => 0,
+            // Unreachable: `stale` is true only when `outcome == Stale`, and
+            // we already handled that arm above.
+            crate::clarification::ResolveOutcome::Stale => 0,
+        }
     };
 
     JsonRpcResponse::success(
@@ -159,6 +193,7 @@ async fn handle_resolve(
         json!(ClarificationResolveResponse {
             resolved,
             pending_questions,
+            stale,
         }),
     )
 }

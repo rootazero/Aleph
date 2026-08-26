@@ -54,18 +54,45 @@ fn button_label(index: usize, label: &str) -> String {
     }
 }
 
+/// Collapse internal whitespace runs in `s` to a single space, so an option
+/// description (or label) containing an embedded `\n` / `\r` / `\t` does not
+/// shift the numbered prefix and make the user's `k+1`-th reply select the
+/// wrong row.
+fn collapse_whitespace(s: &str) -> String {
+    let mut buf = String::with_capacity(s.len());
+    let mut in_ws = false;
+    for ch in s.chars() {
+        if ch.is_whitespace() {
+            if !in_ws {
+                buf.push(' ');
+                in_ws = true;
+            }
+        } else {
+            buf.push(ch);
+            in_ws = false;
+        }
+    }
+    buf.trim().to_string()
+}
+
 /// The numbered menu body for `options`.
+///
+/// Whitespace inside `label` and `description` is collapsed so a model-supplied
+/// newline / ANSI byte in either field cannot break the numbering — every
+/// numbered row is one line, so the user's `k+1` reply selects the matching
+/// option regardless of model output quirks.
 fn menu(options: &[ClarificationOption]) -> String {
     let mut out = String::new();
     for (i, opt) in options.iter().enumerate() {
+        let label = collapse_whitespace(&opt.label);
         match opt
             .description
             .as_deref()
-            .map(str::trim)
+            .map(collapse_whitespace)
             .filter(|d| !d.is_empty())
         {
-            Some(desc) => out.push_str(&format!("{}. {} — {desc}\n", i + 1, opt.label)),
-            None => out.push_str(&format!("{}. {}\n", i + 1, opt.label)),
+            Some(desc) => out.push_str(&format!("{}. {} — {desc}\n", i + 1, label)),
+            None => out.push_str(&format!("{}. {}\n", i + 1, label)),
         }
     }
     out

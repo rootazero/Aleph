@@ -183,7 +183,14 @@ impl ClarificationQuestion {
 pub struct ClarificationRequest {
     /// The questions, answered in this order by sequential (plain-text)
     /// surfaces. Never empty — every constructor guarantees at least one.
-    pub questions: Vec<ClarificationQuestion>,
+    ///
+    /// `pub(crate)` (not `pub`) to make the "never empty" invariant actually
+    /// load-bearing: external callers cannot build a `ClarificationRequest`
+    /// by struct literal and bypass [`Self::new`]. In-crate code reaches the
+    /// field directly (this is a hot path — `iter().filter()` reads on the
+    /// internal face), but external callers go through the constructors and
+    /// the [`Self::questions`] / [`Self::first`] / [`Self::len`] accessors.
+    pub(crate) questions: Vec<ClarificationQuestion>,
 }
 
 impl ClarificationRequest {
@@ -196,6 +203,16 @@ impl ClarificationRequest {
             return Err("a clarification must carry at least one question");
         }
         Ok(Self { questions })
+    }
+
+    /// Borrow the questions vector as a slice.
+    ///
+    /// The slice is never empty — the constructors guarantee at least one.
+    /// Internal callers that need a strict guarantee use [`Self::first`]
+    /// (which still applies a debug assertion).
+    #[must_use]
+    pub fn questions(&self) -> &[ClarificationQuestion] {
+        &self.questions
     }
 
     /// Create a single free-text clarification request.
@@ -219,16 +236,22 @@ impl ClarificationRequest {
     }
 
     /// The first question. Every request has one by construction.
+    ///
+    /// Returns `Option` rather than panicking: now that `questions` is
+    /// `pub(crate)`, in-crate callers CAN bypass [`Self::new`] (struct
+    /// literal inside the module is still possible), so the API honours
+    /// the published contract instead of unwrapping into a caller-visible
+    /// panic. All production call sites going through `new()` / `text()` /
+    /// `select()` see a `Some`.
     #[must_use]
-    pub fn first(&self) -> &ClarificationQuestion {
-        // The invariant ("every request has one question by construction") is
-        // enforced by `new()`; the panic here is the defense-in-depth guard
-        // for any future caller that tries to bypass `new()` by mutating the
-        // (still pub) field directly. Prefer `new()` over hand-rolling a
-        // `ClarificationRequest`.
-        self.questions
-            .first()
-            .expect("invariant: a ClarificationRequest built via new() is never empty")
+    pub fn first(&self) -> Option<&ClarificationQuestion> {
+        // debug-assert the invariant the docstring promises — release builds
+        // return None quietly while `cargo test` catches any drift.
+        debug_assert!(
+            !self.questions.is_empty(),
+            "a ClarificationRequest built via new()/text()/select() is never empty"
+        );
+        self.questions.first()
     }
 
     /// How many questions are outstanding in total.
@@ -428,18 +451,30 @@ mod tests {
             ],
         );
 
+        let first = request
+            .first()
+            .expect("constructor-built request is non-empty");
         assert_eq!(request.len(), 1);
-        assert_eq!(request.first().prompt, "Choose style:");
-        assert!(request.first().has_options());
-        assert_eq!(request.first().options.len(), 2);
+        assert_eq!(first.prompt, "Choose style:");
+        assert!(first.has_options());
+        assert_eq!(first.options.len(), 2);
     }
 
     #[test]
     fn test_clarification_request_text() {
         let request = ClarificationRequest::text("Enter name:");
 
-        assert_eq!(request.first().prompt, "Enter name:");
-        assert!(!request.first().has_options());
+        assert_eq!(
+            request
+                .first()
+                .expect("constructor-built request is non-empty")
+                .prompt,
+            "Enter name:"
+        );
+        assert!(!request
+            .first()
+            .expect("constructor-built request is non-empty")
+            .has_options());
     }
 
     /// A request with nothing to ask registers a waiter no reply can complete,
