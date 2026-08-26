@@ -33,6 +33,20 @@ impl NoteManageTool {
         // Hard security floor (§5.1): reject injection / exfiltration /
         // persistence payloads before they land in trusted long-term memory.
         if let Some(content) = &args.content {
+            // Defence in depth (audit-2026-08-26 BTS-7): mirror the
+            // read-side PER_NOTE_MAX_CHARS at the write site so a steered
+            // model cannot persist a multi-MiB body that the embedding
+            // step + atomic-write + reparse-index pipeline would then
+            // pay for on every subsequent read. The earlier review
+            // recommended this cap; landing it now closes the gap.
+            const MAX_NOTE_BODY_CHARS: usize = 1_048_576; // 1 MiB chars
+            if content.chars().count() > MAX_NOTE_BODY_CHARS {
+                return Err(AlephError::tool(format!(
+                    "note content is {} chars; the cap is {MAX_NOTE_BODY_CHARS}. \
+                     Chunk long bodies via 'append' or split into multiple notes.",
+                    content.chars().count()
+                )));
+            }
             scan_note_for_threats(content)?;
         }
 

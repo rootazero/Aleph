@@ -149,6 +149,30 @@ impl AlephTool for FileWriteTool {
         let output_dir = self.resolve_output_dir().await;
         let output_dir_ref = output_dir.as_deref();
 
+        // Defence in depth (audit-2026-08-26 BTS-1): `file_read` caps at
+        // 100 MB and `apply_patch` caps the envelope at 4 MiB, but
+        // `file_write` had no symmetric guard — a multi-GB `content` string
+        // allocates the full buffer before any deny-checked write begins,
+        // which OOMs the worker. Mirror the read cap so the LLM-callable
+        // surface is bounded consistently.
+        const MAX_WRITE_CONTENT_BYTES: usize = 32 * 1024 * 1024;
+        if args.content.len() > MAX_WRITE_CONTENT_BYTES {
+            notify_tool_result(
+                Self::NAME,
+                &format!(
+                    "file_write content is {} bytes; the cap is {MAX_WRITE_CONTENT_BYTES}. \
+                     Use apply_patch / batch for chunked rewrites."
+                ),
+                false,
+            );
+            return Err(crate::tools::ToolError::InvalidArgs(format!(
+                "file_write content is {} bytes; the cap is {MAX_WRITE_CONTENT_BYTES}. \
+                 Use apply_patch / batch for chunked rewrites.",
+                args.content.len()
+            ))
+            .into());
+        }
+
         let result = execute_write(
             path,
             &args.content,
