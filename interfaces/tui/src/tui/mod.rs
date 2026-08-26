@@ -460,7 +460,19 @@ async fn main_loop<'c>(
                     approval::poll_approvals(state, client).await;
                 }
                 needs_redraw = should_redraw_after_tick(
-                    state.current_run.is_some(),
+                    // `state.dialog` (the AskUser overlay) is OR'd in for the
+                    // same reason as `btw`: `StreamEvent::AskUser` is exempt
+                    // from the cross-session run-id guard by design (see
+                    // `events::run_scoped_id`) so a background/delegated
+                    // run's clarification can reach an otherwise-idle screen
+                    // — `an_ask_user_from_another_sessions_run_is_still_shown`
+                    // exercises exactly this with `current_run` staying
+                    // `None` throughout. Its `Action::None` return means the
+                    // tick that shows it for the first time has to be the one
+                    // that decides to redraw, not some later action.
+                    state.current_run.is_some()
+                        || state.btw.active_run_id().is_some()
+                        || state.dialog.is_some(),
                     state.is_connected != was_connected,
                 );
             }
