@@ -3,7 +3,9 @@
 //! # Why this is not `src.split("#[cfg(test)]").next()`
 //!
 //! That idiom cuts at the *first place a test attribute appears*, which is not
-//! a boundary. Measured on this repo (1734 files carrying the attribute):
+//! a boundary. Measured on this repo AT `a95475edd` (1734 files carrying the
+//! attribute — state the commit, because this count moves: the round that
+//! added this module took it to 1739 by adding four files of its own):
 //! 1458 have one trailing `mod tests {` and are cut correctly; **73** open with
 //! `#[cfg(test)] mod tests;` and lose the ENTIRE file; **203** carry a mid-file
 //! test item and are truncated arbitrarily. `src/utils/paths.rs` declares a
