@@ -174,7 +174,13 @@ impl CodeCheckTool {
             };
 
         let plan = build_plan(args.command.as_deref(), args.path.as_deref());
-        let timeout_secs = args.timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECS);
+        // Defence in depth (audit-2026-08-26 BTT-1): an LLM-supplied
+        // `timeout_seconds: u64::MAX` would otherwise lease the sandbox
+        // worker for centuries. `code_exec` applies the same clamp at the
+        // same boundary via `clamp_foreground_timeout`; mirror it here so
+        // the foreground-tool budget stays the enforcer for both tools.
+        let timeout_secs = super::code_exec::clamp_foreground_timeout(args.timeout_seconds)
+            .unwrap_or(DEFAULT_TIMEOUT_SECS);
 
         info!(
             command = %plan.display_command,
