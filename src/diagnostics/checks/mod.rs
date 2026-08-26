@@ -49,7 +49,9 @@ pub use vault::VaultCheck;
 
 #[cfg(test)]
 mod presence_discipline {
-    use crate::utils::source_scan::{code_text, production_prefix, rust_sources_under};
+    use crate::utils::source_scan::{
+        code_text, production_prefix, rust_sources_under, strip_comment_lines,
+    };
 
     /// Spellings that answer "is it there?" with `false` for BOTH "it is not
     /// there" and "the filesystem would not tell me".
@@ -182,6 +184,435 @@ mod presence_discipline {
                 "must NOT flag `{marker}` in: {line}"
             );
         }
+    }
+
+    /// One `Err(<binding>)` match arm, sliced out of a source file.
+    struct ErrArm {
+        /// The identifier the error is bound to.
+        binding: String,
+        /// Text between the pattern and `=>` — empty when the arm has no
+        /// match guard.
+        guard: String,
+        /// Everything the arm evaluates, block braces included.
+        body: String,
+        /// 1-based line of the `Err(` token, so an offender can be opened.
+        line: usize,
+    }
+
+    /// Is `ident` present in `text` as a whole token?
+    fn mentions(text: &str, ident: &str) -> bool {
+        fn part(c: char) -> bool {
+            c.is_alphanumeric() || c == '_'
+        }
+        text.match_indices(ident).any(|(at, _)| {
+            let left_ok = text[..at].chars().next_back().is_none_or(|c| !part(c));
+            let right_ok = text[at + ident.len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| !part(c));
+            left_ok && right_ok
+        })
+    }
+
+    /// Logging macro invocations, removed.
+    ///
+    /// This is the whole point of the rule below: `tracing::warn!("{e}")`
+    /// mentions the error without the error reaching anything the check
+    /// reports. Both live sites were spelled exactly that way — log it, then
+    /// answer as though it had not happened — so a rule that accepted any
+    /// mention of the binding would have passed them.
+    ///
+    /// `format!` is deliberately NOT in this list: it produces a value, and a
+    /// value is what "carrying the error" means.
+    fn without_logging(body: &str) -> String {
+        const LOG_MACROS: [&str; 5] = ["trace!", "debug!", "info!", "warn!", "error!"];
+        let mut out = String::with_capacity(body.len());
+        let mut i = 0usize;
+        let bytes: Vec<char> = body.chars().collect();
+        'outer: while i < bytes.len() {
+            for m in LOG_MACROS {
+                let rest: String = bytes[i..].iter().take(m.len() + 1).collect();
+                if rest.starts_with(m) && rest[m.len()..].starts_with('(') {
+                    // Left boundary: `warn!` must not match `my_warn!`.
+                    let left_ok = i == 0 || !(bytes[i - 1].is_alphanumeric() || bytes[i - 1] == '_');
+                    if left_ok {
+                        let mut depth = 0i32;
+                        let mut j = i + m.len();
+                        while j < bytes.len() {
+                            match bytes[j] {
+                                '(' => depth += 1,
+                                ')' => {
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        j += 1;
+                                        break;
+                                    }
+                                }
+                                _ => {}
+                            }
+                            j += 1;
+                        }
+                        i = j;
+                        continue 'outer;
+                    }
+                }
+            }
+            out.push(bytes[i]);
+            i += 1;
+        }
+        out
+    }
+
+    /// Every `Err(<binding>) [if guard] => <body>` arm in `src`.
+    ///
+    /// `src` is expected to be comment-stripped production text. String
+    /// literals are skipped while balancing so a `{` or `)` inside one cannot
+    /// end an arm early.
+    fn err_arms(src: &str) -> Vec<ErrArm> {
+        let ch: Vec<char> = src.chars().collect();
+        let mut arms = Vec::new();
+        let mut i = 0usize;
+        while i + 4 <= ch.len() {
+            // A literal can hold anything, `Err(` included.
+            if ch[i] == '"' {
+                i += 1;
+                while i < ch.len() && ch[i] != '"' {
+                    if ch[i] == '\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+                i += 1;
+                continue;
+            }
+            if !(ch[i] == 'E' && ch[i + 1] == 'r' && ch[i + 2] == 'r' && ch[i + 3] == '(') {
+                i += 1;
+                continue;
+            }
+            if i > 0 && (ch[i - 1].is_alphanumeric() || ch[i - 1] == '_') {
+                i += 1;
+                continue;
+            }
+            let Some(close) = balanced(&ch, i + 3, '(', ')') else {
+                i += 1;
+                continue;
+            };
+            let inner: String = ch[i + 4..close].iter().collect();
+            // Only a plain binding. `Err(_)` / `Err(_e)` / `Err(..)` are the
+            // existing discard rule's business, and `Err(io::ErrorKind::X)`
+            // is a variant the author named on purpose.
+            let is_binding = !inner.is_empty()
+                && inner.chars().next().is_some_and(char::is_alphabetic)
+                && inner.chars().all(|c| c.is_alphanumeric() || c == '_');
+            if !is_binding {
+                i += 1;
+                continue;
+            }
+            // Between the pattern and `=>`: nothing, or a match guard.
+            let mut j = close + 1;
+            while j + 1 < ch.len() && !(ch[j] == '=' && ch[j + 1] == '>') {
+                // A `{`, `;` or `,` before the arrow means this was never a
+                // match arm (`let x = Err(e);`, `Err(e).unwrap()`, …).
+                if matches!(ch[j], '{' | ';' | ',') {
+                    break;
+                }
+                j += 1;
+            }
+            if !(j + 1 < ch.len() && ch[j] == '=' && ch[j + 1] == '>') {
+                i += 1;
+                continue;
+            }
+            let guard: String = ch[close + 1..j].iter().collect();
+            let mut b = j + 2;
+            while b < ch.len() && ch[b].is_whitespace() {
+                b += 1;
+            }
+            let body_end = if ch.get(b) == Some(&'{') {
+                balanced(&ch, b, '{', '}').map_or(ch.len(), |e| e + 1)
+            } else {
+                arm_expr_end(&ch, b)
+            };
+            arms.push(ErrArm {
+                binding: inner,
+                guard,
+                body: ch[b..body_end.min(ch.len())].iter().collect(),
+                line: ch[..i].iter().filter(|c| **c == '\n').count() + 1,
+            });
+            i = body_end.max(i + 1);
+        }
+        arms
+    }
+
+    /// Index of the delimiter closing the one that opens at or after `from`,
+    /// skipping string literals.
+    fn balanced(ch: &[char], from: usize, open: char, close: char) -> Option<usize> {
+        let mut depth = 0i32;
+        let mut i = from;
+        while i < ch.len() {
+            match ch[i] {
+                '"' => {
+                    i += 1;
+                    while i < ch.len() && ch[i] != '"' {
+                        if ch[i] == '\\' {
+                            i += 1;
+                        }
+                        i += 1;
+                    }
+                }
+                c if c == open => depth += 1,
+                c if c == close => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// End of a non-block arm body: the `,` that terminates it at depth zero.
+    fn arm_expr_end(ch: &[char], from: usize) -> usize {
+        let mut depth = 0i32;
+        let mut i = from;
+        while i < ch.len() {
+            match ch[i] {
+                '"' => {
+                    i += 1;
+                    while i < ch.len() && ch[i] != '"' {
+                        if ch[i] == '\\' {
+                            i += 1;
+                        }
+                        i += 1;
+                    }
+                }
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => {
+                    if depth == 0 {
+                        return i;
+                    }
+                    depth -= 1;
+                }
+                ',' if depth == 0 => return i,
+                _ => {}
+            }
+            i += 1;
+        }
+        ch.len()
+    }
+
+    /// A bound error that only reaches a log line is a discarded error with a
+    /// receipt.
+    ///
+    /// # Why this is a second rule and not a wider marker
+    ///
+    /// [`CONFLATING`]'s `Err(_` / `Err(..)` entries catch the error that is
+    /// *thrown away at the pattern*. They are green on
+    ///
+    /// ```ignore
+    /// Err(e) => { tracing::warn!("probe failed: {e}"); None }
+    /// ```
+    ///
+    /// because the error IS bound — and that spelling shipped three times in
+    /// this directory while the guard reported the class closed:
+    /// `stale_lock.rs` folded a `JoinError` into `None` and rendered
+    /// `[ok] No lock held`; `duplicate_instance.rs` folded one into `0` and
+    /// rendered `[ok] Single instance`; `providers_connectivity.rs` folded a
+    /// vault error into `None` twice, once per provider and once as
+    /// `vec![None; probes.len()]`, and published `{name}: unreachable` with a
+    /// fix hint routing to the one repair that cannot help. **Binding is
+    /// necessary, not sufficient.**
+    ///
+    /// So the question this asks is not "was the error bound" and not "what
+    /// value did the arm produce" — the three sites produced three different
+    /// values (`None`, `0`, `vec![None; …]`), and a rule enumerating those
+    /// would be the same mistake one level up. It asks: **does the error
+    /// reach anything other than a log line?**
+    ///
+    /// # What it can and cannot see
+    ///
+    /// - *Sees*: `Err(<binding>) => …` arms whose body, with logging macro
+    ///   invocations removed, never mentions the binding again — whatever the
+    ///   arm produces instead.
+    /// - *Accepts a match guard as classification*: `Err(e) if e.kind() ==
+    ///   NotFound => Ok(Absent)` is the shape the round asks for ("one arm per
+    ///   error that actually MEANS absence"), so an arm whose guard reads the
+    ///   binding passes even when its body does not. Zero such arms in this
+    ///   directory today; `check::DirListing::of` one module over is the
+    ///   pattern being permitted.
+    /// - *Accepts carrying the error through a local*: the binding only has to
+    ///   appear somewhere outside a log line, not in the tail expression —
+    ///   `Err(f) => { let why = f.detail.clone(); … }` passes.
+    /// - *Blind to* `Err(_)` and `Err(..)`: those are [`CONFLATING`]'s job, and
+    ///   deliberately not re-reported here.
+    /// - *Blind to* a named-variant arm (`Err(BrowserError::ChromiumNotFound)
+    ///   => Missing`). It binds nothing, so there is no error to carry; that
+    ///   arm is an author's classification and `browser_runtime.rs` argues for
+    ///   it in prose.
+    /// - *Blind to* the same fold written with `?`, `.ok()`, `.unwrap_or*` or
+    ///   `if let Err(e)` rather than a `match` arm. `.unwrap_or*` is discussed
+    ///   at length under [`no_check_answers_a_stat_error_with_absence`] — the
+    ///   `Option`/`Result` ambiguity makes a spelling rule a false accuser.
+    ///   `if let Err(e) = …` is not covered because its body is a statement,
+    ///   not the check's answer.
+    /// - *Blind to* an error that reaches a value which is then itself
+    ///   discarded. This rule tracks one hop, not dataflow.
+    /// - *Blind to* runtime behaviour: it cannot see that `None` means
+    ///   "reassuring" in one check and "irrelevant" in another. That is why it
+    ///   asks about the error rather than about the value.
+    ///
+    /// - *Blind to* a trailing comment on a code line. This scans
+    ///   `strip_comment_lines`, not `code_text`, because `code_text` blanks
+    ///   string INTERIORS — and `format!("… {e}")` is how almost every correct
+    ///   arm in this directory carries its error, so scanning `code_text` here
+    ///   reported all sixteen of them as offenders. `strip_comment_lines` drops
+    ///   whole comment lines and leaves literals intact; a comment sharing a
+    ///   line with code survives and could mention the binding. That is the
+    ///   under-see direction on a rule whose over-see direction is a false
+    ///   accusation, which is the trade this directory already made once.
+    ///
+    /// CRLF-safe by the same route as its sibling: `production_prefix` and
+    /// `strip_comment_lines` both drop `\r` first.
+    #[test]
+    fn no_check_folds_a_bound_error_into_an_answer() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("diagnostics")
+            .join("checks");
+        let sources = rust_sources_under(&root);
+
+        let mut offenders: Vec<String> = Vec::new();
+        let mut arms_examined = 0usize;
+
+        for (rel, text) in &sources {
+            for arm in err_arms(&strip_comment_lines(&production_prefix(text))) {
+                arms_examined += 1;
+                if mentions(&arm.guard, &arm.binding) {
+                    continue;
+                }
+                if mentions(&without_logging(&arm.body), &arm.binding) {
+                    continue;
+                }
+                offenders.push(format!(
+                    "{rel}:{}: `Err({})` is bound and then answered without it — \
+                     `{}`. Logging the error is not reporting it. Carry it into the value \
+                     the check publishes (`check::unknown_finding` / \
+                     `check::settle_probe`), or name the variant that really does mean \
+                     absence so the arm classifies instead of guessing.",
+                    arm.line,
+                    arm.binding,
+                    arm.body.split_whitespace().collect::<Vec<_>>().join(" "),
+                ));
+            }
+        }
+
+        // Self-count: a parser that sliced nothing is green and blind.
+        // MEASURED, not estimated — 36 `Err(<binding>)` arms across this
+        // directory at the time of writing, read off this assertion's own
+        // failure message with the floor temporarily raised. The floor sits
+        // well below that so ordinary edits do not trip it, and far enough
+        // above zero to catch a slicer that stopped working.
+        assert!(
+            arms_examined >= 20,
+            "the scan sliced only {arms_examined} `Err(<binding>)` arm(s) out of \
+             src/diagnostics/checks/ — a guard that examined nothing is green and blind"
+        );
+        assert!(
+            offenders.is_empty(),
+            "a bound error that only reaches a log line is a discarded error with a \
+             receipt:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
+    /// The predicate's own negative half, on the three shapes that shipped and
+    /// the shapes that must stay quiet.
+    ///
+    /// Same argument as
+    /// [`the_marker_matcher_fires_on_real_spellings_and_stays_quiet_on_lookalikes`]:
+    /// a green scan of a directory containing no offenders proves nothing
+    /// about offenders, and `err_arms` + `without_logging` + `mentions` are
+    /// the scan's only decisions.
+    #[test]
+    fn the_fold_detector_fires_on_the_three_shapes_that_shipped() {
+        // Each of the three real sites, verbatim in shape. They produced three
+        // DIFFERENT values, which is why the rule asks about the error.
+        for (src, why) in [
+            (
+                "match p { Ok(h) => h, Err(e) => { tracing::warn!(\"probe failed: {e}\"); None } }",
+                "stale_lock: folded into None",
+            ),
+            (
+                "match p { Ok(n) => n, Err(e) => { tracing::warn!(\"probe failed: {e}\"); 0 } }",
+                "duplicate_instance: folded into 0",
+            ),
+            (
+                "match p { Ok(k) => k, Err(e) => { tracing::warn!(\"task failed: {e}\"); vec![None; probes.len()] } }",
+                "providers_connectivity: folded into vec![None; n]",
+            ),
+            (
+                "match v { Ok(Some(s)) => Some(s), Ok(None) => None, Err(e) => { tracing::warn!(error = %e, \"vault read failed\"); None } }",
+                "providers_connectivity resolve_key: folded into None",
+            ),
+        ] {
+            let arms = err_arms(src);
+            assert_eq!(arms.len(), 1, "{why}: expected exactly one bound Err arm");
+            assert!(
+                !mentions(&without_logging(&arms[0].body), &arms[0].binding),
+                "{why}: must be flagged"
+            );
+        }
+
+        // Stays quiet: the error reaches the value, one way or another.
+        for (src, why) in [
+            (
+                "match p { Err(f) => return vec![f], Ok(v) => v }",
+                "returned directly",
+            ),
+            (
+                "match p { Err(e) => Err(format!(\"lookup failed: {e}\")), Ok(v) => Ok(v) }",
+                "formatted into the value",
+            ),
+            (
+                "match p { Err(e) => { tracing::warn!(\"x: {e}\"); return vec![unknown(format!(\"{e}\"))]; } Ok(v) => v }",
+                "logged AND carried",
+            ),
+            (
+                "match p { Err(f) => { let why = f.detail.clone(); v.map(|_| why.clone()).collect() } Ok(v) => v }",
+                "carried through a local",
+            ),
+            (
+                "match p { Err(e) if e.kind() == NotFound => Ok(Absent), Err(e) => Err(f(e)), Ok(v) => Ok(v) }",
+                "classified by a match guard",
+            ),
+        ] {
+            for arm in err_arms(src) {
+                assert!(
+                    mentions(&arm.guard, &arm.binding)
+                        || mentions(&without_logging(&arm.body), &arm.binding),
+                    "{why}: must NOT be flagged (arm body `{}`)",
+                    arm.body
+                );
+            }
+        }
+
+        // Not this rule's business: discarded at the pattern (CONFLATING's
+        // job), and a named variant, which binds nothing to carry.
+        assert!(err_arms("match p { Err(_) => None, Ok(v) => v }").is_empty());
+        assert!(err_arms("match p { Err(_e) => None, Ok(v) => v }").is_empty());
+        assert!(err_arms("match p { Err(..) => None, Ok(v) => v }").is_empty());
+        assert!(
+            err_arms("match p { Err(BrowserError::ChromiumNotFound) => Missing, Ok(v) => v }")
+                .is_empty()
+        );
+        // Not a match arm at all.
+        assert!(err_arms("let x = Err(e); x.unwrap()").is_empty());
+        // A string literal holding a brace must not end the arm early.
+        let arms = err_arms("match p { Err(e) => { warn!(\"} {e}\"); None } Ok(v) => v }");
+        assert_eq!(arms.len(), 1);
+        assert!(!mentions(&without_logging(&arms[0].body), &arms[0].binding));
     }
 
     /// A check must never dress "I could not look" as "there is nothing there".
