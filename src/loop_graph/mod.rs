@@ -84,6 +84,28 @@ use crate::sync_primitives::Arc;
 /// operator-facing string was the one thing lost in the reclassification, and
 /// what it said ("the objective ACL's permit answer") is the argument for the
 /// higher severity rather than a description of a legal value.
+///
+/// ⚠️ **What the severity buys, stated because it is not only rendering.**
+/// `severity_for` maps `FailsOpen` to `Error`, and inside `alephcore` that
+/// changes nothing that matters — `Finding::is_problem()` is already true at
+/// `Warning`, so `DiagnosticReport::ok()` and `aleph-server doctor`'s exit code
+/// were already failing. The `aleph` CLI is the consumer that branches on the
+/// string: `interfaces/cli/src/commands/doctor.rs` reads `"error"` as a
+/// REQUIRED check and exits **2**, `"warning"` as optional and exits 0. This
+/// check reaches that CLI only over `diagnostics.run`, which is one of the two
+/// callers of `with_capability_wiring_check()` — so the reclassification lands
+/// exactly on the path where the severity is load-bearing, and on a machine
+/// where this slot were absent a CI or cron gate would flip from 0 to 2.
+///
+/// That is a deliberate consequence, not a side effect, and it is currently
+/// **unreachable**: `init_global` has one production call site
+/// (`executor::builtin_registry::builder::constructor`), it is unconditional,
+/// its only failure is `LoopGraphStore::open(..)?` which aborts boot, and
+/// nothing declines this slot — so a daemon able to answer `diagnostics.run`
+/// has it `Installed`. Three of the four `FailsOpen` slots already mapped to
+/// `Error` before this one, so the class pre-existed; this adds a member. If a
+/// degraded-boot path or a second construction site ever makes the
+/// never-reached row possible here, the exit code moves with it.
 static GLOBAL: CapabilitySlot<Arc<LoopGraphStore>> =
     CapabilitySlot::new("loop-graph/store", MissingSemantics::FailsOpen);
 
