@@ -158,15 +158,36 @@ where
                     // and the IPC request landing, the forward will fail
                     // with a confusing "server is initializing or crashed"
                     // error. Retry local acquisition once: if the lock is
-                    // now free we run `local`; only the second failure is
-                    // surfaced.
+                    // now free we run `local`. The second lock error is
+                    // logged at warn; if it is the strictly more informative
+                    // error (e.g. PermissionDenied because data_dir mode
+                    // changed) we surface it instead of the IPC error.
                     match crate::cli::ipc_client::forward_to_server::<T>(
                         data_dir, method, route, ipc_body,
                     ) {
                         Ok(out) => Ok(out),
                         Err(fwd_err) => match acquire_or_held(data_dir) {
                             Ok(lock) => local(&lock),
-                            Err(_) => Err(fwd_err),
+                            Err(lock_err) => {
+                                // Stay defensive: if the second lock error is
+                                // not LockHeld (e.g. PermissionDenied,
+                                // NotFound on data_dir), it is more
+                                // informative than the IPC error. The
+                                // LockHeld case keeps the IPC error because
+                                // the lock IS held — the IPC error is the
+                                // next-most-actionable signal.
+                                if lock_err.downcast_ref::<LockHeldError>().is_some() {
+                                    Err(fwd_err)
+                                } else {
+                                    tracing::warn!(
+                                        ipc_error = %fwd_err,
+                                        lock_error = %lock_err,
+                                        "lock state changed between IPC failure and retry; \
+                                         surfacing lock error (more informative than IPC)"
+                                    );
+                                    Err(lock_err)
+                                }
+                            }
                         },
                     }
                 } else {
