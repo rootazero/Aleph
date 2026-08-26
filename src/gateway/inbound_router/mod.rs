@@ -1344,8 +1344,11 @@ impl InboundMessageRouter {
             }
             // Interpret number / label / free-text exactly like `ask_user`.
             let request = meta.build_request();
+            let first = request
+                .first()
+                .expect("a ClarificationRequest built by a constructor is never empty");
             let answer =
-                crate::clarification::session::interpret_reply(request.first(), reply).value;
+                crate::clarification::session::interpret_reply(first, reply).value;
             if let Err(e) = store
                 .update_task(
                     &task.id,

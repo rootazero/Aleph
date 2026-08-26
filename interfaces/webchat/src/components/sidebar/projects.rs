@@ -30,9 +30,6 @@ pub fn ProjectsSidebar() -> impl IntoView {
     let creating = RwSignal::new(false);
     let new_name = RwSignal::new(String::new());
 
-    // There is no `projects.*` push topic yet (unlike sessions/teams), so a
-    // manual `refresh()` after every mutation is the sole freshness signal —
-    // matching the pre-P2 picker's own model, which has the same gap.
     let refresh = move || {
         spawn_local(async move {
             match ProjectsApi::list(&dash).await {
@@ -55,6 +52,30 @@ pub fn ProjectsSidebar() -> impl IntoView {
         } else {
             projects.set(Vec::new());
         }
+    });
+
+    // `projects.changed` push topic (Task 6): another surface, or another
+    // room member, creating / renaming / archiving / joining / leaving a
+    // room refreshes this list live. No client-side filtering by
+    // `project_id` — `projects.list` is already roster-filtered
+    // server-side, and the event face is gated by the same roster
+    // (`event_visibility::ByProjectScope`), so every frame this client
+    // receives is about a room already relevant to it.
+    let subscription_id = dash.subscribe_events(move |event| {
+        if event.topic != "projects.changed" {
+            return;
+        }
+        refresh();
+    });
+    spawn_local(async move {
+        if let Err(e) = dash.subscribe_topic("projects.changed").await {
+            web_sys::console::error_1(
+                &format!("Failed to subscribe to projects.changed: {e}").into(),
+            );
+        }
+    });
+    on_cleanup(move || {
+        dash.unsubscribe_events(subscription_id);
     });
 
     let do_create = move || {

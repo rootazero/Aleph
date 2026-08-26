@@ -34,6 +34,7 @@ pub mod provider_row_card;
 pub mod service_blocking_gate;
 pub mod settings_sidebar;
 pub mod sidebar;
+pub mod team_chat_entry;
 pub mod team_participants;
 pub mod team_task_strip;
 pub mod theme_toggle;

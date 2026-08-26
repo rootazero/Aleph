@@ -180,6 +180,8 @@ fn base_with_hanging_llm(cancel: CancellationToken) -> SpawnerBase {
         default_max_iterations: None,
         parallel_tool_concurrency: None,
         context_budget_config: None,
+        context_budget_refiner: None,
+        primary_context_window: None,
         cheap_summary_provider: None,
     }
 }
@@ -218,6 +220,8 @@ fn base_with_hanging_tool(cancel: CancellationToken) -> SpawnerBase {
         default_max_iterations: None,
         parallel_tool_concurrency: None,
         context_budget_config: None,
+        context_budget_refiner: None,
+        primary_context_window: None,
         cheap_summary_provider: None,
     }
 }

@@ -29,6 +29,7 @@ pub mod action;
 pub mod automation_types;
 pub mod ax_rank;
 pub mod ax_secure;
+pub mod clipboard_redact;
 pub mod bridge;
 pub mod coord;
 pub mod error;

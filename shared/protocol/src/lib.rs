@@ -34,6 +34,7 @@ pub mod plugins;
 pub mod providers;
 pub mod queue;
 pub mod receipt;
+pub mod scope;
 pub mod session_thread;
 pub mod spend;
 pub mod subagent_tree;
@@ -49,15 +50,18 @@ pub mod workspace;
 // Re-export commonly used types at crate root
 pub use auth::{GuestScope, IdentityContext, Role};
 pub use events::{
-    cache_hit_ratio, AgentTraceEvent, AgentTraceSessionOutcome, AgentTraceState,
-    AgentTraceTextKind, AgentTraceToolCallEnd, AgentTraceToolCallStart, AgentTraceToolResult,
-    AgentTraceTurnMetrics, AgentTraceTurnOutcome, AskUserOption, AskUserQuestion, RunSummary,
-    StreamEvent, TokenBreakdownView, ToolResult,
+    cache_hit_ratio, peer_message_is_renderable, AgentTraceEvent, AgentTraceSessionOutcome,
+    AgentTraceState, AgentTraceTextKind, AgentTraceToolCallEnd, AgentTraceToolCallStart,
+    AgentTraceToolResult, AgentTraceTurnMetrics, AgentTraceTurnOutcome, AskUserOption,
+    AskUserQuestion, RunSummary, StreamEvent, TokenBreakdownView, ToolResult,
 };
 pub use jsonrpc::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolCallContext, ToolCallParams, ToolCallResult,
 };
-pub use session_thread::{AgentRunAccepted, AgentRunRequest, SessionSnapshot};
+pub use session_thread::{
+    AgentRunAccepted, AgentRunRequest, AgentRunStatusReport, AgentRunStatusRequest, RunPhase,
+    SessionSnapshot,
+};
 pub use subagent_tree::{
     build_tree, NodeLifecycle, Rollup, SubagentNode, SubagentTreeEvent, TreeNode,
 };

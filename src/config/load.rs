@@ -362,12 +362,25 @@ impl Config {
         }
     }
 
-    /// Process user-defined routing rules (AI-first architecture)
+    /// Process user-defined routing rules (AI-first architecture).
     ///
-    /// In AI-first mode, there are no builtin rules. This method is kept
-    /// for backward compatibility but does minimal processing.
+    /// **INTENTIONAL NO-OP**: in AI-first mode the runtime does not inject
+    /// builtin routing rules — only the operator-defined `[[rules]]` entries
+    /// are ever surfaced (see [`RoutingRuleConfig`] and the only consumer,
+    /// `tool_metadata::registry::register_custom_commands`). The method is
+    /// kept as a stable hook for the load pipeline so a future "add a builtin"
+    /// intent has an obvious landing site, and so the existing call site
+    /// (`apply_pipelines_after_load` / `Config::load`) does not need to know
+    /// whether the step is currently a no-op.
+    ///
+    /// Do NOT add rule-injection logic here without also implementing the
+    /// dispatch path in `tool_metadata`; a rule defined here but never read
+    /// is a silent contract expansion (one prior bug — see audit 2026-08-26).
     pub(crate) fn merge_builtin_rules(&self) {
-        // AI-first: no builtin rules to merge, just log user rules count
+        // AI-first: no builtin rules to merge, just log user rules count.
+        // Kept at debug! to avoid spamming warn! every boot — the count is
+        // observable via the existing rule-list RPC if a deeper signal is
+        // needed.
         debug!(
             user_rules_count = self.rules.len(),
             "Processing user-defined routing rules (AI-first mode)"
@@ -438,6 +451,15 @@ impl Config {
                     })
                 })
                 .collect();
+        }
+        // Panel-managed toggle: when the operator turns the credential-strip
+        // off, every cross-origin redirect would otherwise keep its
+        // Authorization/Cookie headers — the precise failure this field exists
+        // to silence. Covered by the same JSON-value-extraction pattern used
+        // for `enabled` above; a missing key leaves the field at its
+        // serde-default value (`default_strip_auth` → `true`).
+        if let Some(v) = ssrf.get("strip_auth_on_cross_origin").and_then(|v| v.as_bool()) {
+            config.ssrf.strip_auth_on_cross_origin = v;
         }
     }
 }

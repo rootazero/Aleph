@@ -285,8 +285,6 @@ pub struct AgentConfig {
     /// Maximum total token usage per request (loop guard)
     #[serde(default)]
     pub max_tokens: Option<usize>,
-    /// Custom system prompt
-    pub system_prompt: Option<String>,
     /// Tool whitelist (empty = all allowed)
     #[serde(default)]
     pub tool_whitelist: Vec<String>,
@@ -302,7 +300,6 @@ impl Default for AgentConfig {
             model: "claude-sonnet-4-5".to_string(),
             max_loops: 100,
             max_tokens: None,
-            system_prompt: None,
             tool_whitelist: vec![],
             tool_blacklist: vec![],
         }
@@ -320,7 +317,6 @@ impl AgentConfig {
             model: self.model.clone(),
             max_loops: self.max_loops,
             max_tokens: self.max_tokens,
-            system_prompt: self.system_prompt.clone(),
             tool_whitelist: self.tool_whitelist.clone(),
             tool_blacklist: self.tool_blacklist.clone(),
             // `agent_resolver` owns "where do agents live" — this legacy shape

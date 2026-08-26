@@ -5,7 +5,6 @@
 //! this directory contain?".
 
 use std::path::Path;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, info};
 
 use super::path_utils::{check_and_resolve_path, reject_unsafe_glob_pattern};
@@ -232,17 +231,25 @@ fn sort_files(files: &mut [FileInfo], sort: StatsSort) {
 /// Count newline-terminated lines. Files without a trailing newline still
 /// count their last line (matches `wc -l` semantics for non-empty files).
 async fn count_lines(path: &Path) -> std::io::Result<u64> {
-    let file = tokio::fs::File::open(path).await?;
-    let reader = BufReader::new(file);
-    let mut count: u64 = 0;
-    let mut lines = reader.lines();
-    while let Some(line) = lines.next_line().await? {
-        // Surface I/O errors (e.g. invalid UTF-8 in a "text" file) so the
-        // caller can mark the file as skipped instead of double-counting.
-        let _ = line;
-        count += 1;
-    }
-    Ok(count)
+    // Defence in depth (audit-2026-08-26 BTS-5): the previous async loop
+    // awaited `next_line` per line on a hot path that prefetches 8 KB at a
+    // time — pinning one tokio worker through the entire walk and
+    // serialising every stats invocation onto a single thread. `stats **/*`
+    // over thousands of large files used to wedge the executor. Switch to
+    // `spawn_blocking` + the std `BufReader` so the count runs off the
+    // runtime while the worker stays available for other tasks.
+    let p = path.to_path_buf();
+    tokio::task::spawn_blocking(move || -> std::io::Result<u64> {
+        use std::io::{BufRead, BufReader};
+        let f = std::fs::File::open(&p)?;
+        let mut count: u64 = 0;
+        for _ in BufReader::new(f).lines() {
+            count += 1;
+        }
+        Ok(count)
+    })
+    .await
+    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
 }
 
 #[cfg(test)]

@@ -345,6 +345,7 @@ pub struct Deck {
 /// One whiteboard document — the unit of persistence (`doc.json`) and of
 /// optimistic concurrency (`revision`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CanvasDoc {
     /// `cv-<uuid>` minted by the store on create.
     pub id: String,

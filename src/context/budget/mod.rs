@@ -47,9 +47,10 @@ const CALIBRATION_ALPHA: f64 = 0.3;
 /// Clamp band for a single observation's correction factor. A char-ratio
 /// estimate is rarely off by more than ~2× either way; values outside this band
 /// signal noise (a mid-flight resend, a degenerate provider usage report) and
-/// are clamped rather than allowed to whipsaw the budget.
-const CALIBRATION_MIN: f64 = 0.25;
-const CALIBRATION_MAX: f64 = 4.0;
+/// are clamped rather than allowed to whipsaw the budget. `pub(crate)` so the
+/// prompt-side gate (`thinker::prompt_budget`) seeds from the same band.
+pub(crate) const CALIBRATION_MIN: f64 = 0.25;
+pub(crate) const CALIBRATION_MAX: f64 = 4.0;
 /// Width of the "preventive band" sitting just below the warning threshold.
 /// Inside `[warning - PREVENTIVE_BAND_WIDTH, warning)` the deterministic
 /// preflight cheap passes are allowed to fire; below it they are a no-op.
@@ -281,8 +282,30 @@ pub struct ContextBudget {
 
 impl ContextBudget {
     /// Create a new context budget from configuration.
+    ///
+    /// **Pre-condition (audit 2026-08-26):** `config.token_budget` MUST be
+    /// `> 0`. A zero budget produces a permanent `CompactToFit` loop in
+    /// `before_turn` (ratio is 1.0, every turn compacts, ratio stays at 1.0)
+    /// because the compaction post-condition (`ratio < critical`) cannot be
+    /// reached when the budget itself is zero. The production builder at
+    /// `orchestrator::deps_builder::context_budget` already rejects
+    /// `token_budget == 0` and returns `None`, so a live `ContextBudget`
+    /// cannot be built with a zero budget in production. This assertion is
+    /// the tripwire that keeps the invariant from drifting in tests or any
+    /// future call site that constructs `ContextBudget` directly.
+    ///
+    /// `assert!` (not `debug_assert!`) so a misuse fails fast in release
+    /// builds too — the failure mode is silent correctness loss, not a
+    /// spurious runtime cost, so panicking is the right behavior.
     #[must_use]
     pub fn new(config: &ContextBudgetConfig) -> Self {
+        assert!(
+            config.token_budget > 0,
+            "ContextBudgetConfig.token_budget must be > 0 (got 0); a zero budget \
+             produces a permanent CompactToFit loop because the post-condition \
+             `ratio < critical_threshold` is unreachable. Construct via \
+             `orchestrator::deps_builder::context_budget` which validates this."
+        );
         Self {
             token_budget: config.token_budget,
             warning_threshold: config.warning_threshold,
@@ -815,15 +838,22 @@ mod tests {
     }
 
     #[test]
-    fn test_before_turn_zero_budget_is_critical_returns_compact_to_fit() {
+    fn test_new_rejects_zero_budget_at_construction() {
+        // Audit 2026-08-26 F1: a zero budget used to silently produce a
+        // permanent CompactToFit loop. The pre-condition assertion on
+        // `ContextBudget::new` closes the gap; this test pins the tripwire
+        // so the invariant cannot drift back via a future "let's relax
+        // this" refactor. Use the inner `should_panic` (not the legacy
+        // #[should_panic(expected = ...)] attribute) so the message is
+        // printed verbatim if the assert is changed.
         let config = ContextBudgetConfig {
             token_budget: 0,
             ..default_config()
         };
-        let mut budget = ContextBudget::new(&config);
-        let msgs = vec![UnifiedMessage::user("hello")];
-        let directive = budget.before_turn(&msgs, "", 0);
-        assert_eq!(directive, LoopDirective::CompactToFit);
+        let result = std::panic::catch_unwind(|| {
+            let _budget = ContextBudget::new(&config);
+        });
+        assert!(result.is_err(), "zero token_budget must fail at construction");
     }
 
     #[test]

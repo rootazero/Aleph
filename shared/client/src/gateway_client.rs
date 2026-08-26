@@ -140,6 +140,14 @@ impl GatewayClient {
 
         // Wait for the response whose `id` matches our request, ignoring
         // notifications and out-of-order frames that may arrive first.
+        //
+        // The handshake (id=0) is a special case: a SUCCESSFUL handshake carries
+        // no payload for the caller to read (the role is already granted
+        // server-side), but a FAILED handshake — `AUTH_REQUIRED`, rate limit,
+        // origin gate — comes back with id=0 *and* an `error` frame. Skipping
+        // it on the "id != 1" filter used to leave the caller parked for the
+        // method's full timeout, with the real reason only visible in the
+        // server log. Surface it now instead.
         let json = tokio::time::timeout(Duration::from_millis(self.timeout_ms), async {
             loop {
                 let response = read
@@ -153,8 +161,20 @@ impl GatewayClient {
                     .map_err(|e| CliError::Other(format!("Invalid response: {e}")))?;
 
                 let json: Value = serde_json::from_str(text)?;
-                if json.get("id").and_then(serde_json::Value::as_i64) == Some(request_id) {
-                    return Ok::<Value, CliError>(json);
+                let id = json.get("id").and_then(serde_json::Value::as_i64);
+                match id {
+                    // Handshake error → bubble it up immediately. The matching
+                    // is on the wire `id` only; the error shape is read below.
+                    Some(0) if json.get("error").is_some() => {
+                        return Ok::<Value, CliError>(json);
+                    }
+                    // Method response we asked for.
+                    Some(n) if n == request_id => {
+                        return Ok::<Value, CliError>(json);
+                    }
+                    // Notifications, a successful handshake, or anything we
+                    // didn't ask for: keep reading.
+                    _ => continue,
                 }
             }
         })
@@ -193,6 +213,8 @@ impl Default for GatewayClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
+    use tokio::net::TcpListener;
 
     #[test]
     fn test_client_builder() {
@@ -209,5 +231,58 @@ mod tests {
         let client = GatewayClient::new();
         assert_eq!(client.url, DEFAULT_GATEWAY_URL);
         assert_eq!(client.timeout_ms, DEFAULT_TIMEOUT_MS);
+    }
+
+    /// The gateway answers `AUTH_REQUIRED` for the `connect` handshake when a
+    /// caller without a credential hits an operator-only method. The previous
+    /// read loop matched on `id == request_id` (1) only, so the id=0 error
+    /// frame was discarded and the caller waited for the method's full
+    /// timeout — a thirty-second "is this thing hung?" with the real reason
+    /// buried in the server log. The fix surfaces the id=0 error as soon as
+    /// it arrives.
+    #[tokio::test]
+    async fn a_handshake_error_is_surfaced_immediately_not_at_the_method_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            // Read the connect frame so the client's write completes.
+            let _ = ws.next().await.unwrap().unwrap();
+            let reply = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 0,
+                "error": {
+                    "code": -32000, // AUTH_REQUIRED
+                    "message": "auth required"
+                }
+            });
+            ws.send(Message::Text(reply.to_string().into()))
+                .await
+                .unwrap();
+            // Hold the socket open past the client's read so a Disconnected
+            // cannot masquerade as the fix.
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        });
+
+        let client = GatewayClient::new()
+            .with_url(&format!("ws://{addr}"))
+            .with_timeout(30_000);
+
+        let started = Instant::now();
+        let err = client
+            .call::<Value>("some.method", None)
+            .await
+            .expect_err("a refused handshake must surface, not time out");
+        assert!(
+            matches!(err, CliError::Rpc { code: -32000, .. }),
+            "got {err:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the caller waited {:?} — the id=0 error frame was discarded",
+            started.elapsed()
+        );
     }
 }

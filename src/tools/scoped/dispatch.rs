@@ -946,7 +946,7 @@ impl ScopedToolService {
                 // `ctx_search` / `read_file` — closing the reference-bypass.
                 if just_paused {
                     if let Some(store) = self.result_store.as_deref() {
-                        store.purge_all();
+                        store.purge_all().await;
                         tracing::warn!(
                             session = %key,
                             "denial circuit-breaker tripped — purged offloaded \

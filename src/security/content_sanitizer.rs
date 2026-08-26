@@ -144,7 +144,20 @@ fn generate_boundary_id() -> String {
 #[must_use]
 pub fn wrap_external_content(content: &str, source: ContentSource) -> String {
     let id = generate_boundary_id();
-    let source_label = source.as_label();
+    // The label is part of the boundary surface: a `ContentSource::WebFetch`
+    // URL containing a fullwidth `<` or a homoglyph-spelled
+    // `<<<EXTERNAL_…` substring would otherwise slip into the header
+    // attributes verbatim and the model would read it as a forged marker.
+    // Funnel the label through the same homoglyph-fold + invisible-strip
+    // + fence-prefix escape the body sees, in that order.
+    let source_label = {
+        let raw = source.as_label();
+        let normalized = normalize_homoglyphs(&raw);
+        let (stripped, _) = crate::security::unicode_guard::strip_invisible_chars(&normalized);
+        stripped
+            .replace("<<<EXTERNAL_", "<<<ESCAPED_EXTERNAL_")
+            .replace("<<<END_EXTERNAL_", "<<<ESCAPED_END_EXTERNAL_")
+    };
     let scrubbed = sanitize_external_text(content);
 
     format!(

@@ -247,6 +247,8 @@ mod tests {
             // mechanics, and a wired compactor would put a side-channel LLM
             // call behind the scripted provider.
             context_budget_config: None,
+            context_budget_refiner: None,
+            primary_context_window: None,
             cheap_summary_provider: None,
         }
     }
@@ -2177,5 +2179,173 @@ mod tests {
             "a detached child must be told the root it will actually execute \
              in, not silence and not the daemon's cwd"
         );
+    }
+
+    /// A sub-agent running inside a project room must be told who else is in
+    /// the room.
+    ///
+    /// `ResolvedContext` has exactly two production construction sites — the
+    /// gateway turn (`harness_bridge::prompt_build`) and this one — and
+    /// `room_roster` was populated only at the first. The scope task-local it
+    /// derives from is carried across the spawn by
+    /// [`crate::scope::CarriedAttribution`] and always was, so the data was
+    /// reachable the whole time: what was missing is a reader on this path.
+    /// `RoomRosterLayer` sits in the pipeline BOTH paths run, so the failure
+    /// mode is not an error — it is the layer rendering nothing, forever.
+    ///
+    /// The negative half is asserted in the same test because "always `Some`"
+    /// passes the positive half while re-keying the cached prefix of every
+    /// single-human deployment on earth.
+    #[tokio::test]
+    async fn a_child_in_a_room_inherits_the_rooms_roster() {
+        use crate::scope::{ScopeAttribution, ScopeId};
+
+        let store = crate::projects::ProjectStore::shared();
+        let project = store
+            .create("roster-inheritance", Some("u-owner"), None)
+            .expect("create room");
+        // `create` seeds the owner; a room of one deliberately renders nothing,
+        // so a second member is what makes this fixture a room at all.
+        store
+            .add_member(&project.id, "u-bob")
+            .expect("add second member");
+
+        let in_room = crate::scope::with_scope(
+            Some(ScopeAttribution {
+                owner_user_id: "u-owner".to_string(),
+                scope: ScopeId::Project(project.id.clone()),
+            }),
+            async { child_environment_context("m", None, None, None, None) },
+        )
+        .await;
+
+        let roster = in_room.room_roster.as_deref().unwrap_or_else(|| {
+            panic!(
+                "a sub-agent delegated inside a project room was told nothing \
+                 about the room. Its prompt cannot name a single teammate, so \
+                 it addresses work to people it does not know exist."
+            )
+        });
+        assert!(
+            roster.contains("u-bob"),
+            "the roster reached the child but is missing a member: {roster:?}"
+        );
+        assert!(
+            roster.contains("(owner)"),
+            "the owner mark is part of the rendered line's contract: {roster:?}"
+        );
+
+        let personal = crate::scope::with_scope(
+            Some(ScopeAttribution::personal("u-solo")),
+            async { child_environment_context("m", None, None, None, None) },
+        )
+        .await;
+        assert!(
+            personal.room_roster.is_none(),
+            "a personal session has no room. Emitting a block here would add \
+             per-run bytes to the STABLE prefix of every single-human \
+             deployment — the symptom of which appears only on the bill"
+        );
+    }
+
+    /// Every `ResolvedContext` field is classified for the child, and the
+    /// classification is DERIVED from the type rather than listed here.
+    ///
+    /// `ResolvedContext` has two production construction sites — the gateway
+    /// turn and [`child_environment_context`] — and the struct's own doc names
+    /// only the first ("filled in afterwards by
+    /// `harness_bridge::prompt_build::resolve_prompt_context`"). So a field
+    /// added for the gateway inherits **silence** here, and silence is
+    /// indistinguishable from a deliberate decision not to inherit it. That is
+    /// exactly how `room_roster` shipped dead: nothing was broken, a layer just
+    /// rendered nothing on one of the two paths for its whole existence.
+    ///
+    /// The exhaustive destructure below is the mechanism: adding a field to
+    /// `ResolvedContext` is a COMPILE ERROR in this test, which puts the
+    /// question in front of the person adding it while they still have the
+    /// answer. Do not repair such a break by adding `..` — that converts this
+    /// guard back into the silence it exists to remove.
+    #[tokio::test]
+    async fn every_resolved_context_field_is_classified_for_the_child() {
+        use crate::scope::{ScopeAttribution, ScopeId};
+        use crate::thinker::context::{ResolvedContext, VoiceContext};
+
+        let store = crate::projects::ProjectStore::shared();
+        let project = store
+            .create("field-census", Some("u-owner"), None)
+            .expect("create room");
+        store.add_member(&project.id, "u-bob").expect("add member");
+
+        let ctx = crate::scope::with_scope(
+            Some(ScopeAttribution {
+                owner_user_id: "u-owner".to_string(),
+                scope: ScopeId::Project(project.id.clone()),
+            }),
+            async { child_environment_context("m", None, Some("sess-parent"), Some("run-7"), None) },
+        )
+        .await;
+
+        let ResolvedContext {
+            // -- (a) The child computes its own -------------------------------
+            // Facts about THIS run: its process environment, its jail, its
+            // place in the delegation tree. Inheriting the parent's would be
+            // actively wrong, not merely incomplete.
+            environment_contract: _,
+            runtime_context,
+            sandbox_summary: _,
+            envelope_parent,
+            run_id,
+            approval_tier: _,
+
+            // -- (b) Derived from a task-local the spawn carries ---------------
+            // `CarriedAttribution` re-establishes the scope across every spawn,
+            // so these are reachable on BOTH paths and a child that lacks one
+            // is a wire nobody connected — not a design decision.
+            room_roster,
+
+            // -- (c) The PARENT SESSION's state, deliberately not inherited ----
+            // A sub-agent runs on its own ephemeral session (`ephemeral_for`).
+            // These describe the parent's session, and handing them to a child
+            // would tell it that the parent's plan / goal / loop / strategy /
+            // voice turn is its own. Assert they stay absent so "inherit
+            // everything" cannot be someone's shortcut fix to a future bug.
+            runtime_state_blocks,
+            execution_plan,
+            standing_goal,
+            graph_topology,
+            timer_loop,
+            strategy,
+            strategy_guardrails,
+            voice,
+            voice_vocabulary,
+            session_mode,
+            memory_muted,
+        } = ctx;
+
+        // (a) — proof the fixture really reached the child site, so the (c)
+        // assertions below are not vacuously green on a default-constructed
+        // struct.
+        assert!(runtime_context.is_some(), "the child names its own runtime");
+        assert!(envelope_parent.is_some(), "the child names its parent");
+        assert_eq!(run_id.as_deref(), Some("run-7"));
+
+        // (b)
+        assert!(
+            room_roster.is_some(),
+            "the room is ambient, and a child in one must be told who is in it"
+        );
+
+        // (c)
+        assert!(runtime_state_blocks.is_empty());
+        assert!(execution_plan.is_none());
+        assert!(standing_goal.is_none());
+        assert!(graph_topology.is_none());
+        assert!(timer_loop.is_none());
+        assert!(strategy.is_none(), "threaded by the builder, not the envelope");
+        assert!(strategy_guardrails.is_none());
+        assert!(matches!(voice, VoiceContext::Off), "a child has no channel");
+        assert!(voice_vocabulary.is_none());
+        assert!(session_mode.is_none());
+        assert!(!memory_muted);
     }
 }

@@ -27,6 +27,21 @@ use crate::tools::AlephTool;
 /// it cannot use lossy decoding: a lossy decode followed by write-back would
 /// permanently replace every non-UTF-8 byte with U+FFFD.
 async fn read_text_file(path: &Path) -> std::result::Result<String, ToolError> {
+    // Defence in depth (audit-2026-08-26 BTS-2): mirror `file_read`'s
+    // 100 MB cap so a steered model cannot use `file_edit` to slurp a
+    // multi-GB text file into a single buffer. The cap is checked BEFORE
+    // the read so the allocation never happens.
+    const MAX_EDIT_BYTES: u64 = 100 * 1024 * 1024;
+    let meta = tokio::fs::metadata(path).await.map_err(|e| {
+        ToolError::Execution(format!("Failed to stat {}: {}", path.display(), e))
+    })?;
+    if meta.len() > MAX_EDIT_BYTES {
+        return Err(ToolError::InvalidArgs(format!(
+            "Cannot edit {}: file is {} bytes, max {MAX_EDIT_BYTES}",
+            path.display(),
+            meta.len()
+        )));
+    }
     let bytes = tokio::fs::read(path)
         .await
         .map_err(|e| ToolError::Execution(format!("Failed to read {}: {}", path.display(), e)))?;

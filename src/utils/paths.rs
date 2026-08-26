@@ -356,6 +356,13 @@ pub fn get_background_processes_dir() -> Result<PathBuf> {
     Ok(get_data_dir()?.join("background_processes"))
 }
 
+/// Directory for the busy-input wait lane's crash-durability journal
+/// (`busy_queue::durable`) — one entry per queued message, tombstoned on
+/// admission/stop/timeout, reinjected at boot.
+pub fn get_busy_queue_dir() -> Result<PathBuf> {
+    Ok(get_data_dir()?.join("busy_queue"))
+}
+
 // ============================================================================
 // Private scratch root (shared OS temp dir)
 // ============================================================================
@@ -630,16 +637,96 @@ pub fn plugin_skill_dirs() -> Vec<PathBuf> {
         .clone()
 }
 
+/// Why `agent_id` is not a usable single path component, or `None` when it is.
+///
+/// Returns the reason rather than a bare bool because the caller that REPORTS a
+/// rejection has to explain it, and one fused sentence listing every rule is
+/// wrong for whichever rule actually fired: a NUL byte used to be answered with
+/// a lecture about path traversal and Windows device names, which names neither
+/// what the operator did nor what to change. A boolean is enough to block a
+/// call; it is not enough to explain one.
+///
+/// Order is the order an operator would want to hear about: the cheapest,
+/// most specific fault first.
+fn unsafe_agent_id_reason(agent_id: &str) -> Option<&'static str> {
+    if agent_id.is_empty() {
+        return Some("must not be empty");
+    }
+    if agent_id.contains('\0') {
+        return Some("must not contain null bytes");
+    }
+    if agent_id.contains('/') || agent_id.contains('\\') {
+        return Some("must be a single path component, with no '/' or '\\' separator");
+    }
+    if agent_id.contains("..") {
+        return Some("must not contain '..' (path traversal)");
+    }
+    if is_windows_reserved_name(agent_id) {
+        // Naming the stem rule, not just the device list: the reason an id
+        // like `con.tar.gz` is refused is invisible from the list alone, and
+        // "which of these am I?" is the question this whole function exists
+        // to answer.
+        return Some(
+            "must not match a Windows reserved device name \
+             (CON, PRN, AUX, NUL, COM1-9, LPT1-9) — the match is on the name \
+             up to the first '.' or ':', so an extension does not rescue it",
+        );
+    }
+    None
+}
+
 /// True when `agent_id` is a single safe path component (non-empty, no path
-/// separators, no parent refs, no NUL). Mirrors [`get_agent_config_dir`]'s
-/// guard so skill discovery can build `~/.aleph/agents/<id>/skills` without
-/// risking traversal outside the agents root.
+/// separators, no parent refs, no NUL, not a Windows reserved device name).
+/// Mirrors [`get_agent_config_dir`]'s guard so skill discovery can build
+/// `~/.aleph/agents/<id>/skills` without risking traversal outside the agents
+/// root.
+///
+/// Derived from [`unsafe_agent_id_reason`] so the predicate and the explanation
+/// can never disagree about what is safe.
 fn is_safe_agent_id(agent_id: &str) -> bool {
-    !agent_id.is_empty()
-        && !agent_id.contains('/')
-        && !agent_id.contains('\\')
-        && !agent_id.contains("..")
-        && !agent_id.contains('\0')
+    unsafe_agent_id_reason(agent_id).is_none()
+}
+
+/// Bare names Windows reserves at the filesystem layer regardless of
+/// extension: the four classic devices plus COM1-9 and LPT1-9. Matching is
+/// case-insensitive and applies to the STEM, so `CON.txt` is reserved too.
+///
+/// That last clause is the whole point and this doc used to deny it, claiming
+/// "`CON.txt` is a normal file". It is not: Win32 strips the extension when it
+/// resolves a device name, so `CON.txt`, `CON.log` and `C:\anywhere\CON.txt`
+/// all open the console device. A file "created" under such a name is written
+/// to a device instead — silently, for a caller that only sees a returned
+/// string.
+///
+/// # Where the stem ends
+///
+/// The DOS-device parser takes the name up to the FIRST `.` or `:`, then
+/// ignores trailing spaces — not the last dot. That distinction is the whole
+/// of this function's history: it used to cut at the last dot, so `con.tar.gz`
+/// yielded the stem `con.tar` and passed while resolving to the console
+/// device. `con:foo` and `con ` are the same defect wearing the other two
+/// separators, so all three are answered here rather than left for a later
+/// round to rediscover one at a time.
+///
+/// The widening direction is deliberate: a false positive costs a file called
+/// `unnamed` or a rejected agent id, a false negative costs a write silently
+/// redirected to a device. Only names whose stem is *exactly* a reserved word
+/// are affected — `console.log`, `contacts.txt` and `com10` are untouched — so
+/// the set of agent ids this newly rejects is those literally beginning with
+/// `con`/`nul`/`com1`… followed by a separator.
+///
+/// Lives here (not in `utils::filename`) so the agent-id validator and the
+/// filename sanitizer share one source of truth. `pub(crate)` for the latter.
+pub(crate) fn is_windows_reserved_name(name: &str) -> bool {
+    // The reserved set is exactly 23 names; the base lookup is O(23).
+    const RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    // `find` returns a byte index at a char boundary, so the slice is safe.
+    // Trim AFTER cutting, so `con . txt` reduces to `con` the way Win32 does.
+    let stem = name.find(['.', ':']).map_or(name, |i| &name[..i]).trim_end();
+    RESERVED.iter().any(|r| stem.eq_ignore_ascii_case(r))
 }
 
 /// Append each plugin's `skills` directory found under `plugins_root` to `dirs`
@@ -883,14 +970,9 @@ pub fn get_canvas_root() -> Result<PathBuf> {
 ///
 /// The directory is created if it doesn't exist.
 pub fn get_agent_config_dir(agent_id: &str) -> Result<PathBuf> {
-    if agent_id.contains('/')
-        || agent_id.contains('\\')
-        || agent_id.contains("..")
-        || agent_id.is_empty()
-        || agent_id.contains('\0')
-    {
+    if let Some(reason) = unsafe_agent_id_reason(agent_id) {
         return Err(AlephError::config(format!(
-            "Invalid agent ID '{agent_id}': must not contain path separators, '..', or null bytes"
+            "Invalid agent ID '{agent_id}': {reason}"
         )));
     }
 
@@ -1820,6 +1902,60 @@ mod tests {
         assert!(get_agent_config_dir("a\\b").is_err());
         assert!(get_agent_config_dir("a..b").is_err());
         assert!(get_agent_config_dir("a\0b").is_err());
+        assert!(get_agent_config_dir("CON").is_err());
+        assert!(get_agent_config_dir("con").is_err());
+        assert!(get_agent_config_dir("COM1").is_err());
+        assert!(get_agent_config_dir("lpt9").is_err());
+    }
+
+    #[test]
+    fn test_is_safe_agent_id_rejects_reserved_names() {
+        assert!(!is_safe_agent_id("CON"));
+        assert!(!is_safe_agent_id("con"));
+        assert!(!is_safe_agent_id("COM1"));
+        assert!(!is_safe_agent_id("LPT9"));
+        // Plain agents stay allowed.
+        assert!(is_safe_agent_id("researcher"));
+        assert!(is_safe_agent_id("my-agent_01"));
+    }
+
+    /// The DOS-device stem ends at the FIRST `.` or `:` and ignores trailing
+    /// spaces. Each of these three separators used to let a device name
+    /// through `is_safe_agent_id`, which is how `~/.aleph/agents/<id>` could
+    /// name a device on Windows; the dot case (`con.tar.gz`) was carried for a
+    /// round as a recorded gap because widening it changes what an agent id
+    /// may be, so it wanted its own argument rather than a line smuggled into
+    /// a test repair.
+    #[test]
+    fn a_reserved_stem_is_rejected_whichever_separator_ends_it() {
+        for id in [
+            "con.tar.gz",
+            "CON.tar.gz",
+            "nul.a.b.c",
+            "aux.h",
+            "con:foo",
+            "COM1:9600",
+            "con ",
+            "lpt9 .txt",
+        ] {
+            assert!(
+                !is_safe_agent_id(id),
+                "{id:?} resolves to a Windows device and must not be a usable agent id"
+            );
+        }
+        // Equality on the stem, never a prefix match: widening the separator
+        // set must not start eating ordinary names.
+        for id in [
+            "console.log",
+            "contacts.v2",
+            "com10",
+            "com10.txt",
+            "nulled.data",
+            "connect:9600",
+            "my-agent_01",
+        ] {
+            assert!(is_safe_agent_id(id), "{id:?} is an ordinary name");
+        }
     }
 
     #[test]

@@ -1648,4 +1648,96 @@ mod tests {
             "an indexed /approve session must cascade to the identical card"
         );
     }
+
+    /// The `resolve_for_session` originator gate (the group-chat / paired-chat
+    /// bypass guard commented above at the `if let Some(ref expected)` block):
+    /// a record raised with a known originator resolves via the
+    /// session/text-reply path ONLY for that user. Historically fed only by a
+    /// channel's raw sender id (`ChannelApprovalBridgeAdapter`); as of
+    /// `teams::broadcast::member_run_metadata`, a group-chat member run now
+    /// stamps this same field from the room's speaker
+    /// (`scope::current_room_author()`), so this gate also protects a
+    /// member's parked tool call from being resolved by a DIFFERENT human in
+    /// the same room.
+    #[tokio::test]
+    async fn resolve_for_session_originator_gate_rejects_non_originator_and_admits_the_speaker() {
+        let manager = ExecApprovalManager::new();
+        let mut req = mock_request();
+        req.originator_user_id = Some("u-bob".to_string());
+        let record = manager.create(&req, 60_000);
+        let session_key = record.session_key.clone();
+        let (id, rx, timeout) = manager.register_pending(record);
+
+        // u-carol (not the originator) cannot resolve by session/text-reply —
+        // the entry is left untouched (still live), not consumed.
+        assert!(matches!(
+            manager.resolve_for_session(
+                &session_key,
+                None,
+                ApprovalDecisionType::AllowOnce,
+                Some("u-carol".to_string()),
+                None,
+            ),
+            SessionResolveOutcome::NothingPending
+        ));
+        assert!(
+            manager.get_pending(&id).is_some(),
+            "a non-originator's refused resolve must not have touched the entry"
+        );
+
+        // u-bob (the originator) resolves it normally.
+        assert!(matches!(
+            manager.resolve_for_session(
+                &session_key,
+                None,
+                ApprovalDecisionType::AllowOnce,
+                Some("u-bob".to_string()),
+                None,
+            ),
+            SessionResolveOutcome::Resolved {
+                decision: ApprovalDecisionType::AllowOnce,
+                ..
+            }
+        ));
+
+        let resolved = manager.await_registered(id, rx, timeout).await;
+        assert_eq!(resolved.decision, Some(ApprovalDecisionType::AllowOnce));
+    }
+
+    /// The `None`-originator side of the same gate: a record that carries no
+    /// originator (legacy record, or any non-channel/non-team caller) keeps
+    /// the pre-originator behaviour — the gate is a no-op and any
+    /// `resolved_by` succeeds. This is also the arm that covers admin/operator
+    /// resolution for THIS gate specifically: an operator resolving via
+    /// `exec.approval.resolve` never goes through `resolve_for_session` at
+    /// all (that RPC calls `resolve_with_reason` directly — see
+    /// `gateway::handlers::exec_approvals::handle_approval_resolve` — and its
+    /// own admission gate, `approval_addressable_by_caller`, short-circuits
+    /// `true` for a non-member caller before ever looking at
+    /// `originator_user_id`; already covered by
+    /// `an_operator_still_sees_a_members_parked_approval` in
+    /// `gateway::handlers::exec_approvals`, unchanged by this task).
+    #[tokio::test]
+    async fn resolve_for_session_originator_gate_is_a_noop_with_no_originator() {
+        let manager = ExecApprovalManager::new();
+        let record = manager.create(&mock_request(), 60_000);
+        let session_key = record.session_key.clone();
+        let (id, rx, timeout) = manager.register_pending(record);
+
+        assert!(matches!(
+            manager.resolve_for_session(
+                &session_key,
+                None,
+                ApprovalDecisionType::AllowOnce,
+                Some("anyone".to_string()),
+                None,
+            ),
+            SessionResolveOutcome::Resolved {
+                decision: ApprovalDecisionType::AllowOnce,
+                ..
+            }
+        ));
+        let resolved = manager.await_registered(id, rx, timeout).await;
+        assert_eq!(resolved.decision, Some(ApprovalDecisionType::AllowOnce));
+    }
 }

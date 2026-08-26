@@ -1,12 +1,12 @@
 //! `BackgroundAgentTracker` — tracks sub-agents running in background tokio tasks.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use crate::agents::progress::{ProgressKind, SubagentProgress};
 use crate::agents::subagent_tree_events;
-use crate::sync_primitives::RwLock;
+use crate::sync_primitives::{Arc, RwLock};
 use aleph_protocol::subagent_tree::{NodeLifecycle, SubagentNode};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;

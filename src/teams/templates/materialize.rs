@@ -503,8 +503,6 @@ async fn provision_member(
         })?;
     }
 
-    let system_prompt = if body.is_empty() { None } else { Some(body) };
-
     register_member_agent(
         ProvisionRequest {
             agent_id: member.id.clone(),
@@ -512,7 +510,6 @@ async fn provision_member(
             workspace: workspace_path,
             agent_dir: agent_state_dir,
             model,
-            system_prompt,
             toolset,
         },
         ProvisionDeps {

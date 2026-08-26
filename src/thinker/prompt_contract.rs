@@ -102,6 +102,10 @@ const CONDITIONALLY_SILENT: &[(&str, &str)] = &[
     ("graph_topology", "a session governed by a loop-graph"),
     ("standing_goal", "an active standing goal"),
     ("execution_plan", "a scratchpad plan with at least one item"),
+    (
+        "room_roster",
+        "a project-room session with two or more members",
+    ),
     ("language", "[general] language configured"),
 ];
 
@@ -496,6 +500,226 @@ fn dynamic_tail_bytes_ratchet() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Per-layer bounds for conditionally-silent Dynamic layers
+// ---------------------------------------------------------------------------
+//
+// `dynamic_tail_bytes_ratchet` measures the FIXED production-shaped input, so
+// every Dynamic layer on `CONDITIONALLY_SILENT` reads 0 B there — a number
+// that cannot distinguish "renders one short sentence" from "renders whatever
+// the user pasted". Each such layer therefore owes a bound of its own (the
+// list's doc says so); this section is that rule mechanized. Self-rendering
+// layers are asserted HERE against oversized waking input; pass-through
+// layers name the producer that owns their bound, and the cheap ones are
+// asserted against that producer directly.
+
+/// How a conditionally-silent Dynamic layer's bound is established.
+enum DynamicLayerBound {
+    /// The layer builds its own text; rendered below with deliberately
+    /// oversized waking input and asserted against this byte ceiling.
+    SelfRendered(usize),
+    /// The layer only forwards a producer's render; the bound lives at the
+    /// named producer. Listed so the completeness check cannot lose track of
+    //  it — naming the place IS the assertion for the expensive-to-wake ones.
+    ProducerBounded(&'static str),
+}
+
+use DynamicLayerBound::{ProducerBounded, SelfRendered};
+
+const DYNAMIC_LAYER_BOUNDS: &[(&str, DynamicLayerBound)] = &[
+    ("chain_context", SelfRendered(600)),
+    ("tool_runtime_state", SelfRendered(4_000)),
+    ("mcp_instructions", SelfRendered(2_400)),
+    ("voice_mode", SelfRendered(1_500)),
+    ("doctor_repair_hint", SelfRendered(500)),
+    ("session_context_guide", SelfRendered(600)),
+    ("memory_window", SelfRendered(600)),
+    (
+        "timer_loop",
+        ProducerBounded(
+            "harness_bridge::context_blocks::active_timer_loop (watch prompt clamped to 400 chars)",
+        ),
+    ),
+    (
+        "standing_goal",
+        ProducerBounded(
+            "harness_bridge::context_blocks::render_goal_summary (objective 400 / task 100; asserted below)",
+        ),
+    ),
+    (
+        "execution_plan",
+        ProducerBounded("memory::scratchpad::render_progress_bounded (PROMPT_PLAN_LIMITS)"),
+    ),
+    (
+        "strategy_pointer",
+        ProducerBounded(
+            "strategy::render::render_guardrails_only (10 × 300; asserted below)",
+        ),
+    ),
+    (
+        "graph_topology",
+        ProducerBounded("loop_graph::service::render_is_bounded_against_oversized_graph_rows"),
+    ),
+];
+
+/// Every conditionally-silent Dynamic layer has a registered bound (and the
+/// registry has no ghosts), and each self-rendering one respects its ceiling
+/// under deliberately oversized waking input.
+#[test]
+fn conditionally_silent_dynamic_layers_are_bounded() {
+    use crate::thinker::prompt_layer::PromptLayer;
+
+    let pipeline = PromptPipeline::default_layers();
+    let dynamic_names: Vec<&'static str> = pipeline
+        .layer_info()
+        .into_iter()
+        .filter(|(_, _, stability)| {
+            *stability == crate::thinker::prompt_layer::LayerStability::Dynamic
+        })
+        .map(|(_, name, _)| name)
+        .collect();
+    let silent_dynamic: Vec<&str> = CONDITIONALLY_SILENT
+        .iter()
+        .map(|(n, _)| *n)
+        .filter(|n| dynamic_names.contains(n))
+        .collect();
+
+    // Completeness, both directions: a silent Dynamic layer without a bound
+    // is the graph_topology hole; a bound entry naming a layer that left the
+    // list (or went Stable) is a stale claim.
+    for name in &silent_dynamic {
+        assert!(
+            DYNAMIC_LAYER_BOUNDS.iter().any(|(n, _)| n == name),
+            "{name} is a conditionally-silent Dynamic layer with no registered byte bound — \
+             add it to DYNAMIC_LAYER_BOUNDS (SelfRendered ceiling, or ProducerBounded naming \
+             the producer that caps its input)"
+        );
+    }
+    for (name, _) in DYNAMIC_LAYER_BOUNDS {
+        assert!(
+            silent_dynamic.contains(name),
+            "DYNAMIC_LAYER_BOUNDS entry {name} is not a conditionally-silent Dynamic layer \
+             (removed, renamed, or re-rated) — drop or move the entry"
+        );
+    }
+
+    let config = production_config();
+    let assert_ceiling = |name: &str, rendered: String| {
+        let bound = DYNAMIC_LAYER_BOUNDS
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, b)| b);
+        let ceiling = match bound {
+            Some(SelfRendered(c)) => *c,
+            Some(ProducerBounded(where_it_lives)) => panic!(
+                "{name} is ProducerBounded({where_it_lives}) — assert it at the producer, not here"
+            ),
+            None => panic!("{name} is missing from DYNAMIC_LAYER_BOUNDS"),
+        };
+        assert!(
+            rendered.len() <= ceiling,
+            "{name} rendered {} B under oversized waking input (ceiling {ceiling} B) — \
+             the unbounded-growth hole this table exists to close",
+            rendered.len()
+        );
+    };
+
+    // chain_context — depth/max are small ints; the render is near-const.
+    let chain = crate::harness::chain_context::ChainContext::new()
+        .child()
+        .expect("root always has a child at depth 1");
+    let input = LayerInput::basic(&config, &[]).with_chain_context_opt(Some(&chain));
+    let mut out = String::new();
+    crate::thinker::layers::ChainContextLayer.inject(&mut out, &input);
+    assert!(!out.is_empty(), "fixture must wake chain_context");
+    assert_ceiling("chain_context", out);
+
+    // tool_runtime_state — 50 unhealthy tools (a downed MCP server exposing
+    // many tools) is the realistic worst case.
+    let mut ctx = resolve(InteractionParadigm::Background);
+    ctx.runtime_state_blocks = (0..50)
+        .map(|i| {
+            crate::tools::runtime_state::RuntimeStateFragment::unavailable(
+                format!("mcp_server_tool_{i}"),
+                "dependency down",
+            )
+        })
+        .collect();
+    let input = LayerInput::basic(&config, &[]).with_resolved_context_opt(Some(&ctx));
+    let mut out = String::new();
+    crate::thinker::layers::ToolRuntimeStateLayer.inject(&mut out, &input);
+    assert!(!out.is_empty(), "fixture must wake tool_runtime_state");
+    assert_ceiling("tool_runtime_state", out);
+
+    // mcp_instructions — a hostile / sloppy server advertising a 50 KB block.
+    let instructions = vec![crate::thinker::prompt_layer::McpServerInstruction {
+        server_name: "srv".to_string(),
+        instructions: "x".repeat(50_000),
+    }];
+    let input = LayerInput::basic(&config, &[]).with_mcp_instructions(&instructions);
+    let mut out = String::new();
+    crate::thinker::layers::McpInstructionsLayer.inject(&mut out, &input);
+    assert!(!out.is_empty(), "fixture must wake mcp_instructions");
+    assert_ceiling("mcp_instructions", out);
+
+    // voice_mode — transcribed turn with a 25 KB operator vocabulary list.
+    let mut ctx = resolve(InteractionParadigm::Background);
+    ctx.voice = crate::thinker::context::VoiceContext::SpokenTranscribed;
+    ctx.voice_vocabulary = Some("term".repeat(5_000));
+    let input = LayerInput::basic(&config, &[]).with_resolved_context_opt(Some(&ctx));
+    let mut out = String::new();
+    crate::thinker::layers::VoiceModeLayer.inject(&mut out, &input);
+    assert!(!out.is_empty(), "fixture must wake voice_mode");
+    assert_ceiling("voice_mode", out);
+
+    // doctor_repair_hint — const text under WebRich.
+    let ctx = resolve(InteractionParadigm::WebRich);
+    let input = LayerInput::basic(&config, &[]).with_resolved_context_opt(Some(&ctx));
+    let mut out = String::new();
+    crate::thinker::layers::DoctorRepairHintLayer.inject(&mut out, &input);
+    assert!(!out.is_empty(), "fixture must wake doctor_repair_hint");
+    assert_ceiling("doctor_repair_hint", out);
+
+    // session_context_guide — const text gated on a flag.
+    let input = LayerInput::basic(&config, &[]).with_session_summaries(true);
+    let mut out = String::new();
+    crate::thinker::layers::SessionContextGuideLayer.inject(&mut out, &input);
+    assert!(!out.is_empty(), "fixture must wake session_context_guide");
+    assert_ceiling("session_context_guide", out);
+
+    // memory_window — one of three consts; wake via the recall flag.
+    let input = LayerInput::basic(&config, &[]).with_recalled_memory(true);
+    let mut out = String::new();
+    crate::thinker::layers::MemoryWindowLayer.inject(&mut out, &input);
+    assert!(!out.is_empty(), "fixture must wake memory_window");
+    assert_ceiling("memory_window", out);
+
+    // Producer bounds asserted where the producer is cheap to drive:
+    // render_goal_summary with a 20 KB user-authored objective.
+    let goal = crate::goal::Goal::new("session", &"objective ".repeat(2_500), 0, 0);
+    let rendered = crate::orchestrator::harness_bridge::render_goal_summary(&goal);
+    assert!(
+        rendered.len() <= 600,
+        "render_goal_summary rendered {} B from an oversized objective (ceiling 600 B)",
+        rendered.len()
+    );
+    // render_guardrails_only with 100 guardrails of 1,000 chars each.
+    let strategy = crate::strategy::Strategy {
+        objective: "o".into(),
+        approach: "a".into(),
+        phases: vec![],
+        guardrails: (0..100).map(|_| "g".repeat(1_000)).collect(),
+        success_criteria: "s".into(),
+        goal_id: None,
+    };
+    let rendered = crate::strategy::render_guardrails_only(&strategy);
+    assert!(
+        rendered.len() <= 3_200,
+        "render_guardrails_only rendered {} B from an oversized list (ceiling 3,200 B)",
+        rendered.len()
+    );
+}
+
 /// No sentence may be stated twice in one request — across prompt layers *and*
 /// the tool descriptions that ship beside them.
 ///
@@ -745,20 +969,23 @@ fn no_environment_fact_is_stated_twice() {
 // pins the same property on raw request bodies but only ever sees a
 // hand-written fixture — never the real layer set.
 //
-// They exist because `PromptLayer::stability()` DEFAULTS to `Stable`. A layer
-// that simply forgets to declare rides inside the cacheable prefix by
-// omission, and every byte it renders then re-keys the provider's prompt cache
+// They exist because `PromptLayer::stability()` is a required method — a
+// layer that picks `Stable` without thinking rides inside the cacheable
+// prefix, and every byte it renders then re-keys the provider's prompt cache
 // for the whole conversation behind it. That has already happened once here:
-// `ToolRuntimeStateLayer` sat at priority 502 with no `stability()`, so a
-// 30-second-TTL tool-health probe silently invalidated entire sessions. It was
-// caught by a human reading code, not by a mechanism.
+// `ToolRuntimeStateLayer` sat at priority 502 back when `stability()` still
+// DEFAULTED to `Stable`, so a 30-second-TTL tool-health probe silently
+// invalidated entire sessions. It was caught by a human reading code; making
+// the method required moved the catch to the compiler, and these guards are
+// what watch the answer every layer now has to give.
 //
 // DeepSeek-Reasonix guards the same invariant with a runtime
 // `verifyFingerprint()` that throws when a mutation path bypasses cache
-// invalidation. Aleph deliberately does NOT carry a runtime hash — one existed
-// in `cache_monitor.rs`, never gained a production consumer, and was removed
-// per YAGNI. The useful half of that mechanism is the assertion, not the
-// hash, so it lives here as a test.
+// invalidation. Aleph does carry a runtime prefix hash —
+// `cache_monitor.rs::stable_prefix_hash`, consumed by `MeteringProvider` for
+// miss attribution at the watchdog's alarm edge — but it annotates alarms,
+// it never gates assembly. The gating half of that mechanism is the
+// assertion, so it lives here as a test.
 
 /// Building the stable prefix twice from identical input must produce
 /// identical bytes.

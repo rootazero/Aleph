@@ -1,0 +1,131 @@
+{
+  "module": "src/browser",
+  "scanned_files": 18,
+  "total_loc": 8794,
+  "findings": [
+    {
+      "id": "BRW-1",
+      "severity": "High",
+      "category": "Security",
+      "file": "src/browser/chrome_mcp.rs",
+      "line": 122,
+      "context": "fn default_user_data_dir_for(profile_name: &str) -> String",
+      "title": "Path traversal in default Chrome user-data-dir: profile_name is joined unsanitized",
+      "before": "fn default_user_data_dir_for(profile_name: &str) -> String {\n    let root = crate::utils::paths::get_config_dir()\n        .unwrap_or_else(|_| std::path::PathBuf::from(\"/tmp/.aleph\"));\n    root.join(\"browser\")\n        .join(\"chrome-mcp\")\n        .join(profile_name)\n        .join(\"user-data-dir\")\n        .to_string_lossy()\n        .into_owned()\n}",
+      "after": "fn default_user_data_dir_for(profile_name: &str) -> String {\n    let root = crate::utils::paths::get_config_dir()\n        .unwrap_or_else(|_| std::path::PathBuf::from(\"/tmp/.aleph\"));\n    root.join(\"browser\")\n        .join(\"chrome-mcp\")\n        .join(super::playwright_launch::sanitize_session_key(profile_name))\n        .join(\"user-data-dir\")\n        .to_string_lossy()\n        .into_owned()\n}",
+      "rationale": "`PathBuf::join` does not sanitize `..`, `/`, or leading-dot segments: a profile named `../../etc` resolves outside `get_config_dir()`, and a profile named `/tmp/pwn` causes `PathBuf::join` to replace the root with `/tmp/pwn`. The result is passed straight into Chrome's `--user-data-dir` flag, so Chrome will create (and silently own the cookies, history, and logins of) an arbitrary directory. This defeats the isolation guarantee BROWSER-R4-05 documents (Aleph-private per-profile path) and is inconsistent with `playwright_launch::sanitize_session_key`, which the sibling code path already uses to prevent the same class of bug. Profile names from operator config are the trust boundary the fix has to hold against."
+    },
+    {
+      "id": "BRW-2",
+      "severity": "Medium",
+      "category": "Security",
+      "file": "src/browser/chrome_mcp.rs",
+      "line": 178,
+      "context": "impl Drop for ChromeMcpDriver / launched_pids handling",
+      "title": "Launched-PID list grows unbounded and SIGKILL via libc::kill can hit PID-reused processes",
+      "before": "/// BROWSER-R4-01: PIDs of Chrome processes Aleph launched itself when\n/// no user Chrome was running. The `tokio::process::Child` handle is\n/// intentionally dropped after the bootstrap-spawn (the MCP server's\n/// `--autoConnect` is what keeps Chrome alive), so without this list\n/// the launched Chrome is reparented to PID 1 and outlives the\n/// daemon. Drop below kills each PID so a daemon stop cleans up.\n/// PIDs are recorded on launch and removed when the driver shuts\n/// the session down explicitly; the Drop covers everything else.\nlaunched_pids: Mutex<Vec<u32>>,\n\nfn drop(&mut self) {\n    let pids = self\n        .launched_pids\n        .lock()\n        .unwrap_or_else(|e| e.into_inner())\n        .clone();\n    if pids.is_empty() { return; }\n    #[cfg(unix)] {\n        for pid in pids {\n            let rc = unsafe { libc::kill(pid as i32, libc::SIGKILL) };\n            if rc != 0 { /* log only */ }\n        }\n    }",
+      "after": "// Track live Chrome children; remove a pid when we observe the\n// process has exited (via waitpid/try_wait on a side channel),\n// and on Drop only signal children we still consider ours.\nlaunched_pids: Mutex<HashMap<u32, ()>>,\n\nfn drop(&mut self) {\n    let pids: Vec<u32> = self\n        .launched_pids\n        .lock()\n        .unwrap_or_else(|e| e.into_inner())\n        .keys()\n        .copied()\n        .collect();\n    if pids.is_empty() { return; }\n    // Verify the PID still belongs to a Chrome binary we started\n    // (readlink /proc/<pid>/exe on Linux, GetModuleFileName on\n    // Windows) before signalling, so PID reuse cannot kill an\n    // unrelated process the daemon has no authority over.\n    for pid in pids { /* verify + kill as above */ }\n}",
+      "rationale": "PIDs are appended on every bootstrap launch and never removed — the comment claims they are removed on explicit destroy, but the only sites that touch `launched_pids` are `push` and the Drop read; nothing removes an entry. On a long-running daemon, the list accumulates thousands of PIDs across relaunches. After a process exits, its PID can be reissued by the kernel; the next daemon shutdown then SIGKILLs the unrelated new owner of that PID. The `unsafe { libc::kill }` call is sound per its SAFETY comment (the FFI itself is well-defined), but the *invariant* the comment asserts ('the daemon's user can signal' anything at that number) is not actually upheld once the original Chrome has exited and PID reuse has happened. The Drop should at minimum verify the executable backing each PID (e.g. `readlink /proc/<pid>/exe` on Linux) before signalling, and PIDs should be pruned when Chrome exits so the list cannot grow without bound."
+    },
+    {
+      "id": "BRW-3",
+      "severity": "Medium",
+      "category": "Async",
+      "file": "src/browser/manager.rs",
+      "line": 218,
+      "context": "ProfileManager::spawn_idle_reaper — global handle slot",
+      "title": "TOCTOU race when claiming the global LIVE_MANAGER slot",
+      "before": "let mut slot = LIVE_MANAGER.lock().unwrap_or_else(|e| e.into_inner());\nif let Some(existing) = slot.as_ref() {\n    if existing.strong_count() > 0 {\n        tracing::warn!(\n            \"ProfileManager::spawn_idle_reaper: live manager already installed; \\\n             refusing to claim the global reaper slot\"\n        );\n        return;\n    }\n}\n*slot = Some(Arc::downgrade(self));",
+      "after": "let mut slot = LIVE_MANAGER.lock().unwrap_or_else(|e| e.into_inner());\nmatch slot.as_ref() {\n    Some(existing) if existing.strong_count() > 0 => {\n        tracing::warn!(\n            \"ProfileManager::spawn_idle_reaper: live manager already installed; \\\n             refusing to claim the global reaper slot\"\n        );\n        return;\n    }\n    Some(_) | None => { /* previous handle dead or absent; steal it */ }\n}\n*slot = Some(Arc::downgrade(self));",
+      "rationale": "The check (`existing.strong_count() > 0`) and the write (`*slot = Some(...)`) sit inside the same Mutex lock, so a strict data race is not present, but the *logic* is still racy: between the moment two managers observe `slot` empty and the moment the first one writes, the second will see the freshly-written Weak and bail. Worse, if both observe `None` simultaneously under contended scheduling, the first to write wins and the second silently drops its `Arc::downgrade(self)` — there is no warn, no retry, no comparison. The 'claim-or-skip' intent documented in the BROWSER-R4-08 comment is not actually implemented; only the `Some + still-alive` half is. Use an explicit match and log the overwritten case so a real overwrite is observable, not silent."
+    },
+    {
+      "id": "BRW-4",
+      "severity": "Low",
+      "category": "Architecture",
+      "file": "src/browser/chrome_mcp.rs",
+      "line": 95,
+      "context": "chrome_launch_args — extra_args handling",
+      "title": "extra_args allow arbitrary Chrome flags including safety-relevant ones",
+      "before": "match &cfg.user_data_dir {\n    Some(dir) => args.push(format!(\"--user-data-dir={dir}\")),\n    None => args.push(format!(\"--user-data-dir={default_user_data_dir}\")),\n}\nargs.extend(cfg.extra_args.iter().cloned());",
+      "after": "// extra_args go LAST so user wins, but refuse flags that would\n// re-disable the safety floor (--no-sandbox, --disable-web-security,\n// --remote-debugging-port=... unless we set it ourselves, etc.).\nconst FORBIDDEN_EXTRA_ARGS: &[&str] = &[\n    \"--no-sandbox\",\n    \"--disable-web-security\",\n    \"--disable-site-isolation-trials\",\n    \"--allow-running-insecure-content\",\n];\nargs.extend(\n    cfg.extra_args.iter()\n        .filter(|a| !FORBIDDEN_EXTRA_ARGS.iter().any(|f| a.starts_with(f)))\n        .cloned(),\n);",
+      "rationale": "Operator-configured `extra_args` are appended unfiltered. The test `chrome_launch_args_appends_extra_args_last` even passes a `--proxy-server=...` override to prove user wins over config — the same mechanism lets any profile (including a Brave profile the managed driver cannot honor, but which the existing-session path can) silently pass `--no-sandbox`, `--disable-web-security`, or `--remote-debugging-port=<other-port>` to a Chrome Aleph launched itself. That Chrome owns cookies and storage for that profile, so a sandbox-disable flag is a real escalation. The args come from operator config and the operator already has filesystem access, but this is exactly the class of accidental-typo risk the comment on BROWSER-R4-05 was written to prevent — and the cheapest correct one is a deny-list at the boundary, not a review."
+    },
+    {
+      "id": "BRW-5",
+      "severity": "Low",
+      "category": "ErrorHandling",
+      "file": "src/browser/playwright_cli.rs",
+      "line": 261,
+      "context": "PlaywrightCliDriver::spawn — process spawn",
+      "title": "Browser child process kill_on_drop relies on Drop being reached promptly on timeout",
+      "before": "let child = cmd.no_window().spawn().map_err(|e| match e.kind() {\n    std::io::ErrorKind::NotFound => BrowserError::PlaywrightCliNotInstalled,\n    _ => BrowserError::Io(e),\n})?;\n\nlet output_fut = child.wait_with_output();\nlet output = match tokio::time::timeout(timeout, output_fut).await {\n    Ok(res) => res.map_err(BrowserError::Io)?,\n    Err(_) => {\n        return Err(BrowserError::Timeout(timeout.as_millis() as u64));\n    }\n};",
+      "after": "let child = cmd.no_window().spawn().map_err(|e| match e.kind() {\n    std::io::ErrorKind::NotFound => BrowserError::PlaywrightCliNotInstalled,\n    _ => BrowserError::Io(e),\n})?;\n\n// Drop child explicitly on timeout before returning, so the SIGKILL\n// is delivered before the next iteration locks the per-session guard.\nlet output_fut = child.wait_with_output();\nlet output = match tokio::time::timeout(timeout, output_fut).await {\n    Ok(res) => res.map_err(BrowserError::Io)?,\n    Err(_) => {\n        // output_fut was dropped by tokio::time::timeout — the\n        // Child inside it is also dropped, and kill_on_drop fires.\n        // Reacquire a handle for an explicit SIGKILL in case\n        // kill_on_drop did not fire (varies by platform).\n        return Err(BrowserError::Timeout(timeout.as_millis() as u64));\n    }\n};",
+      "rationale": "`kill_on_drop(true)` is set on the Command but the actual signal is delivered by tokio's Drop impl on Child, which only runs when the future owning Child is dropped. `tokio::time::timeout` does drop the inner future on `Err`, so this *does* fire today, but the mechanism is implicit and platform-dependent (the kill happens via tokio's runtime teardown on some platforms, after the Err has already been returned). A process that hangs past its timeout could therefore be observed still running by the next caller that acquires the per-session lock, leading to interleaved output. Worth a comment that names the kill path and an explicit `child.start_kill()` (via `try_wait` on the original handle) as belt-and-braces, or at minimum a doc-comment on `kill_on_drop(true)` so the next reader doesn't drop the line."
+    },
+    {
+      "id": "BRW-6",
+      "severity": "Low",
+      "category": "Architecture",
+      "file": "src/browser/playwright_cli_backend.rs",
+      "line": 165,
+      "context": "PlaywrightCliBackend::open_tab — tab-new error discarded",
+      "title": "Silent discard of tab-new failure outside `Err` path via `let _ = ...await?`",
+      "before": "async fn open_tab(&self, url: &str) -> Result<TabId, BrowserError> {\n    self.ssrf_guard\n        .check_navigation(url)\n        .await\n        .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;\n    let _ = self\n        .run_launching(&[\"tab-new\", url], self.nav_timeout())\n        .await?;",
+      "after": "async fn open_tab(&self, url: &str) -> Result<TabId, BrowserError> {\n    self.ssrf_guard\n        .check_navigation(url)\n        .await\n        .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;\n    self.run_launching(&[\"tab-new\", url], self.nav_timeout()).await?;\n    // Inspect page_meta from the CliOutput to log the landed URL even\n    // on success (audit_listing below re-derives from tab-list).",
+      "rationale": "The `let _ = ...await?` pattern is widespread across `playwright_cli_backend.rs` (35+ sites) and consistently used: the `?` propagates errors, the `let _` only discards the successful `CliOutput`. This is a stylistic smell (the value is genuinely interesting — e.g. `page_meta.url` is the authoritative post-redirect URL the post-nav audit now uses), not a correctness bug. Flagged so the next reviewer doesn't have to re-derive that the `?` is doing the real work. The deeper fix is to give the helpers names that say 'ignore the value' (`run_and_discard`) so the pattern is self-documenting."
+    },
+    {
+      "id": "BRW-7",
+      "severity": "Low",
+      "category": "Style",
+      "file": "src/browser/tab_registry.rs",
+      "line": 38,
+      "context": "struct Tracked — single Instant field with no invariants",
+      "title": "Tracked struct wraps a single field for no reason",
+      "before": "struct Tracked {\n    last_used: Instant,\n}\n\n#[derive(Default)]\npub struct TabRegistry {\n    tabs: Mutex<HashMap<String, HashMap<String, Tracked>>>,\n}",
+      "after": "// Single-field newtype would be marginally cleaner, but the struct\n// exists so a future 'opened_at' / 'close_reason' can be added\n// without rewriting every map type. Leave a comment to that effect.\nstruct Tracked {\n    last_used: Instant,\n}",
+      "rationale": "Pure style — `HashMap<String, HashMap<String, Instant>>` would express the same data with one fewer layer of indirection. The struct is not load-bearing today; flagging only because every test that builds a `Tracked` writes `{ last_used: Instant::now() }` and every reader does `t.last_used`, which is exactly the newtype ceremony without the type-safety benefit. Either collapse to a plain `Instant` value type or document why the wrapper earns its keep."
+    }
+  ],
+  "deferred": [
+    {
+      "id": "BRW-D1",
+      "severity": "Low",
+      "title": "Many `let _ = self.run(...).await?` sites in playwright_cli_backend.rs",
+      "rationale": "The `?` propagates errors; only the `CliOutput` value is discarded. Stylistic, not a correctness bug — covered by BRW-6."
+    },
+    {
+      "id": "BRW-D2",
+      "severity": "Low",
+      "title": "is_idle uses strict `>` so 1800s elapsed against a 1800s timeout is NOT idle",
+      "rationale": "Pinned by `test_is_idle_timeout_filter` boundary assertion. Intentional design choice (so a tab touched exactly N seconds ago is not yet reaped); deferring would change semantics."
+    },
+    {
+      "id": "BRW-D3",
+      "severity": "Info",
+      "title": "unsafe block in ChromeMcpDriver::Drop has a SAFETY comment",
+      "rationale": "Per project rules only `unsafe` without SAFETY is in scope; this one comments the call. The semantic hazard (PID reuse) is filed as BRW-2."
+    },
+    {
+      "id": "BRW-D4",
+      "severity": "Info",
+      "title": "BrowserError::NoSession triggers lazy launch that can drop existing tabs",
+      "rationale": "Intentional and documented: a second `open` relaunches the browser under a new pid and drops every tab (see `open_session` doc-comment in playwright_cli.rs). Lazy launch off the CLI's own refusal is the contract; review-only concern."
+    },
+    {
+      "id": "BRW-D5",
+      "severity": "Info",
+      "title": "tokio::sync::Mutex held across .await in chrome_mcp.rs / playwright_cli.rs",
+      "rationale": "Held guards (binary_resolve_lock, per_session_locks, session_create_locks, profile_locks, chrome_launch_lock) wrap short async I/O (process spawn, MCP handshake) and are correctly scoped — none hold across page eval or network round trips. Standard pattern for async code."
+    }
+  ],
+  "summary": {
+    "critical": 0,
+    "high": 1,
+    "medium": 2,
+    "low": 4,
+    "total_findings": 7,
+    "files_with_findings": 4
+  }
+}

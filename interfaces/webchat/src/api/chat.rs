@@ -620,4 +620,52 @@ mod tests {
             "these send paths build their dials some other way: {offenders:?}"
         );
     }
+
+    /// Every send path binds the run it started to a conversation.
+    ///
+    /// `bind_run` is what installs the `run_id -> ConvId` route, and that route
+    /// is the FIRST of `resolve_target`'s three steps — without it none of the
+    /// run's later frames (reasoning, tool rows, streamed text, the final
+    /// answer) can be placed, and the handler returns before touching anything.
+    /// The failure is completely silent: the send succeeds, the server streams
+    /// the whole turn, and the surface renders nothing.
+    ///
+    /// The phone composer shipped exactly like that for as long as it has
+    /// existed — it was the only send path in the crate with no `bind_run`, and
+    /// no test asked. Scanned by file, like its sibling above, because one send
+    /// *path* may contain several `ChatApi::send` calls (a queue flush sends in
+    /// a loop and binds only the first, since the rest steer into that run).
+    ///
+    /// Production halves only: this file and the wide composer both name
+    /// `ChatApi::send(` inside their own test fixtures.
+    #[test]
+    fn every_send_path_binds_its_run() {
+        let sources = crate::disposed_reads::rust_sources(&crate::disposed_reads::src_dir());
+        assert!(sources.len() > 50, "the walk is broken, not the code");
+
+        let mut senders = 0_usize;
+        let mut offenders = Vec::new();
+        for path in sources {
+            let Ok(src) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let production = src.split("#[cfg(test)]").next().unwrap_or(&src);
+            if !production.contains("ChatApi::send(") {
+                continue;
+            }
+            senders += 1;
+            if !production.contains("bind_run(") {
+                offenders.push(path.display().to_string());
+            }
+        }
+        assert!(
+            senders >= 4,
+            "found {senders} send paths — the scan stopped seeing them, which \
+             would make this test pass by finding nothing"
+        );
+        assert!(
+            offenders.is_empty(),
+            "these send paths start a run nothing can route: {offenders:?}"
+        );
+    }
 }

@@ -84,9 +84,9 @@ pub struct PromptBuilder {
     /// Loaded identity files (SOUL.md, IDENTITY.md, AGENTS.md, TOOLS.md,
     /// HEARTBEAT.md) from `~/.aleph/agents/{agent_id}/`. When set, these are
     /// threaded into every `LayerInput` so `SoulLayer`, `IdentityFilesLayer`,
-    /// `ProfileLayer`, and `CustomInstructionsLayer` can read their respective
-    /// files. MEMORY.md is **not** included here — it's owned by the curated
-    /// memory module and threaded in via `curated_memory_envelope`.
+    /// and `ProfileLayer` can read their respective files. MEMORY.md is **not**
+    /// included here — it's owned by the curated memory module and threaded in
+    /// via `curated_memory_envelope`.
     identity_files: Option<IdentityFiles>,
     /// Pre-rendered curated memory envelope (`<CuratedMemory>` + `<UserProfile>`).
     ///
@@ -332,13 +332,19 @@ impl PromptBuilder {
     ///
     /// Both exist because a sub-agent prompt historically threaded no
     /// `ResolvedContext`, so `StrategyLayer` and the session-mode line had no
-    /// input to read. A caller that DOES supply a resolved context must leave
-    /// `ResolvedContext::strategy` unset (the spawner does) or the strategy
-    /// body would be stated twice — the layer once and this weld again.
+    /// input to read. When the caller DOES supply a resolved context whose
+    /// `strategy` is set, `StrategyLayer` already renders the body and this
+    /// weld MUST stay silent — the same guard the Cached path applies
+    /// (`cache.rs`), now enforced here instead of resting on a caller-side
+    /// convention (the spawner leaves `ResolvedContext::strategy` unset).
     pub(super) fn append_basic_welds(&self, out: &mut String) {
         // Wrap mirrors `StrategyLayer` byte-for-byte:
         // `<strategy>\n{body}\n</strategy>\n\n`.
-        if let Some(body) = self.strategy.as_deref() {
+        let resolved_strategy = self
+            .resolved_context
+            .as_ref()
+            .and_then(|context| context.strategy.as_deref());
+        if let (Some(body), true) = (self.strategy.as_deref(), resolved_strategy.is_none()) {
             out.push_str("<strategy>\n");
             out.push_str(body);
             out.push_str("\n</strategy>\n\n");
@@ -351,11 +357,15 @@ impl PromptBuilder {
 
     /// Build the system prompt as one undivided string.
     ///
-    /// Carries **no** prompt-cache breakpoint, so the whole prompt is subject
-    /// to the token budget — there is no protected floor to keep intact. Use
-    /// [`Self::build_system_prompt_parts`] for anything that reaches a
-    /// provider: an unsplit prompt is cached (or not) as a single block, which
-    /// means one per-run byte anywhere in it re-keys all of it.
+    /// **Test-only.** Carries **no** prompt-cache breakpoint, so the whole
+    /// prompt is subject to the token budget — there is no protected floor to
+    /// keep intact. Production entries split at the stable/dynamic boundary
+    /// instead: [`Self::build_system_prompt_parts`] (Basic / sub-agent) and
+    /// [`Self::build_system_prompt_cached_with_mode`] (Cached / main loop).
+    /// An unsplit prompt is cached (or not) as a single block, which means
+    /// one per-run byte anywhere in it re-keys all of it — making this entry
+    /// `#[cfg(test)]` turns that convention into a compile-time guarantee.
+    #[cfg(test)]
     pub fn build_system_prompt(&self, tools: &[ToolInfo]) -> String {
         let path = AssemblyPath::Basic;
         let input = self.build_basic_input(tools);
@@ -383,11 +393,12 @@ impl PromptBuilder {
 /// hot path; reuses [`PromptPipeline::layer_breakdown`] so no live state is
 /// duplicated.
 ///
-/// Called from **both** entry points — `build_system_prompt` (Basic, sub-agent)
-/// and `build_system_prompt_cached_with_mode` (Cached, main loop). It used to
-/// hang off the Basic path only, which meant the trace never fired for the
-/// prompt that actually matters. `mode` must be the mode the caller is about to
-/// assemble with, or the breakdown reports layers the prompt won't contain.
+/// Called from **both** production entry points — `build_system_prompt_parts`
+/// (Basic, sub-agent) and `build_system_prompt_cached_with_mode` (Cached, main
+/// loop). It used to hang off the Basic path only, which meant the trace never
+/// fired for the prompt that actually matters. `mode` must be the mode the
+/// caller is about to assemble with, or the breakdown reports layers the
+/// prompt won't contain.
 fn maybe_trace_prompt_size(
     pipeline: &PromptPipeline,
     path: AssemblyPath,

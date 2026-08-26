@@ -103,6 +103,32 @@ pub struct ResolvedTargets {
     pub suppressed: Vec<String>,
 }
 
+/// True iff `content` @-names a roster member or `@all`/`@everyone`.
+///
+/// This is the multi-human activation gate's mention lexer — the ONLY one.
+/// It reuses [`extract_mentions`] + [`MENTION_ALL`] and means exactly what
+/// [`resolve_targets`]'s MENTION ARM means (roster-filtered, reserved-handle
+/// dropped): a message that resolves to a non-empty target set THROUGH THAT
+/// ARM is exactly a message this returns `true` for. This is deliberately
+/// NOT full equivalence with "`resolve_targets` yields a non-empty target
+/// set" — `resolve_targets` also has a leader-fallback arm that yields a
+/// non-empty target set for a message with no mention at all, and this
+/// function correctly returns `false` for that case. That gap is not a bug
+/// to close: it IS the observe gate (spec §6.2) — an unaddressed message in
+/// a multi-human thread must NOT count as an activation mention, or every
+/// message would activate the roster and there would be no observe mode.
+/// Never re-derive the `@` grammar at a second call site — see the module
+/// doc on [`extract_mentions`] for the full grammar (fenced code, inline
+/// code, backslash escapes, email addresses).
+#[must_use]
+pub fn has_activation_mention(content: &str, roster: &[String]) -> bool {
+    let mentions = extract_mentions(content);
+    mentions.iter().any(|m| m == MENTION_ALL)
+        || mentions
+            .iter()
+            .any(|m| m != RESERVED_USER_HANDLE && roster.iter().any(|r| r == m))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,5 +298,17 @@ mod tests {
             MAX_FANOUT_WIDTH,
         );
         assert_eq!(t, vec!["alice".to_string()]);
+    }
+
+    #[test]
+    fn activation_mention_lexicon_matches_resolve_targets() {
+        let roster = vec!["leader".to_string(), "coder".to_string()];
+        assert!(has_activation_mention("@coder fix it", &roster));
+        assert!(has_activation_mention("@all 报到", &roster));
+        assert!(has_activation_mention("@everyone hi", &roster));
+        assert!(!has_activation_mention("no mention here", &roster));
+        assert!(!has_activation_mention("@stranger hi", &roster)); // 不在名册
+        assert!(!has_activation_mention("@user hi", &roster)); // 保留 handle
+        assert!(!has_activation_mention("a@b.com", &roster)); // email 不是提及（复用 extract_mentions 既有词法）
     }
 }

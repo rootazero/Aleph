@@ -15,10 +15,11 @@ use aleph_protocol::providers::{
     ModelsRefreshResult, ModelsRefreshRow, RefreshOutcome,
 };
 use aleph_protocol::{
-    AgentRunAccepted, AgentRunRequest, AgentTraceReplay, AgentTraceTaskSummary, SessionSnapshot,
+    AgentRunAccepted, AgentRunRequest, AgentRunStatusReport, AgentRunStatusRequest,
+    AgentTraceReplay, AgentTraceTaskSummary, RunPhase, SessionSnapshot,
 };
 
-use aleph_client::AlephClient;
+use aleph_client::{AlephClient, CliError, CliResult};
 
 use super::app::{self, AppState};
 use super::command_tree;
@@ -129,6 +130,147 @@ pub(super) async fn dispatch_gateway_text(
     }
 }
 
+/// What one `agent.status` answer means for a side question the overlay still
+/// believes is being answered.
+///
+/// Three outcomes, not two, and the third is the load-bearing one: "the server
+/// said it is over" and "I could not ask the server" are different facts, and
+/// folding the second into the first settles a question over a run that may be
+/// answering perfectly well on the other side of a socket that is still coming
+/// up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SideRunVerdict {
+    /// The gateway says it is still in flight. The spinner is honest and the
+    /// frames resume on the new socket — `EventVisibilityIndex` is
+    /// process-shared, so the run→session seed this run was given on the dead
+    /// connection is still there for the new one.
+    StillAnswering,
+    /// It ended in an error the gateway can name.
+    Failed(String),
+    /// It is no longer being answered here, for a reason that is not a failure.
+    Disconnected(String),
+    /// The question could not be put. Nothing is claimed and nothing settles;
+    /// the next successful reconnect asks again.
+    CouldNotAsk,
+}
+
+/// Read the server's answer about a side run.
+///
+/// Pure so the decision is reachable without a gateway — the same reason
+/// `apply_history` is split out from `attach_session`.
+///
+/// # `Err` is two different things
+///
+/// [`CliError::Rpc`] means the gateway **answered**, and today its only answer
+/// here is `Run not found`: this process has no record of the id. That covers a
+/// core that restarted under the client and a run addressed by someone who may
+/// not (deliberately the same response — see `caller_may_address_run`), and
+/// neither is a verdict about the work. It is still a settlement, because
+/// whatever became of that run, nothing is going to stream it to this client.
+///
+/// The note carries the server's own words rather than paraphrasing them. The
+/// sentence around them has to stay true of *any* refusal this method might
+/// grow, and "it did not report this run in flight" is the whole of what an
+/// error response establishes — "it has no record of it" is one specific
+/// reading, correct today and not this client's to assert.
+///
+/// Every other `CliError` is transport: the socket died again, the request timed
+/// out, the reply would not parse. Those say nothing at all about the run, and
+/// reading them as an ending is the "refusal read as absence" defect one layer
+/// down.
+fn side_run_verdict(answer: &CliResult<AgentRunStatusReport>) -> SideRunVerdict {
+    let report = match answer {
+        Ok(report) => report,
+        Err(CliError::Rpc { message, .. }) => {
+            return SideRunVerdict::Disconnected(format!(
+                "Disconnected while this was being answered, and the gateway did not report it \
+                 in flight (it said: {message}). Anything below arrived before the drop."
+            ))
+        }
+        Err(_) => return SideRunVerdict::CouldNotAsk,
+    };
+    match report.phase() {
+        RunPhase::Running => SideRunVerdict::StillAnswering,
+        RunPhase::Failed => SideRunVerdict::Failed(
+            report
+                .error
+                .clone()
+                .filter(|reason| !reason.trim().is_empty())
+                // A gateway that names the failure without saying why. Not
+                // guessed at: "it failed" is the whole of what was said.
+                .unwrap_or_else(|| "the gateway reported this run failed".to_string()),
+        ),
+        RunPhase::Completed => SideRunVerdict::Disconnected(
+            "Disconnected while this was being answered. The gateway reports the run finished; \
+             the text below is only what reached this client before the drop, and may not be \
+             the whole answer."
+                .to_string(),
+        ),
+        RunPhase::Cancelled => SideRunVerdict::Disconnected(
+            "Disconnected while this was being answered. The gateway reports the run was \
+             cancelled. Anything below arrived before the drop."
+                .to_string(),
+        ),
+        // Not folded in with `Running`: an unknown word read as "still going"
+        // is a spinner that never stops, and this client cannot recover from
+        // that. See `RunPhase::Unrecognized`.
+        RunPhase::Unrecognized => SideRunVerdict::Disconnected(
+            "Disconnected while this was being answered, and the gateway reports a state this \
+             client does not recognize. Anything below arrived before the drop."
+                .to_string(),
+        ),
+    }
+}
+
+/// Ask the server what became of the side question this overlay is still
+/// showing as unanswered, and stop the spinner unless it really is still going.
+///
+/// # Why the TUI needs its own path for this
+///
+/// A `/btw` run's terminal frame can be emitted while this client is offline,
+/// and frames sent to a dead socket are simply gone — so the overlay waits for
+/// a `RunComplete` that already happened, forever. The Panel repairs the
+/// equivalent from `stream.running_set_changed` / `gateway.metrics.
+/// run_concurrency`, but that set is keyed by **session** and is a Panel-only
+/// surface (`frame_census::PANEL_ONLY_STREAM_METHODS`); it could not answer for
+/// a side question anyway, because a side run executes on a derived session
+/// whose key is hashed server-side and which this client therefore cannot name.
+///
+/// The run id is the one handle it does hold, and `agent.status` is the one
+/// run-id-keyed read in the gateway. One round trip, and only when a side
+/// question is actually in flight.
+///
+/// # The window this does not close
+///
+/// A run that finishes *during* this round trip settles as
+/// [`BtwOutcome::Disconnected`], and the `RunComplete` that arrives a moment
+/// later — carrying the full answer — finds no active question and does
+/// nothing. Stated rather than hidden: the cost is the tail of one answer plus
+/// a word that is still true, over a window of one RPC, on a run that had to be
+/// alive at reconnect and dead a few milliseconds later. Closing it would mean
+/// letting a late terminal frame overwrite a settled exchange, which is the
+/// misattribution `for_active_run` exists to prevent.
+pub(super) async fn reconcile_side_question(state: &mut AppState, client: &AlephClient) {
+    let Some(run_id) = state.btw.active_run_id().map(str::to_string) else {
+        return;
+    };
+    let answer = client
+        .call::<_, AgentRunStatusReport>(
+            "agent.status",
+            Some(AgentRunStatusRequest {
+                run_id: run_id.clone(),
+            }),
+        )
+        .await;
+    match side_run_verdict(&answer) {
+        // Nothing is claimed on either: one is "it is still going", the other
+        // is "I do not know". Both leave the overlay as it is.
+        SideRunVerdict::StillAnswering | SideRunVerdict::CouldNotAsk => {}
+        SideRunVerdict::Failed(reason) => state.btw.fail_active(&run_id, reason),
+        SideRunVerdict::Disconnected(note) => state.btw.settle_disconnected(&run_id, note),
+    }
+}
+
 /// The `chat.abort` params that stop the side question the overlay is
 /// showing, or `None` when nothing is being answered.
 ///
@@ -194,7 +336,7 @@ pub(super) async fn btw_abort_or_close(state: &mut AppState, client: &AlephClien
 /// Execute a local slash command (TUI-only, no Gateway RPC needed).
 pub(super) async fn execute_local_command(
     state: &mut AppState,
-    textarea: &TextArea<'_>,
+    _textarea: &TextArea<'_>,
     client: &AlephClient,
     cmd: LocalCommand,
 ) {
@@ -248,9 +390,6 @@ pub(super) async fn execute_local_command(
         LocalCommand::Sessions => execute_sessions(state, client).await,
         LocalCommand::Providers { query } => execute_providers(state, client, query).await,
     }
-
-    // Ensure textarea still has focus hint after command execution
-    let _ = textarea;
 }
 
 // ---------------------------------------------------------------------------
@@ -307,7 +446,7 @@ pub(super) async fn confirm_session_switch(state: &mut AppState, client: &AlephC
     // the settings of the conversation being left) and adds a "Switched"
     // banner; `attach_session` then restores the incoming conversation's own.
     state.switch_session(&key);
-    attach_session(state, client, &key).await;
+    attach_session(state, client, &key, AttachMode::Append).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -479,12 +618,34 @@ pub(super) async fn confirm_provider_pick(state: &mut AppState, client: &AlephCl
     }
 }
 
+/// Whether an attach ADDS to what is on screen or REPLACES it.
+///
+/// Not cosmetic. Launch and `/session` both prepare the list themselves — the
+/// first keeps the welcome banner and the startup notices, the second wipes it
+/// in `switch_session` — so for them this call appends. A reconnect has no such
+/// preparation step and must not get one: clearing before the fetch means a
+/// `chat.history` that fails leaves the user staring at a blank screen on a
+/// connection that just came back, which is a worse outcome than the stale
+/// transcript it replaced.
+///
+/// `Replace` therefore clears **inside the success branch**, once the server's
+/// copy is actually in hand. A failed reattach then costs one error line and
+/// nothing else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AttachMode {
+    /// Append to what the caller has already prepared.
+    Append,
+    /// Swap in the server's copy, but only once it has arrived.
+    Replace,
+}
+
 /// Load a conversation: its transcript **and** the settings that govern it.
 ///
-/// The single attach path, used both at launch and after a switch. One call,
-/// because the transcript and the settings are one snapshot — a second RPC
-/// would open a window in which the screen shows a conversation while the
-/// status bar describes a different one's mode, tier and token count.
+/// The single attach path, used at launch, after a switch, and after a
+/// reconnect. One call, because the transcript and the settings are one
+/// snapshot — a second RPC would open a window in which the screen shows a
+/// conversation while the status bar describes a different one's mode, tier
+/// and token count.
 ///
 /// This is also why launching the TUI on an existing key finally shows
 /// anything: `chat.history` was previously reached *only* from the session
@@ -493,46 +654,116 @@ pub(super) async fn confirm_provider_pick(state: &mut AppState, client: &AlephCl
 ///
 /// Failure is reported and survivable: a conversation that cannot be loaded
 /// leaves the client on the key it was given with no settings, which the status
-/// bar renders as "unknown" rather than as the global defaults.
-pub(super) async fn attach_session(state: &mut AppState, client: &AlephClient, key: &str) {
+/// bar renders as "unknown" rather than as the global defaults. `AttachMode`
+/// exists so that survivability holds for the reconnect path too — see its doc.
+pub(super) async fn attach_session(
+    state: &mut AppState,
+    client: &AlephClient,
+    key: &str,
+    mode: AttachMode,
+) {
     let params = json!({ "session_key": key });
     match client.call::<_, Value>("chat.history", Some(params)).await {
-        Ok(result) => {
-            let rows = result
-                .get("messages")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            let mapped: Vec<app::ChatMessage> =
-                rows.iter().filter_map(history_message_from_json).collect();
-
-            // Render the server transcript verbatim (no local dedup/store).
-            for msg in mapped {
-                state.messages.push(msg);
-            }
-
-            // Restore the conversation's durable settings. Absent on an older
-            // gateway — read as "I was not told", so the caption falls back to
-            // the install default rather than to a value this client made up.
-            match result.get("session").cloned() {
-                Some(v) => match serde_json::from_value::<SessionSnapshot>(v) {
-                    Ok(snapshot) => state.apply_session_snapshot(snapshot),
-                    Err(e) => state.add_system_message(format!(
-                        "Session settings unreadable ({e}); showing install defaults."
-                    )),
-                },
-                None => state.add_system_message(
-                    "Gateway did not report session settings (older server); \
-                     showing install defaults."
-                        .to_string(),
-                ),
-            }
-            state.scroll_to_bottom();
-        }
+        Ok(result) => apply_history(state, &result, mode),
         Err(e) => state.add_system_message(format!("History error: {e}")),
     }
 }
 
+/// Apply one `chat.history` response to this screen.
+///
+/// Split out from the call so the decision it carries is reachable without a
+/// gateway — and the decision is WHEN, not just whether: `AttachMode::Replace`
+/// drops the old transcript here, which is inside the caller's `Ok` arm by
+/// construction. A reattach whose fetch failed therefore cannot blank the
+/// screen, because this never runs.
+fn apply_history(state: &mut AppState, result: &Value, mode: AttachMode) {
+    let rows = result
+        .get("messages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mapped: Vec<app::ChatMessage> = rows.iter().filter_map(history_message_from_json).collect();
+
+    // The server's copy is in hand, so it is now safe to drop what was on
+    // screen. Doing this before the call — the obvious place — turns a
+    // transient `chat.history` failure on a freshly-restored connection into a
+    // blank screen.
+    if mode == AttachMode::Replace {
+        state.messages.clear();
+        // The cache is keyed by positional index into `messages`, which is
+        // about to be repopulated from scratch — a stale entry whose (kind,
+        // len, width) happens to match new content at the same index must
+        // not survive.
+        state.chat_line_cache = crate::tui::widgets::chat_area::LineCache::default();
+    }
+
+    // Render the server transcript verbatim (no local dedup/store).
+    for msg in mapped {
+        state.messages.push(msg);
+    }
+
+    // Restore the conversation's durable settings. Absent on an older
+    // gateway — read as "I was not told", so the caption falls back to
+    // the install default rather than to a value this client made up.
+    match result.get("session").cloned() {
+        Some(v) => match serde_json::from_value::<SessionSnapshot>(v) {
+            Ok(snapshot) => state.apply_session_snapshot(snapshot),
+            Err(e) => state.add_system_message(format!(
+                "Session settings unreadable ({e}); showing install defaults."
+            )),
+        },
+        None => state.add_system_message(
+            "Gateway did not report session settings (older server); \
+             showing install defaults."
+                .to_string(),
+        ),
+    }
+
+    // Which run — if any — is in flight on this session right now.
+    //
+    // The field is always emitted by a core that has it (`null` when
+    // nothing is running), so its PRESENCE is the reconciliation
+    // signal and its value is the run to join; an older gateway omits
+    // it, and this screen then stays in the fail-open posture it has
+    // always had. Deliberately read from the same response as the
+    // transcript rather than through a second RPC: a client that holds
+    // the transcript but not the run (or the reverse) renders either a
+    // duplicated turn or a missing one.
+    if let Some(active) = active_run_from_history(result) {
+        state.adopt_active_run(active);
+    }
+
+    state.scroll_to_bottom();
+}
+
+/// Which run `chat.history` reports in flight on this session — a THREE-way
+/// answer, and the outer layer is the load-bearing one.
+///
+/// - `None` — the field is absent. A gateway older than it; this screen has
+///   learned nothing and stays in its fail-open posture.
+/// - `Some(None)` — asked and answered: nothing is running here. That is what
+///   arms `AppState::session_reconciled`, and it is the common case.
+/// - `Some(Some(join))` — a turn to join, with the age the server measured.
+///
+/// Collapsing the outer two (reading absent as "nothing running") would arm the
+/// guard against a server that never told it anything, and this screen would
+/// then drop every frame of every run it did not personally start.
+fn active_run_from_history(result: &Value) -> Option<Option<app::ActiveRunJoin>> {
+    let value = result.get("active_run")?;
+    let Some(run_id) = value.as_str().filter(|s| !s.is_empty()).map(str::to_string) else {
+        return Some(None);
+    };
+    // Taken from the SAME response, never re-derived by a second call: the
+    // field is a duration the server measured at the instant it answered, so
+    // asking again would be measuring a different instant against a transcript
+    // this screen already holds. Absent (older gateway, or the run left the
+    // engine's table between that handler's two lookups) means "not told",
+    // which the join reads as a floor.
+    let elapsed_ms = result.get("active_run_elapsed_ms").and_then(Value::as_u64);
+    Some(Some(app::ActiveRunJoin { run_id, elapsed_ms }))
+}
+
+/// Map one `chat.history` row (`{role, content, timestamp}`) into a `ChatMessage`.
 /// Map one `chat.history` row (`{role, content, timestamp}`) into a `ChatMessage`.
 fn history_message_from_json(v: &Value) -> Option<app::ChatMessage> {
     let role = v.get("role").and_then(Value::as_str).unwrap_or("");
@@ -544,7 +775,7 @@ fn history_message_from_json(v: &Value) -> Option<app::ChatMessage> {
     match role {
         "user" => Some(app::ChatMessage::User {
             content,
-            timestamp: parse_history_timestamp(v),
+            timestamp: app::row_timestamp(v.get("timestamp").and_then(Value::as_str)),
         }),
         "assistant" => Some(app::ChatMessage::Assistant {
             content,
@@ -555,14 +786,6 @@ fn history_message_from_json(v: &Value) -> Option<app::ChatMessage> {
         "system" => Some(app::ChatMessage::System { content }),
         _ => None,
     }
-}
-
-/// Best-effort RFC3339 timestamp parse, falling back to now.
-fn parse_history_timestamp(v: &Value) -> chrono::DateTime<chrono::Utc> {
-    v.get("timestamp")
-        .and_then(Value::as_str)
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map_or_else(chrono::Utc::now, |dt| dt.with_timezone(&chrono::Utc))
 }
 
 // ---------------------------------------------------------------------------
@@ -1057,6 +1280,30 @@ pub(super) async fn fetch_gateway_commands(
         )
 }
 
+/// This client's own principal id, or `None` when it cannot be established.
+///
+/// Needed to tell "somebody else typed this" from "I typed this" on
+/// `stream.session_user_message`. Author identity is the discriminator rather
+/// than run ownership because the frame can arrive BEFORE the `chat.send` that
+/// would teach this screen its own run id — the two race, and the losing order
+/// renders the sender's own message twice.
+///
+/// Every failure collapses to `None`, and the three that can happen say
+/// different things — an older gateway with no `users.me`, a transport error,
+/// and a loopback caller with no principal record at all. None of them may be
+/// read as "the author is somebody else": `None` disables the echo entirely,
+/// which is exactly the behaviour this client had before the frame existed.
+/// A peer's message then still arrives, on the next attach, as it always did.
+pub(super) async fn fetch_my_user_id(client: &AlephClient) -> Option<String> {
+    client
+        .call::<_, aleph_protocol::users::UserMeResult>("users.me", Some(json!({})))
+        .await
+        .ok()?
+        .user
+        .map(|u| u.user_id)
+        .filter(|id| !id.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1272,5 +1519,333 @@ mod tests {
             "the one resolver call belongs at the send chokepoint, found: {}",
             hits[0]
         );
+    }
+}
+
+#[cfg(test)]
+mod active_run_tests {
+    use super::{active_run_from_history, app};
+    use serde_json::json;
+
+    /// "The server never told me" and "the server told me nothing is running"
+    /// are different answers, and only the second may arm the cross-session
+    /// guard. Reading the first as the second would make an old gateway look
+    /// like a quiet one, and this screen would silently drop every frame of
+    /// every run it did not start itself.
+    #[test]
+    fn an_absent_field_is_not_an_answer() {
+        assert_eq!(active_run_from_history(&json!({ "messages": [] })), None);
+    }
+
+    #[test]
+    fn null_means_nothing_is_running_here() {
+        assert_eq!(
+            active_run_from_history(&json!({ "active_run": serde_json::Value::Null })),
+            Some(None)
+        );
+    }
+
+    #[test]
+    fn a_run_id_is_the_turn_to_join() {
+        assert_eq!(
+            active_run_from_history(&json!({ "active_run": "run-7" })),
+            Some(Some(app::ActiveRunJoin {
+                run_id: "run-7".to_string(),
+                elapsed_ms: None,
+            }))
+        );
+    }
+
+    /// The age rides along on the same response. A client that asked for it
+    /// separately would be timing a different instant than the one that
+    /// produced the run id beside it.
+    #[test]
+    fn the_reported_age_rides_with_the_run_id() {
+        assert_eq!(
+            active_run_from_history(
+                &json!({ "active_run": "run-7", "active_run_elapsed_ms": 240_000 })
+            ),
+            Some(Some(app::ActiveRunJoin {
+                run_id: "run-7".to_string(),
+                elapsed_ms: Some(240_000),
+            }))
+        );
+    }
+
+    /// An age with no run is not a turn to join. The field pair is read from
+    /// the run id outwards, so a server that reported one without the other
+    /// cannot produce a run this screen would try to settle.
+    #[test]
+    fn an_age_without_a_run_is_still_nothing_running() {
+        assert_eq!(
+            active_run_from_history(
+                &json!({ "active_run": serde_json::Value::Null, "active_run_elapsed_ms": 9 })
+            ),
+            Some(None)
+        );
+    }
+
+    /// An empty string is not a run id. It reaches `adopt_active_run` as "we
+    /// asked, nothing is running" rather than as a run nothing can ever settle.
+    #[test]
+    fn an_empty_string_is_not_a_run() {
+        assert_eq!(
+            active_run_from_history(&json!({ "active_run": "" })),
+            Some(None)
+        );
+    }
+}
+
+#[cfg(test)]
+mod attach_mode_tests {
+    use super::{apply_history, AttachMode};
+    use crate::tui::app::{AppState, ChatMessage};
+    use serde_json::json;
+
+    fn user_rows(state: &AppState) -> Vec<&str> {
+        state
+            .messages
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::User { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn history(rows: &[&str]) -> serde_json::Value {
+        json!({
+            "messages": rows
+                .iter()
+                .map(|c| json!({ "role": "user", "content": c }))
+                .collect::<Vec<_>>(),
+            "active_run": serde_json::Value::Null,
+        })
+    }
+
+    /// Launch and `/session` prepare the list themselves — the first keeps the
+    /// welcome banner and the startup notices, the second wipes it in
+    /// `switch_session`. Both then append.
+    #[test]
+    fn an_appending_attach_keeps_what_the_caller_prepared() {
+        let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
+        state.messages.push(ChatMessage::User {
+            content: "prepared by the caller".into(),
+            timestamp: crate::tui::app::row_timestamp(None),
+        });
+
+        apply_history(
+            &mut state,
+            &history(&["from the server"]),
+            AttachMode::Append,
+        );
+
+        assert_eq!(
+            user_rows(&state),
+            vec!["prepared by the caller", "from the server"]
+        );
+    }
+
+    /// A reattach swaps the screen for the server's copy — messages, tool rows
+    /// and whole turns can have landed while this client was offline, and only
+    /// the server's copy is complete.
+    #[test]
+    fn a_replacing_attach_swaps_in_the_servers_copy() {
+        let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
+        state.messages.push(ChatMessage::User {
+            content: "stale, from before the drop".into(),
+            timestamp: crate::tui::app::row_timestamp(None),
+        });
+
+        apply_history(
+            &mut state,
+            &history(&["what really happened"]),
+            AttachMode::Replace,
+        );
+
+        assert_eq!(user_rows(&state), vec!["what really happened"]);
+    }
+
+    /// The swap happens HERE, which is inside `attach_session`'s `Ok` arm. That
+    /// placement is the property: a reattach whose `chat.history` failed never
+    /// reaches this function, so it cannot leave the user on a blank screen at
+    /// the exact moment the connection came back.
+    #[test]
+    fn nothing_is_thrown_away_until_the_servers_copy_is_in_hand() {
+        let src = include_str!("commands.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap_or_default();
+        let attach = production
+            .split("pub(super) async fn attach_session")
+            .nth(1)
+            .expect("attach_session must exist");
+        let body = attach
+            .split("\nfn apply_history")
+            .next()
+            .unwrap_or_default();
+        // Self-protection: a scanner that matched nothing would agree with
+        // everything below. Pin that this really is the function's body.
+        assert!(
+            body.contains("chat.history"),
+            "the scan found no attach_session body — the guard is blind, not clean"
+        );
+        assert!(
+            !body.contains("messages.clear()"),
+            "attach_session must not touch the transcript itself — the clear \
+             belongs in `apply_history`, which only runs on a successful fetch"
+        );
+        assert!(
+            body.contains("Ok(result) => apply_history(state, &result, mode)"),
+            "the applier must be reached only from the success arm"
+        );
+    }
+}
+
+#[cfg(test)]
+mod side_run_verdict_tests {
+    use super::{side_run_verdict, SideRunVerdict};
+    use aleph_client::CliError;
+    use aleph_protocol::AgentRunStatusReport;
+
+    /// Build the report the way the server does — from the contract type, not
+    /// from a JSON literal written here. A literal would only prove serde
+    /// round-trips its own bytes.
+    fn reported(status: &str, error: Option<&str>) -> Result<AgentRunStatusReport, CliError> {
+        Ok(AgentRunStatusReport {
+            run_id: "r-side".into(),
+            session_key: "agent:main:main:s1".into(),
+            status: status.into(),
+            elapsed_ms: 4_200,
+            error: error.map(str::to_string),
+        })
+    }
+
+    /// A side question that outlives a blip must not be torn down by the
+    /// repair. Its frames resume on the new socket, so settling it here would
+    /// throw away an answer that is still on its way.
+    #[test]
+    fn a_side_question_still_in_flight_is_left_alone() {
+        assert_eq!(
+            side_run_verdict(&reported(AgentRunStatusReport::RUNNING, None)),
+            SideRunVerdict::StillAnswering
+        );
+    }
+
+    /// The defect this whole path exists to close: the run ended while the
+    /// client was away, its terminal frame went to a dead socket, and the
+    /// overlay spun forever.
+    ///
+    /// It settles as `Disconnected`, never as answered — the frames emitted
+    /// during the outage are gone, so the text on file may be a prefix of the
+    /// real answer with no way to tell.
+    #[test]
+    fn a_run_that_finished_during_the_outage_settles_without_claiming_the_answer() {
+        let SideRunVerdict::Disconnected(note) =
+            side_run_verdict(&reported(AgentRunStatusReport::COMPLETED, None))
+        else {
+            panic!("a finished run must stop the spinner");
+        };
+        assert!(
+            note.contains("only what reached this client"),
+            "the user must be told the text may be partial: {note}"
+        );
+    }
+
+    /// A failure keeps the reason. The wire used to drop it, so a client told
+    /// `failed` had nothing to show but the word.
+    #[test]
+    fn a_failure_reaches_the_overlay_with_its_reason() {
+        assert_eq!(
+            side_run_verdict(&reported(
+                AgentRunStatusReport::FAILED,
+                Some("provider 429")
+            )),
+            SideRunVerdict::Failed("provider 429".into())
+        );
+    }
+
+    /// …and a gateway that names the failure without saying why gets a sentence
+    /// that claims no more than it was told. Not "unknown error", which reads
+    /// as a fact about the run rather than about what was said.
+    #[test]
+    fn a_reasonless_failure_does_not_invent_one() {
+        for blank in [None, Some(""), Some("   ")] {
+            let SideRunVerdict::Failed(reason) =
+                side_run_verdict(&reported(AgentRunStatusReport::FAILED, blank))
+            else {
+                panic!("a failed run must settle as failed");
+            };
+            assert_eq!(reason, "the gateway reported this run failed");
+        }
+    }
+
+    /// A cancel is not a failure and not an answer.
+    #[test]
+    fn a_cancelled_run_is_neither_failed_nor_answered() {
+        let verdict = side_run_verdict(&reported(AgentRunStatusReport::CANCELLED, None));
+        assert!(matches!(verdict, SideRunVerdict::Disconnected(ref n) if n.contains("cancelled")));
+    }
+
+    /// An older client against a newer gateway. Reading an unknown word as
+    /// "still going" is the one unrecoverable direction — the spinner would
+    /// never stop — so it settles.
+    #[test]
+    fn a_state_word_this_client_does_not_know_is_not_read_as_running() {
+        for unknown in ["", "paused", "queued"] {
+            let verdict = side_run_verdict(&reported(unknown, None));
+            assert_ne!(
+                verdict,
+                SideRunVerdict::StillAnswering,
+                "{unknown:?} must not hold the overlay open"
+            );
+            assert!(matches!(verdict, SideRunVerdict::Disconnected(_)));
+        }
+    }
+
+    /// The gateway answered, and its answer is that it has never heard of this
+    /// run — a core that restarted under the client. Not a verdict about the
+    /// work, but nothing is going to stream it here either, so the spinner
+    /// stops.
+    ///
+    /// The server's own words are carried through instead of paraphrased: the
+    /// sentence around them has to stay true of any refusal this method might
+    /// grow, and this client is not in a position to assert *why* a run is not
+    /// being reported.
+    #[test]
+    fn a_gateway_with_no_record_of_the_run_stops_the_spinner() {
+        let refused: Result<AgentRunStatusReport, CliError> = Err(CliError::Rpc {
+            code: -32602,
+            message: "Run not found".into(),
+        });
+        let SideRunVerdict::Disconnected(note) = side_run_verdict(&refused) else {
+            panic!("an answered refusal must stop the spinner");
+        };
+        assert!(
+            note.contains("Run not found"),
+            "the gateway's own words are what the user can act on: {note}"
+        );
+    }
+
+    /// "I could not ask" is not "it stopped".
+    ///
+    /// The socket can die again mid-repair, or the reply can time out. Settling
+    /// on those would file a question whose run is very likely answering
+    /// normally — and unlike the refusal above, asking again is free: the next
+    /// successful reconnect runs this same repair.
+    #[test]
+    fn a_question_that_could_not_be_put_settles_nothing() {
+        let transport = [
+            CliError::Disconnected("Connection closed by peer".into()),
+            CliError::Timeout("no response in 30s".into()),
+            CliError::Connection("broken pipe".into()),
+        ];
+        for e in transport {
+            let label = e.to_string();
+            let answer: Result<AgentRunStatusReport, CliError> = Err(e);
+            assert_eq!(
+                side_run_verdict(&answer),
+                SideRunVerdict::CouldNotAsk,
+                "{label} says nothing about the run"
+            );
+        }
     }
 }

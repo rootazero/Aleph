@@ -140,6 +140,13 @@ pub fn wikilink_click_target(_ev: &web_sys::MouseEvent) -> Option<String> {
 /// pseudo-URL schemes to prevent XSS when the excerpt is assigned to innerHTML.
 fn sanitize_link_url(url: &str) -> String {
     let trimmed = url.trim();
+    // Protocol-relative URLs (`//evil.com/x`) contain no colon, so the
+    // `split_once(':')` test below would let them through — yet a browser
+    // still navigates them by inheriting the panel's scheme. Reject up-front
+    // so a memory excerpt cannot redirect off-origin.
+    if trimmed.starts_with("//") {
+        return "#disallowed-protocol-relative".to_string();
+    }
     if let Some((scheme, _)) = trimmed.split_once(':') {
         let scheme = scheme.to_lowercase();
         if scheme == "http" || scheme == "https" || scheme == "mailto" {

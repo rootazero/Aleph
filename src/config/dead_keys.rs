@@ -110,6 +110,13 @@ const TOLERATED: &[Tolerated] = &[
         why: "retired — AGENTS.md is the persona overlay; see src/config/types/profile.rs",
     },
     Tolerated {
+        path: "agents.*.system_prompt",
+        why: "retired — boot-time system_prompt on AgentInstanceConfig had zero production \
+              readers; real injection is via SoulLayer/ProfileLayer/IdentityFilesLayer reading \
+              SOUL.md/AGENTS.md/IDENTITY.md each turn. See \
+              src/gateway/agent_instance.rs::from_resolved.",
+    },
+    Tolerated {
         path: "profiles.*.tools",
         why: "retired — the live tool gate is AgentInstanceConfig.tool_whitelist (sourced from \
               agent.skills); see src/config/types/profile.rs",

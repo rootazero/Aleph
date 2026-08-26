@@ -440,6 +440,24 @@ impl MemorySearchTool {
         let args_summary = format!("记忆搜索: {}", &args.query);
         notify_tool_start(Self::NAME, &args_summary);
 
+        // Defence in depth (audit-2026-08-26 BTT-2): `max_results` is
+        // LLM-supplied and the sister retrieval tools (`recall_context`,
+        // `recall_events`, `ctx_search`, `session_search`, `channel_directory`)
+        // already clamp at this layer. Without a clamp here, `usize::MAX`
+        // makes every `retrieve` / `retrieve_multi_agent` call below (and
+        // the session-raw branch above) hand back the entire result set,
+        // which the model then has to truncate — paying the full memory
+        // cost either way. Same ceiling as `recall_events` (`20`).
+        const MAX_MEMORY_SEARCH_RESULTS: usize = 50; // matches recall_context default range
+        if args.max_results > MAX_MEMORY_SEARCH_RESULTS {
+            tracing::warn!(
+                original = args.max_results,
+                clamped_to = MAX_MEMORY_SEARCH_RESULTS,
+                "memory_search: max_results above ceiling, clamping"
+            );
+            args.max_results = MAX_MEMORY_SEARCH_RESULTS;
+        }
+
         info!(query = %args.query, max_results = args.max_results, workspace = %workspace_label, scope = %scope, "Executing memory search");
 
         // Step 1: Session-local search.

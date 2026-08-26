@@ -246,6 +246,18 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         // Same process-global extension manager as `hooks_manage`.
         requires_config: false,
     },
+    // The model's face of project rooms (R8 twin of `projects.*`). Shares the
+    // one process-global `ProjectStore` and the same `authz` predicates the
+    // RPC handlers use, so a room renamed in words and one renamed by a click
+    // are the same write and the same event.
+    BuiltinToolDefinition {
+        name: "project_manage",
+        description: <crate::builtin_tools::project_manage::ProjectManageTool as crate::tools::AlephTool>::DESCRIPTION,
+        // Reads the process-global project catalogue, not injected config.
+        // The security store and event bus are injected cells, and both are
+        // optional — their absence narrows what the tool can do, never widens.
+        requires_config: false,
+    },
     BuiltinToolDefinition {
         name: "self_config",
         description: <crate::builtin_tools::self_config::SelfConfigTool as crate::tools::AlephTool>::DESCRIPTION,
@@ -2263,7 +2275,23 @@ mod tests {
     /// recollection instead of from rows; (3) the consumer is
     /// `MemoryTraceTool`, shipped and dispatched, and the field is populated
     /// on every `kind: "note"` call.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 108_056;
+    ///
+    /// 2026-08-25: 108_056 -> 108_556 B (+500) for `project_manage`'s own
+    /// DESCRIPTION. Measured by running this test with the entry in place, not
+    /// by adding the const's byte length to the old number. Against the three
+    /// questions: (1) it is a runtime fact no argument schema carries — the
+    /// action enum names the eight verbs, but nothing in a schema can say that
+    /// a room you are not on reads as *not found* rather than *forbidden*, and
+    /// a model that does not know that will tell the user their id is wrong;
+    /// (2) a stronger model cannot infer it, because it is a deliberate
+    /// property of this codebase (no existence oracle), not a convention; (3)
+    /// the consumer is `ProjectManageTool`, dispatched from
+    /// `tool_registry_impl.rs`, and every one of its refusal paths depends on
+    /// the caller reading the absence correctly. The sentence about workspace
+    /// binding NOT being here earns its bytes the same way: without it a model
+    /// asked to "point this room at my repo" will loop through eight actions
+    /// discovering by rejection what one clause says outright.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 108_556;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -2693,6 +2721,16 @@ mod tests {
     /// gateway's `CanvasStore` — in a wired deployment it carries a schema;
     /// the deterministic map cannot reach it, same class as the generation
     /// tools above).
+    ///
+    /// 2026-08-25: 131 (+1: `project_manage`. It is catalogued and dispatched
+    /// from `execute_tool`, but deliberately has **no** `create_tool_boxed`
+    /// arm: the tool takes an optional `SecurityStore` and `GatewayEventBus`
+    /// that live on the registry's injection cells, unreachable from a
+    /// name-only constructor, so an instance built there would silently skip
+    /// org-admin escalation and announce nothing — the same reason `canvas`
+    /// refuses to open its own store above. The deterministic map therefore
+    /// has no instance to ask for a schema. In a wired deployment the tool
+    /// does carry one.)
     #[test]
     fn tools_without_an_unconditional_schema_are_pinned() {
         let map = unconditional_registry_map();
@@ -2709,8 +2747,8 @@ mod tests {
         missing.dedup();
 
         assert!(
-            missing.len() <= 130,
-            "{} tools have no schema in the unconditionally-built registry map, up from the 130 \
+            missing.len() <= 131,
+            "{} tools have no schema in the unconditionally-built registry map, up from the 131 \
              recorded here, so `registry_schema_bytes_ratchet` does not bound them. Either a \
              tool ships with no parameters at all (free, and fine), or it registers only once a \
              dependency is live and its schema is unmeasured (not fine, just not cheap to fix). \

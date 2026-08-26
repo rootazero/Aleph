@@ -222,6 +222,10 @@ impl AgentHarnessRunner {
         routing_text: Option<String>,
         has_session_summaries: bool,
         prompt_token_budget: Option<u64>,
+        // Cross-run calibrated estimator factor for the serving model (the
+        // same carry-over the history-side budget seeds from). Applied to
+        // the prompt token hard gate; `None` = uncalibrated (factor 1.0).
+        prompt_estimate_factor: Option<f64>,
         envelope: &crate::thinker::TurnEnvelope,
     ) -> Option<(
         String,
@@ -492,11 +496,18 @@ impl AgentHarnessRunner {
                     .collect::<Vec<_>>()
             })
         };
+        // Resolved BEFORE the bail-out below, not beside the other
+        // `resolved_context` fields further down, because the bail-out is a
+        // list of "is there anything to say" and a room's roster is one of the
+        // things there can be to say. A bare agent in a room — no SOUL.md, no
+        // AGENTS.md, no skills, no MCP — would otherwise be the one deployment
+        // where the block silently never renders.
+        let room_roster = crate::thinker::layers::ambient_room_roster_line();
 
         // Skip prompt assembly entirely when there is nothing to inject:
         // no memory, no AgentDef, no eligible skills, no identity files, no
         // extra files, no MCP server instructions, no runtime capabilities, and
-        // no delegatable agents to advertise.
+        // no delegatable agents to advertise, and no room roster.
         if curated_text.is_none()
             && memory_text.is_none()
             && agent_def.is_none()
@@ -506,6 +517,7 @@ impl AgentHarnessRunner {
             && mcp_instructions.is_none()
             && runtime_capabilities.is_none()
             && available_agents.is_none()
+            && room_roster.is_none()
         {
             return None;
         }
@@ -532,6 +544,10 @@ impl AgentHarnessRunner {
             crate::thinker::prompt_budget::TokenBudget::default,
             crate::thinker::prompt_budget::TokenBudget::from_context_window,
         );
+        let token_budget = match prompt_estimate_factor {
+            Some(factor) => token_budget.with_estimate_factor(factor),
+            None => token_budget,
+        };
         // Tool-scoped skills (`PromptScope::Tool`) are filtered inside
         // `SkillInstructionsLayer` against the active tool names. The cached
         // prompt is assembled with an empty `tools` slice (native tool_use
@@ -658,6 +674,7 @@ impl AgentHarnessRunner {
             sandbox,
             self.tool_catalog.as_ref(),
             envelope,
+            room_roster,
         )
         .await;
         builder = builder.with_resolved_context(resolved_context);
@@ -752,6 +769,10 @@ async fn resolve_prompt_context(
     sandbox: &dyn Sandbox,
     tool_catalog: Option<&Arc<crate::tool_metadata::ToolCatalog>>,
     envelope: &crate::thinker::TurnEnvelope,
+    // `room_roster`: resolved by the caller, ahead of its "is there anything
+    // to inject at all" bail-out. Passed in rather than re-read here so the
+    // bail-out and the rendered block cannot answer differently.
+    room_roster: Option<String>,
 ) -> crate::thinker::context::ResolvedContext {
     let default_manifest;
     let manifest_ref = match channel_manifest {
@@ -841,6 +862,19 @@ async fn resolve_prompt_context(
     resolved_context.graph_topology =
         crate::loop_graph::service::render_session_topology(session_key_str);
     resolved_context.timer_loop = timer_loop;
+    // Who else is in this room. Read from the scope task-local rather than the
+    // session key: the key→room mapping only exists once `projects.room_session`
+    // has claimed it, while the scope is what `run_loop::request_scope` resolved
+    // for THIS run — the same answer the session row was stamped with. Dead
+    // task-local (a path that spawned away from its scope) renders nothing
+    // rather than a wrong roster.
+    //
+    // Two indexed reads against a catalogue that holds tens of rows, and only
+    // for a project session; a personal turn pays one enum match. Sync like
+    // `render_session_topology` above, for the same reason: it is a rusqlite
+    // lookup, and making it async would spread through every caller of the
+    // store.
+    resolved_context.room_roster = room_roster;
     // Render the welded Strategy into its two prompt surfaces: the full
     // `<strategy>` body for the Stable `StrategyLayer` (cacheable head) and
     // the guardrail-only echo for the Dynamic `StrategyPointerLayer` (per-

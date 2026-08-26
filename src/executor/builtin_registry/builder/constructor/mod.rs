@@ -1187,6 +1187,7 @@ impl BuiltinToolRegistry {
             memory_context_provider: Arc::new(tokio::sync::OnceCell::new()),
             node_registry: Arc::new(tokio::sync::OnceCell::new()),
             node_security_store: Arc::new(tokio::sync::OnceCell::new()),
+            gateway_event_bus: Arc::new(tokio::sync::OnceCell::new()),
             memory_browse_tool,
             memory_explore_tool,
             memory_timeline_tool: timeline_tool,

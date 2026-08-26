@@ -76,8 +76,12 @@ pub fn resolve_route(
     // rule declares must also hold. Filtering on the full conjunction here (not
     // per-tier below) is what makes `{ team_id, peer }` mean "this peer in that
     // team" rather than "this peer anywhere, or that team anywhere".
+    // An empty target cannot name an agent. Keep it out of the priority walk:
+    // otherwise a broken early binding would shadow a valid binding later in
+    // the file. `binding_problems` still reports it to the operator.
     let candidates: Vec<&RouteBinding> = bindings
         .iter()
+        .filter(|b| !b.agent_id.trim().is_empty())
         .filter(|b| matches_channel(&b.match_rule, &channel))
         .filter(|b| matches_account(&b.match_rule, account_id))
         .filter(|b| scope_satisfied(&b.match_rule, input))
@@ -439,6 +443,42 @@ mod tests {
             assert_eq!(route.agent_id, "vip", "channel {channel}");
             assert_eq!(route.matched_by, MatchedBy::Peer);
         }
+    }
+
+    #[test]
+    fn invalid_empty_agent_binding_does_not_shadow_later_valid_binding() {
+        let bindings = vec![
+            RouteBinding {
+                agent_id: "  ".to_string(),
+                match_rule: MatchRule {
+                    channel: Some("telegram".to_string()),
+                    account_id: Some("*".to_string()),
+                    peer: Some(PeerMatchConfig {
+                        kind: "dm".to_string(),
+                        id: "user-vip".to_string(),
+                    }),
+                    ..Default::default()
+                },
+            },
+            peer_binding("vip", "telegram", "dm", "user-vip"),
+        ];
+        let route = resolve_route(
+            &bindings,
+            &default_session_cfg(),
+            "main",
+            &RouteInput {
+                channel: "telegram".to_string(),
+                account_id: None,
+                peer: Some(RoutePeer {
+                    kind: RoutePeerKind::Dm,
+                    id: "user-vip".to_string(),
+                }),
+                guild_id: None,
+                team_id: None,
+            },
+        );
+        assert_eq!(route.agent_id, "vip");
+        assert_eq!(route.matched_by, MatchedBy::Peer);
     }
 
     #[test]

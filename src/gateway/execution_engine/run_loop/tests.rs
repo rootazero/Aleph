@@ -357,6 +357,13 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         ingress_why: "rescue of an already-admitted request. A real steering message is a different path — it reached `build_run_request` on its way in and stamped there",
     },
     RunProducer {
+        file: "src/gateway/busy_queue/durable.rs",
+        attribution: "inherits",
+        attribution_why: "boot reinjection rebuilds the request from the journaled payload, whose metadata round-trips the original arrival's scope/caller stamps verbatim",
+        ingress: Ingress::Machine,
+        ingress_why: "boot-time re-delivery of a message the human sent before the crash — the keystroke stamped at the original arrival (mirrors resume_coordinator: re-stamping here would let a crash-restart loop hold the sensor open with nobody present)",
+    },
+    RunProducer {
         file: "src/teams/dispatcher/runner.rs",
         attribution: "stamps",
         attribution_why: "from the ambient scope/turn-context when a live caller exists (team_delegate reaches task_run_metadata before the spawn); the autonomous dispatcher reads None and stamps nothing — MU4-03 adjudicated 2026-08-18",
@@ -1012,4 +1019,150 @@ async fn report_admission_denial_emits_a_run_error_naming_the_run_and_session_wh
         }
         other => panic!("expected StreamEvent::RunError, got {other:?}"),
     }
+}
+
+/// A key a room has claimed stays the room's, on **every** producer's path.
+///
+/// `handlers::agent::resolve_attribution` already answers this for one
+/// producer — the Panel's `agent.run` / `chat.send`. It answers it by asking
+/// the same catalogue, and it can refuse (a non-member gets
+/// `ProjectNotFound`), which is why that arm stays where it is. But it is one
+/// producer out of seven: the channel inbound router, cron, heartbeat, the
+/// teams dispatcher, `session_send` and A2A all reach the row through
+/// `ensure_session_under_request_scope` without passing through it, carrying
+/// whatever scope their own producer stamped.
+///
+/// For a room-claimed key that scope is wrong in the one direction that does
+/// not heal: `stamp_attribution` is create-only and `attribution_backfill`'s
+/// predicate is `owner_user_id IS NULL AND scope_id IS NULL`, so a row stamped
+/// `personal:<first speaker>` is stamped forever and the room goes invisible
+/// to every other member — including its owner — while `projects.list` keeps
+/// listing it.
+///
+/// `current_session_key` has exactly one writer (`claim_session_key`), so a
+/// key it names is a room **by declaration**. Metadata is written by whichever
+/// producer happened to build the request; when the two disagree the gateway's
+/// own mapping is the one that knows.
+#[tokio::test]
+async fn a_room_claimed_key_stamps_the_room_even_when_the_metadata_says_personal() {
+    use crate::gateway::session_store::SessionStore;
+    use crate::projects::roster::TEST_GUARD as ROSTER_TEST_GUARD;
+
+    let _guard = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+    let shared = crate::projects::ProjectStore::shared();
+    let p = shared
+        .create("stamped-room", Some("u-alice"), None)
+        .unwrap();
+    shared.add_member(&p.id, "u-bob").unwrap();
+    let key = crate::routing::session_key::SessionKey::project_room("test-agent", &p.id);
+    shared
+        .claim_session_key(&p.id, &key.to_key_string())
+        .unwrap();
+
+    let temp = tempdir().unwrap();
+    let sessions: Arc<dyn SessionStore> = Arc::new(
+        crate::gateway::session_manager::SessionManager::new(
+            crate::gateway::session_manager::SessionManagerConfig {
+                db_path: temp.path().join("sessions.db"),
+                ..Default::default()
+            },
+        )
+        .expect("session manager"),
+    );
+    let agent = AgentInstance::new(
+        crate::gateway::agent_instance::AgentInstanceConfig {
+            agent_id: "test-agent".to_string(),
+            workspace: temp.path().join("workspace"),
+            agent_dir: temp.path().join("agents/test-agent"),
+            ..Default::default()
+        },
+        Arc::clone(&sessions),
+    )
+    .expect("agent instance");
+
+    // What a producer that never heard of rooms writes: the speaker's own
+    // personal partition.
+    let mut metadata = std::collections::HashMap::new();
+    crate::scope::stamp_metadata(
+        &mut metadata,
+        &crate::scope::ScopeAttribution::personal("u-bob"),
+    );
+    let mut request = minimal_request(metadata);
+    request.session_key = key.clone();
+
+    ensure_session_under_request_scope(&agent, &request).await;
+
+    let meta = sessions
+        .get_metadata(&key)
+        .await
+        .expect("metadata read")
+        .expect("row was created");
+    assert_eq!(
+        meta.scope_id.as_deref(),
+        Some(format!("project:{}", p.id).as_str()),
+        "the room's claim outranks the producer's personal stamp"
+    );
+    assert_eq!(
+        meta.owner_user_id.as_deref(),
+        Some("u-bob"),
+        "only the scope is corrected — who spoke is still who spoke"
+    );
+}
+
+/// The loop must agree with the row it just created.
+///
+/// The row's `scope_id` decides visibility; the task-local decides this turn's
+/// memory partition and every `ambient_*` predicate a tool reads. Deriving them
+/// from two different answers is how a room's transcript ends up filed under
+/// one partition and read from another.
+#[tokio::test]
+async fn the_loop_runs_under_the_room_scope_for_a_claimed_key() {
+    use crate::projects::roster::TEST_GUARD as ROSTER_TEST_GUARD;
+
+    let _guard = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+    let shared = crate::projects::ProjectStore::shared();
+    let p = shared.create("loop-room", Some("u-alice"), None).unwrap();
+    let key = crate::routing::session_key::SessionKey::project_room("test-agent", &p.id);
+    shared
+        .claim_session_key(&p.id, &key.to_key_string())
+        .unwrap();
+
+    let mut metadata = std::collections::HashMap::new();
+    crate::scope::stamp_metadata(
+        &mut metadata,
+        &crate::scope::ScopeAttribution::personal("u-bob"),
+    );
+    let mut request = minimal_request(metadata);
+    request.session_key = key;
+
+    let observed = with_request_scope(&request, async { crate::scope::current_scope() }).await;
+
+    assert_eq!(
+        observed.map(|a| a.scope.render()),
+        Some(format!("project:{}", p.id)),
+        "the loop and the row must not disagree about which room this is"
+    );
+}
+
+/// A key no room claimed is byte-unchanged: the lookup misses and the
+/// producer's own stamp stands. Without this the override reads as "every
+/// session is somebody's room", which is the failure direction that widens.
+#[tokio::test]
+async fn an_unclaimed_key_keeps_the_producers_scope() {
+    use crate::projects::roster::TEST_GUARD as ROSTER_TEST_GUARD;
+
+    let _guard = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+    let mut metadata = std::collections::HashMap::new();
+    crate::scope::stamp_metadata(
+        &mut metadata,
+        &crate::scope::ScopeAttribution::personal("u-alice"),
+    );
+    let request = minimal_request(metadata);
+
+    let observed = with_request_scope(&request, async { crate::scope::current_scope() }).await;
+
+    assert_eq!(
+        observed.map(|a| a.scope.render()),
+        Some("personal:u-alice".to_string())
+    );
 }

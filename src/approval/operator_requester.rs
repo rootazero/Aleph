@@ -146,8 +146,21 @@ impl ApprovalRequester for OperatorApprovalRequester {
             // not just what it does.
             reason: (!reason.is_empty()).then(|| reason.to_string()),
             // Operator/Panel approvals resolve via the `exec.approval.resolve`
-            // RPC, not a channel button, so the originator gate never applies.
-            originator_user_id: None,
+            // RPC, not a channel button, so the channel-callback originator
+            // gate (`callback_sink.rs`) never applies to this record. But a
+            // SECOND consumer does: `approval_addressable_by_caller`
+            // (Ruling P13/P15) narrows by this value when the session is a
+            // Project room and the value resolves against that room's
+            // roster — precisely a team-chat run's room-speaker
+            // (`teams::broadcast::member_run_metadata` stamps it as an Aleph
+            // `u-*` id). A channel-routed run that falls back to THIS
+            // requester (`FallbackApprovalRequester`, when its channel is
+            // momentarily unregistered) may also have seeded this task-local,
+            // but with a raw channel-platform id from a different namespace
+            // — that value never resolves against any room's roster, so it
+            // changes nothing for that path; see
+            // `approval_addressable_by_caller`'s doc.
+            originator_user_id: crate::tools::turn_context::current_originator(),
             // Session-grant identity of this action: a session-level decision
             // cascades to other pending cards of the same action.
             grant_key: action.grant_key.clone(),
@@ -293,6 +306,68 @@ mod tests {
             plan_gate: None,
             side_question: false,
         }
+    }
+
+    /// Link 1 (Ruling P13): the owner-scoped requester must carry whatever
+    /// `TURN_ORIGINATOR` the run seeded onto the record it creates — a
+    /// team-chat run's room-speaker (`teams::broadcast::member_run_metadata`)
+    /// or a channel-routed run's raw sender id, should it fall back here via
+    /// `FallbackApprovalRequester` — instead of hardcoding `None`.
+    /// `approval_addressable_by_caller` is what narrows by this value; this
+    /// requester's only job is to stop discarding it.
+    #[tokio::test]
+    async fn request_approval_carries_the_ambient_originator_onto_the_record() {
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let manager = Arc::new(ExecApprovalManager::new());
+        let requester = OperatorApprovalRequester::new(manager.clone(), event_bus.clone());
+        let mut rx = event_bus.subscribe_typed();
+
+        let mgr = manager.clone();
+        let handle = tokio::spawn(async move {
+            TURN_CONTEXT
+                .scope(guest_turn("run-orig"), async move {
+                    crate::tools::turn_context::with_originator(
+                        Some("u-bob".to_string()),
+                        async move {
+                            requester
+                                .request_approval(&ApprovalAction::for_tool_call(
+                                    "file_ops",
+                                    &serde_json::json!({"operation": "delete"}),
+                                    "destructive",
+                                ))
+                                .await
+                        },
+                    )
+                    .await
+                })
+                .await
+        });
+
+        let mut approval_id = None;
+        for _ in 0..6 {
+            let Ok(Ok(frame)) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await
+            else {
+                break;
+            };
+            if let GatewayEventFrame::ApprovalRequested {
+                approval_id: id, ..
+            } = frame
+            {
+                approval_id = Some(id);
+                break;
+            }
+        }
+        let id = approval_id.expect("expected an ApprovalRequested frame");
+        assert_eq!(
+            manager
+                .get_pending(&id)
+                .map(|p| p.record.originator_user_id.clone()),
+            Some(Some("u-bob".to_string())),
+            "the record must carry the ambient originator, not a hardcoded None"
+        );
+        mgr.resolve(&id, ApprovalDecisionType::AllowOnce, None);
+        let outcome = handle.await.unwrap();
+        assert_eq!(outcome.outcome, ApprovalOutcome::Approved);
     }
 
     #[tokio::test]

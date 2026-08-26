@@ -20,7 +20,18 @@ pub struct VoiceLocalConfig {
     pub endpoint: String,
     /// Optional bearer token. Most BYO servers run unauthenticated — when
     /// unset, no Authorization header is sent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// **Never persisted to disk.** `skip_serializing` (not
+    /// `skip_serializing_if = "Option::is_none"`) ensures a `Some(...)` value
+    /// is dropped at every `Config::save_*` path so a bearer token never
+    /// lands in `config.toml`. `schemars(skip)` keeps the secret out of the
+    /// generated JSON Schema (the Panel's schema-driven form bypasses serde-
+    /// skip and round-trips unknown fields through `extra`, so both
+    /// attributes are required to close both leak paths). The runtime value
+    /// lives in the vault under `voice.local:api_key` after
+    /// `migrate_voice_local` runs at startup (see `secret_migration.rs`).
+    #[serde(default, skip_serializing)]
+    #[schemars(skip)]
     pub api_key: Option<String>,
     /// STT model name. Empty (default) = let the server pick its default.
     #[serde(default)]
@@ -85,7 +96,16 @@ pub struct StreamingConfig {
     pub provider: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub base_url: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    /// Bearer token for the streaming ASR provider. **Never persisted to disk.**
+    /// `skip_serializing` (not `skip_serializing_if = "String::is_empty"`) so
+    /// even a non-empty token is dropped on every `Config::save_*` path,
+    /// closing the prior audit finding where the conditional skip left a
+    /// real key persisting until the migration ran. `schemars(skip)` keeps
+    /// the secret out of the generated JSON Schema. The runtime value lives
+    /// exclusively in the vault under `voice.streaming:api_key` after
+    /// `migrate_voice_streaming` runs at startup (see `secret_migration.rs`).
+    #[serde(default, skip_serializing)]
+    #[schemars(skip)]
     pub api_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,

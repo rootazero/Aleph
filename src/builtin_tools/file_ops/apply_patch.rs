@@ -349,6 +349,25 @@ make several coordinated edits at once."#;
                 ),
             ));
         }
+        // Defence in depth (audit-2026-08-26 BTS-3): the 4 MiB envelope cap
+        // already rejected over-large patches at the parse layer, but a
+        // single `*** Add File:` op with a million `+x` lines could still
+        // pass the envelope check and balloon one allocation. Cap line
+        // count + body bytes per-op so the LLM-callable surface cannot
+        // wedge a worker on one operation.
+        const MAX_ADD_LINES: usize = 100_000;
+        const MAX_ADD_BODY_BYTES: usize = 16 * 1024 * 1024;
+        if lines.len() > MAX_ADD_LINES {
+            return Err(fail(
+                "add",
+                path,
+                format!(
+                    "Add op declares {} lines; the cap is {MAX_ADD_LINES}. \
+                     For bulk data use file_write or multiple apply_patch calls.",
+                    lines.len()
+                ),
+            ));
+        }
         let body = if lines.is_empty() {
             String::new()
         } else {
@@ -357,6 +376,16 @@ make several coordinated edits at once."#;
             // (the codex format implies a final newline).
             let mut s = lines.join("\n");
             s.push('\n');
+            if s.len() > MAX_ADD_BODY_BYTES {
+                return Err(fail(
+                    "add",
+                    path,
+                    format!(
+                        "Add op body is {} bytes; the cap is {MAX_ADD_BODY_BYTES}",
+                        s.len()
+                    ),
+                ));
+            }
             s
         };
         pending.insert(resolved.clone(), Some(body.clone()));

@@ -25,6 +25,11 @@ mod connect_setup;
 mod daemon;
 mod deeplink;
 mod external_link;
+// "Does an Aleph Gateway answer here" — deliberately NOT under a variant cfg.
+// Both shells ask it (the lite one before every navigation, the full app on
+// its remote leg and in its supervisor), and while it lived inside the
+// lite-only `connect_setup` the full app had to answer it a second, weaker way.
+mod gateway_probe;
 mod hotkey;
 #[cfg(target_os = "macos")]
 mod menu;
@@ -486,7 +491,7 @@ fn spawn_background(handle: tauri::AppHandle) {
                 // Bring the chosen target online and reveal the Panel. The full
                 // app supervises the bundled daemon; the panel-only shell just
                 // navigates to the configured origin (no local daemon to manage).
-                let up = bring_target_online(&handle).await;
+                let boot = bring_target_online(&handle).await;
 
                 // Resident background tasks for the lifetime of the shell. The
                 // OS-notification bridge and the auto-update checker are common
@@ -496,12 +501,12 @@ fn spawn_background(handle: tauri::AppHandle) {
                 #[cfg(feature = "embedded-core")]
                 tokio::join!(
                     notify::run_notification_bridge(handle.clone()),
-                    supervise_daemon(handle.clone(), up),
+                    supervise_daemon(handle.clone(), boot),
                     update::run_update_checker(handle),
                 );
                 #[cfg(not(feature = "embedded-core"))]
                 {
-                    let _ = up;
+                    let _ = boot;
                     // Spawn the resident remote-health supervisor as a separate
                     // task so the notification bridge and update checker are not
                     // blocked by its loop (and vice versa).
@@ -518,39 +523,95 @@ fn spawn_background(handle: tauri::AppHandle) {
     }
 }
 
-/// Bring the embedded local core online and reveal the Panel. Returns whether
-/// the daemon is believed up (the full-app supervisor's initial state).
+/// What boot established, for seeding the resident supervisor.
 ///
-/// The full app is local-only: it owns + supervises the bundled daemon
-/// (reconcile any stale daemon offline, launch the bundled one, wait for
-/// `/ready`, then reveal) and never honors a remote target.
+/// Two facts, not one. Reachability seeds Up/Down; whether the connect page is
+/// already on screen seeds the supervisor's once-per-outage latch. Without the
+/// second, a full app that boots against an unreachable remote navigates to the
+/// connect page twice — once here and again on the supervisor's first Down tick
+/// ~5s later, which both wipes an address the user has started typing (R5) and
+/// greets them with "Lost contact … no answer for 15s" about a Gateway that was
+/// never contacted. The lite supervisor absorbs the same collision with an
+/// 8-tick relocation counter; this one fires on the first Down tick, so it has
+/// to be told.
 #[cfg(feature = "embedded-core")]
-async fn bring_target_online(handle: &tauri::AppHandle) -> bool {
-    let version = handle.package_info().version.to_string();
-    // The full app is local-only: it always serves its embedded loopback core
-    // and never honors a remote target. Reconcile any legacy persisted remote
-    // (from a previous build that allowed switching) back to Local so every
-    // surface — menu reload, open-in-browser — agrees on local.
-    if !matches!(
-        connection::load_target(),
-        connection::ConnectionTarget::Local
-    ) {
-        let _ = connection::save_target(&connection::ConnectionTarget::Local);
-    }
-    // Local navigations only ever touch loopback — clear any remote allow-list.
-    external_link::set_remote_host(None);
-    // First launch / post-update: force any stale daemon offline so the
-    // `aleph-server` bundled in this app takes over.
-    daemon::reconcile_for_version(&version).await;
-    match daemon::ensure_ready().await {
-        Ok(()) => {
-            reveal_panel(handle);
-            true
+struct BootOutcome {
+    /// Did the configured target answer? Seeds `Supervisor::for_target`.
+    reachable: bool,
+    /// Did boot already put the connect page on screen for this outage?
+    connect_page_shown: bool,
+}
+
+/// Bring the configured target online and reveal the Panel (full app).
+///
+/// The full app owns a bundled daemon, but it does not follow that it always
+/// runs one: the target is the user's choice and it persists across restarts.
+/// This used to reset any persisted Remote back to Local on every launch while
+/// the menu and tray both offered "Connect to Remote…" — so the full app could
+/// be pointed at a remote Gateway, worked for that session, and silently forgot
+/// on the next launch.
+///
+///   * `Local` → own the machine's core: reconcile any stale daemon offline,
+///     launch the bundled one, wait for `/ready`, reveal.
+///   * `Remote` → the daemon is not ours to manage. Probe before navigating,
+///     and land on the operable connect page rather than the webview's native
+///     error page when nothing answers. The bundled daemon is deliberately
+///     **not** launched: this arm is byte-for-byte the decision
+///     [`reroute_for_target`] makes for a runtime switch to the same target,
+///     and boot disagreeing with a runtime switch is the defect being fixed,
+///     not a feature. "Back to Local" brings the local core up again.
+#[cfg(feature = "embedded-core")]
+async fn bring_target_online(handle: &tauri::AppHandle) -> BootOutcome {
+    let target = connection::load_target();
+    match &target {
+        connection::ConnectionTarget::Remote(url) => {
+            external_link::set_remote_host(Some(url.clone()));
+            if gateway_probe::target_reachable(&target).await {
+                // `reveal_panel` re-reads the target, so this navigates to the
+                // remote origin (and grants it window-drag) rather than loopback.
+                reveal_panel(handle);
+                BootOutcome {
+                    reachable: true,
+                    connect_page_shown: false,
+                }
+            } else {
+                let why = gateway_probe::target_unreachable_message(&target);
+                tracing::warn!("configured remote Gateway unreachable at startup: {why}");
+                show_connection_page(handle, &why);
+                BootOutcome {
+                    reachable: false,
+                    connect_page_shown: true,
+                }
+            }
         }
-        Err(e) => {
-            tracing::error!("daemon did not become ready: {e}");
-            show_daemon_error(handle, &e);
-            false
+        connection::ConnectionTarget::Local => {
+            // Local navigations only ever touch loopback — drop any remote
+            // allow-list left over from a previous target.
+            external_link::set_remote_host(None);
+            let version = handle.package_info().version.to_string();
+            // First launch / post-update: force any stale daemon offline so the
+            // `aleph-server` bundled in this app takes over.
+            daemon::reconcile_for_version(&version).await;
+            match daemon::ensure_ready().await {
+                Ok(()) => {
+                    reveal_panel(handle);
+                    BootOutcome {
+                        reachable: true,
+                        connect_page_shown: false,
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("daemon did not become ready: {e}");
+                    // The splash carries this one, not the connect page — and
+                    // the Local supervisor relaunches rather than relocating,
+                    // so there is no latch to seed.
+                    show_daemon_error(handle, &e);
+                    BootOutcome {
+                        reachable: false,
+                        connect_page_shown: false,
+                    }
+                }
+            }
         }
     }
 }
@@ -577,7 +638,8 @@ async fn bring_target_online(handle: &tauri::AppHandle) -> bool {
     // anywhere — there is no sensible default Gateway for a panel-only shell.
     if !connection::marker_exists() {
         tracing::info!("no connection target configured — opening first-run connect page");
-        connect_setup::show_lite_connect_page(handle);
+        // Nothing has failed yet — the page's own copy is the whole story.
+        connect_setup::show_lite_connect_page(handle, "");
         return true;
     }
 
@@ -589,14 +651,16 @@ async fn bring_target_online(handle: &tauri::AppHandle) -> bool {
         }
     }
 
-    if connect_setup::target_reachable(&target).await {
+    if gateway_probe::target_reachable(&target).await {
         navigate_to_target(handle, &target);
         focus_window(handle);
     } else {
         // Configured but down: land on the operable connection page rather than
-        // the webview's native error page (spec §8 — no white screen).
-        tracing::warn!("configured Gateway unreachable at startup — opening connect page");
-        connect_setup::show_lite_connect_page(handle);
+        // the webview's native error page (spec §8 — no white screen), and say
+        // which origin was dialled — the field only shows what the user typed.
+        let why = gateway_probe::target_unreachable_message(&target);
+        tracing::warn!("configured Gateway unreachable at startup — opening connect page: {why}");
+        connect_setup::show_lite_connect_page(handle, &why);
     }
     true
 }
@@ -696,11 +760,30 @@ pub(crate) fn reroute_for_target(app: &tauri::AppHandle, target: connection::Con
     match &target {
         connection::ConnectionTarget::Remote(url) => {
             external_link::set_remote_host(Some(url.clone()));
-            // Full app: navigate directly — the resident supervisor surfaces
-            // an unreachable remote on its next tick.
+            // Full app: probe before committing the navigation, exactly as the
+            // lite shell does below. "The resident supervisor will surface it
+            // on its next tick" was the old justification for navigating
+            // blind, and it is not good enough on two counts: the user stares
+            // at the webview's native error page for a whole poll interval
+            // first, and — before the supervisor's probe was moved onto
+            // `gateway_probe` — a peer that accepts TCP and then closes read
+            // as healthy forever, so the next tick never came.
             #[cfg(feature = "embedded-core")]
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.navigate(url.clone());
+            {
+                let handle = app.clone();
+                let url = url.clone();
+                let target = target.clone();
+                tauri::async_runtime::spawn(async move {
+                    if gateway_probe::target_reachable(&target).await {
+                        if let Some(window) = handle.get_webview_window("main") {
+                            let _ = window.navigate(url);
+                        }
+                    } else {
+                        let why = gateway_probe::target_unreachable_message(&target);
+                        tracing::warn!("remote target unreachable — opening connect page: {why}");
+                        show_connection_page(&handle, &why);
+                    }
+                });
             }
         }
         connection::ConnectionTarget::Local => {
@@ -725,12 +808,13 @@ pub(crate) fn reroute_for_target(app: &tauri::AppHandle, target: connection::Con
     {
         let handle = app.clone();
         tauri::async_runtime::spawn(async move {
-            if connect_setup::target_reachable(&target).await {
+            if gateway_probe::target_reachable(&target).await {
                 navigate_to_target(&handle, &target);
                 focus_window(&handle);
             } else {
-                tracing::warn!("re-route target unreachable — opening connect page");
-                connect_setup::show_lite_connect_page(&handle);
+                let why = gateway_probe::target_unreachable_message(&target);
+                tracing::warn!("re-route target unreachable — opening connect page: {why}");
+                connect_setup::show_lite_connect_page(&handle, &why);
             }
         });
     }
@@ -952,20 +1036,22 @@ impl Supervisor {
 /// once it is back. Silent by design — it never shows or focuses the window
 /// (R5), it just keeps the plumbing connected. Full-app-only.
 #[cfg(feature = "embedded-core")]
-async fn supervise_daemon(handle: tauri::AppHandle, up: bool) {
+async fn supervise_daemon(handle: tauri::AppHandle, boot: BootOutcome) {
     // The supervisor adapts to a target switch made at runtime (via the
     // connection commands / tray / menu): each tick re-reads the persisted
     // target and, when it differs from the one currently supervised, rebuilds
     // the state machine in the matching mode. This keeps a single resident
     // supervisor — no second loop is ever spawned.
     let mut target = connection::load_target();
-    let mut supervisor = Supervisor::for_target(&target, up);
+    let mut supervisor = Supervisor::for_target(&target, boot.reachable);
     // Latch: show the connect page once per outage. Without it the
     // ShowConnectionError arm re-navigates every tick (~5s), wiping any address
     // the user is typing (an R5 violation — mirrors the lite loop's `relocated`
     // guard). Cleared on any healthy/recovery tick and on a runtime target
     // switch so a future outage re-shows it.
-    let mut connect_page_shown = false;
+    // Seeded from boot: if the connect page is already on screen for this
+    // outage, the first Down tick must not navigate to it a second time.
+    let mut connect_page_shown = boot.connect_page_shown;
     loop {
         tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
 
@@ -973,17 +1059,24 @@ async fn supervise_daemon(handle: tauri::AppHandle, up: bool) {
         // new mode.
         let current = connection::load_target();
 
-        // Probe the live target first — loopback `/ready` for Local, bare TCP
-        // for Remote. Probing before the re-arm lets a freshly-switched target
-        // be seeded with its real reachability (see `Supervisor::for_target`),
-        // so a reachable new target is not mistaken for a Down→Up recovery and
-        // does not trigger a redundant Panel reload.
+        // Probe the live target first — `/ready` either way. Probing before the
+        // re-arm lets a freshly-switched target be seeded with its real
+        // reachability (see `Supervisor::for_target`), so a reachable new
+        // target is not mistaken for a Down→Up recovery and does not trigger a
+        // redundant Panel reload.
+        //
+        // The Remote arm used to be a bare `daemon::tcp_reachable`, and that is
+        // the whole defect: anything fronting an origin (a CDN edge, a
+        // port-forward to nothing) completes the handshake and only then
+        // closes, so this loop saw "healthy" forever and `ShowConnectionError`
+        // never fired — the user was left on the webview's native error page
+        // with no way back. Local keeps its own `/ready` helper because
+        // `daemon` owns the loopback host/port and the launch/relaunch state
+        // that goes with it.
         let ready = match &current {
             connection::ConnectionTarget::Local => daemon::is_ready().await,
-            connection::ConnectionTarget::Remote(url) => {
-                let host = url.host_str().unwrap_or("");
-                let port = url.port_or_known_default().unwrap_or(18790);
-                daemon::tcp_reachable(host, port).await
+            connection::ConnectionTarget::Remote(_) => {
+                gateway_probe::target_reachable(&current).await
             }
         };
 
@@ -1032,11 +1125,19 @@ async fn supervise_daemon(handle: tauri::AppHandle, up: bool) {
             }
             SupervisorAction::ShowConnectionError => {
                 if !connect_page_shown {
-                    tracing::warn!("remote Gateway unreachable — showing connection page");
-                    show_connection_page(
-                        &handle,
-                        "Remote Gateway unreachable. Retry or go back to local.",
+                    // Name the origin that was actually dialled. The old wording
+                    // ("Remote Gateway unreachable. Retry or go back to local.")
+                    // withheld the one fact the address field cannot show — the
+                    // port the shell filled in — which is precisely how a
+                    // correct-looking address fails without explanation.
+                    let secs = HEALTH_POLL_INTERVAL.as_secs() * u64::from(FAILURES_TO_DECLARE_DOWN);
+                    let why = format!(
+                        "Lost contact with {} — no answer for {secs}s. {}",
+                        gateway_probe::target_origin(&target),
+                        "Retry when it is back, enter a different address, or go back to local."
                     );
+                    tracing::warn!("remote Gateway unreachable — showing connection page: {why}");
+                    show_connection_page(&handle, &why);
                     connect_page_shown = true;
                 }
             }
@@ -1045,25 +1146,29 @@ async fn supervise_daemon(handle: tauri::AppHandle, up: bool) {
 }
 
 /// Surface a remote-Gateway connection failure by navigating the main window
-/// to the bundled connection page and forwarding the message to its
-/// `window.__alephError` hook. Mirrors `show_daemon_error`, but targets the
-/// connect page (where the user can retry or fall back to Local) rather than
-/// the splash. Full-app-only — wired into the daemon supervisor's Remote leg.
+/// to the bundled connection page with the reason carried in the URL. Mirrors
+/// `show_daemon_error`, but targets the connect page (where the user can retry
+/// or fall back to Local) rather than the splash — and unlike that one it
+/// navigates first, which is why it cannot use the same eval() channel.
+/// Full-app-only — wired into the daemon supervisor's Remote leg.
 #[cfg(feature = "embedded-core")]
 fn show_connection_page(handle: &tauri::AppHandle, message: &str) {
     let Some(window) = handle.get_webview_window("main") else {
         return;
     };
     let _ = window.show();
-    if let Ok(url) = tauri::Url::parse(connection::connect_page_url()) {
-        if let Err(e) = window.navigate(url) {
-            tracing::warn!("could not navigate to the connection page: {e}");
+    // The message rides the URL, not a post-navigate eval(): the eval would run
+    // against the outgoing document, where the page's hook does not exist yet,
+    // and the reason would be dropped without a trace. See
+    // `connection::connect_page_url_with_error`.
+    match tauri::Url::parse(&connection::connect_page_url_with_error(message)) {
+        Ok(url) => {
+            if let Err(e) = window.navigate(url) {
+                tracing::warn!("could not navigate to the connection page: {e}");
+            }
         }
+        Err(e) => tracing::warn!("invalid connection-page URL: {e}"),
     }
-    let safe = message.replace('\\', "\\\\").replace('\'', "\\'");
-    let _ = window.eval(format!(
-        "window.__alephError && window.__alephError('{safe}')"
-    ));
 }
 
 /// Resident health loop for the panel-only (lite) shell. The full app uses
@@ -1080,7 +1185,7 @@ fn show_connection_page(handle: &tauri::AppHandle, message: &str) {
 #[cfg(not(feature = "embedded-core"))]
 async fn supervise_remote_lite(handle: tauri::AppHandle) {
     // Seed from a live probe so a reachable target isn't mistaken for recovery.
-    let reachable = connect_setup::target_reachable(&connection::load_target()).await;
+    let reachable = gateway_probe::target_reachable(&connection::load_target()).await;
     let mut supervisor = Supervisor::new_remote(reachable);
     // Outer failure counter: native relocation fires only after this many
     // consecutive `ShowConnectionError` ticks — 5s × 8 = 40s total.
@@ -1092,7 +1197,8 @@ async fn supervise_remote_lite(handle: tauri::AppHandle) {
     let mut relocated = false;
     loop {
         tokio::time::sleep(LITE_REMOTE_POLL).await;
-        let ready = connect_setup::target_reachable(&connection::load_target()).await;
+        let target = connection::load_target();
+        let ready = gateway_probe::target_reachable(&target).await;
         if crate::cert_trust::pending::TRUST_PENDING.load(std::sync::atomic::Ordering::SeqCst) {
             // A trust prompt owns the screen — don't relocate, and don't let a
             // recovery tick navigate the webview away from the prompt.
@@ -1102,11 +1208,17 @@ async fn supervise_remote_lite(handle: tauri::AppHandle) {
             SupervisorAction::ShowConnectionError => {
                 relocation_ticks += 1;
                 if relocation_ticks >= LITE_FAILURES_TO_RELOCATE && !relocated {
-                    tracing::warn!(
-                        "remote Gateway unreachable for {}s — relocating to connect page",
-                        LITE_REMOTE_POLL.as_secs() * u64::from(LITE_FAILURES_TO_RELOCATE)
+                    let secs = LITE_REMOTE_POLL.as_secs() * u64::from(LITE_FAILURES_TO_RELOCATE);
+                    tracing::warn!("remote Gateway unreachable for {secs}s — relocating");
+                    // Distinct from the startup wording: this target *was*
+                    // serving, so "check the address" is the wrong first
+                    // suggestion — it went away under a working session.
+                    let why = format!(
+                        "Lost contact with {} — no answer for {secs}s. {}",
+                        gateway_probe::target_origin(&target),
+                        "Reconnect when it is back, or enter a different address."
                     );
-                    connect_setup::show_lite_connect_page(&handle);
+                    connect_setup::show_lite_connect_page(&handle, &why);
                     relocated = true;
                 }
             }
@@ -1364,5 +1476,165 @@ mod tests {
         let mut sup = Supervisor::new_remote(false);
         // Down→Up recovery must emit ReloadPanel, never Relaunch.
         assert_eq!(sup.tick(true), SupervisorAction::ReloadPanel);
+    }
+
+    /// This file's source with comment lines removed, for the source-level
+    /// guards below.
+    ///
+    /// Stripping comments is not tidiness: every guard here matches on code
+    /// spelling, and a doc comment that *explains* a rule ("the bundled daemon
+    /// is deliberately not launched") contains the very tokens the rule
+    /// forbids. Without this, a guard can be satisfied — or tripped — by prose.
+    fn source_without_comments() -> String {
+        // CRLF checkout: a separator anchored as `…\n` never matches otherwise.
+        include_str!("main.rs")
+            .replace('\r', "")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The body of the function introduced by `signature`, bounded by its own
+    /// closing brace at column 0 — not by a line count, which walks into the
+    /// next function the first time someone adds a line.
+    fn function_body<'a>(src: &'a str, signature: &str) -> &'a str {
+        let start = src
+            .find(signature)
+            .unwrap_or_else(|| panic!("not found — was it renamed?: {signature}"));
+        let body = &src[start..];
+        let end = body
+            .find("\n}\n")
+            .expect("function must terminate at a column-0 brace");
+        &body[..end]
+    }
+
+    /// The body of the `match` arm introduced by `arm_head`, bounded by the
+    /// arm's own closing brace at its own indentation.
+    fn match_arm_body<'a>(body: &'a str, arm_head: &str) -> &'a str {
+        let start = body
+            .find(arm_head)
+            .unwrap_or_else(|| panic!("match arm not found — was it renamed?: {arm_head}"));
+        let arm = &body[start..];
+        let end = arm
+            .find("\n        }\n")
+            .expect("match arm must terminate at its own closing brace");
+        &arm[..end]
+    }
+
+    const BOOT_FULL: &str =
+        "async fn bring_target_online(handle: &tauri::AppHandle) -> BootOutcome {";
+    const REMOTE_ARM: &str = "connection::ConnectionTarget::Remote(url) => {";
+
+    /// The full app must honour a persisted `Remote` target across restarts.
+    ///
+    /// It used to reset one back to `Local` on every launch while `menu.rs` and
+    /// `tray.rs` both offered "Connect to Remote…" in the same build: the user
+    /// could connect, it worked for that session, and the next launch silently
+    /// forgot. Every other leg already supported remote — `reroute_for_target`
+    /// probes and navigates, `Supervisor::new_remote` surfaces errors instead
+    /// of relaunching — so boot was the only thing holding it shut.
+    ///
+    /// This reverses a decision that had a doc comment and a stated rationale
+    /// but, notably, no test: nothing went red when the reset was removed.
+    /// Restoring it now has to walk past a named assertion.
+    #[test]
+    fn boot_honours_a_persisted_remote_target() {
+        let src = source_without_comments();
+        let body = function_body(&src, BOOT_FULL);
+
+        assert!(
+            body.contains("connection::load_target()"),
+            "boot must read the persisted target, not assume one"
+        );
+        assert!(
+            !body.contains("save_target("),
+            "boot writes the connection target — a persisted Remote is being \
+             reset on launch, which is the defect this reversed: the menu \
+             offers a remote target the next launch throws away"
+        );
+    }
+
+    /// Boot and a runtime switch are two faces of one decision, and they must
+    /// make it the same way: probe before navigating, and leave the local
+    /// daemon alone when the target is remote.
+    ///
+    /// `every_reroute_navigation_is_probe_gated` covers the runtime face. This
+    /// covers boot — which is compiled only into the full app, so the lite
+    /// build's own test run would never observe it at runtime. Reading the
+    /// source is what makes the guard cfg-independent.
+    #[test]
+    fn boot_treats_a_remote_target_exactly_as_a_runtime_switch_does() {
+        let src = source_without_comments();
+        let arm = match_arm_body(function_body(&src, BOOT_FULL), REMOTE_ARM);
+
+        let navigations = arm.matches(".navigate(").count()
+            + arm.matches("navigate_to_target(").count()
+            + arm.matches("reveal_panel(").count();
+        let probes = arm.matches("gateway_probe::target_reachable(").count();
+
+        // Self-protection: a scan that found nothing must not read as a pass.
+        assert!(
+            navigations > 0,
+            "scanned the wrong region — no navigation found in boot's Remote arm"
+        );
+        assert!(
+            probes >= 1,
+            "boot's Remote arm performs {navigations} navigation(s) with no \
+             reachability probe: a CDN edge or a port-forward to nothing \
+             accepts the connection and then closes, so the user lands on the \
+             webview's native error page with no way back"
+        );
+        assert!(
+            !arm.contains("daemon::"),
+            "boot's Remote arm touches the local daemon. `reroute_for_target` \
+             does not when switching to the same target, and the supervisor's \
+             remote leg does not either (\"the remote daemon is not ours to \
+             manage\") — boot disagreeing with a runtime switch about the same \
+             target is the class of defect being fixed, not a feature"
+        );
+    }
+
+    /// Every navigation `reroute_for_target` performs must be paired with a
+    /// reachability probe — in **both** cfg arms.
+    ///
+    /// Source-level because the two arms are compiled apart: a runtime test
+    /// only ever observes the variant it was built for, which is precisely how
+    /// the full app kept navigating blind for four rounds after the lite shell
+    /// was probe-gated. The old code had two navigation acts and one probe;
+    /// this counts them.
+    ///
+    /// Bounded by the function's own syntactic terminus (its closing brace at
+    /// column 0), not by a line count — a window sized in lines silently walks
+    /// into the next function the first time a comment is added.
+    #[test]
+    fn every_reroute_navigation_is_probe_gated() {
+        // CRLF checkout: a separator anchored as `…\n` never matches here.
+        // Normalising first is the shape that survives both line endings.
+        let src = include_str!("main.rs").replace('\r', "");
+        let start = src
+            .find("fn reroute_for_target(")
+            .expect("reroute_for_target must exist — did it get renamed?");
+        let body = &src[start..];
+        let end = body
+            .find("\n}\n")
+            .expect("function must terminate at a column-0 brace");
+        let body = &body[..end];
+
+        let navigations =
+            body.matches(".navigate(").count() + body.matches("navigate_to_target(").count();
+        let probes = body.matches("gateway_probe::target_reachable(").count();
+
+        // Self-protection: a scan that found nothing must not read as a pass.
+        assert!(
+            navigations > 0,
+            "scanned the wrong region — no navigation found in reroute_for_target"
+        );
+        assert!(
+            probes >= navigations,
+            "reroute_for_target performs {navigations} navigation(s) but only \
+             {probes} probe(s): some path points the webview at an origin \
+             without first asking whether an Aleph Gateway answers there"
+        );
     }
 }

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex, RwLock};
 use tokio::time::{timeout, Duration};
 
 use crate::session::actor::{ActorCommand, SessionActor, DEFAULT_IDLE_TIMEOUT};
@@ -25,6 +25,16 @@ pub struct InProcessActorSessionService {
     store: Arc<dyn SessionEventStore>,
     senders: RwLock<HashMap<SessionId, mpsc::Sender<ActorCommand>>>,
     broadcasters: RwLock<HashMap<SessionId, broadcast::Sender<SessionEventRecord>>>,
+    /// Per-session mutex serialising the entire `wake()` critical section.
+    ///
+    /// Without this, two concurrent `wake()` calls for the same session
+    /// would race the "shutdown old / spawn new / emit SessionWoken"
+    /// sequence: each removes the old sender, each spawns a fresh actor,
+    /// and both `SessionWoken` markers land in the event log. Holding the
+    /// per-key mutex for the duration of `wake()` makes the second caller
+    /// wait, then re-read the now-current prior_head and skip the marker
+    /// emit (it sees the freshly-spawned sender via the fast path).
+    wake_locks: Mutex<HashMap<SessionId, Arc<Mutex<()>>>>,
     idle_timeout: Duration,
     observer: Option<Arc<dyn crate::session::observer::SessionEventObserver>>,
 }
@@ -35,6 +45,7 @@ impl InProcessActorSessionService {
             store,
             senders: RwLock::new(HashMap::new()),
             broadcasters: RwLock::new(HashMap::new()),
+            wake_locks: Mutex::new(HashMap::new()),
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             observer: None,
         }
@@ -204,6 +215,19 @@ impl SessionService for InProcessActorSessionService {
     }
 
     async fn wake(&self, id: &SessionId) -> Result<SessionHandle, SessionError> {
+        // Serialise concurrent wakes for the same session. The per-key
+        // mutex covers the entire shutdown-old / spawn-new / emit-marker
+        // sequence so two racing wake() callers cannot each spawn a fresh
+        // actor and emit duplicate SessionWoken markers.
+        let wake_lock = {
+            let mut locks = self.wake_locks.lock().await;
+            locks
+                .entry(id.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        let _guard = wake_lock.lock().await;
+
         // 1. Shutdown old actor if present.
         if let Some(sender) = self.senders.write().await.remove(id) {
             let (tx, rx) = oneshot::channel();

@@ -7,11 +7,60 @@
 //! one per surface.
 
 use std::future::Future;
+use std::pin::Pin;
 
 use tokio::time::{timeout_at, Duration, Instant};
 
 use super::{BusyQueueConfig, TicketGuard};
+use crate::gateway::event_emitter::EventEmitter;
 use crate::gateway::execution_engine::ExecutionError;
+use crate::gateway::StreamEvent;
+use crate::sync_primitives::Arc;
+
+/// The lane's "still waiting, at position N" reporter: emits
+/// `StreamEvent::RunQueued` through the run's emitter.
+///
+/// Shared by the two spawn seams (Panel/CLI `spawn.rs`, channel
+/// `inbound_router/executor.rs`) so the frame shape and the failure policy
+/// live in exactly one place.
+///
+/// `session_key` is the session the run was ADDRESSED to, not a derived
+/// execution lane (a `/btw` side question runs on its own key): this frame is
+/// the run's first, nothing has seeded the run→session visibility index yet,
+/// and the client resolving it is attached to the addressed session — the
+/// derived session may have no row at all yet. Same reason the never-ran
+/// `RunError` names it.
+///
+/// The frame goes on the WS bus only, never back to a channel:
+/// `OriginFanoutEmitter` fans out final answers, not skeleton events, so a
+/// Panel watching a shared session sees a channel user's queued message
+/// while the channel itself gets no "you are in line" chatter.
+///
+/// Best-effort mirror: `chat.history.pending` is the authoritative half, so a
+/// dropped frame costs liveness, never correctness — failures log at `debug`.
+pub fn run_queued_reporter(
+    emitter: Arc<dyn EventEmitter + Send + Sync>,
+    run_id: String,
+    session_key: String,
+) -> impl FnMut(u16) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    move |ahead: u16| {
+        let emitter = Arc::clone(&emitter);
+        let run_id = run_id.clone();
+        let session_key = session_key.clone();
+        Box::pin(async move {
+            if let Err(e) = emitter
+                .emit(StreamEvent::RunQueued {
+                    run_id,
+                    session_key,
+                    ahead,
+                })
+                .await
+            {
+                tracing::debug!("failed to emit RunQueued: {e}");
+            }
+        })
+    }
+}
 
 /// How a queued message finished.
 ///

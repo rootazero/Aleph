@@ -11,7 +11,15 @@ configs:
 
 settings:
   base:
-    SWIFT_VERSION: "5.9"
+    # Swift 6 language mode (verified in the build log as `swift-version 6` —
+    # an unrecognised value here is silently downgraded, so the mode has to be
+    # read back, not assumed). Moving off 5.9 turned two silent hazards into
+    # build-time facts: `sending 'self.probe' risks causing data races` (the
+    # @MainActor `AppState` handing a non-Sendable probe to a nonisolated
+    # frame), and the WebKit challenge hook no longer witnessing its @objc
+    # optional requirement — that second one only warns, so it is pinned by a
+    # test (`CertChallengeHookIsWiredTests`) rather than left to the log.
+    SWIFT_VERSION: "6.0"
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
     TARGETED_DEVICE_FAMILY: "1,2"
 
@@ -36,6 +44,10 @@ targets:
     sources:
       - AlephPaneliOS
     info:
+      # GENERATED OUTPUT — xcodegen rewrites this file on every `generate`, so it
+      # is gitignored (see .gitignore). The properties below are the source; edit
+      # them here, never the plist. Version strings resolve from the repo's
+      # VERSION file via ./generate.sh (dev) / ./release-testflight.sh (upload).
       path: AlephPaneliOS/Resources/Info.plist
       properties:
         CFBundleDisplayName: Aleph Panel

@@ -194,10 +194,11 @@ pub fn ask_user_frame(
     request: &ClarificationRequest,
     cursor: usize,
 ) -> GatewayEventFrame {
-    let current = request
-        .questions
-        .get(cursor)
-        .unwrap_or_else(|| request.first());
+    let current = request.questions.get(cursor).unwrap_or_else(|| {
+        request
+            .first()
+            .expect("a ClarificationRequest built by a constructor is never empty")
+    });
     GatewayEventFrame::AskUser {
         run_id: run_id.to_string(),
         // The run's emitter owns the stream sequence counter and an
@@ -347,7 +348,11 @@ impl ClarificationManager {
             .iter()
             .filter(|(_, e)| e.is_live())
             .map(|(session_key, e)| {
-                let current = e.current().unwrap_or_else(|| e.request.first());
+                let current = e.current().unwrap_or_else(|| {
+                    e.request
+                        .first()
+                        .expect("a ClarificationRequest built by a constructor is never empty")
+                });
                 PendingClarification {
                     session_key: session_key.clone(),
                     question: current.prompt.clone(),
@@ -507,20 +512,42 @@ impl ClarificationManager {
     /// Returns whether an entry was retired.
     pub async fn cancel_abandoned(&self, session_key: &str) -> bool {
         let mut pending = self.pending.write().await;
-        if pending.get(session_key).is_none_or(PendingEntry::is_live) {
-            return false;
-        }
-        let mut entry = pending
-            .remove(session_key)
-            .expect("invariant: observed under this same write lock");
+        // Peek first (immutably) so we can distinguish "waiter was abandoned"
+        // (`Cancelled` is the canonical outcome) from "entry is past its
+        // deadline" (`Expired` matches what `cleanup_expired` would have
+        // published and what the waiter observes). Without this branch the
+        // model sees a `Cancelled` outcome for a question that was actually
+        // timed out, drifting apart from the `cleanup_expired` contract.
+        let (is_expired, mut entry) = match pending.get(session_key) {
+            Some(e) if !e.is_live() => {
+                let expired = e.is_expired();
+                let entry = pending
+                    .remove(session_key)
+                    .expect("invariant: observed under this same write lock");
+                (expired, entry)
+            }
+            _ => return false,
+        };
         if let Some(sender) = entry.sender.take() {
-            // A no-op for the abandoned case — the receiver is what closed —
-            // but an expired entry whose waiter is still parked is unblocked
-            // here rather than left to its own timeout.
-            let _ = sender.send(ClarificationResult::cancelled());
+            // A closed receiver makes this a no-op for the abandoned case
+            // (waiter gone); for an expired entry whose waiter is still
+            // parked, the variant on the wire matches what the parked tool
+            // would otherwise have observed on its own timeout.
+            let _ = sender.send(if is_expired {
+                ClarificationResult::timeout()
+            } else {
+                ClarificationResult::cancelled()
+            });
         }
         drop(pending);
-        publish_ended(session_key, ClarificationOutcome::Cancelled);
+        publish_ended(
+            session_key,
+            if is_expired {
+                ClarificationOutcome::Expired
+            } else {
+                ClarificationOutcome::Cancelled
+            },
+        );
         true
     }
 

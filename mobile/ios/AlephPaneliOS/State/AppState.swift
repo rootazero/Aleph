@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// A pending server-trust approval raised by `PanelWebView`'s TLS-challenge
 /// handler. Carries the display facts plus the one-shot `decide` callback that
@@ -37,6 +38,8 @@ final class AppState: ObservableObject {
     private let probe: ReachabilityProbing
     private let envURL: () -> String?
 
+    private static let logger = Logger(subsystem: "ai.aleph.panel", category: "AppState")
+
     init(
         store: ConnectionStoring,
         probe: ReachabilityProbing,
@@ -53,7 +56,7 @@ final class AppState: ObservableObject {
     func resolve() async {
         if let env = envURL(), !env.isEmpty,
            case .success(let target) = PairingTarget.parse(env) {
-            try? store.save(target.url)
+            Self.persist(store: store, logger: Self.logger, url: target.url)
             await connectOrPair(target)
             return
         }
@@ -71,22 +74,54 @@ final class AppState: ObservableObject {
         case .failure(let error):
             screen = .pairing(message: Self.message(for: error))
         case .success(let target):
-            if await probe.probe(host: target.host, port: target.port) {
-                try? store.save(target.url)
+            if await probe.probe(target) {
+                Self.persist(store: store, logger: Self.logger, url: target.url)
                 screen = .connected(target.url)
             } else {
-                screen = .pairing(message: "\(target.host):\(target.port) is not reachable")
+                // `unreachableMessage` names the resolved origin and says what
+                // to change. The old wording was `host:port is not reachable`,
+                // which stated the failure and withheld every fact the user
+                // needed: which scheme was dialled, and that the way out of a
+                // reverse-proxy failure is to *remove* the port.
+                screen = .pairing(message: target.unreachableMessage)
             }
         }
     }
 
-    /// Reveal the pairing screen on demand (shake gesture / webview load failure).
+    /// Reveal the pairing screen on demand (shake gesture).
     func requestReconfigure(message: String? = nil) {
         screen = .pairing(message: message)
     }
 
+    /// The webview failed to load a target the probe had just approved — a
+    /// server that died between the two, a TLS trust prompt the user declined,
+    /// or an ATS refusal.
+    ///
+    /// Distinct from ``requestReconfigure(message:)`` because a bare
+    /// `error.localizedDescription` is a system string with no subject: "The
+    /// operation couldn't be completed" says nothing about *which* address
+    /// failed, and this screen's whole job is to let the user fix the address.
+    /// The origin comes from the same accessor every other message uses, so all
+    /// three surfaces name the endpoint the same way.
+    func reportLoadFailure(url: URL, detail: String) {
+        screen = .pairing(message: "Could not load \(PairingTarget(url: url).origin) — \(detail)")
+    }
+
     /// Raise a server-trust approval sheet (called from the webview's TLS hook).
+    ///
+    /// WKWebView can dispatch multiple server-trust challenges for the same
+    /// `host:port` (main document + WASM/asset sub-resources, in particular),
+    /// and the shell can only show one sheet at a time. If a prior challenge
+    /// is still awaiting the user's decision when a second arrives, the second
+    /// overwrites the first here — and the first's `completionHandler` is then
+    /// never called, which strands that load forever. Fail-closed on the new
+    /// one instead: the held challenge is cancelled, and the user keeps the
+    /// single sheet they were already looking at.
     func presentCertPrompt(_ request: CertPromptRequest) {
+        if pendingCert != nil {
+            request.decide(false)
+            return
+        }
         pendingCert = request
     }
 
@@ -105,10 +140,15 @@ final class AppState: ObservableObject {
     }
 
     private func connectOrPair(_ target: PairingTarget) async {
-        if await probe.probe(host: target.host, port: target.port) {
+        if await probe.probe(target) {
             screen = .connected(target.url)
         } else {
-            screen = .pairing(message: "Last server unreachable")
+            // Same sentence as a hand-typed failure, and for the same reason:
+            // the previous copy ("Last server unreachable") named nothing at
+            // all, so a user whose stored target carried a port they never
+            // typed had no way to see it — the field shows the address, never
+            // the resolved origin.
+            screen = .pairing(message: target.unreachableMessage)
         }
     }
 
@@ -118,6 +158,20 @@ final class AppState: ObservableObject {
         case .invalidURL: return "That doesn't look like a valid address"
         case .unsupportedScheme(let s): return "Unsupported scheme: \(s)"
         case .noHost: return "Address is missing a host"
+        }
+    }
+
+    /// Persist the chosen target. A keychain failure here is not fatal — the
+    /// shell still navigates to the panel for this session — but if it goes
+    /// silent the user thinks pairing worked and loses the setting on the
+    /// next launch. Log the OSStatus so the failure surfaces in Console.app /
+    /// `log stream` (the only diagnostic the AppState has; the pairing UI
+    /// stays in the dark by design).
+    private static func persist(store: ConnectionStoring, logger: Logger, url: URL) {
+        do {
+            try store.save(url)
+        } catch {
+            logger.error("Keychain save failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

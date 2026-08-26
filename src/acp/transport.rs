@@ -2,7 +2,6 @@
 //!
 //! Wraps a child process's stdin/stdout for newline-delimited JSON messaging.
 
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
@@ -12,6 +11,7 @@ use tracing::{debug, warn};
 use crate::acp::incoming::IncomingHandler;
 use crate::acp::protocol::{AcpRequest, AcpResponse};
 use crate::error::{AlephError, Result};
+use crate::sync_primitives::Arc;
 
 const MAX_NOTIFICATIONS: usize = 1024;
 

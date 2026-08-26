@@ -94,6 +94,7 @@ pub mod plugin_manage;
 pub mod process_completion;
 pub mod process_journal;
 pub mod process_registry;
+pub mod project_manage;
 pub mod recall_context;
 pub mod recall_events;
 pub mod remember;

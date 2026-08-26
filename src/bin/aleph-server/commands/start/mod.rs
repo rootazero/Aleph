@@ -1568,6 +1568,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
+    // Arm the busy-input wait lane's crash journal (record-only here; the
+    // reinjection of survivors runs later, beside the ResumeCoordinator scan,
+    // once the execution adapter / agent registry / event bus exist).
+    // Fail-soft like the journals above: a missing data dir costs durability,
+    // not boot.
+    match alephcore::utils::paths::get_busy_queue_dir() {
+        Ok(dir) => alephcore::gateway::busy_queue::durable::init(dir),
+        Err(e) => {
+            tracing::warn!(error = %e, "Busy-queue journal disabled (no data dir)");
+        }
+    }
+
     // Register the subagent tree relay — live spawn/progress/settle events are
     // republished to panels under `run.subagent_tree` for the background
     // sub-agent tree view (pure observability; no parent turn driven).
@@ -2012,6 +2024,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         &mut server,
         &project_store,
         &auth_bundle.security_store,
+        &event_bus,
         args.daemon,
     );
 
@@ -2168,6 +2181,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             agent_result.message_store.clone(),
             Some(Arc::clone(&agent_manager)),
             &event_bus,
+            &auth_bundle.security_store,
         );
     }
 
@@ -2810,6 +2824,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     {
         let app_cfg = app_config_for_channels.read().await;
         let resume_cfg = app_cfg.resume.clone();
+        let busy_queue_execution_cfg = app_cfg.execution.clone();
         drop(app_cfg);
         if let Some(event_store) = session_event_store_for_resume.clone() {
             let reconciler = alephcore::gateway::ProjectionReconciler::new(
@@ -2838,6 +2853,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     "ProjectionReconciler boot scan finished"
                 );
                 if let (Some(exec_adapter), Some(registry)) = resume_collaborators {
+                    // Cloned up front: the coordinator constructor consumes
+                    // the originals, and the busy-queue reinjection below
+                    // needs the same two collaborators.
+                    let reinject_adapter = exec_adapter.clone();
+                    let reinject_registry = registry.clone();
+                    let reinject_bus = bus_for_resume.clone();
                     let auto_scan = resume_cfg.enabled;
                     let coordinator =
                         std::sync::Arc::new(alephcore::gateway::ResumeCoordinator::new(
@@ -2846,7 +2867,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             exec_adapter,
                             registry,
                             sessions_for_resume,
-                            Some(bus_for_resume),
+                            bus_for_resume,
                         ));
                     // Published unconditionally, on purpose. `[resume] enabled`
                     // governs the automatic scan below; `agent.resume` /
@@ -2879,6 +2900,29 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         tracing::debug!(
                             "Resume coordinator: auto-scan disabled ([resume] enabled = false); \
                              on-demand resume still available"
+                        );
+                    }
+
+                    // Re-deliver messages that were parked in the busy-input
+                    // lane when the previous process died. Not gated by
+                    // `[resume] enabled`: that flag governs *run* resumption,
+                    // while these are user-typed messages that never became
+                    // runs. Runs after the scan (above) so an interrupted run
+                    // reclaims its session slot before its queued follow-ups
+                    // re-enter the lane.
+                    let reinjected = alephcore::gateway::busy_queue::durable::reinject_survivors(
+                        reinject_adapter,
+                        reinject_registry,
+                        reinject_bus,
+                        alephcore::gateway::busy_queue::BusyQueueConfig::from_execution(
+                            &busy_queue_execution_cfg,
+                        ),
+                    )
+                    .await;
+                    if reinjected > 0 {
+                        tracing::info!(
+                            reinjected,
+                            "Busy-queue: re-delivered messages queued before the restart"
                         );
                     }
                 } else {

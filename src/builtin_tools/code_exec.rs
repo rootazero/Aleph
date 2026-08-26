@@ -66,7 +66,10 @@ const FOREGROUND_MAX_TIMEOUT_SECS: u64 = 170;
 /// Clamp a caller-supplied foreground `timeout` under the tool-budget ceiling.
 /// `None` is preserved (the sandbox applies `DEFAULT_CODE_EXEC_TIMEOUT`); a
 /// value at or below the ceiling passes through unchanged.
-fn clamp_foreground_timeout(timeout: Option<u64>) -> Option<u64> {
+///
+/// `pub(super)` so `code_check` (and any future sibling) can apply the same
+/// clamp at its own entry point instead of duplicating the constant.
+pub(super) fn clamp_foreground_timeout(timeout: Option<u64>) -> Option<u64> {
     timeout.map(|t| t.min(FOREGROUND_MAX_TIMEOUT_SECS))
 }
 

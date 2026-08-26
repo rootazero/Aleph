@@ -73,6 +73,38 @@ mod tests {
     }
 
     #[test]
+    fn soul_layer_renders_nothing_in_minimal_mode_via_input_gate() {
+        // SoulLayer does NOT override `supports_mode` (default = true), so it
+        // participates in every `PromptMode` — including `Minimal` (the 74 B
+        // "tools-only" scaffold). That looks wrong next to `ProfileLayer`,
+        // which excludes Minimal, but it is the deliberately chosen shape:
+        // the `inject` body is input-gated — if SOUL.md is absent or empty,
+        // nothing is rendered, so the Minimal-mode prompt is unaffected. The
+        // alternative (gating supports_mode and leaving a half-persona
+        // injection when SOUL.md exists but AGENTS.md / IDENTITY.md do not)
+        // would be a worse outcome than letting an empty inject pass through.
+        // The cross-layer Minimal gate is pinned in
+        // `prompt_pipeline::mode_tests::minimal_mode_only_core_layers`.
+        use crate::thinker::prompt_mode::PromptMode;
+        assert!(SoulLayer.supports_mode(PromptMode::Minimal));
+        assert!(SoulLayer.supports_mode(PromptMode::Compact));
+        assert!(SoulLayer.supports_mode(PromptMode::Full));
+
+        // Render with no identity files — even at Minimal-eligible layer
+        // status, the inject body must produce an empty string when there
+        // is nothing to inject.
+        let layer = SoulLayer;
+        let config = crate::thinker::prompt_builder::PromptConfig::default();
+        let input = crate::thinker::prompt_layer::LayerInput::basic(&config, &[]);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+        assert!(
+            out.is_empty(),
+            "absent SOUL.md must render empty regardless of mode"
+        );
+    }
+
+    #[test]
     fn renders_workspace_soul_file() {
         let layer = SoulLayer;
         let config = PromptConfig::default();

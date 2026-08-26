@@ -402,7 +402,8 @@ impl Sandbox for WorkspaceSandbox {
                                     &store,
                                     led_key.as_str(),
                                 )
-                                .purge_all();
+                                .purge_all()
+                                .await;
                                 tracing::warn!(
                                     session = %led_key,
                                     "denial circuit-breaker tripped at elevation gate — \
@@ -1158,8 +1159,17 @@ mod tests {
                 &self,
                 _action: &crate::sandbox::exec_approval::ApprovalAction,
             ) -> crate::sandbox::exec_approval::ApprovalResponse {
-                std::fs::remove_dir(&self.sub).expect("remove the approved cwd");
-                std::os::unix::fs::symlink(&self.target, &self.sub).expect("plant the symlink");
+                // Off-thread so the requester never blocks the executor: a
+                // future helper that mirrors this test should not carry the
+                // "block-inside-async" foot-gun forward.
+                let sub = self.sub.clone();
+                let target = self.target.clone();
+                tokio::task::spawn_blocking(move || {
+                    std::fs::remove_dir(&sub).expect("remove the approved cwd");
+                    std::os::unix::fs::symlink(&target, &sub).expect("plant the symlink");
+                })
+                .await
+                .expect("swap task");
                 ApprovalOutcome::Approved.into()
             }
         }

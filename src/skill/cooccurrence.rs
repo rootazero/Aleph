@@ -143,6 +143,12 @@ pub fn cluster_chains(entries: &[RecentUse], window_secs: u64) -> Vec<Vec<String
     let window_ms = window_secs.saturating_mul(1_000);
     let mut chains: Vec<Vec<String>> = Vec::new();
     let mut current: Vec<String> = Vec::new();
+    // Parallel HashSet so the in-chain dedup is O(1) instead of
+    // `Vec::contains` (O(n)). For MAX_ENTRIES = 512 with every entry a
+    // distinct skill the linear search previously spent ~131k
+    // `String::eq` comparisons per call — this brings it back to ~512
+    // hash lookups.
+    let mut current_set: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut prev_ms: Option<u64> = None;
 
     for e in &sorted {
@@ -152,8 +158,9 @@ pub fn cluster_chains(entries: &[RecentUse], window_secs: u64) -> Vec<Vec<String
         };
         if break_chain && !current.is_empty() {
             chains.push(std::mem::take(&mut current));
+            current_set.clear();
         }
-        if !current.contains(&e.skill) {
+        if current_set.insert(e.skill.clone()) {
             current.push(e.skill.clone());
         }
         prev_ms = Some(e.at_ms);

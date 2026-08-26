@@ -295,9 +295,9 @@ const MAX_OUTPUT_BYTES: u64 = 64 * 1024;
 #[must_use]
 pub fn is_shell_safe(command: &str) -> bool {
     const SAFE: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /._-:\"'=";
-    command
-        .chars()
-        .all(|c| SAFE.contains(c) && c != '\n' && c != '\r')
+    // Newline / carriage-return are already absent from `SAFE`, so the
+    // single `contains` check covers them — no extra explicit comparison.
+    command.chars().all(|c| SAFE.contains(c))
 }
 
 /// Build a platform-appropriate shell invocation for `command`.

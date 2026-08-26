@@ -124,8 +124,10 @@ pub async fn query(server_url: &str, config: &CliConfig, json: bool) -> CliResul
 /// wire type spells this out in milliseconds (unlike `audit`'s seconds), so
 /// this conversion is spelled out here rather than inferred at the call site.
 fn format_ms(ms: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(ms)
-        .map_or_else(|| ms.to_string(), |t| t.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+    chrono::DateTime::from_timestamp_millis(ms).map_or_else(
+        || ms.to_string(),
+        |t| t.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+    )
 }
 
 #[cfg(test)]

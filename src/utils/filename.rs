@@ -6,6 +6,8 @@
 
 use std::path::Path;
 
+use super::paths::is_windows_reserved_name;
+
 /// Longest sanitized filename kept, in characters. Keeps the value comfortably
 /// under filesystem and `Content-Disposition` limits downstream.
 pub(crate) const MAX_FILENAME_CHARS: usize = 200;
@@ -63,7 +65,14 @@ pub(crate) fn sanitize_filename(name: &str) -> String {
     // so the recorded name matches what any filesystem would keep. This also
     // turns a residual ".." into the fallback.
     let trimmed = cleaned.trim().trim_end_matches('.').trim_end();
-    if trimmed.is_empty() {
+    // Windows reserves a small set of device names (CON, PRN, AUX, NUL,
+    // COM1-9, LPT1-9) at the filesystem layer — case-insensitively and on the
+    // STEM, which means "CON.txt" is reserved as well: Win32 drops the
+    // extension when resolving a device, so that name opens the console rather
+    // than creating a file. A sanitized name that lands on one of these would
+    // either fail to create or, worse, redirect a write to the device. Map them
+    // to the fallback like every other unrecoverable shape.
+    if trimmed.is_empty() || is_windows_reserved_name(trimmed) {
         FALLBACK_FILENAME.to_string()
     } else {
         trimmed.to_string()
@@ -132,5 +141,58 @@ mod tests {
     fn a_plain_name_passes_through_untouched() {
         assert_eq!(sanitize_filename("chart.png"), "chart.png");
         assert_eq!(sanitize_filename("季度复盘.md"), "季度复盘.md");
+    }
+
+    /// Windows reserves a small set of device names at the FS layer regardless
+    /// of extension. A sanitized name landing on one would either fail to
+    /// create or, worse, redirect to a device — both silently for a caller that
+    /// only sees the returned string.
+    #[test]
+    fn windows_reserved_device_names_become_the_fallback() {
+        for raw in ["CON", "con", "Con", "PRN", "AUX", "NUL", "COM1", "LPT9"] {
+            assert_eq!(
+                sanitize_filename(raw),
+                FALLBACK_FILENAME,
+                "{raw:?} must map to the fallback"
+            );
+        }
+        // The reserved set applies to the STEM, and an extension does not
+        // rescue it: Win32 resolves `CON.txt` to the console device, so a
+        // "file" written under that name goes to the device. This pair used to
+        // assert the opposite — the misconception travelled from the SSOT's doc
+        // comment (`utils::paths::is_windows_reserved_name`) into a test, where
+        // it then read as a deliberate carve-out rather than an error.
+        for raw in ["CON.txt", "con.log", "NUL.md", "LPT9.tar"] {
+            assert_eq!(
+                sanitize_filename(raw),
+                FALLBACK_FILENAME,
+                "{raw:?} resolves to a device on Windows and must map to the fallback"
+            );
+        }
+        // Formerly a recorded gap: the stem used to be taken at the LAST dot,
+        // so `con.tar.gz` yielded the stem `con.tar` and passed while Win32
+        // resolved it to the console device. The SSOT now cuts at the FIRST
+        // dot. Multi-extension names are the common shape for exactly the
+        // files this matters for — an archive a tool writes under a
+        // model-supplied name.
+        for raw in ["con.tar.gz", "CON.tar.gz", "nul.a.b.c", "aux.h"] {
+            assert_eq!(
+                sanitize_filename(raw),
+                FALLBACK_FILENAME,
+                "{raw:?} resolves to a device on Windows and must map to the fallback"
+            );
+        }
+        // The SSOT also cuts at `:` and ignores trailing spaces, because the
+        // DOS-device parser does. Both are no-ops *here* — `:` is filtered out
+        // and trailing spaces are trimmed before the check runs — so these
+        // assert the sanitizer's own two steps still land first, not the
+        // stem rule. `con:foo` losing its colon leaves the ordinary name
+        // `confoo`; it must not become the fallback.
+        assert_eq!(sanitize_filename("con:foo"), "confoo");
+        assert_eq!(sanitize_filename("con "), FALLBACK_FILENAME);
+        // A name that merely STARTS with a reserved word is a normal file —
+        // the check is equality on the stem, not a prefix match.
+        assert_eq!(sanitize_filename("CONTACTS.txt"), "CONTACTS.txt");
+        assert_eq!(sanitize_filename("console.log"), "console.log");
     }
 }

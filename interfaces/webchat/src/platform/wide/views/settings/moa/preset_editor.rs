@@ -5,9 +5,9 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::moa::{MoaApi, MoaPresetDto, MoaSlotDto};
-use crate::i18n::{t, t_string};
 use crate::api::providers::CatalogEntry;
 use crate::context::DashboardState;
+use crate::i18n::{t, t_string};
 
 use super::options::available_options;
 

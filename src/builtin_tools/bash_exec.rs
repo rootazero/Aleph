@@ -248,6 +248,25 @@ The child shell sees `ALEPH_SESSION_ID` (the per-session workspace key) and
             if code_exec_args.timeout_seconds.is_none() {
                 code_exec_args.timeout_seconds = Some(BACKGROUND_DEFAULT_TIMEOUT_SECS);
             }
+            // Defence in depth (audit-2026-08-26 BTT-3): background escapes
+            // the budget wrapper entirely, so a runaway LLM passing
+            // `u64::MAX` would register a job the registry never reaps
+            // (kill requires the same session to come back and call
+            // `process_action: "kill"`). Cap the worst case at 4 hours so
+            // the daemon cannot be wedged indefinitely on a single bad
+            // call; the 1h default still wins when the caller leaves the
+            // field unset.
+            const BACKGROUND_MAX_TIMEOUT_SECS: u64 = 4 * 3600;
+            if let Some(t) = code_exec_args.timeout_seconds {
+                if t > BACKGROUND_MAX_TIMEOUT_SECS {
+                    tracing::warn!(
+                        original = t,
+                        capped_to = BACKGROUND_MAX_TIMEOUT_SECS,
+                        "bash_exec: background timeout above ceiling, clamping"
+                    );
+                    code_exec_args.timeout_seconds = Some(BACKGROUND_MAX_TIMEOUT_SECS);
+                }
+            }
             return Ok(self.spawn_background(code_exec_args));
         }
 
@@ -367,7 +386,23 @@ impl BashExecTool {
         match registry.register_running(preview, caller, join.abort_handle()) {
             RegisterOutcome::Registered(id) => {
                 registry.attach_live(id, live);
-                let _ = id_tx.send(id);
+                // Defence in depth (audit-2026-08-26 BTT-4): the registry
+                // accepted the slot and the foreground path returned
+                // "running" to the model. If the spawned task already exited
+                // (panic before the oneshot receive), the model would be
+                // told the job is running while the registry holds an
+                // orphan. Today the gate awaits the oneshot inside the
+                // spawned task, so this cannot happen — but the pattern is
+                // one refactor away from a real silent orphan. Log loudly
+                // so any future semantic change surfaces in tests / logs
+                // instead of leaking the slot.
+                if id_tx.send(id).is_err() {
+                    tracing::warn!(
+                        process_id = id,
+                        "bash_exec: background task abandoned before handoff — \
+                         registry slot may be orphaned"
+                    );
+                }
                 info_output(serde_json::json!({
                     "process_id": id,
                     "status": "running",

@@ -1010,6 +1010,67 @@ mod tests {
         ));
     }
 
+    /// Pins the P1/P2 scope stamp (`with_owner_scope` at the `start` arm,
+    /// mirrors `goal.rs`'s creation-path pin): a loop started inside a room
+    /// run's `scope::with_scope` nest lands `scope_id == "project:<id>"` —
+    /// the actual tool call path the Kanban board's write side runs through,
+    /// not just `with_owner_scope` in isolation.
+    #[tokio::test]
+    async fn a_loop_started_inside_a_room_run_lands_in_project_scope() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let tool = LoopTool::new(reg.clone()).with_session_for_test("sess-room");
+        let attr = crate::scope::ScopeAttribution {
+            owner_user_id: "u-alice".to_string(),
+            scope: crate::scope::ScopeId::Project("p-x".to_string()),
+        };
+        let out = crate::scope::with_scope(
+            Some(attr),
+            tool.run(LoopArgs {
+                action: LoopAction::Start,
+                interval: Some("5m".to_string()),
+                prompt: Some("watch the deploy".to_string()),
+                max_iterations: None,
+                timeout_minutes: None,
+                token_budget: None,
+                next_wake: None,
+                session: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(out.success);
+
+        let st = reg.get("sess-room").unwrap();
+        assert_eq!(st.scope_id.as_deref(), Some("project:p-x"));
+        assert_eq!(st.owner_user_id.as_deref(), Some("u-alice"));
+    }
+
+    /// The room-outside twin: no ambient scope ⇒ current (pre-P2) behavior —
+    /// unscoped, `owner_user_id`/`scope_id` both `None`.
+    #[tokio::test]
+    async fn a_loop_started_outside_any_room_stays_unscoped() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let tool = LoopTool::new(reg.clone()).with_session_for_test("sess-personal");
+        let out = tool
+            .run(LoopArgs {
+                action: LoopAction::Start,
+                interval: Some("5m".to_string()),
+                prompt: Some("watch the deploy".to_string()),
+                max_iterations: None,
+                timeout_minutes: None,
+                token_budget: None,
+                next_wake: None,
+                session: None,
+            })
+            .await
+            .unwrap();
+        assert!(out.success);
+
+        let st = reg.get("sess-personal").unwrap();
+        assert_eq!(st.scope_id, None);
+        assert_eq!(st.owner_user_id, None);
+    }
+
     #[tokio::test]
     async fn start_without_interval_is_model_paced() {
         let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());

@@ -12,6 +12,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 # Version strings come from the repo's single VERSION source (CalVer), mirrored
 # into the generated Info.plist the same way PANEL_URL is injected into the scheme.
+# That plist (AlephPaneliOS/Resources/Info.plist) is xcodegen OUTPUT and is
+# gitignored alongside the .xcodeproj — this script rewrites it on every run, so
+# there is nothing to restore afterwards. project.yml holds the properties.
 export ALEPH_VERSION="$(cat ../../VERSION | tr -d '[:space:]')"
 # TestFlight requires a unique CFBundleVersion per upload, but CalVer is one/day.
 # Decouple: marketing version = CalVer (ALEPH_VERSION); build number =

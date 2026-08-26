@@ -302,6 +302,63 @@ impl RuntimeSecurityGuard {
             current_text = current_text.replace(*raw, value);
         }
 
+        // 5. Post-substitution leak re-scan.
+        //
+        // The earlier step-2 scan ran against the placeholder-bearing text, so
+        // a freshly resolved secret value (the common case — the placeholders
+        // reference API keys and tokens) was inserted into `current_text`
+        // AFTER every outbound leak/redact pass. The only thing that would
+        // catch an outbound that quotes the resolved secret back is a second
+        // scan against the substituted string. Without this pass a tool
+        // call that echoes the resolved value slips past both the exec and
+        // secret leak detectors.
+        if self.config.leak_detection && !ordered.is_empty() {
+            let exec_post_scan = {
+                let detector = self.exec_leak_detector.lock().await;
+                detector.scan_outbound(&current_text)
+            };
+            let secret_post_scan = {
+                let detector = self.secret_leak_detector.lock().await;
+                detector.scan_outbound(&current_text)
+            };
+            let post_has_blocks = exec_post_scan.has_blocks()
+                || matches!(secret_post_scan, LeakDecision::Block { .. });
+            if post_has_blocks {
+                let detail = format!(
+                    "outbound leak blocked post-substitution; \
+                     exec_findings={}, secret_block={}",
+                    exec_post_scan.findings.len(),
+                    matches!(secret_post_scan, LeakDecision::Block { .. }),
+                );
+                self.log_audit(
+                    &context,
+                    AuditEventType::ExecBlocked,
+                    AuditSeverity::Critical,
+                    detail,
+                );
+                return Ok(GuardResult::Blocked {
+                    reason: "Leak detector found sensitive data in resolved outbound content"
+                        .to_string(),
+                });
+            }
+            if exec_post_scan.has_redacts() {
+                current_text = {
+                    let detector = self.exec_leak_detector.lock().await;
+                    detector.redact(&current_text)
+                };
+                reasons.push(
+                    "Outbound leak detector redacted sensitive token after secret resolution"
+                        .to_string(),
+                );
+                self.log_audit(
+                    &context,
+                    AuditEventType::LeakWarning,
+                    AuditSeverity::Warn,
+                    "outbound leak detector redacted sensitive token post-substitution".to_string(),
+                );
+            }
+        }
+
         // Assemble final result
         if reasons.is_empty() && warnings.is_empty() {
             Ok(GuardResult::Clean { text: current_text })
@@ -463,9 +520,13 @@ mod tests {
     #[async_trait::async_trait]
     impl AsyncSecretResolver for MockResolver {
         async fn resolve(&self, _name: &str) -> Result<DecryptedSecret, SecretError> {
-            Ok(DecryptedSecret::new(
-                "sk-ant-test12345678901234567890".to_string(),
-            ))
+            // Use a non-pattern-matching value so the post-substitution
+            // leak scan (added in review-batch 2026-08-25, HIGH C-3 fix)
+            // does not block this test on its own. A separate test
+            // (`test_outbound_post_substitution_blocks_pattern_match`)
+            // covers the post-substitution block path with a
+            // pattern-matching value.
+            Ok(DecryptedSecret::new("test_secret_value_xyz".to_string()))
         }
     }
 
@@ -487,11 +548,39 @@ mod tests {
 
         match result {
             GuardResult::Clean { text } => {
-                assert!(text.contains("sk-ant-test"));
+                assert!(text.contains("test_secret_value_xyz"));
                 assert!(!text.contains("{{secret:test_key}}"));
             }
             _ => panic!("Expected Clean result, got {:?}", result),
         }
+    }
+
+    #[tokio::test]
+    async fn test_outbound_post_substitution_blocks_pattern_match() {
+        // Regression for review-batch 2026-08-25 HIGH C-3 fix:
+        // a freshly resolved secret value that itself matches an
+        // outbound leak pattern must be blocked, not silently shipped
+        // to the model. The pre-fix code ran the leak scan against the
+        // placeholder-bearing text and only substituted afterwards,
+        // so a `sk-…` value resolved at this step was added to the
+        // outbound string AFTER every leak/redact pass.
+        struct PatternMatchingResolver;
+        #[async_trait::async_trait]
+        impl AsyncSecretResolver for PatternMatchingResolver {
+            async fn resolve(&self, _name: &str) -> Result<DecryptedSecret, SecretError> {
+                Ok(DecryptedSecret::new(
+                    "sk-ant-test12345678901234567890".to_string(),
+                ))
+            }
+        }
+        let guard = RuntimeSecurityGuard::default_guard();
+        let context = SecurityContext::default();
+        let input = "Authorization: Bearer {{secret:test_key}}";
+        let result = guard
+            .process_outbound(input, Some(&PatternMatchingResolver), context)
+            .await
+            .unwrap();
+        assert!(matches!(result, GuardResult::Blocked { .. }));
     }
 
     #[tokio::test]

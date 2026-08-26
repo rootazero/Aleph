@@ -1,5 +1,15 @@
 # iPad Multitasking (Split View / Stage Manager) — Design Spec
 
+> **⚠️ Superseded 2026-08-24 — the committed `Info.plist` this document edits no longer exists.**
+> `mobile/ios/AlephPaneliOS/Resources/Info.plist` is xcodegen *output* and is now
+> gitignored beside the generated `.xcodeproj`; `project.yml`'s `info.properties`
+> block is the only source, and there is nothing to restore before a commit. Every
+> step below that stages that file, or that asks a regeneration to preserve its
+> `${ALEPH_VERSION}` / `${ALEPH_BUILD}` placeholders, describes the world as it was
+> — the current one is stated once, in `mobile/ios/README.md` and
+> `mobile/ios/.gitignore`. Kept as the record of what was done: do not re-add the
+> file by following it.
+
 **Date:** 2026-06-28
 **Status:** Approved (ready for plan)
 **Slice:** #1 of the three deferred iPad follow-ups (#1 multitasking, #2 Tablet-specific rendering, #3 touch ergonomics). Each is its own spec → plan → implementation cycle.

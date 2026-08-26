@@ -71,10 +71,10 @@ pub fn validate_identity_links(
 /// Returns the canonical name if a link is found, None otherwise.
 ///
 /// Assumes `identity_links` has been validated by `validate_identity_links`
-/// at deserialize time (no ID maps to more than one canonical). The
-/// alphabetic sort below only protects in-memory mutation paths and the
-/// `Default::default()` empty case — duplicates loaded via config are
-/// rejected before reaching here.
+/// at deserialize time (no ID maps to more than one canonical). Directly
+/// constructed maps are handled fail-closed below: an ID that maps to more than
+/// one non-empty canonical is ignored instead of being assigned by iteration
+/// order.
 pub(crate) fn resolve_linked_peer_id(
     identity_links: &HashMap<String, Vec<String>>,
     channel: &str,
@@ -92,36 +92,8 @@ pub(crate) fn resolve_linked_peer_id(
         Some(format!("{channel_lower}:{peer_lower}"))
     };
 
-    // Sort entries for deterministic iteration. In the unlikely event of
-    // duplicate IDs (directly-constructed HashMap, not validated config),
-    // alphabetic canonical order provides a stable tie-break.
-    let mut entries: Vec<_> = identity_links.iter().collect();
-    entries.sort_by_key(|(a, _)| *a);
-
-    // First pass: prefer scoped match (more specific) for deterministic behavior.
-    // A scoped ID like "telegram:123" is more precise than a bare "123" and
-    // prevents HashMap iteration order from affecting the result when both forms
-    // appear under different canonicals.
-    if let Some(ref scoped_id) = scoped {
-        for &(canonical, ids) in &entries {
-            let canonical_name = canonical.trim();
-            if canonical_name.is_empty() {
-                continue;
-            }
-            for id in ids {
-                let id_lower = id.trim().to_lowercase();
-                if id_lower.is_empty() {
-                    continue;
-                }
-                if &id_lower == scoped_id {
-                    return Some(canonical_name.to_string());
-                }
-            }
-        }
-    }
-
-    // Second pass: bare peer ID match
-    for &(canonical, ids) in &entries {
+    let mut id_to_canonical: HashMap<String, Option<String>> = HashMap::new();
+    for (canonical, ids) in identity_links {
         let canonical_name = canonical.trim();
         if canonical_name.is_empty() {
             continue;
@@ -131,13 +103,34 @@ pub(crate) fn resolve_linked_peer_id(
             if id_lower.is_empty() {
                 continue;
             }
-            if id_lower == peer_lower {
-                return Some(canonical_name.to_string());
+            match id_to_canonical.get(&id_lower).cloned() {
+                Some(existing) if existing.as_deref() == Some(canonical_name) => {}
+                Some(_) => {
+                    id_to_canonical.insert(id_lower, None);
+                }
+                None => {
+                    id_to_canonical.insert(id_lower, Some(canonical_name.to_string()));
+                }
             }
         }
     }
 
-    None
+    let canonical_for = |id: &str| {
+        let id_lower = id.trim().to_lowercase();
+        id_to_canonical
+            .get(&id_lower)
+            .and_then(Option::as_ref)
+            .map(String::as_str)
+    };
+
+    // Prefer a scoped match (more specific) over a bare peer-ID match.
+    if let Some(scoped_id) = scoped.as_deref() {
+        if let Some(canonical_name) = canonical_for(scoped_id) {
+            return Some(canonical_name.to_string());
+        }
+    }
+
+    canonical_for(&peer_lower).map(|canonical| canonical.to_string())
 }
 
 #[cfg(test)]
@@ -211,17 +204,16 @@ mod tests {
     }
 
     #[test]
-    fn test_duplicate_id_across_canonicals_picks_first() {
-        // Documents the alphabetic tie-break for in-memory mutation paths.
-        // Configs loaded via serde are now rejected by `validate_identity_links`
-        // before reaching this code, but a directly-constructed HashMap (as in
-        // tests or programmatic mutation) still hits this fallback.
+    fn test_duplicate_id_across_canonicals_is_ignored() {
+        // Configs loaded via serde reject this before resolution, but the
+        // resolver also fails closed for directly-constructed maps so a
+        // mutation cannot choose one user's canonical for another user's ID.
         let mut links = HashMap::new();
         links.insert("alice".to_string(), vec!["telegram:123".to_string()]);
-        links.insert("bob".to_string(), vec!["telegram:123".to_string()]); // duplicate ID
+        links.insert("bob".to_string(), vec!["telegram:123".to_string()]);
 
         let result = resolve_linked_peer_id(&links, "telegram", "123");
-        assert_eq!(result, Some("alice".to_string()));
+        assert_eq!(result, None);
     }
 
     #[test]

@@ -5,7 +5,8 @@
 //!
 //! With no project selected it renders an empty-state placeholder. With one
 //! selected it renders the room page: header (name + owner/member badge), a
-//! tab strip (群聊 default / 设置 / 看板·工作区浏览·记忆浏览 P3 placeholders),
+//! tab strip (群聊 default / 设置 / 看板 live; 工作区浏览·记忆浏览 still P3
+//! placeholders),
 //! and the active tab's body.
 //!
 //! ## i18n
@@ -35,7 +36,10 @@
 //! brand-new session, and the two never saw each other's messages on any
 //! surface.
 
+mod kanban;
+mod memory;
 mod settings;
+mod workspace;
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -51,10 +55,13 @@ use crate::platform::wide::views::chat::state::ChatState;
 use crate::state::layout::WorkspaceState;
 use crate::state::sessions::SessionMap;
 use crate::state::user_directory::UserDirectoryState;
+use kanban::KanbanTab;
+use memory::MemoryTab;
 use settings::SettingsTab;
+use workspace::WorkspaceTab;
 
-/// Sub-tab inside a project room page. `Kanban` / `Workspace` / `Memory` are
-/// P3 (spec §6.4) — rendered as bare placeholders here, no content.
+/// Sub-tab inside a project room page. `Kanban` is live (P3 Task 8);
+/// `Workspace` / `Memory` are still rendered as bare placeholders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RoomSubTab {
     Chat,
@@ -179,6 +186,37 @@ fn ProjectRoomPage(project_id: String) -> impl IntoView {
     };
     Effect::new(move |_| refresh.run(()));
 
+    // `projects.changed` push topic (Task 6): a rename / archive /
+    // bind_workspace / roster change from another surface, or another
+    // member, refreshes this room's header AND settings tab — both read
+    // the same `project` signal `refresh` sets, `member_ids` included, so
+    // one re-fetch covers both. Filtered to THIS room: the event face is
+    // roster-gated (`event_visibility::ByProjectScope`), so every frame
+    // this client receives is one it may see, but a sibling room's rename
+    // must not re-render a page that is not showing it.
+    {
+        let filter_id = project_id.clone();
+        let subscription_id = dash.subscribe_events(move |event| {
+            if event.topic != "projects.changed" {
+                return;
+            }
+            if event.data.get("project_id").and_then(|v| v.as_str()) != Some(filter_id.as_str()) {
+                return;
+            }
+            refresh.run(());
+        });
+        spawn_local(async move {
+            if let Err(e) = dash.subscribe_topic("projects.changed").await {
+                web_sys::console::error_1(
+                    &format!("Failed to subscribe to projects.changed: {e}").into(),
+                );
+            }
+        });
+        on_cleanup(move || {
+            dash.unsubscribe_events(subscription_id);
+        });
+    }
+
     view! {
         <div class="flex-1 flex flex-col h-full overflow-hidden">
             <Show when=move || load_error.get().is_some()>
@@ -194,9 +232,15 @@ fn ProjectRoomPage(project_id: String) -> impl IntoView {
                         RoomSubTab::Settings => view! {
                             <SettingsTab project=p.clone() refresh=refresh />
                         }.into_any(),
-                        RoomSubTab::Kanban | RoomSubTab::Workspace | RoomSubTab::Memory => {
-                            view! { <PlaceholderTab /> }.into_any()
-                        }
+                        RoomSubTab::Kanban => view! {
+                            <KanbanTab project=p.clone() />
+                        }.into_any(),
+                        RoomSubTab::Workspace => view! {
+                            <WorkspaceTab project=p.clone() />
+                        }.into_any(),
+                        RoomSubTab::Memory => view! {
+                            <MemoryTab project=p.clone() />
+                        }.into_any(),
                     }}
                 </div>
             })}
@@ -264,14 +308,26 @@ fn RoomTabButton(current: RwSignal<RoomSubTab>, target: RoomSubTab) -> impl Into
     }
 }
 
-#[component]
-fn PlaceholderTab() -> impl IntoView {
-    let i18n = use_i18n();
-    view! {
-        <div class="px-6 py-10 text-center text-sm text-text-tertiary">
-            {t!(i18n, project_room.coming_soon)}
-        </div>
+/// The agent a room's surfaces run under.
+///
+/// One rule, shared by the room chat (which opens the room's session with it)
+/// and the Memory tab (which reads the partition that session writes into). A
+/// second rule would let the two disagree, and the disagreement would be
+/// silent: the tab would read a partition nobody in the room writes to and
+/// render an empty list.
+///
+/// The open conversation's agent wins when there is one, so a room opened
+/// under a named agent keeps it; otherwise the server's default agent. An
+/// unreachable agent list yields an empty id, which the server rejects — a
+/// visible failure rather than a wrong-partition read.
+pub(crate) async fn room_agent_id(dash: &DashboardState, chat: Option<ChatState>) -> String {
+    if let Some(agent) = chat.and_then(|c| c.agent_id.get_untracked()) {
+        return agent;
     }
+    AgentsApi::list(dash)
+        .await
+        .map(|r| r.default_id)
+        .unwrap_or_default()
 }
 
 /// The room's live chat surface: resolves the room's server-side session,
@@ -304,13 +360,7 @@ pub async fn enter_project_room(
     project_name: String,
     locale: crate::i18n::Locale,
 ) {
-    let agent_id = match chat.agent_id.get_untracked() {
-        Some(a) => a,
-        None => AgentsApi::list(&dash)
-            .await
-            .map(|r| r.default_id)
-            .unwrap_or_default(),
-    };
+    let agent_id = room_agent_id(&dash, Some(chat)).await;
     // The room's canonical session, shared with every other member. `agent_id`
     // is only this Panel's proposal — a room somebody already opened answers
     // with the key it has.
@@ -320,19 +370,17 @@ pub async fn enter_project_room(
         // tab that sends nowhere.
         return;
     };
-    let conv = session_map
-        .conv_for_session_key(&key)
-        .unwrap_or_else(|| session_map.open_conversation(&agent_id, project_name));
-    session_map.activate(chat, conv);
+    // Reuse-or-open + activate + register, through the one writer every chat
+    // surface shares. The registration half matters more here than anywhere
+    // else: a room's canonical session belongs to every member, so a run
+    // started by a peer is the NORMAL case — without the identity
+    // `adopt_session` stamps, `conv_for_session_key` cannot find the tab and
+    // the peer's turn has nowhere to render.
+    session_map.adopt_session(chat, &agent_id, &key, || project_name);
     chat.clear_team_context();
     chat.room_project_id.set(Some(project_id.to_string()));
     chat.session_key.set(Some(key.clone()));
-    // Same wire as `ChatSidebar::on_select_session`, and it matters more here:
-    // a room's canonical session is shared with every other member, so a run
-    // started by a peer is the NORMAL case, not the exotic one. Without this
-    // the lookup two lines above never finds the tab it just opened and the
-    // peer's turn has nowhere to render.
-    session_map.set_session_key(conv, &key);
+
     // Mirror `ChatSidebar::on_select_session`: only hydrate when there is
     // nothing live to preserve — a conversation already open (background
     // `ChatState`) is at least as fresh as `chat.history`.

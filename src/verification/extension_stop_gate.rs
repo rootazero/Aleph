@@ -216,16 +216,28 @@ impl TurnVerifier for ExtensionStopHookVerifier {
     async fn verify(
         &self,
         ctx: &TurnVerifyContext<'_>,
-        _cancel: &CancellationToken,
+        cancel: &CancellationToken,
     ) -> VerifierVerdict {
         // Only gate actual stop attempts; mid-turn checks pay zero cost.
         if ctx.stop_reason.is_none() {
+            return VerifierVerdict::Continue;
+        }
+        // Honor cancellation at the synchronous boundaries we control.
+        // The hook executor (`crate::extension::hooks::executor`) does not
+        // accept a cancel token, so cancellation during an in-flight hook
+        // call cannot be interrupted from here — the hook's own per-action
+        // timeout is the only escape valve inside that window. Skipping the
+        // cancel checks entirely would silently ignore the trait contract.
+        if cancel.is_cancelled() {
             return VerifierVerdict::Continue;
         }
         let Some(manager) = crate::extension::try_extension_manager() else {
             return VerifierVerdict::Continue;
         };
         let executor = manager.hook_executor_snapshot().await;
+        if cancel.is_cancelled() {
+            return VerifierVerdict::Continue;
+        }
         if !executor.has_hooks_for(HookEvent::Stop) {
             return VerifierVerdict::Continue;
         }

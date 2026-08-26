@@ -21,7 +21,11 @@ fn eligible_skills_render_into_system_prompt() {
         eligible_skills: Some(vec![skill]),
         ..PromptConfig::default()
     };
-    let prompt = PromptBuilder::new(config).build_system_prompt(&[]);
+    // `build_system_prompt_parts` is the production Basic entry (the undivided
+    // `build_system_prompt` is lib-test-only now); joining the parts
+    // reproduces the same bytes.
+    let parts = PromptBuilder::new(config).build_system_prompt_parts(&[]);
+    let prompt: String = parts.iter().map(|p| p.content.as_str()).collect();
 
     assert!(prompt.contains("Available Skills"), "prompt: {prompt}");
     assert!(

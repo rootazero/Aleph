@@ -30,6 +30,37 @@ pub struct ProjectInfo {
     pub last_used_at: i64,
 }
 
+/// One entry in a room workspace listing.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct WorkspaceEntry {
+    pub name: String,
+    pub is_dir: bool,
+    #[serde(default)]
+    pub size: u64,
+}
+
+/// A room workspace listing: the entries, plus whether the room is bound at
+/// all. `root_bound: false` is a state, not a failure — the tab renders a
+/// bind prompt for it, which is why it cannot be flattened into an empty
+/// `entries` list.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct WorkspaceListing {
+    #[serde(default)]
+    pub root_bound: bool,
+    #[serde(default)]
+    pub entries: Vec<WorkspaceEntry>,
+}
+
+/// A text preview of one file under a room workspace.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct WorkspacePreview {
+    #[serde(default)]
+    pub content: String,
+    /// The server stopped at its byte cap. Rendered as a banner rather than
+    /// silently, so a reader never mistakes a cut file for the whole one.
+    #[serde(default)]
+    pub truncated: bool,
+}
 pub struct ProjectsApi;
 
 impl ProjectsApi {
@@ -210,6 +241,44 @@ impl ProjectsApi {
         let params = serde_json::json!({ "id": id, "user_id": user_id });
         let result = state.rpc_call("projects.member.remove", params).await?;
         parse_member_ids(result)
+    }
+    /// List one directory under the room's bound workspace. `rel_path` is
+    /// relative to the bound root; `None` means the root itself.
+    pub async fn workspace_list(
+        state: &DashboardState,
+        project_id: &str,
+        rel_path: Option<&str>,
+    ) -> Result<WorkspaceListing, String> {
+        let mut params = serde_json::Map::new();
+        params.insert(
+            "project_id".to_string(),
+            serde_json::Value::String(project_id.to_string()),
+        );
+        if let Some(rel) = rel_path {
+            params.insert(
+                "rel_path".to_string(),
+                serde_json::Value::String(rel.to_string()),
+            );
+        }
+        let result = state
+            .rpc_call("projects.workspace.list", serde_json::Value::Object(params))
+            .await?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
+    }
+
+    /// Preview one text file under the room's bound workspace.
+    pub async fn workspace_read(
+        state: &DashboardState,
+        project_id: &str,
+        rel_path: &str,
+    ) -> Result<WorkspacePreview, String> {
+        let result = state
+            .rpc_call(
+                "projects.workspace.read",
+                serde_json::json!({ "project_id": project_id, "rel_path": rel_path }),
+            )
+            .await?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
     }
 }
 

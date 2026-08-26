@@ -45,7 +45,13 @@ struct PanelWebView: UIViewRepresentable {
         webView.navigationDelegate = context.coordinator
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.scrollView.bounces = false
+        // Web Inspector lets a Mac Safari attached to a Release/TestFlight build
+        // read the panel's DOM and the (token-bearing) URL it is currently
+        // dialled at — gate the toggle to debug builds so production only ships
+        // the pairing screen and the webview itself.
+        #if DEBUG
         webView.isInspectable = true
+        #endif
         webView.load(URLRequest(url: url))
         return webView
     }
@@ -90,7 +96,7 @@ struct PanelWebView: UIViewRepresentable {
         func webView(
             _ webView: WKWebView,
             didReceive challenge: URLAuthenticationChallenge,
-            completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+            completionHandler: @escaping @MainActor @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
         ) {
             guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
                   let trust = challenge.protectionSpace.serverTrust else {
@@ -136,7 +142,7 @@ struct PanelWebView: UIViewRepresentable {
             subject: String,
             changedFrom: String?,
             trust: SecTrust,
-            completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+            completionHandler: @escaping @MainActor @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
         ) {
             let store = certStore
             var resolved = false

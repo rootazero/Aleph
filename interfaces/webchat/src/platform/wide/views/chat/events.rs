@@ -1,5 +1,9 @@
 //! Maps Gateway streaming events (run.*) to `ChatState` mutations.
 
+// The peer-echo predicate lives in `aleph-protocol`, beside the frame it
+// judges: the TUI has to answer the same question and cannot see this crate,
+// and two copies of a delivery predicate is two answers — the wrong one
+// renders a user their own message twice.
 use super::state::{
     ChatState, ContextUsage, ModelInfo, ProviderRetryNotice, RunCost, ToolSettlement,
 };
@@ -9,6 +13,7 @@ use crate::state::layout::WorkspaceState;
 use crate::state::notifications::{AskOptionView, AskQuestionView, PendingAskView};
 use crate::state::sessions::SessionMap;
 use crate::state::user_directory::UserDirectoryState;
+use aleph_protocol::peer_message_is_renderable;
 use leptos::prelude::*;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -690,8 +695,21 @@ fn resolve_target(
         // 3. Last resort, the foreground conversation — but only when it
         //    cannot be shown to belong to a DIFFERENT session. A conversation
         //    with no key yet (opened but never sent in) still qualifies, which
-        //    is what keeps a legacy core and any surface that does not
-        //    register its conversations working exactly as before.
+        //    is what keeps a legacy core (whose frames carry no `session_key`)
+        //    working exactly as before.
+        //
+        //    Note what step 3 does NOT do: there is no arm here for a surface
+        //    that registers no conversation at all. It needs an `active_conv()`
+        //    like every other step, so such a surface resolves `None` for
+        //    EVERY frame and receives no live turn whatsoever — no assistant
+        //    bubble, no tool rows, no final answer, nothing logged. This
+        //    comment used to claim the opposite, and the phone was exactly that
+        //    surface for as long as it existed; the claim was the only thing a
+        //    grep for the defect found. Registration is now the surface's job
+        //    (`SessionMap::ensure_active` / `adopt_session`), pinned by
+        //    `a_surface_that_registers_no_conversation_receives_no_frame` below
+        //    and by `PhoneChat`'s own `the_phone_chat_router_registers_a_conversation`.
+
         //
         // Step 3 used to be unconditional, and that was the "two terminals
         // stepping on each other" defect: a foreign run's whole turn —
@@ -751,37 +769,6 @@ fn resolve_target(
         sessions.settle_run(run_id);
     }
     target.map(|chat| (chat, is_foreground))
-}
-
-/// Should this client render a `session_user_message` echo as a bubble?
-///
-/// The question is "did somebody ELSE type this", and it is answered by author
-/// identity alone — deliberately NOT by `is_own_run` the way
-/// `session_update_needs_rehydrate` answers its own question. That predicate is
-/// safe there because it runs at turn *end*, long after `chat.send` returned
-/// the run id. This frame can arrive before that response does: `start_run`
-/// spawns execution and returns the id afterwards, so the two race, and the
-/// losing order renders the sender's message twice with nothing to clean it up
-/// (the terminal re-hydrate is skipped for one's own run). Author identity has
-/// no such window — it is known before the send, not after it.
-///
-/// Both sides must be known. An unattributed message (`author` empty) cannot be
-/// told apart from the viewer's own, and a viewer who does not yet know their
-/// own id (`users.me` still in flight, or a loopback caller with no P1 identity
-/// at all) cannot make the comparison. Either way the answer is "don't", which
-/// costs only the pre-existing behavior: the message still lands when the turn
-/// ends and `run.session_updated` re-hydrates.
-///
-/// Consequence worth naming: a second tab of the SAME user is not served by
-/// this. It sees its own id and skips, then re-hydrates at turn end exactly as
-/// it does today. Serving it would need a per-connection discriminator this
-/// frame deliberately does not carry — see the frame's doc for why author, not
-/// origin, is the field it was given.
-fn peer_message_is_renderable(author_user_id: &str, my_user_id: Option<&str>) -> bool {
-    if author_user_id.is_empty() {
-        return false;
-    }
-    my_user_id.is_some_and(|me| !me.is_empty() && me != author_user_id)
 }
 
 /// Subscribe to `run.*` events and dispatch to `ChatState`. Tool args/results
@@ -1109,6 +1096,12 @@ pub fn subscribe_run_events(
                 apply_context_gauge(chat, data);
             }
             "run_complete" => {
+                // The run is over: its trace-mode membership is no longer
+                // needed. Without this prune the set grew by one entry per
+                // run for the lifetime of the view.
+                if let Ok(mut runs) = trace_runs.lock() {
+                    runs.remove(run_id);
+                }
                 chat.complete_run(run_id);
                 // Promote the harness-authoritative final answer into the
                 // trailing bubble so it renders as the conversational reply —
@@ -1157,6 +1150,9 @@ pub fn subscribe_run_events(
                 }
             }
             "run_error" => {
+                if let Ok(mut runs) = trace_runs.lock() {
+                    runs.remove(run_id);
+                }
                 let error = data
                     .get("error")
                     .and_then(|e| e.as_str())
@@ -1542,6 +1538,49 @@ mod projection_tests {
         assert_eq!(usage.used_tokens, 42_000);
         assert_eq!(usage.window_tokens, 200_000);
         assert_eq!(usage.total_tokens, 55_000);
+    }
+
+    /// A surface that registers no conversation receives no frame at all.
+    ///
+    /// This is the mechanism, stated so it cannot be "fixed" by a silent
+    /// fallback: with nothing in `SessionMap`, all three of `resolve_target`'s
+    /// steps come up empty and the dispatcher returns before touching
+    /// `ChatState`. No assistant bubble, no tool rows, no final answer, nothing
+    /// logged — which is precisely what the phone did for as long as it
+    /// existed, because `ChatSidebar` (the only thing in the crate that opened
+    /// a conversation) is mounted behind `not_phone`.
+    ///
+    /// The answer is registration at the surface — `SessionMap::ensure_active`
+    /// at mount, `adopt_session` when a session is picked — NOT a fourth step
+    /// here. A fallback that invents a target is the "foreground hijack"
+    /// defect this function was rewritten to remove: it would render a foreign
+    /// run's whole turn into whatever the viewer happens to be reading and send
+    /// their next message to somebody else's session.
+    #[test]
+    fn a_surface_that_registers_no_conversation_receives_no_frame() {
+        let owner = Owner::new();
+        owner.set();
+        let sessions = crate::state::sessions::SessionMap::new();
+        let singleton = ChatState::new();
+
+        for (kind, run, key) in [
+            ("run_accepted", "run-a", Some("sk-a")),
+            ("response_chunk", "run-a", None),
+            ("agent_trace", "run-a", None),
+            ("run_complete", "run-a", None),
+        ] {
+            assert!(
+                resolve_target(&sessions, singleton, kind, run, key).is_none(),
+                "{kind} resolved a target with no conversation registered"
+            );
+        }
+
+        // One `ensure_active` is the whole difference.
+        sessions.ensure_active(singleton, "agent-a", || "New chat".into());
+        assert!(
+            resolve_target(&sessions, singleton, "run_accepted", "run-a", Some("sk-a")).is_some(),
+            "a registered surface must be able to route its own turn"
+        );
     }
 
     #[test]

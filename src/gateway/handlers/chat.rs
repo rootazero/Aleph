@@ -365,10 +365,21 @@ pub async fn handle_abort(
 
 /// Handle chat.history RPC request
 ///
-/// Returns the chat history for a session, plus two facts about that session's
-/// *current* state that the transcript alone cannot express: `active_run` (the
-/// turn in flight right now, or `null`) and `plan` (the durable execution list,
-/// or `null`).
+/// Returns the chat history for a session, plus three facts about that
+/// session's *current* state that the transcript alone cannot express:
+/// `active_run` (the turn in flight right now, or `null`),
+/// `active_run_elapsed_ms` (how long that turn has been going, or `null`) and
+/// `plan` (the durable execution list, or `null`).
+///
+/// # Why the age is a sibling field and not part of `active_run`
+///
+/// `active_run` is `string | null` on the wire and two clients read it that
+/// way — the TUI's three-way parse keys off its PRESENCE (absent means an
+/// older core, which is a different answer from "nothing running"), the Panel
+/// off its value. Widening it into an object would have broken both to add one
+/// number. It is also a DURATION rather than a start stamp: a client cannot
+/// subtract a timestamp without first answering "whose clock", and across
+/// machines that answer is not free.
 ///
 /// # Why `plan` rides here too
 ///
@@ -504,7 +515,27 @@ pub async fn handle_history(
             // function the prompt layer and the stop verifier also call, so a
             // client and the model can never be told different lists.
             let canonical = session_key.to_key_string();
-            let active_run = run_manager.and_then(|rm| rm.active_run_for_session(&canonical));
+            let active_run = run_manager
+                .as_ref()
+                .and_then(|rm| rm.active_run_for_session(&canonical));
+            // How long that run has been going, measured on the server's
+            // monotonic clock at this instant. A duration and not a start
+            // stamp: a client cannot subtract a timestamp without first
+            // answering "whose clock", and across machines that answer is not
+            // free. Without it a client joining mid-turn can only count from
+            // its own arrival, which understates a turn that has been running
+            // for minutes — the working indicator says 3s on a run in its
+            // fourth minute, and nothing on screen says the number is a
+            // floor.
+            //
+            // Two lookups, so the run can end between them; that answers
+            // `None`, which the client reads as "count from now" and is the
+            // behaviour it had before this field existed. The reverse would
+            // need the registry to carry timing it does not have.
+            let active_run_elapsed_ms = match (run_manager.as_ref(), active_run.as_deref()) {
+                (Some(rm), Some(id)) => rm.run_elapsed_ms(id).await,
+                _ => None,
+            };
             let plan = crate::builtin_tools::scratchpad::session_plan_snapshot(&canonical).await;
             // The conversation's own settings — usage mode, exec tier, thinking
             // depth, memory mode, model pin, cumulative tokens, working folder.
@@ -537,6 +568,12 @@ pub async fn handle_history(
                     "count": count,
                     "active_run": active_run,
                     "pending": pending,
+                    // A SIBLING of `active_run`, not a field inside it. That
+                    // key is `string | null` on the wire and two clients read
+                    // it that way — the TUI's three-way parse keys off its
+                    // PRESENCE, the Panel off its value — so widening it into
+                    // an object would break both to add one number.
+                    "active_run_elapsed_ms": active_run_elapsed_ms,
                     "plan": plan,
                     "session": session_snapshot,
                 }),
@@ -1377,6 +1414,24 @@ mod tests {
             assert!(
                 result["active_run"].is_null(),
                 "no run manager ⇒ no live turn this handler can confirm"
+            );
+            assert!(
+                result.get("active_run_elapsed_ms").is_some(),
+                "the age rides beside `active_run` and is emitted on the same \
+                 terms: absent would read to a client as an old core rather \
+                 than as `I could not measure it`"
+            );
+            assert!(
+                result["active_run_elapsed_ms"].is_null(),
+                "no run to measure ⇒ no age; a client reads null as `count from \
+                 now`, never as `it started now`"
+            );
+            assert!(
+                result["active_run"].is_string() || result["active_run"].is_null(),
+                "`active_run` stays `string | null` on the wire — the TUI's \
+                 three-way parse keys off its PRESENCE and the Panel off its \
+                 value, so widening it into an object to carry the age would \
+                 have broken both"
             );
             assert!(
                 result.get("plan").is_some(),

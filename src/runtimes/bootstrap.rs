@@ -120,13 +120,13 @@ pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
     }
 
     // 2. Re-probe to get binary path + version.
-    let probe_result = probe::probe(name);
+    let mut probe_result = probe::probe(name);
     if !probe_result.found {
         return Ok(BootstrapResult::PathNotFound {
             expected: format!("binary '{name}' on PATH after install"),
         });
     }
-    let bin_path = match probe_result.bin_path.clone() {
+    let bin_path = match probe_result.bin_path.take() {
         Some(path) => path,
         None => {
             return Ok(BootstrapResult::PathNotFound {

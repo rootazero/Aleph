@@ -463,6 +463,18 @@ impl AgentRunManager {
     pub fn active_run_for_session(&self, session_key: &str) -> Option<String> {
         self.execution_adapter.active_run_for_session(session_key)
     }
+
+    /// How long the run in flight has been running, in milliseconds.
+    ///
+    /// Same registry-vs-`active_runs` split as
+    /// [`Self::active_run_for_session`], from the other side: that one reads
+    /// the authoritative session registry because the run may not be ours,
+    /// and this one reads the adapter's run table because the registry holds
+    /// no timing. A run started by a CLI, channel or cron therefore answers
+    /// here as long as this process is the one executing it.
+    pub async fn run_elapsed_ms(&self, run_id: &str) -> Option<u64> {
+        self.execution_adapter.run_elapsed_ms(run_id).await
+    }
 }
 
 /// Why a turn could not be turned into a [`RunRequest`].
@@ -1124,12 +1136,33 @@ pub(crate) async fn caller_may_address_run(
     }
 }
 
+/// The engine's run status as `agent.status` reports it: the wire word, and
+/// the reason when there is one.
+///
+/// The exhaustive match is the point. A new `RunStatus` variant is a compile
+/// error here, which forces whoever adds it to answer "what word does a client
+/// see" rather than inheriting a `_ =>` arm — and an unrecognized word is read
+/// by every client as "not running" (see [`aleph_protocol::RunPhase`]).
+///
+/// The reason used to be dropped. All four states flattened to a bare word, so
+/// a client told `failed` had nothing to show its user but that word, while the
+/// engine held the provider error the whole time.
+fn reported_status(status: &RunStatus) -> (&'static str, Option<String>) {
+    use aleph_protocol::AgentRunStatusReport as Report;
+    match status {
+        RunStatus::Running => (Report::RUNNING, None),
+        RunStatus::Completed => (Report::COMPLETED, None),
+        RunStatus::Failed(reason) => (Report::FAILED, Some(reason.clone())),
+        RunStatus::Cancelled => (Report::CANCELLED, None),
+    }
+}
+
 pub async fn handle_status(
     request: JsonRpcRequest,
     run_manager: Arc<AgentRunManager>,
     session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
 ) -> JsonRpcResponse {
-    let params: RunIdParams = match parse_params(&request) {
+    let params: aleph_protocol::AgentRunStatusRequest = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -1143,19 +1176,23 @@ pub async fn handle_status(
 
     match run_manager.get_run_status(&params.run_id).await {
         Some(state) => {
-            let status_str = match &state.status {
-                RunStatus::Running => "running",
-                RunStatus::Completed => "completed",
-                RunStatus::Failed(_) => "failed",
-                RunStatus::Cancelled => "cancelled",
-            };
+            let (status, error) = reported_status(&state.status);
+            // Built FROM the shared contract type, not from a `json!` literal:
+            // a client reads this through `aleph_protocol::AgentRunStatusReport`,
+            // and constructing the response from that type makes both halves of
+            // the drift impossible at compile time — a field the client expects
+            // and the server stopped sending, and a field the server sends that
+            // nothing reads. A parse-side assertion can only ever catch the
+            // first, which is how a whole `AgentEnv` once went out on
+            // `workspace.get`.
             JsonRpcResponse::success(
                 request.id,
-                json!({
-                    "run_id": state.run_id,
-                    "session_key": state.session_key.to_key_string(),
-                    "status": status_str,
-                    "elapsed_ms": state.started_at.elapsed().as_millis() as u64,
+                json!(aleph_protocol::AgentRunStatusReport {
+                    run_id: state.run_id,
+                    session_key: state.session_key.to_key_string(),
+                    status: status.to_string(),
+                    elapsed_ms: state.started_at.elapsed().as_millis() as u64,
+                    error,
                 }),
             )
         }
@@ -1305,6 +1342,80 @@ mod tests {
             serde_json::from_value(serde_json::to_value(&server).expect("serialize"))
                 .expect("parse");
         assert_eq!(parsed.session_key, "agent:main:main:s2");
+    }
+
+    /// Every state the engine can be in has a word the shared contract reads.
+    ///
+    /// `RunPhase::Unrecognized` is the client's honest "I have never heard of
+    /// this", and it settles a `/btw` overlay rather than leaving it spinning —
+    /// correct for an old client against a new gateway, and a silent
+    /// mis-report if the *current* gateway ever emits a word its own contract
+    /// does not name. The `reported_status` match is exhaustive, so a new
+    /// `RunStatus` variant is a compile error there; this is what stops the
+    /// author answering that compile error with a word nobody reads.
+    #[test]
+    fn every_engine_run_status_has_a_word_the_shared_contract_recognizes() {
+        use aleph_protocol::{AgentRunStatusReport, RunPhase};
+
+        let cases = [
+            (RunStatus::Running, RunPhase::Running),
+            (RunStatus::Completed, RunPhase::Completed),
+            (RunStatus::Failed("boom".into()), RunPhase::Failed),
+            (RunStatus::Cancelled, RunPhase::Cancelled),
+        ];
+        for (status, expected) in cases {
+            let (word, _) = reported_status(&status);
+            let report = AgentRunStatusReport {
+                status: word.to_string(),
+                ..AgentRunStatusReport::default()
+            };
+            assert_eq!(
+                report.phase(),
+                expected,
+                "{status:?} is reported as {word:?}, which no client can read"
+            );
+        }
+    }
+
+    /// A failure reaches the client with its reason attached.
+    ///
+    /// The wire dropped it for as long as this handler existed: `RunStatus`
+    /// carries the provider error, the response flattened to a bare `"failed"`,
+    /// and a client that had to explain the failure to a human had only the
+    /// word. Every other state carries no reason — `Some("")` there would be a
+    /// failure with nothing to say.
+    #[test]
+    fn only_a_failed_run_reports_a_reason_and_it_reports_the_real_one() {
+        assert_eq!(
+            reported_status(&RunStatus::Failed("provider 429".into())).1,
+            Some("provider 429".to_string())
+        );
+        for quiet in [
+            RunStatus::Running,
+            RunStatus::Completed,
+            RunStatus::Cancelled,
+        ] {
+            assert_eq!(
+                reported_status(&quiet).1,
+                None,
+                "{quiet:?} invented a reason"
+            );
+        }
+    }
+
+    /// The request half of the same contract. `agent.status` is the only
+    /// run-id-keyed read a thin client has, and the `/btw` overlay is the
+    /// caller that cannot fall back to a session key — a side question runs on
+    /// a derived session whose key is hashed server-side.
+    #[test]
+    fn the_shared_status_request_deserializes_into_the_handler_params() {
+        let shared = aleph_protocol::AgentRunStatusRequest {
+            run_id: "r-1".into(),
+        };
+        let wire = serde_json::to_value(&shared).expect("serialize");
+        let parsed: aleph_protocol::AgentRunStatusRequest =
+            serde_json::from_value(wire.clone()).unwrap_or_else(|e| panic!("{e}: {wire}"));
+        assert_eq!(parsed.run_id, "r-1");
     }
 
     /// The minimal request — a client that only has text and a session — must

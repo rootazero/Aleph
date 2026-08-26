@@ -76,6 +76,40 @@ pub fn try_acquire(data_dir: &Path) -> std::io::Result<AcquireOutcome> {
     let lock_path = data_dir.join(LOCK_FILENAME);
     let holder_path = data_dir.join(HOLDER_FILENAME);
 
+    // Refuse a symlink at `lock_path`. The path is fixed (`<data_dir>/aleph.lock`)
+    // and only this process should ever create the file, so a symlink there is
+    // either an attacker-planted redirect or a previous failed install — both
+    // of which must NOT be silently followed. Following the symlink would
+    // (a) lock an attacker-controlled file (DoS: lock against the real
+    // aleph.lock becomes a lock against their file), or (b) let the sidecar
+    // rename target an unexpected inode. `O_NOFOLLOW` is POSIX; Windows has
+    // no portable equivalent, so non-Unix falls back to the previous behavior.
+    #[cfg(unix)]
+    let file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&lock_path)
+        {
+            Ok(f) => f,
+            Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!(
+                        "refusing to use lock file at {}: a symlink is present \
+                         where a regular file is required (possible tampering)",
+                        lock_path.display()
+                    ),
+                ));
+            }
+            Err(e) => return Err(e),
+        }
+    };
+    #[cfg(not(unix))]
     let file = std::fs::OpenOptions::new()
         .create(true)
         .read(true)
@@ -250,5 +284,29 @@ mod tests {
         let diag = diagnose_holder(dir.path()).expect("file should exist");
         assert_eq!(diag.pid as u32, std::process::id());
         assert!(diag.process_alive);
+    }
+
+    /// A symlink planted at `aleph.lock` is either an attacker redirect or a
+    /// previous failed install — either way, locking it (which would otherwise
+    /// follow the link and lock the attacker-controlled target inode) must be
+    /// refused, not silently followed.
+    #[cfg(unix)]
+    #[test]
+    fn try_acquire_refuses_a_symlink_at_the_lock_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock_path = dir.path().join(LOCK_FILENAME);
+        // Plant a regular file elsewhere and symlink the lock path at it.
+        // `target_file` is a real 0700 file owned by us, so the only thing
+        // that distinguishes the attack from a benign lock file is the symlink.
+        let target = dir.path().join("attacker_target");
+        std::fs::write(&target, b"x").unwrap();
+        std::os::unix::fs::symlink(&target, &lock_path).unwrap();
+
+        let err = try_acquire(dir.path()).expect_err("a symlink at the lock path must be refused");
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(
+            err.to_string().contains("symlink"),
+            "refusal must name the defect, got: {err}"
+        );
     }
 }

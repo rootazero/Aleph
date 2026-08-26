@@ -30,8 +30,6 @@ pub struct AgentInstanceConfig {
     pub max_loops: u32,
     /// Maximum total token usage per request (loop guard, None = use default)
     pub max_tokens: Option<usize>,
-    /// Custom system prompt (optional)
-    pub system_prompt: Option<String>,
     /// Tool whitelist (empty = all allowed)
     pub tool_whitelist: Vec<String>,
     /// Tool blacklist
@@ -62,7 +60,6 @@ impl Default for AgentInstanceConfig {
             model: "claude-sonnet-4-5".to_string(),
             max_loops: 100,
             max_tokens: None,
-            system_prompt: None,
             tool_whitelist: vec![],
             tool_blacklist: vec![],
             // Both roots come from `agent_resolver` — the same functions the
@@ -94,13 +91,20 @@ impl AgentInstanceConfig {
     /// Create from a resolved agent definition.
     ///
     /// Maps `ResolvedAgent` fields to `AgentInstanceConfig`:
-    /// - `system_prompt` <- `soul_md` (workspace SOUL.md content), falls back to `agents_md`
     /// - `tool_whitelist` <- skills
     /// - workspace <- `workspace_path`
+    ///
+    /// Note: a prior shape carried an eagerly-read `system_prompt` field
+    /// from `ResolvedAgent.soul_md / agents_md`. That copy had zero
+    /// production readers (the field was only consumed by tests); real
+    /// system-prompt injection happens through `IdentityFiles::load` in
+    /// `harness_bridge::prompt_build`, which reads the files fresh every
+    /// turn and feeds them to `SoulLayer` / `ProfileLayer` /
+    /// `IdentityFilesLayer`. The field is gone for good — anything that
+    /// wants to add a system-prompt override should add a layer, not a
+    /// boot-time string.
     #[must_use]
     pub fn from_resolved(agent: &crate::config::agent_resolver::ResolvedAgent) -> Self {
-        // Prioritize SOUL.md over AGENTS.md for system prompt
-        let system_prompt = agent.soul_md.clone().or_else(|| agent.agents_md.clone());
         Self {
             agent_id: agent.id.clone(),
             display_name: Some(agent.name.clone()),
@@ -108,7 +112,6 @@ impl AgentInstanceConfig {
             model: agent.model.clone(),
             max_loops: 100,
             max_tokens: None,
-            system_prompt,
             tool_whitelist: agent.skills.clone(),
             tool_blacklist: agent.skills_blacklist.clone(),
             agent_dir: agent.agent_dir.clone(),
@@ -1332,8 +1335,6 @@ mod tests {
             workspace_path: PathBuf::from("/tmp/test-workspace"),
             agent_dir: PathBuf::from("/tmp/test-agents/coding"),
             profile: ProfileConfig::default(),
-            soul_md: Some("You are a coding expert.".to_string()),
-            agents_md: Some("Be a great coder.".to_string()),
             model: "claude-opus-4-6".to_string(),
             skills: vec!["git_*".to_string(), "fs_*".to_string()],
             skills_blacklist: vec![],
@@ -1347,11 +1348,10 @@ mod tests {
         assert_eq!(config.agent_id, "coding");
         assert_eq!(config.workspace, PathBuf::from("/tmp/test-workspace"));
         assert_eq!(config.model, "claude-opus-4-6");
-        // soul_md takes priority over agents_md
-        assert_eq!(
-            config.system_prompt.as_deref(),
-            Some("You are a coding expert.")
-        );
+        // The `soul_md` / `agents_md` -> `system_prompt` copy is gone; that
+        // boot-time read chain had zero production readers. Real persona
+        // injection happens at runtime through `IdentityFiles::load` in
+        // `harness_bridge::prompt_build`, not through `AgentInstanceConfig`.
         assert_eq!(config.tool_whitelist, vec!["git_*", "fs_*"]);
         assert!(config.tool_blacklist.is_empty());
         assert_eq!(config.max_loops, 100);
@@ -1369,8 +1369,6 @@ mod tests {
             workspace_path: PathBuf::from("/tmp/test-workspace"),
             agent_dir: PathBuf::from("/tmp/test-agents/restricted"),
             profile: ProfileConfig::default(),
-            soul_md: None,
-            agents_md: None,
             model: "claude-sonnet-4-5".to_string(),
             skills: vec!["*".to_string()],
             skills_blacklist: vec!["bash".to_string(), "code_exec".to_string()],

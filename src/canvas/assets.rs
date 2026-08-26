@@ -72,7 +72,9 @@ fn mime_for_ext(ext: &str) -> Option<&'static str> {
 /// from the allowlist table. This is both the traversal gate (no separators,
 /// no dots beyond the one split, nothing our writer could not have minted)
 /// and the mime resolver for [`CanvasStore::read_asset`].
-fn parse_asset_id(asset_id: &str) -> Option<&'static str> {
+/// `pub(super)` so `validate.rs` can reject garbage `asset_id`s at upsert
+/// time, before they are committed to doc.json.
+pub(super) fn parse_asset_id(asset_id: &str) -> Option<&'static str> {
     let (digest, ext) = asset_id.split_once('.')?;
     if digest.len() != 64
         || !digest
@@ -136,7 +138,27 @@ impl CanvasStore {
         }
         let dir = self.assets_dir(id);
         let path = dir.join(&asset_id);
-        if tokio::fs::metadata(&path).await.is_ok() {
+        // Existence check must distinguish "regular file present" from
+        // "something else at this path" (a directory placed by an operator
+        // or a symlink would otherwise be treated as a dedupe hit and the
+        // supplied bytes would never be written — silent data loss).
+        // `metadata().is_ok()` accepts non-file types; we gate on
+        // `is_file()` so the dedupe branch only fires when an actual file
+        // already sits at the canonical name.
+        let dedupe_hit = match tokio::fs::metadata(&path).await {
+            Ok(md) if md.is_file() => true,
+            Ok(_) => {
+                // A directory / symlink / fifo occupies the path. Refuse
+                // to silently dedupe; fall through to write the bytes over
+                // top (atomic_write_bytes will replace the existing entry
+                // atomically — the bytes the caller supplied are stored).
+                warn!(canvas = %id, asset = %asset_id,
+                    "canvas: non-file entry at asset path; treating as miss");
+                false
+            }
+            Err(_) => false,
+        };
+        if dedupe_hit {
             // Dedupe hit. Re-touch the mtime so the orphan sweep's grace
             // window re-arms: without this, put(old orphan) → sweep → apply
             // would land a dangling reference. Best-effort — a failed touch
@@ -185,9 +207,22 @@ impl CanvasStore {
         let path = self.assets_dir(id).join(asset_id);
         match tokio::fs::read(&path).await {
             Ok(bytes) => Ok((mime.to_string(), bytes)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(CanvasError::NotFound(
-                format!("asset {asset_id} in canvas {id}"),
-            )),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Distinguish "canvas missing" from "asset missing in a
+                // present canvas" so a caller that pasted the wrong canvas
+                // id is told which one was wrong. The asset id is already
+                // verified to the canonical shape, so the parent directory's
+                // existence is the only meaningful signal left.
+                let canvas_dir = self.assets_dir(id);
+                match tokio::fs::metadata(&canvas_dir).await {
+                    Ok(_) => Err(CanvasError::NotFound(format!(
+                        "asset {asset_id} in canvas {id}"
+                    ))),
+                    Err(_) => {
+                        Err(CanvasError::NotFound(format!("canvas {id}")))
+                    }
+                }
+            }
             Err(e) => Err(CanvasError::Internal(format!(
                 "failed to read asset {asset_id}: {e}"
             ))),

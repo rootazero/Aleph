@@ -172,7 +172,6 @@ pub struct ProvisionRequest {
     pub workspace: std::path::PathBuf,
     pub agent_dir: std::path::PathBuf,
     pub model: String,
-    pub system_prompt: Option<String>,
     pub toolset: MemberToolset,
 }
 
@@ -202,7 +201,6 @@ pub async fn register_member_agent(
         agent_id: req.agent_id.clone(),
         workspace: req.workspace,
         model: req.model.clone(),
-        system_prompt: req.system_prompt,
         agent_dir: req.agent_dir,
         tool_whitelist: req.toolset.allowed.clone(),
         tool_blacklist: req.toolset.denied.clone(),

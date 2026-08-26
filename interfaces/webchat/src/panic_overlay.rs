@@ -90,10 +90,58 @@ fn persist_crash(message: &str, stack: &str) -> usize {
 }
 
 /// Current page URL, or an empty string if unavailable.
+///
+/// The URL is dropped into the `aleph.panel.crashes` localStorage ring buffer
+/// on every panic. The Page may carry credentials as query params
+/// (`?token=…`, `?bt=…`) before the WS handshake runs `scrub_credentials_from_url`,
+/// and that ring buffer survives a `clear_credentials()` call (it scrubs
+/// sessionStorage, not localStorage). Strip the credential-bearing params
+/// here so a panic during cold-start cannot leak the gateway token into a
+/// key the XSS blast radius already covers.
 fn current_url() -> String {
-    web_sys::window()
+    let raw = web_sys::window()
         .and_then(|w| w.location().href().ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    strip_credentials(&raw)
+}
+
+/// Drop `?token=…` and `?bt=…` (and their `&` siblings) from a URL, mirroring
+/// `context::strip_params` so the format the crash ring stores cannot be
+/// distinguished from a post-handshake URL.
+fn strip_credentials(url: &str) -> String {
+    let Some(q_start) = url.find('?') else {
+        return url.to_string();
+    };
+    let (path, query_with_fragment) = url.split_at(q_start);
+    // Strip the leading `?` so we can split on `&` / `#` cleanly.
+    let rest = &query_with_fragment[1..];
+    let (query, fragment) = match rest.find('#') {
+        Some(hash) => (&rest[..hash], &rest[hash..]),
+        None => (rest, ""),
+    };
+    let mut kept: Vec<&str> = Vec::with_capacity(query.len() / 8);
+    let mut changed = false;
+    for pair in query.split('&') {
+        if pair.is_empty() {
+            kept.push(pair);
+            continue;
+        }
+        let key = pair.split('=').next().unwrap_or(pair);
+        if key == "token" || key == "bt" {
+            changed = true;
+            continue;
+        }
+        kept.push(pair);
+    }
+    if !changed {
+        return url.to_string();
+    }
+    let joined = kept.join("&");
+    if joined.is_empty() {
+        format!("{path}{fragment}")
+    } else {
+        format!("{path}?{joined}{fragment}")
+    }
 }
 
 fn mount_overlay(message: &str, stack: &str, crash_count: usize) {
@@ -299,5 +347,29 @@ mod tests {
         let arr: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["message"], "a");
+    }
+
+    #[test]
+    fn strip_credentials_drops_token_and_bt() {
+        // Cold-start paths hand the URL to `current_url` before
+        // `scrub_credentials_from_url` runs; the crash log must not keep the
+        // bare value alongside an unrelated parameter.
+        assert_eq!(
+            strip_credentials("https://panel/?token=sk-abc&bt=bt-xyz"),
+            "https://panel/"
+        );
+        assert_eq!(
+            strip_credentials("https://panel/?token=sk-abc&step=2"),
+            "https://panel/?step=2"
+        );
+        assert_eq!(
+            strip_credentials("https://panel/?bt=bt-xyz#hash"),
+            "https://panel/#hash"
+        );
+        assert_eq!(
+            strip_credentials("https://panel/?other=ok"),
+            "https://panel/?other=ok"
+        );
+        assert_eq!(strip_credentials("https://panel/"), "https://panel/");
     }
 }

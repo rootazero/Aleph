@@ -32,11 +32,25 @@ pub(super) fn format_size(bytes: u64) -> String {
 ///
 /// Errors are silent (the chip simply never appears) — the previous
 /// implementation behaved the same way and the alternative is a noisy
+/// Maximum size per attachment in bytes. Sized to be friendly to multimodal
+/// providers (Anthropic / OpenAI cap image uploads around 5 MB; PDFs/doc
+/// containers typically accepted up to ~10 MB) while still preventing the
+/// browser tab from being killed by a user dragging in a video. Past the
+/// cap we skip the file rather than read-and-discard — the data is in
+/// memory the moment `read_as_data_url` lands, and the whole point of the
+/// gate is to never let the bytes near the heap.
+pub(crate) const MAX_ATTACHMENT_SIZE_BYTES: u64 = 10 * 1024 * 1024;
+/// Maximum number of attachments in a single send. Keeps the encoded
+/// payload's base64 expansion (~33 % over raw) from blowing past the
+/// gateway's per-request budget and keeps the UI chip strip legible.
+pub(crate) const MAX_ATTACHMENT_COUNT: usize = 10;
+
 /// banner for permissions that the browser already surfaces.
 pub(crate) fn read_file_list_into(
     file_list: &web_sys::FileList,
     attachments: RwSignal<Vec<PendingAttachment>>,
 ) {
+    let mut accepted: usize = attachments.with_untracked(|list| list.len());
     for i in 0..file_list.length() {
         let Some(file) = file_list.get(i) else {
             continue;
@@ -44,6 +58,27 @@ pub(crate) fn read_file_list_into(
         let name = file.name();
         let mime_type = file.type_();
         let size = file.size() as u64;
+
+        if size > MAX_ATTACHMENT_SIZE_BYTES {
+            web_sys::console::warn_1(
+                &format!(
+                    "skipping attachment '{name}': {size} bytes exceeds the {} MB limit",
+                    MAX_ATTACHMENT_SIZE_BYTES / (1024 * 1024)
+                )
+                .into(),
+            );
+            continue;
+        }
+        if accepted >= MAX_ATTACHMENT_COUNT {
+            web_sys::console::warn_1(
+                &format!(
+                    "skipping attachment '{name}': already at the {MAX_ATTACHMENT_COUNT}-file limit"
+                )
+                .into(),
+            );
+            continue;
+        }
+        accepted += 1;
 
         let reader = match web_sys::FileReader::new() {
             Ok(r) => r,

@@ -6,12 +6,12 @@
 use std::time::{Duration, Instant};
 
 use aleph_protocol::{
-    summarize_tool_input, AgentTracePresentationPreset, AgentTraceToolResult, AskUserQuestion,
-    StreamEvent,
+    peer_message_is_renderable, summarize_tool_input, AgentTracePresentationPreset,
+    AgentTraceToolResult, AskUserQuestion, StreamEvent,
 };
 
 use super::super::slash::ToolProgressMode;
-use super::{Action, AppState, AskDialogView, ChatMessage};
+use super::{row_timestamp, Action, ActiveRunJoin, AppState, AskDialogView, ChatMessage};
 
 /// Bound on how many `(run_id, session_key)` pairs [`AppState`] remembers,
 /// learned one per `RunAccepted`. A background/cron/subagent-heavy install
@@ -21,7 +21,7 @@ use super::{Action, AppState, AskDialogView, ChatMessage};
 /// `AppState::frame_belongs_here` already keeps rather than drops. That is
 /// the safe direction: capping this can let a few stragglers back in, it can
 /// never cause a frame that is actually ours to be dropped.
-const RUN_SESSION_CAP: usize = 256;
+pub(super) const RUN_SESSION_CAP: usize = 256;
 
 /// The run id `handle_gateway_event`'s cross-session guard should check for
 /// `event`, or `None` for a frame the guard does not apply to.
@@ -140,18 +140,74 @@ impl AppState {
 
     /// Whether a frame naming `run_id` belongs on THIS screen right now.
     ///
-    /// Only a run id whose recorded home session does not match
-    /// [`AppState::session_key`] *at this moment* is dropped. An id this
-    /// screen has never learned about is kept: "I cannot tell" must not
-    /// become "not mine", or a run whose `RunAccepted` raced past this frame
-    /// (or a core too old to send one at all) goes silently missing from its
-    /// own transcript.
+    /// Three answers, in the order the arms take them:
+    ///
+    /// - **This screen's own in-flight run.** Kept unconditionally, so the FIFO
+    ///   eviction below can never drop the one turn the user is watching.
+    /// - **A run whose home session is recorded.** Compared against
+    ///   [`AppState::session_key`] *at this moment* rather than baked in at
+    ///   learn time, so the same run correctly resumes if a later `/session`
+    ///   switch returns to its actual session.
+    /// - **An id this screen has never learned about.** Answered by
+    ///   [`AppState::session_reconciled`]: before the server has said which run
+    ///   is in flight here, "I cannot tell" must not become "not mine" — a run
+    ///   whose `RunAccepted` raced past this frame, or a core too old to send
+    ///   one, would go silently missing from its own transcript. Once it has
+    ///   said so, an unheard-of id can only be somebody else's, and keeping it
+    ///   is how another terminal's turn leaked into this transcript whenever
+    ///   this client started up mid-run.
     #[must_use]
     pub fn frame_belongs_here(&self, run_id: &str) -> bool {
+        if self.current_run.as_deref() == Some(run_id) {
+            return true;
+        }
         match self.run_sessions.iter().find(|(id, _)| id == run_id) {
             Some((_, session_key)) => *session_key == self.session_key,
-            None => true,
+            None => !self.session_reconciled,
         }
+    }
+
+    /// Adopt the run the server reports in flight on this screen's session.
+    ///
+    /// Called by `commands::attach_session` with `chat.history`'s `active_run`.
+    /// `Some` binds it; `None` records only that the question was answered.
+    ///
+    /// # What this closes
+    ///
+    /// Attaching to a session somebody else is driving — a second terminal, the
+    /// Panel, a channel, cron, or a run `resume_coordinator` re-triggered after
+    /// a crash — used to leave `current_run` empty. The transcript looked
+    /// finished, the status bar said idle, and Esc / Ctrl-C had nothing to
+    /// cancel, so this screen could watch a turn it was unable to stop. It is
+    /// also the positive half of [`Self::session_reconciled`]: without it,
+    /// reconciling would drop the frames of the very run this screen wants.
+    pub fn adopt_active_run(&mut self, active: Option<ActiveRunJoin>) {
+        self.session_reconciled = true;
+        let Some(ActiveRunJoin { run_id, elapsed_ms }) = active else {
+            return;
+        };
+        let session_key = self.session_key.clone();
+        self.mark_run_session(run_id.clone(), session_key);
+        self.current_run = Some(run_id);
+        // Back-dated by the age the SERVER measured, so the working indicator
+        // reports the turn's age rather than this screen's attachment. Without
+        // the reading — an older gateway, or a run that left the engine's table
+        // between the two lookups behind that field — this falls back to now,
+        // which is what this line always did: a floor, understated on purpose,
+        // and still better than leaving the indicator off.
+        //
+        // `checked_sub` rather than `-`: subtracting past the start of the
+        // monotonic clock panics, and no reading off a wire may be able to
+        // take the whole client down.
+        self.run_started_at = Some(
+            elapsed_ms
+                .and_then(|ms| Instant::now().checked_sub(Duration::from_millis(ms)))
+                .unwrap_or_else(Instant::now),
+        );
+        self.current_run_uses_agent_trace = false;
+        self.current_run_trace_summary_applied = false;
+        self.turn_streamed_len = 0;
+        self.run_rendered_assistant_text = false;
     }
 
     /// Apply one frame belonging to a side question to the `/btw` overlay.
@@ -255,9 +311,19 @@ impl AppState {
             return self.apply_btw_frame(event);
         }
 
-        if let Some(run_id) = run_scoped_id(&event) {
-            if !self.frame_belongs_here(run_id) {
-                return Action::None;
+        // `RunAccepted` is exempt, and has to be: it carries its own
+        // `session_key`, so it is the frame that TEACHES `run_sessions` which
+        // session a run is home to, and its own arm below drops it when that
+        // session is not this screen's. Guarding it was harmless while the
+        // guard failed open on unknown ids; once it can answer "not mine" it
+        // would drop the teaching frame itself, and this screen would then
+        // never learn about any run it did not start — including on a later
+        // `/session` switch to that run's actual session.
+        if !matches!(event, StreamEvent::RunAccepted { .. }) {
+            if let Some(run_id) = run_scoped_id(&event) {
+                if !self.frame_belongs_here(run_id) {
+                    return Action::None;
+                }
             }
         }
 
@@ -524,6 +590,61 @@ impl AppState {
                 // core's, printed verbatim — this client does not own that
                 // vocabulary and must not paraphrase it.
                 self.add_system_message(format!("The agent's question ended ({outcome})."));
+                Action::ScrollToBottomIfAutoScroll
+            }
+
+            // A room peer's message became a transcript row. Session-keyed and
+            // run-less by design: the run that produced it is somebody else's,
+            // which is exactly why this screen cannot already see the message.
+            //
+            // What it closes: in a shared project room a peer's `RunAccepted`
+            // carries THIS session's key, so the guard admits it and the answer
+            // streams in with no question above it. The row itself only arrived
+            // on the next attach — this client never re-hydrates mid-session —
+            // so the question could be minutes behind its answer, or never
+            // appear at all in that sitting.
+            //
+            // Outside a room the frame is not published (the producer skips an
+            // unattributed author), so a single-user install never reaches here.
+            StreamEvent::SessionUserMessage {
+                session_key,
+                author_user_id,
+                content,
+                timestamp,
+                ..
+            } => {
+                // Belongs to another conversation: dropped, exactly as
+                // `frame_belongs_here` drops a foreign run's frames. This
+                // screen holds one transcript and no session list.
+                if session_key != self.session_key {
+                    return Action::None;
+                }
+                // "Somebody else typed this" — the shared delivery predicate,
+                // not a local re-derivation, and not run ownership (this frame
+                // races the `chat.send` that would teach this screen its own
+                // run id). Unknown on either side means don't, which is what
+                // this client did before the frame existed.
+                if !peer_message_is_renderable(&author_user_id, self.my_user_id.as_deref()) {
+                    return Action::None;
+                }
+                let row = ChatMessage::User {
+                    content,
+                    timestamp: row_timestamp(Some(&timestamp)),
+                };
+                // Placed BEFORE a bubble that is still streaming. The peer's
+                // run may have opened its assistant message already, and a
+                // question rendered under its own answer reads as a reply to
+                // it. Anything settled stays above, so this only ever moves the
+                // row past the one bubble that is still being written.
+                match self.messages.last() {
+                    Some(ChatMessage::Assistant {
+                        is_streaming: true, ..
+                    }) => {
+                        let at = self.messages.len() - 1;
+                        self.messages.insert(at, row);
+                    }
+                    _ => self.messages.push(row),
+                }
                 Action::ScrollToBottomIfAutoScroll
             }
 

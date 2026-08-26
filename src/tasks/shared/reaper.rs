@@ -291,13 +291,15 @@ impl HistoryReap for DedupHistoryReaper {
     }
 
     async fn reap(&self) -> Result<u64, String> {
-        // `DedupEngine::cleanup` returns no count today, so we report 0;
-        // callers see "swept" only if they observe row counts elsewhere.
-        // Mirrors the openclaw cleanup contract.
-        self.engine
+        // Surface the deleted-row count instead of hard-coding 0 so the
+        // operator-visible log distinguishes 'no rows older than the
+        // retention window' from 'sweeper broken'. Mirrors
+        // `HeartbeatHistoryReaper` / `CronHistoryReaper`.
+        let deleted = self
+            .engine
             .cleanup(self.retention_secs.saturating_mul(1000))
-            .await;
-        Ok(0)
+            .await?;
+        Ok(deleted as u64)
     }
 }
 

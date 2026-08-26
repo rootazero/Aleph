@@ -383,6 +383,32 @@ pub fn project_visible_to(project_id: &str, actor: Option<&str>) -> bool {
     }
 }
 
+/// Whether `actor` may receive a `projects.changed` event frame for
+/// `project_id` — [`project_visible_to`] widened by exactly one case.
+///
+/// A roster member sees the frame like any other project-scoped fact. In
+/// addition, the user named by `affected_user` sees it too: that field is
+/// set ONLY on a member-removal mutation
+/// (`GatewayEventFrame::ProjectsChanged::affected_user`), and by the time the
+/// frame is published the roster projection no longer admits them — without
+/// this second arm the one person who most needs to learn they were removed
+/// (so their client drops the room from its list) would be the one person
+/// [`project_visible_to`] now refuses.
+///
+/// `actor == None` is unrestricted, matching [`project_visible_to`] and
+/// every other predicate in this module.
+#[must_use]
+pub fn project_or_removal_visible_to(
+    project_id: &str,
+    affected_user: Option<&str>,
+    actor: Option<&str>,
+) -> bool {
+    let Some(caller) = actor else {
+        return true;
+    };
+    project_visible_to(project_id, Some(caller)) || affected_user == Some(caller)
+}
+
 /// Whiteboard visibility: the owner sees it; a project-linked canvas is
 /// visible to every roster member. `actor == None` (cron / internal /
 /// in-process callers) is unrestricted, same convention as the partition

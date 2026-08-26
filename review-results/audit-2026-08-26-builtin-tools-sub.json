@@ -1,0 +1,161 @@
+{
+  "module": "src/builtin_tools (subdirs)",
+  "scanned_files": 164,
+  "total_loc": 63122,
+  "findings": [
+    {
+      "id": "BTS-1",
+      "severity": "High",
+      "category": "Security",
+      "file": "src/builtin_tools/file_ops/write.rs",
+      "line": 174,
+      "context": "FileWriteTool::call → execute_write",
+      "title": "file_write has no upper bound on content size (DoS)",
+      "before": "        let result = execute_write(\n            path,\n            &args.content,\n            args.create_parents,\n            &self.denied_paths,\n            output_dir_ref,\n        )\n        .await;",
+      "after": "        // Defense-in-depth: cap mirror the apply_patch / read tools, so a\n        // runaway model cannot flood the filesystem with a multi-GB blob.\n        const MAX_WRITE_CONTENT_BYTES: usize = 32 * 1024 * 1024;\n        if args.content.len() > MAX_WRITE_CONTENT_BYTES {\n            notify_tool_result(Self::NAME, \"content too large\", false);\n            return Err(ToolError::InvalidArgs(format!(\n                \"file_write content is {} bytes; the cap is {MAX_WRITE_CONTENT_BYTES}. \\\n                 Use apply_patch / batch for chunked rewrites.\",\n                args.content.len()\n            )).into());\n        }\n        let result = execute_write(",
+      "rationale": "file_read caps reads at 100 MB (ops.rs:140) and apply_patch caps the envelope at 4 MiB (apply_patch.rs:93), but file_write has no symmetric guard. A model that submits args.content as a multi-GB string allocates the full buffer before the deny-checked write ever begins; the path-lock + atomic_write_file pipeline then OOMs the worker, wedging the session. Same DoS class as the apply_patch finding already fixed in this same module."
+    },
+    {
+      "id": "BTS-2",
+      "severity": "High",
+      "category": "Security",
+      "file": "src/builtin_tools/file_ops/edit.rs",
+      "line": 75,
+      "context": "read_text_file (helper used by apply_multi_edit / call_impl)",
+      "title": "file_edit reads entire file into memory with no size cap",
+      "before": "async fn read_text_file(path: &Path) -> std::result::Result<String, ToolError> {\n    let bytes = tokio::fs::read(path)\n        .await\n        .map_err(|e| ToolError::Execution(format!(\"Failed to read {}: {}\", path.display(), e)))?;",
+      "after": "async fn read_text_file(path: &Path) -> std::result::Result<String, ToolError> {\n    // Mirror file_read's cap (100 MB) so file_edit cannot be steered into\n    // slurping a multi-GB text file into one buffer.\n    const MAX_EDIT_BYTES: u64 = 100 * 1024 * 1024;\n    let meta = tokio::fs::metadata(path).await.map_err(|e| {\n        ToolError::Execution(format!(\"Failed to stat {}: {}\", path.display(), e))\n    })?;\n    if meta.len() > MAX_EDIT_BYTES {\n        return Err(ToolError::InvalidArgs(format!(\n            \"Cannot edit {}: file is {} bytes, max {MAX_EDIT_BYTES}\",\n            path.display(), meta.len()\n        )));\n    }\n    let bytes = tokio::fs::read(path)\n        .await\n        .map_err(|e| ToolError::Execution(format!(\"Failed to read {}: {}\", path.display(), e)))?;",
+      "rationale": "file_read enforces `max_read_size = 100 MB` before allocation, but file_edit's read_text_file does an unbounded tokio::fs::read → String. A 2-GB text file causes a 2-GB allocation, which then OOMs the worker or stalls the writer for minutes. file_edit is LLM-callable, so a steered model has the same DoS vector as the apply_patch envelope (already capped). The cap should be applied at the same boundary as file_read for symmetry."
+    },
+    {
+      "id": "BTS-3",
+      "severity": "High",
+      "category": "Security",
+      "file": "src/builtin_tools/file_ops/apply_patch.rs",
+      "line": 333,
+      "context": "plan_add → body construction",
+      "title": "PatchOp::Add body length is still uncapped (the MEDIUM follow-up from review batch 2 was not landed)",
+      "before": "        let body = if lines.is_empty() {\n            String::new()\n        } else {\n            // V4A `+lines` already strip the leading `+`; join with newlines\n            // and append a trailing newline so the file ends in a newline\n            // (the codex format implies a final newline).\n            let mut s = lines.join(\"\\n\");\n            s.push('\\n');\n            s\n        };",
+      "after": "        const MAX_ADD_LINES: usize = 100_000;\n        const MAX_ADD_BODY_BYTES: usize = 16 * 1024 * 1024;\n        if lines.len() > MAX_ADD_LINES {\n            return Err(fail(\n                \"add\",\n                path,\n                format!(\n                    \"Add op declares {} lines; the cap is {MAX_ADD_LINES}. \\\n                     For bulk data use file_write or multiple apply_patch calls.\",\n                    lines.len()\n                ),\n            ));\n        }\n        let body = if lines.is_empty() {\n            String::new()\n        } else {\n            let mut s = lines.join(\"\\n\");\n            s.push('\\n');\n            if s.len() > MAX_ADD_BODY_BYTES {\n                return Err(fail(\n                    \"add\",\n                    path,\n                    format!(\n                        \"Add op body is {} bytes; the cap is {MAX_ADD_BODY_BYTES}\",\n                        s.len()\n                    ),\n                ));\n            }\n            s\n        };",
+      "rationale": "The MAX_PATCH_BYTES envelope cap (4 MiB) was added in commit since 2026-08-11 review, but the per-op MEDIUM finding from that same review (`PatchOp::Add.lines` count and per-line size unbounded) was NOT addressed. A `*** Add File:` op with one million `+x` lines still parses into Vec<Line>, concatenates into one giant String, then writes. The envelope cap is only a coarse filter — within one envelope, a single op can still balloon memory and disk. Mirror the line count + body size cap that the review recommended."
+    },
+    {
+      "id": "BTS-4",
+      "severity": "Medium",
+      "category": "Security",
+      "file": "src/builtin_tools/file_ops/apply_patch.rs",
+      "line": 1008,
+      "context": "execute → plan_add (deny re-check)",
+      "title": "denied-paths enforcement can be bypassed via Add-onto-denied-parent (MEDIUM from review batch 2 unfixed)",
+      "before": "    fn plan_add(\n        &self,\n        path: &str,\n        lines: &[String],\n        output_dir: Option<&Path>,\n        pending: &mut Pending,\n    ) -> std::result::Result<Planned, FileOutcome> {\n        let resolved = self\n            .resolve(path, output_dir)\n            .map_err(|msg| fail(\"add\", path, msg))?;\n        if exists_after_pending(&resolved, pending) {\n            return Err(fail(\n                \"add\",\n                path,\n                format!(\n                    \"{} already exists — use `*** Update File:` instead\",\n                    resolved.display()\n                ),\n            ));\n        }",
+      "after": "    fn plan_add(\n        &self,\n        path: &str,\n        lines: &[String],\n        output_dir: Option<&Path>,\n        denied_paths: &[String],\n        pending: &mut Pending,\n    ) -> std::result::Result<Planned, FileOutcome> {\n        let resolved = self\n            .resolve(path, output_dir)\n            .map_err(|msg| fail(\"add\", path, msg))?;\n        // Defense in depth (BT-batch2-MEDIUM): if the resolved path itself is\n        // already denied, fail closed even when the resolve-step approved it\n        // (the future addition of a less-strict deny entry would silently\n        // re-open the gate otherwise).\n        if super::path_utils::path_is_denied(&resolved, denied_paths) {\n            return Err(fail(\n                \"add\",\n                path,\n                format!(\"{} is in a protected location\", resolved.display()),\n            ));\n        }\n        if exists_after_pending(&resolved, pending) {",
+      "rationale": "The batch-2 review flagged that `plan_add` relies on the resolve-step to deny-check, and recommended an explicit precheck that fails closed even when the denylist widens later. That fix was not landed. A `*** Add File: ~/.ssh/authorized_keys` op currently slips past only because the broad `/root/.ssh` (Unix) deny entry catches the canonicalized parent; an entry removal or a future config that drops `/etc/ssh` would silently re-open the gate. Pass denied_paths through to plan_add (and call path_is_denied directly on resolved) so the explicit precheck closes the dependency on prefix-only matches."
+    },
+    {
+      "id": "BTS-5",
+      "severity": "Medium",
+      "category": "Performance",
+      "file": "src/builtin_tools/file_ops/stats.rs",
+      "line": 184,
+      "context": "count_lines → BufReader::lines (async)",
+      "title": "Async line-counting loop holds the executor open on huge files; no spawn_blocking",
+      "before": "/// Count newline-terminated lines. Files without a trailing newline still\n/// count their last line (matches `wc -l` semantics for non-empty files).\nasync fn count_lines(path: &Path) -> std::io::Result<u64> {\n    let file = tokio::fs::File::open(path).await?;\n    let reader = BufReader::new(file);\n    let mut count: u64 = 0;\n    let mut lines = reader.lines();\n    while let Some(line) = lines.next_line().await? {\n        // Surface I/O errors (e.g. invalid UTF-8 in a \"text\" file) so the\n        // caller can mark the file as skipped instead of double-counting.\n        let _ = line;\n        count += 1;\n    }\n    Ok(count)\n}",
+      "after": "/// Count newline-terminated lines. Files without a trailing newline still\n/// count their last line (matches `wc -l` semantics for non-empty files).\nasync fn count_lines(path: &Path) -> std::io::Result<u64> {\n    // spawn_blocking: the count is a tight byte-scanning loop that pins the\n    // current tokio worker for the duration of the read. On a 16 MB file the\n    // loop is small, but a `stats **/*` over thousands of large files\n    // serialises every read on one worker and starves the rest of the runtime.\n    let p = path.to_path_buf();\n    tokio::task::spawn_blocking(move || -> std::io::Result<u64> {\n        use std::io::{BufRead, BufReader};\n        let f = std::fs::File::open(&p)?;\n        let mut count: u64 = 0;\n        for _ in BufReader::new(f).lines() {\n            count += 1;\n        }\n        Ok(count)\n    })\n    .await\n    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?\n}",
+      "rationale": "`count_lines` is called once per matched file in stats. The async BufReader::lines loop yields on every line — a per-line await on a hot path that does no I/O at all (the BufReader prefetches 8 KB at a time and `next_line()` just walks the cache). The pattern pins the worker through every iteration and serialises the entire stats walk onto a single tokio thread. Switching to a single spawn_blocking + std BufReader closes the per-line await storm and lets the executor keep making progress on other tasks while one stats walk runs. file_ops is a hot path; this is the only spot in this scope where per-line await is used."
+    },
+    {
+      "id": "BTS-6",
+      "severity": "Medium",
+      "category": "ErrorHandling",
+      "file": "src/builtin_tools/team/delegate.rs",
+      "line": 411,
+      "context": "W12 running-run registration (background_tracker::SpawnMeta)",
+      "title": "SpawnMeta depth is hard-coded to 1 for every delegation, including chained ones (review batch 3 still unfixed)",
+      "before": "        let running_reg = caller_session.as_deref().map(|caller| {\n            crate::agents::background_tracker::RunningRegistration::register(\n                crate::agents::background_tracker::BackgroundAgentTracker::global(),\n                member_run_id.clone(),\n                tokio_util::sync::CancellationToken::new(),\n                format!(\"team_delegate → {}: {}\", args.agent_id, args.task),\n                crate::agents::background_tracker::SpawnMeta {\n                    parent_id: None,\n                    depth: 1,\n                    root_session: caller.to_string(),\n                    model: None,\n                },\n            )\n        });",
+      "after": "        // Read the leader's depth from the background tracker so a delegated\n        // member records depth = leader_depth + 1; chain-depth metrics stay\n        // honest and the depth cap fires when it should.\n        let leader_depth = crate::agents::background_tracker::BackgroundAgentTracker::global()\n            .current_depth(caller_session.as_deref().unwrap_or(\"\"))\n            .unwrap_or(0);\n        let running_reg = caller_session.as_deref().map(|caller| {\n            crate::agents::background_tracker::RunningRegistration::register(\n                crate::agents::background_tracker::BackgroundAgentTracker::global(),\n                member_run_id.clone(),\n                tokio_util::sync::CancellationToken::new(),\n                format!(\"team_delegate → {}: {}\", args.agent_id, args.task),\n                crate::agents::background_tracker::SpawnMeta {\n                    parent_id: None,\n                    depth: leader_depth + 1,\n                    root_session: caller.to_string(),\n                    model: None,\n                },\n            )\n        });",
+      "rationale": "The 2026-08-11 review (batch 3) explicitly recommended `depth = parent_depth + 1`. The fix was not landed (the constant `1` is still hardcoded at both lines 411 and 558). The background tracker's depth cap is the safety belt that refuses runaway delegation chains; underestimating depth by N means the chain can grow N deeper than the cap before the cap fires. Same finding still valid; not re-flagging for content, but tracking so the cluster is closed."
+    },
+    {
+      "id": "BTS-7",
+      "severity": "Medium",
+      "category": "ErrorHandling",
+      "file": "src/builtin_tools/note_manage/write.rs",
+      "line": 17,
+      "context": "handle_create / handle_update content path",
+      "title": "note body size is uncapped at the dispatcher (DoS, review batch 5 still unfixed)",
+      "before": "        // Hard security floor (§5.1): reject injection / exfiltration /\n        // persistence payloads before they land in trusted long-term memory.\n        if let Some(content) = &args.content {\n            scan_note_for_threats(content)?;\n        }",
+      "after": "        // Mirror PER_NOTE_MAX_CHARS (read.rs) at the write site, so a 100 MB\n        // note body is refused before the embedding step / atomic_write +\n        // reparse-index pipeline is even invoked.\n        const MAX_NOTE_BODY_CHARS: usize = 1_048_576; // 1 MiB\n        if let Some(content) = &args.content {\n            if content.chars().count() > MAX_NOTE_BODY_CHARS {\n                return Err(AlephError::tool(format!(\n                    \"note content is {} chars; the cap is {MAX_NOTE_BODY_CHARS}. \\\n                     chunk long bodies via append or split into multiple notes.\",\n                    content.chars().count()\n                )));\n            }\n            scan_note_for_threats(content)?;\n        }",
+      "rationale": "The 2026-08-11 review (batch 5) recommended mirroring the read-side PER_NOTE_MAX_CHARS = 4_000 at the write site. Neither handle_create nor handle_update cap `args.content` today, so a 100 MB note is persisted on write and re-pays the full disk read + embedder + reparse-index cost on every subsequent page. Tracked here so the cluster is closed; fixing it is a 10-line patch that lands in note_manage/write.rs only."
+    },
+    {
+      "id": "BTS-8",
+      "severity": "Medium",
+      "category": "Performance",
+      "file": "src/builtin_tools/file_ops/read.rs",
+      "line": 197,
+      "context": "render_window → 'Second, independent limit' pre-pass",
+      "title": "Per-line char-cost arithmetic allocates a Vec<String> even for the budget-bound early-break path",
+      "before": "    let mut rendered: Vec<String> = Vec::new();\n    let mut chars = 0usize;\n    let mut stopped_on_chars = false;\n    for (idx, line) in lines\n        .get(start..line_end)\n        .expect(\"invariant: start..line_end is clamped to lines length\")\n        .iter()\n        .enumerate()\n    {\n        let clamped = clamp_line(line);\n        let cost = clamped.chars().count() + width + 2; // gutter + tab + newline\n        // Always emit at least one line, so a single over-budget line still\n        // makes progress instead of returning an empty window forever.\n        if chars + cost > char_budget && !rendered.is_empty() {\n            stopped_on_chars = true;\n            break;\n        }\n        let lineno = start + idx + 1;\n        rendered.push(format!(\"{lineno:>width$}\\t{clamped}\\n\"));\n        chars += cost;\n    }",
+      "after": "    // Build directly into a String: every kept line is concatenated by\n    // `mint().concat()` afterwards anyway, so a Vec<String> + final concat\n    // is an extra allocation per window. The bytes buffer lets the early\n    // budget-break path avoid the per-line String allocation entirely.\n    let mut rendered_buf = String::new();\n    let mut kept = 0usize;\n    let mut chars = 0usize;\n    let mut stopped_on_chars = false;\n    for (idx, line) in lines\n        .get(start..line_end)\n        .expect(\"invariant: start..line_end is clamped to lines length\")\n        .iter()\n        .enumerate()\n    {\n        let clamped = clamp_line(line);\n        let cost = clamped.chars().count() + width + 2;\n        if chars + cost > char_budget && kept > 0 {\n            stopped_on_chars = true;\n            break;\n        }\n        use std::fmt::Write;\n        let lineno = start + idx + 1;\n        let _ = writeln!(rendered_buf, \"{lineno:>width$}\\t{clamped}\");\n        chars += cost;\n        kept += 1;\n    }\n    let rendered_len = kept;\n    let rendered_slice = || rendered_buf.as_str();",
+      "rationale": "Every file_read allocates one String per line for the rendered Vec, then `mint()` does another concat on the kept prefix. On a 2 000-line window that is up to 2 000 String allocations + one final concat of the whole prefix — measurable in flame graphs for read-heavy sessions. Building into a single String buffer via writeln! keeps the common case allocation-free beyond the buffer growths. file_ops is the hottest read path; this is the single biggest alloc hotspot in the module outside of `read_file_bytes` itself."
+    },
+    {
+      "id": "BTS-9",
+      "severity": "Low",
+      "category": "ErrorHandling",
+      "file": "src/builtin_tools/web_fetch/extract.rs",
+      "line": 23,
+      "context": "static Lazy<Regex> initialisers",
+      "title": "Regex compile failure uses unreachable!() — startup panic if regex breaks",
+      "before": "static RE_COMMENTS: Lazy<Regex> = Lazy::new(|| {\n    Regex::new(r\"(?s)<!--.*?-->\").unwrap_or_else(|e| unreachable!(\"invalid regex RE_COMMENTS: {e}\"))\n});",
+      "after": "// Build-time-checked regexes (compiled once, surfacing a real panic on\n// construction failure rather than `unreachable!` after a future edit).\n// The patterns below are static literals, so a build-time failure here is\n// a code defect — fail loudly at first use, not in a never-taken branch.\nfn re_comments() -> Regex {\n    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();\n    RE.get_or_init(|| {\n        Regex::new(r\"(?s)<!--.*?-->\").expect(\"static RE_COMMENTS pattern is valid\")\n    })\n    .clone()\n}",
+      "rationale": "Each Lazy<Regex> uses `unwrap_or_else(|e| unreachable!(...))`. The comment above claims a build-time check, but `unreachable!` is only reached on a regex engine change — not on a regex *edit*. If a future edit makes one of these patterns invalid (e.g. an unescaped `(`), the panic fires at first call, mid-extraction, with no link to the broken literal. Switch to a plain `.expect(\"static literal X\")` so the panic message names the file:line + pattern and a CI build with `cargo test` flags it immediately. Not blocking; quality nit."
+    }
+  ],
+  "deferred": [
+    {
+      "id": "BTS-D1",
+      "severity": "Medium",
+      "title": "team/message_send.rs and team/task_submit.rs and team/task_comment.rs — payload fields have no per-call size cap",
+      "rationale": "Same DoS class as the apply_patch / file_write findings. The 2026-08-11 review (batch 3) flagged this as Low and recommended a single 256 KiB constant at team/mod.rs. Worth a one-line patch but functionally similar to BTS-1 (file_write) so flagged here once, not duplicated as a separate BTS finding."
+    },
+    {
+      "id": "BTS-D2",
+      "severity": "Medium",
+      "title": "pdf_generate/* — `args.content` has no per-call size cap (review batch 6 still unfixed)",
+      "rationale": "Both browser and native engines parse the full Markdown string before any output cap fires. 4 MiB constant recommended in batch 6; not yet landed. Tracked here as deferred so the existing review's cluster stays visible."
+    },
+    {
+      "id": "BTS-D3",
+      "severity": "Medium",
+      "title": "generation/{image,video,audio}_generate.rs — prompt has no upper bound (review batch 6 still unfixed)",
+      "rationale": "The provider-side API usually has its own cap, but a runaway model can stuff a 100 MB prompt and pay for the request. 32 KiB constant at generation/mod.rs recommended in batch 6."
+    },
+    {
+      "id": "BTS-D4",
+      "severity": "Low",
+      "title": "task_manage/wait.rs — polling loop has no per-tick cap (review batch 5 still unfixed)",
+      "rationale": "Performance nit only. 250 ms MIN_POLL_INTERVAL_MS would close it."
+    },
+    {
+      "id": "BTS-D5",
+      "severity": "Low",
+      "title": "agent_manage/validation.rs — `id.len()` is byte-count, not char-count (review batch 5 still unfixed)",
+      "rationale": "Cosmetic; the ASCII-only contract means the byte and char counts agree for every valid input. Flagged for accuracy only."
+    },
+    {
+      "id": "BTS-D6",
+      "severity": "Low",
+      "title": "browser_tools/evaluate.rs — `script` field has no size cap (review batch 4 still unfixed)",
+      "rationale": "HIGH in original review; not landed. Mirrors BTS-1 / BTS-3 cluster (LLM-callable DoS via large payload)."
+    }
+  ],
+  "summary": {
+    "critical": 0,
+    "high": 3,
+    "medium": 5,
+    "low": 1,
+    "total_findings": 9,
+    "files_with_findings": 8
+  }
+}

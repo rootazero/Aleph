@@ -59,8 +59,28 @@ impl Inbox {
 
         if mark_read {
             for msg in &messages {
-                let _ = self.msg_store.mark_read(&msg.id, agent_id).await;
-                let _ = self
+                // mark_read failure is no longer swallowed silently: a
+                // dropped mark would let the next `read` return the same
+                // message and the agent would double-deliver. Log a
+                // structured warn so an operator can correlate an SQLITE_BUSY
+                // or disk-full blip with a subsequent duplicate-delivery
+                // symptom, then continue so a single message failure does
+                // not block the rest of the inbox.
+                if let Err(e) = self.msg_store.mark_read(&msg.id, agent_id).await {
+                    tracing::warn!(
+                        target: "teams.messages.inbox",
+                        agent_id = %agent_id,
+                        team_id = %team_id,
+                        message_id = %msg.id,
+                        error = %e,
+                        "mark_read failed; message may reappear on next read",
+                    );
+                }
+                // log_event failures were already swallowed, but the
+                // audit-hole is narrower than mark_read's user-visible
+                // inconsistency. Promote it to a warn so silent
+                // event-log gaps are observable too.
+                if let Err(e) = self
                     .event_store
                     .log_event(NewTeamEvent {
                         team_id: team_id.to_string(),
@@ -70,7 +90,17 @@ impl Inbox {
                             "message_id": msg.id,
                         }),
                     })
-                    .await;
+                    .await
+                {
+                    tracing::warn!(
+                        target: "teams.messages.inbox",
+                        agent_id = %agent_id,
+                        team_id = %team_id,
+                        message_id = %msg.id,
+                        error = %e,
+                        "MessageRead event log failed; audit gap",
+                    );
+                }
             }
         }
 
@@ -139,6 +169,7 @@ mod tests {
             }],
             reply_to: None,
             attachments: vec![],
+            author_user_id: None,
         }
     }
 

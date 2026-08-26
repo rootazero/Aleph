@@ -20,6 +20,16 @@ pub struct OnePasswordProvider {
     service_account_token: Option<SecretString>,
 }
 
+/// Default wall-clock budget for a single `op` invocation.
+///
+/// `op` is interactive: it blocks on Touch ID / biometric / TTY prompts when
+/// the user's session has expired. Without a timeout a hung child wedges
+/// `health_check` (and the caller) indefinitely, and a dropped task leaves a
+/// zombie child connected to the daemon's stdio. 5 s is comfortably above
+/// any healthy `op` round-trip and short enough to surface a stuck prompt
+/// before the next caller blocks on the same lock.
+const OP_INVOCATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 impl OnePasswordProvider {
     /// Create a new 1Password provider.
     ///
@@ -34,6 +44,10 @@ impl OnePasswordProvider {
     }
 
     /// Build a base `op` command with account and token pre-configured.
+    ///
+    /// Always sets `kill_on_drop(true)` so any task drop (timeout, cancellation
+    /// token, panic unwind) reaps the child instead of leaving a zombie whose
+    /// stdio is still connected to the daemon.
     fn base_command(&self) -> tokio::process::Command {
         let mut cmd = tokio::process::Command::new("op");
         if let Some(ref account) = self.account {
@@ -42,6 +56,7 @@ impl OnePasswordProvider {
         if let Some(ref token) = self.service_account_token {
             cmd.env("OP_SERVICE_ACCOUNT_TOKEN", token.expose_secret());
         }
+        cmd.kill_on_drop(true);
         cmd.no_window();
         cmd
     }
@@ -86,19 +101,34 @@ impl SecretProvider for OnePasswordProvider {
         let mut cmd = self.base_command();
         cmd.arg("whoami");
 
-        let output = cmd.output().await.map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                SecretError::ProviderError {
-                    provider: "1password".into(),
-                    message: "1Password CLI (`op`) not found".into(),
+        // Bound the wait: a stuck interactive prompt or a hung CLI process
+        // must not block `health_check` indefinitely. `kill_on_drop(true)`
+        // (set in `base_command`) reaps the child if the timeout future is
+        // dropped before `output()` resolves.
+        let output = match tokio::time::timeout(OP_INVOCATION_TIMEOUT, cmd.output()).await {
+            Ok(res) => res.map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    SecretError::ProviderError {
+                        provider: "1password".into(),
+                        message: "1Password CLI (`op`) not found".into(),
+                    }
+                } else {
+                    SecretError::ProviderError {
+                        provider: "1password".into(),
+                        message: format!("Failed to execute `op whoami`: {e}"),
+                    }
                 }
-            } else {
-                SecretError::ProviderError {
-                    provider: "1password".into(),
-                    message: format!("Failed to execute `op whoami`: {e}"),
-                }
+            })?,
+            Err(_elapsed) => {
+                return Ok(ProviderStatus::Unavailable {
+                    reason: format!(
+                        "`op whoami` timed out after {}s — \
+                         the 1Password CLI may be waiting for an interactive prompt",
+                        OP_INVOCATION_TIMEOUT.as_secs()
+                    ),
+                });
             }
-        })?;
+        };
 
         if output.status.success() {
             Ok(ProviderStatus::Ready)

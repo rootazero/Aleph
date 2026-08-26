@@ -1,0 +1,87 @@
+{
+  "module": "src/builtin_tools (top-level, focused)",
+  "scanned_files": 19,
+  "total_loc": 14608,
+  "findings": [
+    {
+      "id": "BTT-1",
+      "severity": "High",
+      "category": "Security",
+      "file": "src/builtin_tools/code_check.rs",
+      "line": 177,
+      "context": "async fn run() — CodeCheckArgs::timeout_seconds path",
+      "title": "Missing upper-bound clamp on LLM-supplied timeout_seconds; code_exec has the clamp, code_check does not",
+      "before": "        let timeout_secs = args.timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECS);",
+      "after": "        let timeout_secs = clamp_foreground_timeout(args.timeout_seconds)\n            .unwrap_or(DEFAULT_TIMEOUT_SECS);",
+      "rationale": "code_check shares its `code: ArgCheckArgs.timeout_seconds: Option<u64>` shape with code_exec, where the value is explicitly clamped via `clamp_foreground_timeout` (FOREGROUND_MAX_TIMEOUT_SECS = 170) inside `AlephTool::call`. code_check bypasses `call_unclamped` — yet still passes `args.timeout_seconds.unwrap_or(120)` straight into `Duration::from_secs(timeout_secs)` and a `SandboxCommand::timeout`. An LLM caller (or a stuck tool loop) passing `u64::MAX` reserves a 2.6e11-second sandbox lease that pegs a worker for years. The default of 120s is generous for cold `cargo check`; without the clamp the 180s per-tool budget wrapper does NOT fire (it tracks wall-clock from the call site, not the sandbox lease), so a runaway checker is the caller's problem, not the budget's. Pattern matches the GOOD code_exec.rs:793 site verbatim."
+    },
+    {
+      "id": "BTT-2",
+      "severity": "High",
+      "category": "Performance",
+      "file": "src/builtin_tools/memory_search.rs",
+      "line": 486,
+      "context": "pub async fn call() — session-raw fact retrieval branch",
+      "title": "max_results is documented as LLM-supplied and unclamped; saturating_mul(2) hides the DoS",
+      "before": "                // Saturate: max_results is LLM-supplied and unclamped, so a\n                // huge value must not overflow-panic in debug builds.\n                let fetch_limit = args.max_results.saturating_mul(2);\n                let raws = self\n                    .database\n                    .get_raw_by_path_prefix(&path_prefix, agent_id, fetch_limit)\n                    .await",
+      "after": "                const MAX_RESULTS: usize = 50; // matches recall_context\n                let fetch_limit = args\n                    .max_results\n                    .clamp(1, MAX_RESULTS)\n                    .saturating_mul(2);\n                let raws = self\n                    .database\n                    .get_raw_by_path_prefix(&path_prefix, agent_id, fetch_limit)\n                    .await",
+      "rationale": "The inline comment admits the design defect: the only defence against `usize::MAX` is `saturating_mul` (prevents the overflow-panic, not the allocation). `get_raw_by_path_prefix(..., usize::MAX)` will hand back the full raw-chunk table for the session (compact-then-paginated batches), each row then copied into a `FactResult` and accumulated into a `Vec`. Sister tool `recall_context` (`recall_context.rs:55-56`) explicitly caps at 3 by default and `recall_events` clamps to `[1, 20]`; sister `ctx_search` / `session_search` / `channel_directory` all `.clamp(1, MAX_LIMIT)`. `memory_search` is the only one of the retrieval tools that trusts the cap, and it is the largest — the same surface a model reach-for first. Other call sites that forward `args.max_results` verbatim: lines 559, 598, 656, 661, 676 — every one of them feeds a vector-store `retrieve` call that is already O(n*k)."
+    },
+    {
+      "id": "BTT-3",
+      "severity": "Medium",
+      "category": "ErrorHandling",
+      "file": "src/builtin_tools/bash_exec.rs",
+      "line": 34,
+      "context": "BACKGROUND_DEFAULT_TIMEOUT_SECS — background spawn path",
+      "title": "Background-mode timeout has no upper bound; foreground has one and is named the same",
+      "before": "/// jobs a generous one-hour ceiling instead; an explicit `timeout`\n/// still wins, and the job stays killable via `process_action: \"kill\"`.\nconst BACKGROUND_DEFAULT_TIMEOUT_SECS: u64 = 3600;",
+      "after": "/// jobs a generous one-hour ceiling instead; an explicit `timeout`\n/// still wins (clamped to BACKGROUND_MAX_TIMEOUT_SECS so a runaway LLM\n/// cannot lease a worker for a day), and the job stays killable via\n/// `process_action: \"kill\"`.\nconst BACKGROUND_DEFAULT_TIMEOUT_SECS: u64 = 3600;\nconst BACKGROUND_MAX_TIMEOUT_SECS: u64 = 4 * 3600;",
+      "rationale": "Foreground enforces a 170s cap (FOREGROUND_MAX_TIMEOUT_SECS) precisely so the harness budget wrapper stays the enforcer. Background escapes that wrapper (the spawn call returns a process_id immediately) and is treated as trust-the-caller. With `background: true` and `timeout_seconds: u64::MAX` the daemon registers a job that the registry will never reap until it exits on its own — the kill path requires the same session to come back and call `process_action: \"kill\"`, and a stuck LLM that issued the bad call cannot. A 4h ceiling matches the 1h default but bounds the worst case. process_registry already enforces `MAX_RUNNING_PER_SESSION = 8` / `MAX_RUNNING_GLOBAL = 32`, but those bound COUNT, not DURATION per job."
+    },
+    {
+      "id": "BTT-4",
+      "severity": "Medium",
+      "category": "Architecture",
+      "file": "src/builtin_tools/bash_exec.rs",
+      "line": 370,
+      "context": "BashExecTool::spawn_background — registry-register / id-pump handoff",
+      "title": "Silent discard `let _ = id_tx.send(id)` swallows registration-then-task-loss races",
+      "before": "        match registry.register_running(preview, caller, join.abort_handle()) {\n            RegisterOutcome::Registered(id) => {\n                registry.attach_live(id, live);\n                let _ = id_tx.send(id);",
+      "after": "        match registry.register_running(preview, caller, join.abort_handle()) {\n            RegisterOutcome::Registered(id) => {\n                registry.attach_live(id, live);\n                if id_tx.send(id).is_err() {\n                    // Detached task already exited (it never reached the\n                    // oneshot). Without this branch, a future refactor that\n                    // wires the gate differently would silently leak the\n                    // registry slot — the call returned \"running\" to the\n                    // model but the job is gone. Be loud now so any future\n                    // semantic change here surfaces in tests, not in prod.\n                    warn!(process_id = id, \"background task abandoned before handoff\");\n                    return error_output(format!(\n                        \"bash: background task for process {id} exited before it could run — \\\n                         retry, or remove `background: true` to run inline\"\n                    ));\n                }",
+      "rationale": "`register_running` succeeded and the foreground returned `{\"status\":\"running\", \"process_id\": id, ...}` to the model. If the spawned task had already failed to receive the oneshot (panic before .await, or task-local re-entry crash inside the gated body), the model is told the job is running while the registry now holds an orphan whose live tail is wired to a dead task. The `_ =` is currently safe in practice (the gate awaits the oneshot inside the spawned task, so it cannot exit before receiving) but the pattern is one refactor away from a real silent orphan, and AGENTS.md flags silent-discards of fallible calls."
+    },
+    {
+      "id": "BTT-5",
+      "severity": "Medium",
+      "category": "ErrorHandling",
+      "file": "src/builtin_tools/code_exec.rs",
+      "line": 281,
+      "context": "doc-comment on CodeExecTool::call_unclamped",
+      "title": "call_unclamped has no audit trail; only the comment warns about it",
+      "before": "    /// Execute WITHOUT the foreground timeout clamp. Used only by\n    /// the background-spawn path in [`BashExecTool::spawn_background`],\n    /// which legitimately needs to outlive the 170s foreground budget\n    /// (a backgrounded `cargo build` may run for the 1h ceiling).",
+      "after": "    /// Execute WITHOUT the foreground timeout clamp. Used only by\n    /// the background-spawn path in [`BashExecTool::spawn_background`],\n    /// which legitimately needs to outlive the 170s foreground budget\n    /// (a backgrounded `cargo build` may run for the 1h ceiling).\n    /// Every call site must log an audit row keyed on session_id+tool_name\n    /// so a future caller wiring this from a non-spawn path is detectable\n    /// in the sandbox hook stream.",
+      "rationale": "`call_unclamped` is a footgun-by-design — same sandbox call as `call`, just with the safety clamp skipped. The doc is the only thing stopping a future refactor from wiring it from a UI panel, a CLI retry, or a recovery loop and bypassing the 170s budget. Today the only caller is `BashExecTool::spawn_background` (line 311), so adding a structured log here would catch drift for free. No code change needed; mark the surface so audit can grep it."
+    }
+  ],
+  "deferred": [
+    "vault_store.rs: requires_confirmation=true + 'delete' verb documented as reversible-irrelevant (R:CONFIRMATION_REQUIRED_TOOLS excludes it) — intentional, see prior audit note 'Why there is no confirmation gate on archive' precedent.",
+    "mcp_login.rs: IN_FLIGHT HashMap is process-local by design; restart loses lock, OAuth state is persisted in OAuthStorage so the re-attempt surfaces 'state mismatch' and is recoverable. No silent failure.",
+    "mcp_resource.rs / mcp_prompt.rs: longest-prefix matching is intentionally fixed (BT-D-R4 prefix collision); pinned by `server_prefix_candidates_are_longest_first` unit test.",
+    "process_registry.rs:702 evict_if_needed — bounded by MAX_ENTRIES=64 with running-sacrosanct invariant; no finding.",
+    "recall_context.rs / recall_events.rs: limits clamped to bounded values (3 default, MAX_LIMIT=20).",
+    "memory_browse.rs: validate_path_component blocks '..', '/', '\\\\', NUL, leading '.', empty — path traversal closed.",
+    "automation_tool.rs / system_tool.rs: ALL gated code-executing actions route through `ApprovalPolicy::check` first (auto/ask/deny).",
+    "workspace_manage.rs: action dispatch is exhaustive (6 verbs, addressed-by-name on missing id), routes through ops::* shared with the RPC face.",
+    "canvas.rs: insert_image — https fetches bounded (10s timeout, MAX_ASSET_BYTES streaming cap, image/* content-type gate), local paths locked to data_dir + temp_dir canonicalized.",
+    "meta_tools.rs: Levenshtein input capped at 500 chars before allocation; matrix is bounded."
+  ],
+  "summary": {
+    "critical": 0,
+    "high": 2,
+    "medium": 3,
+    "low": 0,
+    "total_findings": 5,
+    "files_with_findings": 4
+  }
+}

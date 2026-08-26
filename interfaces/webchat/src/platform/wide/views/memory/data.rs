@@ -676,7 +676,10 @@ mod tests {
         let md = raws_to_markdown(&items);
         // Header still present (the row exists), body section absent.
         assert!(md.contains("raw-3"));
-        assert_eq!(md.trim_end().lines().last().unwrap().trim(), "`raw-3` · main");
+        assert_eq!(
+            md.trim_end().lines().last().unwrap().trim(),
+            "`raw-3` · main"
+        );
     }
 
     #[test]
@@ -779,7 +782,9 @@ mod tests {
         // reported as dropped, not silently omitted from an export that still
         // claims success.
         let page: Vec<RawMemory> = (25..50).map(|i| raw_row(&format!("r{i}"))).collect();
-        let selected: HashSet<RowRef> = (0..50).map(|i| RowRef::new("main", format!("r{i}"))).collect();
+        let selected: HashSet<RowRef> = (0..50)
+            .map(|i| RowRef::new("main", format!("r{i}")))
+            .collect();
         let (staged, dropped) = stage_raw_export(&selected, &page);
         assert_eq!(staged.len(), 25);
         assert_eq!(dropped, 25);
@@ -791,10 +796,7 @@ mod tests {
     /// partition union.
     #[test]
     fn stage_raw_export_matches_on_the_partition_too_not_the_id_alone() {
-        let page = vec![
-            raw_row_in("main", "r0"),
-            raw_row_in("main__u-owner", "r0"),
-        ];
+        let page = vec![raw_row_in("main", "r0"), raw_row_in("main__u-owner", "r0")];
         let selected: HashSet<RowRef> = [RowRef::new("main__u-owner", "r0")].into_iter().collect();
         let (staged, dropped) = stage_raw_export(&selected, &page);
         assert_eq!(staged.len(), 1, "exactly the ticked row, not its namesake");
@@ -805,7 +807,9 @@ mod tests {
     #[test]
     fn stage_raw_export_no_drop_when_the_whole_selection_is_on_page() {
         let page: Vec<RawMemory> = (0..10).map(|i| raw_row(&format!("r{i}"))).collect();
-        let selected: HashSet<RowRef> = (0..5).map(|i| RowRef::new("main", format!("r{i}"))).collect();
+        let selected: HashSet<RowRef> = (0..5)
+            .map(|i| RowRef::new("main", format!("r{i}")))
+            .collect();
         let (staged, dropped) = stage_raw_export(&selected, &page);
         assert_eq!(staged.len(), 5);
         assert_eq!(dropped, 0);

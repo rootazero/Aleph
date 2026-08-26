@@ -7,7 +7,7 @@
 //! user a receipt* — that rule lives with [`DeliveryOutcome`], and this is its
 //! one implementation for stream surfaces.
 
-use super::{deliver_with_ticket, register_run, BusyQueueConfig, DeliveryOutcome};
+use super::{deliver_with_ticket, durable, register_run, BusyQueueConfig, DeliveryOutcome};
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::execution_engine::{ExecutionError, RunRequest};
 use crate::gateway::i18n::Locale;
@@ -65,6 +65,12 @@ pub fn spawn_queued_run<P, R, E>(
         cfg.max_per_session,
         &run_id,
     );
+    // Crash-durability write point (one of two; the channel twin lives in
+    // `inbound_router::executor`). Only a *registered* ticket is journaled —
+    // a `None` here is REJECT_NEWEST, the sender already heard no.
+    if ticket.is_some() && durable::is_armed() {
+        durable::record_enqueued(durable::QueuedRunPayload::from_request(&request, locale));
+    }
 
     tokio::spawn(async move {
         let outcome = match ticket {
@@ -72,35 +78,12 @@ pub fn spawn_queued_run<P, R, E>(
             Some(ticket) => {
                 let mut attempt =
                     || engine.execute(request.clone(), agent.clone(), emitter.clone());
-                // The lane's own surface for "still waiting". `session_key`
-                // is the ADDRESSED session, not the derived execution lane
-                // — same reason the never-ran `RunError` below names it:
-                // the client resolving this frame is attached to the
-                // former, and this is the run's first frame, so nothing
-                // has seeded the run→session index yet.
-                let queued_emitter = emitter.clone();
-                let queued_run_id = run_id.clone();
-                let queued_session = session_key.clone();
-                let mut report = move |ahead: u16| {
-                    let emitter = queued_emitter.clone();
-                    let run_id = queued_run_id.clone();
-                    let session_key = queued_session.clone();
-                    async move {
-                        if let Err(e) = emitter
-                            .emit(StreamEvent::RunQueued {
-                                run_id,
-                                session_key,
-                                ahead,
-                            })
-                            .await
-                        {
-                            // Best-effort mirror: `chat.history.pending`
-                            // is the authoritative half, so a dropped
-                            // frame costs liveness, never correctness.
-                            tracing::debug!("failed to emit RunQueued: {e}");
-                        }
-                    }
-                };
+                // The lane's own surface for "still waiting" — the shared
+                // constructor carries the addressed-vs-derived session rule
+                // and the failure policy; see `run_queued_reporter`.
+                let report_emitter: Arc<dyn EventEmitter + Send + Sync> = emitter.clone();
+                let mut report =
+                    super::run_queued_reporter(report_emitter, run_id.clone(), session_key.clone());
                 deliver_with_ticket(ticket, cfg, &mut attempt, &mut report).await
             }
         };
@@ -114,6 +97,7 @@ pub fn spawn_queued_run<P, R, E>(
         let pending_error = match outcome {
             DeliveryOutcome::Executed(Ok(())) => {
                 tracing::info!(run_id = %run_id, "{label} completed successfully");
+                durable::record_settled(&run_id, durable::SettleReason::AttemptConcluded);
                 return;
             }
             DeliveryOutcome::Executed(Err(ref e)) => {
@@ -121,14 +105,21 @@ pub fn spawn_queued_run<P, R, E>(
                 // sanitized receipt on the wire (shared single source with
                 // `ExecutionError::user_receipt`).
                 tracing::error!(run_id = %run_id, error = %e, "{label} failed");
+                durable::record_settled(&run_id, durable::SettleReason::AttemptConcluded);
                 None
             }
             DeliveryOutcome::Purged => {
                 tracing::info!(run_id = %run_id, session = %session_key,
                     "{label} dropped: an explicit stop abandoned it while it was queued");
+                durable::record_settled(&run_id, durable::SettleReason::Purged);
                 Some(ExecutionError::Cancelled)
             }
-            DeliveryOutcome::Rejected | DeliveryOutcome::TimedOut => outcome.user_error(&agent_id),
+            DeliveryOutcome::Rejected | DeliveryOutcome::TimedOut => {
+                if matches!(outcome, DeliveryOutcome::TimedOut) {
+                    durable::record_settled(&run_id, durable::SettleReason::TimedOut);
+                }
+                outcome.user_error(&agent_id)
+            }
         };
 
         let Some(e) = pending_error else {

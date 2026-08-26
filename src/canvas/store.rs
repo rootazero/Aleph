@@ -132,6 +132,17 @@ impl CanvasStore {
             updated_at_ms: now,
         };
         let mut guard = self.locks.lock(&id, self.doc_path(&id)).await?;
+        // Existence guard: a residual `<root>/<id>/doc.json` (manual restore,
+        // operator copy-paste, leftover from a previous install) used to be
+        // silently overwritten because `insert()` replaced whatever the read
+        // loaded. UUID collisions are unreachable in practice, but the
+        // contract now refuses on principle so a future caller passing a
+        // hand-built id cannot eat an unrelated canvas.
+        if guard.existing_mut().is_some() {
+            return Err(CanvasError::Internal(format!(
+                "canvas id collision: {id} already exists"
+            )));
+        }
         guard.insert(doc);
         let committed = guard.commit().await?;
         Ok(committed.clone())
@@ -284,7 +295,24 @@ impl CanvasStore {
         Self::checked_id(id)?;
         let mut guard = self.locks.lock(id, self.doc_path(id)).await?;
         if guard.existing_mut().is_none() {
-            return Err(CanvasError::NotFound(format!("canvas {id}")));
+            // No document, but the directory may still be a leftover from a
+            // partial `create()` (commit failed after `create_dir_all`
+            // succeeded). Sweep the directory anyway so a future
+            // `list_entries` walk does not keep `warn!`-ing about an empty
+            // canvas dir forever. Idempotent — `NotFound` from `remove_dir`
+            // is swallowable because the directory might also be missing.
+            let dir = self.root.join(id);
+            match tokio::fs::remove_dir(&dir).await {
+                Ok(()) => return Err(CanvasError::NotFound(format!("canvas {id}"))),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(CanvasError::NotFound(format!("canvas {id}")))
+                }
+                Err(e) => {
+                    return Err(CanvasError::Internal(format!(
+                        "failed to clean leftover canvas dir {id}: {e}"
+                    )));
+                }
+            }
         }
         // Remove while still holding the per-canvas lock, so a racing apply
         // either committed before us or finds nothing to lock onto after.

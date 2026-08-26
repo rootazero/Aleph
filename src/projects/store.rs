@@ -265,7 +265,24 @@ impl ProjectStore {
             conn.execute_batch(SCHEMA).map_err(db_err)?;
             conn.execute_batch(&workspace_uniqueness_ddl())
                 .map_err(db_err)?;
-            add_current_session_key_column(conn)
+            add_current_session_key_column(conn)?;
+            // AFTER the column migration, never inside `SCHEMA`. On a database
+            // created before rooms existed, `SCHEMA`'s `CREATE TABLE IF NOT
+            // EXISTS` is a no-op and the column is added by the line above — an
+            // index over it placed in `SCHEMA` would run first, fail with "no
+            // such column", and take the whole catalogue down at boot on
+            // exactly the deployments that predate rooms. An isolated test HOME
+            // only ever has the new shape, so nothing here would have caught it.
+            //
+            // Partial (`WHERE ... IS NOT NULL`) because the overwhelming
+            // majority of rows have no claim, and `project_for_session_key`
+            // only ever probes non-NULL keys.
+            conn.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_projects_session_key
+                     ON projects(current_session_key)
+                     WHERE current_session_key IS NOT NULL;",
+            )
+            .map_err(db_err)
         })
     }
 
@@ -957,6 +974,72 @@ mod tests {
         let store = ProjectStore::new(Connection::open_in_memory().unwrap());
         store.create_schema().unwrap();
         store
+    }
+
+    /// A catalogue created before rooms existed must still open.
+    ///
+    /// `SCHEMA`'s `CREATE TABLE IF NOT EXISTS projects` is a no-op against such
+    /// a database — the table is there, the column is not — so
+    /// `current_session_key` arrives only via
+    /// [`add_current_session_key_column`]. Anything that *reads* the column
+    /// (an index, a trigger, a view) therefore has to be ordered after it, and
+    /// putting it in `SCHEMA` instead fails with "no such column" and takes the
+    /// whole catalogue down at boot.
+    ///
+    /// This is the shape an isolated test HOME is structurally blind to: every
+    /// fixture in this module builds a *fresh* database, which always has the
+    /// new column. The pre-migration row has to be constructed on purpose.
+    #[test]
+    fn a_pre_rooms_catalogue_still_opens_and_indexes() {
+        let conn = Connection::open_in_memory().unwrap();
+        // The projects table exactly as it was before rooms: no
+        // `current_session_key`.
+        conn.execute_batch(
+            "CREATE TABLE projects (
+                 id                  TEXT PRIMARY KEY,
+                 name                TEXT NOT NULL,
+                 owner_user_id       TEXT,
+                 workspace_path      TEXT,
+                 status              TEXT NOT NULL DEFAULT 'active',
+                 created_at          INTEGER NOT NULL,
+                 updated_at          INTEGER NOT NULL,
+                 last_used_at        INTEGER NOT NULL
+             );
+             INSERT INTO projects (id, name, created_at, updated_at, last_used_at)
+             VALUES ('p-old', 'before rooms', 1, 1, 1);",
+        )
+        .unwrap();
+
+        let store = ProjectStore::new(conn);
+        store
+            .create_schema()
+            .expect("a pre-rooms catalogue must migrate, not fail to open");
+
+        // The column exists and the row survived...
+        assert_eq!(
+            store.get("p-old").unwrap().map(|p| p.current_session_key),
+            Some(None),
+            "the pre-existing row must survive the migration unclaimed"
+        );
+        // ...and the index over it was created, not skipped.
+        let indexed: i64 = store
+            .with_conn(|c| {
+                c.query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type = 'index' AND name = 'idx_projects_session_key'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(db_err)
+            })
+            .unwrap();
+        assert_eq!(
+            indexed, 1,
+            "the claim lookup must be indexed, as its doc says"
+        );
+
+        // Idempotent: opening the same database again is not an error.
+        store.create_schema().expect("re-open must be a no-op");
     }
 
     #[test]

@@ -110,6 +110,12 @@ impl CachedProbe {
 pub struct ToolHealthCache {
     entries: ArcSwap<HashMap<String, CachedProbe>>,
     probes: ArcSwap<HashMap<String, Arc<dyn ToolHealthProbe>>>,
+    /// Single-flight slots keyed by probe name. The map is pruned
+    /// explicitly: `invalidate_all` clears it (so a registration-epoch
+    /// reset cannot leak stale slots into the next epoch) and
+    /// `refresh` removes its own slot on the success path. The Drop
+    /// guard inside `refresh` covers cancellation and panic paths so a
+    /// dropped future cannot leak the slot for the life of the cache.
     inflight: dashmap::DashMap<String, Arc<OnceCell<ProbeResult>>>,
     generation: AtomicU64,
 }
@@ -139,7 +145,9 @@ impl ToolHealthCache {
     }
 
     /// Remove a probe by name. Bumps generation. Returns `true` if a
-    /// probe was actually removed.
+    /// probe was actually removed. Also clears any `inflight` slot
+    /// for the same name so a re-registration does not inherit a
+    /// cancelled or panicked probe future.
     pub fn unregister_probe(&self, name: &str) -> bool {
         let mut removed = false;
         self.probes.rcu(|probes| {
@@ -148,6 +156,7 @@ impl ToolHealthCache {
             Arc::new(next)
         });
         if removed {
+            self.inflight.remove(name);
             self.generation.fetch_add(1, Ordering::Release);
         }
         removed
@@ -174,9 +183,13 @@ impl ToolHealthCache {
 
     /// Clear every cached entry and bump generation. Called when the
     /// underlying tool registry mutates (broadcast subscriber).
-    /// Does NOT clear registered probes.
+    /// Does NOT clear registered probes. Also clears the single-flight
+    /// `inflight` map so a probe left in flight by a cancelled
+    /// `refresh` future cannot survive into the next epoch and block
+    /// new triggers for the same name.
     pub fn invalidate_all(&self) {
         self.entries.store(Arc::new(HashMap::new()));
+        self.inflight.clear();
         self.generation.fetch_add(1, Ordering::Release);
     }
 
@@ -206,6 +219,30 @@ impl ToolHealthCache {
             .entry(name.to_string())
             .or_insert_with(|| Arc::new(OnceCell::new()))
             .clone();
+        // RAII guard: if the future is dropped at any await point below
+        // (client disconnect, server shutdown, cancellation), the slot
+        // is freed. Without this guard, a single cancellation leaks a
+        // DashMap entry for the lifetime of the cache, and a probe that
+        // panics inside the OnceCell blocks the same name forever (the
+        // cell stays empty but is never cleared, so every subsequent
+        // refresh re-enters the same panicking initializer).
+        struct InflightGuard<'a> {
+            cache: &'a ToolHealthCache,
+            name: &'a str,
+            armed: bool,
+        }
+        impl<'a> Drop for InflightGuard<'a> {
+            fn drop(&mut self) {
+                if self.armed {
+                    self.cache.inflight.remove(self.name);
+                }
+            }
+        }
+        let mut guard = InflightGuard {
+            cache: self,
+            name,
+            armed: true,
+        };
         let result = cell
             .get_or_init(|| async {
                 let bounded = timeout(PROBE_DEADLINE, probe.probe()).await;
@@ -229,9 +266,11 @@ impl ToolHealthCache {
         });
         self.generation.fetch_add(1, Ordering::Release);
 
-        // Free the single-flight slot AFTER the result is cached so
-        // concurrent callers that missed the OnceCell still see a fresh
-        // entry instead of spawning a redundant probe.
+        // Disarm the guard before explicit removal so we don't double-free
+        // the DashMap entry. The explicit removal stays so concurrent
+        // callers that missed the OnceCell still see a fresh entry
+        // instead of spawning a redundant probe.
+        guard.armed = false;
         self.inflight.remove(name);
 
         result

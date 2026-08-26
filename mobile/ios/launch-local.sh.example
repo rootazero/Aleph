@@ -14,7 +14,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 UDID="${UDID:-<YOUR_SIMULATOR_UDID>}"   # find via: xcrun simctl list devices | grep Booted
-BID="ai.aleph.panel.iossim"
+BID="ai.aleph.panel"                    # matches PRODUCT_BUNDLE_IDENTIFIER in project.yml
 ROUTE="${1:-/settings}"                 # /settings | / | /memory ...
 
 # ---- Pick ONE connection target, then set PANEL_URL accordingly ----

@@ -9,10 +9,10 @@ use super::layers::{
     ExtraFilesLayer, GraphTopologyLayer, GuidelinesLayer, IdentityFilesLayer, LanguageLayer,
     McpInstructionsLayer, MemoryProtocolLayer, MemoryWindowLayer, MultiStepConductLayer,
     OperatingEnvelopeLayer, OperationalGuidelinesLayer, ProfileLayer, ProtocolTokensLayer,
-    ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer, RuntimeContextLayer, SecurityLayer,
-    SessionBudgetLayer, SessionContextGuideLayer, SkillInstructionsLayer, SoulLayer,
-    SpecialActionsLayer, StandingGoalLayer, StrategyLayer, StrategyPointerLayer, TimerLoopLayer,
-    ToolRuntimeStateLayer, VoiceModeLayer,
+    ProviderGuidanceLayer, RoleLayer, RoomRosterLayer, RuntimeCapabilitiesLayer,
+    RuntimeContextLayer, SecurityLayer, SessionBudgetLayer, SessionContextGuideLayer,
+    SkillInstructionsLayer, SoulLayer, SpecialActionsLayer, StandingGoalLayer, StrategyLayer,
+    StrategyPointerLayer, TimerLoopLayer, ToolRuntimeStateLayer, VoiceModeLayer,
 };
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use super::prompt_mode::PromptMode;
@@ -256,6 +256,9 @@ impl PromptPipeline {
             Box::new(VoiceModeLayer),
             Box::new(ProfileLayer),
             Box::new(RoleLayer),
+            // @105 — who else is in this room. Silent (zero bytes) for every
+            // session that is not a project room.
+            Box::new(RoomRosterLayer),
             Box::new(RuntimeContextLayer),
             Box::new(EnvironmentLayer),
             Box::new(RuntimeCapabilitiesLayer),
@@ -525,7 +528,14 @@ mod tests {
         // the claim is still Dynamic. Net prompt bytes unchanged, and the
         // dynamic-layer COUNT unchanged too (one left, one arrived) — the whole
         // effect is in `prompt_contract::dynamic_tail_bytes_ratchet`.
-        assert_eq!(pipeline.layer_count(), 37);
+        // → 38 (RoomRosterLayer @105 Stable, 2026-08-25): a project room's
+        // member list. NOT a split of an existing layer — a genuinely new
+        // runtime fact, and the first prompt section that exists only for
+        // multi-human sessions. Silent for every personal or org session, so
+        // a single-human deployment's prompt is byte-identical; declared in
+        // `prompt_contract::CONDITIONALLY_SILENT` with the content that wakes
+        // it.
+        assert_eq!(pipeline.layer_count(), 38);
     }
 
     #[test]

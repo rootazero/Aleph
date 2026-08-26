@@ -54,7 +54,7 @@ struct KeychainConnectionStore: ConnectionStoring {
         if updateStatus == errSecItemNotFound {
             var addQuery = baseQuery
             addQuery[kSecValueData as String] = data
-            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
             let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
             guard addStatus == errSecSuccess else {
                 throw KeychainError.unexpectedStatus(addStatus)

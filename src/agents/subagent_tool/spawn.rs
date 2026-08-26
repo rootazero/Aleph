@@ -445,6 +445,10 @@ impl SubagentTool {
             // rust-doctor-disable-next-line excessive-clone
             runtime = runtime.with_context_budget_config(cfg.clone());
         }
+        if let Some(refiner) = self.context_budget_refiner.as_ref() {
+            runtime = runtime
+                .with_context_budget_refinement(refiner.clone(), self.primary_context_window);
+        }
         if let Some(cheap) = self.cheap_summary_provider.clone() {
             runtime = runtime.with_cheap_summary_provider(cheap);
         }

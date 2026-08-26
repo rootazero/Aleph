@@ -328,11 +328,9 @@ fn MarketplacesSection() -> impl IntoView {
                         // Registered but not fetched is a real state, and
                         // saying so beats an empty catalogue with no reason.
                         error.set(Some(
-                            crate::components::admin_refusal::settings_write_error(
-                                i18n,
-                                &e,
-                                |e| format!("Added, but fetching its contents failed: {e}"),
-                            ),
+                            crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                                format!("Added, but fetching its contents failed: {e}")
+                            }),
                         ));
                     }
                 }
@@ -351,8 +349,8 @@ fn MarketplacesSection() -> impl IntoView {
     let remove = move |name: String| {
         busy.set(true);
         error.set(None);
-        let params = serde_json::to_value(MarketplaceRemoveParams { name })
-            .unwrap_or_else(|_| json!({}));
+        let params =
+            serde_json::to_value(MarketplaceRemoveParams { name }).unwrap_or_else(|_| json!({}));
         spawn_local(async move {
             let outcome = state.rpc_call("plugin.marketplace.remove", params).await;
             busy.set(false);
@@ -755,7 +753,8 @@ fn InstallPluginDialog(
     // Browse state.
     let query = RwSignal::new(String::new());
     let browse_rows = RwSignal::new(Vec::<MarketplacePluginRow>::new());
-    let browse_problems = RwSignal::new(Vec::<aleph_protocol::plugins::MarketplaceProblemRow>::new());
+    let browse_problems =
+        RwSignal::new(Vec::<aleph_protocol::plugins::MarketplaceProblemRow>::new());
     let browsing = RwSignal::new(false);
     let refreshing = RwSignal::new(false);
 
@@ -818,16 +817,14 @@ fn InstallPluginDialog(
                     // keeps "you are not an admin" from rendering as "there
                     // are no plugins".
                     browse_rows.set(Vec::new());
-                    browse_problems.set(vec![
-                        aleph_protocol::plugins::MarketplaceProblemRow {
-                            marketplace: String::new(),
-                            reason: crate::components::admin_refusal::settings_load_error(
-                                i18n,
-                                &e,
-                                |e| format!("Failed to browse marketplace: {e}"),
-                            ),
-                        },
-                    ]);
+                    browse_problems.set(vec![aleph_protocol::plugins::MarketplaceProblemRow {
+                        marketplace: String::new(),
+                        reason: crate::components::admin_refusal::settings_load_error(
+                            i18n,
+                            &e,
+                            |e| format!("Failed to browse marketplace: {e}"),
+                        ),
+                    }]);
                     browsing.set(false);
                 }
             }
@@ -846,16 +843,12 @@ fn InstallPluginDialog(
             let outcome = state.rpc_call("plugin.marketplace.update", json!({})).await;
             refreshing.set(false);
             if let Err(e) = outcome {
-                browse_problems.set(vec![
-                    aleph_protocol::plugins::MarketplaceProblemRow {
-                        marketplace: String::new(),
-                        reason: crate::components::admin_refusal::settings_write_error(
-                            i18n,
-                            &e,
-                            |e| format!("Failed to refresh marketplace index: {e}"),
-                        ),
-                    },
-                ]);
+                browse_problems.set(vec![aleph_protocol::plugins::MarketplaceProblemRow {
+                    marketplace: String::new(),
+                    reason: crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                        format!("Failed to refresh marketplace index: {e}")
+                    }),
+                }]);
                 return;
             }
             run_browse(q);

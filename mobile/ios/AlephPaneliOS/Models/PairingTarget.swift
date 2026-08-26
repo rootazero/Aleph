@@ -1,26 +1,101 @@
 import Foundation
 
 /// A validated connection target: the full URL of an `aleph-server` Gateway,
-/// including any `?token=…`. Parsing mirrors the desktop lite shell's
-/// `ConnectionTarget::parse` (default scheme https, default port 18790) so the
-/// two shells share one onboarding format. iOS has no Local variant — the phone
-/// shell never embeds a server.
+/// including any `?token=…`.
+///
+/// Parsing mirrors the desktop lite shell's `ConnectionTarget::parse`, and that
+/// is a promise, not a remark: the two shells deliberately share one onboarding
+/// format, so an address that works on the desktop must work here. It did not.
+/// This file used to default a bare host to `https` **and** force the Aleph
+/// listener port onto every URL, which combined into `https://host:18790` — an
+/// origin no deployment serves. See ``defaultPort(hasTypedScheme:scheme:)``.
+///
+/// iOS has no Local variant — the phone shell never embeds a server.
 struct PairingTarget: Equatable {
     let url: URL
 
-    static let defaultPort: UInt16 = 18790
+    /// `aleph-server`'s own default listener. Applies only to a bare host; a
+    /// typed `http://` / `https://` gets the scheme's default instead.
+    static let alephListenerPort: UInt16 = 18790
 
-    /// Host of the target (without brackets for IPv6).
+    /// Host of the target, always **without** IPv6 brackets.
+    ///
+    /// Foundation has shipped both spellings here: `URLComponents.host` handed
+    /// back `::1` on the version this file was first written against and hands
+    /// back `[::1]` on the current one. Neither is assumed — brackets are
+    /// stripped if present — because a comment that names an external
+    /// behaviour is a fact that can rot while still reading as correct, and
+    /// this one did. Nothing that builds a URL *string* may use this accessor;
+    /// use ``hostLiteral``.
     var host: String {
-        URLComponents(url: url, resolvingAgainstBaseURL: false)?.host ?? ""
+        let raw = URLComponents(url: url, resolvingAgainstBaseURL: false)?.host ?? ""
+        guard raw.hasPrefix("["), raw.hasSuffix("]") else { return raw }
+        return String(raw.dropFirst().dropLast())
     }
 
-    /// Port of the target; falls back to `defaultPort` if somehow absent.
+    /// The host as it must appear **inside a URL string**: bracketed when it is
+    /// an IPv6 literal, bare otherwise.
+    ///
+    /// One accessor owns the bracket rule so it is answered once instead of at
+    /// each call site. It was answered twice before, in opposite directions:
+    /// ``origin`` re-added brackets Foundation had already supplied and emitted
+    /// `http://[[::1]]:18790`, while ``unreachableMessage`` two lines down
+    /// interpolated the raw host and happened to be right — on this Foundation,
+    /// and wrong on the other one.
+    var hostLiteral: String {
+        let bare = host
+        return bare.contains(":") ? "[\(bare)]" : bare
+    }
+
+    /// Port of the target. ``parse(_:)`` always writes an explicit port, so the
+    /// fallback below is defensive only — and it resolves through the same
+    /// scheme-aware rule rather than reaching for the listener default, which
+    /// is how `https` and 18790 got paired in the first place.
     var port: UInt16 {
-        guard let p = URLComponents(url: url, resolvingAgainstBaseURL: false)?.port else {
-            return Self.defaultPort
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        if let explicit = components?.port, let narrowed = UInt16(exactly: explicit) {
+            return narrowed
         }
-        return UInt16(exactly: p) ?? Self.defaultPort
+        return Self.defaultPort(hasTypedScheme: true, scheme: components?.scheme)
+    }
+
+    /// Scheme of the target; `http` when somehow absent (``parse(_:)`` always
+    /// writes one).
+    var scheme: String {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?.scheme ?? "http"
+    }
+
+    /// The endpoint this target actually resolves to, port included.
+    ///
+    /// Every user-facing message goes through this one accessor so a message
+    /// can never name a different endpoint than the one that was dialled —
+    /// mirrors `gateway_probe::target_origin` on the desktop. The port is
+    /// usually the one *we* filled in, so it is invisible in the address field,
+    /// and a silently wrong default port is exactly how a correct-looking
+    /// address fails.
+    var origin: String {
+        "\(scheme)://\(hostLiteral):\(port)"
+    }
+
+    /// The port to assume when the user wrote none. Two different questions,
+    /// two different answers — a straight port of the desktop shell's
+    /// `connection::default_port_for`:
+    ///
+    ///   * A bare `host` / `host/path` means *"an aleph-server lives there"*,
+    ///     whose default listener is ``alephListenerPort`` — the LAN case.
+    ///   * An explicitly written `http://` / `https://` means *"this URL"*,
+    ///     whose default port is the scheme's own (80 / 443). The gateway ships
+    ///     with TLS off, so a typed `https://` almost always names a reverse
+    ///     proxy or a CDN, and those live on 443.
+    ///
+    /// Injecting 18790 into a typed `https://host` rewrote a working
+    /// `https://gw.example.com` into `https://gw.example.com:18790`, which no
+    /// proxy forwards. The CDN edge still completed the TCP handshake before
+    /// closing, so the old connect-only probe called it healthy and the phone
+    /// navigated to a dead origin — with no way back but a shake gesture.
+    static func defaultPort(hasTypedScheme: Bool, scheme: String?) -> UInt16 {
+        guard hasTypedScheme else { return alephListenerPort }
+        return scheme == "https" ? 443 : 80
     }
 
     /// Parse user/raw input into a target. See `PairingError` for rejections.
@@ -28,7 +103,14 @@ struct PairingTarget: Equatable {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .failure(.empty) }
 
-        let withScheme = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
+        // A bare host means "an aleph-server lives there", and the gateway
+        // ships with TLS off — so the assumed scheme is `http`, matching the
+        // desktop shell. (ATS permits plaintext to local-network addresses via
+        // `NSAllowsLocalNetworking`, which is what a bare host denotes; a bare
+        // *public* hostname is then refused by the probe with an explanation
+        // instead of failing later inside the webview.)
+        let hasTypedScheme = trimmed.contains("://")
+        let withScheme = hasTypedScheme ? trimmed : "http://\(trimmed)"
         guard var components = URLComponents(string: withScheme) else {
             return .failure(.invalidURL)
         }
@@ -49,13 +131,42 @@ struct PairingTarget: Equatable {
             return .failure(.invalidURL)
         }
         // URLComponents.port is non-nil only when the user wrote an explicit
-        // port (it does NOT apply scheme defaults), so this cleanly injects the
-        // default only when none was supplied.
+        // port (it does NOT apply scheme defaults), so this cleanly injects a
+        // default only when none was supplied — and which default depends on
+        // whether they typed a scheme.
         if components.port == nil {
-            components.port = Int(Self.defaultPort)
+            components.port = Int(
+                defaultPort(hasTypedScheme: hasTypedScheme, scheme: components.scheme)
+            )
         }
         guard let url = components.url else { return .failure(.invalidURL) }
         return .success(PairingTarget(url: url))
+    }
+
+    /// What the pairing screen says when nothing answered at this target.
+    ///
+    /// Derived from ``origin`` so the endpoint it names is the one that was
+    /// probed, and carrying the same three-way hint as the desktop connect page
+    /// (`gateway_probe::unreachable_message`). The hint matters more than the
+    /// failure: an `https` target on a non-default port is the reverse-proxy
+    /// case, where the fix is to **remove** the port — telling that user to
+    /// "try another port" sends them the wrong way, and every install upgrading
+    /// from the build that force-injected 18790 lands exactly there.
+    var unreachableMessage: String {
+        let hint: String
+        if scheme == "https" && port != 443 {
+            hint = "If it is behind a reverse proxy or CDN, remove the port so "
+                + "the default 443 is used (https://\(hostLiteral))."
+        } else if scheme == "https" {
+            hint = "If the server listens on a different port, add it "
+                + "explicitly (for example \(hostLiteral):8443)."
+        } else {
+            hint = "If it is behind HTTPS or a reverse proxy, enter the full "
+                + "URL (for example https://\(hostLiteral)); to use a different "
+                + "port, add it explicitly (for example \(hostLiteral):18790)."
+        }
+        return "No Aleph server answered at \(origin). "
+            + "Check the address and that the server is running. \(hint)"
     }
 }
 

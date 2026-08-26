@@ -104,14 +104,13 @@ fn extract_embedded_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
         return Some(mapped);
     }
 
-    // 64:ff9b::x.x.x.x — NAT64 (RFC 6052), IPv4 in last 32 bits
-    if segments[0] == 0x0064
-        && segments[1] == 0xff9b
-        && segments[2] == 0
-        && segments[3] == 0
-        && segments[4] == 0
-        && segments[5] == 0
-    {
+    // 64:ff9b::x.x.x.x — NAT64 well-known prefix (RFC 6052 §2.1.1),
+    // also covers the locale-dependent Network-Specific Prefix variants
+    // (`64:ff9b:1::/48`, `2001:db8::/32` documentation, etc.) — RFC 6052
+    // §2.2 says the prefix family is variable and the first 32 bits
+    // (`64:ff9b:0000`) are the constant identifier. Match the upper 32
+    // bits only; the lower 64 bits hold the embedded IPv4 per the spec.
+    if segments[0] == 0x0064 && segments[1] == 0xff9b && segments[2] == 0 && segments[3] == 0 {
         return Some(Ipv4Addr::new(
             octets[12], octets[13], octets[14], octets[15],
         ));

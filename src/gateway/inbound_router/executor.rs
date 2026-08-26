@@ -472,6 +472,20 @@ impl InboundMessageRouter {
             &request.run_id,
         );
 
+        // Crash-durability write point (one of two; the Panel/CLI twin lives
+        // in `busy_queue::spawn`). Only a *registered* ticket is journaled —
+        // a `None` here is REJECT_NEWEST, the sender already heard no. The
+        // locale rides `metadata["locale"]` (stamped above), same source the
+        // outcome path below re-derives from.
+        if ticket.is_some() && crate::gateway::busy_queue::durable::is_armed() {
+            let locale = crate::gateway::i18n::Locale::from_config(
+                request.metadata.get("locale").map(String::as_str),
+            );
+            crate::gateway::busy_queue::durable::record_enqueued(
+                crate::gateway::busy_queue::QueuedRunPayload::from_request(&request, locale),
+            );
+        }
+
         // Spawn the delivery task (non-blocking). While the session is busy the
         // waiter parks on the lane's wake signal — fired by the engine when the
         // session's run slot frees — instead of polling, and only the front
@@ -494,35 +508,39 @@ impl InboundMessageRouter {
                     let mut attempt = || {
                         execution_adapter.execute(request.clone(), agent.clone(), emitter.clone())
                     };
-                    // Same frame from the channel arrival path. It goes on the
-                    // WS bus, NOT back to Telegram/Slack: a Panel watching the
-                    // shared session should see a queued message from a
-                    // channel, while the channel itself gets no "you are in
-                    // line" chatter. `OriginFanoutEmitter` only fans out final
-                    // answers, so skeleton events never reach a channel.
-                    let queued_emitter = emitter.clone();
-                    let queued_run_id = run_id.clone();
-                    let queued_session = request.session_key.to_key_string();
-                    let mut report = move |ahead: u16| {
-                        let emitter = queued_emitter.clone();
-                        let run_id = queued_run_id.clone();
-                        let session_key = queued_session.clone();
-                        async move {
-                            if let Err(e) = emitter
-                                .emit(crate::gateway::StreamEvent::RunQueued {
-                                    run_id,
-                                    session_key,
-                                    ahead,
-                                })
-                                .await
-                            {
-                                tracing::debug!("failed to emit RunQueued: {e}");
-                            }
-                        }
-                    };
+                    // Same frame from the channel arrival path — the shared
+                    // constructor carries the bus-not-channel rule and the
+                    // failure policy; see `run_queued_reporter`.
+                    let mut report = crate::gateway::busy_queue::run_queued_reporter(
+                        emitter.clone(),
+                        request.run_id.clone(),
+                        request.session_key.to_key_string(),
+                    );
                     deliver_with_ticket(ticket, busy_cfg, &mut attempt, &mut report).await
                 }
             };
+
+            // Journal tombstone for the terminal outcome — the lane arms
+            // (admitted/purge/cancel) cover their own cases; what remains is
+            // "the attempt concluded" (gate refusal without admission) and
+            // the wait deadline. `Rejected` never journaled (register failed).
+            match &outcome {
+                DeliveryOutcome::Executed(_) => {
+                    crate::gateway::busy_queue::durable::record_settled(
+                        &run_id,
+                        crate::gateway::busy_queue::SettleReason::AttemptConcluded,
+                    )
+                }
+                DeliveryOutcome::TimedOut => crate::gateway::busy_queue::durable::record_settled(
+                    &run_id,
+                    crate::gateway::busy_queue::SettleReason::TimedOut,
+                ),
+                DeliveryOutcome::Purged => crate::gateway::busy_queue::durable::record_settled(
+                    &run_id,
+                    crate::gateway::busy_queue::SettleReason::Purged,
+                ),
+                DeliveryOutcome::Rejected => {}
+            }
 
             // An attempt that actually ran already reported its own failure to
             // this channel through the run's `ReplyEmitter` (`RunError` →

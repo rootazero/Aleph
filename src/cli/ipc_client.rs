@@ -31,11 +31,21 @@ where
             data_dir.display()
         )
     })?;
-    let url = format!(
-        "{}/{}",
-        endpoint.url.trim_end_matches('/'),
-        route.trim_start_matches('/')
-    );
+    // Robust URL join via `url::Url::join` rather than the prior
+    // `format!("{}/{...}")` slice: today the daemon writes a bare
+    // `scheme://host:port`, but a future reverse-proxy prefix or query
+    // string would be silently appended to the wrong segment.
+    let base =
+        url::Url::parse(&endpoint.url).context("endpoint URL is not a parseable URL")?;
+    let joined = base
+        .join(route)
+        .with_context(|| format!("cannot join route {route:?} to base {base}"))?;
+    // Strip any query string the base may carry; the admin routes do not
+    // honour one, and a query from a tampered endpoint file would otherwise
+    // be forwarded verbatim.
+    let mut url = joined;
+    url.set_query(None);
+    let url = url.to_string();
 
     let token = read_token(data_dir)?;
     let resp = call_once(&url, method, &body, &token)?;
@@ -116,31 +126,73 @@ fn call_once(
 /// deployment uses one) but **only** when the endpoint is on loopback — any
 /// non-loopback host is a clear signal of operator error or a MITM attempt
 /// and is refused outright rather than silently trusted.
+///
+/// Both `http://` and `https://` must be loopback: the bearer token is the
+/// only authentication, so even on plain HTTP, sending it to an external
+/// host leaks the admin credential to whatever the daemon's endpoint file
+/// was tampered into pointing at.
 fn build_client(url: &str) -> anyhow::Result<reqwest::blocking::Client> {
     let mut builder =
         reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(10));
+    let host = host_of(url).ok_or_else(|| {
+        anyhow::anyhow!("could not parse host out of endpoint URL {url:?}")
+    })?;
+    if !is_loopback_host(&host) {
+        anyhow::bail!(
+            "admin IPC endpoint is not on loopback ({host} from {url}); \
+             refusing to forward the bearer token to a non-loopback host. \
+             Bind the daemon to 127.0.0.1 or ::1 and update .ipc-endpoint.json."
+        );
+    }
     if url.starts_with("https://") {
-        let host = url
-            .trim_start_matches("https://")
-            .split([':', '/', '?'])
-            .next()
-            .unwrap_or("");
-        // IPv6 hosts arrive as `[::1]`; strip the brackets for the comparison.
-        let host = host.trim_start_matches('[').trim_end_matches(']');
-        if is_loopback_host(host) {
-            // Self-signed cert on loopback is the supported local TLS setup.
-            builder = builder.danger_accept_invalid_certs(true);
-        } else {
-            anyhow::bail!(
-                "TLS IPC endpoint is not on loopback ({url}); refusing to connect \
-                 without certificate verification. Use `http://` for non-loopback \
-                 or pin a CA-signed certificate on the server."
-            );
-        }
+        // Self-signed cert on loopback is the supported local TLS setup.
+        builder = builder.danger_accept_invalid_certs(true);
     }
     builder
         .build()
         .context("failed to build HTTP client for admin IPC")
+}
+
+/// Extract the host portion of a `scheme://host:port/path` URL, correctly
+/// handling bracketed IPv6 hosts (`[::1]:18790` → `::1`). Falls back to
+/// `None` for unparseable input so the caller can produce a clear error.
+fn host_of(url: &str) -> Option<String> {
+    // Strip the scheme.
+    let after_scheme = url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(url);
+    // Strip userinfo (none expected today, but stay defensive).
+    let after_userinfo = after_scheme.split_once('@').map(|(_, rest)| rest).unwrap_or(after_scheme);
+    // Truncate at the first `:`, `/`, or `?` that closes the host portion.
+    // For IPv6 these come in the form `[::1]:port` so use `url::Url::parse`
+    // to do the bracket-aware split rather than the prior byte-split which
+    // turned `[::1]:18790` into host `::1` only when an extra `:18790`
+    // boundary survived — fragile and silently rejected loopback HTTPS in
+    // production (see review-results/cli-logic-2026-08-26/REPORT.md Warning 2).
+    url::Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_string))
+        .or_else(|| {
+            // Manual fallback: strip everything from the host-closing delimiter.
+            let mut end = after_userinfo.len();
+            for (idx, ch) in after_userinfo.char_indices() {
+                if matches!(ch, '/' | '?') {
+                    end = idx;
+                    break;
+                }
+            }
+            let host = &after_userinfo[..end];
+            // Strip the bracketed IPv6 form to bare `::1` etc.
+            let host = host
+                .strip_prefix('[')
+                .and_then(|s| s.strip_suffix(']'))
+                .unwrap_or(host);
+            // Stop at the trailing `]:port` — none expected here since the
+            // loop above already removed `:`, but defensive.
+            let host = host.split(':').next().unwrap_or("");
+            if host.is_empty() { None } else { Some(host.to_string()) }
+        })
 }
 
 fn is_loopback_host(host: &str) -> bool {

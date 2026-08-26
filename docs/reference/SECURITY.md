@@ -495,6 +495,40 @@ Teams (dispatcher / broadcast) are deliberately **not** stamped: a member run's
 approvals resolve to a Panel card, and the user who dispatched the team is the
 operator watching it.
 
+
+**But "the user who dispatched the team" is one person only until the room has
+two (2026-08-25).** In a project room the person who *started* the team and the
+person whose message triggered this member run are routinely different, and the
+card used to go to the room's owner regardless. It now follows the **speaker**:
+the same `author_user_id` the transcript labels the turn with, carried into the
+approval request, so the card lands with the person whose action is waiting on
+it. Two consequences worth stating: the room owner is no longer guaranteed to
+see every card in their room (they see the ones their own turns raise, plus
+whatever their operator tier grants them), and a turn with no author at all —
+a channel-driven or scheduled run — still routes the old way, because there is
+no speaker to route to. Falling back to the owner there is a wrong-but-honest
+addressee, not a widened one: it is the same principal the run would have
+reached before.
+
+**And the wire it rides on was cut, for every card, since before any of this
+(found by `qa/teamchat_rooms`, fixed 2026-08-25).** `TURN_ORIGINATOR` is scoped
+**once per run tree** at `run_agent_loop`, while `TURN_CONTEXT` is re-scoped at
+the tool chokepoint by `ScopedToolService::execute`. Between the two sits
+`orchestrator::dispatch`'s harness `tokio::spawn`, which hand-rolled a list of
+task-locals to re-establish — agent id, project root, scope, room author — and
+that list never learned about the originator. So `TURN_CONTEXT` survived the
+boundary and `TURN_ORIGINATOR` did not, and every
+`ExecApprovalRecord::originator_user_id` raised from inside a run was `None`.
+That silently disarmed **both** consumers: the channel button-callback gate in
+`ManagerCallbackSink::handle_callback` ("only the human who asked may press the
+button" — the group-chat bypass it exists to close) and the room narrowing in
+`approval_addressable_by_caller`. Neither degraded loudly; both fell back to
+the pre-existing "any paired user / any session owner" rule, which is what they
+were written to replace. **A lost task-local and a run that never had one are
+the same `None`**, which is why no in-process test could see it and a
+two-process real-machine run could: `run_agent_loop` logged `Some(u-…)` and
+`OperatorApprovalRequester` logged `None`, one spawn apart. Guarded at source by
+`dispatch.rs::the_harness_spawn_reestablishes_the_run_tree_originator`.
 **刻意不做 · session grants do NOT survive into an unattended continuation
 (评估于 2026-08-07, 用户裁定)。** In `confirm_with_memory` the `if self.unattended`
 auto-deny sits **before** the session-grant short-circuit, so an action a human
@@ -2756,6 +2790,49 @@ attribution, and a bound workspace as the room's default cwd.
   `speaker_label`): room members are same-server operators under the
   single-layer trust model; rewriting user prose to defend against peers of
   equal privilege costs more than it buys.
+- **The room's WORKSPACE tab is read-only, and that is a boundary, not a
+  simplification.** `projects.workspace.list` / `.read` let a member browse
+  and read the folder the room is bound to. Three properties hold it:
+  reads are roster-gated exactly like every other room predicate; a path
+  that escapes the bound root and a path that does not exist return the
+  **same** refusal, so the tab cannot be used to probe the server's
+  filesystem outside the room; and reads are capped (8 KB, binary refused
+  rather than lossily decoded). What it deliberately does NOT have is a
+  write verb — a room member editing the owner's checkout through a browse
+  UI is a different privilege from reading it, and there is no request that
+  needs it today.
+
+  **The threat this tab makes concrete, which the binding gate did not:**
+  before it, binding a room to an over-broad directory (`~`, a repo root
+  holding secrets) only affected what an *agent run* could reach in that
+  room. Now it is directly readable by every person on the roster, one
+  click, no model in the loop. The gate on the binding
+  (`caller_may_choose_directory()`) is unchanged and still correct — the
+  owner chose the directory through a gated verb — but the consequence of
+  choosing badly got larger. Bind rooms to the project folder, not to a
+  home directory.
+- **The room's member list reaches the model, and it is display-grade for
+  the same reason the speaker labels are.** `RoomRosterLayer` renders
+  `<room_context>` naming the roster and marking the owner. The names come
+  from `nudges::speaker_label` — the same seam the transcript labels use, so
+  a member cannot spell a display name that forges a second speaker in
+  either place, and there is exactly one sanitiser rather than two spellings
+  of one rule. It is bounded (24 names, then a count) because the block
+  rides on every request for the whole conversation and the list is
+  something another member can grow. A session that is not a project room
+  renders nothing at all.
+- **Model-facing room management goes through the same authorization as the
+  RPC face, and stops short of the one verb that grants reach.**
+  `project_manage` (R8) shares `projects::authz` with `handlers/projects.rs`
+  — the same `project_for` (not-found for a non-member) and `is_owner`
+  (owner or org admin) — so a room renamed in words and one renamed by a
+  click pass the same gates. `bind_workspace` is **absent from the tool on
+  purpose**: it is a writer of `workspace_path`, the gate it needs is
+  `caller_may_choose_directory()`, and that predicate is fail-OPEN for a
+  caller with no connection role — which on a tool face is a model running
+  under cron or A2A. Writing a stricter predicate just for this face would
+  be a second answer to "may this actor name a server directory", and the
+  two answers would drift.
 - **The §11 honesty boundary applies unchanged.** Project isolation is
   privacy-grade, exactly like P1 — it prevents ACCIDENTAL cross-room and
   cross-user exposure between cooperating users. All three §11 hard

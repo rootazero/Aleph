@@ -595,6 +595,42 @@ pub struct SessionKnobs<'a> {
     pub memory_mode: Option<&'a str>,
 }
 
+/// The run `chat.history` reports in flight on the session being attached,
+/// and how old the server says it is.
+///
+/// The age is `Option` inside a run that is `Some` because those are two
+/// different questions with two different answers: "is a turn running here"
+/// is answered by the session registry, "how long has it been running" by the
+/// engine's run table, and a run can leave the second between the two reads —
+/// or be executing in another process entirely. `None` there means "the
+/// server did not tell me", which the join reads as *count from now*, never
+/// as *it started now*.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveRunJoin {
+    pub run_id: String,
+    /// Milliseconds the run had been going when the server answered, on the
+    /// server's monotonic clock. A duration rather than a start stamp so no
+    /// client has to reconcile its clock with the server's — see
+    /// `ExecutionAdapter::run_elapsed_ms`.
+    pub elapsed_ms: Option<u64>,
+}
+
+/// Read a transcript row's RFC3339 stamp, falling back to now.
+///
+/// One parser for both producers of that stamp, and they are the same value:
+/// `chat.history` serves `MessageRecord::rfc3339` and
+/// `StreamEvent::SessionUserMessage` carries the stamp taken from the very same
+/// record. A second reader here would be a second answer to "when did this row
+/// happen" for one row.
+///
+/// Falling back to now rather than refusing the row: an unreadable stamp is a
+/// cosmetic loss, and dropping a peer's message to protect a timestamp would
+/// trade the thing being rendered for the caption under it.
+pub(super) fn row_timestamp(raw: Option<&str>) -> DateTime<Utc> {
+    raw.and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map_or_else(Utc::now, |dt| dt.with_timezone(&Utc))
+}
+
 #[derive(Debug)]
 pub struct AppState {
     // -- Chat --
@@ -655,6 +691,20 @@ pub struct AppState {
     /// the run topology.
     cache_root_agent: Option<String>,
     pub is_connected: bool,
+    /// This client's own principal id, fetched once at startup (`users.me`).
+    ///
+    /// Sole consumer is the `SessionUserMessage` arm: a room peer's message
+    /// becomes a bubble here, the viewer's own does not. `None` means the
+    /// question cannot be answered — an older gateway, a transport error, or a
+    /// caller with no principal record — and disables the echo rather than
+    /// guessing, because the only wrong guess renders the user's own message
+    /// twice with nothing to clean it up.
+    ///
+    /// Deliberately NOT derived from `current_run`: the frame races the
+    /// `chat.send` response that would teach this screen its own run id, so
+    /// run ownership is unknown at exactly the moment it would be needed.
+    /// Author identity is known before the send, not after it.
+    pub my_user_id: Option<String>,
 
     /// `(run_id, session_key)` pairs learned from every `RunAccepted` this
     /// screen has observed, own or foreign. Every other run-scoped frame is
@@ -671,14 +721,47 @@ pub struct AppState {
     /// to a busy install does not grow this without limit.
     run_sessions: std::collections::VecDeque<(String, String)>,
 
+    /// Whether the server has told this screen which run (if any) is in flight
+    /// on [`Self::session_key`].
+    ///
+    /// Set by `commands::attach_session` from `chat.history`'s `active_run`
+    /// field; cleared by [`Self::switch_session`], whose caller re-attaches
+    /// immediately after.
+    ///
+    /// It exists to make [`Self::frame_belongs_here`] able to say "not mine"
+    /// about a run id it has never heard of. That answer used to be
+    /// unavailable, so an unknown id was kept — and a client that STARTS while
+    /// another terminal is mid-turn on a different session never sees that
+    /// run's `RunAccepted` and therefore never learns it is foreign, so its
+    /// reasoning, tool rows and answer stream into whatever conversation this
+    /// screen is showing. Once the server has answered, the picture is
+    /// complete: this session's in-flight run (if any) is known by name, and
+    /// every run started on it afterwards announces itself with a
+    /// `RunAccepted` this connection receives. Anything else is somebody
+    /// else's.
+    ///
+    /// `false` until then, which reproduces the previous fail-open exactly —
+    /// including against a core too old to send the field at all.
+    session_reconciled: bool,
+
     // -- Run tracking --
     pub current_run: Option<String>,
-    /// Wall-clock start of the active run (set on `RunAccepted`, cleared on any
-    /// run-end). Drives the status-bar working indicator's elapsed timer.
+    /// Start of the active run, on the monotonic clock. Set to now on
+    /// `RunAccepted`; on [`AppState::adopt_active_run`] it is BACK-DATED by the
+    /// age the server reported, so joining a turn already minutes deep reports
+    /// that turn's age and not this screen's attachment. Cleared on any
+    /// run-end. Drives the status-bar working indicator's elapsed timer.
     pub run_started_at: Option<Instant>,
     pub last_run_duration: Option<Duration>,
     pub current_run_uses_agent_trace: bool,
     pub current_run_trace_summary_applied: bool,
+    /// True while [`Self::load_trace_replay`] is projecting a persisted trace
+    /// onto the live state. The summary-side arms of `apply_agent_trace_event`
+    /// (`SessionCompleted` / `ProviderUsage`) check this so the replay's
+    /// finished-run accounting does not bleed into the current session's
+    /// status-bar counters — a passive replay must not move the tokens/cache
+    /// numbers the user is looking at.
+    pub replaying_trace: bool,
     /// Bytes of the current turn's assistant text already appended by
     /// `ResponseChunk` deltas.
     ///
@@ -749,6 +832,11 @@ pub struct AppState {
     pub ctrl_c_count: u8,
     pub spinner_frame: usize,
     pub should_quit: bool,
+
+    /// Per-message rendered-line cache for the chat area — see
+    /// `widgets::chat_area::LineCache`. Not part of any serialized/exported
+    /// state; purely a render-time optimization.
+    pub chat_line_cache: crate::tui::widgets::chat_area::LineCache,
 }
 
 impl AppState {
@@ -783,12 +871,15 @@ impl AppState {
             cache_stat_agent: None,
             cache_root_agent: None,
             is_connected: true,
+            my_user_id: None,
             run_sessions: std::collections::VecDeque::new(),
+            session_reconciled: false,
 
             current_run: None,
             run_started_at: None,
             last_run_duration: None,
             current_run_uses_agent_trace: false,
+            replaying_trace: false,
             turn_streamed_len: 0,
             run_rendered_assistant_text: false,
             current_run_trace_summary_applied: false,
@@ -808,6 +899,8 @@ impl AppState {
             ctrl_c_count: 0,
             spinner_frame: 0,
             should_quit: false,
+
+            chat_line_cache: crate::tui::widgets::chat_area::LineCache::default(),
         }
     }
 
@@ -1375,6 +1468,53 @@ impl AppState {
         }
     }
 
+    /// The socket died: stop believing what this screen learned from it.
+    ///
+    /// Only [`Self::session_reconciled`] is dropped, and dropping it is the
+    /// whole point. That bit means "the server has told THIS screen which run
+    /// is in flight here" — and the server that told it is gone. Left set, it
+    /// leaves [`Self::frame_belongs_here`] answering "not mine" about unknown
+    /// run ids on the strength of a baseline taken from a connection that no
+    /// longer exists, including about a run that STARTED while this client was
+    /// offline and whose `RunAccepted` it therefore never saw. Cleared, the
+    /// fallback returns to keeping what it cannot prove foreign, which is the
+    /// honest posture for a screen that has been out of the room.
+    ///
+    /// `current_run` is deliberately NOT cleared. That turn is very likely
+    /// still running; this client simply cannot hear it. Clearing it switches
+    /// off the working indicator and reports the turn as over, which is the one
+    /// thing this screen does not know.
+    pub fn on_disconnected(&mut self) {
+        self.is_connected = false;
+        self.session_reconciled = false;
+    }
+
+    /// Reset what a reconnect makes uncertain, before re-attaching.
+    ///
+    /// The transcript is deliberately NOT touched here. It is replaced by
+    /// `attach_session(.., AttachMode::Replace)`, inside that call's success
+    /// branch and only once the server's copy has arrived — clearing first
+    /// turns a `chat.history` that fails on a freshly-restored connection into
+    /// a blank screen, which is worse than the stale transcript it replaced.
+    ///
+    /// What IS reset: the run this screen believed was in flight (the attach
+    /// re-answers it from the server, and a stale id would otherwise survive a
+    /// turn that ended while this client was away) and the reconciliation bit,
+    /// so unknown run ids are kept until the server has spoken again.
+    ///
+    /// Unlike [`Self::switch_session`] this leaves the `/btw` overlay alone.
+    /// The side thread belongs to the SAME conversation, which has not changed,
+    /// and its derived key is still addressable server-side.
+    pub fn begin_reattach(&mut self) {
+        self.current_run = None;
+        self.run_started_at = None;
+        self.current_run_uses_agent_trace = false;
+        self.current_run_trace_summary_applied = false;
+        self.turn_streamed_len = 0;
+        self.run_rendered_assistant_text = false;
+        self.session_reconciled = false;
+    }
+
     /// Switch to a different session and reset transient chat/run UI state.
     /// The caller then appends the fetched `chat.history` transcript.
     pub fn switch_session(&mut self, session_key: &str) {
@@ -1387,6 +1527,11 @@ impl AppState {
         self.session_snapshot = None;
         self.model_name.clone_from(&self.default_model_name);
         self.messages.clear();
+        // The cache is keyed by positional index into `messages`, which is
+        // about to be repopulated from scratch — a stale entry whose (kind,
+        // len, width) happens to match new content at the same index must
+        // not survive.
+        self.chat_line_cache = crate::tui::widgets::chat_area::LineCache::default();
         // The run left behind (if any) still belongs to the OLD session, and
         // nothing extra needs to be recorded for that here: its own
         // `RunAccepted` already taught `run_sessions` which session it is
@@ -1397,6 +1542,12 @@ impl AppState {
         self.run_started_at = None;
         self.current_run_uses_agent_trace = false;
         self.current_run_trace_summary_applied = false;
+        // Nothing has been asked about the INCOMING session yet. The caller
+        // attaches immediately after and sets this again; until it does,
+        // `frame_belongs_here` falls back to keeping unknown run ids, which is
+        // the safe direction while this screen genuinely cannot tell.
+        self.session_reconciled = false;
+
         // The side thread belongs to the conversation we just left, and it is
         // cleared rather than kept per-conversation. Two reasons, and the
         // second is the decisive one:
@@ -1457,6 +1608,11 @@ impl AppState {
     /// Clear the chat screen (keep session state).
     pub fn clear_screen(&mut self) {
         self.messages.clear();
+        // The cache is keyed by positional index into `messages`, which is
+        // about to be repopulated from scratch — a stale entry whose (kind,
+        // len, width) happens to match new content at the same index must
+        // not survive.
+        self.chat_line_cache = crate::tui::widgets::chat_area::LineCache::default();
         self.scroll_offset = 0;
         self.auto_scroll = true;
         self.add_system_message("Screen cleared.".to_string());

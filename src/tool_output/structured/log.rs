@@ -171,8 +171,15 @@ fn mark_signal(
             let Some(&follower) = lines.get(i + k) else {
                 break;
             };
-            if !follower.trim().is_empty()
-                && indent_of(follower) <= base_indent
+            // Blank lines terminate context: a real diagnostic body is a run of
+            // non-empty indented lines, and a blank line between blocks is the
+            // signal the next block belongs to a different loud line. Keeping
+            // the blank itself (and the line past it) silently dragged the next
+            // diagnostic in as "context" for this one.
+            if follower.trim().is_empty() {
+                break;
+            }
+            if indent_of(follower) <= base_indent
                 && !is_loud(follower)
                 && !is_continuation(follower)
             {

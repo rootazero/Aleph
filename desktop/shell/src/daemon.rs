@@ -277,16 +277,14 @@ async fn port_open() -> bool {
     TcpStream::connect((DAEMON_HOST, DAEMON_PORT)).await.is_ok()
 }
 
-/// Bare TCP reachability for a remote Gateway — connect only, no HTTP/TLS.
-/// True reachability + auth + TLS are the webview's job; the supervisor only
-/// needs "is the port answering".
-pub async fn tcp_reachable(host: &str, port: u16) -> bool {
-    tokio::time::timeout(PROBE_TIMEOUT, TcpStream::connect((host, port)))
-        .await
-        .ok()
-        .and_then(std::result::Result::ok)
-        .is_some()
-}
+// `tcp_reachable` (bare TCP connect for a remote Gateway) lived here and is
+// deliberately gone rather than kept "for future use" (R10). It answered a
+// different question than its caller asked — a CDN edge or a port-forward to
+// nothing completes the handshake and then closes, which it reported as
+// healthy — and the remote supervisor now shares the lite shell's
+// `gateway_probe::target_reachable`, which asks for `/ready` over the target's
+// own scheme. `port_open` above stays: it is loopback-only and its caller
+// (`probe_port`) immediately follows it with the HTTP status check.
 
 /// Minimal HTTP/1.0 GET that returns just the numeric status code. Avoids
 /// pulling a full HTTP client into the shell for a single localhost probe.

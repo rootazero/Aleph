@@ -30,10 +30,7 @@ fn search_rows(result: &Value) -> Vec<Vec<String>> {
                 .and_then(Value::as_i64)
                 .map_or_else(|| "-".to_string(), |t| t.to_string());
             let agent = item.get("agent_id").and_then(|v| v.as_str()).unwrap_or("-");
-            let content = item
-                .get("content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("-");
+            let content = item.get("content").and_then(|v| v.as_str()).unwrap_or("-");
             rows.push(vec![ts, agent.to_string(), truncate(content, 80)]);
         }
     }

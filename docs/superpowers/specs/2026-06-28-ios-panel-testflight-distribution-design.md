@@ -1,5 +1,15 @@
 # iOS Panel TestFlight Distribution — Design Spec
 
+> **⚠️ Superseded 2026-08-24 — the committed `Info.plist` this document edits no longer exists.**
+> `mobile/ios/AlephPaneliOS/Resources/Info.plist` is xcodegen *output* and is now
+> gitignored beside the generated `.xcodeproj`; `project.yml`'s `info.properties`
+> block is the only source, and there is nothing to restore before a commit. Every
+> step below that stages that file, or that asks a regeneration to preserve its
+> `${ALEPH_VERSION}` / `${ALEPH_BUILD}` placeholders, describes the world as it was
+> — the current one is stated once, in `mobile/ios/README.md` and
+> `mobile/ios/.gitignore`. Kept as the record of what was done: do not re-add the
+> file by following it.
+
 > First iOS distribution slice. Give the existing iOS Panel app a repeatable way
 > to reach real devices via **TestFlight internal testing**, driven by one local
 > script. Pure shell/ops — **zero panel change, zero Rust, zero CI**. Unblocks the

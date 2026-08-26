@@ -199,6 +199,8 @@ async fn h_t1_worktree_isolation_happy_path() {
         default_max_iterations: None,
         parallel_tool_concurrency: None,
         context_budget_config: None,
+        context_budget_refiner: None,
+        primary_context_window: None,
         cheap_summary_provider: None,
     };
 

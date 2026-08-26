@@ -129,7 +129,7 @@ impl ConnectionTarget {
     /// Parse a persisted/user-entered target string. `"local"` (any case) or
     /// empty → Local. Otherwise normalise to a `Remote(Url)`:
     /// accept `host`, `host:port`, `http://host`, `https://host:port`;
-    /// default scheme `http`, default port 18790.
+    /// default scheme `http`, default port per [`default_port_for`].
     pub fn parse(raw: &str) -> Result<Self, String> {
         let t = raw.trim();
         if t.is_empty() || t.eq_ignore_ascii_case("local") {
@@ -153,11 +153,12 @@ impl ConnectionTarget {
         // equals the scheme default" (e.g. https:443, http:80) — the two cases are
         // indistinguishable after parsing.  We therefore inspect the pre-parse
         // string: if it already contains ":<digits>" after the host, the user made
-        // an explicit choice and we honour it; otherwise we inject DEFAULT_PORT.
+        // an explicit choice and we honour it; otherwise we pick the default that
+        // matches what the user actually wrote (see [`default_port_for`]).
         let has_explicit_port = has_explicit_port_in_input(t);
         if !has_explicit_port {
             // set_port only errors when the URL cannot have a port (it can here)
-            let _ = url.set_port(Some(DEFAULT_PORT));
+            let _ = url.set_port(Some(default_port_for(t, url.scheme())));
         }
         Ok(Self::Remote(url))
     }
@@ -193,6 +194,44 @@ impl ConnectionTarget {
             Self::Local => url.origin().unicode_serialization() == crate::PANEL_URL,
             Self::Remote(target) => url.origin() == target.origin(),
         }
+    }
+}
+
+/// The port to assume when the user wrote none. Two different questions, two
+/// different answers:
+///
+///   * A bare `host` / `host/path` means *"an aleph-server lives there"*, whose
+///     default listener is [`DEFAULT_PORT`] — the LAN case, unchanged.
+///   * An explicitly written `http://` / `https://` means *"this URL"*, whose
+///     default port is the scheme's own (80 / 443). TLS on the gateway is off by
+///     default and `gateway::tls` states outright that public issuance is
+///     Caddy's / certbot's job, so a typed `https://` almost always names a
+///     reverse proxy or CDN on 443.
+///
+/// Injecting [`DEFAULT_PORT`] into a typed `https://host` made every
+/// reverse-proxied deployment structurally unreachable: the shell rewrote a
+/// working `https://gw.example.com` into `https://gw.example.com:18790`, which
+/// no proxy serves. No persisted target regresses, because [`to_persisted`]
+/// always writes an explicit port and `has_explicit_port_in_input` then honours
+/// it — the rule only reinterprets *freshly typed* input.
+///
+/// [`to_persisted`]: ConnectionTarget::to_persisted
+///
+/// **Mirrored on iOS.** `mobile/ios/…/Models/PairingTarget.swift` ports this
+/// rule verbatim and pins it with its own tests, because the two shells
+/// promise one onboarding format — an address that works on the desktop must
+/// work on the phone. That promise is written down only on the iOS side, and
+/// nothing here can fail when it is broken: the halves are built by different
+/// toolchains (`cargo` never compiles the Swift, `xcodebuild` never compiles
+/// this), so changing the rule below is green in CI while silently splitting
+/// the two shells apart. Change one, change both.
+fn default_port_for(raw: &str, scheme: &str) -> u16 {
+    if !raw.contains("://") {
+        return DEFAULT_PORT;
+    }
+    match scheme {
+        "https" => 443,
+        _ => 80,
     }
 }
 
@@ -289,6 +328,26 @@ pub(crate) fn connect_page_url() -> &'static str {
     {
         "tauri://localhost/connect.html"
     }
+}
+
+/// [`connect_page_url`] with a routing failure carried in the fragment, for
+/// the page to render on load.
+///
+/// Deliberately NOT an `eval("window.__alephError(…)")` after `navigate`: the
+/// two are unordered, so the script runs against the *outgoing* document where
+/// the hook does not exist yet, the `&&` guard makes it a silent no-op, and the
+/// explanation is lost — the failure mode is "the connect page appears with no
+/// reason on it", which is exactly the stranding this page exists to prevent.
+/// A fragment is part of the load itself and cannot race.
+///
+/// The message embeds a user-supplied host, so it is percent-encoded rather
+/// than concatenated; `#` or `&` in a hostname would otherwise truncate it.
+pub(crate) fn connect_page_url_with_error(message: &str) -> String {
+    if message.is_empty() {
+        return connect_page_url().to_string();
+    }
+    let encoded: String = url::form_urlencoded::byte_serialize(message.as_bytes()).collect();
+    format!("{}#err={encoded}", connect_page_url())
 }
 
 /// The bundled cert-trust approval page (`splash/cert-trust.html`) as a
@@ -403,6 +462,7 @@ pub fn is_lite_shell() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use url::form_urlencoded;
 
     #[test]
     fn lite_flag_matches_build_variant() {
@@ -450,9 +510,63 @@ mod tests {
     #[test]
     fn explicit_scheme_preserved() {
         let t = ConnectionTarget::parse("https://gw.example.com").unwrap();
-        assert_eq!(t.to_persisted(), "https://gw.example.com:18790");
+        assert_eq!(t.to_persisted(), "https://gw.example.com:443");
         let t2 = ConnectionTarget::parse("https://gw.example.com:443").unwrap();
         assert_eq!(t2.to_persisted(), "https://gw.example.com:443");
+    }
+
+    /// A typed `https://host` must land on 443, not on the bare-host default.
+    /// Rewriting it to `:18790` is what made every reverse-proxy / CDN
+    /// deployment unreachable — the shell pointed the webview at a port no
+    /// proxy serves, and the user had no way to see why.
+    #[test]
+    fn a_typed_https_url_keeps_the_schemes_own_port() {
+        let t = ConnectionTarget::parse("https://aleph.example.com").unwrap();
+        assert_eq!(t.to_persisted(), "https://aleph.example.com:443");
+        // An explicitly written non-default port still wins.
+        let t2 = ConnectionTarget::parse("https://aleph.example.com:8443").unwrap();
+        assert_eq!(t2.to_persisted(), "https://aleph.example.com:8443");
+        // A typed http:// URL likewise means "this URL", i.e. port 80.
+        let t3 = ConnectionTarget::parse("http://aleph.example.com").unwrap();
+        assert_eq!(t3.to_persisted(), "http://aleph.example.com:80");
+    }
+
+    /// The bare-host form is the LAN case and must keep pointing at the
+    /// aleph-server default listener — this is the half that must NOT move.
+    #[test]
+    fn a_bare_host_still_gets_the_aleph_default_port() {
+        for raw in ["192.168.1.5", "box.lan", "[::1]"] {
+            let t = ConnectionTarget::parse(raw).unwrap();
+            assert!(
+                t.to_persisted().ends_with(":18790"),
+                "bare host {raw} must keep the aleph default port, got {}",
+                t.to_persisted()
+            );
+        }
+    }
+
+    /// Every already-saved target round-trips unchanged: `to_persisted` always
+    /// writes an explicit port, so reloading it takes the "user was explicit"
+    /// branch. This is the no-regression argument for the rule change above —
+    /// existing installs cannot be re-interpreted by it.
+    #[test]
+    fn a_persisted_target_round_trips_its_port() {
+        for raw in [
+            "192.168.1.5",
+            "box.lan:9000",
+            "https://gw.example.com",
+            "http://gw.example.com",
+            "http://[::1]",
+            "https://gw.example.com:8443",
+        ] {
+            let once = ConnectionTarget::parse(raw).unwrap();
+            let persisted = once.to_persisted();
+            let twice = ConnectionTarget::parse(&persisted).unwrap();
+            assert_eq!(
+                once, twice,
+                "reloading the persisted form of {raw} ({persisted}) changed the target"
+            );
+        }
     }
 
     #[test]
@@ -469,8 +583,11 @@ mod tests {
 
     #[test]
     fn ipv6_without_port_gets_default_port() {
+        // Typed scheme → that scheme's port; bare host → the aleph default.
         let t = ConnectionTarget::parse("http://[::1]").unwrap();
-        assert_eq!(t.to_persisted(), "http://[::1]:18790");
+        assert_eq!(t.to_persisted(), "http://[::1]:80");
+        let bare = ConnectionTarget::parse("[::1]").unwrap();
+        assert_eq!(bare.to_persisted(), "http://[::1]:18790");
     }
 
     #[test]
@@ -504,6 +621,40 @@ mod tests {
     fn credential_from_url_falls_back_to_legacy_token() {
         let url = Url::parse("https://gw.example.com:8443/?token=aleph-abc123").unwrap();
         assert_eq!(credential_from_url(&url).as_deref(), Some("aleph-abc123"));
+    }
+
+    #[test]
+    fn an_empty_message_leaves_the_connect_page_url_untouched() {
+        // First run has nothing to explain; it must not grow a stray `#err=`.
+        assert_eq!(connect_page_url_with_error(""), connect_page_url());
+    }
+
+    #[test]
+    fn the_reason_survives_the_url_round_trip() {
+        // The page reads this back with URLSearchParams over the fragment, so
+        // the encoding has to be recoverable — not merely "looks escaped".
+        let msg = "No Aleph server answered at https://gw.example.com:18790. \
+                   Check the address & that the server is running.";
+        let url = Url::parse(&connect_page_url_with_error(msg)).unwrap();
+        let frag = url.fragment().expect("reason must ride the fragment");
+        let recovered = form_urlencoded::parse(frag.as_bytes())
+            .find(|(k, _)| k == "err")
+            .map(|(_, v)| v.into_owned())
+            .expect("`err` key must be present");
+        assert_eq!(recovered, msg);
+    }
+
+    #[test]
+    fn a_hostname_cannot_truncate_the_reason() {
+        // `#` and `&` are the two characters that would silently cut the
+        // message short if it were concatenated instead of encoded.
+        let msg = "unreachable at https://a#b&c:443 — check it";
+        let url = Url::parse(&connect_page_url_with_error(msg)).unwrap();
+        let recovered = form_urlencoded::parse(url.fragment().unwrap().as_bytes())
+            .find(|(k, _)| k == "err")
+            .map(|(_, v)| v.into_owned())
+            .unwrap();
+        assert_eq!(recovered, msg, "the whole message must survive");
     }
 
     #[test]

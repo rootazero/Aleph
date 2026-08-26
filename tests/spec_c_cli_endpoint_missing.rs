@@ -32,7 +32,13 @@ fn cli_secret_set_reports_missing_endpoint_when_lock_held() {
     let bin = env!("CARGO_BIN_EXE_aleph-server");
     let out = Command::new(bin)
         .args(["secret", "set", "FOO", "--value", "bar"])
+        // `ALEPH_HOME` outranks the `HOME` fallback (see
+        // `utils::paths::get_config_dir`), so set both. With only `HOME`,
+        // this child resolves its state outside the tempdir on any machine
+        // that has `ALEPH_HOME` set — and `ALEPH_HOME` is a product knob,
+        // not a test-only switch.
         .env("HOME", &home)
+        .env("ALEPH_HOME", home.join(".aleph"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()

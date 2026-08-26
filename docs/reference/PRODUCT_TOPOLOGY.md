@@ -100,6 +100,13 @@ GUI webview 连 `127.0.0.1:18790`。零配置。
     持久化到 `~/.aleph/.desktop-shell-target`；之后启动直连。导航是 probe-gated（目标 Gateway 应答才 navigate，否则停在 connect 页，不白屏）。
   - **更轻的替代**：笔记本上直接用浏览器开 `http://<mac-mini-ip>:18790`，连 App 都不用装。
     纯壳 App 相对浏览器的增量价值 = 原生托盘/菜单/系统通知/deep-link/窗口管理。
+  - **完整 App 也能指向远程**（2026-08-24 起）：菜单/托盘的 "Connect to Remote…" 在两种产物下都在，
+    而完整 App 此前**每次启动都把持久化的 Remote 重置回 Local** —— 连得上、当次能用、下次启动静默忘记。
+    现在 target 跨重启保留：指向 Remote 时它按 `reroute_for_target` 同一条规则先探针再导航，
+    并**不启动内置 daemon**（"the remote daemon is not ours to manage"，与监督器 Remote 臂一致）；
+    点 "Back to Local" 才把本机 core 拉起来。⚠️ 推论：指向远程期间本机没有 core，
+    依赖它的 `aleph` CLI / 本地 channel 也就不在。守卫见
+    `main.rs::{boot_honours_a_persisted_remote_target, boot_treats_a_remote_target_exactly_as_a_runtime_switch_does}`。
 
 ### C. 服务器 / NAS headless（纯 core）
 

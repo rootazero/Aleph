@@ -31,7 +31,7 @@ use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, IN
 use crate::sync_primitives::Arc;
 use crate::thinker::identity_files::{
     backup_identity_file, list_identity_file_status, validate_identity_file_name,
-    write_identity_file,
+    write_identity_file_async,
 };
 use crate::thinker::identity_profile::AgentIdentityProfile;
 use crate::thinker::soul::SoulManifest;
@@ -194,7 +194,7 @@ pub async fn handle_set(request: JsonRpcRequest, ctx: SharedIdentityCtx) -> Json
     };
 
     let file_name = set.file_name.as_deref().unwrap_or(DEFAULT_IDENTITY_FILE);
-    match write_identity_file(&agent_dir, file_name, &set.content) {
+    match write_identity_file_async(&agent_dir, file_name, &set.content).await {
         Ok(outcome) => JsonRpcResponse::success(
             request.id,
             json!({
@@ -206,7 +206,26 @@ pub async fn handle_set(request: JsonRpcRequest, ctx: SharedIdentityCtx) -> Json
                 "note": "Identity updated. Takes effect on the next turn.",
             }),
         ),
-        Err(e) => JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
+        Err(e) => {
+            // Classify the failure so clients can route the response correctly.
+            // `write_identity_file` only emits three error categories, and
+            // their discriminator (the colon-prefixed tag) is part of the
+            // public error contract — `self_config::write_file` parses it for
+            // the LLM-facing message. Two are operator mistakes (bad file
+            // name, oversize content) and stay on `INVALID_PARAMS`. The third
+            // — a real filesystem failure (mkdir / write / IO) — is an
+            // internal state problem and must surface as `INTERNAL_ERROR`;
+            // reporting it as `INVALID_PARAMS` makes the operator blame
+            // their own request and re-issue a doomed one.
+            let code = if e.starts_with("Failed to create agent directory")
+                || e.starts_with("Failed to write ")
+            {
+                INTERNAL_ERROR
+            } else {
+                INVALID_PARAMS
+            };
+            JsonRpcResponse::error(request.id, code, e)
+        }
     }
 }
 
@@ -496,5 +515,73 @@ mod tests {
         .await;
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn set_rejects_oversize_content() {
+        // Guard the 1 MB cap (identity_files::MAX_IDENTITY_FILE_SIZE) at the
+        // RPC surface: oversize content is an operator mistake, so it must
+        // surface as `INVALID_PARAMS` — same shape as a bad file name.
+        // (The same cap is asserted at the library surface in identity_files.rs
+        // and at the tool surface in self_config.rs; this is the third leg.)
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_with_agent(tmp.path(), "main");
+        let oversize = "x".repeat(crate::thinker::identity_files::MAX_IDENTITY_FILE_SIZE + 1);
+        let resp = handle_set(
+            JsonRpcRequest::new(
+                "identity.set",
+                Some(json!({ "content": oversize })),
+                Some(json!(1)),
+            ),
+            ctx,
+        )
+        .await;
+        assert!(resp.is_error(), "oversize write must fail");
+        let err = resp.error.unwrap();
+        assert_eq!(
+            err.code, INVALID_PARAMS,
+            "operator mistake → INVALID_PARAMS"
+        );
+        assert!(err.message.contains("exceeds maximum size"));
+        // And the file must NOT have been written.
+        assert!(!tmp.path().join("main").join("SOUL.md").exists());
+    }
+
+    #[tokio::test]
+    async fn set_classifies_filesystem_failures_as_internal_error() {
+        // When the agent directory cannot be created (e.g. a parent path that
+        // is actually a regular file) the write fails with a
+        // `Failed to create agent directory:` or `Failed to write ...`
+        // message — both are operator-state failures, not request-shape
+        // mistakes, and must surface as `INTERNAL_ERROR` so the operator
+        // doesn't blame their own payload and retry a doomed write.
+        let tmp = TempDir::new().unwrap();
+        // Pre-create a regular file where the agent dir should be — `create_dir_all`
+        // on a path that already names a file returns NotADirectory.
+        std::fs::write(tmp.path().join("main"), b"not a directory").unwrap();
+        let ctx = Arc::new(IdentityHandlerContext::with_base("main", tmp.path()));
+
+        let resp = handle_set(
+            JsonRpcRequest::new(
+                "identity.set",
+                Some(json!({ "content": "new soul" })),
+                Some(json!(1)),
+            ),
+            ctx,
+        )
+        .await;
+        assert!(resp.is_error());
+        let err = resp.error.unwrap();
+        assert_eq!(
+            err.code, INTERNAL_ERROR,
+            "filesystem failure must be INTERNAL_ERROR, got {:?}: {}",
+            err.code, err.message
+        );
+        assert!(
+            err.message.starts_with("Failed to create agent directory")
+                || err.message.starts_with("Failed to write "),
+            "unexpected message shape: {}",
+            err.message
+        );
     }
 }

@@ -115,13 +115,24 @@ impl PreflightPipeline {
     /// Create a new pipeline with the given ordered stages. The preventive-band
     /// floor defaults to `0.0` (always run); set it with
     /// [`with_min_pressure_ratio`](Self::with_min_pressure_ratio).
+    ///
+    /// **Cache-stability defaults (audit 2026-08-26 F3):** the previous
+    /// `new()` shipped with `cut_quantum = 1` and `min_savings_ratio = 0.0`
+    /// (commit any rewrite, even one token). On a near-empty context that
+    /// would bust the prompt cache every turn. The defaults now match
+    /// [`DEFAULT_CUT_QUANTUM`] and [`DEFAULT_MIN_SAVINGS_RATIO`] so a
+    /// caller that builds the pipeline directly (without going through
+    /// [`default_pipeline`]) still inherits the cache-safe guardrails.
+    /// `flush_ratio = 1.0` is kept so the degenerate no-budget path
+    /// (which feeds a `ratio: 1.0` placeholder into the pipeline) keeps its
+    /// historical always-run behaviour.
     #[must_use]
     pub fn new(stages: Vec<Box<dyn PreflightStage>>) -> Self {
         Self {
             stages,
             min_pressure_ratio: 0.0,
-            cut_quantum: 1,
-            min_savings_ratio: 0.0,
+            cut_quantum: DEFAULT_CUT_QUANTUM,
+            min_savings_ratio: DEFAULT_MIN_SAVINGS_RATIO,
             flush_ratio: 1.0,
         }
     }
@@ -415,11 +426,17 @@ mod tests {
     #[tokio::test]
     async fn default_pipeline_floor_is_always_on() {
         // `new` without a floor keeps the historical behaviour: stages run even
-        // at very low pressure (floor defaults to 0.0).
+        // at very low pressure (floor defaults to 0.0). Audit 2026-08-26 F3
+        // tightened `new`'s cache-stability defaults
+        // (`cut_quantum = DEFAULT_CUT_QUANTUM`, `min_savings_ratio = DEFAULT_MIN_SAVINGS_RATIO`),
+        // so to assert the floor-only behaviour we explicitly zero the
+        // cache-stability guards (the same shape the original test relied on
+        // via the old unsafe defaults).
         let pipeline = PreflightPipeline::new(vec![Box::new(MockStage {
             name: "always",
             tokens_to_free: 42,
-        })]);
+        })])
+        .with_cache_stability(1, 0.0, 1.0);
         let mut msgs = vec![UnifiedMessage::user("test")];
         let freed = pipeline.run(&mut msgs, &make_pressure(0.01), 1).await;
         assert_eq!(freed, 42);
@@ -427,6 +444,9 @@ mod tests {
 
     #[tokio::test]
     async fn pipeline_runs_stages_in_order_and_sums_freed() {
+        // Audit 2026-08-26 F3: explicit `with_cache_stability(1, 0.0, 1.0)`
+        // bypasses the new safe defaults so the test exercises the stage-
+        // ordering assertion without crossing the savings floor.
         let pipeline = PreflightPipeline::new(vec![
             Box::new(MockStage {
                 name: "stage_a",
@@ -436,7 +456,8 @@ mod tests {
                 name: "stage_b",
                 tokens_to_free: 250,
             }),
-        ]);
+        ])
+        .with_cache_stability(1, 0.0, 1.0);
         let mut msgs = vec![UnifiedMessage::user("test")];
         let pressure = make_pressure(0.8);
         let freed = pipeline.run(&mut msgs, &pressure, 1).await;
@@ -445,6 +466,8 @@ mod tests {
 
     #[tokio::test]
     async fn pipeline_respects_per_stage_pressure_thresholds() {
+        // See `pipeline_runs_stages_in_order_and_sums_freed` for why the
+        // explicit cache-stability override is required post-F3.
         let pipeline = PreflightPipeline::new(vec![
             Box::new(ThresholdStage {
                 name: "low_threshold",
@@ -456,7 +479,8 @@ mod tests {
                 threshold: 0.9,
                 tokens_to_free: 200,
             }),
-        ]);
+        ])
+        .with_cache_stability(1, 0.0, 1.0);
         let mut msgs = vec![UnifiedMessage::user("test")];
 
         // Pressure at 0.7 — only the low-threshold stage should fire
@@ -492,7 +516,10 @@ mod tests {
             }
         }
 
-        let pipeline = PreflightPipeline::new(vec![Box::new(RecordingStage)]);
+        // Audit 2026-08-26 F3: bypass the new safe defaults so the
+        // fresh_tail_count plumbing is exercised in isolation.
+        let pipeline = PreflightPipeline::new(vec![Box::new(RecordingStage)])
+            .with_cache_stability(1, 0.0, 1.0);
         let mut msgs = vec![UnifiedMessage::user("test")];
         let pressure = make_pressure(0.5);
         let freed = pipeline.run(&mut msgs, &pressure, 42).await;

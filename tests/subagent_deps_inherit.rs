@@ -159,6 +159,10 @@ async fn subagent_base_carries_4_p1_fields() {
         // asserted by routing, not by presence, in
         // `subagent_spawner::tests::a_child_compactor_summarizes_on_the_inherited_cheap_tier`.
         cheap_summary_provider: None,
+        // No refiner in this fixture: the spawn falls back to the unrefined
+        // chain-minimum budget, which is exactly what the test pins.
+        context_budget_refiner: None,
+        primary_context_window: None,
     };
 
     // Structural assertions — the 5 P1 fields are populated as expected.

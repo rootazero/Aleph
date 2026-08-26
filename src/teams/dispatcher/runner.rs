@@ -486,6 +486,16 @@ pub async fn execute_member_task(
         Err(_) => {
             // Timeout — abort the spawned task to free resources.
             abort_handle.abort();
+            // `tokio::JoinHandle::abort` only signals cancellation; the
+            // task may still be mid-flight, holding the worktree directory
+            // open while it finishes flushing stdout / writing tool output.
+            // The explicit `cleanup().await` below calls
+            // `git worktree remove --force`, which would race the spawned
+            // task's open file descriptors and produce ENOENT / EBUSY in
+            // member-side logs. A short grace window lets the task unwind
+            // before the directory disappears. The window is bounded so a
+            // misbehaving member cannot indefinitely block the dispatcher.
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             // Keep what it produced. The per-task session is durable and the
             // messages are already written, so the same one-line read the
             // success arm uses works here too — and the NEXT attempt's
@@ -650,14 +660,24 @@ async fn execute_acp_member_task(
 }
 
 /// Fetch the last assistant reply from an agent's session.
+///
+/// Reads a trailing window (default 20 frames — enough to span one full
+/// tool round-trip: user → assistant(tool_call) → tool → assistant(final))
+/// and returns the LAST message with `MessageRole::Assistant`. Reading
+/// only the most-recent frame silently returned `None` whenever the
+/// final assistant turn was followed by a tool result (the tool-using
+/// pattern the dispatcher overwhelmingly produces), making every
+/// tool-using attempt look like an empty reply to the caller.
 async fn fetch_last_reply(
     agent: &crate::gateway::agent_instance::AgentInstance,
     session_key: &SessionKey,
 ) -> Option<String> {
-    let history = agent.get_history(session_key, Some(1)).await;
+    const TRAILING_WINDOW: usize = 20;
+    let history = agent.get_history(session_key, Some(TRAILING_WINDOW)).await;
     history
-        .last()
-        .filter(|msg| {
+        .iter()
+        .rev()
+        .find(|msg| {
             matches!(
                 msg.role,
                 crate::gateway::agent_instance::MessageRole::Assistant

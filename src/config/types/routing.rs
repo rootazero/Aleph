@@ -2,6 +2,18 @@
 //!
 //! Contains routing rule configuration:
 //! - `RoutingRuleConfig`: AI routing rules with command/keyword types
+//!
+//! **Implementation status (audit 2026-08-26):** only the `regex`,
+//! `system_prompt`, and (for command rules) `is_builtin` fields are
+//! currently consumed by the only production reader,
+//! `tool_metadata::registry::registration::register_custom_commands`.
+//! The fields `provider`, `preferred_model`, `strip_prefix`, `intent_type`,
+//! and `icon` parse and round-trip cleanly through serde but are silently
+//! dropped on the registration path. They are kept on the struct so
+//! existing operator TOML files do not break; the runtime contract is
+//! documented honestly here rather than allowed to drift silently. A future
+//! patch that wires these fields must (a) update the registration path to
+//! honor them and (b) keep the field-level doc-comments in sync.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

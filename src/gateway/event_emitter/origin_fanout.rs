@@ -237,6 +237,7 @@ mod tests {
         /// Every production site, each answered in `btw::format_side_answer`.
         const ANSWERED: &[&str] = &[
             "src/gateway/announce_delivery.rs",
+            "src/gateway/busy_queue/durable.rs",
             "src/gateway/resume_coordinator.rs",
             "src/gateway/execution_engine/execute.rs",
             "src/gateway/handlers/agent.rs",

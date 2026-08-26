@@ -324,7 +324,12 @@ pub fn validate(plugin_dir: &Path, json_mode: bool) -> CliResult<()> {
             "warnings": result.warnings,
             "info": result.info,
         });
-        println!("{}", serde_json::to_string_pretty(&json).unwrap());
+        // `serde_json::Value` serialisation cannot actually fail, but the
+        // project forbids production `unwrap`/`expect`. Treat an
+        // (impossible) error as an empty payload so the CLI still exits 0
+        // rather than panicking on its own output path.
+        let rendered = serde_json::to_string_pretty(&json).unwrap_or_default();
+        println!("{rendered}");
     } else {
         for msg in &result.info {
             println!("  [info] {msg}");
@@ -823,10 +828,28 @@ fn add_dir_to_zip(
             continue;
         }
 
+        // `symlink_metadata` (vs `metadata`) does NOT follow the symlink, so
+        // we can decide per-entry whether to skip, recurse or pack. Following
+        // a symlink with `is_dir()` / `File::open` would happily package
+        // arbitrary files outside `base` (e.g. `/etc/passwd` if the plugin
+        // shipper made a typo).
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let file_type = meta.file_type();
+        if file_type.is_symlink() {
+            // Symlinks are intentionally NOT packed. Resolving them risks
+            // leaking files outside the plugin tree, and the resulting zip
+            // would be ambiguous to load (target moved between pack and
+            // unpack). Skip silently — plugin templates do not ship symlinks.
+            continue;
+        }
+
         let relative = path.strip_prefix(base).unwrap_or(&path);
         let relative_str = relative.to_string_lossy().replace('\\', "/");
 
-        if path.is_dir() {
+        if file_type.is_dir() {
             add_dir_to_zip(zip, base, &path, options)?;
         } else {
             zip.start_file(&relative_str, *options)

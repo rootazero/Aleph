@@ -526,14 +526,32 @@ pub async fn add(
     config: &CliConfig,
     name: &str,
     provider_type: &str,
-    api_key: &str,
+    api_key: Option<&str>,
     base_url: Option<&str>,
     models: &[String],
     json: bool,
 ) -> CliResult<()> {
+    // Resolution order for the credential:
+    //   1. `--api-key` flag (visible in `ps` / shell history — discouraged)
+    //   2. `ALEPH_PROVIDER_API_KEY` env var (hidden, see clap `hide_env_values`)
+    //   3. Interactive hidden prompt via `rpassword` — never echoed,
+    //      never enters history. The order keeps the credential off disk
+    //      and off the process listing for callers who reach for the flag.
+    let api_key = match api_key.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(key) => key.to_string(),
+        None if json => {
+            return Err(CliError::Other(
+                "`--api-key` (or ALEPH_PROVIDER_API_KEY) is required in --json mode \
+                 (no TTY available for a hidden prompt)"
+                    .into(),
+            ));
+        }
+        None => rpassword::prompt_password("API key (input hidden): ")
+            .map_err(|e| CliError::Other(format!("read api key: {e}")))?,
+    };
     // Before connecting: a request the server is guaranteed to refuse is a
     // mistake at the command line, and there is nothing a round trip can add.
-    let params = create_params(name, provider_type, api_key, base_url, models)?;
+    let params = create_params(name, provider_type, &api_key, base_url, models)?;
 
     let (client, _events) = AlephClient::connect(server_url, config).await?;
     let result: Value = client.call("providers.create", Some(params)).await?;

@@ -121,6 +121,113 @@ pub struct AgentRunAccepted {
     pub accepted_at: String,
 }
 
+/// Parameters for `agent.status` as a thin client sends them.
+///
+/// A run id is the only handle some clients have on a run. The `/btw` overlay
+/// is the case that forced this type into the shared crate: a side question
+/// executes on a *derived* session whose key is hashed server-side (see
+/// [`crate::btw`]), so the asking client can never address that conversation —
+/// it holds the run id its own `agent.run` handed back, and nothing else.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRunStatusRequest {
+    /// The run to ask about.
+    pub run_id: String,
+}
+
+/// What `agent.status` reports about one run.
+///
+/// # Absence is not an answer
+///
+/// The manager's table is in-process. A run it has no record of is reported as
+/// an error, and that error means exactly one thing — *this* gateway process
+/// has never heard of this id — which covers both "you asked about someone
+/// else's run" (deliberately indistinguishable, see `caller_may_address_run`)
+/// and "the process that was running it is gone". Neither is a verdict about
+/// the work, and a client must not render either as one.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRunStatusReport {
+    /// The run asked about, echoed back.
+    #[serde(default)]
+    pub run_id: String,
+    /// The session the run was routed to. For a `/btw` run this is the **main**
+    /// conversation, not the derived side session: the redirect happens inside
+    /// `execute()`, long after the run was registered under the routed key.
+    #[serde(default)]
+    pub session_key: String,
+    /// One of the four words in [`AgentRunStatusReport`]'s constants. Read it
+    /// through [`Self::phase`] rather than comparing strings at the call site —
+    /// a word this client has never heard of is a real possibility (an older
+    /// client against a newer gateway) and has exactly one safe reading.
+    #[serde(default)]
+    pub status: String,
+    /// How long the run has been alive, measured by the server at the instant
+    /// it answered.
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    /// Why it failed, when it did.
+    ///
+    /// Not skipped when absent: [`Self::status`] already says whether there is
+    /// a failure, so the key is always present and a client sees one shape.
+    /// This field exists because the wire used to drop it — `RunStatus::Failed`
+    /// carries its reason server-side and the response flattened all four
+    /// states to a bare word, so a client told "failed" had nothing to show the
+    /// user but the word.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// What a run's reported [`AgentRunStatusReport::status`] means, with the one
+/// arm that matters: whether it is still being worked on.
+///
+/// [`Self::Unrecognized`] is deliberately **not** grouped with
+/// [`Self::Running`]. A client that reads an unknown word as "still going"
+/// waits forever on a run that ended; one that reads it as "over" stops waiting
+/// on a run that may still be going, and the work itself is unaffected either
+/// way. Only the first of those is unrecoverable, so unknown means "not
+/// running".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunPhase {
+    /// Still being worked on.
+    Running,
+    /// Finished on its own.
+    Completed,
+    /// Ended in an error; [`AgentRunStatusReport::error`] carries it.
+    Failed,
+    /// Stopped by somebody — this client, another client, or a shutdown.
+    Cancelled,
+    /// A word this client has no reading for. See the type doc for why this is
+    /// not `Running`.
+    Unrecognized,
+}
+
+impl AgentRunStatusReport {
+    /// The word for a run still being worked on.
+    pub const RUNNING: &'static str = "running";
+    /// The word for a run that finished on its own.
+    pub const COMPLETED: &'static str = "completed";
+    /// The word for a run that ended in an error.
+    pub const FAILED: &'static str = "failed";
+    /// The word for a run somebody stopped.
+    pub const CANCELLED: &'static str = "cancelled";
+
+    /// Classify [`Self::status`].
+    ///
+    /// **The one reader of the word set.** The server writes these four
+    /// constants and this function reads them; a `== "running"` written at a
+    /// call site would be a second answer to "is it still going", and it would
+    /// be the one that got the unknown-word case wrong.
+    #[must_use]
+    pub fn phase(&self) -> RunPhase {
+        match self.status.as_str() {
+            Self::RUNNING => RunPhase::Running,
+            Self::COMPLETED => RunPhase::Completed,
+            Self::FAILED => RunPhase::Failed,
+            Self::CANCELLED => RunPhase::Cancelled,
+            _ => RunPhase::Unrecognized,
+        }
+    }
+}
+
 /// A conversation's durable settings, as `chat.history` reports them on
 /// re-attach.
 ///
@@ -258,6 +365,58 @@ mod tests {
         // wrong key: adding optional fields must not change what an existing
         // client sends.
         assert_eq!(obj.len(), 2, "unexpected keys: {obj:?}");
+    }
+
+    fn reported(status: &str) -> AgentRunStatusReport {
+        AgentRunStatusReport {
+            status: status.to_string(),
+            ..AgentRunStatusReport::default()
+        }
+    }
+
+    #[test]
+    fn each_word_the_server_writes_has_a_distinct_reading() {
+        assert_eq!(
+            reported(AgentRunStatusReport::RUNNING).phase(),
+            RunPhase::Running
+        );
+        assert_eq!(
+            reported(AgentRunStatusReport::COMPLETED).phase(),
+            RunPhase::Completed
+        );
+        assert_eq!(
+            reported(AgentRunStatusReport::FAILED).phase(),
+            RunPhase::Failed
+        );
+        assert_eq!(
+            reported(AgentRunStatusReport::CANCELLED).phase(),
+            RunPhase::Cancelled
+        );
+    }
+
+    /// The one arm a client cannot afford to get wrong. An unknown word read as
+    /// `Running` is a spinner that never stops on a run that already ended —
+    /// unrecoverable from the client, unlike the other direction.
+    #[test]
+    fn a_word_this_client_has_never_heard_of_is_not_running() {
+        for unknown in ["", "paused", "queued", "RUNNING"] {
+            assert_eq!(
+                reported(unknown).phase(),
+                RunPhase::Unrecognized,
+                "{unknown:?} must not read as a state this client claims to know"
+            );
+        }
+    }
+
+    /// A missing `error` is a present key, so a client sees one shape whatever
+    /// the run did. The `status` word is what says whether there is a failure.
+    #[test]
+    fn the_status_report_always_carries_every_key() {
+        let v = serde_json::to_value(AgentRunStatusReport::default()).expect("serialize");
+        let obj = v.as_object().expect("object");
+        for key in ["run_id", "session_key", "status", "elapsed_ms", "error"] {
+            assert!(obj.contains_key(key), "{key} missing from {obj:?}");
+        }
     }
 
     #[test]

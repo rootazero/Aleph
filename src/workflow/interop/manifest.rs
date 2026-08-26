@@ -67,7 +67,7 @@ pub struct WorkflowPhase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowManifestStep {
     pub id: String,
     pub agent: String,

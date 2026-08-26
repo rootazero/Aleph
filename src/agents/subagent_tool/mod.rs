@@ -152,6 +152,15 @@ pub struct SubagentTool {
     /// (the `new()` default, or `[context_budget]` disabled) leaves the child
     /// context-unmanaged, matching the main harness under the same config.
     pub(super) context_budget_config: Option<crate::context::budget::ContextBudgetConfig>,
+    /// The parent runner's per-run budget refiner + its configured
+    /// context-window override, inherited so a spawned child's **prompt**
+    /// budget is re-keyed onto the model the child will actually run on
+    /// rather than the chain minimum. `None` (the `new()` default) keeps the
+    /// unrefined chain-minimum derivation.
+    pub(super) context_budget_refiner:
+        Option<crate::orchestrator::deps_builder::ContextBudgetRefiner>,
+    /// See [`Self::context_budget_refiner`] — travels with it.
+    pub(super) primary_context_window: Option<u32>,
     /// The parent runner's cheap-tier summarization provider, inherited so the
     /// child's compactor bills its side-channel to the same flash sibling
     /// rather than the main reasoning model. `None` (the `new()` default, or no
@@ -209,6 +218,8 @@ impl SubagentTool {
             default_max_iterations: None,
             parallel_tool_concurrency: None,
             context_budget_config: None,
+            context_budget_refiner: None,
+            primary_context_window: None,
             cheap_summary_provider: None,
         }
     }
@@ -222,6 +233,23 @@ impl SubagentTool {
         cfg: crate::context::budget::ContextBudgetConfig,
     ) -> Self {
         self.context_budget_config = Some(cfg);
+        self
+    }
+
+    /// Wire the parent runner's per-run budget refiner + window override so a
+    /// spawned child's prompt budget is sized to the model IT will run on
+    /// (the main loop already refines its own; the spawner used to derive
+    /// straight from the chain-minimum config). Pairs with
+    /// [`Self::with_context_budget_config`]: that one sizes the child's
+    /// history budget, this one re-keys both onto the serving model.
+    #[must_use]
+    pub fn with_context_budget_refinement(
+        mut self,
+        refiner: crate::orchestrator::deps_builder::ContextBudgetRefiner,
+        primary_context_window: Option<u32>,
+    ) -> Self {
+        self.context_budget_refiner = Some(refiner);
+        self.primary_context_window = primary_context_window;
         self
     }
 

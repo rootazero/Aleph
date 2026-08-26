@@ -51,15 +51,27 @@ pub fn sanitize_for_prompt(value: &str, level: SanitizeLevel) -> String {
 
 /// Check for Unicode format characters (category Cf) and line/paragraph separators.
 ///
-/// Includes:
-/// - The shared invisible / bidi / tag class, delegated to
-///   `crate::security::unicode_guard::is_invisible_char` (the single source of
-///   truth) so this prompt-facing catalog can never drift from it. This adds
-///   the Hangul fillers (U+3164/115F/1160) and variation selectors
-///   (U+FE00-FE0F) the hand-rolled ranges below omitted.
-/// - A local supplement the SSOT deliberately omits: U+2028/U+2029 (Zl/Zp
-///   separators) and the wider Cf ranges (soft hyphen, Arabic marks,
-///   deprecated + astral-plane format chars).
+/// Two layers:
+///
+/// 1. **Shared invisible class** — delegated to
+///    `crate::security::unicode_guard::is_invisible_char`, the project's
+///    single source of truth for invisible / bidi / tag characters used by
+///    the external-content sanitizer and the sandbox byte path. Keeping this
+///    first means a new invisible char added to the SSOT will start being
+///    stripped by the prompt sanitizer automatically.
+///
+/// 2. **Prompt-only supplement** — a hand-rolled `matches!` covering the
+///    Cf ranges the SSOT deliberately omits (soft hyphen, Arabic letter
+///    mark, Mongolian vowel separator, Zl/Zp separators U+2028/U+2029,
+///    interlinear annotation anchors U+FFF9-FFFB, and the astral-plane
+///    Cf ranges U+110BD / U+110CD / U+13430-1343F / U+1BCA0-1BCA3 /
+///    U+1D173-1D17A). These are SSOT additions deferred to the prompt
+///    layer because the sandbox byte path already handles them via
+///    shell parsing, and the external-content sanitizer rejects them at
+///    a coarser layer. If a new Cf range needs to be caught here,
+///    **also add it to `unicode_guard::is_invisible_char`** and remove
+///    it from the local list below — both call sites should converge on
+///    the SSOT eventually.
 fn is_format_char(c: char) -> bool {
     // Shared invisible class — single source of truth, no drift.
     if crate::security::unicode_guard::is_invisible_char(c) {

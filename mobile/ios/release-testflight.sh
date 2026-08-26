@@ -99,6 +99,5 @@ xcrun altool --upload-app -t ios -f "$IPA" \
   --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
 
 echo "✓ Uploaded. It will appear under App Store Connect → TestFlight after processing."
-echo "  NOTE: this run resolved version/build into AlephPaneliOS/Resources/Info.plist."
-echo "        Run ./generate.sh (or 'git checkout AlephPaneliOS/Resources/Info.plist')"
-echo "        before committing, to restore the \${ALEPH_VERSION}/\${ALEPH_BUILD} placeholders."
+echo "  NOTE: this run resolved version/build into AlephPaneliOS/Resources/Info.plist,"
+echo "        which is generated + gitignored — nothing to restore before committing."

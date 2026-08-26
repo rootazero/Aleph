@@ -313,21 +313,97 @@ impl CommandPolicy {
 /// space-joined, then any UTF-8 stdin payload (the `bash -s` large-script
 /// path) on a fresh line. Non-UTF-8 stdin is skipped — the OS sandbox covers
 /// binary payloads; the policy is a text-pattern filter.
+///
+/// Output is capped at [`MAX_SCAN_BYTES`] * 2 so a sandboxed command cannot
+/// make this function allocate O(stdin.len()) just to feed
+/// [`CommandPolicy::evaluate`], which itself only consumes a
+/// `2 * MAX_SCAN_BYTES`-byte window (head/mid/tail). Pre-truncating here
+/// keeps memory bounded at the same ceiling `evaluate` already assumes,
+/// and the OS sandbox remains the backstop.
+/// The cap is well above any realistic program/args line, so an argv that
+/// genuinely exceeds it would itself be a more interesting incident than
+/// any policy scan missing it.
+///
+/// **What gets dropped is the MIDDLE, never the tail.** `evaluate`'s own
+/// head/mid/tail windowing operates on whatever this function returns, so a
+/// byte discarded here is a byte the hard filter can never see — which is why
+/// "keep the first N" was a bypass rather than a budget.
 #[must_use]
 pub fn command_text(cmd: &SandboxCommand) -> String {
+    const CAP: usize = 2 * MAX_SCAN_BYTES;
+
     let mut s = String::with_capacity(cmd.program.len() + 16);
     s.push_str(&cmd.program);
     for arg in &cmd.args {
         s.push(' ');
         s.push_str(arg);
     }
+    // Cap BEFORE adding the stdin payload: program/args alone overflowing the
+    // scan window is a separate signal we surface by truncation here. A
+    // malicious 100 MiB `bash -s` payload now allocates at most `CAP` bytes
+    // regardless of `stdin.len()`, closing the O(stdin.len()) allocation a
+    // single command could otherwise use to OOM the daemon.
+    if s.len() >= CAP {
+        // `String::truncate` PANICS off a char boundary, and argv is arbitrary
+        // UTF-8 — so floor to one rather than trusting CAP to land cleanly.
+        s.truncate(floor_boundary(&s, CAP));
+        return s;
+    }
     if let Some(stdin) = &cmd.stdin {
         if let Ok(text) = std::str::from_utf8(stdin) {
             s.push('\n');
-            s.push_str(text);
+            let remaining = CAP - s.len();
+            if text.len() <= remaining {
+                s.push_str(text);
+            } else {
+                // Keep the head AND the tail.
+                //
+                // This used to keep only the head, arguing that `evaluate`
+                // windows head/mid/tail over the result so a dangerous tail was
+                // still caught. That argument does not hold: `evaluate` windows
+                // over the buffer IT IS GIVEN, and bytes dropped here are not in
+                // it. The tail of a large stdin was therefore unreachable by the
+                // hard filter, which is a bypass with a trivial recipe —
+                // `bash -s` with a megabyte of padding ahead of the payload.
+                //
+                // The two halves are joined by a newline-fenced marker rather
+                // than spliced directly: an abutted head and tail can FORGE a
+                // match that exists in neither (`…of=` + `/dev/sda`), and the
+                // rules treat a newline as a statement boundary. The marker also
+                // makes the elision visible in any log that prints this text.
+                const ELISION: &str = "\n…[stdin truncated]…\n";
+                let budget = remaining.saturating_sub(ELISION.len());
+                let head_len = budget / 2;
+                let head_end = floor_boundary(text, head_len);
+                let tail_start = ceil_boundary(text, text.len() - (budget - head_len));
+                s.push_str(&text[..head_end]);
+                s.push_str(ELISION);
+                s.push_str(&text[tail_start..]);
+            }
         }
     }
     s
+}
+
+/// Largest char boundary `<= i`. `str::floor_char_boundary` is still unstable,
+/// and a raw `&s[..i]` on a multi-byte payload is a panic in the one code path
+/// whose whole job is to survive hostile input.
+fn floor_boundary(s: &str, mut i: usize) -> usize {
+    if i >= s.len() {
+        return s.len();
+    }
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// Smallest char boundary `>= i`.
+fn ceil_boundary(s: &str, mut i: usize) -> usize {
+    while i < s.len() && !s.is_char_boundary(i) {
+        i += 1;
+    }
+    i
 }
 
 /// `SandboxBeforeHook` that evaluates each command against a [`CommandPolicy`]
@@ -1532,6 +1608,41 @@ mod tests {
         );
         let e = policy(EnforcementMode::Block).evaluate(&text);
         assert!(e.blocked.contains(&"dd_to_block_device".to_string()));
+    }
+
+    /// A hostile `bash -s` with a multi-MiB stdin must not make `command_text`
+    /// allocate O(stdin.len()) — that is the DoS the scan-window cap closes.
+    /// Pre-fix the function built a single `String` of every byte the caller
+    /// passed in; post-fix it returns at most `2 * MAX_SCAN_BYTES + program/args`
+    /// regardless of stdin size, and `evaluate` still scans the (now-bounded)
+    /// text.
+    #[test]
+    fn command_text_caps_an_oversized_payload() {
+        // ~4 MiB of safe padding — well past the 512 KiB scan window.
+        let stdin = vec![b'a'; 4 * 1024 * 1024];
+        let mut cmd = shell_cmd("echo hi");
+        cmd.args = vec!["-s".into()];
+        cmd.stdin = Some(stdin.clone());
+        let text = command_text(&cmd);
+        assert!(
+            text.len() <= 2 * MAX_SCAN_BYTES,
+            "command_text must cap output at 2*MAX_SCAN_BYTES, got {}",
+            text.len()
+        );
+        // The catastrophic tail-of-a-large-stdin shape must STILL be caught:
+        // the dangerous bytes get into the head of the bounded text on
+        // (deterministic) padding-bypass evasion.
+        let mut hostile = vec![b'a'; 2 * MAX_SCAN_BYTES];
+        hostile.extend_from_slice(b" dd if=/dev/zero of=/dev/sda");
+        let mut cmd = shell_cmd("echo hi");
+        cmd.args = vec!["-s".into()];
+        cmd.stdin = Some(hostile);
+        let text = command_text(&cmd);
+        let e = policy(EnforcementMode::Block).evaluate(&text);
+        assert!(
+            e.blocked.contains(&"dd_to_block_device".to_string()),
+            "the dangerous tail of an oversize stdin must still be caught: {e:?}"
+        );
     }
 
     #[test]

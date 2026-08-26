@@ -489,7 +489,18 @@ impl ToolResultStore {
     /// the denial breaker trips — the hole this countermeasure exists to close.
     /// Widening stays inside INV-ISO (epochs of one base key are one trust
     /// domain); it never touches another agent or conversation.
-    pub fn purge_all(&self) {
+    /// Sync body of [`Self::purge_all`], moved off the async executor.
+    ///
+    /// `purge_all` is reached at the gate-trip edge (denial circuit breaker)
+    /// from two async sites: `confirm_with_memory` in `scoped/dispatch.rs`
+    /// and the elevation-gate in `sandbox/workspace`. Both run on the
+    /// tool-dispatch path; a synchronous walk of `base_dir` plus FTS5
+    /// deletes would hold the runtime thread for as many milliseconds as
+    /// there are sessions worth of blobs, and every sibling call in the
+    /// harness's parallel batch pays that stall. The public `purge_all`
+    /// hands the work to `spawn_blocking`; this private body holds the
+    /// actual filesystem + index delete.
+    fn purge_all_sync(&self) {
         let idx = self.index();
         for key in self.read_scope_keys() {
             // 1. Remove this key's offloaded `.txt` blobs (the
@@ -521,6 +532,40 @@ impl ToolResultStore {
                     );
                 }
             }
+        }
+    }
+
+    /// Async front door — hands the blocking I/O to the runtime's blocking
+    /// pool. See [`Self::purge_all_sync`] for the rationale (sync-blocking-on-
+    /// Tokio at the gate-trip edge, which stalls every sibling in the
+    /// harness's parallel batch).
+    ///
+    /// # Why the offload is conditional
+    ///
+    /// `spawn_blocking` panics when no Tokio runtime is in scope, which made
+    /// "does every caller run under a runtime?" a standing obligation — one
+    /// answerable only by auditing call sites, and re-openable by the next
+    /// path added. Both production call sites (`scoped::dispatch`'s
+    /// `confirm_with_memory` and `sandbox::workspace`'s `execute`) do run
+    /// under one today, so the audit passes; the point is that it should not
+    /// have to be redone. The dependency is removed instead of verified.
+    ///
+    /// Falling back to inline is not a degraded mode: with no runtime there is
+    /// no runtime thread to keep free, so the reason for the offload is
+    /// absent too. What must not happen at this call site is either half of
+    /// the alternative — skipping the purge (it is a security breaker's trip
+    /// edge, the one moment the offloaded-result cache must actually go) or
+    /// panicking through the gate that is mid-refusal.
+    pub async fn purge_all(&self) {
+        let inner = self.inner.clone();
+        let session = self.session.clone();
+        // `purge_all_sync` only consults `inner`/`session` on `self`, so
+        // rebuilding a view here is equivalent to calling the method.
+        let run = move || ToolResultStore { inner, session }.purge_all_sync();
+        if tokio::runtime::Handle::try_current().is_ok() {
+            let _ = tokio::task::spawn_blocking(run).await;
+        } else {
+            run();
         }
     }
 
@@ -880,6 +925,27 @@ mod tests {
         (scratch, store, base)
     }
 
+    /// Drive an async front door to completion on a REAL Tokio runtime.
+    ///
+    /// [`ToolResultStore::purge_all`] hands its blocking I/O to
+    /// `tokio::task::spawn_blocking`, which panics outside a runtime —
+    /// and `futures::executor::block_on` is not one. These tests used it
+    /// (correct while `purge_all` was a sync body in an async wrapper) and
+    /// began panicking with "there is no reactor running" the moment the
+    /// offload landed.
+    ///
+    /// A runtime rather than a call to `purge_all_sync`: production reaches
+    /// this through the async door (`scoped::dispatch`, `sandbox::workspace`),
+    /// so that is the door the test should knock on. `spawn_blocking` is served
+    /// by the blocking pool, which a current-thread runtime has too.
+    fn block_on(fut: impl std::future::Future<Output = ()>) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test tokio runtime")
+            .block_on(fut);
+    }
+
     /// Two session-scoped handles over one shared store — the production shape
     /// (boot installs one store; each run narrows it with `for_session`).
     fn shared_pair(name: &str) -> (Arc<ToolResultStore>, Arc<ToolResultStore>, PathBuf) {
@@ -977,7 +1043,7 @@ mod tests {
             "one offloaded blob present before purge"
         );
 
-        store.purge_all();
+        block_on(store.purge_all());
 
         assert_eq!(
             txt_count(&base),
@@ -992,6 +1058,57 @@ mod tests {
         assert!(
             store.search("secret-token-abcdef", 5).is_empty(),
             "ctx_search must find nothing after purge"
+        );
+    }
+
+    /// The twin of [`block_on`]: that helper knocks on the production door
+    /// (runtime present, `spawn_blocking` serves the purge), this one proves
+    /// the other branch. Deliberately behavioural rather than a source-level
+    /// scan for `spawn_blocking` — the property is "the purge happens", and a
+    /// text rule would only pin today's spelling of it.
+    ///
+    /// The future is driven by hand because there is nothing else to drive it
+    /// with: the crate has no second async runtime by policy, so "no runtime
+    /// in scope" cannot be staged by borrowing another executor. A no-op waker
+    /// suffices — a correct `purge_all` never parks on this path, and if it
+    /// starts to, `Pending` is the failure, not a hang.
+    #[test]
+    fn purge_all_still_purges_with_no_runtime_in_scope() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        let (_scratch, store, base) = test_store("purge_all_no_runtime");
+        if let Ok(entries) = std::fs::read_dir(&base) {
+            for e in entries.flatten() {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+        let content = "secret-token-nort ".repeat(200);
+        assert!(store
+            .persist_if_large("call_nort", "bash", &content, 1)
+            .is_some());
+        let _ = store.index_output("call_nort", "bash", &content);
+        assert!(store.indexed_sections() > 0, "content should be indexed");
+
+        // No `#[tokio::test]`, no runtime builder: an unconditional
+        // `spawn_blocking` panics with "there is no reactor running" right here.
+        let mut fut = std::pin::pin!(store.purge_all());
+        assert_eq!(
+            fut.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(()),
+            "purge_all parked with no runtime available to wake it"
+        );
+
+        let txt_left = std::fs::read_dir(&base)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("txt"))
+            .count();
+        assert_eq!(txt_left, 0, "offloaded blobs must be gone after purge");
+        assert_eq!(
+            store.indexed_sections(),
+            0,
+            "index must be empty after purge"
         );
     }
 
@@ -1042,7 +1159,7 @@ mod tests {
         assert!(b_blob.exists());
         assert!(marker_path(&a_marker).exists());
 
-        a.purge_all();
+        block_on(a.purge_all());
 
         assert!(
             !marker_path(&a_marker).exists(),
@@ -1309,7 +1426,7 @@ mod tests {
         );
 
         // The breaker fires on the CHILD handle.
-        child.purge_all();
+        block_on(child.purge_all());
 
         assert!(
             !parent_blob.exists(),
