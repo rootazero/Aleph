@@ -104,12 +104,13 @@ pub fn PhoneMemory() -> impl IntoView {
                     Ok((facts, _total)) => {
                         // Drop the response if the user has navigated to a
                         // different agent while the request was in flight.
-                        if mem.agent_id.get_untracked() == agent {
+                        // Post-`.await`: see `crate::disposed_reads`.
+                        if mem.agent_id.try_get_untracked() == Some(agent.clone()) {
                             st.window.set(facts);
                         }
                     }
                     Err(e) => {
-                        if mem.agent_id.get_untracked() == agent {
+                        if mem.agent_id.try_get_untracked() == Some(agent.clone()) {
                             st.error
                                 .set(Some(crate::components::admin_refusal::settings_load_error(
                                     i18n,
