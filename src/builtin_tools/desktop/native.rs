@@ -1843,9 +1843,25 @@ impl super::DesktopTool {
                 // letting vision-capable agents see a copied image.
                 Some(system) => match system.clipboard_read().await {
                     Ok(content) => {
+                        // Redact token-shaped clipboard text before it crosses
+                        // the IPC boundary — a credential the user copied out
+                        // of a password manager would otherwise land in the
+                        // model context with no defence (see
+                        // review-results/clipboard-logic-2026-08-26/REPORT.md
+                        // Critical 3). The platform limb's read_text stays raw
+                        // for the snapshot/restore pipeline; the IPC layer
+                        // applies the secret-redaction gate here.
+                        let (redacted_text, redacted_flag) = match content.text.as_deref() {
+                            Some(t) => {
+                                let r = aleph_desktop::clipboard_redact::redact_clipboard_text(t);
+                                (Some(r.text), r.redacted)
+                            }
+                            None => (None, false),
+                        };
                         let mut obj = serde_json::Map::new();
-                        obj.insert("text".into(), serde_json::json!(content.text));
+                        obj.insert("text".into(), serde_json::json!(redacted_text));
                         obj.insert("has_image".into(), serde_json::json!(content.has_image));
+                        obj.insert("redacted".into(), serde_json::json!(redacted_flag));
                         if let Some(img) = content.image_base64 {
                             let fitted = fit_clipboard_image(img).await?;
                             obj.insert("image_base64".into(), serde_json::json!(fitted));
@@ -1853,7 +1869,14 @@ impl super::DesktopTool {
                         Ok(Some(DesktopOutput {
                             success: true,
                             data: Some(serde_json::Value::Object(obj)),
-                            message: None,
+                            // Tell the model explicitly when redaction fired so
+                            // it can ask the user rather than guessing.
+                            message: redacted_flag.then(|| {
+                                "Clipboard text was redacted: a token-shaped \
+                                 substring (<REDACTED:candidate-secret>) was \
+                                 replaced; ask the user if access is needed."
+                                    .to_string()
+                            }),
                         }))
                     }
                     Err(e) => Ok(Some(DesktopOutput {
@@ -1867,11 +1890,26 @@ impl super::DesktopTool {
                 // No system capability wired: fall back to the text-only screen
                 // path (unchanged behavior).
                 None => match screen.clipboard_read().await {
-                    Ok(text) => Ok(Some(DesktopOutput {
-                        success: true,
-                        data: Some(serde_json::json!({"text": text, "has_image": false})),
-                        message: None,
-                    })),
+                    Ok(text) => {
+                        // Same redaction gate as the system arm — credentials
+                        // on the pasteboard must not land in the model context
+                        // either way.
+                        let r = aleph_desktop::clipboard_redact::redact_clipboard_text(&text);
+                        Ok(Some(DesktopOutput {
+                            success: true,
+                            data: Some(serde_json::json!({
+                                "text": r.text,
+                                "has_image": false,
+                                "redacted": r.redacted,
+                            })),
+                            message: r.redacted.then(|| {
+                                "Clipboard text was redacted: a token-shaped \
+                                 substring (<REDACTED:candidate-secret>) was \
+                                 replaced; ask the user if access is needed."
+                                    .to_string()
+                            }),
+                        }))
+                    }
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
@@ -1950,52 +1988,102 @@ impl super::DesktopTool {
                 // the empty string over it is a clear, not a restore.
                 let saved = snapshot_clipboard(platform, screen).await;
 
-                // Write target text to clipboard
-                if let Err(e) = screen.clipboard_write(text).await {
-                    return Ok(Some(DesktopOutput {
-                        success: false,
-                        data: None,
-                        message: Some(super::recovery::with_hint(format!(
-                            "Failed to write to clipboard: {e}"
-                        ))),
-                    }));
+                // Run the body as a single async block so that any early
+                // `return` (clipboard_write failure, keypress failure) is
+                // followed by a single `restore_clipboard` call. The prior
+                // shape called `restore_clipboard` only on the keypress arm
+                // — the clipboard_write failure arm returned without
+                // restoring, leaving the user's clipboard at whatever the OS
+                // gave us after a partial write (panic-/cancellation-safety
+                // for the snapshot was loose; see
+                // review-results/clipboard-logic-2026-08-26/REPORT.md
+                // Critical 1). The restore now fires in every path that
+                // already took the snapshot.
+                let body: Result<(), DesktopOutput> = async {
+                    // Write target text to clipboard
+                    if let Err(e) = screen.clipboard_write(text).await {
+                        return Err(DesktopOutput {
+                            success: false,
+                            data: None,
+                            message: Some(super::recovery::with_hint(format!(
+                                "Failed to write to clipboard: {e}"
+                            ))),
+                        });
+                    }
+
+                    // Paste shortcut: Cmd+V on macOS, Ctrl+V on Linux/Windows.
+                    #[cfg(target_os = "macos")]
+                    let paste_modifier = "meta";
+                    #[cfg(not(target_os = "macos"))]
+                    let paste_modifier = "ctrl";
+
+                    let modifiers = [paste_modifier.to_string()];
+                    let pasted = match rail {
+                        Rail::Targeted(pid) => {
+                            screen.key_combo_targeted(pid, &modifiers, "v").await
+                        }
+                        Rail::Global => screen.key_combo(&modifiers, "v").await,
+                    };
+                    if let Err(e) = pasted {
+                        return Err(DesktopOutput {
+                            success: false,
+                            data: None,
+                            message: Some(super::recovery::with_hint(format!(
+                                "Failed to paste: {e}"
+                            ))),
+                        });
+                    }
+
+                    // Wait for paste to take effect
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    Ok(())
                 }
+                .await;
 
-                // Paste shortcut: Cmd+V on macOS, Ctrl+V on Linux/Windows.
-                #[cfg(target_os = "macos")]
-                let paste_modifier = "meta";
-                #[cfg(not(target_os = "macos"))]
-                let paste_modifier = "ctrl";
-
-                let modifiers = [paste_modifier.to_string()];
-                let pasted = match rail {
-                    Rail::Targeted(pid) => screen.key_combo_targeted(pid, &modifiers, "v").await,
-                    Rail::Global => screen.key_combo(&modifiers, "v").await,
-                };
-                if let Err(e) = pasted {
-                    restore_clipboard(screen, &saved).await;
-                    return Ok(Some(DesktopOutput {
-                        success: false,
-                        data: None,
-                        message: Some(super::recovery::with_hint(format!("Failed to paste: {e}"))),
-                    }));
-                }
-
-                // Wait for paste to take effect
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
+                // Always restore the snapshot from this single tail site, so
+                // the user's prior clipboard is put back whether the body
+                // succeeded or failed.
                 let restored = restore_clipboard(screen, &saved).await;
 
-                Ok(Some(DesktopOutput {
-                    success: true,
-                    data: Some(serde_json::json!({
-                        "pasted": true,
-                        "chars": text.chars().count(),
-                        "clipboard_restored": restored,
-                        "delivery": rail.delivery(),
-                    })),
-                    message: saved.unrestorable_note(),
-                }))
+                match body {
+                    Err(out) => Ok(Some(out)),
+                    Ok(()) => {
+                        // Compose a user-visible warning when a Text snapshot
+                        // failed to restore — the prior shape only fired
+                        // `unrestorable_note()` for the `Unrestorable`
+                        // variant, leaving the Text snapshot silently broken
+                        // for a user who expected their prior copy back (see
+                        // Critical 4). A Nothing snapshot, by definition, has
+                        // nothing to restore — no warning.
+                        let extra_warning = match (&saved, restored) {
+                            (ClipboardSnapshot::Text(_), false) => Some(
+                                "I could not put back what was on your clipboard. \
+                                 The clipboard now holds the pasted text. If you \
+                                 had something important on the clipboard before, \
+                                 please re-copy it."
+                                    .to_string()
+                            ),
+                            _ => None,
+                        };
+                        let message = match (extra_warning, saved.unrestorable_note()) {
+                            (Some(extra), Some(note)) => Some(format!("{extra}\n{note}")),
+                            (Some(extra), None) => Some(extra),
+                            (None, Some(note)) => Some(note),
+                            (None, None) => None,
+                        };
+
+                        Ok(Some(DesktopOutput {
+                            success: true,
+                            data: Some(serde_json::json!({
+                                "pasted": true,
+                                "chars": text.chars().count(),
+                                "clipboard_restored": restored,
+                                "delivery": rail.delivery(),
+                            })),
+                            message,
+                        }))
+                    }
+                }
             }
             "wait_visual" => {
                 let region = args.region.clone();

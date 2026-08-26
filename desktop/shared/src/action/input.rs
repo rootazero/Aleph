@@ -405,7 +405,12 @@ pub fn mouse_button(x: f64, y: f64, button: MouseButton, action: crate::PressAct
     Ok(())
 }
 
-/// Read text from system clipboard.
+/// Read text from system clipboard. **Raw** — returns unredacted content.
+///
+/// The IPC tool goes through [`redacted_clipboard_read`] (below) so a
+/// credential the user copied out of a password manager does not land in
+/// the model context. The raw path remains for test fixtures and any
+/// future in-process consumer that genuinely needs unredacted content.
 pub fn clipboard_read() -> Result<String> {
     #[cfg(target_os = "macos")]
     {
@@ -434,6 +439,22 @@ pub fn clipboard_read() -> Result<String> {
             "clipboard_read not implemented on this platform".into(),
         ))
     }
+}
+
+/// Read text from the system clipboard and redact token-shaped substrings.
+///
+/// The redaction heuristic is in [`crate::clipboard_redact`]. Long opaque
+/// tokens (≥32 chars, mixed letter/digit/symbol) are replaced with the
+/// `<REDACTED:candidate-secret>` sentinel and the result carries a
+/// `redacted: bool` flag so the model can ask the user explicitly when
+/// redaction fires.
+///
+/// Used by the `clipboard_read` IPC tool to prevent clipboard-copied
+/// credentials from leaking into the model context (see
+/// `review-results/clipboard-logic-2026-08-26/REPORT.md` Critical 3).
+pub fn redacted_clipboard_read() -> Result<crate::clipboard_redact::RedactedText> {
+    let raw = clipboard_read()?;
+    Ok(crate::clipboard_redact::redact_clipboard_text(&raw))
 }
 
 /// Write text to system clipboard.

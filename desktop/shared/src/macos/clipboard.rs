@@ -56,8 +56,22 @@ pub fn read() -> Result<ClipboardContent> {
 /// [`DesktopError::InputFailed`] when the pasteboard refuses the write. This is
 /// the whole reason this function exists in one place: the other implementation
 /// threw that answer away.
+///
+/// If the pasteboard refuses the write, the previous contents are restored from
+/// a snapshot taken before [`NSPasteboard::clearContents`]. The earlier
+/// implementation called `clearContents` first and then bailed on
+/// `setString_forType:` returning `false`, leaving the user's clipboard empty
+/// while the error message claimed otherwise — see
+/// `review-results/clipboard-logic-2026-08-26/REPORT.md` Critical 2.
 pub fn write_text(text: &str) -> Result<()> {
     let pb = NSPasteboard::generalPasteboard();
+    // Snapshot the prior text BEFORE clearing so we can restore on failure.
+    // `NSPasteboard` does not expose an atomic "declare-and-write"; the only
+    // safe sequence is snapshot → clear → set → (on fail) restore.
+    let prior_text: Option<String> = unsafe {
+        pb.stringForType(NSPasteboardTypeString).map(|s| s.to_string())
+    };
+
     pb.clearContents();
 
     let ns_str = NSString::from_str(text);
@@ -66,6 +80,23 @@ pub fn write_text(text: &str) -> Result<()> {
     // into the pasteboard and reports whether it took.
     let ok = unsafe { pb.setString_forType(&ns_str, NSPasteboardTypeString) };
     if !ok {
+        // Restore the prior text so the user's clipboard looks like the
+        // function was never called. Best-effort: if even the restore fails
+        // (pasteboard held by another process), we still report the error —
+        // leaving the user with whatever the OS gave them.
+        if let Some(prior) = prior_text.as_deref() {
+            let restore_ns = NSString::from_str(prior);
+            let restored = unsafe {
+                pb.setString_forType(&restore_ns, NSPasteboardTypeString)
+            };
+            if !restored {
+                tracing::warn!(
+                    "clipboard write refusal: tried to restore prior text, \
+                     but NSPasteboard refused the restore too; pasteboard may \
+                     be empty until the user copies again"
+                );
+            }
+        }
         return Err(DesktopError::InputFailed(
             "clipboard write refused by NSPasteboard — another process may be holding the \
              pasteboard. Nothing was copied; the previous clipboard contents are still there."
