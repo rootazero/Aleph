@@ -62,11 +62,22 @@ enum ManagedProbe {
 /// Which `find_chromium` outcomes mean "absent" and which mean "I could not
 /// look".
 ///
-/// `BrowserError::ChromiumNotFound` is NAMED rather than caught by an `Err(_)`
-/// arm: it is the one variant that means absence. `find_chromium` has only that
-/// one error path today, so the two spellings agree — but `Err(_)` agrees by
-/// luck, and would go on calling a future IO error "not installed" without
-/// anybody editing this file.
+/// **This does not shrug, and the residual arm is unreachable today.** Read
+/// (`browser::discovery::find_chromium`, verified rather than assumed): the
+/// body has no `?`, every internal failure is swallowed on the way — a
+/// non-`is_file` platform path is skipped, a `which` error is skipped — and the
+/// final expression is `Err(BrowserError::ChromiumNotFound)`. That is the only
+/// error this call site can observe, and it MEANS absence, so it is answered as
+/// absence. Behaviour is byte-identical to the `Err(_) => Missing` this
+/// replaced.
+///
+/// What changed is where the knowledge lives. `BrowserError` is a fifteen-
+/// variant enum shared across the whole browser subsystem, so "this `Err` is
+/// only ever not-found" is a property of another module's *body*, not of the
+/// type — a claim this file cannot enforce and the next reader cannot check
+/// without opening `discovery.rs`. Naming the variant makes it local: if
+/// `find_chromium` ever returns something else, this check stops calling it
+/// "not installed" instead of continuing to agree by luck.
 fn classify_chromium(
     found: Result<std::path::PathBuf, BrowserError>,
 ) -> Result<ChromiumProbe, String> {
@@ -79,10 +90,27 @@ fn classify_chromium(
 
 /// Which `which` outcomes mean "absent".
 ///
-/// `which` distinguishes "not on PATH" from "there was nowhere to search" and
-/// "the hit could not be canonicalised". Only the first is absence; the other
-/// two are this round's `try_exists` distinction wearing another crate's error
-/// type.
+/// Read out of `which-6.0.3` rather than inferred from the variant names,
+/// because two of the three are not what they sound like. `"npx"` has no path
+/// separator, so `Finder::find` always takes the PATH branch and this call site
+/// can observe exactly two errors:
+///
+/// - `CannotFindBinaryPath` — PATH was searched and `npx` was not on it. **This
+///   is absence**, and it is answered as absence.
+/// - `CannotGetCurrentDirAndPathListEmpty` — PATH is unset, or set and empty,
+///   so there was nowhere to search.
+///
+/// The second is treated as unknown, deliberately, on the same argument as
+/// `core/config-parse`'s unreadable-file branch. The *conclusion* "the driver
+/// cannot launch npx" happens to hold either way (a spawned child inherits this
+/// empty PATH), but the finding's remedy is "Install Node.js" — and telling
+/// somebody who has Node installed to install Node is the right symptom with
+/// the wrong cause, which is the failure this round exists to remove. "PATH is
+/// empty" is a different and far rarer problem, and saying so points at it.
+///
+/// `CannotCanonicalize` is covered by the residual arm for totality only: every
+/// site that produces it is inside `which::CanonicalPath::*`, which this call
+/// site does not use.
 fn classify_npx(found: Result<std::path::PathBuf, which::Error>) -> Result<NodeProbe, String> {
     match found {
         Ok(path) => Ok(NodeProbe::Found(path.display().to_string())),
@@ -163,9 +191,17 @@ impl BrowserRuntimeCheck {
     ///
     /// # Errors
     ///
-    /// The ready-made "unknown" finding when the probe task did not complete.
-    /// The resolver itself returns `Option`, so there is no error of its own to
-    /// misread here — only the task's.
+    /// The ready-made "unknown" finding when the probe task did not complete —
+    /// and ONLY then.
+    ///
+    /// `managed_cli_path()` returns `Option`, and its `None` is left exactly as
+    /// it was: a determinate "no such path", the `Presence::Absent` case. It is
+    /// **not** converted, on purpose. This class has a mirror image, and
+    /// over-fixing is not the safe direction: manufacturing an "unknown" where
+    /// the code genuinely knows degrades a check that worked into one that
+    /// shrugs, and it is harder to notice than the original defect because it
+    /// looks like the fix. The property is "does this code know?", not "is
+    /// there an `Err` or a `None` in this arm".
     // The `Err` IS the finding pushed for this probe; see `check::Presence::of`.
     #[allow(clippy::result_large_err)]
     async fn probe_managed() -> Result<ManagedProbe, Finding> {
@@ -372,17 +408,20 @@ mod tests {
         // that could not RUN is deliberately `Warning` — see
         // [`a_probe_that_could_not_run_is_not_a_missing_prerequisite`]. This
         // test still asserts the whole battery because on any machine that can
-        // run it, all three probes complete: `find_chromium` has one error
-        // path (`ChromiumNotFound`), `which` returns `CannotFindBinaryPath`
-        // when `npx` is absent, and the managed resolver returns `Option`. So a
-        // `Warning` here means a probe task actually failed, which is a real
-        // defect and a true red, not a false gate.
+        // run it, all three probes answer: `find_chromium` has one error path
+        // and it means absence, `which("npx")` answers `CannotFindBinaryPath`
+        // when npx is absent (its other reachable error needs an unset or empty
+        // PATH, which a test binary does not have), and the managed resolver
+        // returns `Option`. So a `Warning` here means a probe task failed or the
+        // environment lost its PATH — both real defects and a true red, not a
+        // false gate.
         let check = BrowserRuntimeCheck::new();
         let findings = check.run(Posture::Inspect).await;
         assert!(
             findings.iter().all(|f| !f.is_problem()),
             "browser/runtime prerequisite findings must stay advisory (Info) to avoid a \
-             false doctor-gate failure; a problem here means a probe task did not complete"
+             false doctor-gate failure; a problem here means a probe did not answer, \
+             not that a prerequisite is missing"
         );
     }
 
@@ -427,6 +466,12 @@ mod tests {
     }
 
     /// `which` has three error variants and only one of them is "not on PATH".
+    ///
+    /// `which::which("npx")` can actually produce two of them —
+    /// `CannotFindBinaryPath` and `CannotGetCurrentDirAndPathListEmpty`; the
+    /// third comes only from `which::CanonicalPath::*`. It is asserted anyway
+    /// because `classify_npx` is a total function over the enum and a rule that
+    /// only covers the reachable half is a rule with a hole in it.
     #[test]
     fn only_cannot_find_binary_path_means_npx_is_absent() {
         assert!(matches!(
@@ -434,7 +479,9 @@ mod tests {
             Ok(NodeProbe::Missing)
         ));
         for e in [
+            // Reachable from this call site: PATH unset or empty.
             which::Error::CannotGetCurrentDirAndPathListEmpty,
+            // Not reachable from `which::which`; covered for totality.
             which::Error::CannotCanonicalize,
         ] {
             assert!(
