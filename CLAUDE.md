@@ -727,7 +727,7 @@ Singleton 由 OS 级 `flock`（`~/.aleph/data/aleph.lock`）强制；CLI 写子�
 
 ## 📚 文档索引 (Tier 2)
 
-**总入口**: [FEATURE_LOCATOR.md](docs/reference/FEATURE_LOCATOR.md) —— 按 §编号组织的全项目现状库，判据清单里每个 `→ §x.y` 都指向它。
+**总入口**: [FEATURE_LOCATOR.md](docs/reference/FEATURE_LOCATOR.md) —— 按 §编号组织的全项目现状库，判据清单里每个 `→ §x.y` 与 `→ 附录 C.x` 都指向它（**附录 C = 验证纪律全文**：这个绿是怎么骗你的——数字 / 仪器 / 扫描边界 / 闸 / 跑测试 / 命令陷阱）。
 
 | 文档 | 说明 |
 |------|------|
