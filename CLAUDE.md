@@ -590,7 +590,9 @@
   cargo test -p alephcore --features test-helpers --test '*' --no-run   # --all-targets 只展开 target 不展开 feature
   cargo test -p aleph-panel --lib --no-run                               # check 看不见它的 #[cfg(test)]；曾整程编译不过
   cargo check -p aleph-desktop-{macos,windows,linux}                    # 跨平台改动要 check 那个目标的限肢 crate
-  cargo clippy --workspace --all-targets    # 先 just _stage-shell-placeholders。--all-targets 展开 target（examples 只有它才暴露），--workspace 展开 **package**：根 Cargo.toml 无 `default-members` ⇒ 默认只 lint 根 crate 一个，13 个成员里漏掉 panel/tui/cli
+  cargo clippy --workspace --all-targets                                # 先 just _stage-shell-placeholders
+      # --all-targets 展开的是 target（examples 只有它才暴露），--workspace 展开的才是 package：
+      # 根 Cargo.toml 无 default-members ⇒ 默认只 lint 根 crate 一个（13 个成员），panel/tui/cli 全在外面
   ```
 - **`interfaces/webchat/` 有任何改动（哪怕不是你改的）就跑一次 `cargo test -p aleph-panel --lib`**（不是 `cargo check`——它看不见这个 crate 的测试模块，那正是 805 条测试整程没跑的原因） —— 这个 crate 的**语义合并冲突是常态形状**：一侧的类型 + 另一侧的调用点，git 不报冲突、两边单独看都完整。合并实现过同一功能的分支前先 grep 功能名；修完**先看警告再看错误**（`unused variable` 说明那半边根本没有调用者，正解是 CUT）
 - **`cargo check -p aleph-desktop-shell` 前需先 `just _stage-shell-placeholders`**（tauri-build 要求 externalBin 占位文件存在）—— **上面那条 `--workspace` clippy 同样要**，它会把 shell crate 一起编。占位路径**别在别处抄一份**：那条 recipe 自己推 triple、Windows 补 `.exe`、`AlephBridge-` 只在 macOS 上建，手抄的模板会漏掉后两件
