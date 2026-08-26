@@ -122,6 +122,19 @@ fn shape_is_well_formed(shape: &Shape) -> Result<(), CanvasError> {
         }
         _ => {}
     }
+    // Reject non-canonical `asset_id` shapes up front — a model that emits
+    // `asset_id = "../escape.png"` (or any other string that does not
+    // match the canonical `<sha256-hex>.<ext>` shape the store mints) would
+    // otherwise commit the garbage verbatim. `read_asset` rejects the same
+    // ids at read time, but rejecting at upsert prevents the orphan sweep
+    // from getting confused by dangling references in the first place.
+    for asset_id in shape.asset_ids() {
+        if super::assets::parse_asset_id(asset_id).is_none() {
+            return Err(CanvasError::Invalid(format!(
+                "invalid asset_id {asset_id:?}: expected <sha256-hex>.<ext> with a whitelisted extension"
+            )));
+        }
+    }
     Ok(())
 }
 
