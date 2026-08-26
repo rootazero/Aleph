@@ -34,7 +34,10 @@ pub struct LineCache {
     /// never caches a streaming message (its content grows every tick), so
     /// this is the only cache the streaming message gets, and it caches at
     /// the safe-prefix-offset granularity rather than the whole message.
-    streaming_markdown_cache: Option<(usize, Vec<Line<'static>>)>,
+    /// Carries its own `width` (mirroring `CachedEntry::width` below) so a
+    /// mid-stream resize invalidates it instead of serving prefix lines
+    /// wrapped for the old pane width.
+    streaming_markdown_cache: Option<(usize, u16, Vec<Line<'static>>)>,
     /// The message index this `streaming_markdown_cache` belongs to. Reset
     /// (along with the cache above) whenever the streaming message changes
     /// — e.g. a new turn starts streaming — so the new message doesn't
@@ -320,7 +323,7 @@ fn render_assistant_message(
     spinner_frame: usize,
     width: u16,
     lines: &mut Vec<Line<'static>>,
-    streaming_cache: Option<&mut Option<(usize, Vec<Line<'static>>)>>,
+    streaming_cache: Option<&mut Option<(usize, u16, Vec<Line<'static>>)>>,
 ) {
     let prefix_style = Style::default().fg(DEFAULT_THEME.assistant);
 
