@@ -44,21 +44,48 @@ use crate::sync_primitives::Arc;
 /// (`constructor.rs`); `None` until then so tests / early-boot read as
 /// "no graph subsystem" (fail-soft, mirrors `goal::global`).
 ///
-/// `IndistinguishableDefault` rather than `ConsumerDecides`, and the three
-/// readers are why: two of them fold absence into a POSITIVE answer.
-/// `service::governing_owner` returns `Ok(None)` — its own doc says that means
-/// *"genuinely ungoverned"*, "including the legitimate case where the
-/// loop-graph subsystem never booted", and it is the objective ACL's permit
-/// answer. `service::notify_node_settled` returns `true`, i.e. the settle claim
-/// is EARNED, retiring that review for good on a key that never moves again.
-/// The third (`render_session_topology`) just renders nothing.
-static GLOBAL: CapabilitySlot<Arc<LoopGraphStore>> = CapabilitySlot::new(
-    "loop-graph/store",
-    MissingSemantics::IndistinguishableDefault {
-        reads_as: "\"genuinely ungoverned\" -- the objective ACL's permit answer, \
-                   and a settle claim earned without any watcher review",
-    },
-);
+/// `FailsOpen`. Two of the three readers do not merely return a legal-looking
+/// value — they take the branch that GRANTS, and that is read from the
+/// consumer rather than asserted here:
+///
+/// - `service::governing_owner` returns `Ok(None)` when this slot is absent.
+///   Its one consumer is `builtin_tools::goal::governing_owner_or_refuse`, and
+///   all three of its call sites are
+///   `if let Some(owner) = governing_owner_or_refuse(&session)? { return Err(..) }`
+///   — the refusal lives inside the `Some` arm, so `Ok(None)` falls through
+///   and the write to a governed objective (or its `gate_command`) PROCEEDS.
+///   The `owns_reference` edges live in `loop_graph.db`, not in this handle, so
+///   a session that really is governed reads as ungoverned whenever boot failed
+///   to install the store. That is this variant's definition verbatim: a gate
+///   silently stops gating.
+/// - `service::notify_node_settled` returns `true` — the settle claim is EARNED
+///   without any watcher having been poked, retiring that review for good on a
+///   key that never moves again.
+/// - The third (`render_session_topology`) just renders nothing.
+///
+/// **Not `IndistinguishableDefault`**, which is what this slot shipped as and
+/// is a real reading: on an install with no graph at all, `Ok(None)` is both
+/// the correct answer and indistinguishable from any other, exactly like
+/// `tools/result-budget-ceiling`'s uncapped read. What separates the two
+/// variants in this round is whether a caller keeps behaving as though a bound
+/// were enforced — and here one does. The ACL's stated job is to stop a
+/// governed loop rewriting its own reference, and `governing_owner_or_refuse`'s
+/// own doc says "I could not find out" must land on the deny side; it routes
+/// the `Err` there and then lets the absent-subsystem `Ok(None)` through the
+/// permit door. `providers/pinnable-set` is the same shape
+/// (`pinnable_providers()?` ⇒ no set ⇒ no refusal) and is classified
+/// `FailsOpen`; classifying this one lower made the same shape carry two
+/// answers.
+///
+/// **Not `ConsumerDecides`**: the consumers do not decide. Two of the three
+/// fold absence into a positive answer with no branch that could say otherwise.
+///
+/// No `reads_as` sentence any more, because this variant carries none — the
+/// operator-facing string was the one thing lost in the reclassification, and
+/// what it said ("the objective ACL's permit answer") is the argument for the
+/// higher severity rather than a description of a legal value.
+static GLOBAL: CapabilitySlot<Arc<LoopGraphStore>> =
+    CapabilitySlot::new("loop-graph/store", MissingSemantics::FailsOpen);
 
 /// Process-global topology event bus. Initialized once at daemon boot, next
 /// to [`init_global`]. `None` until then — publishing into an absent bus is a
@@ -237,8 +264,11 @@ mod tests {
         }
     }
 
-    /// Both handles reach the roster, with the right sentence on the one that
-    /// has a sentence.
+    /// Both handles reach the roster with the right failure semantics.
+    ///
+    /// Neither variant carries a `reads_as` sentence now: `GLOBAL` was
+    /// reclassified from `IndistinguishableDefault` to `FailsOpen` once its
+    /// consumer was read rather than described — see that static's doc.
     ///
     /// No runtime tie here on purpose: `set_global_for_test` installs `GLOBAL`
     /// from sibling tests in this very module, so an "uninstalled read still
@@ -248,16 +278,14 @@ mod tests {
     fn the_accessors_expose_both_handles_to_the_roster() {
         assert_eq!(global_slot().id(), "loop-graph/store");
         assert_eq!(event_bus_slot().id(), "loop-graph/event-bus");
-        let MissingSemantics::IndistinguishableDefault { reads_as } = global_slot().missing()
-        else {
-            panic!(
-                "expected IndistinguishableDefault, got {:?}",
-                global_slot().missing()
-            );
-        };
         assert!(
-            reads_as.contains("ungoverned"),
-            "must name governing_owner's Ok(None) -- the ACL's permit answer; got {reads_as:?}"
+            matches!(global_slot().missing(), MissingSemantics::FailsOpen),
+            "`governing_owner`'s absent-store `Ok(None)` reaches \
+             `goal::governing_owner_or_refuse`, whose three call sites put the refusal \
+             inside the `Some` arm — so absence PERMITS the write to a governed \
+             objective. Downgrading this to a Warning-severity variant ranks a \
+             silently-permitting ACL below a missing redaction engine; got {:?}",
+            global_slot().missing()
         );
         assert!(matches!(
             event_bus_slot().missing(),

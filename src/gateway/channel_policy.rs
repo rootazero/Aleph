@@ -64,6 +64,17 @@ pub fn channel_permission_level_from_role(caller_role: &str) -> Option<ChannelPe
 /// denies" — which is the fail-open gap the paragraph above says this snapshot
 /// exists to close.
 ///
+/// **Not `FailsOpen`**, and that option is on the table because the paragraph
+/// above names a fail-open gap: absence cannot promote anyone. The guest floor
+/// is written unconditionally by [`channel_identity_meta`] before the config is
+/// consulted at all, so no gate stops gating here — what is lost is an OPTIONAL
+/// additional deny layer, and "this channel has no denies" is a configuration
+/// an operator can legally have. That is the `IndistinguishableDefault` shape
+/// (a legal-looking value no caller can tell apart), not the `FailsOpen` one (a
+/// grant the caller believed was gated). Contrast `loop-graph/store`, which was
+/// reclassified UP for the opposite reason: there the absent handle reaches an
+/// ACL whose refusal branch is then never taken.
+///
 /// ⚠️ Read alongside [`wait_for_channel_config_snapshot`]: boot scans park on
 /// the publish rather than racing it, so on a healthy boot this default is
 /// unreachable. The diagnostic is for the boot that is not healthy.
