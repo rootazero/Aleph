@@ -56,7 +56,7 @@ mod presence_discipline {
     ///
     /// Paired with the replacement a reader is supposed to reach for, because
     /// a rule that only forbids is a rule people work around.
-    const CONFLATING: [(&str, &str); 2] = [
+    const CONFLATING: [(&str, &str); 3] = [
         (
             ".exists()",
             "`check::Presence::of(ID, \"<subject>\", path)?` — it returns the third \
@@ -68,17 +68,33 @@ mod presence_discipline {
              directory is not there\" from \"the directory would not open\", and counts \
              entries the walk could not read",
         ),
+        (
+            "Err(_)",
+            "a bound error — `Err(e)` — and one arm per error that actually MEANS \
+             absence, everything else through `check::unknown_finding`. A discarded \
+             error cannot be told apart from the answer the check then invents",
+        ),
     ];
 
     /// A check must never dress "I could not look" as "there is nothing there".
     ///
-    /// Eight production sites across seven files in this directory did exactly
-    /// that, in three different directions: six answered a stat error with a
-    /// reassuring `Finding::ok` ("no secrets stored yet" in front of an
+    /// Eight production sites across **eight** files in this directory did
+    /// exactly that, in three different directions: six answered a stat error
+    /// with a reassuring `Finding::ok` ("no secrets stored yet" in front of an
     /// unreadable vault), one answered it with the wrong problem and then let
     /// `--fix` report a repair it had not performed, and one walked past an
     /// unreadable ancestor and reported free space for a different filesystem.
-    /// Converting those eight would have closed eight instances and left the
+    /// (An earlier revision of this comment said "seven files"; the figure was
+    /// inherited from a brief rather than counted, and `probe_users >= 8` three
+    /// screens down — which counts files — contradicted it.)
+    ///
+    /// `browser_runtime.rs` was a ninth, in a shape the first sweep could not
+    /// see: `Err(_) => …::Missing` and `.unwrap_or(…::Missing)` on a
+    /// `spawn_blocking` `JoinError`, all rendering `[ok]`. A panicked probe task
+    /// reported "no browser installed", reassuringly. The `Err(_)` rule below
+    /// exists because of it.
+    ///
+    /// Converting the sites one by one would have closed instances and left the
     /// class open; this closes the class.
     ///
     /// # What it can and cannot see
@@ -98,8 +114,19 @@ mod presence_discipline {
     ///   `read_to_string(..).ok()?` reads an unreadable holder file as "no lock
     ///   file at all". That is the same class one directory over, and out of
     ///   this rule's stated scope.
+    /// - *Blind to* `unwrap_or` / `unwrap_or_else` / `unwrap_or_default`
+    ///   applied to a `Result` — the other spelling of "discard the error and
+    ///   invent the answer", and the one `browser_runtime.rs` used on its
+    ///   `spawn_blocking` `JoinError`. `Option::unwrap_or` is lexically
+    ///   identical and this directory has eight legitimate uses of it, so a rule
+    ///   covering the spelling would need an allowlist. A statement-bounded
+    ///   "`.await` and `unwrap_or` in one expression" rule WOULD be clean
+    ///   against today's tree (measured: none of those eight has an `.await` in
+    ///   its statement) and is deliberately not shipped — the first legitimate
+    ///   `Option`-yielding `.await` makes it a false accuser, and a guard that
+    ///   accuses falsely gets cited as evidence.
     /// - *Blind to* runtime behaviour generally: this is a spelling rule. It
-    ///   cannot see a new conflating API, only the two that were used here.
+    ///   cannot see a new conflating API, only the three that were used here.
     /// - **No allowlist, by construction.** If a site genuinely needs a bare
     ///   `.exists()`, the answer is that `check::Presence` is missing a case —
     ///   extend it there, where every check inherits the fix.
@@ -107,8 +134,11 @@ mod presence_discipline {
     /// CRLF-safe: `production_prefix` and `code_text` both drop `\r` before
     /// anything else, so nothing here is anchored to a bare `\n`.
     ///
-    /// Reads the tree `CARGO_MANIFEST_DIR` pointed at when this binary was
-    /// COMPILED, not the tree on disk now — rebuild before believing a green.
+    /// `CARGO_MANIFEST_DIR` is baked in at COMPILE time, but
+    /// `rust_sources_under` reads file *contents* at run time — so this reads
+    /// the CURRENT tree at that path, not a snapshot. The hazard that leaves is
+    /// narrower and worth naming precisely: a test binary built in worktree A
+    /// scans worktree A even when the command is run from worktree B.
     #[test]
     fn no_check_answers_a_stat_error_with_absence() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

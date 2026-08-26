@@ -558,10 +558,13 @@ mod tests {
     ///   and [`code_text`](crate::utils::source_scan::code_text) drop `\r`
     ///   before doing anything else, so nothing here is anchored to a bare
     ///   `\n`.
-    /// - Reads the tree `CARGO_MANIFEST_DIR` pointed at when this test binary
-    ///   was COMPILED. Editing `src/bin/aleph-server/**` does not rebuild the
-    ///   lib target, so a stale binary reports on a stale tree — rebuild
-    ///   before believing a green.
+    /// - `CARGO_MANIFEST_DIR` is baked in at COMPILE time, but
+    ///   `rust_sources_under` reads file *contents* at run time — so this reads
+    ///   the CURRENT tree at that path, not a snapshot, and an edit under
+    ///   `src/bin/aleph-server/**` is seen even by a lib binary that was not
+    ///   rebuilt. The hazard that remains is narrower: a test binary built in
+    ///   worktree A scans worktree A even when the command is run from
+    ///   worktree B.
     #[test]
     fn every_in_daemon_engine_also_attaches_the_capability_wiring_check() {
         use crate::utils::source_scan::{code_text, production_prefix, rust_sources_under};

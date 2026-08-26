@@ -44,6 +44,10 @@ const MAX_REPORTED_ROWS: usize = 5;
 /// and holds well under a dozen databases; a directory that somehow holds
 /// hundreds is itself the finding, and probing all of them would trade a
 /// bounded check for an unbounded one.
+///
+/// "Is itself the finding" was, for a while, a claim no code made: the cap
+/// truncated silently, three lines from where an incomplete listing's OTHER
+/// cause was being announced. [`Candidates::over_cap`] carries it out now.
 const MAX_DATABASES: usize = 32;
 
 pub struct SqliteIntegrityCheck {
@@ -114,22 +118,41 @@ fn probe_database(path: &Path) -> DbVerdict {
 /// The directory exists but could not be opened.
 // The `Err` IS the finding this check will report; see `check::Presence::of`.
 #[allow(clippy::result_large_err)]
-fn list_databases(dir: &Path) -> Result<(Vec<PathBuf>, usize), Finding> {
+fn list_databases(dir: &Path) -> Result<Candidates, Finding> {
     let (entries, unreadable_entries) = match DirListing::of(ID, "SQLite integrity", dir)? {
-        DirListing::Absent => return Ok((Vec::new(), 0)),
+        DirListing::Absent => return Ok(Candidates::default()),
         DirListing::Listed {
             entries,
             unreadable_entries,
         } => (entries, unreadable_entries),
     };
-    let mut dbs: Vec<PathBuf> = entries
+    let mut paths: Vec<PathBuf> = entries
         .into_iter()
         .filter(|p| p.extension().is_some_and(|ext| ext == "db"))
         .filter(|p| p.metadata().map_or(true, |m| m.is_file()))
         .collect();
-    dbs.sort();
-    dbs.truncate(MAX_DATABASES);
-    Ok((dbs, unreadable_entries))
+    paths.sort();
+    let over_cap = paths.len().saturating_sub(MAX_DATABASES);
+    paths.truncate(MAX_DATABASES);
+    Ok(Candidates {
+        paths,
+        unreadable_entries,
+        over_cap,
+    })
+}
+
+/// What the data-dir walk found, plus every reason the list is not the whole
+/// truth. Both counts exist so no cause of an incomplete listing is announced
+/// while another one three lines away stays silent.
+#[derive(Default)]
+struct Candidates {
+    paths: Vec<PathBuf>,
+    /// Entries the OS refused part-way through the walk.
+    unreadable_entries: usize,
+    /// `*.db` files past [`MAX_DATABASES`] that were sorted out and never
+    /// probed. Non-zero implies `paths.len() == MAX_DATABASES`, so this can
+    /// never coexist with an empty probe list.
+    over_cap: usize,
 }
 
 fn corrupt_hint(name: &str) -> String {
@@ -160,8 +183,9 @@ impl HealthCheck for SqliteIntegrityCheck {
         // rusqlite is synchronous and `quick_check` reads the whole file —
         // keep both off the async executor.
         let probed = tokio::task::spawn_blocking(move || {
-            let (dbs, unreadable_entries) = list_databases(&dir)?;
-            let verdicts = dbs
+            let candidates = list_databases(&dir)?;
+            let verdicts = candidates
+                .paths
                 .into_iter()
                 .map(|path| {
                     let name = path.file_name().map_or_else(
@@ -172,11 +196,11 @@ impl HealthCheck for SqliteIntegrityCheck {
                     (name, verdict)
                 })
                 .collect::<Vec<_>>();
-            Ok::<_, Finding>((verdicts, unreadable_entries))
+            Ok::<_, Finding>((verdicts, candidates.unreadable_entries, candidates.over_cap))
         })
         .await;
 
-        let (probed, unreadable_entries) = match probed {
+        let (probed, unreadable_entries, over_cap) = match probed {
             Ok(Ok(p)) => p,
             // The directory is there and would not open. Not "no stores".
             Ok(Err(f)) => return vec![f],
@@ -255,6 +279,31 @@ impl HealthCheck for SqliteIntegrityCheck {
                     entries = plural_entries(unreadable_entries),
                 ),
             ));
+        }
+        // The other cause of an incomplete listing, said out loud for the same
+        // reason. `MAX_DATABASES` keeps this check bounded, which is right —
+        // but a bound that truncates silently reports on 32 stores while
+        // implying it reported on all of them.
+        if over_cap > 0 {
+            findings.push(
+                unknown_finding(
+                    ID,
+                    "SQLite integrity",
+                    format!(
+                        "{dir} holds {total} *.db files; this run probed the first \
+                         {MAX_DATABASES} in sorted order and did not look at the other \
+                         {over_cap}. Aleph's own data dir holds well under a dozen, so \
+                         a directory this size is itself worth a look.",
+                        dir = self.data_dir.display(),
+                        total = MAX_DATABASES + over_cap,
+                    ),
+                )
+                .with_fix_hint(
+                    "Check what is writing *.db files into the data dir; move anything \
+                     that is not Aleph's own store elsewhere so the integrity check can \
+                     cover the whole directory.",
+                ),
+            );
         }
         findings
     }
@@ -381,5 +430,38 @@ mod tests {
         assert_eq!(findings.len(), 1);
         assert!(findings[0].is_problem(), "{:?}", findings[0]);
         assert_eq!(findings[0].title, "SQLite integrity unknown");
+    }
+
+    /// The cap keeps this check bounded, which is right — but a bound that
+    /// truncates silently reports on 32 stores while implying it reported on
+    /// all of them. That silence sat three lines from where the OTHER cause of
+    /// an incomplete listing was already being announced, which is the shape
+    /// this whole round removes.
+    #[tokio::test]
+    async fn a_truncated_listing_says_so_instead_of_implying_it_covered_everything() {
+        let tmp = tempdir().unwrap();
+        let extra = 3;
+        for i in 0..(MAX_DATABASES + extra) {
+            std::fs::write(tmp.path().join(format!("store{i:03}.db")), b"").unwrap();
+        }
+        let findings = SqliteIntegrityCheck::new(tmp.path().to_path_buf())
+            .run(Posture::Inspect)
+            .await;
+
+        // One verdict per probed store, plus exactly one finding about the
+        // ones that were never looked at.
+        assert_eq!(findings.len(), MAX_DATABASES + 1);
+        let truncation = findings
+            .iter()
+            .find(|f| f.title == "SQLite integrity unknown")
+            .expect("a truncated listing must say it is truncated");
+        assert!(truncation.is_problem());
+        assert!(
+            truncation
+                .detail
+                .contains(&format!("did not look at the other {extra}")),
+            "detail must name how many were skipped: {}",
+            truncation.detail
+        );
     }
 }

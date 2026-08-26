@@ -98,7 +98,7 @@ pub trait HealthCheck: Send + Sync {
 /// for "unknown" (`"SQLite integrity unknown"`, `"Free disk space unknown"`),
 /// so a caller's entire obligation is `Err(f) => return vec![f]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Presence {
+pub(crate) enum Presence {
     /// The path is there.
     Present,
     /// The path is *determinately* not there — `ErrorKind::NotFound`, not a
@@ -122,7 +122,7 @@ impl Presence {
     // deref for no gain. Same house shape as the
     // `Result<_, JsonRpcResponse>` gates in `gateway::handlers`.
     #[allow(clippy::result_large_err)]
-    pub fn of(check_id: &'static str, subject: &str, path: &Path) -> Result<Self, Finding> {
+    pub(crate) fn of(check_id: &'static str, subject: &str, path: &Path) -> Result<Self, Finding> {
         match path.try_exists() {
             Ok(true) => Ok(Self::Present),
             Ok(false) => Ok(Self::Absent),
@@ -132,7 +132,7 @@ impl Presence {
 
     /// True when the path is determinately not there.
     #[must_use]
-    pub const fn is_absent(self) -> bool {
+    pub(crate) const fn is_absent(self) -> bool {
         matches!(self, Self::Absent)
     }
 }
@@ -152,7 +152,7 @@ impl Presence {
 /// *not* re-report it as a scary error). Folding an indeterminate answer into
 /// a determinate one is the defect; folding one determinate answer into
 /// another is a caller's choice, made where a reader can see it.
-pub enum DirListing {
+pub(crate) enum DirListing {
     /// The directory itself is not there.
     Absent,
     /// The directory was walked.
@@ -181,7 +181,7 @@ impl DirListing {
     // deref for no gain. Same house shape as the
     // `Result<_, JsonRpcResponse>` gates in `gateway::handlers`.
     #[allow(clippy::result_large_err)]
-    pub fn of(check_id: &'static str, subject: &str, dir: &Path) -> Result<Self, Finding> {
+    pub(crate) fn of(check_id: &'static str, subject: &str, dir: &Path) -> Result<Self, Finding> {
         let entries = match std::fs::read_dir(dir) {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::Absent),
@@ -211,7 +211,7 @@ impl DirListing {
 /// prints `detail` only when [`Finding::is_problem`]), which is exactly the
 /// invisibility this whole family of findings exists to avoid.
 #[must_use]
-pub fn unknown_finding(
+pub(crate) fn unknown_finding(
     check_id: &'static str,
     subject: &str,
     detail: impl Into<String>,
