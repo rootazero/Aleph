@@ -269,10 +269,16 @@ fn is_step(m: &ChatMessage) -> bool {
 /// remount). Keying on it would force one extra unmount/remount right at
 /// that transition, which would replay the bubble's one-shot entrance
 /// animation a second time — the exact bug this row model exists to avoid,
-/// just moved from "every token" to "once, at the end". So the key changes
-/// only on a structural transition that isn't already handled reactively
-/// (a tool call added, the model-info badge appearing, a day/clock change);
-/// separators key on their day.
+/// just moved from "every token" to "once, at the end". `tool_call_count`
+/// and `has_model_info` are excluded for the same reason: `messages.rs`'s
+/// `tool_calls_view` and `model_view` closures already read the message's
+/// tool calls and model info reactively (`message.with(...)`), so a tool
+/// call landing or the model-info badge appearing already updates in place
+/// without a remount — keying on either field would force the same
+/// unnecessary remount/re-animate this comment describes for `is_streaming`.
+/// So the key changes only on a structural transition that isn't already
+/// handled reactively (the step→final transition via `is_intermediate`, or a
+/// day/clock change); separators key on their day.
 #[must_use]
 pub fn row_key(row: &TimelineRow) -> String {
     match row {
@@ -280,11 +286,9 @@ pub fn row_key(row: &TimelineRow) -> String {
         TimelineRow::Message {
             id,
             is_intermediate,
-            tool_call_count,
-            has_model_info,
             clock,
             ..
-        } => format!("{id}:{is_intermediate}:{tool_call_count}:{has_model_info}:{clock}",),
+        } => format!("{id}:{is_intermediate}:{clock}"),
         TimelineRow::Narration { id, .. } => format!("narr:{id}"),
         TimelineRow::ToolLine { run_id, tool } => format!(
             "tool:{run_id}:{}:{}:{:?}",
@@ -892,6 +896,36 @@ mod tests {
             *is_streaming = false;
         }
         assert_eq!(row_key(&base), row_key(&done));
+    }
+
+    #[test]
+    fn row_key_message_is_stable_across_tool_calls_and_model_info() {
+        // `tool_call_count` and `has_model_info` are read reactively by
+        // `messages.rs`'s `tool_calls_view`/`model_view` closures (see the
+        // `row_key` doc comment), so a tool call landing or the model-info
+        // badge attaching must not change the key — either would force an
+        // unnecessary remount and replay the bubble's entrance animation.
+        let base = TimelineRow::Message {
+            id: "assistant-r1".into(),
+            role: "assistant".into(),
+            has_plan_archive: false,
+            is_streaming: false,
+            is_intermediate: false,
+            tool_call_count: 0,
+            has_model_info: false,
+            clock: "T1000".into(),
+        };
+        let mut with_tools_and_model = base.clone();
+        if let TimelineRow::Message {
+            tool_call_count,
+            has_model_info,
+            ..
+        } = &mut with_tools_and_model
+        {
+            *tool_call_count = 2;
+            *has_model_info = true;
+        }
+        assert_eq!(row_key(&base), row_key(&with_tools_and_model));
     }
 
     #[test]

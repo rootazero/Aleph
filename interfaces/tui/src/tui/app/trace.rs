@@ -382,6 +382,11 @@ impl AppState {
         );
 
         self.messages.clear();
+        // The cache is keyed by positional index into `messages`, which is
+        // about to be repopulated from scratch — a stale entry whose (kind,
+        // len, width) happens to match new content at the same index must
+        // not survive.
+        self.chat_line_cache = crate::tui::widgets::chat_area::LineCache::default();
         self.current_run = Some(replay.task.task_id.clone());
         // Replay is not a live run — keep the working indicator off even though
         // current_run is briefly Some for projection bookkeeping.

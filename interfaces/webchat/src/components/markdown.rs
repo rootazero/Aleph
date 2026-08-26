@@ -346,9 +346,11 @@ fn now_ms() -> Option<f64> {
 /// `is_streaming`**: it keeps advancing after the backend finishes until it has
 /// revealed the whole final text, so a response that generates faster than `cps`
 /// still animates instead of dumping on completion. The per-message cursor lives
-/// in the clock keyed on `message_id`, so it survives the per-token remount of a
-/// streaming bubble (the keyed `<For>` recreates the bubble on every delta) and
-/// the sweep stays continuous.
+/// in the clock keyed on `message_id`, so it survives `TypewriterRenderer` being
+/// re-invoked (its caller wraps it in a `{move || message.with(...)}` closure
+/// that rebuilds this fragment reactively whenever the message's content
+/// changes — the row itself no longer remounts per token) and the sweep stays
+/// continuous.
 ///
 /// Routing:
 /// - No cursor and not streaming → a message loaded from history (never streamed

@@ -171,7 +171,12 @@ pub fn markdown_to_lines_incremental(
             // No new safe progress: reformat only the tail past the cached
             // safe offset and append it to the cached prefix lines.
             let mut lines = prev_lines.clone();
-            let tail = &text[prev_offset..];
+            // A stale `prev_offset` (e.g. from a content swap the cache
+            // didn't observe) must never panic — mirrors Panel's
+            // `extend_stable_prefix` guard against the same hazard. An
+            // out-of-range or off-char-boundary offset degrades to "no
+            // tail" rather than slicing.
+            let tail = text.get(prev_offset..).unwrap_or("");
             if !tail.is_empty() {
                 lines.extend(markdown_to_lines(tail, width));
             }

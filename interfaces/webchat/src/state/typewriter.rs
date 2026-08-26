@@ -78,10 +78,12 @@ pub struct TypewriterClock {
     /// (the backend already coalesces to a single final chunk in instant mode;
     /// this keeps the Panel honest if a stray streamed delta still arrives).
     pub instant: RwSignal<bool>,
-    /// `message_id → reveal cursor`. Persists across the per-token remount of a
-    /// streaming bubble (the keyed `<For>` recreates the bubble on every delta)
-    /// so the reveal is continuous, not reset each token. Also persists *past*
-    /// stream completion so the sweep can finish revealing the final text.
+    /// `message_id → reveal cursor`. Persists across `TypewriterRenderer` being
+    /// re-invoked (its caller wraps it in a `{move || message.with(...)}`
+    /// closure that rebuilds it reactively whenever the message's content
+    /// changes — the row itself no longer remounts per token) so the reveal is
+    /// continuous, not reset each token. Also persists *past* stream completion
+    /// so the sweep can finish revealing the final text.
     reveals: RwSignal<HashMap<String, Reveal>>,
     /// `message_id → (already-rendered HTML for the safe prefix, chars that
     /// prefix represents)`. Separate from `reveals` (not folded into

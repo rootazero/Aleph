@@ -1247,7 +1247,12 @@ fn ToolFallbackRow(message: ChatMessage) -> impl IntoView {
 }
 
 /// Explore aggregate block — consecutive read-only tools collapsed into one expandable block (codex Exploring origin).
-/// Expand state stored by group key in `ChatState::strip_open` (survives per-token remount).
+/// Expand state stored by group key in `ChatState::strip_open`, not as this
+/// component's own signal: unlike the stabilized `Message`/`Narration` row
+/// keys, `ExploreGroup`'s own key (`timeline::row_key`) still changes on the
+/// group's own transitions (a tool starting/finishing, the group completing),
+/// remounting this row while it is active — an in-component signal would
+/// reset the toggle on every one of those.
 #[component]
 fn ExploreGroupRow(
     key_id: String,

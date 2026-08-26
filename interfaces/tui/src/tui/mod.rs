@@ -334,9 +334,22 @@ async fn main_loop<'c>(
         // Wait for next event
         let action = tokio::select! {
             Some(te) = term_events.recv() => {
+                // A terminal event always represents something the user
+                // needs to see reflected on screen (a keystroke landing in
+                // the composer, a resize reflowing the layout, a paste)
+                // even when the handler's returned Action is None — Action
+                // describes what the loop should do NEXT, not whether
+                // visible state changed. Set here, at the source, rather
+                // than inferred from the returned Action's value.
+                needs_redraw = true;
                 keys::handle_terminal_event(state, textarea, &te)
             }
             Some(ge) = gateway_events.recv() => {
+                // Same reasoning as the terminal branch above: a gateway
+                // frame can mutate visible state (e.g. the /btw overlay,
+                // the AskUser dialog, a streamed chunk) while returning
+                // Action::None.
+                needs_redraw = true;
                 state.handle_gateway_event(ge)
             }
             _ = tick_interval.tick() => {
@@ -411,14 +424,6 @@ async fn main_loop<'c>(
                 }
             }
         }
-
-        // Every action other than a pure idle tick represents a real state
-        // change worth showing; `Tick` decides for itself in its own arm
-        // below (see `should_redraw_after_tick`), and `None`/`Quit` need no
-        // redraw (nothing changed, or the loop is exiting). Computed before
-        // the match below, which moves owned fields (e.g. `SendMessage`'s
-        // `String`) out of `action` in several arms.
-        let action_always_redraws = !matches!(action, Action::Tick | Action::None | Action::Quit);
 
         // Execute action
         match action {
@@ -693,10 +698,6 @@ async fn main_loop<'c>(
             Action::ProviderPickerRefresh => {
                 refresh_picker_provider(state, client).await;
             }
-        }
-
-        if action_always_redraws {
-            needs_redraw = true;
         }
 
         // Check quit flag
