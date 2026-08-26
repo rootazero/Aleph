@@ -5,7 +5,7 @@
 #   KEEP=1 ./qa/teamchat_rooms/run.sh      # keep the scratch dir for post-mortem
 #   SKIP_BUILD=1 ./qa/teamchat_rooms/run.sh
 #
-# Six claims, none of which a unit test can make, because each one needs two
+# Seven claims, none of which a unit test can make, because each one needs two
 # authenticated principals and a live run between them:
 #
 #   1. A room-scoped team really is reachable by every member of the room —
@@ -22,6 +22,10 @@
 #      room's scope stamp, the bound workspace lists and reads, a room run's
 #      note lands in `main__p-<id>`, and `projects.changed` reaches both
 #      sockets live.
+#   7. A child the room's run DELEGATES inherits the room: its own prompt
+#      carries `<room_context>` naming the same two members. Claim 4 is about
+#      the turn a human started; this one is about a prompt built one spawn
+#      later, from a task-local the spawn had to re-establish.
 #
 # ## The two identities are not optional
 #

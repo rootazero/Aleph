@@ -17,6 +17,7 @@
 //   QA-TEAMCREATE  -> tool_use team_create     (room-scoped team, S1/S3 setup)
 //   QA-NOTE        -> tool_use note_manage     (writes into the room partition)
 //   QA-CARD        -> tool_use file_ops:delete (destructive => approval card)
+//   QA-DELEGATE    -> tool_use subagent        (a child run, phase 7)
 //   anything else  -> end_turn, "Hi <label>, noted."
 //
 // The last arm is not filler: it is the only end-to-end evidence that the
@@ -41,6 +42,8 @@ const log = (...a) =>
   console.log(`${((Date.now() - T0) / 1000).toFixed(2)}s [mock]`, ...a);
 
 let turns = 0;
+/** See the `QA-DELEGATE` arm: at most one delegation per process. */
+let delegated = false;
 
 /** Flatten one message's content into plain text. */
 const textOf = (content) => {
@@ -174,6 +177,35 @@ const decide = (body) => {
       kind: "tool",
       name: "file_ops",
       input: { operation: "delete", path: DELETE_PATH },
+    };
+  }
+  // A delegated child is the one turn this mock serves that it also CAUSES, so
+  // it is the one arm that can feed itself. Three independent guards, because
+  // a runaway here does not fail the fixture — it spawns children until the
+  // budget is gone:
+  //
+  //  1. `context: "isolated"` — the child's conversation is its own, so the
+  //     parent's `[Ada]: … QA-DELEGATE` line is not in it to be re-read. This
+  //     is the guard that matters; the other two exist because it is an
+  //     argument about someone else's code.
+  //  2. `delegated` — at most one delegation per process. Unlike a turn
+  //     counter (which this mock rejects in its header, because run order is
+  //     the server's to decide) a once-flag is order-independent: it says
+  //     "whichever turn asks first", and the fixture asks exactly once.
+  //  3. The child's task carries a marker that is NOT this one, so even a
+  //     `currentLine` that somehow saw the parent's text would have to match
+  //     `QA-DELEGATE` rather than `QA-CHILD` to loop.
+  if (text.includes("QA-DELEGATE") && !delegated) {
+    delegated = true;
+    return {
+      kind: "tool",
+      name: "subagent",
+      input: {
+        action: "run",
+        task: "QA-CHILD: reply with one short sentence and stop.",
+        context: "isolated",
+        timeout_secs: 120,
+      },
     };
   }
   return {
