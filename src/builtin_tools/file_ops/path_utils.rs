@@ -1404,11 +1404,7 @@ deny_read_globs = ["**/.env", "**/*.pem"]
         // needle (the bare attribute, no surrounding newlines) so a CRLF
         // checkout does not turn the "production prefix" into the whole file.
         fn production_prefix(src: &str) -> String {
-            src.replace('\r', "")
-                .split("#[cfg(test)]")
-                .next()
-                .unwrap_or_default()
-                .to_string()
+            crate::utils::source_scan::production_prefix(src)
         }
         /// Every `fn` name in `src` whose name mentions resolving or
         /// normalizing — i.e. every candidate path resolver. Matches on a line

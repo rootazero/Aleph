@@ -10,8 +10,8 @@ pub mod types;
 
 pub use types::{Cadence, LoopState, LoopStatus};
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
-use once_cell::sync::OnceCell;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -549,11 +549,25 @@ impl LoopRegistry {
 /// Process-global registry. Initialized once at daemon boot
 /// (`constructor.rs`); `None` until then so tests / early-boot read as "no
 /// loop subsystem" and the continuation hook stays dormant.
-static GLOBAL: OnceCell<Arc<LoopRegistry>> = OnceCell::new();
+///
+/// `ConsumerDecides`, with the sharpest reader worth naming: `execute.rs`'s
+/// loop continuation does `crate::looping::global().is_some_and(|reg|
+/// reg.confirm_fire(..))`, so an uninstalled registry makes `confirmed` false
+/// and the tick is dropped with the log line *"loop: tick superseded during its
+/// delay (loop stopped or replaced)"* — a confident explanation of something
+/// that did not happen. The other ten readers each choose differently.
+static GLOBAL: CapabilitySlot<Arc<LoopRegistry>> =
+    CapabilitySlot::new("looping/registry", MissingSemantics::ConsumerDecides);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn global_slot() -> &'static dyn SlotStatus {
+    &GLOBAL
+}
 
 /// Install the global registry at boot. Idempotent.
 pub fn init_global(registry: Arc<LoopRegistry>) {
-    let _ = GLOBAL.set(registry);
+    let _ = GLOBAL.install(registry);
 }
 
 /// Read the global registry, if initialized.
@@ -1247,5 +1261,25 @@ mod tests {
         };
         reg.put(reg.get("b").unwrap().with_status(LoopStatus::Stopped));
         assert!(!reg.confirm_fire("b", wb), "ghost tick must not execute");
+    }
+
+    /// The variant is the operator-facing severity of this handle going
+    /// missing (`FailsOpen` => Error and a non-zero `aleph doctor`;
+    /// `IndistinguishableDefault` / `ConsumerDecides` => Warning;
+    /// `FailsClosed` => Info), and it is DERIVED from the consumers named on
+    /// the static above. Pinned in the module that owns the handle, because
+    /// that is the only place a reclassification and a re-read of those
+    /// consumers can be made to happen together — the aggregate figure in
+    /// FEATURE_LOCATOR cannot tell a reclassification from a new slot.
+    /// `census::every_slot_pins_its_own_missing_semantics` requires this by
+    /// slot id.
+    #[test]
+    fn the_registry_slot_pins_its_missing_semantics() {
+        assert_eq!(global_slot().id(), "looping/registry");
+        assert!(
+            matches!(global_slot().missing(), MissingSemantics::ConsumerDecides),
+            "`looping/registry` is classified ConsumerDecides from its consumers; changing that \
+             means re-reading them, not re-typing this line"
+        );
     }
 }

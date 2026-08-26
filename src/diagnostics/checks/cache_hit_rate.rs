@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 
-use crate::diagnostics::check::{HealthCheck, Posture};
+use crate::diagnostics::check::{HealthCheck, Posture, Presence};
 use crate::diagnostics::finding::{Finding, Severity};
 
 const ID: &str = "core/cache-hit-rate";
@@ -110,12 +110,17 @@ impl HealthCheck for CacheHitRateCheck {
     }
 
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
-        if !self.db_path.exists() {
-            return vec![Finding::ok(
-                ID,
-                "No trace database yet",
-                "state.db absent — no agent has run, so no cache telemetry exists.",
-            )];
+        // Same conflation, same sentence, same fix as `core/cache-health`.
+        match Presence::of(ID, "Prompt cache hit rate", &self.db_path) {
+            Err(f) => return vec![f],
+            Ok(Presence::Absent) => {
+                return vec![Finding::ok(
+                    ID,
+                    "No trace database yet",
+                    "state.db absent — no agent has run, so no cache telemetry exists.",
+                )]
+            }
+            Ok(Presence::Present) => {}
         }
         // rusqlite is synchronous — keep the aggregation off the async executor.
         let db = self.db_path.clone();
@@ -287,5 +292,17 @@ mod tests {
         let findings = check.run(Posture::Inspect).await;
         // All rows stale → under MIN_CALLS → informational.
         assert_eq!(findings[0].severity, Severity::Info);
+    }
+
+    /// Twin of `core/cache-health`'s: the same false sentence had been copied
+    /// byte-for-byte into this check, so the fix has to be too.
+    #[tokio::test]
+    async fn an_unreadable_trace_db_is_not_reported_as_no_trace_database_yet() {
+        let findings = CacheHitRateCheck::new(PathBuf::from("aleph\u{0}state.db"))
+            .run(Posture::Inspect)
+            .await;
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].is_problem(), "{:?}", findings[0]);
+        assert_ne!(findings[0].title, "No trace database yet");
     }
 }

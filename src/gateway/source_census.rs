@@ -19,17 +19,9 @@
 /// The half of a Rust source file that ships: CRLF-normalized, everything from
 /// the first `#[cfg(test)]` onward removed, comment lines dropped.
 pub(crate) fn production_prefix(src: &str) -> String {
-    src.replace('\r', "")
-        .split("#[cfg(test)]")
-        .next()
-        .unwrap_or_default()
-        .lines()
-        .filter(|l| {
-            let t = l.trim_start();
-            !t.starts_with("//") && !t.starts_with('*')
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    crate::utils::source_scan::strip_comment_lines(&crate::utils::source_scan::production_prefix(
+        src,
+    ))
 }
 
 /// Every topic literal in a `TopicEvent::new("…", …)` call in `src`.

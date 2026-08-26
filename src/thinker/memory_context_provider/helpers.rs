@@ -1,3 +1,4 @@
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::memory::notes::orientation::types::OrientationSnapshot;
 use crate::sync_primitives::Arc;
 use crate::thinker::xml_util::escape_xml;
@@ -33,18 +34,40 @@ pub fn render_orientation_envelope(s: &OrientationSnapshot) -> String {
 /// and has 3 callsites + 2 test fixtures. Threading an optional
 /// `Arc<MemoryContextProvider>` argument through every caller would be a
 /// 5-file blast radius for what is essentially a single fire-and-forget
-/// invalidation. Using an opt-in `OnceCell` keeps the change surgical:
+/// invalidation. Using an opt-in capability slot keeps the change surgical:
 /// `agent_init` registers the MCP once at startup, the session-end path
-/// reads the cell and spawns the eviction (and reads the MCP's extension
+/// reads the slot and spawns the eviction (and reads the MCP's extension
 /// registry for the session-close capture-filter pass).
-static SESSION_END_MCP: tokio::sync::OnceCell<Arc<super::MemoryContextProvider>> =
-    tokio::sync::OnceCell::const_new();
+///
+/// `FailsClosed`, like the three siblings below: `emit_session_end_raw` reads
+/// it as `if let Some(mcp)` with no `else`, so an uninstalled handle means the
+/// curated snapshot is never evicted and `registry` stays `None`, taking the
+/// session-close capture-filter pass with it. Nothing is granted; two
+/// fire-and-forget effects simply do not happen, and no surface says so.
+static SESSION_END_MCP: CapabilitySlot<Arc<super::MemoryContextProvider>> =
+    CapabilitySlot::new("memory/session-end-mcp", MissingSemantics::FailsClosed);
+
+/// The five handles in this file, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn session_end_mcp_slot() -> &'static dyn SlotStatus {
+    &SESSION_END_MCP
+}
 
 /// Register a `MemoryContextProvider` for SessionEnd-triggered curated
-/// invalidation. Idempotent; subsequent calls are a no-op (returns the
-/// `Err(_)` from `OnceCell::set` silently).
+/// invalidation. Idempotent; subsequent calls are a no-op (the `false` from
+/// [`CapabilitySlot::install`] is discarded).
 pub fn register_session_end_mcp(mcp: Arc<super::MemoryContextProvider>) {
-    let _ = SESSION_END_MCP.set(mcp);
+    let _ = SESSION_END_MCP.install(mcp);
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// The `else` half of [`register_session_end_mcp`]. All five handles in this
+/// file are registered from one branch of `agent_init`, so they share one
+/// absence and one reason; each still gets its own function because a roster
+/// consumer reads them one at a time. `because` is quoted verbatim.
+pub fn decline_session_end_mcp(because: &'static str) {
+    SESSION_END_MCP.decline(because);
 }
 
 /// Read the registered MCP, if any. Used by
@@ -60,16 +83,39 @@ pub fn session_end_mcp() -> Option<Arc<super::MemoryContextProvider>> {
 /// `emit_session_end_raw`. The two cells are kept separate so
 /// Spec A (cache invalidation) and Spec B (summary production) remain
 /// independently removable.
-static SESSION_END_SUMMARIZER: tokio::sync::OnceCell<
+/// `FailsClosed`: `if let Some(summarizer)` with no `else`. An uninstalled
+/// handle means no Spec-B summary is produced AND — the second-order cost, and
+/// the one the call site spends twenty lines on — nothing registers with
+/// `flush::global_registry()`'s readiness gate, so `HybridAssembler::assemble`
+/// stops waiting for a snapshot that is never coming. That reads as "ready",
+/// which is true, and useless.
+static SESSION_END_SUMMARIZER: CapabilitySlot<
     Arc<crate::memory::session_search_summary::end_hook::SessionEndSummarizer>,
-> = tokio::sync::OnceCell::const_new();
+> = CapabilitySlot::new(
+    "memory/session-end-summarizer",
+    MissingSemantics::FailsClosed,
+);
+
+pub(crate) const fn session_end_summarizer_slot() -> &'static dyn SlotStatus {
+    &SESSION_END_SUMMARIZER
+}
 
 /// Register a `SessionEndSummarizer` for Spec B on-session-end hook firing.
 /// Idempotent; subsequent calls are a no-op.
 pub fn register_session_end_summarizer(
     summarizer: Arc<crate::memory::session_search_summary::end_hook::SessionEndSummarizer>,
 ) {
-    let _ = SESSION_END_SUMMARIZER.set(summarizer);
+    let _ = SESSION_END_SUMMARIZER.install(summarizer);
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// The `else` half of [`register_session_end_summarizer`]. See the static above
+/// for the second-order cost this silence hides — `HybridAssembler::assemble`
+/// reporting "ready" about a snapshot that is never coming. `because` is quoted
+/// verbatim to an operator.
+pub fn decline_session_end_summarizer(because: &'static str) {
+    SESSION_END_SUMMARIZER.decline(because);
 }
 
 /// Read the registered `SessionEndSummarizer`, if any.
@@ -84,16 +130,33 @@ pub fn session_end_summarizer(
 /// (only when `[memory.reflection] enabled = true`), consumed fire-and-forget
 /// at session-end in `emit_session_end_raw`. Kept separate so the
 /// reflection feature stays independently removable from Spec A/Spec B.
-static SESSION_REFLECTOR: tokio::sync::OnceCell<
-    Arc<crate::memory::session_reflection::SessionReflector>,
-> = tokio::sync::OnceCell::const_new();
+/// `FailsClosed`: `if let Some(reflector)` with no `else`, and the reflector
+/// self-gates on substance and cooldown anyway — so "no lesson was distilled
+/// tonight" is a legitimate outcome that an uninstalled handle produces for a
+/// different reason, with no way to tell them apart. Nothing is granted.
+static SESSION_REFLECTOR: CapabilitySlot<Arc<crate::memory::session_reflection::SessionReflector>> =
+    CapabilitySlot::new("memory/session-reflector", MissingSemantics::FailsClosed);
+
+pub(crate) const fn session_reflector_slot() -> &'static dyn SlotStatus {
+    &SESSION_REFLECTOR
+}
 
 /// Register a `SessionReflector` for on-session-end lesson distillation.
 /// Idempotent; subsequent calls are a no-op.
 pub fn register_session_reflector(
     reflector: Arc<crate::memory::session_reflection::SessionReflector>,
 ) {
-    let _ = SESSION_REFLECTOR.set(reflector);
+    let _ = SESSION_REFLECTOR.install(reflector);
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// The `else` half of [`register_session_reflector`], and the handle whose
+/// absence is hardest to see: the reflector self-gates on substance and
+/// cooldown, so "no lesson tonight" is a legitimate installed outcome that
+/// looks identical. `because` is quoted verbatim to an operator.
+pub fn decline_session_reflector(because: &'static str) {
+    SESSION_REFLECTOR.decline(because);
 }
 
 /// Read the registered `SessionReflector`, if any.
@@ -107,16 +170,36 @@ pub fn session_reflector() -> Option<Arc<crate::memory::session_reflection::Sess
 /// in `emit_session_end_raw` to drain pending raws into linked
 /// notes immediately. Kept separate from the cells above so the flush feature
 /// stays independently removable.
-static SESSION_END_COMPRESSION: tokio::sync::OnceCell<
+/// `FailsClosed`: `.map(|cs| ..)` on the read, so an uninstalled handle
+/// produces `None` and the Pillar-2 flush never runs — pending raws are not
+/// drained into linked notes at session end. They are not lost (the periodic
+/// path still consolidates them); what is lost is the immediacy, silently.
+static SESSION_END_COMPRESSION: CapabilitySlot<
     Arc<crate::memory::compression::CompressionService>,
-> = tokio::sync::OnceCell::const_new();
+> = CapabilitySlot::new(
+    "memory/session-end-compression",
+    MissingSemantics::FailsClosed,
+);
+
+pub(crate) const fn session_end_compression_slot() -> &'static dyn SlotStatus {
+    &SESSION_END_COMPRESSION
+}
 
 /// Register a `CompressionService` for the on-session-end real-time flush.
 /// Idempotent; subsequent calls are a no-op (first call wins).
 pub fn register_session_end_compression(
     compression: Arc<crate::memory::compression::CompressionService>,
 ) {
-    let _ = SESSION_END_COMPRESSION.set(compression);
+    let _ = SESSION_END_COMPRESSION.install(compression);
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// The `else` half of [`register_session_end_compression`]. What is lost is the
+/// immediacy of the session-end flush, silently — the periodic path still
+/// consolidates. `because` is quoted verbatim to an operator.
+pub fn decline_session_end_compression(because: &'static str) {
+    SESSION_END_COMPRESSION.decline(because);
 }
 
 /// Read the registered `CompressionService`, if any. Used by
@@ -127,19 +210,103 @@ pub fn session_end_compression() -> Option<Arc<crate::memory::compression::Compr
 
 /// Process-wide opt-in flag for injecting last session's open loops into the
 /// next session's curated context (Batch 2 — `[memory.reflection]
-/// open_loop_inject_prompt`). Mirrors the `OnceCell` idiom above to avoid
+/// open_loop_inject_prompt`). Mirrors the capability-slot idiom above to avoid
 /// threading a bool through the `MemoryContextProvider` constructor and its
 /// callers. Set once at startup by `agent_init`; read in `capture_curated`.
 /// Unset (default) reads `false`, so the open-loops block is never injected
 /// unless explicitly enabled.
-static OPEN_LOOP_INJECT: tokio::sync::OnceCell<bool> = tokio::sync::OnceCell::const_new();
+///
+/// The one `IndistinguishableDefault` in this file, and the sentence above is
+/// the derivation: [`open_loop_inject`] ends in `.unwrap_or(false)`, so an
+/// uninstalled flag is byte-identical to an operator who left
+/// `[memory.reflection] open_loop_inject_prompt` off. Note this handle is
+/// installed with the config value either way — `false` is a legitimate
+/// INSTALL here, not an absence, which is exactly the distinction the slot can
+/// now record and the bare flag could not.
+static OPEN_LOOP_INJECT: CapabilitySlot<bool> = CapabilitySlot::new(
+    "memory/open-loop-inject",
+    MissingSemantics::IndistinguishableDefault {
+        reads_as: "false -- open loops are never injected, exactly as if \
+                   [memory.reflection] open_loop_inject_prompt were off",
+    },
+);
+
+pub(crate) const fn open_loop_inject_slot() -> &'static dyn SlotStatus {
+    &OPEN_LOOP_INJECT
+}
 
 /// Enable/disable open-loop injection. Idempotent; first call wins.
 pub fn set_open_loop_inject(enabled: bool) {
-    let _ = OPEN_LOOP_INJECT.set(enabled);
+    let _ = OPEN_LOOP_INJECT.install(enabled);
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// Note the asymmetry the static above spells out: `set_open_loop_inject(false)`
+/// is an INSTALL, not an absence. This function is for the arms that never
+/// reach the setter at all — the reflection block being off, or no agent engine
+/// having been built. `because` is quoted verbatim to an operator.
+pub fn decline_open_loop_inject(because: &'static str) {
+    OPEN_LOOP_INJECT.decline(because);
 }
 
 /// Whether last session's open loops should be injected into curated context.
 pub fn open_loop_inject() -> bool {
     OPEN_LOOP_INJECT.get().copied().unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// All five handles reach the roster under the ids
+    /// [`crate::capability::ALL_SLOTS`] reads, and the one that carries a
+    /// `reads_as` sentence carries the right one.
+    ///
+    /// No runtime tie on `OPEN_LOOP_INJECT` on purpose: `curated.rs`'s tests
+    /// call `set_open_loop_inject(true)`, so "an uninstalled read is false"
+    /// would pass or fail on libtest's scheduling. A flaky guard teaches
+    /// people to re-run.
+    #[test]
+    fn the_accessors_expose_all_five_handles_to_the_roster() {
+        assert_eq!(session_end_mcp_slot().id(), "memory/session-end-mcp");
+        assert_eq!(
+            session_end_summarizer_slot().id(),
+            "memory/session-end-summarizer"
+        );
+        assert_eq!(session_reflector_slot().id(), "memory/session-reflector");
+        assert_eq!(
+            session_end_compression_slot().id(),
+            "memory/session-end-compression"
+        );
+        assert_eq!(open_loop_inject_slot().id(), "memory/open-loop-inject");
+
+        for slot in [
+            session_end_mcp_slot(),
+            session_end_summarizer_slot(),
+            session_reflector_slot(),
+            session_end_compression_slot(),
+        ] {
+            assert!(
+                matches!(slot.missing(), MissingSemantics::FailsClosed),
+                "{} is a fire-and-forget session-end hook: absence must be \
+                 FailsClosed, got {:?}",
+                slot.id(),
+                slot.missing()
+            );
+        }
+
+        let MissingSemantics::IndistinguishableDefault { reads_as } =
+            open_loop_inject_slot().missing()
+        else {
+            panic!(
+                "expected IndistinguishableDefault, got {:?}",
+                open_loop_inject_slot().missing()
+            );
+        };
+        assert!(
+            reads_as.contains("false"),
+            "must name open_loop_inject()'s real fallback; got {reads_as:?}"
+        );
+    }
 }

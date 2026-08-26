@@ -10,6 +10,44 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-24-capability-wiring-design.md`
 
+
+> ### ⚠️ Correction — the count is 46, but NOT the specification's 46 (2026-08-24, after Task 6 and its fix round)
+>
+> Every "46" below that describes the roster size is again **46** — and that number is
+> a trap, so read this before relying on it. Task 6's rule-derived census found the
+> specification's 46 was wrong in **three** members. The numbers agree; the rosters do
+> not. **The decomposition is the tell: the spec's 46 was 46 *written* handles; this
+> one is 45 written + 1 first-caller-wins.**
+>
+> - **OUT** — `extension/template.rs::FILE_REF_REGEX`, a compiled-regex cache in a
+>   zero-parameter fn. It was on the spec's roster only because `get_or_try_init` sat
+>   in the writer set, which is where a fallible initialiser had to go before install
+>   form 2 existed.
+> - **IN** — `metrics/mod.rs::METRICS_RUNTIME`, a real handle no setter search saw,
+>   because rustfmt put its `.set(` on the next line. Roster membership was a function
+>   of line length.
+> - **SAME, FOR A DIFFERENT REASON** — `providers/route_handle.rs::GLOBAL`, on the
+>   spec's roster by a **name collision**: seven container statics in `src/` are called
+>   `GLOBAL` and six are `.set(` in their own files, so a corpus-wide word-boundary
+>   search cannot tell the seventh from them. It is now selected by derivation, so a
+>   rename can no longer drop it silently.
+>
+> Arithmetic: spec's 46, −1 `FILE_REF_REGEX`, +1 `METRICS_RUNTIME` = 46. `GLOBAL` does
+> not move the count — it was already counted, wrongly. **This is the third cancelling
+> coincidence around this number in one task**, which is exactly why the disambiguation
+> lives in the census's own assertion message and module doc, not only here.
+>
+> Authoritative: `src/capability/census.rs` and
+> `.superpowers/sdd/2026-08-24-capability-wiring/capability-inventory.txt` (46 lines).
+> Task 6's own step block below is kept verbatim and marked SUPERSEDED.
+>
+> A known gap is recorded in the census module doc: **interior-mutable installs** —
+> a container built lazily with no argument and then filled *through* a guard — are
+> invisible to both rule arms while having the full failure semantics. At least four
+> instances, including both gateway fan-out registries and the **security audit trail**
+> (`security/audit.rs::GLOBAL_AUDIT`, which has no `OnceLock` at all). Unfixed this
+> round; direction is under-see.
+
 ## Global Constraints
 
 - **Branch isolation.** All implementation commits land on worktree branch `capability-wiring`. `main` receives no implementation commits.
@@ -1220,6 +1258,8 @@ cargo test -p alephcore --lib capability::census -- --nocapture 2>&1 | tail -60
 
 Expected: either PASS with 46 raw handles listed, or RED naming a different count. **If the count differs from 46, stop and investigate** — do not edit the constant. Capture the printed list; Tasks 7–10 migrate exactly these.
 
+> **SUPERSEDED — Task 6 executed and the answer is 47, not 46.** This block is kept as written for the record. The rule found that the spec's 46 was *the right roster reached by the wrong reason* (`route_handle::GLOBAL` was in it only by a name collision with three unrelated `GLOBAL` statics) and that `metrics::METRICS_RUNTIME` was **excluded because rustfmt broke its writer across two lines** — roster membership was a function of line length. Authoritative count and inventory: `src/capability/census.rs` and `.superpowers/sdd/2026-08-24-capability-wiring/capability-inventory.txt`. See commit `66244e97b`.
+
 - [ ] **Step 3: Save the inventory**
 
 ```bash
@@ -1438,16 +1478,25 @@ Assign each handle a `MissingSemantics` by asking *what a read observes when nob
 | `tools/result_store.rs::GLOBAL_STORE` | `tools/result-store` | `FailsClosed` |
 | `tools/turn_budget.rs::GLOBAL_BUDGET` | `tools/turn-budget` | `FailsOpen` |
 | `tools/in_flight.rs::GLOBAL_REGISTRY` | `tools/in-flight` | `ConsumerDecides` |
-| `tools/result_processing.rs::RESULT_BUDGET_CEILING` | `tools/result-budget-ceiling` | `IndistinguishableDefault { reads_as: "<compiled-in default ceiling>" }` |
+| `tools/result_processing.rs::RESULT_BUDGET_CEILING` | `tools/result-budget-ceiling` | `IndistinguishableDefault { reads_as: "<compiled-in default ceiling>" }` ⚠️ **PLACEHOLDER, WRONG IN SUBSTANCE — Task 8 found it names a different constant from what `result_budget_ceiling()` actually falls back to. Derive `reads_as` from the accessor's real fallback, never from this cell.** |
 
 ⚠️ Read each handle's current fallback before choosing. If a reader does `unwrap_or(DEFAULT)`, it is `IndistinguishableDefault` and `reads_as` must quote the actual default. If a *gate* reads it and skips its check on `None`, it is `FailsOpen`. Do not copy the table without checking — the table is a starting hypothesis, and the whole point of this round is that these two are indistinguishable from outside.
 
 - [ ] **Step 4: Run the affected suites**
 
 ```bash
-cargo test -p alephcore --lib session:: tools::result_store tools::turn_budget tools::in_flight tools::result_processing 2>&1 | tail -14
+cargo test -p alephcore --lib -- session:: tools::result_store tools::turn_budget tools::in_flight tools::result_processing 2>&1 | tail -14
 cargo test -p alephcore --lib capability::census 2>&1 | tail -6
 ```
+
+⚠️ **This command shipped without the `--` and could not run** — `cargo test`
+accepts one positional TESTNAME, so the multi-filter form exits 1 with
+`unexpected argument 'tools::result_store'` before compiling anything. Task 8 hit
+it and worked around it; the `--` above is the fix. Left annotated rather than
+silently corrected because later batches read this plan as a template, and the
+shape that invites the error is worth seeing next to the shape that works. The
+failure is loud, so the cost is a minute — the reason to record it is that a step
+which has never been executed is worth knowing about.
 
 Expected: all green; census shows 38 raw + 8 slots.
 
@@ -1743,7 +1792,7 @@ Replace the Task 6 count test with the two closing guards in `src/capability/cen
         );
         assert!(
             rostered.len() >= 40,
-            "roster has {} entries; 46 were measured. A shrinking roster and a \
+            "roster has {} entries; 46 were measured (NOT the spec's 46 -- see the correction block at the top of this plan). A shrinking roster and a \
              broken scan look identical in a green report.",
             rostered.len()
         );
@@ -2152,7 +2201,48 @@ git commit -m "docs: close the Task 3 triage ledger"
   `src/bin/aleph-server/commands/start/builder/subsystems.rs:{292,319,348,391,396,398}`,
   `src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:{682,751}`,
   `src/bin/aleph-server/commands/start/builder/agent_init/tool_catalog_init.rs:470`,
-  `src/bin/aleph-server/commands/start/mod.rs:109`, `src/bin/aleph-server/main.rs:79`
+  `src/bin/aleph-server/commands/start/mod.rs:109`, `src/bin/aleph-server/main.rs:79`,
+  **`src/bin/aleph-server/commands/start/mod.rs:3163-3195`** — a `match` arm, not an
+  `if`, and it decides THREE slots at once (see Step 2's ⚠️ below)
+
+**Two decline sites this task's own search shape will not find. Read both before Step 1.**
+
+1. **`start/mod.rs:3163-3195` — three slots inside a `match` arm.**
+   ```rust
+   match alephcore::tools::result_store::ToolResultStore::new("global") {
+       Ok(store) => {
+           set_global_tool_result_store(store);   // tools/result-store
+           set_global_result_budget_ceiling(…);   // tools/result-budget-ceiling
+           set_global_turn_result_budget(budget); // tools/turn-budget
+       }
+       Err(e) => { tracing::warn!(…, "…Layer 2 + Layer 3 disabled"); }
+   }
+   ```
+   Step 1's `grep` includes `match ` so it will *list* this, but Step 3's guard
+   recognised `if` / `if let` openers only and would have **silently exempted all
+   three** — widened below. Note also for Task 15: `turn-budget` and
+   `result-budget-ceiling` are installed only inside the result-store's `Ok` arm
+   though neither depends on the store, so a `ToolResultStore::new` failure
+   silently disables the turn cap — a handle Task 8 judged `FailsOpen`.
+
+2. **`src/tools/result_processing.rs::set_global_result_budget_ceiling` — an early
+   return inside the library setter, outside this task's walk root entirely.**
+   It returns without installing when `ceiling >= DEFAULT_RESULT_BUDGET_TOKENS`,
+   with the reason already written down ("a large-window model installs nothing
+   and behaves byte-for-byte as it does today"). Step 1 greps
+   `src/bin/aleph-server/commands/start/` and Step 3 walks `src/bin/aleph-server`
+   only, so **neither reaches it**.
+
+   ⚠️ Boot passes `per_result_tokens`, whose maximum *is* `DEFAULT_RESULT_BUDGET_TOKENS`,
+   and the no-`[context_budget]` path passes that constant directly — so this decline
+   fires for **every deployment without a small window**, i.e. the common healthy case.
+   Until it is converted, a healthy box reports `outcome() == None` on that slot, which
+   `capability/mod.rs` defines as "nothing ever reached this slot — either this process
+   did not boot, or boot died before getting here". That is the confident-lie direction,
+   and it becomes observable the moment Task 11/12 land.
+
+   Task 8 recorded this at the declaration; it is repeated here because that file is
+   one this task has no reason to open.
 
 **Interfaces:**
 - Consumes: `decline` on every migrated slot
@@ -2256,6 +2346,13 @@ into the next item.
         out
     }
 
+    /// Which conditional opener decided an install — the `else` for one is a
+    /// sibling arm for the other, so they cannot share a check.
+    enum GuardKind {
+        If,
+        MatchArm,
+    }
+
     /// Every conditional capability install in boot says why it was skipped.
     #[test]
     fn no_conditional_boot_install_is_silent() {
@@ -2283,8 +2380,21 @@ into the next item.
                 }
                 let my_indent = indent_of(&lines[i]);
 
-                // Nearest enclosing `if`-family opener at a strictly smaller indent.
-                let mut guard: Option<usize> = None;
+                // Nearest enclosing CONDITIONAL opener at a strictly smaller
+                // indent. TWO families, not one.
+                //
+                // ⚠️ This recognised `if` / `if let` only for one revision, and
+                // `start/mod.rs:3163` is why that was not enough: three installs
+                // sit inside `match ToolResultStore::new { Ok(store) => … ,
+                // Err(e) => warn! }`. From each of them the back-walk lands on
+                // `Ok(store) => {`, finds no `if`, sets `guard = None`, and takes
+                // the `continue` below commented "unconditional install: fine".
+                // It is not unconditional — an `Err` decides three slots and says
+                // nothing — and `examined >= 15` is satisfied by the genuine
+                // `if let` sites, so the vacuity assertion could not report it
+                // either. A guard blind to a whole opener family reports "all
+                // clear" about sites it never read.
+                let mut guard: Option<(usize, GuardKind)> = None;
                 for j in (0..i).rev() {
                     if lines[j].trim().is_empty() {
                         continue;
@@ -2295,18 +2405,50 @@ into the next item.
                     }
                     let t = lines[j].trim_start();
                     if t.starts_with("if ") || t.starts_with("if let ") {
-                        guard = Some(j);
+                        guard = Some((j, GuardKind::If));
+                    } else if t.contains("=>") && t.ends_with('{') {
+                        // A match arm. Nothing else in Rust opens a block with
+                        // `… => {`; closures spell their params `|a, b|`.
+                        guard = Some((j, GuardKind::MatchArm));
                     }
                     break; // first shallower line decides; do not keep walking out
                 }
-                let Some(g) = guard else { continue }; // unconditional install: fine
+                let Some((g, kind)) = guard else { continue }; // unconditional install: fine
                 examined += 1;
 
-                let (_, closing) = block_at(&lines, g);
-                let closer = lines.get(closing).map(String::as_str).unwrap_or("");
-                let has_else_with_decline = closer.trim_start().starts_with("} else")
-                    && block_at(&lines, closing).0.contains("decline");
-                if !has_else_with_decline {
+                let says_why = match kind {
+                    GuardKind::If => {
+                        let (_, closing) = block_at(&lines, g);
+                        let closer = lines.get(closing).map(String::as_str).unwrap_or("");
+                        closer.trim_start().starts_with("} else")
+                            && block_at(&lines, closing).0.contains("decline")
+                    }
+                    // A match arm's "else" is a SIBLING ARM, so the subject is
+                    // the whole `match`: step out exactly one level and require a
+                    // `decline` somewhere in its body.
+                    //
+                    // Deliberately weaker than the `If` branch, and say so rather
+                    // than assume it away: an arm that declines the WRONG slot
+                    // still passes here. Pinning which arm declines what needs
+                    // arm-by-arm parsing; the defect worth catching first is "this
+                    // match decides a slot and never declines at all".
+                    //
+                    // `contains("match ")`, not `starts_with`: `let x = match y {`
+                    // is the common spelling, and `starts_with` would walk past it
+                    // to an unrelated earlier `match`. If the line one step out is
+                    // not a match at all, this yields `false` and the site is
+                    // REPORTED — over-report rather than silently exempt, which is
+                    // the failure this whole widening exists to remove.
+                    GuardKind::MatchArm => {
+                        let arm_indent = indent_of(&lines[g]);
+                        lines[..g]
+                            .iter()
+                            .rposition(|l| !l.trim().is_empty() && indent_of(l) < arm_indent)
+                            .filter(|&m| lines[m].contains("match "))
+                            .is_some_and(|m| block_at(&lines, m).0.contains("decline"))
+                    }
+                };
+                if !says_why {
                     offenders.push(format!("{rel}:{}", i + 1));
                 }
             }
@@ -2350,6 +2492,23 @@ cp /tmp/subsystems.rs.bak src/bin/aleph-server/commands/start/builder/subsystems
 Expected: `test result: FAILED` ⇒ **RED** naming `subsystems.rs:<line>`. If instead you get
 `examined only 0`, the wrapper derivation broke — fix that before trusting any green from
 this guard.
+
+⚠️ **Falsify the `match` branch separately — the `if` branch passing proves nothing about
+it.** That is the whole lesson of the revision that added it: the guard was green crate-wide
+while structurally blind to three slots.
+
+```bash
+cp src/bin/aleph-server/commands/start/mod.rs /tmp/mod.rs.bak
+# Delete the `decline` from the Err arm at ~3189 and confirm all THREE installs
+# in the Ok arm are named.
+cargo test -p alephcore --lib capability::census::tests::no_conditional_boot_install 2>&1 | tail -12
+cp /tmp/mod.rs.bak src/bin/aleph-server/commands/start/mod.rs
+```
+
+Expected: **RED** naming three lines in `start/mod.rs` (one per slot). A single line means
+the back-walk is still resolving only one of them; a green means the `match` opener is not
+being recognised at all — check `t.contains("=>") && t.ends_with('{')` against the actual
+formatting of that arm before believing it.
 
 - [ ] **Step 4: Run boot tests and the verification set**
 
@@ -2417,7 +2576,7 @@ let Some(session_svc) = crate::session::service::global_session_service() else {
 - [ ] **Step 3: Run the affected suites plus the verification set**
 
 ```bash
-cargo test -p alephcore --lib tools::scoped builtin_tools::sessions gateway::execution_engine 2>&1 | tail -12
+cargo test -p alephcore --lib -- tools::scoped builtin_tools::sessions gateway::execution_engine 2>&1 | tail -12
 cargo test -p alephcore --lib --no-run
 cargo test -p alephcore --features test-helpers --test '*' --no-run
 cargo test -p aleph-panel --lib --no-run

@@ -13,8 +13,7 @@
 //! hint a person reads (translated) while `clarification::ask` builds the
 //! refusal the model reads (never translated).
 
-use std::sync::OnceLock;
-
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::orchestrator::dispatch::TerminateReason;
 use crate::spend::Limit;
 
@@ -66,8 +65,10 @@ impl Locale {
 ///
 /// # Changing the language takes a restart, and that is the declared contract
 ///
-/// `OnceLock` means an edit to `[general] language` does not reach these
-/// strings until the process restarts. That matches what the config system
+/// Install-once (the slot below is a `CapabilitySlot`, which is an `OnceLock`
+/// that can also say whether boot reached it) means an edit to
+/// `[general] language` does not reach these strings until the process
+/// restarts. That matches what the config system
 /// already promises: `general` is **not** in `reload_impact::LIVE_SECTIONS`
 /// (`route` / `behavior` / `execution`), so `ReloadImpact::classify` reports
 /// `Restart` for it and `self_config` tells the user so. Note the gateway's
@@ -75,12 +76,42 @@ impl Locale {
 /// re-read config per run — so a hot language change moves them and not this.
 /// If `general` is ever promoted to a live section, this global has to become
 /// a per-run parameter in the same change.
-static INSTALLED_LOCALE: OnceLock<Locale> = OnceLock::new();
+///
+/// `IndistinguishableDefault`, and the sentence below is the whole point: an
+/// uninstalled read is `Locale::En`, NOT [`Locale::from_config`]'s `Zh`. A
+/// deployment that set `[general] language = "zh"` and whose boot never reached
+/// [`install_locale`] emits English from every `t_ui` call site while every
+/// other locale reader in the gateway (they re-read config per run) speaks
+/// Chinese — and nothing anywhere says why.
+static INSTALLED_LOCALE: CapabilitySlot<Locale> = CapabilitySlot::new(
+    "gateway/locale",
+    MissingSemantics::IndistinguishableDefault {
+        reads_as: "Locale::En -- English, deliberately NOT Locale::from_config's Zh \
+                   default, so an uninstalled process emits the pre-catalog bytes",
+    },
+);
 
 /// Install the process-wide UI locale. First call wins; later calls are
 /// ignored, which is why boot resolves it from one config read.
 pub fn install_locale(locale: Locale) {
-    let _ = INSTALLED_LOCALE.set(locale);
+    let _ = INSTALLED_LOCALE.install(locale);
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// Boot installs this from inside `initialize_orchestrator`, which is itself
+/// gated on a default provider plus a session service — so on a
+/// provider-less deployment nothing here runs at all and every human-facing
+/// string silently falls back to English. `because` is quoted verbatim to an
+/// operator.
+pub fn decline_locale(because: &'static str) {
+    INSTALLED_LOCALE.decline(because);
+}
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn installed_locale_slot() -> &'static dyn SlotStatus {
+    &INSTALLED_LOCALE
 }
 
 /// Translate a **human-facing** message using the installed locale.
@@ -720,6 +751,35 @@ fn contains_phrase(lower: &str, phrases: &[&str]) -> bool {
 mod tests {
     use super::*;
 
+    /// See `session::service::tests::the_accessor_exposes_this_handle_to_the_roster`
+    /// for why this asserts through the accessor rather than the static.
+    ///
+    /// The sentence has to name `En`, and this is the one slot in the batch
+    /// where naming the *config* default instead would be an easy, wrong and
+    /// invisible mistake: `Locale::from_config` defaults to `Zh`, `t_ui`
+    /// defaults to `En`, and only the second one is what an uninstalled read
+    /// observes.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = installed_locale_slot();
+        assert_eq!(slot.id(), "gateway/locale");
+        match slot.missing() {
+            MissingSemantics::IndistinguishableDefault { reads_as } => {
+                assert!(
+                    reads_as.contains("Locale::En"),
+                    "must name t_ui's real fallback; got {reads_as:?}"
+                );
+                assert_eq!(
+                    t_ui(Msg::NoActiveRun),
+                    t(Msg::NoActiveRun, Locale::En),
+                    "if this ever fails, the sentence above is stale: an \
+                     uninstalled read no longer resolves to En"
+                );
+            }
+            other => panic!("expected IndistinguishableDefault, got {other:?}"),
+        }
+    }
+
     #[test]
     fn test_locale_from_config() {
         assert_eq!(Locale::from_config(Some("en")), Locale::En);
@@ -1049,15 +1109,9 @@ mod tests {
     #[test]
     fn no_limit_total_receipt_arm_formats_a_dollar_figure() {
         let full = include_str!("i18n.rs").replace('\r', "");
-        let production = full
-            .split("#[cfg(test)]")
-            .next()
-            .expect("this file always has a #[cfg(test)] boundary");
-        let src: String = production
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let src = crate::utils::source_scan::strip_comment_lines(
+            &crate::utils::source_scan::production_prefix(&full),
+        );
         assert!(
             !src.trim().is_empty(),
             "scan read nothing; the split point moved"

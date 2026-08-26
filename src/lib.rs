@@ -61,6 +61,7 @@ pub mod browser;
 pub mod builtin_tools;
 pub mod bundled;
 pub mod canvas;
+pub mod capability;
 pub mod clarification;
 pub mod cli;
 pub mod cluster;

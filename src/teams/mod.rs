@@ -79,7 +79,7 @@ mod agent_axis_census {
             // matches nothing on a CRLF checkout, which would silently make
             // `prod` the whole file and let this test be satisfied by its own
             // assertion strings (§10).
-            let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
+            let prod = crate::utils::source_scan::production_prefix(src);
             assert!(
                 prod.contains("get_allowed_users"),
                 "{path}: this face starts a member run but never asks the target \

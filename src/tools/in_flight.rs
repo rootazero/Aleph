@@ -25,8 +25,9 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Mutex;
 
 /// Process-wide monotonic source of unique guard identities. Used so an
@@ -49,17 +50,45 @@ use tokio_util::sync::CancellationToken;
 // `global_in_flight_tool_calls`. The gateway's `tools.cancel_call` RPC reads
 // the same singleton.
 
-static GLOBAL_REGISTRY: OnceLock<InFlightToolCalls> = OnceLock::new();
+/// `ConsumerDecides`. Two production readers, and they answer a caller in two
+/// incompatible ways rather than in two shades of one way:
+///
+/// - `start/builder/agent_init/tool_catalog_init.rs` puts the whole
+///   registration of `tools.cancel_call` and `tools.in_flight` inside
+///   `if let Some(reg)`, so an uninstalled handle deletes two RPC methods. A
+///   client gets "method not found" — i.e. *this core does not support
+///   cancelling tool calls*.
+/// - `orchestrator/harness_bridge/runner_impl.rs` maps it into
+///   `HarnessDeps.in_flight_tool_calls: Option<_>`, so the harness registers
+///   nothing and per-call cancellation is inert while the surface still exists.
+///
+/// In production the two travel together, but the sentence a diagnostic should
+/// print differs by reader, so no single `reads_as` is available. Task 15 is
+/// where "should a missing registry hide the RPC or answer it honestly" gets
+/// decided.
+static GLOBAL_REGISTRY: CapabilitySlot<InFlightToolCalls> =
+    CapabilitySlot::new("tools/in-flight", MissingSemantics::ConsumerDecides);
 
 /// Install the process-wide in-flight registry. Idempotent — subsequent calls
 /// are silently ignored so multiple boot paths cannot stomp each other.
+#[inline]
 pub fn set_global_in_flight_tool_calls(reg: InFlightToolCalls) {
-    let _ = GLOBAL_REGISTRY.set(reg);
+    let _ = GLOBAL_REGISTRY.install(reg);
 }
 
 /// Read the process-wide in-flight registry, if installed.
+///
+/// ⚠️ `None` says nothing about whether boot reached this slot. Ask
+/// [`global_in_flight_tool_calls_slot`]`().outcome()` for that.
+#[inline]
 pub fn global_in_flight_tool_calls() -> Option<InFlightToolCalls> {
     GLOBAL_REGISTRY.get().cloned()
+}
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn global_in_flight_tool_calls_slot() -> &'static dyn SlotStatus {
+    &GLOBAL_REGISTRY
 }
 
 /// Registry of in-flight tool calls keyed by `tool_call_id`.
@@ -217,6 +246,19 @@ impl Drop for InFlightGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ========================================================================
+    // The process-global handle, as a capability slot
+    // ========================================================================
+
+    /// See `session::service::tests::the_accessor_exposes_this_handle_to_the_roster`
+    /// for why this asserts through the accessor rather than the static.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = global_in_flight_tool_calls_slot();
+        assert_eq!(slot.id(), "tools/in-flight");
+        assert!(matches!(slot.missing(), MissingSemantics::ConsumerDecides));
+    }
 
     #[test]
     fn register_then_drop_removes_entry() {

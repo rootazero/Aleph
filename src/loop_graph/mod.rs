@@ -37,22 +37,103 @@ pub use store::LoopGraphStore;
 pub use templates::AUDIT_NODE_BODY;
 pub use types::{EdgeKind, GraphEdge, GraphNode, NodeKind, Origin};
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
-use once_cell::sync::OnceCell;
 
 /// Process-global graph store. Initialized once at daemon boot
 /// (`constructor.rs`); `None` until then so tests / early-boot read as
 /// "no graph subsystem" (fail-soft, mirrors `goal::global`).
-static GLOBAL: OnceCell<Arc<LoopGraphStore>> = OnceCell::new();
+///
+/// `FailsOpen`. Two of the three readers do not merely return a legal-looking
+/// value — they take the branch that GRANTS, and that is read from the
+/// consumer rather than asserted here:
+///
+/// - `service::governing_owner` returns `Ok(None)` when this slot is absent.
+///   Its one consumer is `builtin_tools::goal::governing_owner_or_refuse`, and
+///   all three of its call sites are
+///   `if let Some(owner) = governing_owner_or_refuse(&session)? { return Err(..) }`
+///   — the refusal lives inside the `Some` arm, so `Ok(None)` falls through
+///   and the write to a governed objective (or its `gate_command`) PROCEEDS.
+///   The `owns_reference` edges live in `loop_graph.db`, not in this handle, so
+///   a session that really is governed reads as ungoverned whenever boot failed
+///   to install the store. That is this variant's definition verbatim: a gate
+///   silently stops gating.
+/// - `service::notify_node_settled` returns `true` — the settle claim is EARNED
+///   without any watcher having been poked, retiring that review for good on a
+///   key that never moves again.
+/// - The third (`render_session_topology`) just renders nothing.
+///
+/// **Not `IndistinguishableDefault`**, which is what this slot shipped as and
+/// is a real reading: on an install with no graph at all, `Ok(None)` is both
+/// the correct answer and indistinguishable from any other, exactly like
+/// `tools/result-budget-ceiling`'s uncapped read. What separates the two
+/// variants in this round is whether a caller keeps behaving as though a bound
+/// were enforced — and here one does. The ACL's stated job is to stop a
+/// governed loop rewriting its own reference, and `governing_owner_or_refuse`'s
+/// own doc says "I could not find out" must land on the deny side; it routes
+/// the `Err` there and then lets the absent-subsystem `Ok(None)` through the
+/// permit door. `providers/pinnable-set` is the same shape
+/// (`pinnable_providers()?` ⇒ no set ⇒ no refusal) and is classified
+/// `FailsOpen`; classifying this one lower made the same shape carry two
+/// answers.
+///
+/// **Not `ConsumerDecides`**: the consumers do not decide. Two of the three
+/// fold absence into a positive answer with no branch that could say otherwise.
+///
+/// No `reads_as` sentence any more, because this variant carries none — the
+/// operator-facing string was the one thing lost in the reclassification, and
+/// what it said ("the objective ACL's permit answer") is the argument for the
+/// higher severity rather than a description of a legal value.
+///
+/// ⚠️ **What the severity buys, stated because it is not only rendering.**
+/// `severity_for` maps `FailsOpen` to `Error`, and inside `alephcore` that
+/// changes nothing that matters — `Finding::is_problem()` is already true at
+/// `Warning`, so `DiagnosticReport::ok()` and `aleph-server doctor`'s exit code
+/// were already failing. The `aleph` CLI is the consumer that branches on the
+/// string: `interfaces/cli/src/commands/doctor.rs` reads `"error"` as a
+/// REQUIRED check and exits **2**, `"warning"` as optional and exits 0. This
+/// check reaches that CLI only over `diagnostics.run`, which is one of the two
+/// callers of `with_capability_wiring_check()` — so the reclassification lands
+/// exactly on the path where the severity is load-bearing, and on a machine
+/// where this slot were absent a CI or cron gate would flip from 0 to 2.
+///
+/// That is a deliberate consequence, not a side effect, and it is currently
+/// **unreachable**: `init_global` has one production call site
+/// (`executor::builtin_registry::builder::constructor`), it is unconditional,
+/// its only failure is `LoopGraphStore::open(..)?` which aborts boot, and
+/// nothing declines this slot — so a daemon able to answer `diagnostics.run`
+/// has it `Installed`. Three of the four `FailsOpen` slots already mapped to
+/// `Error` before this one, so the class pre-existed; this adds a member. If a
+/// degraded-boot path or a second construction site ever makes the
+/// never-reached row possible here, the exit code moves with it.
+static GLOBAL: CapabilitySlot<Arc<LoopGraphStore>> =
+    CapabilitySlot::new("loop-graph/store", MissingSemantics::FailsOpen);
 
 /// Process-global topology event bus. Initialized once at daemon boot, next
 /// to [`init_global`]. `None` until then — publishing into an absent bus is a
 /// no-op, so tests and early boot need no special casing.
-static EVENT_BUS: OnceCell<TopologyEventBus> = OnceCell::new();
+///
+/// `FailsClosed`: [`publish`] is `if let Some(bus)` with no `else`, so topology
+/// events are dropped and nothing is granted; and `loop_graph_manage`'s audit
+/// block omits its own liveness line when the bus is absent, so the diagnostic
+/// that would have said "the audit trail is not being written" is the thing
+/// that goes missing. Dead and silent, which is what this variant names.
+static EVENT_BUS: CapabilitySlot<TopologyEventBus> =
+    CapabilitySlot::new("loop-graph/event-bus", MissingSemantics::FailsClosed);
+
+/// The handles above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn global_slot() -> &'static dyn SlotStatus {
+    &GLOBAL
+}
+
+pub(crate) const fn event_bus_slot() -> &'static dyn SlotStatus {
+    &EVENT_BUS
+}
 
 /// Install the global store at boot. Idempotent: a second call is ignored.
 pub fn init_global(store: Arc<LoopGraphStore>) {
-    let _ = GLOBAL.set(store);
+    let _ = GLOBAL.install(store);
 }
 
 /// Read the global store, if initialized.
@@ -62,7 +143,7 @@ pub fn global() -> Option<Arc<LoopGraphStore>> {
 
 /// Install the global topology event bus at boot. Idempotent.
 pub fn init_event_bus(bus: TopologyEventBus) {
-    let _ = EVENT_BUS.set(bus);
+    let _ = EVENT_BUS.install(bus);
 }
 
 /// Read the global event bus, if initialized.
@@ -134,7 +215,7 @@ pub fn spawn_event_persister(
 
 #[cfg(test)]
 pub fn set_global_for_test(store: Arc<LoopGraphStore>) {
-    let _ = GLOBAL.set(store);
+    let _ = GLOBAL.install(store);
 }
 
 #[cfg(test)]
@@ -203,5 +284,34 @@ mod tests {
             );
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
+    }
+
+    /// Both handles reach the roster with the right failure semantics.
+    ///
+    /// Neither variant carries a `reads_as` sentence now: `GLOBAL` was
+    /// reclassified from `IndistinguishableDefault` to `FailsOpen` once its
+    /// consumer was read rather than described — see that static's doc.
+    ///
+    /// No runtime tie here on purpose: `set_global_for_test` installs `GLOBAL`
+    /// from sibling tests in this very module, so an "uninstalled read still
+    /// resolves to ..." assertion would pass or fail on libtest's scheduling.
+    /// A flaky guard teaches people to re-run.
+    #[test]
+    fn the_accessors_expose_both_handles_to_the_roster() {
+        assert_eq!(global_slot().id(), "loop-graph/store");
+        assert_eq!(event_bus_slot().id(), "loop-graph/event-bus");
+        assert!(
+            matches!(global_slot().missing(), MissingSemantics::FailsOpen),
+            "`governing_owner`'s absent-store `Ok(None)` reaches \
+             `goal::governing_owner_or_refuse`, whose three call sites put the refusal \
+             inside the `Some` arm — so absence PERMITS the write to a governed \
+             objective. Downgrading this to a Warning-severity variant ranks a \
+             silently-permitting ACL below a missing redaction engine; got {:?}",
+            global_slot().missing()
+        );
+        assert!(matches!(
+            event_bus_slot().missing(),
+            MissingSemantics::FailsClosed
+        ));
     }
 }

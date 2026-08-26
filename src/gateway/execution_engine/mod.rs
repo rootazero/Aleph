@@ -33,7 +33,7 @@ mod simple;
 mod slash_command;
 mod steering;
 mod tool_refresh;
-mod tool_service_builder;
+pub(crate) mod tool_service_builder;
 pub(crate) mod topic;
 mod trace_sink_adapter;
 mod turn_memory;

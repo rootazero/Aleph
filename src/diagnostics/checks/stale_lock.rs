@@ -13,11 +13,14 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 
-use crate::diagnostics::check::{HealthCheck, Posture};
+use crate::diagnostics::check::{settle_probe, HealthCheck, Posture};
 use crate::diagnostics::finding::{Finding, RepairOutcome, Severity};
 use crate::utils::instance_lock::diagnose_holder;
 
 const ID: &str = "core/instance-lock";
+/// Noun phrase the "unknown" finding is titled with — `"Instance lock
+/// unknown"`. See [`crate::diagnostics::check::unknown_finding`].
+const SUBJECT: &str = "Instance lock";
 const LOCK_FILENAME: &str = "aleph.lock";
 const HOLDER_FILENAME: &str = "aleph.lock.pid";
 
@@ -46,12 +49,18 @@ impl HealthCheck for StaleLockCheck {
         // `diagnose_holder` does a synchronous sysinfo process scan — keep it
         // off the async executor (same discipline as `core/duplicate-instance`).
         let data_dir = self.data_dir.clone();
-        let holder = match tokio::task::spawn_blocking(move || diagnose_holder(&data_dir)).await {
+        // A panicked or cancelled probe knows nothing about the lock. Folding
+        // it into `None` reached the `None` arm below, which says "No lock
+        // held … the singleton is free" at `Info` — byte-identical to a real
+        // pass. `check::settle_probe` is the one place that decides what a
+        // probe that did not run means.
+        let holder = match settle_probe(
+            ID,
+            SUBJECT,
+            tokio::task::spawn_blocking(move || diagnose_holder(&data_dir)).await,
+        ) {
             Ok(h) => h,
-            Err(e) => {
-                tracing::warn!("instance-lock holder probe task failed: {e}");
-                None
-            }
+            Err(finding) => return vec![finding],
         };
         let holder = match holder {
             // No lock file at all — nothing is holding the singleton.
@@ -152,5 +161,23 @@ mod tests {
             Some(RepairOutcome::Repaired { .. })
         ));
         assert!(!holder.exists(), "fix must remove the stale holder record");
+    }
+
+    /// The `[ok] No lock held` line must be reachable only from a probe that
+    /// actually looked.
+    ///
+    /// Pins this check's own `(ID, SUBJECT)` wiring, which the shared test on
+    /// `check::settle_probe` cannot: a check that passed the wrong subject
+    /// would still produce a `Warning` there and would title it about the
+    /// wrong thing here.
+    #[tokio::test]
+    async fn a_holder_probe_that_did_not_run_is_not_a_free_singleton() {
+        let joined: Result<Option<()>, tokio::task::JoinError> =
+            tokio::task::spawn_blocking(|| panic!("holder probe blew up")).await;
+        let finding = settle_probe(ID, SUBJECT, joined)
+            .expect_err("a task that did not complete must not settle into `no holder`");
+        assert_eq!(finding.check_id, ID);
+        assert_eq!(finding.title, "Instance lock unknown");
+        assert!(finding.is_problem(), "an unknown must never render as [ok]");
     }
 }

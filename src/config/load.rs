@@ -2,18 +2,37 @@
 //!
 //! This module handles loading configuration from TOML files.
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::config::Config;
 use crate::error::{AlephError, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use tracing::{debug, error, info, warn};
 
 /// The config file this process was told to use, if `--config` named one.
 /// Write-once so that no code path can move the file out from under a
 /// consumer that already cached it (`ConfigPatcher`, `AgentManager`, the
 /// config watcher all hold their own copy).
-static EFFECTIVE_CONFIG_PATH: OnceLock<PathBuf> = OnceLock::new();
+///
+/// `IndistinguishableDefault`, derived from [`Config::effective_path`], whose
+/// last line is `.unwrap_or_else(Self::default_path)`. An uninstalled handle is
+/// therefore byte-identical to "nobody passed `--config`", and the failure it
+/// hides is the one the setter's own doc describes as already having happened
+/// once: the server running on the operator's file while every other reader
+/// reads `~/.aleph/config.toml`. A doctor that parses "the config file" parses
+/// one nothing is using, and says so with confidence.
+static EFFECTIVE_CONFIG_PATH: CapabilitySlot<PathBuf> = CapabilitySlot::new(
+    "config/effective-path",
+    MissingSemantics::IndistinguishableDefault {
+        reads_as: "the default ~/.aleph config path, even when --config named another",
+    },
+);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn effective_config_path_slot() -> &'static dyn SlotStatus {
+    &EFFECTIVE_CONFIG_PATH
+}
 
 impl Config {
     /// Get the default config path using unified directory
@@ -43,7 +62,31 @@ impl Config {
     /// to consumers that keep their own copy of it, so moving it would only
     /// split the process across two files again.
     pub fn set_effective_path(path: PathBuf) -> std::result::Result<(), PathBuf> {
-        EFFECTIVE_CONFIG_PATH.set(path)
+        // The clone exists to keep this signature: `CapabilitySlot::install`
+        // consumes the value and answers a bool, while the `Err(PathBuf)` here
+        // is the REJECTED path and `main.rs` prints it. Migrating the handle
+        // must be invisible from outside, so the echo is reconstructed rather
+        // than the caller changed. One clone, once, on the argv path.
+        let rejected = path.clone();
+        if EFFECTIVE_CONFIG_PATH.install(path) {
+            Ok(())
+        } else {
+            Err(rejected)
+        }
+    }
+
+    /// Record that argv parsing reached this slot with no `--config` to pin.
+    ///
+    /// The absence and the pin read identically through [`Self::effective_path`]
+    /// (see this slot's `reads_as`), so an operator debugging "my `--config`
+    /// was ignored" cannot tell "no flag was passed" from "the flag was passed
+    /// and the pin never happened". This is what separates them. `because` is
+    /// quoted verbatim to an operator.
+    ///
+    /// ⚠️ NOT for [`Self::set_effective_path`]'s own `Err(rejected)` arm: that
+    /// means a pin is already in place, which is the opposite of a decline.
+    pub fn decline_effective_path(because: &'static str) {
+        EFFECTIVE_CONFIG_PATH.decline(because);
     }
 
     /// The config file this process reads and writes: the `--config` override
@@ -145,7 +188,20 @@ impl Config {
 
         // Load defaults override BEFORE parsing config.toml
         // because serde calls fn default_*() during deserialization,
-        // and those functions need to read from the OnceLock.
+        // and those functions need to read from the defaults-override slot.
+        // ⚠️ DELIBERATELY UNSTAMPED — no `else { decline(..) }` here.
+        //
+        // This is one of two conditional installs of `DEFAULTS_OVERRIDE`; the
+        // other is on `Self::load`'s no-config-file path below. They are
+        // mutually exclusive within one call, and that is NOT enough:
+        // `Config::load` runs many times per process, so "config dir missing on
+        // the first load, present on a later one" reaches decline-then-install
+        // in a single process lifetime — the sequence
+        // `capability::Outcome` cannot describe (first writer wins, so the
+        // stamp would keep saying `Declined` about an installed handle). A
+        // `because` an operator reads about a state the process already left is
+        // worse than the silence. Pinned by
+        // `capability::mod::tests::decline_then_install_is_the_one_pair_this_type_cannot_describe`.
         if let Some(ref dir) = config_dir {
             let defaults_path = dir.join("defaults.toml");
             let defaults = crate::config::defaults_override::load_defaults_override(&defaults_path);
@@ -206,7 +262,7 @@ impl Config {
                 crate::config::presets_override::load_presets_override(&presets_path);
         }
 
-        // Assign defaults override to config (already loaded into OnceLock above)
+        // Assign defaults override to config (already installed above)
         config.defaults_override =
             crate::config::defaults_override::get_defaults_override().clone();
 
@@ -275,7 +331,10 @@ impl Config {
                 "Config file not found, generating default configuration"
             );
             // Load defaults override BEFORE Self::default() so serde default
-            // functions can read from the OnceLock during construction.
+            // functions can read from the defaults-override slot during construction.
+            // ⚠️ DELIBERATELY UNSTAMPED — see the twin of this block in
+            // `load_from_file_reporting_dead_keys` above for why these two
+            // conditional installs get no `else { decline(..) }`.
             if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
                 let defaults_path = config_dir.join("defaults.toml");
                 let defaults =
@@ -558,6 +617,45 @@ allowed_hosts = ["panel.example.com"]
         assert_eq!(
             cfg.ssrf.allowed_hosts,
             vec!["panel.example.com".to_string()]
+        );
+    }
+}
+
+#[cfg(test)]
+mod capability_slot_tests {
+    use super::*;
+
+    /// The `reads_as` sentence reaches an operator, so the fallback it names
+    /// is asserted against what `effective_path()` really returns.
+    ///
+    /// Premise stated out loud: `set_effective_path`'s only caller is
+    /// `bin/aleph-server/main.rs`, so nothing in the library installs this pin
+    /// and an uninstalled read is observable here.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = effective_config_path_slot();
+        assert_eq!(slot.id(), "config/effective-path");
+        let MissingSemantics::IndistinguishableDefault { reads_as } = slot.missing() else {
+            panic!(
+                "expected IndistinguishableDefault, got {:?}",
+                slot.missing()
+            );
+        };
+        assert!(
+            reads_as.contains("--config"),
+            "the sentence has to name the thing that gets ignored; got {reads_as:?}"
+        );
+        assert!(
+            EFFECTIVE_CONFIG_PATH.get().is_none(),
+            "a library test now installs the --config pin; this guard's \
+             premise is gone and the assertion below is about an installed \
+             handle, not an absent one"
+        );
+        assert_eq!(
+            Config::effective_path(),
+            Config::default_path(),
+            "an uninstalled read no longer resolves to the default path, so \
+             the sentence above is stale"
         );
     }
 }

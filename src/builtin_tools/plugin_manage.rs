@@ -680,12 +680,7 @@ mod tests {
     #[test]
     fn a_browse_row_names_the_actor_who_can_install() {
         let src = include_str!("plugin_manage.rs");
-        let body = src
-            .replace('\r', "")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap()
-            .to_string();
+        let body = crate::utils::source_scan::production_prefix(src);
         assert!(
             body.contains("\"operator_can_install\""),
             "the browse projection must say whose install it is talking about"

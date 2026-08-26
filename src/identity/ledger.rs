@@ -41,13 +41,13 @@
 //! the outcome instead of assuming it.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
 
 use tokio::sync::{mpsc, oneshot};
 
 use super::keystore::{AgentIdentityRow, AgentKeystore, KeyError};
 use super::record::{LedgerRecord, NewRecord};
 use super::verify::{verify_chain, ChainReport};
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
 
 /// Buffered appends before producers start waiting. Sized like the audit
@@ -382,8 +382,59 @@ pub enum LedgerCommandError {
     Key(#[from] KeyError),
 }
 
-static LEDGER: OnceLock<Arc<AgentLedger>> = OnceLock::new();
-static WRITER: OnceLock<mpsc::Sender<LedgerJob>> = OnceLock::new();
+/// `FailsClosed` — and the reflex answer here was `IndistinguishableDefault`,
+/// so the derivation is recorded rather than the verdict.
+///
+/// This handle is used only as an EXISTENCE ORACLE, never for its value:
+/// `tools::scoped::ledger::ledger_intent` opens with a bare
+/// `crate::identity::global()?;`, and `record_allowlist_refusal` and
+/// `sandbox::exec_approval::gate::record_gate_decision` both open with
+/// `if crate::identity::global().is_none() { return; }`. So an uninstalled
+/// ledger records nothing — every tool call, approval decision and refusal
+/// goes unwritten, silently, on those three paths.
+///
+/// The reflex conclusion from that is "an empty chain that verifies clean, and
+/// nobody can tell". It is wrong, and the reason is worth keeping: the one
+/// surface that shows a human this ledger, `builtin_tools::agent_identity`,
+/// already refuses rather than answering — *"the agent identity ledger is not
+/// installed in this process, so there is nothing to read. This is not an
+/// empty ledger — no records are being written at all."* Nothing else reads
+/// the chain for a health verdict. Enumerated rather than sampled, because
+/// that is a negative claim: `verify_chain` has no caller outside this file;
+/// `.lost()` has **five** production call sites across four files
+/// (`export.rs:457`, `bin/aleph-server/commands/identity.rs:453`,
+/// `builtin_tools/agent_identity.rs:215`, `:326`, `:352`) and every one of
+/// them already holds an `&AgentLedger` — the tool's three come from
+/// `Self::ledger()?`, which is this handle behind the named refusal above, and
+/// the CLI's builds its own with `open_ledger()`. So absence yields no
+/// legal-looking value anywhere: it is a dead feature that one reader names
+/// out loud and three do not.
+static LEDGER: CapabilitySlot<Arc<AgentLedger>> =
+    CapabilitySlot::new("identity/ledger", MissingSemantics::FailsClosed);
+
+/// `FailsClosed`: the reader that decides this is [`submit`], which answers
+/// `LedgerCommandError::NotInstalled` — an error whose own text names the
+/// missing input and where it comes from ("It is installed by
+/// `aleph-server start`"). [`flush`] answers `false`, and [`record`] returns
+/// silently, but `record`'s production callers all stand behind [`LEDGER`]'s
+/// oracle above, so `record`'s silent arm is not the one an operator meets.
+/// Same variant as [`LEDGER`], reached independently.
+///
+/// The two are installed together in one act by [`install`], so their absence
+/// is always jointly observed; they are two slots because they are two
+/// handles, and Task 11's roster counts handles.
+static WRITER: CapabilitySlot<mpsc::Sender<LedgerJob>> =
+    CapabilitySlot::new("identity/ledger-writer", MissingSemantics::FailsClosed);
+
+/// The handles above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn ledger_slot() -> &'static dyn SlotStatus {
+    &LEDGER
+}
+
+pub(crate) const fn writer_slot() -> &'static dyn SlotStatus {
+    &WRITER
+}
 
 /// Install the process-wide ledger and start its writer task.
 ///
@@ -396,7 +447,7 @@ pub fn install(ledger: Arc<AgentLedger>) -> Option<tokio::task::JoinHandle<()>> 
         return None;
     }
     let (tx, mut rx) = mpsc::channel::<LedgerJob>(LEDGER_QUEUE);
-    if LEDGER.set(ledger.clone()).is_err() || WRITER.set(tx).is_err() {
+    if !LEDGER.install(ledger.clone()) || !WRITER.install(tx) {
         return None;
     }
     Some(tokio::spawn(async move {
@@ -1115,5 +1166,36 @@ mod tests {
         rt.block_on(async {
             record(entry("main", "t")).await;
         });
+    }
+
+    /// The variant is the operator-facing severity of this handle going
+    /// missing (`FailsOpen` => Error and a non-zero `aleph doctor`;
+    /// `IndistinguishableDefault` / `ConsumerDecides` => Warning;
+    /// `FailsClosed` => Info), and it is DERIVED from the consumers named on
+    /// the static above. Pinned in the module that owns the handle, because
+    /// that is the only place a reclassification and a re-read of those
+    /// consumers can be made to happen together — the aggregate figure in
+    /// FEATURE_LOCATOR cannot tell a reclassification from a new slot.
+    /// `census::every_slot_pins_its_own_missing_semantics` requires this by
+    /// slot id.
+    #[test]
+    fn the_ledger_slot_pins_its_missing_semantics() {
+        assert_eq!(ledger_slot().id(), "identity/ledger");
+        assert!(
+            matches!(ledger_slot().missing(), MissingSemantics::FailsClosed),
+            "`identity/ledger` is classified FailsClosed from its consumers; changing that \
+             means re-reading them, not re-typing this line"
+        );
+    }
+
+    /// See the sibling pin above.
+    #[test]
+    fn the_writer_slot_pins_its_missing_semantics() {
+        assert_eq!(writer_slot().id(), "identity/ledger-writer");
+        assert!(
+            matches!(writer_slot().missing(), MissingSemantics::FailsClosed),
+            "`identity/ledger-writer` is classified FailsClosed from its consumers; changing that \
+             means re-reading them, not re-typing this line"
+        );
     }
 }

@@ -6,19 +6,63 @@
 //! gateway layer. The gateway's `get_extension_manager` wraps this accessor
 //! with a `JsonRpcResponse`-shaped error for its RPC handlers.
 
-use once_cell::sync::OnceCell;
-
 use super::ExtensionManager;
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
 
-static EXTENSION_MANAGER: OnceCell<Arc<ExtensionManager>> = OnceCell::new();
+/// `ConsumerDecides`, by weight of evidence: **22** production call sites, all
+/// through [`try_extension_manager`], each writing its own meaning for absence.
+///
+/// ⚠️ [`is_extension_manager_initialized`] contributes **0** of those: its only
+/// five callers live in `gateway/handlers/plugins/handlers/tests.rs`, a file
+/// declared `#[cfg(test)] mod tests;`. An earlier draft of this line said "27
+/// across the two accessors, counted with `#[cfg(test)]` items stripped" —
+/// 22 + 5, i.e. exactly the qualifier was the false part. A whole file gated by
+/// a `#[cfg(test)] mod NAME;` in its parent looks like ordinary source and
+/// never compiles into the shipped lib. `plugin_manage` answers a named
+/// error; `hooks_admin` and `handlers::services` answer their own refusals;
+/// `tools::usage::report` and `hub::reconcile` return early and report nothing
+/// missing. The sharpest is `hooks::executor`, where an early return means a
+/// registered hook simply never fires — §5.10's "hook 注册了 ≠ hook 会触发",
+/// arriving here through a handle rather than through a matcher.
+static EXTENSION_MANAGER: CapabilitySlot<Arc<ExtensionManager>> =
+    CapabilitySlot::new("extension/manager", MissingSemantics::ConsumerDecides);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn extension_manager_slot() -> &'static dyn SlotStatus {
+    &EXTENSION_MANAGER
+}
 
 /// Register the process-global extension manager.
 ///
 /// Called once during server startup, before any plugin RPC handler or hook
 /// fire-site reads the manager. Returns `Err(manager)` if already initialized.
 pub fn init_extension_manager(manager: Arc<ExtensionManager>) -> Result<(), Arc<ExtensionManager>> {
-    EXTENSION_MANAGER.set(manager)
+    // The clone keeps this signature: `CapabilitySlot::install` consumes the
+    // value and answers a bool, while `Err(_)` here carries the REJECTED
+    // manager back. Only `start/helpers.rs` reads it, and only as a
+    // discriminant (`Err(_existing)`), but migrating a handle must be
+    // invisible from outside — so the echo is reconstructed rather than the
+    // caller changed. One `Arc` clone on the boot path.
+    let rejected = Arc::clone(&manager);
+    if EXTENSION_MANAGER.install(manager) {
+        Ok(())
+    } else {
+        Err(rejected)
+    }
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// The `Err(e)` arm of boot's `ExtensionManager::with_defaults()` match, which
+/// today only prints to a non-daemon console. `because` is quoted verbatim to
+/// an operator.
+///
+/// ⚠️ NOT for [`init_extension_manager`]'s own `Err(rejected)` arm: that means
+/// a manager is already installed, which is the opposite of a decline.
+pub fn decline_extension_manager(because: &'static str) {
+    EXTENSION_MANAGER.decline(because);
 }
 
 /// Borrow the process-global extension manager, if it has been registered.
@@ -29,4 +73,35 @@ pub fn try_extension_manager() -> Option<&'static Arc<ExtensionManager>> {
 /// Whether the process-global extension manager has been registered.
 pub fn is_extension_manager_initialized() -> bool {
     EXTENSION_MANAGER.get().is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The variant is the operator-facing severity of this handle going
+    /// missing (`FailsOpen` => Error and a non-zero `aleph doctor`;
+    /// `IndistinguishableDefault` / `ConsumerDecides` => Warning;
+    /// `FailsClosed` => Info), and it is DERIVED from the consumers named on
+    /// the static above. Pinned in the module that owns the handle, because
+    /// that is the only place a reclassification and a re-read of those
+    /// consumers can be made to happen together — the aggregate figure in
+    /// FEATURE_LOCATOR cannot tell a reclassification from a new slot.
+    /// `census::every_slot_pins_its_own_missing_semantics` requires this by
+    /// slot id.
+    ///
+    /// This module had no test module at all before this assertion; the file
+    /// is otherwise pure wiring.
+    #[test]
+    fn the_manager_slot_pins_its_missing_semantics() {
+        assert_eq!(extension_manager_slot().id(), "extension/manager");
+        assert!(
+            matches!(
+                extension_manager_slot().missing(),
+                MissingSemantics::ConsumerDecides
+            ),
+            "`extension/manager` is classified ConsumerDecides from its consumers; \
+             changing that means re-reading them, not re-typing this line"
+        );
+    }
 }

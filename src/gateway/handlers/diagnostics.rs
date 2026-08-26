@@ -77,7 +77,11 @@ pub async fn handle_run(
     let engine = match DiagnosticEngine::default_registry() {
         Ok(e) => e
             .with_runtime_checks(config, vault)
-            .with_extension_usage_check(mcp),
+            .with_extension_usage_check(mcp)
+            // In-daemon: this process ran `aleph-server start`, so the
+            // capability roster is a real fact here. Deliberately absent from
+            // `default_registry()` — see that builder's doc.
+            .with_capability_wiring_check(),
         Err(e) => {
             return JsonRpcResponse::error(
                 request.id,

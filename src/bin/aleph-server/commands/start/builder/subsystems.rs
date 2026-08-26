@@ -290,6 +290,13 @@ pub(in crate::commands::start) async fn initialize_channels(
     // Cache ToolCatalog for Telegram channel recreation (channel.start RPC)
     if let Some(ref reg) = tool_catalog {
         alephcore::gateway::handlers::channel::set_telegram_tool_registry(reg.clone());
+    } else {
+        alephcore::gateway::handlers::channel::decline_telegram_tool_registry(
+            "no tool catalog was built this boot (a deployment with no configured \
+             provider builds no agent engine and therefore no catalog), so a \
+             Telegram channel restarted via `channel.start` comes up without \
+             slash commands and reports success.",
+        );
     }
 
     // Create and register all channel instances

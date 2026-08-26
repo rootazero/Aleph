@@ -867,17 +867,9 @@ mod arg_mapping_tests {
     /// the separator to a line start would match nothing on a CRLF checkout
     /// and silently turn "production prefix" into "the whole file".
     fn production_prefix(text: &str) -> String {
-        text.replace('\r', "")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap_or_default()
-            .lines()
-            .filter(|l| {
-                let t = l.trim_start();
-                !t.starts_with("//") && !t.starts_with('*')
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        crate::utils::source_scan::strip_comment_lines(
+            &crate::utils::source_scan::production_prefix(text),
+        )
     }
 
     /// `serialize_parsed_command` is the only place the fast path's mode JSON

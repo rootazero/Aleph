@@ -29,12 +29,12 @@
 //! live `MultiProviderRegistry`, so re-registering `chatgpt` with a fresh-token
 //! instance is visible on the next dispatch turn with no restart.
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::config::Config;
 use crate::gateway::handlers::oauth::{try_refresh, SharedOAuthState};
 use crate::gateway::security::SharedTokenManager;
 use crate::sync_primitives::Arc;
 use crate::thinker::MultiProviderRegistry;
-use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
@@ -44,12 +44,36 @@ use tracing::{debug, info, warn};
 /// refresher without threading it through every constructor. Mirrors the
 /// existing global-registry pattern (`shared_skill_system`, scratchpad/process
 /// registries). `None` in tests and when OAuth is not configured.
-static GLOBAL: OnceLock<Arc<CodexTokenRefresher>> = OnceLock::new();
+///
+/// `FailsClosed`: `run_loop/inner.rs` skips the refresh-and-swap block, and the
+/// retry it was about to guard happens anyway — against the same stale token,
+/// until the run hard-fails. That is the exact failure the module doc above
+/// says this service exists to remove, restored in silence. Safe (no credential
+/// is used that should not be) and mute (the run's error blames the provider).
+static GLOBAL: CapabilitySlot<Arc<CodexTokenRefresher>> = CapabilitySlot::new(
+    "gateway/codex-token-refresher",
+    MissingSemantics::FailsClosed,
+);
 
 /// Install the process-wide refresher. First writer wins; later calls are
 /// ignored (boot installs exactly once).
 pub fn set_global(refresher: Arc<CodexTokenRefresher>) {
-    let _ = GLOBAL.set(refresher);
+    let _ = GLOBAL.install(refresher);
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// `FailsClosed` absence is mute by construction (see the static above), so an
+/// operator whose long task died on a stale token has no other way to learn
+/// that the refresher was never wired. `because` is quoted verbatim.
+pub fn decline_global(because: &'static str) {
+    GLOBAL.decline(because);
+}
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn global_slot() -> &'static dyn SlotStatus {
+    &GLOBAL
 }
 
 /// The process-wide refresher, if one was installed at boot.
@@ -209,6 +233,15 @@ impl CodexTokenRefresher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// See `session::service::tests::the_accessor_exposes_this_handle_to_the_roster`
+    /// for why this asserts through the accessor rather than the static.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = global_slot();
+        assert_eq!(slot.id(), "gateway/codex-token-refresher");
+        assert!(matches!(slot.missing(), MissingSemantics::FailsClosed));
+    }
 
     #[test]
     fn detects_token_expired_errors() {

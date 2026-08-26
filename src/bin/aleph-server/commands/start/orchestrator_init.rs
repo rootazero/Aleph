@@ -57,6 +57,29 @@ use alephcore::StopHookConfig;
 
 use alephcore::Config;
 
+/// Say why the four capability handles this function installs are absent.
+///
+/// Those four installs are unconditional *inside* [`initialize_orchestrator`],
+/// so nothing at their own call sites can record an absence — the condition
+/// that decides whether they happen at all is one frame up, at this function's
+/// call site (`if let (Some(default_provider), Some(session_service))`). This
+/// is the seam that owns that condition, which is why the sentence is written
+/// here and not in `providers/`, `context/` or `gateway/i18n`.
+///
+/// The list is exhaustive by inspection of this file, and one member matters
+/// more than the rest: `providers/pinnable-set` FAILS OPEN — with no published
+/// set, `select_model(provider=…)` validates nothing and silently substitutes
+/// the default chain, which is the defect its own doc records.
+///
+/// Safe to call after a partial install: [`CapabilitySlot::decline`] is
+/// first-writer-wins, so it is a no-op on anything already stamped `Installed`.
+pub(in crate::commands::start) fn decline_orchestrator_slots(because: &'static str) {
+    alephcore::gateway::i18n::decline_locale(because);
+    alephcore::providers::route_observe::decline_global_route_observability(because);
+    alephcore::providers::session_model_handle::decline_pinnable_providers(because);
+    alephcore::context::compact::manual::decline_manual_compaction(because);
+}
+
 /// Assemble the Phase 5 Orchestrator from already-constructed boot services.
 ///
 /// Returns `Arc<Orchestrator>` — callers typically park it on

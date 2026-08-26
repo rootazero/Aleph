@@ -375,10 +375,7 @@ fn every_tool_the_panel_canvas_templates_name_resolves_in_the_real_tool_table() 
     // Production prefix only: the `#[cfg(test)]` module's assertion strings
     // quote the same names, and scanning them would let the guard pass on
     // its own test fixtures after the templates stopped naming any tool.
-    let production = src
-        .split("#[cfg(test)]")
-        .next()
-        .expect("split always yields a first segment");
+    let production = alephcore::utils::source_scan::production_prefix(&src);
 
     // Non-vacuity: the two template functions must still exist — if the AI
     // flow is redesigned, this guard has to follow it, not silently scan an
@@ -391,7 +388,7 @@ fn every_tool_the_panel_canvas_templates_name_resolves_in_the_real_tool_table() 
         );
     }
 
-    let named = backticked_tool_names(production);
+    let named = backticked_tool_names(&production);
     assert!(
         named.contains("canvas") && named.contains("image_generate"),
         "the templates are contracted (ai.rs module doc) to name `canvas` \

@@ -52,6 +52,16 @@ impl DiagnosticEngine {
     }
 
     /// Build the production registry against the real `~/.aleph` paths.
+    ///
+    /// **Offline and path-only.** This is the registry the cold
+    /// `aleph-server doctor` command builds, and that command maps unresolved
+    /// problems onto a non-zero exit code "so CI can gate on it". A check that
+    /// cannot answer from a cold process therefore does not belong here: its
+    /// finding would fire on every invocation, on every machine, and an
+    /// always-firing gate is not a gate. Three checks stay out for that
+    /// reason, each saying so at its own attach point —
+    /// [`Self::with_runtime_checks`], [`Self::with_extension_usage_check`],
+    /// and [`Self::with_capability_wiring_check`].
     pub fn default_registry() -> Result<Self> {
         // ⚠️ NOT `utils::paths::get_data_dir()`: that helper *creates* the
         // directory as a side effect, so building the registry silently
@@ -83,6 +93,52 @@ impl DiagnosticEngine {
             Arc::new(checks::DuplicateInstanceCheck::new()),
         ];
         Ok(Self::new(checks))
+    }
+
+    /// Append `core/capability-wiring`, which can only answer inside the
+    /// daemon.
+    ///
+    /// # Why this is not in `default_registry()`
+    ///
+    /// It was, for one round, and that made `aleph-server doctor` exit 1 on
+    /// every invocation on every machine forever. The check keys on
+    /// `shutdown_forensics::booted()`, and `aleph-server doctor` is by
+    /// definition a cold process — it never ran `aleph-server start` — so the
+    /// cold branch fired unconditionally, `Report::ok()` was always false, and
+    /// the exit code this command's module doc promises "so CI can gate on it"
+    /// could never be zero. A gate that always fires is not a gate.
+    ///
+    /// The severity is not the bug and must not be "fixed" by lowering it:
+    /// `Info` renders byte-identically to a genuine pass (`render_human` maps
+    /// it to `[ok]`, suppresses the `detail` line, and never prints
+    /// `Finding::tags` at all), which is the invisibility defect the `Warning`
+    /// was raised to remove. The bug is registering, on an offline path, a
+    /// check whose own `fix_hint` reads "run `aleph doctor` ... rather than
+    /// `aleph-server doctor`".
+    ///
+    /// # Why its own builder rather than [`Self::with_runtime_checks`]
+    ///
+    /// That one's contract is stated in terms of the handles it takes ("live
+    /// daemon handles (config + vault)"), and this check needs neither — it
+    /// needs to be *in the booted process*, which is a different availability
+    /// story, the same reason [`Self::with_extension_usage_check`] is separate.
+    /// Folding it in would widen that contract without changing its signature,
+    /// so a future caller holding config + vault outside the daemon would get a
+    /// check that cannot answer. A named builder also makes "this check is
+    /// daemon-only" legible at each call site, which is precisely the fact that
+    /// was implicit before and got lost.
+    ///
+    /// The cold branch inside the check **stays**: this builder is reachable in
+    /// principle from a process that never booted, and the branch has a test
+    /// (`gateway::shutdown_forensics`'s
+    /// `booted_is_false_before_mark_boot_and_true_after`). It is defence in
+    /// depth now rather than the default path — do not delete it as
+    /// unreachable.
+    #[must_use]
+    pub fn with_capability_wiring_check(mut self) -> Self {
+        self.checks
+            .push(Arc::new(checks::CapabilityWiringCheck::new()));
+        self
     }
 
     /// Append runtime checks that need live daemon handles (config + vault).
@@ -432,6 +488,131 @@ impl DiagnosticReport {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+
+    /// Item 0 regression. `default_registry()` is the OFFLINE registry — the
+    /// one `aleph-server doctor` builds — and `core/capability-wiring` keys on
+    /// `shutdown_forensics::booted()`, which is false in any process that did
+    /// not run `aleph-server start`. Registering it there made that command's
+    /// cold branch fire on every invocation, so `report.ok()` was always false
+    /// and the exit code its module doc promises "so CI can gate on it" could
+    /// never be zero. An always-firing gate is not a gate.
+    ///
+    /// The id is read off the check itself, not spelled again here: a rename
+    /// must move the production registration and this assertion together
+    /// rather than leave a stale literal comparing itself to itself.
+    #[tokio::test]
+    async fn default_registry_omits_the_capability_wiring_check() {
+        // Deliberately no `IsolatedAlephHome`: `default_registry()` resolves
+        // paths through `get_config_dir()` (pure lookup, see its call site's
+        // comment) and constructs checks — it neither reads nor writes the
+        // filesystem, so mutating the process-global `ALEPH_HOME` here would
+        // buy nothing and cost every sibling test running in parallel.
+        let wiring_id = checks::CapabilityWiringCheck::new().id();
+        let offline = DiagnosticEngine::default_registry().unwrap();
+        assert!(
+            !offline.checks.iter().any(|c| c.id() == wiring_id),
+            "`{wiring_id}` is registered in the offline `default_registry()`; \
+             it can never answer there, so `aleph-server doctor` exits \
+             non-zero on every machine forever. Attach it with \
+             `with_capability_wiring_check()` from an in-daemon caller instead."
+        );
+
+        let daemon = offline.with_capability_wiring_check();
+        assert_eq!(
+            daemon.checks.iter().filter(|c| c.id() == wiring_id).count(),
+            1,
+            "the daemon builder must add exactly one `{wiring_id}` check"
+        );
+    }
+
+    /// The RPC path (`gateway::handlers::diagnostics::handle_run`) builds its
+    /// engine from live handles and has no unit test that can construct them,
+    /// so the "both daemon paths keep the check" half of Item 0 is asserted
+    /// here, at the source level, as a rule rather than a list of two files.
+    ///
+    /// The rule keys on `with_runtime_checks` because *that* is the marker of
+    /// "this caller is inside the daemon holding live handles" — the same
+    /// property that makes `core/capability-wiring` answerable. A third daemon
+    /// caller written next month inherits the requirement without anyone
+    /// remembering to add it here.
+    ///
+    /// **What it can and cannot see**, stated rather than left to be
+    /// discovered:
+    ///
+    /// - *Sees*: any file whose production half calls `.with_runtime_checks(`
+    ///   without also calling `.with_capability_wiring_check(`.
+    /// - *Blind to*: an in-daemon caller that uses only
+    ///   `with_extension_usage_check`, or none of these builders at all —
+    ///   the marker is a proxy for "inside the daemon", not a proof of it.
+    /// - *Blind to*: the reverse direction, an OFFLINE caller that attaches
+    ///   the wiring check. [`default_registry_omits_the_capability_wiring_check`]
+    ///   covers the one offline path that exists; a second one would need its
+    ///   own assertion.
+    /// - The match is per FILE, not per expression. File granularity is what
+    ///   this repo's other source-level guards settled on because
+    ///   expression-window scanning has produced both a false negative (a
+    ///   fixed-size window that read past its subject) and a false positive (a
+    ///   window pushed out of range by an unrelated comment edit) in this
+    ///   round alone.
+    /// - CRLF-safe: both [`production_prefix`](crate::utils::source_scan::production_prefix)
+    ///   and [`code_text`](crate::utils::source_scan::code_text) drop `\r`
+    ///   before doing anything else, so nothing here is anchored to a bare
+    ///   `\n`.
+    /// - `CARGO_MANIFEST_DIR` is baked in at COMPILE time, but
+    ///   `rust_sources_under` reads file *contents* at run time — so this reads
+    ///   the CURRENT tree at that path, not a snapshot, and an edit under
+    ///   `src/bin/aleph-server/**` is seen even by a lib binary that was not
+    ///   rebuilt. The hazard that remains is narrower: a test binary built in
+    ///   worktree A scans worktree A even when the command is run from
+    ///   worktree B.
+    #[test]
+    fn every_in_daemon_engine_also_attaches_the_capability_wiring_check() {
+        use crate::utils::source_scan::{code_text, production_prefix, rust_sources_under};
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let sources = rust_sources_under(&root);
+        // Self-count. The walk saw 2447 files under `src/` when this was
+        // written; the floor is deliberately far below that rather than
+        // pinned to it, because a guard whose floor is the exact population
+        // fails on every unrelated file addition. What it has to separate is
+        // "scanned the tree" from "scanned nothing" — a walk that broke
+        // returns 0, not 1000.
+        assert!(
+            sources.len() > 1000,
+            "the source walk found only {} files under src/ — a guard that \
+             examined nothing is green and blind, not clean",
+            sources.len()
+        );
+
+        let mut daemon_callers = Vec::new();
+        let mut offenders = Vec::new();
+        for (rel, text) in &sources {
+            let prod = code_text(&production_prefix(text));
+            if !prod.contains(".with_runtime_checks(") {
+                continue;
+            }
+            daemon_callers.push(rel.clone());
+            if !prod.contains(".with_capability_wiring_check(") {
+                offenders.push(rel.clone());
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these build a DiagnosticEngine with live daemon handles but never \
+             attach `core/capability-wiring`, so the daemon-side doctor silently \
+             stops reporting whether boot wired the process globals: {offenders:?}"
+        );
+        assert!(
+            daemon_callers.len() >= 2,
+            "expected at least the `doctor` builtin and the `diagnostics.run` \
+             RPC handler to build an in-daemon engine; the scan found {}: {:?}. \
+             Fewer than two means the marker this rule keys on has moved, not \
+             that the rule passed.",
+            daemon_callers.len(),
+            daemon_callers
+        );
+    }
 
     struct FakeCheck {
         id: &'static str,

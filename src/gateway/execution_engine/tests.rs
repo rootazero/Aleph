@@ -2244,10 +2244,7 @@ async fn a_fired_timer_wake_leaves_nothing_for_the_sweep_to_claim() {
 #[test]
 fn execute_announces_the_turn_end_on_both_terminal_arms() {
     let src = include_str!("execute.rs").replace('\r', "");
-    let production = src
-        .split("#[cfg(test)]")
-        .next()
-        .expect("split always yields at least one element");
+    let production = crate::utils::source_scan::production_prefix(&src);
     assert!(
         production.len() > 1000,
         "the production prefix must be the bulk of execute.rs, not an empty \

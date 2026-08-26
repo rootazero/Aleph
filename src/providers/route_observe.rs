@@ -18,11 +18,10 @@
 //! semantic-router's `x-vsr-*` decision headers, `RouteLLM`'s per-route model
 //! counts) without any of their classifier machinery.
 
-use std::sync::OnceLock;
-
 use arc_swap::ArcSwap;
 use serde_json::json;
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::config::types::{LoadBalanceStrategy, ModelRouteConfig, RouteMode};
 use crate::providers::default_handle::DefaultProviderHandle;
 use crate::providers::failover::{FailoverHealth, ModelCooldown, ProviderCooldown};
@@ -374,12 +373,48 @@ impl RouteObservability {
 /// [`route_handle`](crate::providers::route_handle)'s global. Registered by
 /// the production boot path only (`orchestrator_init`), so library tests
 /// never see a populated global.
-static GLOBAL: OnceLock<RouteObservability> = OnceLock::new();
+///
+/// `ConsumerDecides`: six production call sites, each choosing differently.
+/// `self_config`'s `route_status` drops the whole `data.runtime` object and the
+/// sentence that tells the model to read it — the same tool then says nothing
+/// about live health, so the model does exactly what that sentence warns
+/// against and guesses why a provider was chosen. `health_prober` `continue`s
+/// every tick forever, a prober that never probes and never says so.
+/// `route_config`'s hot-apply of `config_problems` is skipped silently, and
+/// three more readers each pick their own answer.
+///
+/// ⚠️ The paragraph above this one points at
+/// [`route_handle`](crate::providers::route_handle)'s global for "the same
+/// contract". After batch D that is now the ONE handle in `src/` still on a raw
+/// `OnceLock` — deliberately: it is first-caller-wins (its initialiser closes
+/// over the caller's `cfg`), which `CapabilitySlot::install` cannot express
+/// without forging an `Installed` stamp for a boot that never happened.
+/// Task 13 adjudicates it. Do not "finish the job" by migrating it here.
+static GLOBAL: CapabilitySlot<RouteObservability> = CapabilitySlot::new(
+    "providers/route-observability",
+    MissingSemantics::ConsumerDecides,
+);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn global_route_observability_slot() -> &'static dyn SlotStatus {
+    &GLOBAL
+}
 
 /// Register the boot-assembled bundle. First call wins (one chain assembly
 /// per boot); later calls are ignored.
 pub fn set_global_route_observability(obs: RouteObservability) {
-    let _ = GLOBAL.set(obs);
+    let _ = GLOBAL.install(obs);
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// Boot installs this from inside `initialize_orchestrator`, which is gated on
+/// a default provider plus a session service; without it `route_status` renders
+/// config-only output that looks like a healthy chain with no history.
+/// `because` is quoted verbatim to an operator.
+pub fn decline_global_route_observability(because: &'static str) {
+    GLOBAL.decline(because);
 }
 
 /// The boot-registered bundle, if the production chain has been assembled.
@@ -580,6 +615,26 @@ mod tests {
         assert_eq!(
             chain_step, expected_step,
             "route_status fallback_chain schema drifted"
+        );
+    }
+
+    /// The variant is the operator-facing severity of this handle going
+    /// missing (`FailsOpen` => Error and a non-zero `aleph doctor`;
+    /// `IndistinguishableDefault` / `ConsumerDecides` => Warning;
+    /// `FailsClosed` => Info), and it is DERIVED from the consumers named on
+    /// the static above. Pinned in the module that owns the handle, because
+    /// that is the only place a reclassification and a re-read of those
+    /// consumers can be made to happen together — the aggregate figure in
+    /// FEATURE_LOCATOR cannot tell a reclassification from a new slot.
+    /// `census::every_slot_pins_its_own_missing_semantics` requires this by
+    /// slot id.
+    #[test]
+    fn the_observability_slot_pins_its_missing_semantics() {
+        assert_eq!(global_route_observability_slot().id(), "providers/route-observability");
+        assert!(
+            matches!(global_route_observability_slot().missing(), MissingSemantics::ConsumerDecides),
+            "`providers/route-observability` is classified ConsumerDecides from its consumers; changing that \
+             means re-reading them, not re-typing this line"
         );
     }
 }

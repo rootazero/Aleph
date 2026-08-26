@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 
-use crate::diagnostics::check::{HealthCheck, Posture};
+use crate::diagnostics::check::{HealthCheck, Posture, Presence};
 use crate::diagnostics::finding::{Finding, RepairOutcome, Severity};
 
 const ID: &str = "core/data-dir";
@@ -47,7 +47,20 @@ impl HealthCheck for DataDirCheck {
     async fn run(&self, posture: Posture) -> Vec<Finding> {
         let display = self.data_dir.display().to_string();
 
-        if !self.data_dir.exists() {
+        // The `Err` arm is what keeps `--fix` honest. `Path::exists()` is
+        // false both for "missing" and for "I could not look", and
+        // `create_dir_all` returns `Ok(())` for a directory that already
+        // exists — so an unreadable data dir used to render as "missing" and
+        // then, under `--fix`, report "Created {display}" having created
+        // nothing while the real problem went untouched. The unknown finding
+        // below is deliberately NOT `.repairable()`: do not offer to mkdir -p
+        // a path you could not stat.
+        let presence = match Presence::of(ID, "Data directory state", &self.data_dir) {
+            Ok(p) => p,
+            Err(f) => return vec![f],
+        };
+
+        if presence.is_absent() {
             let mut finding = Finding::problem(
                 ID,
                 Severity::Error,
@@ -127,5 +140,30 @@ mod tests {
             Some(RepairOutcome::Repaired { .. })
         ));
         assert!(missing.exists());
+    }
+
+    /// `Path::exists()` is false for an unreadable directory too, so the
+    /// "missing" branch used to claim it — and then, under `--fix`,
+    /// `create_dir_all` returns `Ok(())` for a directory that already exists,
+    /// so the repair reported "Created {display}" having created nothing.
+    #[tokio::test]
+    async fn an_unreadable_data_dir_is_not_reported_as_missing_and_is_not_repaired() {
+        let check = DataDirCheck::new(PathBuf::from("aleph\u{0}data"));
+        for posture in [Posture::Inspect, Posture::Fix] {
+            let findings = check.run(posture).await;
+            assert_eq!(findings.len(), 1);
+            let f = &findings[0];
+            assert!(f.is_problem());
+            assert_ne!(f.title, "Data directory is missing");
+            assert!(
+                !f.repairable,
+                "do not offer to mkdir -p a path you could not stat"
+            );
+            assert!(
+                f.repair_outcome.is_none(),
+                "no repair may be reported for a directory whose state is unknown: {:?}",
+                f.repair_outcome
+            );
+        }
     }
 }

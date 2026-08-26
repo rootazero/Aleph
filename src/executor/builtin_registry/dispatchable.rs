@@ -55,12 +55,9 @@
 /// separator written `"\n#[cfg(test)]"` matches nothing there — the scan then
 /// silently covers the test module too.
 fn production_source(src: &str) -> String {
-    let src = src.replace('\r', "");
-    let body = src.split("#[cfg(test)]").next().unwrap_or(&src).to_string();
-    body.lines()
-        .filter(|l| !l.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n")
+    crate::utils::source_scan::strip_comment_lines(&crate::utils::source_scan::production_prefix(
+        src,
+    ))
 }
 
 /// Tool names the model can be told about, from both registration shapes.

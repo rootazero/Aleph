@@ -783,6 +783,15 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // here is what makes that declaration true.
         if let Some(ref prov) = default_prov {
             alephcore::mcp::register_sampling_llm(prov.clone());
+        } else {
+            // The MCP manager already declared the sampling capability at boot;
+            // without this the declaration is simply never made true and every
+            // `sampling/createMessage` is refused with nothing saying why.
+            alephcore::mcp::decline_sampling_llm(
+                "the provider registry produced no default provider, so there is \
+                 no model to answer MCP `sampling/createMessage` with. Set \
+                 `[general] default_provider` to a configured provider.",
+            );
         }
 
         // Clone provider registry for topic generation before it's moved into engine
@@ -1098,6 +1107,14 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 alephcore::thinker::memory_context_provider::register_session_end_compression(
                     cs.clone(),
                 );
+            } else {
+                alephcore::thinker::memory_context_provider::decline_session_end_compression(
+                    "no CompressionService was built (it needs a provider and an \
+                     embedder, and `[memory.compression]` must be on), so pending \
+                     raw memories are not flushed into linked notes at session \
+                     end. The periodic path still consolidates them; only the \
+                     immediacy is lost.",
+                );
             }
 
             // Spec B Task 9 — register SessionEndSummarizer for on-session-end
@@ -1159,7 +1176,35 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     alephcore::thinker::memory_context_provider::set_open_loop_inject(
                         app_config.memory.reflection.open_loop_inject_prompt,
                     );
+                } else {
+                    // Note the asymmetry: `set_open_loop_inject(false)` a few
+                    // lines up is an INSTALL of `false`. This arm never reaches
+                    // the setter at all, which is a different fact.
+                    const NO_REFLECTION: &str =
+                        "`[memory.reflection] enabled = false`: no session-end \
+                         lesson distillation runs, and last session's open loops \
+                         are never injected into the next session's context.";
+                    alephcore::thinker::memory_context_provider::decline_session_reflector(
+                        NO_REFLECTION,
+                    );
+                    alephcore::thinker::memory_context_provider::decline_open_loop_inject(
+                        NO_REFLECTION,
+                    );
                 }
+            } else {
+                // One missing input, three handles. `register_session_end_mcp`
+                // above is NOT among them — it ran unconditionally in this
+                // block.
+                const NO_PROVIDER: &str =
+                    "the provider registry produced no default provider, so no \
+                     summary LLM could be built: session-end summaries, lesson \
+                     reflection and open-loop injection are all off. Set \
+                     `[general] default_provider` to a configured provider.";
+                alephcore::thinker::memory_context_provider::decline_session_end_summarizer(
+                    NO_PROVIDER,
+                );
+                alephcore::thinker::memory_context_provider::decline_session_reflector(NO_PROVIDER);
+                alephcore::thinker::memory_context_provider::decline_open_loop_inject(NO_PROVIDER);
             }
 
             mcp_for_orchestrator = Some(mcp.clone());
@@ -1769,6 +1814,29 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         }
     } else {
+        // Simulated mode: no provider registry, so none of this function's
+        // agent-engine branch ran. Seven capability handles are installed in
+        // there and every one of them now reads "never reached" — the state an
+        // operator cannot tell from a wiring bug. Name the input instead.
+        //
+        // Scope is deliberate: only the handles installed LEXICALLY in the
+        // branch above. `goal/store`, `looping/registry`, `strategy/store` and
+        // the loop-graph handles are also absent here, but they are installed
+        // by `BuiltinToolRegistry::with_config` in `src/executor/`, and a
+        // sentence written here would be a second, remote authority on their
+        // absence — wrong the first time that constructor is called from
+        // anywhere else.
+        const NO_ENGINE: &str =
+            "this process built no agent engine: no provider registry could be \
+             created, so no API key and no `[providers]` entry resolved. Configure \
+             a provider (or set ANTHROPIC_API_KEY / OPENAI_API_KEY) and restart.";
+        alephcore::mcp::decline_sampling_llm(NO_ENGINE);
+        alephcore::memory::decline_dream_daemon(NO_ENGINE);
+        alephcore::thinker::memory_context_provider::decline_session_end_mcp(NO_ENGINE);
+        alephcore::thinker::memory_context_provider::decline_session_end_compression(NO_ENGINE);
+        alephcore::thinker::memory_context_provider::decline_session_end_summarizer(NO_ENGINE);
+        alephcore::thinker::memory_context_provider::decline_session_reflector(NO_ENGINE);
+        alephcore::thinker::memory_context_provider::decline_open_loop_inject(NO_ENGINE);
         if !daemon {
             println!(
                 "  Mode: Simulated (set ANTHROPIC_API_KEY or OPENAI_API_KEY for real execution)"

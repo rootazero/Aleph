@@ -1361,15 +1361,9 @@ mod residue_tests {
     #[test]
     fn the_directory_name_is_spelled_exactly_once() {
         let src = include_str!("apply.rs");
-        let production = src.split("#[cfg(test)]").next().unwrap();
-        let code: String = production
-            .lines()
-            .filter(|l| {
-                let t = l.trim_start();
-                !t.starts_with("//") && !t.starts_with("*")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let code = crate::utils::source_scan::strip_comment_lines(
+            &crate::utils::source_scan::production_prefix(src),
+        );
 
         let decl = "const TX_DIR: &str = \".tx\";";
         assert!(

@@ -9,11 +9,13 @@
 //! this module is the other half of it.
 //!
 //! Shape follows the existing session-end hooks (`memory_context_provider`):
-//! a process-wide `OnceCell` registered at startup, read lazily at call time.
+//! a process-wide capability slot registered at startup, read lazily at call
+//! time.
 //! Lazy is required, not incidental — the MCP manager spawns (and servers
 //! handshake) before the agent's provider exists, so a callback that captured a
 //! provider eagerly could only ever be installed too late to be declared.
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
 
 use crate::error::{AlephError, Result};
@@ -30,13 +32,51 @@ use crate::providers::AiProvider;
 /// server's own `max_tokens` is treated as a request, not an authority.
 const MAX_SAMPLING_TOKENS: u32 = 4096;
 
-static SAMPLING_LLM: tokio::sync::OnceCell<Arc<dyn AiProvider>> =
-    tokio::sync::OnceCell::const_new();
+/// `FailsClosed`: the one production reader is [`serve_sampling`], which
+/// answers `AlephError::IoError("MCP sampling requested but no LLM provider is
+/// registered on this host")`. Nothing is granted and the error names its own
+/// missing input.
+///
+/// ⚠️ **The capability declaration does NOT depend on this handle**, and an
+/// earlier draft of this comment claimed it did. The chain is:
+/// `with_sampling_bridge` (`mcp/manager/actor.rs:171-176`) installs a callback
+/// that closes over [`serve_sampling`] — unconditionally, and resolving its
+/// provider lazily precisely because the manager spawns before the agent's LLM
+/// exists — and `McpServerConnection::can_sample`
+/// (`mcp/external/connection.rs:302-307`) asks `handler.has_callback()`. So
+/// with this slot empty the `sampling` capability **is** still declared, the
+/// server **does** see it offered, and a request that arrives gets the error
+/// above. The "structural `true`" defect this module's header opens with was
+/// fixed by making `can_sample` ask about the callback, not by consulting this
+/// handle.
+///
+/// [`sampling_llm_registered`] reads like the observability for that and is
+/// not: it has **no production caller** — its only caller is a `#[cfg(test)]`
+/// guard in this file. It is an existence oracle nothing consumes, recorded
+/// here rather than deleted because it was not orphaned by this migration.
+static SAMPLING_LLM: CapabilitySlot<Arc<dyn AiProvider>> =
+    CapabilitySlot::new("mcp/sampling-llm", MissingSemantics::FailsClosed);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn sampling_llm_slot() -> &'static dyn SlotStatus {
+    &SAMPLING_LLM
+}
 
 /// Register the provider that answers MCP sampling requests.
 /// Idempotent; the first call wins.
 pub fn register_sampling_llm(provider: Arc<dyn AiProvider>) {
-    let _ = SAMPLING_LLM.set(provider);
+    let _ = SAMPLING_LLM.install(provider);
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// The `else` half of [`register_sampling_llm`]. The MCP manager declares the
+/// sampling capability at boot regardless; this is the one place that can say
+/// the declaration was never made true, and why. `because` is quoted verbatim
+/// to an operator.
+pub fn decline_sampling_llm(because: &'static str) {
+    SAMPLING_LLM.decline(because);
 }
 
 /// Whether a sampling provider has been registered.
@@ -297,5 +337,25 @@ mod tests {
         .await
         .expect_err("no provider registered");
         assert!(err.to_string().contains("no LLM provider is registered"));
+    }
+
+    /// The variant is the operator-facing severity of this handle going
+    /// missing (`FailsOpen` => Error and a non-zero `aleph doctor`;
+    /// `IndistinguishableDefault` / `ConsumerDecides` => Warning;
+    /// `FailsClosed` => Info), and it is DERIVED from the consumers named on
+    /// the static above. Pinned in the module that owns the handle, because
+    /// that is the only place a reclassification and a re-read of those
+    /// consumers can be made to happen together — the aggregate figure in
+    /// FEATURE_LOCATOR cannot tell a reclassification from a new slot.
+    /// `census::every_slot_pins_its_own_missing_semantics` requires this by
+    /// slot id.
+    #[test]
+    fn the_sampling_llm_slot_pins_its_missing_semantics() {
+        assert_eq!(sampling_llm_slot().id(), "mcp/sampling-llm");
+        assert!(
+            matches!(sampling_llm_slot().missing(), MissingSemantics::FailsClosed),
+            "`mcp/sampling-llm` is classified FailsClosed from its consumers; changing that \
+             means re-reading them, not re-typing this line"
+        );
     }
 }

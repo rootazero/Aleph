@@ -78,6 +78,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(path) = args.config.as_ref() {
         alephcore::Config::set_effective_path(daemon::expand_path(&path.to_string_lossy()))
             .expect("--config pinned twice; this is meant to be the only pin site");
+    } else {
+        // A pin and a missing pin read identically through `effective_path()`,
+        // so the operator debugging "my --config was ignored" has no way to
+        // tell "no flag was passed" from "the flag was passed and the pin never
+        // happened". Say which.
+        alephcore::Config::decline_effective_path(
+            "no `--config <path>` was given on the command line: this process \
+             reads and writes the default config file (`$ALEPH_HOME/config.toml`, \
+             else `~/.aleph/config.toml`)",
+        );
     }
 
     // Spec C Tasks 5 + 19: acquire the cross-process singleton lock as

@@ -29,7 +29,7 @@ use futures::future::join_all;
 use tokio::sync::RwLock;
 
 use crate::config::{Config, ProviderConfig};
-use crate::diagnostics::check::{HealthCheck, Posture};
+use crate::diagnostics::check::{settle_probe, unknown_finding, HealthCheck, Posture};
 use crate::diagnostics::finding::{Finding, Severity};
 use crate::gateway::security::SharedTokenManager;
 use crate::providers::probe::{
@@ -57,18 +57,40 @@ impl ProvidersConnectivityCheck {
     }
 }
 
+/// What the vault was able to say about one provider's API key.
+///
+/// Three answers, not two. `Option<String>` can hold "there is a key" and
+/// "there is no key" but not "the vault would not tell me", and folding the
+/// third into the second is not a quiet degradation here — it decides what
+/// this check *reports*. A provider whose stored key could not be read is
+/// dialled without it, answers 401, and is published as
+/// `{name}: unreachable` with a fix hint telling the operator to store a
+/// fresh key with `vault_store`: a confident wrong diagnosis about a
+/// credential this check never read, pointing at the one repair that cannot
+/// help. Same class as the `[ok]` conflations in `stale_lock` /
+/// `duplicate_instance`, one step milder — the wrong *problem* rather than a
+/// reassuring pass.
+enum KeyLookup {
+    /// The vault answered. `None` means no secret is stored for this provider
+    /// — a determinate answer, and the ordinary case for OAuth presets.
+    Ready(Option<String>),
+    /// The vault did not answer; the payload is why, already in the
+    /// [`unknown_finding`] house style's `detail` voice.
+    Unreadable(String),
+}
+
 /// Resolve a provider's API key from the vault (`ai:<name>`). Mirrors the
 /// gateway handler's resolution so both surfaces probe identical configs.
 ///
 /// Blocking (vault decryption is synchronous crypto) — callers must keep it
 /// off the async executor (`spawn_blocking`).
-fn resolve_key(vault: &SharedTokenManager, name: &str) -> Option<String> {
+fn resolve_key(vault: &SharedTokenManager, name: &str) -> KeyLookup {
     match vault.get_secret(&provider_vault_key(name)) {
-        Ok(Some(secret)) => Some(secret.expose().to_string()),
-        Ok(None) => None,
+        Ok(Some(secret)) => KeyLookup::Ready(Some(secret.expose().to_string())),
+        Ok(None) => KeyLookup::Ready(None),
         Err(e) => {
             tracing::warn!(provider = %name, error = %e, "vault read failed during connectivity probe");
-            None
+            KeyLookup::Unreadable(format!("the vault would not release `{}`: {e}", provider_vault_key(name)))
         }
     }
 }
@@ -117,25 +139,39 @@ impl HealthCheck for ProvidersConnectivityCheck {
 
         let names: Vec<String> = probes.iter().map(|(name, ..)| name.clone()).collect();
         let vault = Arc::clone(&self.vault);
-        let keys: Vec<Option<String>> = match tokio::task::spawn_blocking(move || {
-            names.iter().map(|name| resolve_key(&vault, name)).collect()
-        })
-        .await
-        {
+        let keys: Vec<KeyLookup> = match settle_probe(
+            ID,
+            "Provider credentials",
+            tokio::task::spawn_blocking(move || {
+                names
+                    .iter()
+                    .map(|name| resolve_key(&vault, name))
+                    .collect::<Vec<_>>()
+            })
+            .await,
+        ) {
             Ok(keys) => keys,
-            Err(e) => {
-                // Key resolution is best-effort (vault read failures already
-                // degrade to None); a failed task must not fail the check.
-                tracing::warn!("provider key-resolution task failed: {e}");
-                vec![None; probes.len()]
+            // A task that never came back read nobody's key. The previous
+            // `vec![None; len]` said "none of these providers has a key",
+            // which is an answer, and the check then published it as a
+            // fleet-wide outage. Every provider inherits the unknown instead;
+            // `settle_probe` owns the wording.
+            Err(finding) => {
+                let why = finding.detail.clone();
+                probes
+                    .iter()
+                    .map(|_| KeyLookup::Unreadable(why.clone()))
+                    .collect()
             }
         };
-        let probes: Vec<(String, bool, ProviderConfig)> = probes
+        let probes: Vec<(String, bool, ProviderConfig, KeyLookup)> = probes
             .into_iter()
             .zip(keys)
             .map(|((name, enabled, mut runtime), key)| {
-                runtime.api_key = key;
-                (name, enabled, runtime)
+                if let KeyLookup::Ready(k) = &key {
+                    runtime.api_key = k.clone();
+                }
+                (name, enabled, runtime, key)
             })
             .collect();
 
@@ -144,15 +180,17 @@ impl HealthCheck for ProvidersConnectivityCheck {
         // consumed below. The post-join total-outage gate keys off this so a
         // fleet of OAuth-only / placeholder providers that all SKIP probing is
         // never mistaken for a total outage.
+        // A provider whose key could not be read is NOT probed below, so it
+        // must not be counted here either: leaving it in would make the gate
+        // demand a `provider-reachable` tag from a provider nobody dialled,
+        // and one unreadable vault would publish "No providers reachable".
         let probed_count = probes
             .iter()
-            .filter(|(name, enabled, _)| {
-                probe_disposition(name, *enabled) == ProbeDisposition::Probe
-            })
+            .filter(|(name, enabled, _, key)| will_be_probed(name, *enabled, key))
             .count();
         let futures = probes
             .into_iter()
-            .map(|(name, enabled, runtime)| async move {
+            .map(|(name, enabled, runtime, key)| async move {
                 // Both faces of "should this provider be dialled" read the same
                 // derivation (`probe::probe_disposition`); the `providers.healthcheck`
                 // RPC used to answer it with `enabled` alone and reported the
@@ -178,6 +216,12 @@ impl HealthCheck for ProvidersConnectivityCheck {
                         )
                     }
                     ProbeDisposition::Probe => {}
+                }
+                // After the two short-circuits, which need no key: reporting
+                // "credentials unknown" about a disabled provider would be
+                // noise about a provider nobody is going to use.
+                if let KeyLookup::Unreadable(why) = key {
+                    return credentials_unknown(&name, why);
                 }
                 let outcome = probe_provider_bounded(&name, runtime).await;
                 if outcome.success {
@@ -238,6 +282,31 @@ impl HealthCheck for ProvidersConnectivityCheck {
         }
         findings
     }
+}
+
+/// Will this provider actually be dialled?
+///
+/// One predicate with two readers — the outage gate's `probed_count` and the
+/// per-provider future — because the gate demands a `provider-reachable` tag
+/// from every provider it counted. A provider counted here but short-circuited
+/// there is a provider nobody dialled and nobody can vouch for, so a single
+/// unreadable vault would publish `No providers reachable`.
+fn will_be_probed(name: &str, enabled: bool, key: &KeyLookup) -> bool {
+    matches!(key, KeyLookup::Ready(_))
+        && probe_disposition(name, enabled) == ProbeDisposition::Probe
+}
+
+/// The finding for a provider whose stored credential could not be read.
+///
+/// Deliberately NOT [`unreachable_hint`]: that hint routes to `vault_store`,
+/// which is the one repair that cannot help when the vault itself is what
+/// would not answer.
+fn credentials_unknown(name: &str, why: String) -> Finding {
+    unknown_finding(ID, &format!("{name} credentials"), why).with_fix_hint(format!(
+        "Check the vault before trusting any verdict about `{name}`: run doctor's \
+         vault check, then re-run this one. Storing a fresh key with vault_store will \
+         not help if the vault itself is unreadable."
+    ))
 }
 
 /// Total-outage decision: at least one provider was actually probed and none
@@ -321,5 +390,48 @@ mod tests {
         // no tag must not suppress the gate (the old string-match bug).
         let title_only = vec![Finding::ok(ID, "openai: reachable", "ping ok")];
         assert!(total_outage(1, &title_only));
+    }
+
+    /// A credential the vault would not release is not "this provider has no
+    /// key". The old `Option<String>` said it was, and the check went on to
+    /// dial the provider without it and publish `{name}: unreachable` — a
+    /// confident wrong diagnosis, with a fix hint pointing at `vault_store`,
+    /// the one repair that cannot help.
+    #[test]
+    fn an_unreadable_credential_is_not_an_absent_one() {
+        let f = credentials_unknown("openai", "the vault would not release `ai:openai`".into());
+        assert_eq!(f.severity, Severity::Warning);
+        assert_eq!(f.title, "openai credentials unknown");
+        assert!(f.is_problem(), "an unknown must never render as [ok]");
+        let hint = f.fix_hint.expect("an unknown must say what to look at");
+        assert!(hint.contains("vault check"));
+        assert!(
+            hint.contains("will not help"),
+            "the hint must not send the operator to vault_store, which cannot fix an \
+             unreadable vault: {hint}"
+        );
+    }
+
+    /// The outage gate counts providers it will demand an answer from, so the
+    /// count and the dial decision must be the same predicate. Stated
+    /// name-independently: the key axis vetoes unconditionally, and on the
+    /// readable side the answer is exactly `probe_disposition`'s.
+    #[test]
+    fn a_provider_whose_key_could_not_be_read_is_not_counted_as_probed() {
+        for name in ["openai", "anthropic", "not-a-preset"] {
+            for enabled in [true, false] {
+                assert!(
+                    !will_be_probed(name, enabled, &KeyLookup::Unreadable("why".into())),
+                    "{name}/{enabled}: an unreadable key must never be counted as probed"
+                );
+                for key in [KeyLookup::Ready(None), KeyLookup::Ready(Some("k".into()))] {
+                    assert_eq!(
+                        will_be_probed(name, enabled, &key),
+                        probe_disposition(name, enabled) == ProbeDisposition::Probe,
+                        "{name}/{enabled}: a readable key must not change the disposition"
+                    );
+                }
+            }
+        }
     }
 }

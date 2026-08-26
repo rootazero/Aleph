@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 
-use crate::diagnostics::check::{HealthCheck, Posture};
+use crate::diagnostics::check::{HealthCheck, Posture, Presence};
 use crate::diagnostics::finding::{Finding, Severity};
 
 const ID: &str = "core/disk-space";
@@ -64,18 +64,29 @@ impl HealthCheck for DiskSpaceCheck {
         // mount from the path). Anchor on an existing ancestor: the data dir
         // itself may legitimately not exist yet (first run — the data-dir
         // check owns that finding).
+        //
+        // An UNREADABLE ancestor must stop the walk, not be stepped over.
+        // `Path::exists()` cannot tell the two apart, so the walk used to
+        // climb past a directory it merely could not stat and hand `fs2` an
+        // ancestor on the far side of a mount point — reporting free space
+        // for a different filesystem than the one hosting the data dir, as a
+        // confident number with no hint that it is the wrong one.
         let mut anchor = self.data_dir.as_path();
-        while !anchor.exists() {
-            match anchor.parent() {
-                Some(parent) => anchor = parent,
-                None => {
-                    return vec![Finding::problem(
-                        ID,
-                        Severity::Warning,
-                        "Free disk space unknown",
-                        format!("no existing ancestor of {display} to stat."),
-                    )];
-                }
+        loop {
+            match Presence::of(ID, "Free disk space", anchor) {
+                Err(f) => return vec![f],
+                Ok(Presence::Present) => break,
+                Ok(Presence::Absent) => match anchor.parent() {
+                    Some(parent) => anchor = parent,
+                    None => {
+                        return vec![Finding::problem(
+                            ID,
+                            Severity::Warning,
+                            "Free disk space unknown",
+                            format!("no existing ancestor of {display} to stat."),
+                        )];
+                    }
+                },
             }
         }
 
@@ -150,5 +161,32 @@ mod tests {
         // Whatever the threshold outcome, disk fullness is never mechanically
         // repairable.
         assert!(!findings[0].repairable);
+    }
+
+    /// An unreadable ancestor must STOP the walk. `Path::exists()` cannot tell
+    /// it from a missing one, so the walk stepped over it and handed `fs2` an
+    /// ancestor that can be on the far side of a mount point — a confident
+    /// free-space number for a different filesystem.
+    ///
+    /// The discriminator here is that the parent directory is a real, readable
+    /// temp dir with plenty of space: if the walk still climbed, this check
+    /// would report a healthy "Disk space OK" for it.
+    #[tokio::test]
+    async fn an_unreadable_ancestor_stops_the_walk_instead_of_being_stepped_over() {
+        let tmp = tempdir().unwrap();
+        let unreadable = tmp.path().join("aleph\u{0}data");
+        let findings = DiskSpaceCheck::new(unreadable).run(Posture::Inspect).await;
+        assert_eq!(findings.len(), 1);
+        assert!(
+            findings[0].is_problem(),
+            "climbing past the unreadable component would report the parent \
+             filesystem as healthy: {:?}",
+            findings[0]
+        );
+        assert!(
+            findings[0].detail.contains("would not say"),
+            "expected the refusal, not the give-up-at-the-root finding: {}",
+            findings[0].detail
+        );
     }
 }

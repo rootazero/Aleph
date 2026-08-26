@@ -32,6 +32,7 @@
 
 use std::collections::HashMap;
 
+use crate::capability::{CapabilitySlot, MissingSemantics, MutableCapabilitySlot, SlotStatus};
 use crate::config::types::policies::SpendPolicy;
 use crate::sync_primitives::{Arc, Mutex};
 
@@ -337,42 +338,91 @@ impl SpendLedger for InMemorySpendLedger {
 // Process-global handles
 // ============================================================================
 //
-// Same shape as `thinker::prompt_builder::cache_monitor::global_cache_monitor`
-// on the read side (lazy `OnceLock`, the admission/floor arms always have
-// something to call) and as `tools::result_store::set_global_tool_result_store`
-// / `providers::route_handle::global_route_handle` on the install side (boot
-// wins the first install; a config-write path hot-applies afterward through
-// its own interior mutability rather than re-installing).
+// Both are `crate::capability` slots rather than bare `OnceLock`s, and they are
+// the anchor that module argues from. §5.22 round-7 recorded the failure right
+// here: `spend.query` reporting `configured: false` is a true statement about a
+// box with no ceiling AND a true statement about a box that configured one
+// whose handle boot never installed, and nothing a caller can reach tells the
+// two apart. The slot's `outcome()` is what separates them; the
+// `MissingSemantics` below is the sentence a diagnostic shows when it is
+// `None`.
+//
+// The read side is unchanged. `global_ledger` / `current_policy` still always
+// return something, so the admission and floor arms never special-case
+// "nothing installed yet" (mirroring
+// `thinker::prompt_builder::cache_monitor::global_cache_monitor`), and the
+// install side is still first-writer-wins with a hot-apply path of its own
+// (mirroring `tools::result_store::set_global_tool_result_store` /
+// `providers::route_handle::global_route_handle`).
 
-static GLOBAL_LEDGER: std::sync::OnceLock<Arc<dyn SpendLedger>> = std::sync::OnceLock::new();
+static GLOBAL_LEDGER: CapabilitySlot<Arc<dyn SpendLedger>> = CapabilitySlot::new(
+    "spend/ledger",
+    MissingSemantics::IndistinguishableDefault {
+        reads_as: "an in-memory ledger that resets every restart",
+    },
+);
+
+/// The lazy default [`global_ledger`] falls back to — kept OUT of the slot on
+/// purpose.
+///
+/// Latching it into `GLOBAL_LEDGER` is the obvious rewrite of the old
+/// `get_or_init`, and it would make this handle's own `MissingSemantics` false:
+/// `install` stamps `Outcome::Installed`, so the first pre-boot read would
+/// teach every later diagnostic that boot installed a ledger boot never
+/// touched. That is the "confident lie … worse than today's silence" the
+/// `capability` module doc exists to prevent, and it is worse here than a bare
+/// `OnceLock` was. A separate `LazyLock` keeps the identity that matters (every
+/// caller shares one in-memory ledger, so spend recorded through it
+/// accumulates) while leaving `GLOBAL_LEDGER.outcome()` honestly `None`.
+///
+/// ⚠️ One deliberate behavioural delta, and it is the only one **this file's**
+/// migration makes. The round makes exactly one other, in
+/// [`crate::config::defaults_override`], and it is the same latch on a
+/// different handle — that file says so too. (Both sentences used to read "the
+/// only one", which at the level a later reader reads them is a
+/// contradiction.) Here: the old `GLOBAL_LEDGER.get_or_init` LATCHED the fallback into the
+/// handle, so any read before boot made the subsequent `install_ledger` a
+/// silent no-op. Now boot's install wins. In production nothing reads before
+/// `start/mod.rs` installs the durable backend, so the window is theoretical
+/// either way — but of the two answers, "the durable ledger boot installed is
+/// the one in use" is the one this module is trying to make true.
+static LEDGER_FALLBACK: std::sync::LazyLock<Arc<dyn SpendLedger>> =
+    std::sync::LazyLock::new(|| Arc::new(InMemorySpendLedger::default()) as Arc<dyn SpendLedger>);
 
 /// Install the process-wide ledger. Idempotent — a second call is silently
 /// ignored so multiple boot paths cannot stomp each other (mirrors
 /// `set_global_tool_result_store`). Boot calls this once, before the gateway
 /// serves any request, with the durable `spend::sqlite` backend.
 pub fn install_ledger(ledger: Arc<dyn SpendLedger>) {
-    let _ = GLOBAL_LEDGER.set(ledger);
+    let _ = GLOBAL_LEDGER.install(ledger);
 }
 
-/// Read the process-wide ledger, lazily installing [`InMemorySpendLedger`] if
-/// nothing has called [`install_ledger`] yet — mirrors
+/// Read the process-wide ledger, falling back to the shared
+/// [`InMemorySpendLedger`] when nothing has called [`install_ledger`] yet —
+/// mirrors
 /// [`global_cache_monitor`](crate::thinker::prompt_builder::cache_monitor::global_cache_monitor):
 /// the admission and floor arms must always have something to call.
 pub fn global_ledger() -> Arc<dyn SpendLedger> {
-    GLOBAL_LEDGER
-        .get_or_init(|| Arc::new(InMemorySpendLedger::default()) as Arc<dyn SpendLedger>)
-        .clone()
+    match GLOBAL_LEDGER.get() {
+        Some(ledger) => ledger.clone(),
+        // Not `unwrap_or(&LEDGER_FALLBACK)`: that forces the `LazyLock` on
+        // every call, including the installed path this arm never runs on.
+        None => LEDGER_FALLBACK.clone(),
+    }
 }
 
-static GLOBAL_POLICY: std::sync::OnceLock<
-    arc_swap::ArcSwap<crate::config::types::policies::SpendPolicy>,
-> = std::sync::OnceLock::new();
+static GLOBAL_POLICY: MutableCapabilitySlot<SpendPolicy> = MutableCapabilitySlot::new(
+    "spend/policy",
+    MissingSemantics::IndistinguishableDefault {
+        reads_as: "SpendPolicy::default() — enabled() == false, i.e. no ceiling",
+    },
+);
 
 /// Install the process-wide policy handle at boot, seeded from
 /// `[policies.spend]`. Idempotent, like [`install_ledger`]: a second call is
 /// silently ignored.
 pub fn install_policy(policy: crate::config::types::policies::SpendPolicy) {
-    let _ = GLOBAL_POLICY.set(arc_swap::ArcSwap::from_pointee(policy));
+    let _ = GLOBAL_POLICY.install(policy);
 }
 
 /// Hot-apply path for `[policies.spend]` (the live-reload round): store a new
@@ -381,33 +431,26 @@ pub fn install_policy(policy: crate::config::types::policies::SpendPolicy) {
 /// `Restart` honestly instead of reporting `Live` for a knob that silently
 /// did nothing — mirrors `providers::route_handle::try_global_route_handle`'s
 /// `None` arm.
-pub fn update_policy(policy: crate::config::types::policies::SpendPolicy) -> bool {
-    update_policy_into(GLOBAL_POLICY.get(), policy)
-}
-
-/// Core of [`update_policy`], with the handle taken explicitly instead of
-/// read from the process-wide `OnceLock`.
 ///
-/// `GLOBAL_POLICY` cannot be reset once set — `install_policy` is
-/// deliberately idempotent, like [`install_ledger`] — and `cargo test --lib`
-/// runs every unit test in this crate in one process, so any test elsewhere
-/// that calls `install_policy` makes `GLOBAL_POLICY.get()` return `Some` for
-/// the remaining life of the binary in an order this crate does not control.
-/// That makes the `None` branch above untestable through the real global:
-/// see `check_with`'s doc for the identical hazard with the ledger/policy
-/// singletons. Taking the handle as a parameter sidesteps it — a test can
-/// exercise both branches deterministically against a value it owns.
-fn update_policy_into(
-    handle: Option<&arc_swap::ArcSwap<crate::config::types::policies::SpendPolicy>>,
-    policy: crate::config::types::policies::SpendPolicy,
-) -> bool {
-    match handle {
-        Some(cell) => {
-            cell.store(Arc::new(policy));
-            true
-        }
-        None => false,
-    }
+/// The `false` branch is not exercisable through this global. `install_policy`
+/// is deliberately idempotent and `cargo test --lib` runs every unit test in
+/// this crate in one process, so any test anywhere that installs a policy makes
+/// this handle `Some` for the rest of the binary's life, in an order this crate
+/// does not control. It used to be reached through an injectable
+/// `update_policy_into(handle, policy)`; the slot type carries that seam now —
+/// `capability::tests::update_before_install_returns_false_and_changes_nothing`
+/// pins the same contract against a slot the test owns.
+///
+/// `#[must_use]` for the same reason [`MutableCapabilitySlot::update`] carries
+/// it one level down: a caller who writes `update_policy(p);` and drops the
+/// bool reports a successful hot-apply for a store that never happened. The
+/// argument for keeping the slot type at all was "the type enforces it rather
+/// than each call site remembering" — that applies here too, and a wrapper that
+/// forwards a `#[must_use]` value without being `#[must_use]` itself is a hole
+/// in exactly that argument.
+#[must_use]
+pub fn update_policy(policy: crate::config::types::policies::SpendPolicy) -> bool {
+    GLOBAL_POLICY.update(policy)
 }
 
 /// The effective policy right now. Mirrors `global_cache_monitor()`: always
@@ -416,11 +459,45 @@ fn update_policy_into(
 /// `SpendPolicy::default()` (no ceiling on either axis, i.e. disabled),
 /// which is the correct behavior for unit tests, pre-boot code, and embedded
 /// uses that never touch `[policies.spend]`.
+///
+/// ⚠️ That default is precisely the round-7 indistinguishable read: it is the
+/// right value to return and it says nothing about whether boot got here. Ask
+/// [`global_policy_slot`]`().outcome()` for that — never this function.
 pub fn current_policy() -> crate::config::types::policies::SpendPolicy {
-    GLOBAL_POLICY.get().map_or_else(
-        crate::config::types::policies::SpendPolicy::default,
-        |cell| (*cell.load_full()).clone(),
-    )
+    GLOBAL_POLICY
+        .load()
+        .map_or_else(crate::config::types::policies::SpendPolicy::default, |p| {
+            (**p).clone()
+        })
+}
+
+/// The two handles above, type-erased for the roster.
+///
+/// `pub(crate) fn` rather than `pub static`: the roster built in
+/// [`crate::capability::ALL_SLOTS`] needs one `&dyn SlotStatus` per handle, and
+/// making 45 statics public to assemble it would widen the crate's surface by
+/// 45 items to answer one question. Erasing at the accessor also means a
+/// roster consumer gets exactly `id` / `missing` / `outcome` and can never
+/// reach the value — a diagnostic has no business reading the ledger.
+///
+/// `const fn`, not merely `fn`: `ALL_SLOTS` is a `static` array of trait
+/// objects, and a `static` initializer must be a constant expression, so every
+/// accessor it calls has to be callable at compile time. The body is nothing
+/// but an unsizing coercion of an already-`'static` reference, so `const` adds
+/// no restriction the body did not already meet.
+///
+/// These carried `#[allow(dead_code)]` from the day they were written until
+/// `ALL_SLOTS` landed and gave them their first production caller — see that
+/// static's doc, and `census::every_installed_global_is_a_capability_slot` /
+/// `census::every_declared_slot_is_in_the_roster` for the guards that close
+/// the round these two handles anchor.
+pub(crate) const fn global_ledger_slot() -> &'static dyn SlotStatus {
+    &GLOBAL_LEDGER
+}
+
+/// See [`global_ledger_slot`].
+pub(crate) const fn global_policy_slot() -> &'static dyn SlotStatus {
+    &GLOBAL_POLICY
 }
 
 // ============================================================================

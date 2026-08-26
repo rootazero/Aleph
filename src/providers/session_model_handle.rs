@@ -33,6 +33,7 @@
 //! would have left the other two writing to memory only, each with its own
 //! green unit test.
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::RwLock;
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -84,7 +85,22 @@ pub trait SessionPinSink: Send + Sync {
     fn persist(&self, session_key: &str, pref: Option<&SessionModelPref>);
 }
 
-static PIN_SINK: OnceLock<std::sync::Arc<dyn SessionPinSink>> = OnceLock::new();
+/// `FailsClosed`: both readers are `if let Some(sink)` with no `else`
+/// ([`set_session_model`], [`clear_session_model`]), so an uninstalled sink
+/// means a pick governs this process and nothing else. Nothing is granted and
+/// nothing durable is falsely claimed — [`install_pin_sink`]'s own doc calls
+/// that "the honest degradation", and it is right about the in-process half.
+///
+/// The part that is dead and silent is the restart: a user who pins a model
+/// gets no signal that the pin will not survive one.
+static PIN_SINK: CapabilitySlot<std::sync::Arc<dyn SessionPinSink>> =
+    CapabilitySlot::new("providers/session-pin-sink", MissingSemantics::FailsClosed);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn pin_sink_slot() -> &'static dyn SlotStatus {
+    &PIN_SINK
+}
 
 /// Install the durability sink. First call wins (one boot, one sink).
 ///
@@ -92,7 +108,7 @@ static PIN_SINK: OnceLock<std::sync::Arc<dyn SessionPinSink>> = OnceLock::new();
 /// in-memory and behave exactly as they did before, which is the honest
 /// degradation: nothing claims to have been saved.
 pub fn install_pin_sink(sink: std::sync::Arc<dyn SessionPinSink>) {
-    let _ = PIN_SINK.set(sink);
+    let _ = PIN_SINK.install(sink);
 }
 
 fn sink() -> Option<&'static std::sync::Arc<dyn SessionPinSink>> {
@@ -161,7 +177,24 @@ pub fn clear_session_model(session_key: &str) {
 }
 
 /// The provider keys a `select_model(provider=…)` pin can actually resolve to.
-static PINNABLE_PROVIDERS: OnceLock<std::collections::BTreeSet<String>> = OnceLock::new();
+///
+/// `FailsOpen`, and unlike its neighbour above this one really is a gate.
+/// `builtin_tools::select_model::refuse_unpinnable_provider` opens with
+/// `let known = pinnable_providers()?;` — a `?` on an `Option<..>` returning
+/// `Option<String>`, so "no set published" produces NO REFUSAL. The
+/// consequence is not hypothetical and is written out in the setter's doc
+/// below: `select_model(provider="openai")` on an Anthropic-only deployment
+/// returns `ok: true`, the run silently falls back to the default chain, and
+/// the mis-attributed `(provider, model)` pair is written into the
+/// routing-experience store the model later reads back as verified.
+static PINNABLE_PROVIDERS: CapabilitySlot<std::collections::BTreeSet<String>> =
+    CapabilitySlot::new("providers/pinnable-set", MissingSemantics::FailsOpen);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn pinnable_providers_slot() -> &'static dyn SlotStatus {
+    &PINNABLE_PROVIDERS
+}
 
 /// Publish the provider keys the run builder will resolve a pin against.
 ///
@@ -177,7 +210,19 @@ static PINNABLE_PROVIDERS: OnceLock<std::collections::BTreeSet<String>> = OnceLo
 /// First call wins (one chain assembly per boot), matching
 /// [`route_observe`](super::route_observe)'s global.
 pub fn set_pinnable_providers(names: impl IntoIterator<Item = String>) {
-    let _ = PINNABLE_PROVIDERS.set(names.into_iter().collect());
+    let _ = PINNABLE_PROVIDERS.install(names.into_iter().collect());
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// This is one of the repo's three `FailsOpen` handles: with no published set,
+/// `select_model(provider=…)` validates nothing and the paragraph above
+/// describes what follows. Boot installs it from inside
+/// `initialize_orchestrator`, which is gated on a default provider plus a
+/// session service — so a provider-less deployment leaves the gate open and
+/// says nothing. `because` is quoted verbatim to an operator.
+pub fn decline_pinnable_providers(because: &'static str) {
+    PINNABLE_PROVIDERS.decline(because);
 }
 
 /// Whether `provider` can be pinned, plus the valid set for the error message.
@@ -265,6 +310,37 @@ mod tests {
         assert_eq!(
             get_session_model("test:session:b").unwrap().model,
             "model-b"
+        );
+    }
+
+    /// The variant is the operator-facing severity of this handle going
+    /// missing (`FailsOpen` => Error and a non-zero `aleph doctor`;
+    /// `IndistinguishableDefault` / `ConsumerDecides` => Warning;
+    /// `FailsClosed` => Info), and it is DERIVED from the consumers named on
+    /// the static above. Pinned in the module that owns the handle, because
+    /// that is the only place a reclassification and a re-read of those
+    /// consumers can be made to happen together — the aggregate figure in
+    /// FEATURE_LOCATOR cannot tell a reclassification from a new slot.
+    /// `census::every_slot_pins_its_own_missing_semantics` requires this by
+    /// slot id.
+    #[test]
+    fn the_pin_sink_slot_pins_its_missing_semantics() {
+        assert_eq!(pin_sink_slot().id(), "providers/session-pin-sink");
+        assert!(
+            matches!(pin_sink_slot().missing(), MissingSemantics::FailsClosed),
+            "`providers/session-pin-sink` is classified FailsClosed from its consumers; changing that \
+             means re-reading them, not re-typing this line"
+        );
+    }
+
+    /// See the sibling pin above.
+    #[test]
+    fn the_pinnable_set_slot_pins_its_missing_semantics() {
+        assert_eq!(pinnable_providers_slot().id(), "providers/pinnable-set");
+        assert!(
+            matches!(pinnable_providers_slot().missing(), MissingSemantics::FailsOpen),
+            "`providers/pinnable-set` is classified FailsOpen from its consumers; changing that \
+             means re-reading them, not re-typing this line"
         );
     }
 }

@@ -8,14 +8,48 @@
 
 use super::crypto::{generate_secret, hmac_sign};
 use super::store::SecurityStore;
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::secrets::crypto::SecretsCrypto;
 use crate::secrets::types::{DecryptedSecret, EncryptedEntry, EntryMetadata, SecretError};
 use crate::secrets::vault::SecretVault;
 use crate::sync_primitives::{Arc, Mutex, RwLock};
-use std::sync::OnceLock;
 use uuid::Uuid;
 
-static GLOBAL_SHARED_TOKEN_MANAGER: OnceLock<Arc<SharedTokenManager>> = OnceLock::new();
+/// `ConsumerDecides`, and the sharpest instance the round has met so far: six
+/// production reads, five distinct dispositions, one of which reports success.
+///
+/// | reader | an uninstalled read becomes |
+/// |---|---|
+/// | `gateway/server/handler.rs` (connect) | the validator closure returns `false` — every remote token presentation rejected |
+/// | `extension/runtime/wasm/secret_resolver.rs` | a `DenyAllSecretResolver`, deliberately, per its own comment |
+/// | `gateway/handlers/gateway_token.rs::handle_token_current` | `{"token": null}` returned as **success** |
+/// | `gateway/handlers/gateway_token.rs::handle_token_rotate` | `INTERNAL_ERROR "shared token manager unavailable"` |
+/// | `extension/plugin_ops.rs` | no resolver — plugin settings ship with secret references unresolved |
+/// | `gateway/interfaces/whatsapp/wa_auth/vault_store.rs` (via [`SharedTokenManager::global_crypto`]) | `crypto: None` |
+///
+/// No single `reads_as` sentence covers a set that contains both "reject every
+/// remote login" and "answer `null` and call it success", which is precisely
+/// what this variant is for. Adjudicating the arms is Task 15's; recording
+/// that there are five of them is this one's.
+///
+/// ⚠️ `global_crypto` collapses two different absences into one `None` — "no
+/// manager installed" and "a manager with no plaintext token loaded" (its
+/// `crypto()` returns `Err` for the second). Only the first is this slot's.
+static GLOBAL_SHARED_TOKEN_MANAGER: CapabilitySlot<Arc<SharedTokenManager>> = CapabilitySlot::new(
+    "gateway/shared-token-manager",
+    MissingSemantics::ConsumerDecides,
+);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+///
+/// A free function rather than a third associated item on
+/// [`SharedTokenManager`], so that all twelve accessors in this batch have one
+/// shape: the roster reads the return type, and a reader comparing files
+/// should not have to notice that this one is spelled differently.
+pub(crate) const fn global_shared_token_manager_slot() -> &'static dyn SlotStatus {
+    &GLOBAL_SHARED_TOKEN_MANAGER
+}
 
 /// Manages a single shared token for UI/API authentication.
 ///
@@ -165,7 +199,7 @@ impl SharedTokenManager {
     }
 
     pub fn set_global(manager: Arc<SharedTokenManager>) {
-        let _ = GLOBAL_SHARED_TOKEN_MANAGER.set(manager);
+        let _ = GLOBAL_SHARED_TOKEN_MANAGER.install(manager);
     }
 
     pub fn global() -> Option<Arc<SharedTokenManager>> {
@@ -314,6 +348,15 @@ impl SharedTokenManager {
 mod tests {
     use super::*;
     use crate::gateway::security::store::SecurityStore;
+
+    /// See `session::service::tests::the_accessor_exposes_this_handle_to_the_roster`
+    /// for why this asserts through the accessor rather than the static.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = global_shared_token_manager_slot();
+        assert_eq!(slot.id(), "gateway/shared-token-manager");
+        assert!(matches!(slot.missing(), MissingSemantics::ConsumerDecides));
+    }
 
     #[test]
     fn test_generate_and_validate() {

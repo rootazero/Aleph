@@ -825,20 +825,14 @@ mod tests {
     #[test]
     fn the_reader_composes_its_default_scope_and_narrows_both_fan_outs() {
         let src = include_str!("memory_search.rs");
-        // Unanchored separator — `"\n#[cfg(test)]\n"` matches nothing on a CRLF
-        // checkout, which would make `prod` the whole file and let this test be
-        // satisfied by its own assertion strings (§10).
-        let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
         // Comments stripped before the negative assertion, or the paragraph
         // *explaining* why `retrieve_all_agents` is wrong satisfies the check
         // that it is gone. `gateway/CLAUDE.md` records the mirror of this: a
         // severed wire whose only remaining reference is the comment claiming
         // it is wired. A name in prose is not a call site in either direction.
-        let code: String = prod
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let code = crate::utils::source_scan::strip_comment_lines(
+            &crate::utils::source_scan::production_prefix(src),
+        );
 
         assert!(
             code.contains("session_read_ids"),
