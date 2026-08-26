@@ -13,7 +13,7 @@ use ratatui::{
 };
 
 use crate::tui::app::{AppState, ChatMessage, Focus};
-use crate::tui::markdown::{markdown_to_lines, markdown_to_lines_incremental};
+use crate::tui::markdown::{markdown_to_lines, markdown_to_lines_incremental, StreamLines, StreamPrefix};
 use crate::tui::theme::DEFAULT_THEME;
 
 use super::tool_block::render_tool_block;
@@ -34,10 +34,9 @@ pub struct LineCache {
     /// never caches a streaming message (its content grows every tick), so
     /// this is the only cache the streaming message gets, and it caches at
     /// the safe-prefix-offset granularity rather than the whole message.
-    /// Carries its own `width` (mirroring `CachedEntry::width` below) so a
-    /// mid-stream resize invalidates it instead of serving prefix lines
-    /// wrapped for the old pane width.
-    streaming_markdown_cache: Option<(usize, u16, Vec<Line<'static>>)>,
+    /// The `Rc`-shared prefix lines are reused across frames with zero deep
+    /// copies; a mid-stream resize invalidates via `StreamPrefix::width`.
+    streaming_markdown_cache: Option<StreamPrefix>,
     /// The message index this `streaming_markdown_cache` belongs to. Reset
     /// (along with the cache above) whenever the streaming message changes
     /// — e.g. a new turn starts streaming — so the new message doesn't
@@ -48,7 +47,11 @@ pub struct LineCache {
 #[derive(Debug)]
 struct CachedEntry {
     kind: MessageKind,
-    content_len: usize,
+    /// Sampled fingerprint of the message content (see
+    /// [`content_fingerprint`]) — a bare length match can serve lines
+    /// rendered from *different* content after a same-length replacement
+    /// (e.g. a peer message inserted before the tail shifting indices).
+    fingerprint: u64,
     width: u16,
     lines: Vec<Line<'static>>,
 }
@@ -64,11 +67,28 @@ enum MessageKind {
     System,
 }
 
-fn message_kind_and_len(message: &ChatMessage) -> (MessageKind, usize) {
+/// O(1) sampled content fingerprint for cache validation: length plus the
+/// first and last 32 bytes. A full hash would re-scan every settled message
+/// on every frame — the exact cost the cache exists to avoid — while a bare
+/// length can't tell a same-length replacement apart from a hit.
+fn content_fingerprint(content: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let bytes = content.as_bytes();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.len().hash(&mut h);
+    let edge = 32.min(bytes.len());
+    bytes[..edge].hash(&mut h);
+    bytes[bytes.len() - edge..].hash(&mut h);
+    h.finish()
+}
+
+fn message_kind_and_fingerprint(message: &ChatMessage) -> (MessageKind, u64) {
     match message {
-        ChatMessage::User { content, .. } => (MessageKind::User, content.len()),
-        ChatMessage::Assistant { content, .. } => (MessageKind::Assistant, content.len()),
-        ChatMessage::System { content } => (MessageKind::System, content.len()),
+        ChatMessage::User { content, .. } => (MessageKind::User, content_fingerprint(content)),
+        ChatMessage::Assistant { content, .. } => {
+            (MessageKind::Assistant, content_fingerprint(content))
+        }
+        ChatMessage::System { content } => (MessageKind::System, content_fingerprint(content)),
     }
 }
 
@@ -94,46 +114,35 @@ pub fn render_chat_area(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let content_width = inner.width;
     let visible_height = inner.height as usize;
 
-    // Build all lines from all messages, but reuse cached per-message
-    // renders for unchanged messages (see `LineCache`). Idle ticks (no new
-    // content, no scroll change) are the common case; without this cache,
-    // every 50 ms tick re-parsed every assistant turn's markdown.
-    let all_lines = build_all_lines_cached(
+    // Render only the visible window: pass 1 ensures every message's lines
+    // exist (settled ones in the per-message cache, the streaming one via
+    // its incremental prefix cache) and records line counts; pass 2 clones
+    // out just the rows the window intersects. The previous implementation
+    // assembled the FULL transcript (`entry.lines.clone()` per message,
+    // then `visible_lines.to_vec()` on top) on every frame — O(transcript)
+    // deep copies per draw, 20x/s while a spinner runs.
+    let (_total_lines, visible) = build_visible_lines(
         &state.messages,
         state.verbose,
         state.spinner_frame,
         content_width,
         &mut state.chat_line_cache,
+        state.auto_scroll,
+        state.scroll_offset,
+        visible_height,
     );
 
-    // Calculate the visible window based on scroll state
-    let total_lines = all_lines.len();
-    let visible_lines = if state.auto_scroll {
-        // Show the last visible_height lines
-        let start = total_lines.saturating_sub(visible_height);
-        all_lines.get(start..).unwrap_or(&[])
-    } else {
-        // scroll_offset = how many lines from the bottom we've scrolled up.
-        // Clamp it to the renderable range so a large offset (Home maps to
-        // usize::MAX/2, or held PageUp) can never push the whole window
-        // off-screen and blank the chat.
-        let max_offset = total_lines.saturating_sub(visible_height);
-        let offset = state.scroll_offset.min(max_offset);
-        let end = total_lines.saturating_sub(offset);
-        let start = end.saturating_sub(visible_height);
-        all_lines.get(start..end).unwrap_or(&[])
-    };
-
-    let paragraph = Paragraph::new(visible_lines.to_vec()).wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(visible).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, inner);
 }
 
 /// Build all rendered lines from the message history.
 ///
-/// Uncached: `render_chat_area` uses [`build_all_lines_cached`] instead. This
-/// is kept as the reference implementation the cache is checked against (see
-/// `build_all_lines_cached_matches_uncached_output`) and for tests that don't
-/// care about caching — hence `#[cfg(test)]` rather than dead-code warnings.
+/// Uncached: `render_chat_area` uses [`build_visible_lines`] instead. This
+/// is kept as the reference implementation the cache/windowing is checked
+/// against (see `build_all_lines_cached_matches_uncached_output`) and for
+/// tests that don't care about caching — hence `#[cfg(test)]` rather than
+/// dead-code warnings.
 #[cfg(test)]
 fn build_all_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -158,7 +167,6 @@ fn build_all_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
                     state.spinner_frame,
                     width,
                     &mut lines,
-                    None,
                 );
             }
             ChatMessage::System { content } => {
@@ -172,17 +180,10 @@ fn build_all_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
     lines
 }
 
-/// Cached variant of [`build_all_lines`]. Produces identical output (see
-/// `build_all_lines_cached_matches_uncached_output`); the only difference is
-/// that unchanged messages skip re-formatting.
-///
-/// Takes `messages`/`verbose`/`spinner_frame` as separate parameters rather
-/// than `&AppState` deliberately: the caller (`render_chat_area`) needs to
-/// pass `&state.messages` (shared) alongside `&mut state.chat_line_cache`
-/// (exclusive) in the same call. Rust's disjoint-field borrowing allows that
-/// when the call site borrows fields directly, but NOT if this function took
-/// `state: &AppState` as one opaque parameter — the compiler can't see
-/// through that to know only `messages`/`verbose`/`spinner_frame` are read.
+/// Cached full-transcript build for tests: a window tall enough to cover
+/// everything (`usize::MAX`) makes [`build_visible_lines`] return the whole
+/// transcript, exercising the same cache machinery the production path uses.
+#[cfg(test)]
 fn build_all_lines_cached(
     messages: &[ChatMessage],
     verbose: bool,
@@ -190,6 +191,36 @@ fn build_all_lines_cached(
     width: u16,
     cache: &mut LineCache,
 ) -> Vec<Line<'static>> {
+    let (_total, lines) =
+        build_visible_lines(messages, verbose, spinner_frame, width, cache, true, 0, usize::MAX);
+    lines
+}
+
+/// Render only the lines inside the current scroll window.
+///
+/// Returns `(total_lines, visible_lines)`. Pass 1 materializes every
+/// message's rendered lines exactly once per change (settled messages hit
+/// the per-message [`LineCache`] entry, the streaming message reuses its
+/// `Rc`-shared frozen prefix and re-renders only the unfrozen tail) and
+/// records per-message heights; pass 2 walks the cumulative offsets and
+/// clones out ONLY the rows the window intersects — per-frame cost is
+/// O(messages) pointer arithmetic plus O(visible rows) of cloning, never
+/// O(transcript).
+///
+/// Each message occupies `rendered_lines + 1` rows: the blank separator the
+/// old `build_all_lines` pushed after every message is folded into the
+/// height so window arithmetic stays exact.
+#[allow(clippy::too_many_arguments)]
+fn build_visible_lines(
+    messages: &[ChatMessage],
+    verbose: bool,
+    spinner_frame: usize,
+    width: u16,
+    cache: &mut LineCache,
+    auto_scroll: bool,
+    scroll_offset: usize,
+    visible_height: usize,
+) -> (usize, Vec<Line<'static>>) {
     let streaming_idx = messages.iter().position(|m| {
         matches!(
             m,
@@ -204,80 +235,200 @@ fn build_all_lines_cached(
         cache.streaming_message_idx = streaming_idx;
     }
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
+    // Pass 1: ensure lines exist, record heights (rendered lines + 1 blank
+    // separator per message).
+    let mut heights: Vec<usize> = Vec::with_capacity(messages.len());
+    let mut streaming_head: Vec<Line<'static>> = Vec::new();
+    let mut streaming_content: Option<StreamLines> = None;
     for (idx, message) in messages.iter().enumerate() {
-        let (kind, content_len) = message_kind_and_len(message);
-        let is_streaming_now = matches!(
-            message,
-            ChatMessage::Assistant {
-                is_streaming: true,
+        if Some(idx) == streaming_idx {
+            // A streaming message's spinner/tool-block content can change
+            // every tick without its text changing, so it is never cached in
+            // `entries` — it would serve stale tool-block state. Its markdown
+            // content still gets the incremental prefix cache.
+            cache.entries.remove(&idx);
+            if let ChatMessage::Assistant {
+                content,
+                tools,
+                reasoning,
                 ..
-            }
-        );
-        let hit = cache
-            .entries
-            .get(&idx)
-            .filter(|e| e.kind == kind && e.content_len == content_len && e.width == width);
-        let message_lines = if let Some(entry) = hit {
-            entry.lines.clone()
-        } else {
-            let mut buf = Vec::new();
-            match message {
-                ChatMessage::User { content, timestamp } => {
-                    render_user_message(content, timestamp, width, &mut buf);
-                }
-                ChatMessage::Assistant {
-                    content,
+            } = message
+            {
+                render_assistant_head(
+                    reasoning.as_deref(),
                     tools,
-                    reasoning,
-                    is_streaming,
-                } => {
-                    render_assistant_message(
+                    verbose,
+                    spinner_frame,
+                    width,
+                    &mut streaming_head,
+                );
+                if !content.is_empty() {
+                    streaming_content = Some(markdown_to_lines_incremental(
                         content,
-                        tools,
-                        reasoning.as_deref(),
-                        *is_streaming,
-                        verbose,
-                        spinner_frame,
-                        width,
-                        &mut buf,
-                        if *is_streaming {
-                            Some(&mut cache.streaming_markdown_cache)
-                        } else {
-                            None
+                        width.saturating_sub(2),
+                        &mut cache.streaming_markdown_cache,
+                    ));
+                }
+                let content_rows = streaming_content.as_ref().map_or(0, StreamLines::line_count);
+                // +1 streaming cursor, +1 blank separator.
+                heights.push(streaming_head.len() + content_rows + 2);
+            }
+        } else {
+            let (kind, fingerprint) = message_kind_and_fingerprint(message);
+            let hit = cache
+                .entries
+                .get(&idx)
+                .filter(|e| e.kind == kind && e.fingerprint == fingerprint && e.width == width);
+            match hit {
+                Some(entry) => heights.push(entry.lines.len() + 1),
+                None => {
+                    let mut buf = Vec::new();
+                    render_settled_message(message, verbose, spinner_frame, width, &mut buf);
+                    heights.push(buf.len() + 1);
+                    cache.entries.insert(
+                        idx,
+                        CachedEntry {
+                            kind,
+                            fingerprint,
+                            width,
+                            lines: buf,
                         },
                     );
                 }
-                ChatMessage::System { content } => {
-                    render_system_message(content, width, &mut buf);
-                }
             }
-            // A streaming message's spinner/tool-block content can change
-            // every tick without `content_len` changing (e.g. tool status),
-            // so don't cache it — it would serve stale tool-block state.
-            // Everything else (settled messages) is safe to cache.
-            if !is_streaming_now {
-                cache.entries.insert(
-                    idx,
-                    CachedEntry {
-                        kind,
-                        content_len,
-                        width,
-                        lines: buf.clone(),
-                    },
-                );
-            } else {
-                cache.entries.remove(&idx);
-            }
-            buf
-        };
-        lines.extend(message_lines);
-        lines.push(Line::default());
+        }
     }
     // Drop cache entries for indices beyond the current message count (a
     // conversation switch or `.clear()` shrinks the vec).
     cache.entries.retain(|idx, _| *idx < messages.len());
-    lines
+
+    let total_lines: usize = heights.iter().sum();
+    let (start, end) = visible_window(total_lines, visible_height, auto_scroll, scroll_offset);
+
+    // Pass 2: clone out only the intersecting rows.
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut pos = 0usize;
+    for (idx, _) in messages.iter().enumerate() {
+        let height = heights[idx];
+        let mstart = pos;
+        pos += height;
+        if pos <= start || mstart >= end {
+            continue;
+        }
+        let lo = start.saturating_sub(mstart);
+        let hi = (end - mstart).min(height);
+        // Body rows occupy [0, height-1); the blank separator sits at
+        // height-1.
+        let body_hi = hi.min(height - 1);
+        if lo < body_hi {
+            if Some(idx) == streaming_idx {
+                copy_streaming_slice(
+                    &streaming_head,
+                    streaming_content.as_ref(),
+                    lo,
+                    body_hi,
+                    &mut out,
+                );
+            } else if let Some(entry) = cache.entries.get(&idx) {
+                out.extend(entry.lines[lo..body_hi].iter().cloned());
+            }
+        }
+        if hi == height {
+            out.push(Line::default());
+        }
+    }
+    (total_lines, out)
+}
+
+/// The `[start, end)` row range the viewport shows — the exact arithmetic
+/// the old `render_chat_area` did on a fully-materialized `Vec`, preserved
+/// verbatim so scroll behavior is unchanged.
+fn visible_window(
+    total_lines: usize,
+    visible_height: usize,
+    auto_scroll: bool,
+    scroll_offset: usize,
+) -> (usize, usize) {
+    if auto_scroll {
+        (total_lines.saturating_sub(visible_height), total_lines)
+    } else {
+        // Clamp a large offset (Home maps to usize::MAX/2, or held PageUp)
+        // so it can never push the whole window off-screen and blank the
+        // chat.
+        let max_offset = total_lines.saturating_sub(visible_height);
+        let offset = scroll_offset.min(max_offset);
+        let end = total_lines.saturating_sub(offset);
+        (end.saturating_sub(visible_height), end)
+    }
+}
+
+/// Copy the `[lo, hi)` slice of the streaming message's rows into `out`,
+/// applying the assistant prefix bar to content rows (deferred to here so
+/// off-window rows never pay for it). Row layout: head (header + reasoning
+/// + tool blocks) | content | cursor.
+fn copy_streaming_slice(
+    head: &[Line<'static>],
+    content: Option<&StreamLines>,
+    lo: usize,
+    hi: usize,
+    out: &mut Vec<Line<'static>>,
+) {
+    let head_len = head.len();
+    let content_len = content.map_or(0, StreamLines::line_count);
+
+    let head_hi = hi.min(head_len);
+    if lo < head_hi {
+        out.extend(head[lo..head_hi].iter().cloned());
+    }
+
+    let c_lo = lo.saturating_sub(head_len).min(content_len);
+    let c_hi = hi.saturating_sub(head_len).min(content_len);
+    if let Some(sl) = content {
+        let prefix_style = Style::default().fg(DEFAULT_THEME.assistant);
+        for i in c_lo..c_hi {
+            if let Some(line) = sl.get(i) {
+                let mut spans = Vec::with_capacity(line.spans.len() + 1);
+                spans.push(Span::styled("\u{2503} ", prefix_style));
+                spans.extend(line.spans.iter().cloned());
+                out.push(Line::from(spans));
+            }
+        }
+    }
+
+    let cursor_idx = head_len + content_len;
+    if lo <= cursor_idx && cursor_idx < hi {
+        out.push(streaming_cursor_line());
+    }
+}
+
+/// Render a settled (non-streaming) message into `out`.
+fn render_settled_message(
+    message: &ChatMessage,
+    verbose: bool,
+    spinner_frame: usize,
+    width: u16,
+    out: &mut Vec<Line<'static>>,
+) {
+    match message {
+        ChatMessage::User { content, timestamp } => {
+            render_user_message(content, timestamp, width, out);
+        }
+        ChatMessage::Assistant {
+            content,
+            tools,
+            reasoning,
+            ..
+        } => {
+            render_assistant_head(reasoning.as_deref(), tools, verbose, spinner_frame, width, out);
+            if !content.is_empty() {
+                let md_lines = markdown_to_lines(content, width.saturating_sub(2));
+                push_prefixed_content(out, md_lines);
+            }
+        }
+        ChatMessage::System { content } => {
+            render_system_message(content, width, out);
+        }
+    }
 }
 
 /// Render a user message with blue prefix bar.
@@ -315,7 +466,12 @@ fn render_user_message(
     }
 }
 
-/// Render an assistant message with green prefix bar, reasoning, tools, and content.
+/// Render an assistant message with green prefix bar, reasoning, tools, and
+/// content. Test-only reference path (see `build_all_lines`): the production
+/// path renders settled messages through `render_settled_message` and the
+/// streaming message through `render_assistant_head` +
+/// `markdown_to_lines_incremental` + `copy_streaming_slice`.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn render_assistant_message(
     content: &str,
@@ -326,7 +482,27 @@ fn render_assistant_message(
     spinner_frame: usize,
     width: u16,
     lines: &mut Vec<Line<'static>>,
-    streaming_cache: Option<&mut Option<(usize, u16, Vec<Line<'static>>)>>,
+) {
+    render_assistant_head(reasoning, tools, verbose, spinner_frame, width, lines);
+    if !content.is_empty() {
+        let md_lines = markdown_to_lines(content, width.saturating_sub(2));
+        push_prefixed_content(lines, md_lines);
+    }
+    if is_streaming {
+        lines.push(streaming_cursor_line());
+    }
+}
+
+/// Everything above an assistant message's markdown content: the `┃ Aleph`
+/// header, verbose reasoning, and tool blocks. Shared by the settled path
+/// and the streaming path so both lay out identically.
+fn render_assistant_head(
+    reasoning: Option<&str>,
+    tools: &[crate::tui::app::ToolExecution],
+    verbose: bool,
+    spinner_frame: usize,
+    width: u16,
+    lines: &mut Vec<Line<'static>>,
 ) {
     let prefix_style = Style::default().fg(DEFAULT_THEME.assistant);
 
@@ -383,34 +559,29 @@ fn render_assistant_message(
             lines.push(Line::from(spans));
         }
     }
+}
 
-    // Content (markdown rendered)
-    if !content.is_empty() {
-        let content_width = width.saturating_sub(2);
-        let md_lines = match streaming_cache {
-            Some(cache) => {
-                let (_offset, lines) = markdown_to_lines_incremental(content, content_width, cache);
-                lines
-            }
-            None => markdown_to_lines(content, content_width),
-        };
-        for md_line in md_lines {
-            let mut spans = vec![Span::styled("\u{2503} ", prefix_style)];
-            spans.extend(md_line.spans);
-            lines.push(Line::from(spans));
-        }
+/// Append markdown-rendered content lines, each prefixed with the assistant
+/// `┃ ` bar.
+fn push_prefixed_content(lines: &mut Vec<Line<'static>>, md_lines: Vec<Line<'static>>) {
+    let prefix_style = Style::default().fg(DEFAULT_THEME.assistant);
+    for md_line in md_lines {
+        let mut spans = vec![Span::styled("\u{2503} ", prefix_style)];
+        spans.extend(md_line.spans);
+        lines.push(Line::from(spans));
     }
+}
 
-    // Streaming cursor
-    if is_streaming {
-        lines.push(Line::from(vec![
-            Span::styled("\u{2503} ", prefix_style),
-            Span::styled(
-                "\u{258d}".to_string(), // ▍
-                Style::default().fg(DEFAULT_THEME.assistant),
-            ),
-        ]));
-    }
+/// The `┃ ▍` line shown under a still-streaming assistant message.
+fn streaming_cursor_line() -> Line<'static> {
+    let prefix_style = Style::default().fg(DEFAULT_THEME.assistant);
+    Line::from(vec![
+        Span::styled("\u{2503} ", prefix_style),
+        Span::styled(
+            "\u{258d}".to_string(), // ▍
+            Style::default().fg(DEFAULT_THEME.assistant),
+        ),
+    ])
 }
 
 /// Render a system message with yellow text and indentation.
@@ -709,5 +880,72 @@ mod tests {
         );
         let uncached = build_all_lines(&state, 80);
         assert_eq!(cached, uncached, "caching must not change what's rendered");
+    }
+
+    #[test]
+    fn build_visible_lines_window_matches_the_full_build_sliced() {
+        // The windowed production path must be byte-identical to slicing the
+        // full reference build — for both scroll modes and for a window that
+        // cuts through the middle of a message (the blank-separator and
+        // streaming-cursor boundary cases live in that cut).
+        let mut state = AppState::new("test".into(), "claude".into());
+        for i in 0..6 {
+            state.add_user_message(format!("question {i}"));
+            state.ensure_assistant_message();
+            if let ChatMessage::Assistant {
+                content,
+                is_streaming,
+                ..
+            } = state.current_assistant_mut()
+            {
+                content.push_str(&format!("answer {i}\nwith a second line"));
+                *is_streaming = i == 5; // only the last one stays streaming
+            }
+        }
+        let full = build_all_lines(&state, 80);
+        let mut cache = LineCache::default();
+
+        // Auto-scroll bottom window.
+        let height = 7;
+        let (total, visible) = build_visible_lines(
+            &state.messages,
+            state.verbose,
+            state.spinner_frame,
+            80,
+            &mut cache,
+            true,
+            0,
+            height,
+        );
+        assert_eq!(total, full.len());
+        assert_eq!(visible, full[full.len() - height..].to_vec());
+
+        // Scrolled-up window (auto_scroll off, offset from the bottom).
+        let (_total, visible) = build_visible_lines(
+            &state.messages,
+            state.verbose,
+            state.spinner_frame,
+            80,
+            &mut cache,
+            false,
+            10,
+            height,
+        );
+        let end = full.len() - 10;
+        assert_eq!(visible, full[end - height..end].to_vec());
+
+        // A second call with unchanged state must serve the same window from
+        // cache (this is the per-frame steady state).
+        let (_total, visible2) = build_visible_lines(
+            &state.messages,
+            state.verbose,
+            state.spinner_frame,
+            80,
+            &mut cache,
+            false,
+            10,
+            height,
+        );
+        assert_eq!(visible, visible2);
     }
 }

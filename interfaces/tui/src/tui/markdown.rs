@@ -2,6 +2,7 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
+use std::rc::Rc;
 use unicode_width::UnicodeWidthStr;
 
 use super::theme::DEFAULT_THEME;
@@ -95,33 +96,64 @@ pub fn markdown_to_lines(text: &str, width: u16) -> Vec<Line<'static>> {
     result
 }
 
+/// Frozen-prefix half of an incremental streaming render — see
+/// [`markdown_to_lines_incremental`]. `Rc`-shared so the cache and the
+/// current frame can both hold the prefix without a deep copy.
+#[derive(Debug)]
+pub struct StreamPrefix {
+    /// Byte offset into the source text up to which `lines` renders.
+    pub safe_offset: usize,
+    /// Pane width the prefix was wrapped for; a resize invalidates (mirrors
+    /// the width check `CachedEntry` does for the whole-message cache).
+    pub width: u16,
+    /// Rendered lines for exactly `text[..safe_offset]` — nothing more. The
+    /// unfrozen tail is never baked in here (it keeps changing byte for
+    /// byte; a snapshot of it would resurface as a stale duplicate the next
+    /// time the boundary advanced).
+    pub lines: Rc<Vec<Line<'static>>>,
+}
+
+/// One frame of an incremental streaming render: the frozen prefix (shared
+/// with the cache, so holding it costs one `Rc` bump) plus the freshly
+/// rendered unfrozen tail.
+#[derive(Debug)]
+pub struct StreamLines {
+    pub prefix: Rc<Vec<Line<'static>>>,
+    pub tail: Vec<Line<'static>>,
+}
+
+impl StreamLines {
+    /// Total rendered line count across the prefix/tail seam.
+    pub fn line_count(&self) -> usize {
+        self.prefix.len() + self.tail.len()
+    }
+
+    /// Borrow line `i` across the prefix/tail seam.
+    pub fn get(&self, i: usize) -> Option<&Line<'static>> {
+        if i < self.prefix.len() {
+            self.prefix.get(i)
+        } else {
+            self.tail.get(i - self.prefix.len())
+        }
+    }
+}
+
 /// Incremental variant of [`markdown_to_lines`] for a still-growing message.
 ///
-/// `cache` holds `(safe_offset, width, lines_for_that_prefix)` from the
-/// previous call. Only the text from `safe_offset` to the new
+/// `cache` holds the [`StreamPrefix`] from the previous call. Only the text
+/// from `cache.safe_offset` to the new
 /// `shared_ui_logic::markdown_stream::safe_freeze_offset` boundary is
-/// re-converted; the rest of the cached `Vec<Line>` is reused as-is. Falls
-/// back to a full re-run of [`markdown_to_lines`] on the very first call
-/// (`cache == None`), whenever the requested `width` no longer matches the
-/// cached one (a resize mid-stream — mirrors the width check `CachedEntry`
-/// already does for the whole-message cache in `chat_area.rs`), and
-/// whenever no further safe progress exists (the cached lines are still
-/// returned unchanged in that case).
+/// re-converted; the frozen prefix is reused via `Rc` with **zero deep
+/// copies** (the previous signature cloned the whole cached `Vec<Line>` on
+/// every call — twice on boundary-advance calls — purely to satisfy the
+/// borrow checker). Falls back to a full re-run of [`markdown_to_lines`] on
+/// the very first call (`cache == None`) and whenever the requested `width`
+/// no longer matches the cached one (a resize mid-stream).
 ///
-/// **Important**: the cached prefix lines must be exactly
-/// `markdown_to_lines(&text[..safe_offset], width)` — nothing more. It is
-/// tempting to cache whatever `lines` ends up holding after the tail is
-/// appended for display, but the tail is unfrozen and keeps changing byte
-/// for byte between calls; baking a snapshot of it into the cache would
-/// leave stale tail content sitting in the cached prefix, which then gets a
-/// *second*, fresher copy of the (by-then-longer) tail appended on top of it
-/// on the next call — a visible duplicated/stale line. So the prefix is
-/// cached before the tail is ever appended.
-///
-/// Returns `(new_safe_offset, full_lines_for_the_whole_text)` — the second
-/// element is what callers render; the first is what they should pass back
-/// in `cache` (already stored into `*cache` by this function) on the next
-/// call.
+/// A stale cached offset (longer than `text` or off its char boundary —
+/// possible only after a wholesale content swap the cache didn't observe) is
+/// treated as "no cache": the prefix is dropped and the whole text renders
+/// as tail, so a stale prefix can never paint text that is no longer there.
 ///
 /// **Note on the cost model**: unlike Panel's HTML-string cache (which only
 /// re-processes the newly-safe delta and appends pre-rendered HTML), this
@@ -132,58 +164,64 @@ pub fn markdown_to_lines(text: &str, width: u16) -> Vec<Line<'static>> {
 /// boundary can differ depending on what came before it in the same
 /// paragraph). This still avoids reprocessing whenever the boundary DOESN'T
 /// advance (the common case — most ticks arrive between safe-offset
-/// advances), and the tail-only reprocessing (`text[new_offset..]` /
-/// `text[prev_offset..]`) is always bounded by "how far behind the safe
-/// boundary trails," not by total message length. If profiling after this
-/// ships shows the prefix reformat is still too costly for very long
-/// streaming messages, that's a Phase 2 candidate — not attempted here
-/// (YAGNI).
+/// advances), and the tail-only reprocessing is always bounded by "how far
+/// behind the safe boundary trails," not by total message length. If
+/// profiling after this ships shows the prefix reformat is still too costly
+/// for very long streaming messages, that's a Phase 2 candidate — not
+/// attempted here (YAGNI).
 pub fn markdown_to_lines_incremental(
     text: &str,
     width: u16,
-    cache: &mut Option<(usize, u16, Vec<Line<'static>>)>,
-) -> (usize, Vec<Line<'static>>) {
-    let (prev_offset, prev_lines) = match cache.clone() {
-        Some((offset, cached_width, lines)) if cached_width == width => (offset, lines),
-        _ => (0, Vec::new()), // no cache yet, or the pane was resized — start over
-    };
-    match shared_ui_logic::markdown_stream::safe_freeze_offset(text, prev_offset) {
-        Some(new_offset) if new_offset > prev_offset => {
-            // The safe prefix grew. Re-run full conversion ONLY on the safe
-            // prefix (cheap relative to the whole growing text as long as
-            // fences close reasonably often), matching markdown_to_lines's
-            // own fence-tracking semantics (it always starts a fresh scan at
-            // `in_code_block = false`, which is valid exactly at a
-            // safe-offset boundary by construction). Cache THIS — the
-            // prefix-only render — before appending the (still unfrozen)
-            // tail for display, so a stale tail snapshot never gets baked
-            // into what the next call reuses.
-            let prefix_lines = markdown_to_lines(&text[..new_offset], width);
-            *cache = Some((new_offset, width, prefix_lines.clone()));
-            let mut lines = prefix_lines;
-            let tail = &text[new_offset..];
-            if !tail.is_empty() {
-                lines.extend(markdown_to_lines(tail, width));
-            }
-            (new_offset, lines)
-        }
+    cache: &mut Option<StreamPrefix>,
+) -> StreamLines {
+    let prev_offset = match cache {
+        Some(p) if p.width == width => p.safe_offset,
         _ => {
-            // No new safe progress: reformat only the tail past the cached
-            // safe offset and append it to the cached prefix lines.
-            let mut lines = prev_lines.clone();
-            // A stale `prev_offset` (e.g. from a content swap the cache
-            // didn't observe) must never panic — mirrors Panel's
-            // `extend_stable_prefix` guard against the same hazard. An
-            // out-of-range or off-char-boundary offset degrades to "no
-            // tail" rather than slicing.
-            let tail = text.get(prev_offset..).unwrap_or("");
-            if !tail.is_empty() {
-                lines.extend(markdown_to_lines(tail, width));
-            }
-            *cache = Some((prev_offset, width, prev_lines));
-            (prev_offset, lines)
+            // No cache yet, or the pane was resized — start over.
+            *cache = None;
+            0
         }
-    }
+    };
+    let (prefix, tail_start) =
+        match shared_ui_logic::markdown_stream::safe_freeze_offset(text, prev_offset) {
+            Some(new_offset) if new_offset > prev_offset => {
+                // The safe prefix grew. Re-run full conversion ONLY on the
+                // safe prefix (cheap relative to the whole growing text as
+                // long as fences close reasonably often), matching
+                // markdown_to_lines's own fence-tracking semantics (it always
+                // starts a fresh scan at `in_code_block = false`, which is
+                // valid exactly at a safe-offset boundary by construction).
+                let lines = Rc::new(markdown_to_lines(&text[..new_offset], width));
+                *cache = Some(StreamPrefix {
+                    safe_offset: new_offset,
+                    width,
+                    lines: Rc::clone(&lines),
+                });
+                (lines, new_offset)
+            }
+            _ => match cache {
+                Some(p)
+                    if p.safe_offset <= text.len() && text.is_char_boundary(p.safe_offset) =>
+                {
+                    let off = p.safe_offset;
+                    (Rc::clone(&p.lines), off)
+                }
+                _ => {
+                    // No usable cache: nothing is frozen, everything is tail.
+                    if cache.is_some() {
+                        *cache = None;
+                    }
+                    (Rc::new(Vec::new()), 0)
+                }
+            },
+        };
+    let tail_text = &text[tail_start..];
+    let tail = if tail_text.is_empty() {
+        Vec::new()
+    } else {
+        markdown_to_lines(tail_text, width)
+    };
+    StreamLines { prefix, tail }
 }
 
 /// Check if a line is a list item (starts with `- ` or `* `)
@@ -719,46 +757,83 @@ mod tests {
         let text = "line one\n```rust\nfn f() {}\n```\nline two\n";
         let full = markdown_to_lines(text, 80);
 
-        let mut cache: Option<(usize, u16, Vec<Line<'static>>)> = None;
-        let (_offset, incremental) = markdown_to_lines_incremental(text, 80, &mut cache);
-        assert_eq!(full, incremental);
+        let mut cache: Option<StreamPrefix> = None;
+        let incremental = markdown_to_lines_incremental(text, 80, &mut cache);
+        let combined: Vec<Line<'static>> = incremental
+            .prefix
+            .iter()
+            .cloned()
+            .chain(incremental.tail.iter().cloned())
+            .collect();
+        assert_eq!(full, combined);
     }
 
     #[test]
     fn incremental_conversion_reuses_the_cache_on_a_second_call_with_more_text() {
-        let mut cache: Option<(usize, u16, Vec<Line<'static>>)> = None;
+        let mut cache: Option<StreamPrefix> = None;
         let first_text = "line one\n";
-        let (offset1, lines1) = markdown_to_lines_incremental(first_text, 80, &mut cache);
-        assert!(offset1 > 0);
-        assert_eq!(cache.as_ref().map(|(o, _, _)| *o), Some(offset1));
+        let first = markdown_to_lines_incremental(first_text, 80, &mut cache);
+        let offset1 = cache.as_ref().map(|p| p.safe_offset);
+        assert!(offset1.unwrap_or(0) > 0);
 
         let grown_text = "line one\nline two\n";
-        let (offset2, lines2) = markdown_to_lines_incremental(grown_text, 80, &mut cache);
+        let second = markdown_to_lines_incremental(grown_text, 80, &mut cache);
+        let offset2 = cache.as_ref().map(|p| p.safe_offset);
         assert!(offset2 >= offset1);
-        assert_eq!(lines2, markdown_to_lines(grown_text, 80));
-        let _ = lines1; // only asserted for the offset progression above
+        let combined: Vec<Line<'static>> = second
+            .prefix
+            .iter()
+            .cloned()
+            .chain(second.tail.iter().cloned())
+            .collect();
+        assert_eq!(combined, markdown_to_lines(grown_text, 80));
+        let _ = first;
     }
 
     #[test]
     fn incremental_conversion_does_not_duplicate_a_tail_baked_into_an_earlier_cache_write() {
-        let mut cache: Option<(usize, u16, Vec<Line<'static>>)> = None;
+        let mut cache: Option<StreamPrefix> = None;
         // First call: boundary advances (closing fence), but there's already
         // a non-empty tail past it ("af") — this must NOT get baked into
         // what's cached for the prefix.
         let text1 = "before\n```rust\ncode\n```\naf";
-        let (offset1, _lines1) = markdown_to_lines_incremental(text1, 80, &mut cache);
+        markdown_to_lines_incremental(text1, 80, &mut cache);
+        let offset1 = cache.as_ref().map(|p| p.safe_offset).unwrap_or(0);
         assert!(offset1 > 0);
 
         // Second call: boundary does NOT advance further, but the tail
         // grows ("af" -> "after"). The old tail render must not survive
         // into the output alongside the new one.
         let text2 = "before\n```rust\ncode\n```\nafter";
-        let (offset2, lines2) = markdown_to_lines_incremental(text2, 80, &mut cache);
-        assert_eq!(offset2, offset1); // boundary hasn't moved
+        let second = markdown_to_lines_incremental(text2, 80, &mut cache);
+        assert_eq!(cache.as_ref().map(|p| p.safe_offset), Some(offset1)); // boundary hasn't moved
+        let combined: Vec<Line<'static>> = second
+            .prefix
+            .iter()
+            .cloned()
+            .chain(second.tail.iter().cloned())
+            .collect();
         assert_eq!(
-            lines2,
+            combined,
             markdown_to_lines(text2, 80),
             "must match a full, non-incremental re-render exactly — no stale/duplicated tail"
+        );
+    }
+
+    #[test]
+    fn incremental_conversion_shares_the_frozen_prefix_without_copying() {
+        // The Rc-sharing contract: across a no-advance frame, the returned
+        // prefix must be the SAME allocation as the cached one (the previous
+        // tuple API deep-copied the whole prefix Vec on every call).
+        let mut cache: Option<StreamPrefix> = None;
+        let text = "line one\npartial";
+        markdown_to_lines_incremental(text, 80, &mut cache);
+        let cached_lines = Rc::clone(&cache.as_ref().expect("cache populated").lines);
+        let grown = "line one\npartially";
+        let frame = markdown_to_lines_incremental(grown, 80, &mut cache);
+        assert!(
+            Rc::ptr_eq(&cached_lines, &frame.prefix),
+            "a no-advance frame must reuse the cached prefix allocation"
         );
     }
 }
