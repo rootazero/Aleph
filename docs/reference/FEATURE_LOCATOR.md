@@ -3520,6 +3520,11 @@
 **本仓在册的实测观测**（都是**观测**，不是诊断；诊断没做就别写成做了）：
 
 - **F-2 · 挂住** —— `builtin_tools::desktop::tests::test_desktop_reports_legacy_snapshot_as_unsupported`，2026-08-26 在 capability-wiring 轮基线树上挂住 22 分钟零 CPU，同一次会话在该轮 HEAD 上通过。详见 §7.2。
+- **F-3 · 间歇失败，机制靠阅读认出、未能复现（2026-08-26）** —— `extension::mcp_config::tests::plugin_data_variable_is_expanded`。**观测到一次**（`a95475edd`，全量 `--lib`，测试名在输出里）。**复现失败**：`a95475edd` 上 0/8、`8baa2bb49` 上 0/8；连同最初那次，在 base 上是**11 次里 1 次**。
+  - **机制是读出来的，不是跑出来的**：该测试**两次**读 `ALEPH_HOME`（`plugin_data_dir` → `default_plugins_dir` → `discovery::aleph_plugins_dir` → `aleph_home_dir` → `utils::paths::get_config_dir`），一次在 `parse_mcp_json_content` 内产出实际值、一次在构造 `expected` 时，然后断言两者相等——中间被兄弟测试换掉 `ALEPH_HOME` 就会不等。**可达性成立，因果未证。**
+  - **⚠️ 而这一条独立于 F-3 成立，是本次真正的产出**：`ALEPH_HOME_TEST_GUARD` 的契约**只约束写者**（doc 逐字："Any test that **sets/removes** `ALEPH_HOME` MUST hold this guard"），而**一个跨两次读做比较的读者同样暴露**——因为**一次跨两读的比较需要那个值在整个比较跨度上稳定，而不只是在某次写入期间稳定**。守卫本身正确、被所有写者遵守，并且**对自己一半的危险结构性失明**。这正是「一部分测试隔离比全都不隔离更糟」终于被点名的那个不对称：**被隔离的那一半是写者**。它是**读**出来的性质，不取决于任何测试红过。
+  - **什么都没改**，理由要写下来：**对一个未能复现的间歇失败施加一个看似合理的修复，是不可证伪的**——此后「我们修好了那个 flake」既无法被推翻，下一个遇到它的人还会看到一个**已关闭**的条目。留活、留标签，比留一个没被演示过的修复好。
+- **⚠️ 一个「频率」如果分母是「我碰巧看了几次」，它就不是频率，是一次观测除以一个偶然数。** F-3 最初被报成「~1/3」，而那来自**三次**运行（1 红 2 绿）。它当场就传播了下去：复现协议按它定样本量（「8 次里预期 2–3 次失败」），证伪阈值 8 也是照 1/3 算出来"足够强"的——**而对 1/11 来说，8 次全绿本来就是最可能的结果**，几乎什么都没排除。判据：写下 1/3、2/5 这类比率前先问**分母是不是设计出来的**；不是，就只报**事件本身**（见过一次、哪个 commit、什么日期），速率留空。**速率一旦写下，下游就会拿它去定样本量和阈值，而它承担不起。**
 - **F-4 · 间歇失败（新，2026-08-26）** —— `gateway::handlers::chat::tests::visibility_guards::history_serves_the_durable_execution_list`，全量 `--lib` 跑 8 次红 1 次（`8baa2bb49`，macOS）。⚠️ **它在 2026-08-23 被记成「Windows-only 红，未诊断」，而这次是 macOS**——所以两种可能都要写下来：要么当初那个平台限定**太窄**，要么这是**同名的第二个机制**。**一份带平台限定的缺陷报告，说的是它在哪里被找过，不是它在哪里存在。** 唯一被廉价排除掉的假设：这条测试持有 `IsolatedAlephHome`（经 `AlephHomeEnvGuard::acquire_and_set` 拿 `ALEPH_HOME_TEST_GUARD`），所以**它不是 `ALEPH_HOME` 隔离那一类**——记下来是为了下一个人不用把这个假设再推一遍。未诊断，Task 17 报开放。
 
 - **⚠️ 四分类器的 BUILD-ERROR 桶里装着两种东西，而它们的处置相反。** 分类顺序必须是 `running 0 tests` ⇒ VACUOUS → `test result: FAILED` ⇒ RED → `test result: ok` ⇒ GREEN → 剩下的才是 BUILD-ERROR，**因为 cargo 对测试失败也打 `error:`、对真 RED 也打 `0 passed`**。而「没有 `test result:` 行」既是构建失败**也是跑挂了**——落进 BUILD-ERROR 时**先看有没有编译错误行**，没有就是挂了。这一类最贵的地方不在当次运行：**下一个去量基线的人会把这段时间再赔一遍**，因为挂的那条测试和它周围的一切在报告里长得一模一样。
