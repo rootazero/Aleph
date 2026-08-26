@@ -1,0 +1,95 @@
+{
+  "module": "src/bin + src/bundled",
+  "scanned_files": 49,
+  "total_loc": 21310,
+  "findings": [
+    {
+      "id": "BLD-1",
+      "severity": "Low",
+      "category": "Security",
+      "file": "src/bundled/extractor.rs",
+      "line": 660,
+      "context": "fn copy_dir_into (file copy helper)",
+      "title": "Symlink-traversal check is one-way: keep-side filters symlinks but the recursive descent into subdirectories skips symlinked subtrees silently",
+      "before": "        let ft = std::fs::symlink_metadata(entry.path())?.file_type();\n        if ft.is_dir() {\n            copy_dir_into(&from, &to)?;\n        } else if ft.is_file() {\n            std::fs::copy(&from, &to)?;\n        } else {\n            // Skip symlinks and other special files.\n            continue;\n        }",
+      "after": "        let ft = std::fs::symlink_metadata(entry.path())?.file_type();\n        if ft.is_dir() {\n            copy_dir_into(&from, &to)?;\n        } else if ft.is_file() {\n            std::fs::copy(&from, &to)?;\n        } else {\n            // Skip symlinks and other special files — refuse to dereference\n            // any non-regular entry; a symlink-to-dir here would otherwise\n            // pull content from outside the source tree.\n            tracing::warn!(path = %from.display(), \"copy_dir_into: skipping non-regular entry (symlink/special)\");\n            continue;\n        }",
+      "rationale": "The keep-side does log a warning when it filters a symlink during pruning, but the descent-side silently continues. An operator-facing log line on each skip makes it easier to detect a malicious checkout or a corrupted bundle (without changing observable behavior — symlinks are still skipped). Low because the security property (no symlink-follow during copy) already holds; this is a hardening-only observation."
+    },
+    {
+      "id": "BIN-1",
+      "severity": "Low",
+      "category": "ErrorHandling",
+      "file": "src/bin/aleph-server/commands/secret.rs",
+      "line": 158,
+      "context": "fn handle_secret_providers (inside match for '1password')",
+      "title": "Nested tokio runtime created when no runtime is active, blocks the calling thread",
+      "before": "                let health_result = if let Ok(handle) = tokio::runtime::Handle::try_current() {\n                    handle.block_on(op.health_check())\n                } else {\n                    let rt = tokio::runtime::Runtime::new()?;\n                    rt.block_on(op.health_check())\n                };",
+      "after": "                // Spec C: the providers handler is NoLock and never runs\n                // under a tokio runtime — block_on an explicit\n                // single-thread runtime rather than reusing a possibly-missing\n                // current handle, which is unambiguous.\n                let rt = tokio::runtime::Builder::new_current_thread()\n                    .enable_all()\n                    .build()?;\n                let health_result = rt.block_on(op.health_check());",
+      "rationale": "`tokio::runtime::Runtime::new()` defaults to multi-thread; constructing a multi-thread runtime inside a CLI process that is *not* a tokio program is wasteful, and `Handle::try_current()` only succeeds inside an existing runtime. The current code is correct (a nested runtime works), but the runtime shape is unprincipled — switching to `new_current_thread` is cheaper and removes the `try_current` branch. Low because there is no correctness bug."
+    },
+    {
+      "id": "BIN-2",
+      "severity": "Low",
+      "category": "Style",
+      "file": "src/bin/aleph-server/commands/secret.rs",
+      "line": 237,
+      "context": "fn handle_secret_command — Set action closure",
+      "title": "Closure clones already-owned strings before moving into the lock closure",
+      "before": "            let body = serde_json::json!({ \"key\": &name, \"value\": &value });\n            let name_local = name;\n            let value_local = value;\n            let summary: SecretSummary = with_policy(",
+      "after": "            let body = serde_json::json!({ \"key\": &name, \"value\": &value });\n            // `name`/`value` are moved into the closure below; the `body`\n            // above borrows them once before the move.\n            let summary: SecretSummary = with_policy(",
+      "rationale": "`name_local`/`value_local` are pure renames to satisfy the borrow checker around `body`'s borrow; the names add nothing. Could be dropped with a small restructure (build the body string after extracting the owned values, or use `name.clone()` once at the top). Low — purely cosmetic."
+    }
+  ],
+  "deferred": [
+    {
+      "id": "BIN-D1",
+      "severity": "Low",
+      "title": "`Box<dyn Error>` / `Box<dyn std::error::Error>` used throughout src/bin as the public return type of every command handler (main.rs:69, server_init.rs:20, commands/{secret,identity,resume,pair,update,bootstrap_token,...}.rs)",
+      "rationale": "AGENTS.md says \"applications use anyhow\", but the entire bin crate uses `Box<dyn Error>` consistently (47 occurrences across 24 files). The past 2026-08-15 bin review deferred B1-L2 (the handle_run_with_engine twin duplication) without flagging this. Switching to `anyhow::Result` would be a mechanical refactor across every public handler — out of scope for a code review and already an established project idiom. No correctness impact: each handler maps source errors through `format!(\"{e:#}\")` to preserve the chain before boxing."
+    },
+    {
+      "id": "BIN-D2",
+      "severity": "Low",
+      "title": "`main.rs:80` `.expect(\"--config pinned twice; this is meant to be the only pin site\")`, `subsystems.rs:71` `.expect(\"Fatal: in-memory security store fallback failed ...\")`, `agent_init/mod.rs:1899` `.expect(\"run_manager must be set by either the real-execution branch ...\")`",
+      "rationale": "All three are documented design-by-contract invariants (the prior 2026-08-15 review kept B3-M1 and B3-M2 as deliberate panics, and the `--config` panic is acknowledged in main.rs). The comments above each site justify the choice (a process split across two config files, the security store being unable to allocate, or both execution branches skipping the assignment would each be a process-level corruption that should surface loudly). Re-flagging these would just re-litigate a settled decision."
+    },
+    {
+      "id": "BIN-D3",
+      "severity": "Low",
+      "title": "`daemon.rs:267` `std::thread::sleep` inside `wait_for_exit` (polling helper for graceful-shutdown SIGTERM/SIGKILL escalation)",
+      "rationale": "The function is `fn` (synchronous), not `async fn`, so `thread::sleep` is correct. The 100ms poll cadence × 50 attempts = 5s budget for SIGTERM and 2s for SIGKILL escalation matches the daemon-stop SLA. No finding — flagged here only because the template asks about thread::sleep in async fns."
+    },
+    {
+      "id": "BIN-D4",
+      "severity": "Low",
+      "title": "`commands/start/mod.rs` is 3592 lines; `register_agent_handlers` takes 22+ parameters; `initialize_orchestrator` takes 16+ parameters",
+      "rationale": "Past review deferred B3-L1 (the 3274-line start_server body) and B3-L2 (20+ parameter registration). The current sizes (3592 / 22 / 16) are within the same envelope. The module docstring at start/mod.rs:60-66 explicitly states: \"a giant fn that can't be cleanly carved stays whole\" and the parameter sprawl is idiomatic in the project's \"Spec C\" boot protocol — every parameter is a documented subsystem handle."
+    },
+    {
+      "id": "BIN-D5",
+      "severity": "Low",
+      "title": "`commands/secret.rs:374` `SecretAction::Set { value: Option<String> }` accepts the secret value as a `--value` flag (shell-history exposure)",
+      "rationale": "Past review deferred B1-L1: documented as deliberate operator UX trade-off at secret.rs:374-376 (\"Secret value (avoid shell history by omitting and using prompt)\"). Operator can omit the flag to fall through to a hidden stdin prompt (`secret.rs::resolve_secret_value`). Promoting to `error: --value forbidden` would break scripted secret provisioning. The flag's doc string is the mitigation."
+    },
+    {
+      "id": "BIN-D6",
+      "severity": "Low",
+      "title": "`hooks.rs:79` `entry.command.strip_prefix(\"http:\")` strips the scheme when printing the URL — prints `//host/path` instead of `https://host/path`",
+      "rationale": "Past review deferred B2-L2: the docstring says \"the URL POST events get sent to\", and adding the scheme back would change a wire-level printed string operators may have copy-pasted into scripts. Cosmetic UX only."
+    },
+    {
+      "id": "BLD-D1",
+      "severity": "Low",
+      "title": "`bundled/sync.rs` `clone_or_update_at` calls `git2::Repository::clone` and `remote.fetch` on the calling thread (blocking I/O)",
+      "rationale": "Caller paths (`extractor::sync_official_now`, `extractor::extract_bundled_content`) are themselves called only from the CLI binary's startup path, not from request handlers. The module docstring says \"Network I/O is blocking — call from `spawn_blocking`\". Server startup gates on this completing before tokio accepts connections, and the IPC `bundled.sync` path calls into the same fn from the handler thread; the latter is a true risk only if it ever blocks the runtime worker. Documented as intentional; out of scope for a static review."
+    }
+  ],
+  "summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 3,
+    "total_findings": 3,
+    "files_with_findings": 2
+  }
+}
