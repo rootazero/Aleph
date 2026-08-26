@@ -250,6 +250,34 @@ mod presence_discipline {
     /// not. rustfmt normalises the space form and the brace form is vanishingly
     /// rare for these macros, so this is a stated limit rather than a hole
     /// worth code.
+    ///
+    /// ⚠️ **A parenthesis inside the log message mis-terminates this walk.**
+    /// `depth` counts `(` and `)` without skipping string literals — unlike
+    /// `balanced` in [`err_arms`], which does. Both directions below were
+    /// MEASURED by running the predicate, not reasoned about: two readers
+    /// derived them and both got the labels backwards, because it is easy to
+    /// describe the *stripper's* error instead of the *guard's verdict*.
+    ///
+    /// - `tracing::warn!("oops :) {e}")` — depth reaches 0 inside the string,
+    ///   the strip stops early, and the message's own tail survives into the
+    ///   output carrying the `{e}` with it. The binding is then "found", so an
+    ///   arm that really does fold is **not flagged**: a false NEGATIVE. This
+    ///   is the shape that matters, because a log line normally interpolates
+    ///   the binding, so the surviving tail normally contains it.
+    /// - `tracing::warn!("oops :( ")` — depth never returns to 0 at the
+    ///   macro's real end, so the walk overshoots and strips the rest of the
+    ///   arm. A carry written AFTER the log line is destroyed and a correct arm
+    ///   is **flagged**: a false POSITIVE.
+    ///
+    /// It predates this list's widening (it reproduces on `warn!`) and is
+    /// unreachable in this directory today — one production log call, and every
+    /// `println!` / `eprintln!` here is inside `#[cfg(test)]`. Closing it is not
+    /// expensive (share `balanced`, which already skips literals); that is a
+    /// code change and this is the doc that says what the guard cannot see.
+    /// Both directions are asserted in
+    /// [`the_fold_detector_fires_on_the_three_shapes_that_shipped`], so this
+    /// paragraph cannot drift from the behaviour, and a future fix turns those
+    /// two assertions red at the lines that name it.
     fn without_logging(body: &str) -> String {
         const LOG_MACROS: [&str; 7] = [
             "trace!", "debug!", "info!", "warn!", "error!", "eprintln!", "println!",
@@ -635,6 +663,33 @@ mod presence_discipline {
                     arm.body
                 );
             }
+        }
+
+        // The paren-in-string limit, pinned in BOTH directions so the doc on
+        // `without_logging` cannot drift from it. These assert the CURRENT
+        // behaviour, which is wrong in two different ways; a fix that shares
+        // `balanced`'s literal-skipping turns both red, and the doc paragraph
+        // they belong to is then the thing to delete.
+        {
+            let fold_with_smiley =
+                "match p { Ok(h) => h, Err(e) => { tracing::warn!(\"oops :) {e}\"); None } }";
+            let arms = err_arms(fold_with_smiley);
+            assert_eq!(arms.len(), 1);
+            assert!(
+                mentions(&without_logging(&arms[0].body), &arms[0].binding),
+                "measured: a `)` inside the message stops the strip early and the \
+                 message's own tail carries `{{e}}` out with it, so this real fold is \
+                 NOT flagged -- a false negative"
+            );
+
+            let carry_with_frowny = "match p { Ok(h) => h, Err(e) => { tracing::warn!(\"oops :( \");                                      return Err(unknown(format!(\"{e}\"))); } }";
+            let arms = err_arms(carry_with_frowny);
+            assert_eq!(arms.len(), 1);
+            assert!(
+                !mentions(&without_logging(&arms[0].body), &arms[0].binding),
+                "measured: a `(` inside the message makes the walk overshoot and swallow \
+                 the carry that follows, so this CORRECT arm IS flagged -- a false positive"
+            );
         }
 
         // `println!` is a suffix of `eprintln!`; the left boundary is what
