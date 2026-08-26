@@ -57,7 +57,6 @@ pub fn redact_clipboard_text(text: &str) -> RedactedText {
         };
     }
     let mut out = String::with_capacity(text.len());
-    let mut redacted = false;
     let mut buf = String::new();
 
     let flush = |buf: &mut String, out: &mut String| {
@@ -93,8 +92,10 @@ pub fn redact_clipboard_text(text: &str) -> RedactedText {
 
     // Track whether redactions actually happened. `flush` uses the sentinel
     // when it replaces; we can detect that by comparing out after the run.
-    redacted = out.contains(REDACTED_SENTINEL);
-    RedactedText { text: out, redacted }
+    RedactedText {
+        text: out.clone(),
+        redacted: out.contains(REDACTED_SENTINEL),
+    }
 }
 
 fn looks_like_credential(s: &str) -> bool {

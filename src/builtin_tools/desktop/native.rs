@@ -1999,7 +1999,7 @@ impl super::DesktopTool {
                 // review-results/clipboard-logic-2026-08-26/REPORT.md
                 // Critical 1). The restore now fires in every path that
                 // already took the snapshot.
-                let body: Result<(), DesktopOutput> = async {
+                let body: std::result::Result<(), DesktopOutput> = async {
                     // Write target text to clipboard
                     if let Err(e) = screen.clipboard_write(text).await {
                         return Err(DesktopOutput {

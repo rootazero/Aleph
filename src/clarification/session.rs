@@ -518,7 +518,7 @@ impl ClarificationManager {
         // published and what the waiter observes). Without this branch the
         // model sees a `Cancelled` outcome for a question that was actually
         // timed out, drifting apart from the `cleanup_expired` contract.
-        let (is_expired, entry) = match pending.get(session_key) {
+        let (is_expired, mut entry) = match pending.get(session_key) {
             Some(e) if !e.is_live() => {
                 let expired = e.is_expired();
                 let entry = pending
