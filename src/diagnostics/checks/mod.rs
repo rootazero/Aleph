@@ -56,7 +56,7 @@ mod presence_discipline {
     ///
     /// Paired with the replacement a reader is supposed to reach for, because
     /// a rule that only forbids is a rule people work around.
-    const CONFLATING: [(&str, &str); 3] = [
+    const CONFLATING: [(&str, &str); 4] = [
         (
             ".exists()",
             "`check::Presence::of(ID, \"<subject>\", path)?` — it returns the third \
@@ -68,8 +68,22 @@ mod presence_discipline {
              directory is not there\" from \"the directory would not open\", and counts \
              entries the walk could not read",
         ),
+        // Two markers, one rule: `Err(_` reaches `Err(_)`, `Err(_e)`,
+        // `Err(_err)` and anything else whose binding starts with `_`, and
+        // `Err(..)` is the remaining spelling of the same discard. Measured
+        // before widening: zero occurrences of either in this directory's
+        // production halves, so covering all of them costs nothing — and a
+        // rule that only knew the one spelling its author happened to meet
+        // would be tighter in the doc than in the tree.
         (
-            "Err(_)",
+            "Err(_",
+            "a bound error — `Err(e)`, not `Err(_)` / `Err(_e)` / `Err(..)` — and one \
+             arm per error that actually MEANS absence, everything else through \
+             `check::unknown_finding`. A discarded error cannot be told apart from the \
+             answer the check then invents",
+        ),
+        (
+            "Err(..)",
             "a bound error — `Err(e)` — and one arm per error that actually MEANS \
              absence, everything else through `check::unknown_finding`. A discarded \
              error cannot be told apart from the answer the check then invents",
@@ -118,15 +132,21 @@ mod presence_discipline {
     ///   applied to a `Result` — the other spelling of "discard the error and
     ///   invent the answer", and the one `browser_runtime.rs` used on its
     ///   `spawn_blocking` `JoinError`. `Option::unwrap_or` is lexically
-    ///   identical and this directory has eight legitimate uses of it, so a rule
-    ///   covering the spelling would need an allowlist. A statement-bounded
-    ///   "`.await` and `unwrap_or` in one expression" rule WOULD be clean
-    ///   against today's tree (measured: none of those eight has an `.await` in
-    ///   its statement) and is deliberately not shipped — the first legitimate
-    ///   `Option`-yielding `.await` makes it a false accuser, and a guard that
-    ///   accuses falsely gets cited as evidence.
+    ///   identical, and the production halves of this directory hold **nine
+    ///   such occurrences across eight lines** that are not this defect: eight
+    ///   `Option::unwrap_or*`, plus one `Result::unwrap_or`
+    ///   (`u32::try_from(..).unwrap_or(0)` in `cache_health.rs`, clamping an
+    ///   out-of-range streak — and note that this one shares a line with an
+    ///   `Option` use, which is why "eight lines" and "nine occurrences" are
+    ///   different numbers). So a rule on the spelling would need an allowlist
+    ///   covering both kinds. A statement-bounded "`.await` and `unwrap_or` in
+    ///   one expression" rule WOULD be clean against today's tree (measured:
+    ///   none of those nine has an `.await` in its statement) and is
+    ///   deliberately not shipped — the first legitimate `Option`-yielding
+    ///   `.await` makes it a false accuser, and a guard that accuses falsely
+    ///   gets cited as evidence.
     /// - *Blind to* runtime behaviour generally: this is a spelling rule. It
-    ///   cannot see a new conflating API, only the three that were used here.
+    ///   cannot see a new conflating API, only the shapes that were used here.
     /// - **No allowlist, by construction.** If a site genuinely needs a bare
     ///   `.exists()`, the answer is that `check::Presence` is missing a case —
     ///   extend it there, where every check inherits the fix.

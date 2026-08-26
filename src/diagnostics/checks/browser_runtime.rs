@@ -98,10 +98,16 @@ fn classify_chromium(
 /// - `CannotFindBinaryPath` — PATH was searched and `npx` was not on it. **This
 ///   is absence**, and it is answered as absence.
 /// - `CannotGetCurrentDirAndPathListEmpty` — PATH is unset, or set and empty,
-///   so there was nowhere to search.
+///   so there was nowhere to search. Its detail sentence is written in the arm
+///   rather than taken from `which`'s `Display`, which names neither PATH nor
+///   emptiness and points at the argument instead.
 ///
 /// The second is treated as unknown, deliberately, on the same argument as
-/// `core/config-parse`'s unreadable-file branch. The *conclusion* "the driver
+/// `core/config-parse`'s unreadable-file branch. It is the one place in this
+/// file where a previously-determinate answer became `unknown`, and because
+/// `unknown_finding` is `Warning`, a host with no PATH now fails `aleph
+/// doctor`'s exit gate where it previously passed — stated here rather than
+/// left to be inferred from a severity two modules away. The *conclusion* "the driver
 /// cannot launch npx" happens to hold either way (a spawned child inherits this
 /// empty PATH), but the finding's remedy is "Install Node.js" — and telling
 /// somebody who has Node installed to install Node is the right symptom with
@@ -115,6 +121,23 @@ fn classify_npx(found: Result<std::path::PathBuf, which::Error>) -> Result<NodeP
     match found {
         Ok(path) => Ok(NodeProbe::Found(path.display().to_string())),
         Err(which::Error::CannotFindBinaryPath) => Ok(NodeProbe::Missing),
+        // The cause is written here rather than deferred to `which`'s
+        // `Display`, because this arm's whole value is naming it and `Display`
+        // does not: it says "no path to search and provided name is not an
+        // absolute path", which never mentions PATH and points at the
+        // *argument* — a red herring where the name passed is always a bare
+        // `"npx"`. A finding that credits itself with naming a cause has to
+        // name it.
+        Err(which::Error::CannotGetCurrentDirAndPathListEmpty) => Err(
+            "the PATH environment variable is unset or empty, so there was nowhere to \
+             look for `npx`. That is not the same as Node being absent — reporting \
+             \"not detected\" here would point at installing software this host may \
+             already have. Check how this process's environment is being set; a \
+             service manager that scrubs it is the usual cause."
+                .to_string(),
+        ),
+        // `{e}` is right HERE and only here: this arm is the residual one, so
+        // by construction it does not know what the error is.
         Err(e) => Err(format!("the `npx` lookup could not be performed: {e}")),
     }
 }
@@ -489,6 +512,21 @@ mod tests {
                 "a PATH lookup that could not be performed is not the same as absence"
             );
         }
+
+        // The arm's whole value is that it NAMES the cause. `which`'s own
+        // `Display` for this variant is "no path to search and provided name is
+        // not an absolute path" — it never says PATH, and it points at the
+        // argument, which is a bare `"npx"` at every call site. A detail that
+        // deferred to it would leave the doc above claiming a cause the
+        // operator never reads.
+        let why = classify_npx(Err(which::Error::CannotGetCurrentDirAndPathListEmpty))
+            .err()
+            .expect("an empty PATH is not absence");
+        assert!(why.contains("PATH"), "the cause must be named: {why}");
+        assert!(
+            !why.contains("absolute path"),
+            "must not defer to `which`'s Display, which points at the argument: {why}"
+        );
         assert!(matches!(
             classify_npx(Ok(std::path::PathBuf::from("/x/npx"))),
             Ok(NodeProbe::Found(_))

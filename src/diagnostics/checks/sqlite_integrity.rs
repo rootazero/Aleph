@@ -284,6 +284,14 @@ impl HealthCheck for SqliteIntegrityCheck {
         // reason. `MAX_DATABASES` keeps this check bounded, which is right —
         // but a bound that truncates silently reports on 32 stores while
         // implying it reported on all of them.
+        //
+        // Consequence, stated rather than left to be inferred from
+        // `unknown_finding`'s severity: this is `Warning`, so a data dir holding
+        // more than `MAX_DATABASES` `*.db` files now fails `aleph doctor`'s exit
+        // gate where it previously passed silently. That is deliberate and
+        // consistent with the `unreadable_entries` finding beside it — an
+        // integrity check that verified 32 of N stores has not verified the data
+        // dir — but it IS a new gating condition, not just a new sentence.
         if over_cap > 0 {
             findings.push(
                 unknown_finding(
