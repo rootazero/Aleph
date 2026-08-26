@@ -209,6 +209,19 @@ impl TypewriterClock {
         });
     }
 
+    /// Mutate `id`'s cached stable prefix in place. The hot-path counterpart
+    /// of [`Self::stable_prefix_for`]/[`Self::set_stable_prefix`]: those two
+    /// clone the whole cached HTML string out and back in, which made every
+    /// animation frame an O(prefix) copy; the renderer now extends the cache
+    /// entry directly and only reads it out when the safe offset actually
+    /// advanced (see `TypewriterRenderer`'s two-zone split).
+    pub fn update_stable_prefix<R>(&self, id: &str, f: impl FnOnce(&mut String, &mut usize) -> R) -> R {
+        self.stable_prefixes.update_untracked(|m| {
+            let entry = m.entry(id.to_string()).or_default();
+            f(&mut entry.0, &mut entry.1)
+        })
+    }
+
     /// Drop `id`'s cached stable prefix. Called from [`Self::finish`] and
     /// whenever a caller observes `is_streaming == false` for a still-
     /// sweeping message: `finalize_answer`/`set_step_text` can swap a

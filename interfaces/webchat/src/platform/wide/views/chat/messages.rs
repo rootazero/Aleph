@@ -1036,18 +1036,11 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
                             })}
                             <div class=bubble_class>
                                 {tool_calls_view}
-                                // Assistant text — always the paced renderer; it
-                                // keeps sweeping past stream completion and falls
-                                // back to full Markdown for history/finished text.
-                                // Reactive: `content` is the field that streams,
-                                // so this fragment (unlike the structural layout
-                                // around it) is rebuilt on every message change.
-                                {move || message.with(|m| m.as_ref().map(|m| {
-                                    let content = m.content.clone();
-                                    let message_id = timeline::reveal_key(m);
-                                    let is_streaming = m.is_streaming;
-                                    view! { <TypewriterRenderer content=content message_id=message_id is_streaming=is_streaming /> }
-                                }))}
+                                // Assistant text — the paced renderer is mounted
+                                // ONCE and follows the message reactively; the
+                                // predecessor rebuilt the component (and its DOM
+                                // subtree) on every streamed token.
+                                <TypewriterRenderer message=message />
                                 {error_view}
                                 {model_view}
                                 {cost_view}
@@ -1080,18 +1073,10 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
                                     </div>
                                 }.into_any()
                             } else {
-                                // Assistant text — always the paced renderer; it keeps
-                                // sweeping past stream completion and falls back to
-                                // full Markdown for history/finished text. Reactive
-                                // for the same reason as the team-layout branch above.
-                                view! {
-                                    {move || message.with(|m| m.as_ref().map(|m| {
-                                        let content = m.content.clone();
-                                        let message_id = timeline::reveal_key(m);
-                                        let is_streaming = m.is_streaming;
-                                        view! { <TypewriterRenderer content=content message_id=message_id is_streaming=is_streaming /> }
-                                    }))}
-                                }.into_any()
+                                // Assistant text — the paced renderer is mounted
+                                // ONCE and follows the message reactively (see
+                                // the team-layout branch above).
+                                view! { <TypewriterRenderer message=message /> }.into_any()
                             }}
                             {error_view}
                             {model_view}
@@ -1189,24 +1174,17 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
 #[component]
 fn NarrationRow(message: Memo<Option<ChatMessage>>) -> impl IntoView {
     // A lookup miss (should not happen — ids are stamped once) renders
-    // nothing rather than panicking.
-    move || {
-        message.with(|m| {
-            m.as_ref().map(|m| {
-                let content = m.content.clone();
-                // Per-step reveal identity, NOT the bare id — consecutive
-                // steps of one run share the id `assistant-{run}` (see
-                // `timeline::reveal_key`).
-                let message_id = timeline::reveal_key(m);
-                let is_streaming = m.is_streaming;
-                view! {
-                    <div class="px-1 py-0.5 text-sm text-text-secondary leading-relaxed aleph-step-narration">
-                        <TypewriterRenderer content=content message_id=message_id is_streaming=is_streaming />
-                    </div>
-                }
-            })
-        })
+    // nothing rather than panicking. One-time gate, same pattern as
+    // `MessageBubble`'s mount-time check.
+    if message.with_untracked(|m| m.is_none()) {
+        return ().into_any();
     }
+    view! {
+        <div class="px-1 py-0.5 text-sm text-text-secondary leading-relaxed aleph-step-narration">
+            <TypewriterRenderer message=message />
+        </div>
+    }
+    .into_any()
 }
 
 /// A group-chat system notice: the broadcaster explaining why the conversation

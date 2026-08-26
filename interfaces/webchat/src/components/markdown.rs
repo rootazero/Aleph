@@ -3,6 +3,8 @@
 //! Uses pulldown-cmark for Markdown parsing and syntect for code block highlighting.
 
 use crate::state::typewriter::TypewriterClock;
+use crate::views::chat::state::ChatMessage;
+use crate::views::chat::timeline;
 use leptos::prelude::*;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use std::sync::LazyLock;
@@ -323,20 +325,6 @@ fn extend_stable_prefix(
     }
 }
 
-/// A Leptos component for streaming content — lightweight rendering without full Markdown parse.
-///
-/// Tracks code fences and escapes HTML, but does not process Markdown syntax.
-/// Switches to MarkdownRenderer on completion for full formatting.
-#[component]
-#[must_use]
-pub fn StreamingRenderer(content: String) -> impl IntoView {
-    let html = render_streaming_with_cursor(&content);
-
-    view! {
-        <div class="markdown-body text-sm leading-relaxed streaming-content" inner_html=html />
-    }
-}
-
 /// Monotonic clock in milliseconds (page-load relative), or `None` when
 /// `performance` is unavailable. The renderer treats `None` as "no usable clock"
 /// and reveals all arrived text at once (degrade to instant, never hide text)
@@ -347,144 +335,281 @@ fn now_ms() -> Option<f64> {
         .map(|p| p.now())
 }
 
+/// Map a character-count reveal position to a byte offset, incrementally.
+///
+/// `prev` is the `(revealed_chars, byte_offset)` pair returned for the same
+/// message on the previous frame; the fast path scans only the characters
+/// revealed since then. A full rescan happens only when the cursor can't be
+/// trusted: a backwards move, or a stored offset that no longer lands on a
+/// char boundary of the (wholesale-swapped) content. Returns the honest
+/// `(chars_covered, byte_offset)` pair — `chars_covered` is normally
+/// `revealed`, but clamps if `revealed` overshoots the content.
+fn advance_byte_cursor(content: &str, prev: (usize, usize), revealed: usize) -> (usize, usize) {
+    let base = if revealed >= prev.0 && content.is_char_boundary(prev.1) {
+        prev
+    } else {
+        (0, 0)
+    };
+    let mut chars_done = base.0;
+    let mut bytes = base.1;
+    for ch in content[bytes..].chars() {
+        if chars_done >= revealed {
+            break;
+        }
+        bytes += ch.len_utf8();
+        chars_done += 1;
+    }
+    (chars_done, bytes)
+}
+
+/// Per-frame output of the reveal computation — see [`TypewriterRenderer`].
+#[derive(Clone, Copy, PartialEq)]
+enum Frame {
+    /// Full markdown, no animation (history, or the sweep finished).
+    Static,
+    /// Two-zone live preview: the stable prefix covers `..safe_offset` (byte
+    /// index into content), the tail zone shows `safe_offset..revealed_bytes`
+    /// plus the cursor.
+    Live {
+        revealed_bytes: usize,
+        safe_offset: usize,
+    },
+}
+
 /// Assistant-message renderer that paces character reveal at
 /// `behavior.typing_speed` (chars/sec) via the shared [`TypewriterClock`], then
 /// switches to full Markdown once the sweep catches up.
 ///
-/// Unlike a stream-gated renderer, the reveal is **decoupled from
-/// `is_streaming`**: it keeps advancing after the backend finishes until it has
-/// revealed the whole final text, so a response that generates faster than `cps`
-/// still animates instead of dumping on completion. The per-message cursor lives
-/// in the clock keyed on `message_id`, so it survives `TypewriterRenderer` being
-/// re-invoked (its caller wraps it in a `{move || message.with(...)}` closure
-/// that rebuilds this fragment reactively whenever the message's content
-/// changes — the row itself no longer remounts per token) and the sweep stays
-/// continuous.
+/// The component is MOUNTED ONCE per row and reads its message through the
+/// row's `Memo` — its predecessor took owned `content`/`message_id` props and
+/// had to be re-invoked by a `{move || message.with(...)}` closure on every
+/// streamed token, which tore down and rebuilt the whole bubble subtree (new
+/// DOM node, fresh `StoredValue`s, full-content `inner_html` re-parse) per
+/// chunk.
+///
+/// Rendering is TWO-ZONE (codex's stable/tail split mapped to the DOM):
+/// - a `display:contents` stable zone whose `inner_html` updates only when
+///   the safe-freeze boundary advances (line granularity — see
+///   [`extend_stable_prefix`]), and
+/// - a `display:contents` tail zone holding the unfrozen remainder + the
+///   streaming cursor, updated per animation tick with O(tail) work.
+/// `display:contents` keeps both zones in the parent's flow, so the split is
+/// layout-identical to the old single-string `inner_html`.
+///
+/// The reveal cursor counts characters (cps is a char rate) but rendering
+/// slices bytes, so [`advance_byte_cursor`] maintains an incremental
+/// char→byte mapping — O(newly-revealed chars) per frame instead of the old
+/// `chars().take(revealed).collect()` full rescan + allocation.
 ///
 /// Routing:
 /// - No cursor and not streaming → a message loaded from history (never streamed
-///   live this session): render full Markdown immediately, no tick subscription
-///   (keeps a long transcript cheap — only the one live bubble ticks at 30fps).
-/// - Reveal caught up + stream finished → prune the cursor and render full
-///   Markdown, then stop ticking (the finished bubble goes static).
-/// - Otherwise → paced streaming preview, advancing on each animation tick.
+///   live this session): full Markdown, no tick subscription (keeps a long
+///   transcript cheap — only live bubbles tick at 30fps).
+/// - Reveal caught up + stream finished → prune the cursor, switch to full
+///   Markdown, unsubscribe the tick (the finished bubble goes static).
+/// - Otherwise → two-zone live preview, advancing on each animation tick.
+///   While caught up mid-stream the frame value stops changing, so downstream
+///   effects do zero work until the next delta (the predecessor re-rendered
+///   the FULL accumulated text with cursor 30x/s in that state).
 ///
-/// When no clock is in context (e.g. storybook) it degrades to a static render.
+/// When no clock is in context (e.g. storybook) it degrades to a reactive
+/// static render.
 #[component]
 #[must_use]
-pub fn TypewriterRenderer(
-    content: String,
-    message_id: String,
-    is_streaming: bool,
-) -> impl IntoView {
+pub fn TypewriterRenderer(message: Memo<Option<ChatMessage>>) -> impl IntoView {
     let Some(clock) = use_context::<TypewriterClock>() else {
-        return if is_streaming {
-            view! { <StreamingRenderer content=content /> }.into_any()
-        } else {
-            view! { <MarkdownRenderer content=content /> }.into_any()
-        };
+        return view! {
+            <div
+                class="markdown-body text-sm leading-relaxed streaming-content"
+                inner_html=move || {
+                    message.with(|m| {
+                        m.as_ref()
+                            .map(|m| {
+                                if m.is_streaming {
+                                    render_streaming_with_cursor(&m.content)
+                                } else {
+                                    render_markdown(&m.content)
+                                }
+                            })
+                            .unwrap_or_default()
+                    })
+                }
+            />
+        }
+        .into_any();
     };
 
-    // History: a completed message with no live reveal cursor was never streamed
-    // this session — show it in full at once, with no reactive tick dependency.
-    if !is_streaming && !clock.has_reveal(&message_id) {
-        return view! { <MarkdownRenderer content=content /> }.into_any();
-    }
+    // Per-content-change snapshot of the fields pacing math needs. Recomputed
+    // once per chunk (Memo), NOT per frame — `chars().count()` is O(content)
+    // and the predecessor paid it at every re-invocation.
+    let snap = Memo::new(move |_| {
+        message.with(|m| {
+            m.as_ref()
+                .map(|m| (timeline::reveal_key(m), m.content.chars().count(), m.is_streaming))
+        })
+    });
 
-    // Hold content/id in StoredValues so the per-tick closure borrows them
-    // instead of cloning the (potentially large) accumulated text 30×/sec.
-    let content = StoredValue::new(content);
-    let total = content.with_value(|c| c.chars().count());
-    let message_id = StoredValue::new(message_id);
+    // Incremental char→byte cursor for the reveal position: the previous
+    // frame's `(revealed_chars, byte_offset)`, plus the message identity it
+    // was computed against (`begin_step` renames + bumps iteration, so the
+    // reveal key changes across steps and forces a re-anchor).
+    let byte_cursor = StoredValue::new_local((0usize, 0usize));
+    let byte_cursor_id = StoredValue::new_local(String::new());
 
-    let html = move || {
-        // No monotonic clock → cannot pace; reveal everything arrived so far.
-        let Some(now) = now_ms() else {
-            return content.with_value(|c| {
-                if is_streaming {
-                    render_streaming_with_cursor(c)
-                } else {
-                    render_markdown(c)
-                }
-            });
+    // The one per-tick computation: advance the reveal cursor, extend the
+    // frozen prefix, return what the zones need. `Frame::Static` carries no
+    // numbers, so once a bubble goes static its frame value stops changing
+    // and every downstream memo goes quiet.
+    let frame = Memo::new(move |_| {
+        let (id, total_chars, is_streaming) = snap.get()?;
+        // History fast path: no live cursor, not streaming → static markdown
+        // with NO tick subscription (`tick` is only read below this point, so
+        // the subscription set of a static frame is empty).
+        if !is_streaming && !clock.has_reveal(&id) {
+            return Some((id, Frame::Static));
+        }
+        clock.tick.track();
+        // No monotonic clock → cannot pace; reveal everything that arrived
+        // (degrade to instant, never hide text).
+        let revealed = match now_ms() {
+            Some(now) => clock.advance_for(
+                &id,
+                total_chars,
+                now,
+                clock.cps.get_untracked(),
+                clock.instant.get_untracked(),
+            ),
+            None => total_chars,
         };
-        // Read pacing params untracked: the animation is driven by `tick` (which
-        // re-reads them fresh every ~33ms, so a live speed-slider change still
-        // lands within a frame), while a finished/history bubble takes no cps
-        // subscription and so never re-runs — its pruned cursor can't be
-        // resurrected into a replayed sweep.
-        let revealed = clock.advance_for(
-            &message_id.get_value(),
-            total,
-            now,
-            clock.cps.get_untracked(),
-            clock.instant.get_untracked(),
-        );
-        if revealed >= total {
-            if is_streaming {
-                // Caught up to the content that has arrived so far. Keep ticking
-                // (heartbeat, see `advance_reveal`) so the next delta paces
-                // smoothly; show everything available with the streaming cursor.
-                clock.tick.track();
-                content.with_value(|c| render_streaming_with_cursor(c))
-            } else {
-                // Stream finished AND fully revealed → static final Markdown.
-                // Prune the cursor and read no tick, so the bubble stops
-                // re-rendering.
-                clock.finish(&message_id.get_value());
-                content.with_value(|c| render_markdown(c))
+        if revealed >= total_chars && !is_streaming {
+            // Stream finished AND fully revealed → static final Markdown.
+            // Prune the cursor so this bubble never ticks again.
+            clock.finish(&id);
+            return Some((id, Frame::Static));
+        }
+        let (revealed_bytes, safe_offset) = message.with_untracked(|m| {
+            let content = &m.as_ref()?.content;
+            if byte_cursor_id.get_value() != id {
+                byte_cursor_id.set_value(id.clone());
+                byte_cursor.set_value((0, 0));
             }
-        } else {
-            // Still sweeping — advance on each ~30fps animation tick.
-            clock.tick.track();
-            let id = message_id.get_value();
+            let cursor = advance_byte_cursor(content, byte_cursor.get_value(), revealed);
+            byte_cursor.set_value(cursor);
+            let revealed_bytes = cursor.1;
             if !is_streaming {
                 // Reveal hasn't caught up but the stream already ended —
                 // finalize may have swapped `content` wholesale, so a cached
                 // prefix could describe text that's no longer there. Drop it
-                // and fall back to an uncached render for this tick; the
-                // cache rebuilds itself from the next call onward.
+                // and render this frame uncached; the lag-floor window bounds
+                // how long this lasts.
                 clock.clear_stable_prefix(&id);
-                return content.with_value(|c| {
-                    let shown: String = c.chars().take(revealed).collect();
-                    render_streaming_with_cursor(&shown)
-                });
+                return Some((revealed_bytes, 0));
             }
-            content.with_value(|c| {
-                let revealed_prefix: String = c.chars().take(revealed).collect();
-                let (mut cached_html, mut cached_offset) =
-                    clock.stable_prefix_for(&id).unwrap_or_default();
-                if extend_stable_prefix(&mut cached_html, &mut cached_offset, &revealed_prefix) {
-                    clock.set_stable_prefix(&id, cached_html.clone(), cached_offset);
-                }
-                let tail = &revealed_prefix[cached_offset..];
-                format!("{cached_html}{}{STREAMING_CURSOR_HTML}", render_streaming(tail))
-            })
-        }
+            let revealed_prefix = content.get(..revealed_bytes)?;
+            let safe_offset = clock.update_stable_prefix(&id, |html, off| {
+                extend_stable_prefix(html, off, revealed_prefix);
+                *off
+            });
+            Some((revealed_bytes, safe_offset))
+        })?;
+        Some((
+            id,
+            Frame::Live {
+                revealed_bytes,
+                safe_offset,
+            },
+        ))
+    });
+
+    // Gate for the Static↔Live branch switch: the branch closure rebuilds
+    // the subtree only when this flips (once per message lifetime), not on
+    // every frame.
+    let is_static = Memo::new(move |_| !matches!(frame.get(), Some((_, Frame::Live { .. }))));
+
+    // Full markdown for the Static branch, recomputed only when the message
+    // changes while the branch is mounted (a finished bubble's content is
+    // final, so this settles immediately).
+    let full_html =
+        move || message.with(|m| m.as_ref().map(|m| render_markdown(&m.content)).unwrap_or_default());
+
+    // Stable zone: the DOM write is gated on `(id, safe_offset)`, so the
+    // frozen prefix's HTML is re-read (and re-parsed by the browser) only
+    // when the freeze boundary actually advances — line granularity, not
+    // frame granularity.
+    let stable_key = Memo::new(move |_| match frame.get() {
+        Some((id, Frame::Live { safe_offset, .. })) => Some((id, safe_offset)),
+        _ => None,
+    });
+    let stable_html = move || {
+        stable_key.with(|k| {
+            k.as_ref()
+                .and_then(|(id, _)| clock.stable_prefix_for(id))
+                .map(|(html, _)| html)
+                .unwrap_or_default()
+        })
+    };
+
+    // Tail zone: unfrozen remainder + cursor. Re-runs per frame while the
+    // frame value keeps changing (active sweep), with O(tail) work; when
+    // caught up mid-stream the frame value is stable and this stays quiet.
+    let tail_html = move || {
+        let (revealed_bytes, safe_offset) = match frame.get() {
+            Some((_, Frame::Live {
+                revealed_bytes,
+                safe_offset,
+            })) => (revealed_bytes, safe_offset),
+            _ => return String::new(),
+        };
+        message.with_untracked(|m| {
+            m.as_ref()
+                .map(|m| {
+                    let content = &m.content;
+                    let Some(revealed) = content.get(..revealed_bytes) else {
+                        return render_streaming_with_cursor(content);
+                    };
+                    if revealed.is_empty() {
+                        // Match the old empty-content case: a non-breaking
+                        // space keeps the bubble one text line tall instead
+                        // of collapsing or showing a cursor on its own line.
+                        return "&nbsp;".to_string();
+                    }
+                    let tail = revealed.get(safe_offset..).unwrap_or(revealed);
+                    format!("{}{}", render_streaming(tail), STREAMING_CURSOR_HTML)
+                })
+                .unwrap_or_default()
+        })
     };
 
     // Click-to-skip: a mid-sweep click jumps the reveal to the full arrived
     // text (`TypewriterClock::skip`, which sets the cursor rather than
     // dropping it — dropping would re-anchor a still-streaming bubble at
-    // zero). The pointer affordance shows only while a live cursor exists.
-    let sweeping = move || {
-        clock.tick.track();
-        clock.has_reveal(&message_id.get_value())
-    };
+    // zero). The pointer affordance shows only while a live frame exists.
+    let sweeping = move || matches!(frame.get(), Some((_, Frame::Live { .. })));
     let on_skip = move |_| {
-        let id = message_id.get_value();
-        if clock.has_reveal(&id) {
-            clock.skip(&id, total);
+        if let Some((id, total_chars, _)) = snap.get_untracked() {
+            if clock.has_reveal(&id) {
+                clock.skip(&id, total_chars);
+            }
         }
     };
 
     view! {
-        <div
-            class="markdown-body text-sm leading-relaxed streaming-content"
-            class:cursor-pointer=move || sweeping()
-            on:click=on_skip
-            inner_html=html
-        />
+        {move || if is_static.get() {
+            view! { <div class="markdown-body text-sm leading-relaxed" inner_html=full_html /> }
+                .into_any()
+        } else {
+            view! {
+                <div
+                    class="markdown-body text-sm leading-relaxed streaming-content"
+                    class:cursor-pointer=move || sweeping()
+                    on:click=on_skip
+                >
+                    <div class="contents" inner_html=stable_html></div>
+                    <div class="contents" inner_html=tail_html></div>
+                </div>
+            }
+                .into_any()
+        }}
     }
     .into_any()
 }
@@ -502,7 +627,54 @@ pub fn MarkdownRenderer(content: String) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{extend_stable_prefix, render_markdown, render_streaming, sanitize_link_url};
+    use super::{
+        advance_byte_cursor, extend_stable_prefix, render_markdown, render_streaming,
+        sanitize_link_url,
+    };
+
+    #[test]
+    fn byte_cursor_advances_incrementally_over_ascii() {
+        let content = "hello world";
+        let c1 = advance_byte_cursor(content, (0, 0), 5);
+        assert_eq!(c1, (5, 5));
+        let c2 = advance_byte_cursor(content, c1, 11);
+        assert_eq!(c2, (11, 11));
+    }
+
+    #[test]
+    fn byte_cursor_counts_chars_not_bytes_for_cjk() {
+        // 3 bytes per CJK char: 4 chars == 12 bytes.
+        let content = "你好世界 done";
+        let c1 = advance_byte_cursor(content, (0, 0), 4);
+        assert_eq!(c1, (4, 12));
+        let c2 = advance_byte_cursor(content, c1, 9);
+        assert_eq!(c2, (9, content.len()));
+        assert!(content.is_char_boundary(c2.1));
+    }
+
+    #[test]
+    fn byte_cursor_rescans_when_the_reveal_moves_backwards() {
+        let content = "abcdef";
+        let forward = advance_byte_cursor(content, (0, 0), 5);
+        let back = advance_byte_cursor(content, forward, 2);
+        assert_eq!(back, (2, 2));
+    }
+
+    #[test]
+    fn byte_cursor_rescans_when_the_stored_offset_is_not_a_boundary() {
+        // Wholesale content swap: the old byte offset lands mid-char in the
+        // new content — must rescan from zero rather than panic.
+        let content = "你好";
+        let c = advance_byte_cursor(content, (5, 1), 1);
+        assert_eq!(c, (1, 3));
+    }
+
+    #[test]
+    fn byte_cursor_clamps_when_revealed_overshoots_the_content() {
+        let content = "abc";
+        let c = advance_byte_cursor(content, (0, 0), 10);
+        assert_eq!(c, (3, 3));
+    }
 
     // ⚠️ Host-test safety: render_markdown with a *language-tagged* fence
     // calls is_dark_mode() → web_sys::window(), which panics off-wasm.
