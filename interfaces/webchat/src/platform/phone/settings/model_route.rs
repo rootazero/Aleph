@@ -57,9 +57,15 @@ pub fn PhoneModelRoute() -> impl IntoView {
 
     // Load once the socket connects; recovers after cold-boot / reconnect
     // (rpc_call returns "Not connected" until the WS handshake completes, so a
-    // bare mount-time spawn strands a permanent error). Logic mirrors route.rs.
+    // bare mount-time spawn strands a permanent error). Logic mirrors route.rs,
+    // except that we only fetch the FIRST time the socket opens: a reconnect
+    // must not clobber whatever the user has edited since the last successful
+    // load. This screen is small and the server response is cheap to cache,
+    // so the saved snapshot stays valid until the user explicitly hits Retry
+    // (which bumps `reload_nonce`-style control, currently a manual refresh).
+    let ever_loaded = RwSignal::new(false);
     Effect::new(move || {
-        if state.is_connected.get() {
+        if state.is_connected.get() && !ever_loaded.get_untracked() {
             spawn_local(async move {
                 loading.set(true);
                 error.set(None);
@@ -72,6 +78,7 @@ pub fn PhoneModelRoute() -> impl IntoView {
                         providers.set(view.providers);
                         load_balance.set(view.load_balance.unwrap_or_else(|| "ordered".into()));
                         rate_limits.set(view.rate_limits);
+                        ever_loaded.set(true);
                         loading.set(false);
                     }
                     Err(e) => {

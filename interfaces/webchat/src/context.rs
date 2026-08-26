@@ -871,11 +871,21 @@ impl DashboardState {
 
     /// Dispatch event to all subscribers
     fn dispatch_event(&self, event: GatewayEvent) {
-        let handlers = self.event_handlers.with_value(std::clone::Clone::clone);
-        let handlers = handlers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for handler in handlers.iter().flatten() {
+        // Copy the (Arc) handlers out under the lock, then drop the guard
+        // before invoking any of them. A handler that synchronously calls
+        // subscribe_events / unsubscribe_events on the same `event_handlers`
+        // Mutex would otherwise re-enter the lock on the same thread and
+        // deadlock (Wasm is single-threaded — no `try_lock` escape hatch).
+        // Bind the `&Arc<Mutex<...>>` to a let first so the `MutexGuard`
+        // borrows from a named location rather than a chain temporary.
+        let store = self.event_handlers.with_value(std::clone::Clone::clone);
+        let handlers = {
+            let guard = store
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.iter().flatten().cloned().collect::<Vec<_>>()
+        };
+        for handler in handlers {
             handler(event.clone());
         }
     }

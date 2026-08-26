@@ -178,7 +178,7 @@ impl AcpSession {
         // Wire the agent→client request handler so `fs/*` and
         // `session/request_permission` issued mid-prompt are answered instead
         // of dropped. Filesystem access is confined to the session cwd.
-        let handler = std::sync::Arc::new(crate::acp::incoming::IncomingHandler::new(
+        let handler = Arc::new(crate::acp::incoming::IncomingHandler::new(
             config.cwd.as_deref(),
             config.permission_policy,
         ));

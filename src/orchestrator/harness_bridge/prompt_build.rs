@@ -502,7 +502,7 @@ impl AgentHarnessRunner {
         // things there can be to say. A bare agent in a room — no SOUL.md, no
         // AGENTS.md, no skills, no MCP — would otherwise be the one deployment
         // where the block silently never renders.
-        let room_roster = room_roster_line();
+        let room_roster = crate::thinker::layers::ambient_room_roster_line();
 
         // Skip prompt assembly entirely when there is nothing to inject:
         // no memory, no AgentDef, no eligible skills, no identity files, no
@@ -956,46 +956,6 @@ pub(crate) fn resolve_max_iterations(
         .unwrap_or(FALLBACK_MAX_ITERATIONS)
 }
 
-/// The `<room_context>` member line for this run, or `None` when the run is
-/// not in a project room.
-///
-/// Reads `ProjectStore` directly rather than the `roster::` projection: that
-/// projection stores members in a `HashSet` and exposes only `is_member`, and
-/// a set iterated into a **cached prefix** would re-key the whole conversation
-/// on every process restart. The store returns `ORDER BY added_at`, which is
-/// the same bytes every turn.
-///
-/// A catalogue read failure renders nothing. The alternative — a partial
-/// roster — is worse than silence here: the model would introduce a room to
-/// itself with people missing and no sign that any were.
-fn room_roster_line() -> Option<String> {
-    let crate::scope::ScopeId::Project(project_id) = crate::scope::current_scope()?.scope else {
-        return None;
-    };
-    let store = crate::projects::ProjectStore::shared();
-    let members = match store.members(&project_id) {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::debug!(
-                error = %e,
-                project = %project_id,
-                "projects: roster read failed; the room prompt block is omitted this turn"
-            );
-            return None;
-        }
-    };
-    // A room of one is a room in name only, and naming its single member tells
-    // the model nothing the transcript does not already show.
-    if members.len() < 2 {
-        return None;
-    }
-    let owner = store
-        .get(&project_id)
-        .ok()
-        .flatten()
-        .and_then(|p| p.owner_user_id);
-    crate::thinker::layers::render_room_roster(owner.as_deref(), &members)
-}
 /// Merge the curated-memory and wiki-orientation envelopes into the single
 /// pre-rendered stable string `CuratedMemoryLayer` injects verbatim. Both are
 /// already self-contained XML blocks, so a newline join suffices; either side

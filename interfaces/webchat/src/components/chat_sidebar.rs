@@ -1011,18 +1011,30 @@ pub fn ChatSidebar() -> impl IntoView {
                     >
                         {move || format!("👥 {}", t_string!(i18n, chat.team_chat))}
                     </button>
+                    // Was `disabled=true` with a "coming soon" badge from
+                    // 2026-06-22 (fbbe7be0b) — true when written, and a lie from
+                    // the day project rooms shipped (P2, 2026-08-06) until this
+                    // was noticed in a browser on 2026-08-26. Nothing could see
+                    // it: `aleph-panel --lib` mounts `ProjectsView` directly,
+                    // and the room QA fixture asserts over RPCs. Neither one
+                    // asks the only question a user asks — "how do I get there".
+                    //
+                    // `/projects` had worked the whole time; the composer's
+                    // 「进入项目工作」 pill is NOT a second door to it (it swaps
+                    // the CHAT to the room's session and stays on `/`), so this
+                    // button was the sole in-app route to the Kanban / workspace
+                    // / memory tabs, and it was bolted shut.
                     <button
                         class="w-full inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg
                                bg-surface-sunken border border-border text-sm
-                               opacity-70 cursor-not-allowed"
+                               hover:border-primary transition-colors"
                         title=move || t_string!(i18n, chat.project_management).to_string()
-                        disabled=true
+                        on:click={
+                            let navigate = navigate.clone();
+                            move |_| navigate("/projects", Default::default())
+                        }
                     >
                         {move || format!("📁 {}", t_string!(i18n, chat.project_management))}
-                        <span class="ml-auto text-[10px] px-1.5 py-0.5 rounded
-                                     bg-surface-raised text-text-tertiary">
-                            {move || t_string!(i18n, chat.coming_soon).to_string()}
-                        </span>
                     </button>
                     <button
                         class="w-full inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg

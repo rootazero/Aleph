@@ -95,9 +95,14 @@ pub use citation_standards::CitationStandardsLayer;
 pub use guidelines::GuidelinesLayer;
 pub use role::RoleLayer;
 pub use room_roster::RoomRosterLayer;
-// The bridge pre-renders the member line so the cap, the owner mark and the
-// display-name sanitiser keep one owner — same shape as `sanitize_identity_content`.
-pub(crate) use room_roster::render_members as render_room_roster;
+// Both `ResolvedContext` construction sites pre-render the member line through
+// this ONE resolver, so the scope predicate, the room-of-one rule, the cap, the
+// owner mark and the display-name sanitiser keep a single owner — same shape as
+// `sanitize_identity_content`. `render_members` is deliberately NOT re-exported
+// beside it: a caller that could reach the renderer without the resolver is a
+// caller that can re-derive "is this run in a room", which is the second answer
+// this seam exists to prevent.
+pub(crate) use room_roster::ambient_line as ambient_room_roster_line;
 pub use special_actions::SpecialActionsLayer;
 
 pub use agent_catalog::AgentCatalogLayer;

@@ -310,6 +310,21 @@ fn child_environment_context(
         .filter(|id| !id.is_empty())
         .map(std::string::ToString::to_string);
     ctx.approval_tier = approval_tier;
+
+    // A delegated child inside a project room is in the SAME room as its
+    // parent: `RoomRosterLayer` sits in the pipeline both paths run, and the
+    // scope this resolves from is one of the task-locals
+    // [`crate::scope::CarriedAttribution`] already carries across every spawn.
+    // Until 2026-08-25 nothing on this path read it, so the layer rendered
+    // nothing here forever — no error, no red test, just a child that cannot
+    // name a teammate.
+    //
+    // Read live rather than snapshotted at the call site for the reason
+    // `approval_tier` is: `project_manage(action='member_add')` can change the
+    // answer while the parent turn is still running, and this function runs
+    // after that. Personal and org scopes resolve to `None`, which keeps every
+    // single-human deployment's prompt byte-identical.
+    ctx.room_roster = crate::thinker::layers::ambient_room_roster_line();
     ctx
 }
 
