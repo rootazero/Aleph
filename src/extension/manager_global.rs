@@ -74,3 +74,34 @@ pub fn try_extension_manager() -> Option<&'static Arc<ExtensionManager>> {
 pub fn is_extension_manager_initialized() -> bool {
     EXTENSION_MANAGER.get().is_some()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The variant is the operator-facing severity of this handle going
+    /// missing (`FailsOpen` => Error and a non-zero `aleph doctor`;
+    /// `IndistinguishableDefault` / `ConsumerDecides` => Warning;
+    /// `FailsClosed` => Info), and it is DERIVED from the consumers named on
+    /// the static above. Pinned in the module that owns the handle, because
+    /// that is the only place a reclassification and a re-read of those
+    /// consumers can be made to happen together — the aggregate figure in
+    /// FEATURE_LOCATOR cannot tell a reclassification from a new slot.
+    /// `census::every_slot_pins_its_own_missing_semantics` requires this by
+    /// slot id.
+    ///
+    /// This module had no test module at all before this assertion; the file
+    /// is otherwise pure wiring.
+    #[test]
+    fn the_manager_slot_pins_its_missing_semantics() {
+        assert_eq!(extension_manager_slot().id(), "extension/manager");
+        assert!(
+            matches!(
+                extension_manager_slot().missing(),
+                MissingSemantics::ConsumerDecides
+            ),
+            "`extension/manager` is classified ConsumerDecides from its consumers; \
+             changing that means re-reading them, not re-typing this line"
+        );
+    }
+}

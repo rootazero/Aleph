@@ -913,4 +913,24 @@ mod tests {
             result.text
         );
     }
+
+    /// The variant is the operator-facing severity of this handle going
+    /// missing (`FailsOpen` => Error and a non-zero `aleph doctor`;
+    /// `IndistinguishableDefault` / `ConsumerDecides` => Warning;
+    /// `FailsClosed` => Info), and it is DERIVED from the consumers named on
+    /// the static above. Pinned in the module that owns the handle, because
+    /// that is the only place a reclassification and a re-read of those
+    /// consumers can be made to happen together — the aggregate figure in
+    /// FEATURE_LOCATOR cannot tell a reclassification from a new slot.
+    /// `census::every_slot_pins_its_own_missing_semantics` requires this by
+    /// slot id.
+    #[test]
+    fn the_engine_slot_pins_its_missing_semantics() {
+        assert_eq!(pii_engine_slot().id(), "pii/engine");
+        assert!(
+            matches!(pii_engine_slot().missing(), MissingSemantics::FailsOpen),
+            "`pii/engine` is classified FailsOpen from its consumers; changing that \
+             means re-reading them, not re-typing this line"
+        );
+    }
 }

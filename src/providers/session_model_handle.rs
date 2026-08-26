@@ -312,4 +312,35 @@ mod tests {
             "model-b"
         );
     }
+
+    /// The variant is the operator-facing severity of this handle going
+    /// missing (`FailsOpen` => Error and a non-zero `aleph doctor`;
+    /// `IndistinguishableDefault` / `ConsumerDecides` => Warning;
+    /// `FailsClosed` => Info), and it is DERIVED from the consumers named on
+    /// the static above. Pinned in the module that owns the handle, because
+    /// that is the only place a reclassification and a re-read of those
+    /// consumers can be made to happen together — the aggregate figure in
+    /// FEATURE_LOCATOR cannot tell a reclassification from a new slot.
+    /// `census::every_slot_pins_its_own_missing_semantics` requires this by
+    /// slot id.
+    #[test]
+    fn the_pin_sink_slot_pins_its_missing_semantics() {
+        assert_eq!(pin_sink_slot().id(), "providers/session-pin-sink");
+        assert!(
+            matches!(pin_sink_slot().missing(), MissingSemantics::FailsClosed),
+            "`providers/session-pin-sink` is classified FailsClosed from its consumers; changing that \
+             means re-reading them, not re-typing this line"
+        );
+    }
+
+    /// See the sibling pin above.
+    #[test]
+    fn the_pinnable_set_slot_pins_its_missing_semantics() {
+        assert_eq!(pinnable_providers_slot().id(), "providers/pinnable-set");
+        assert!(
+            matches!(pinnable_providers_slot().missing(), MissingSemantics::FailsOpen),
+            "`providers/pinnable-set` is classified FailsOpen from its consumers; changing that \
+             means re-reading them, not re-typing this line"
+        );
+    }
 }

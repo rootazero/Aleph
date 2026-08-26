@@ -2819,6 +2819,191 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         out
     }
 
+    /// One slot declaration, as the variant census reads it.
+    struct SlotDecl {
+        /// The file that declares it.
+        file: String,
+        /// The `"<id>"` first argument to `::new`.
+        id: String,
+        /// The `MissingSemantics::<V>` second argument.
+        variant: String,
+    }
+
+    /// Every `static _: [Mutable]CapabilitySlot<..> = ..::new("<id>",
+    /// MissingSemantics::<V>..)` under `src/`, outside `src/capability/`.
+    ///
+    /// The window is the `static` item's own syntactic end — the first line
+    /// whose trimmed text ends in `;` — not a line count. A fixed window is
+    /// how a scan in this repo once read the NEXT declaration's text and
+    /// stayed green after the line it was checking had been deleted.
+    fn slot_declarations() -> Vec<SlotDecl> {
+        let mut out = Vec::new();
+        for (rel, text) in rust_sources_under(&manifest_src()) {
+            if rel.starts_with("src/capability/") {
+                continue;
+            }
+            let prod = production_prefix(&text);
+            let lines: Vec<&str> = prod.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                let t = strip_visibility(line.trim_start());
+                let Some(rest) = t.strip_prefix("static ") else {
+                    continue;
+                };
+                if !rest.contains("CapabilitySlot<") {
+                    continue; // also covers MutableCapabilitySlot<
+                }
+                let mut item = String::new();
+                for l in &lines[i..] {
+                    item.push_str(l);
+                    item.push('\n');
+                    if l.trim_end().ends_with(';') {
+                        break;
+                    }
+                }
+                let id = item
+                    .split_once('"')
+                    .and_then(|(_, after)| after.split_once('"'))
+                    .map(|(id, _)| id.to_string());
+                let variant = item.split_once("MissingSemantics::").map(|(_, after)| {
+                    after
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect::<String>()
+                });
+                if let (Some(id), Some(variant)) = (id, variant) {
+                    out.push(SlotDecl {
+                        file: rel.clone(),
+                        id,
+                        variant,
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// Every slot names its own `MissingSemantics` variant inside its own
+    /// module's test code.
+    ///
+    /// # Why this and not a guard on the distribution
+    ///
+    /// The obvious guard after a reclassification is a ratchet on
+    /// `FailsClosed 19 / IndistinguishableDefault 13 / ConsumerDecides 9 /
+    /// FailsOpen 4`. Three reasons it would be the wrong subject, and all
+    /// three are this repo's own recorded lessons:
+    ///
+    /// - There is nothing to derive those four numbers *against*. Any
+    ///   comparison target is a literal in the guard, so it is a third copy of
+    ///   the same figure — 「派生不要列举」 inverted.
+    /// - It cannot tell a reclassification from a NEW slot, and adding a slot
+    ///   is a normal operation. Every new slot would trip it and the fix would
+    ///   be "bump four numbers", which trains the next author to rubber-stamp
+    ///   exactly the figure the guard exists to protect.
+    /// - The numbers are a proxy. The hazard is "a slot's variant changed
+    ///   without anyone re-reading its consumers", and the per-slot assertion
+    ///   is what actually catches that: when `loop-graph/store` moved to
+    ///   `FailsOpen`, its own module's test destructured the old variant and
+    ///   panicked, so the change could not land without a human editing the
+    ///   assertion. Only the aggregate was unguarded.
+    ///
+    /// So this completes the habit rather than inventing one: 33 of the 45
+    /// slots already pinned their variant in their own module; this required
+    /// the remaining 12, and requires it of every slot added later. It reads
+    /// declarations, never a list; a new slot trips it only by arriving
+    /// unpinned, which is the defect and not a false alarm.
+    ///
+    /// # Scope of "its own module"
+    ///
+    /// The declaring file's `cfg_test_portion`, plus any **test-only file**
+    /// (`test_only_module_files`, the existing derivation) under the declaring
+    /// file's module directory — `src/spend/mod.rs`'s pins live in
+    /// `src/spend/tests.rs`, and that is the right place for them.
+    ///
+    /// # What it cannot see
+    ///
+    /// - A pin that names the id and the variant in the same file without
+    ///   asserting them *together*. Text cannot see the `assert!`.
+    /// - A variant moved WITH its assertion updated but without the consumers
+    ///   re-read. Nothing text-level can see that; the assertion's doc is what
+    ///   asks for it.
+    /// - It does not keep FEATURE_LOCATOR's four numbers accurate. It makes
+    ///   them re-derivable instead: the tally is in the failure messages
+    ///   below.
+    ///
+    /// The tally lives here rather than in
+    /// [`every_declared_slot_is_in_the_roster`], which the re-review suggested,
+    /// for the reason this whole round is about: that guard does not parse the
+    /// `MissingSemantics` argument, so putting the breakdown there would mint a
+    /// SECOND parser for the same fact. One parser, and the guard that already
+    /// owns it prints the tally.
+    #[test]
+    fn every_slot_pins_its_own_missing_semantics() {
+        let decls = slot_declarations();
+        let test_only = test_only_module_files();
+        let sources = rust_sources_under(&manifest_src());
+
+        let mut tally: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+        for d in &decls {
+            *tally.entry(d.variant.as_str()).or_default() += 1;
+        }
+        let tally_line = || {
+            let body = tally
+                .iter()
+                .map(|(v, n)| format!("{v} {n}"))
+                .collect::<Vec<_>>()
+                .join(" / ");
+            format!("{body} = {}", decls.len())
+        };
+
+        // Self-count, against the roster guard's own 45. A parser that stopped
+        // matching would pass this test by finding nothing to check.
+        assert!(
+            decls.len() >= 40,
+            "parsed only {} slot declaration(s) — a variant census that read no \
+             declarations is green and blind. Tally: {}",
+            decls.len(),
+            tally_line()
+        );
+
+        let module_dir = |file: &str| -> String {
+            file.strip_suffix("/mod.rs")
+                .or_else(|| file.strip_suffix(".rs"))
+                .unwrap_or(file)
+                .to_string()
+        };
+
+        let mut unpinned: Vec<String> = Vec::new();
+        for d in &decls {
+            let own = sources
+                .iter()
+                .find(|(rel, _)| *rel == d.file)
+                .map(|(_, t)| cfg_test_portion(t))
+                .unwrap_or_default();
+            let dir = module_dir(&d.file);
+            let mut scope = own;
+            for (rel, text) in &sources {
+                if test_only.contains(rel) && rel.starts_with(&format!("{dir}/")) {
+                    scope.push('\n');
+                    scope.push_str(text);
+                }
+            }
+            let needle = format!("MissingSemantics::{}", d.variant);
+            if !(scope.contains(&needle) && scope.contains(&format!("\"{}\"", d.id))) {
+                unpinned.push(format!("{} ({}) in {}", d.id, d.variant, d.file));
+            }
+        }
+
+        assert!(
+            unpinned.is_empty(),
+            "these slots do not name their own MissingSemantics variant in their own \
+             module's tests, so a reclassification there lands with nothing red — and \
+             the variant is the operator-facing severity, `FailsOpen` being the one \
+             that exits `aleph doctor` non-zero:\n  {}\n\nCurrent tally: {}",
+            unpinned.join("\n  "),
+            tally_line()
+        );
+    }
+
     /// Does this `impl` line name exactly `ty` as its target?
     ///
     /// **This is what makes [`TYPES`]'s order irrelevant, and that is the
