@@ -165,6 +165,7 @@
 | 调度 | cron 改了没生效 / 停摆的 job enable 报成功 / 心跳挂了没人告诉我 / 时区没人读 | Cron & Heartbeat Write Surface | `src/tasks/cron/config.rs`（`CronJobUpdates` + DTO 对账守卫）· `src/tasks/shared/alert.rs`（两者共用告警判据 + 回退通道）| ✅ (§4.13, 2026-08-08) |
 | 记忆 | 个人/房间语料从没被维护过 / 纠正说好今晚蒸馏却没有消费者 | Nightly Corpus Fan-out | `src/memory/dreaming/project_cycle.rs` · `project_scope::list_note_corpora`（枚举唯一源）· `[memory.dreaming] max_corpus_cycles_per_night` | ✅ (§4.13, 2026-08-08) |
 | 安全 | `agent_type="main"` 提权 / 子代理拿到 `allowed_tools:["*"]` | Spawnable-Agent Resolution | `AgentRegistry::resolve_spawnable()`（四个 spawn 面共用；prompt 目录与 spawn 侧此前判据不一致）| ✅ (§4.13, 2026-08-08) |
+| 横切 | 这个绿是真的吗 / 测试全绿但功能是坏的 / 数字每次数都不一样 / 守卫为什么不报错 / 变异了却没变红 / 一次扫描能证明什么 | Verification Discipline | **附录 C**（判据全文；CLAUDE.md 判据清单 §0 / §10 是它的触发器） | ✅ (附录 C, 2026-08-26) |
 | 横切 | boot 到底装没装上 / `configured: false` 是没配置还是没安装 / 功能不生效但零报错 / doctor 说 capability wiring / 全局 `OnceLock` / `install_*` 零调用者 | Process-Global Capability Handles | `src/capability/`（`CapabilitySlot` + `census.rs` 成员规则）+ `src/utils/source_scan.rs` + `diagnostics/checks/capability_wiring.rs` | ✅ (§5.25, 2026-08-26) |
 
 ---
@@ -3437,3 +3438,23 @@
 - **"desktop"**：能力契约 trait（`desktop/shared`，大脑只持有它）≠ 原生 Bridge 实现（`desktop/{macos,windows,linux}`，四肢）≠ LLM 桌面工具（`src/builtin_tools/desktop` + system/automation/permission/media/pim）≠ Tauri 桌面壳（`desktop/shell`，纯外壳）。说"桌面"时指明是契约 / 四肢 / 工具 / 壳哪一层（§7）。**Linux 尤其容易找错地方**：它的窗口/剪贴板/启动退出实现**不在 `desktop/linux/`**，而在 `desktop/shared/src/action/window_linux/` 与 `desktop/shared/src/linux/`（`action`/`perception` 的 per-OS 臂本来就住 shared）；`desktop/linux/` 里的是 AT-SPI 无障碍层与 system/permission/media/automation/pim。
 - **"arena / 共享工件竞技场"**：`SharedArena` 子系统（`src/arena/` + `arena_create`/`arena_query`/`arena_settle` 三工具 + `arena.*` 三 RPC）**已于 2026-07-24 整体删除（W23，~3,300 LOC）**——全仓零消费者（两个 create 面丢弃返回句柄；query 恒空、settle 恒排空 0 条＝模型能创建却没人能写入的死面），CONNECT 会与 teams 既有工件流重复。说"多代理工件共享/交接"指 **teams 的 `TaskArtifact`（`task_submit`/`task_read_artifact`）+ handoff 的 Dependency-Results 段**，别再找 arena（外部客户端调 `arena.*` 现得 METHOD_NOT_FOUND；旧库的 `arenas`/`arena_artifacts` 空表无害留存，未发 DROP）。
 - **"session vs agent"（多会话平行的两条身份轴，§4.9）**：**session** = 并行 / transcript 单元——`SessionRunRegistry` 按 `session_key` 做每会话运行互斥（1/session，防交错写同一 transcript），同 agent 的不同 session 真并行。**agent** = 记忆 / 存储物理隔离单元——`ConcurrencyLimiter` 的 per-agent 子上限键、记忆召回 / note 写入 / workspace 都按 `agent_id` 隔离（INV-ISO 守）。说"并行/互斥/红点"指 session 轴，说"记忆/存储/隔离/子上限"指 agent 轴，别混。
+
+---
+
+## 附录 C. 验证纪律：这个绿是怎么骗你的（Verification Discipline）
+
+> 本附录**不定位功能，定位方法**。前七章回答"这个功能在哪"，这里回答一个别处没有家的问题：
+> **我怎么验证一件事，以及验证是怎么骗我的。**
+> 每一条都是本仓真实付过的账——一个假绿、一次被推翻的发现、或一个测量本身错了的结论；
+> 抽象的告诫一律不收。CLAUDE.md 判据清单 §0 / §10 里的对应条目从这里压缩而来，
+> **这里是全文，那里是触发器**。
+
+### C.1 数字：一个没有谓词的数字，每次复核都会动
+
+- **一个数字必须带着它测的那个谓词，否则它会在每一次复核时移动——而每个复核者都会断定上一个人错了。** 这不是马虎，恰恰相反：下一个人善意地量了一个**略微不同的问题**，得到一个不同的数，两个数都对。本仓实测过一对：同一句话背后，**111** 是"裸子串搜 `#[cfg(test)]`"，**120** 是"`cfg_test_portion()` 什么都没返回、而该文件确实含测试"——后者才是那句话真正断言的性质。判据是机械的：**把一个数字写进文档之前，说出它数的是什么；说不出来，你就没有测到任何你守得住的东西。**
+- **⚠️ 谓词之外还欠一个跨度（commit），而这一条是本轮在自己的旗舰产物上犯的。** `utils/source_scan.rs` 写着「实测 1734 个文件带该标记」——在 `a95475edd` 上完全正确，而**写下它的那一轮自己把它挪到了 1739**（`a95475edd` 1734 → `86cb58e32` 1737 → `7dba911d6` 1739，九个文件获得该标记、四个失去，其中四个正是那一轮新建的文件）。一个在捕获时正确、却没写下跨度的数字，出现在论证"守卫的绿只覆盖它认得的形状"的那一段里。**凡随代码移动的计数，写下它的同一笔里写下它测于哪个 commit。**
+- **两次测量彼此吻合，不等于互相印证——如果它们是因为同一个原因才吻合的。** 一份 doc 声称"27 个生产调用点，已剥掉 `#[cfg(test)]`"；复核者数出 22 + 5 个 test-only，然后**推断这只是一个文件的手误而非方法有问题**，理由是同一提交里另外两个计数在它自己的方法下**精确复现**。那个推断是错的：两把尺子共享同一个盲区（都只剥文件**内**的 `#[cfg(test)]` 项，不剥被父模块 `#[cfg(test)] mod NAME;` 门控的**整个文件**），所以它们的一致是**结构性的、不是证据性的**。判据：**问"这两个测量会不会因为同一个理由一起错"**；会，那么它们的一致什么都没证明。
+- **⚠️ 反过来，一次符合预期的测量才是最该重跑的那个。** 本轮每一个被独立重测的数字都**变大**了（同名 static 的重名冲突 3 → 5 → 7；内部可变安装类 1 → 4 → 6 → 9 → 14 → 16 → 17，没有一次向下修正）。唯一落回预期值的那个（46 → 47 → 46）恰恰是最需要盘问的：**它是两个方向相反的错误恰好抵消**——名册里多了一个因重名而入选的成员，少了一个因 `rustfmt` 把它的写者断成两行而落榜的成员。数字对了，花名册差三个人。**分解才是那个 tell，总数不是。**
+- **一个「我记得是 N」的数字，和一个没装上的进程级句柄同形**——两者都交出一个合法、无人能证伪的值。判据不是"这个数字对不对"，是**"这个数字是我数的，还是我记得的"**。⚠️ 尤其注意**被更正过的数字**：一次更正只证明旧值错了，**不证明新值对**——本轮某个成员数走了 1 → 2 → 3，第二步是别人递给我的，我没有去数。（本附录写下时，§5.25 里正躺着这个类的一个实例：一个"八"，真值 14。它是在这一段被写下之后、由一次独立重推导发现的。）
+- **一份 brief / 计划 / 交接清单是一件有作者的产物，不是一次测量。** 所以每一份交出去的清单、计数、坐标都要附一句「**自己重数，别继承，包括别继承我的；数不上就停下来报告，别把计划适配到数目上**」。本轮的账：那句指令抓到**五个**控制者写下并从未强制过的错数字，成本是每份 brief 一行。**它比它守护的任何一个数字都值钱。** 推论：当一个执行者**不同意**某个数字并去测量时，五次里对四次，第五次它发现是自己的探针错了并撤回——那也是对的结局。**"有异议并去测量"在本仓的记录很好，"照做"没有。**
+
