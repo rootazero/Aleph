@@ -662,9 +662,14 @@ fn unsafe_agent_id_reason(agent_id: &str) -> Option<&'static str> {
         return Some("must not contain '..' (path traversal)");
     }
     if is_windows_reserved_name(agent_id) {
+        // Naming the stem rule, not just the device list: the reason an id
+        // like `con.tar.gz` is refused is invisible from the list alone, and
+        // "which of these am I?" is the question this whole function exists
+        // to answer.
         return Some(
             "must not match a Windows reserved device name \
-             (CON, PRN, AUX, NUL, COM1-9, LPT1-9)",
+             (CON, PRN, AUX, NUL, COM1-9, LPT1-9) — the match is on the name \
+             up to the first '.' or ':', so an extension does not rescue it",
         );
     }
     None
@@ -691,9 +696,24 @@ fn is_safe_agent_id(agent_id: &str) -> bool {
 /// resolves a device name, so `CON.txt`, `CON.log` and `C:\anywhere\CON.txt`
 /// all open the console device. A file "created" under such a name is written
 /// to a device instead — silently, for a caller that only sees a returned
-/// string. The stem check has always been correct; only the sentence
-/// describing it was wrong, and it was copied into a test that then pinned the
-/// misconception.
+/// string.
+///
+/// # Where the stem ends
+///
+/// The DOS-device parser takes the name up to the FIRST `.` or `:`, then
+/// ignores trailing spaces — not the last dot. That distinction is the whole
+/// of this function's history: it used to cut at the last dot, so `con.tar.gz`
+/// yielded the stem `con.tar` and passed while resolving to the console
+/// device. `con:foo` and `con ` are the same defect wearing the other two
+/// separators, so all three are answered here rather than left for a later
+/// round to rediscover one at a time.
+///
+/// The widening direction is deliberate: a false positive costs a file called
+/// `unnamed` or a rejected agent id, a false negative costs a write silently
+/// redirected to a device. Only names whose stem is *exactly* a reserved word
+/// are affected — `console.log`, `contacts.txt` and `com10` are untouched — so
+/// the set of agent ids this newly rejects is those literally beginning with
+/// `con`/`nul`/`com1`… followed by a separator.
 ///
 /// Lives here (not in `utils::filename`) so the agent-id validator and the
 /// filename sanitizer share one source of truth. `pub(crate)` for the latter.
@@ -703,7 +723,9 @@ pub(crate) fn is_windows_reserved_name(name: &str) -> bool {
         "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
         "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
-    let stem = name.rsplit_once('.').map_or(name, |(b, _)| b);
+    // `find` returns a byte index at a char boundary, so the slice is safe.
+    // Trim AFTER cutting, so `con . txt` reduces to `con` the way Win32 does.
+    let stem = name.find(['.', ':']).map_or(name, |i| &name[..i]).trim_end();
     RESERVED.iter().any(|r| stem.eq_ignore_ascii_case(r))
 }
 
@@ -1895,6 +1917,45 @@ mod tests {
         // Plain agents stay allowed.
         assert!(is_safe_agent_id("researcher"));
         assert!(is_safe_agent_id("my-agent_01"));
+    }
+
+    /// The DOS-device stem ends at the FIRST `.` or `:` and ignores trailing
+    /// spaces. Each of these three separators used to let a device name
+    /// through `is_safe_agent_id`, which is how `~/.aleph/agents/<id>` could
+    /// name a device on Windows; the dot case (`con.tar.gz`) was carried for a
+    /// round as a recorded gap because widening it changes what an agent id
+    /// may be, so it wanted its own argument rather than a line smuggled into
+    /// a test repair.
+    #[test]
+    fn a_reserved_stem_is_rejected_whichever_separator_ends_it() {
+        for id in [
+            "con.tar.gz",
+            "CON.tar.gz",
+            "nul.a.b.c",
+            "aux.h",
+            "con:foo",
+            "COM1:9600",
+            "con ",
+            "lpt9 .txt",
+        ] {
+            assert!(
+                !is_safe_agent_id(id),
+                "{id:?} resolves to a Windows device and must not be a usable agent id"
+            );
+        }
+        // Equality on the stem, never a prefix match: widening the separator
+        // set must not start eating ordinary names.
+        for id in [
+            "console.log",
+            "contacts.v2",
+            "com10",
+            "com10.txt",
+            "nulled.data",
+            "connect:9600",
+            "my-agent_01",
+        ] {
+            assert!(is_safe_agent_id(id), "{id:?} is an ordinary name");
+        }
     }
 
     #[test]

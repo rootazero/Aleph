@@ -648,6 +648,73 @@ async function main() {
     ).slice(0, 500) + `\n(requests since: ${requests().length - beforeNote})`,
   );
 
+  // ===== Phase 7: the delegated child inherits the room ===================
+  //
+  // `child_environment_context` fills a fresh `ResolvedContext` for a spawned
+  // child, and `room_roster` was the one field it left unset — so the
+  // `RoomRosterLayer` sitting in the pipeline both paths run rendered nothing
+  // for a child, silently. Unit tests can assert the field is populated; only
+  // a live run can show that the value it resolves from is still there at the
+  // moment the child's prompt is built, one spawn and one task-local
+  // re-establishment later.
+  //
+  // The oracle is the same request log phase 2 uses, read from the other end:
+  // the child's own turn is the one whose USER text carries the marker the
+  // parent's `subagent` call put in the task.
+  console.log("\n=== phase 7: a delegated child inherits <room_context> ===");
+  const beforeDelegate = requests().length;
+  const runD = await conns.alice.ok("chat.send", {
+    message: "QA-DELEGATE hand this one to a helper",
+    session_key: keyA,
+    channel: "gui:qa-room",
+  });
+  log(`alice's delegation run ${runD.run_id}`);
+  // `subagent` is not on the read-only allowlist, so a member's turn parks it
+  // the way phase 2's `team_create` parked — observed, not assumed: every run
+  // of this phase has resolved a card here. The short budget is insurance
+  // rather than doubt. If that ceiling ever stops applying, this phase should
+  // say so in seconds instead of spending 90 s discovering there was no card,
+  // and it must not fail for it: the claim being made is about the child's
+  // prompt, not about which tier parks a spawn.
+  const delegateCard = await approveOperatorCard("subagent", 45_000);
+  log(delegateCard ? "subagent card resolved" : "no subagent card (tier allowed it)");
+
+  // Both halves matter. `QA-CHILD` alone would also match the PARENT's next
+  // turn if the harness ever flattens a `tool_result` into text — and the
+  // parent's prompt does carry `<room_context>`, so that mismatch would pass
+  // this phase while proving nothing. Excluding the delegation marker pins it
+  // to the isolated child, whose conversation is only the task it was seeded
+  // with.
+  const isChildTurn = (r) => {
+    const t = userText(r.body);
+    return t.includes("QA-CHILD") && !t.includes("QA-DELEGATE");
+  };
+  const childReq = await until(
+    async () => requests().slice(beforeDelegate).find(isChildTurn) || null,
+    180_000,
+  );
+  if (childReq) log(`child turn #${childReq.turn}: ${userText(childReq.body).slice(0, 120)}`);
+  check(
+    Boolean(childReq),
+    "the room turn's subagent call spawned a child that reached the provider",
+    `requests since the delegation: ${requests().length - beforeDelegate}`,
+  );
+  if (childReq) {
+    const childSystem = systemText(childReq.body);
+    check(
+      childSystem.includes("<room_context>"),
+      "the DELEGATED CHILD's prompt carries <room_context>, not just the parent's",
+      childSystem.slice(0, 800),
+    );
+    const childRoom =
+      childSystem.split("<room_context>")[1]?.split("</room_context>")[0] ?? "";
+    check(
+      childRoom.includes("QA Alice") && childRoom.includes("QA Bob"),
+      "the child's block names the same two members the parent's did",
+      childRoom.trim() || "(no block)",
+    );
+  }
+
   // projects.changed — the sidebar's live refresh signal, per connection.
   for (const c of [conns.alice, conns.bob]) c.frames.length = 0;
   await op.ok("projects.rename", { id: project.id, name: "QA Room Renamed" });

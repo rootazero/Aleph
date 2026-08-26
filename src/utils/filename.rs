@@ -169,15 +169,27 @@ mod tests {
                 "{raw:?} resolves to a device on Windows and must map to the fallback"
             );
         }
-        // KNOWN GAP, recorded rather than silently widened: the stem is taken
-        // at the LAST dot, so `con.tar.gz` yields the stem `con.tar` and passes.
-        // Win32 resolves a device from the name up to the FIRST dot, so that
-        // one is a device too. Switching to `split_once` is the fail-safe
-        // direction (a false positive is a file called `unnamed`; a false
-        // negative is a write redirected to a device) but it also widens what
-        // `is_safe_agent_id` rejects, so it wants its own change and its own
-        // argument — not a line smuggled into a test repair.
-        assert_eq!(sanitize_filename("con.tar.gz"), "con.tar.gz");
+        // Formerly a recorded gap: the stem used to be taken at the LAST dot,
+        // so `con.tar.gz` yielded the stem `con.tar` and passed while Win32
+        // resolved it to the console device. The SSOT now cuts at the FIRST
+        // dot. Multi-extension names are the common shape for exactly the
+        // files this matters for — an archive a tool writes under a
+        // model-supplied name.
+        for raw in ["con.tar.gz", "CON.tar.gz", "nul.a.b.c", "aux.h"] {
+            assert_eq!(
+                sanitize_filename(raw),
+                FALLBACK_FILENAME,
+                "{raw:?} resolves to a device on Windows and must map to the fallback"
+            );
+        }
+        // The SSOT also cuts at `:` and ignores trailing spaces, because the
+        // DOS-device parser does. Both are no-ops *here* — `:` is filtered out
+        // and trailing spaces are trimmed before the check runs — so these
+        // assert the sanitizer's own two steps still land first, not the
+        // stem rule. `con:foo` losing its colon leaves the ordinary name
+        // `confoo`; it must not become the fallback.
+        assert_eq!(sanitize_filename("con:foo"), "confoo");
+        assert_eq!(sanitize_filename("con "), FALLBACK_FILENAME);
         // A name that merely STARTS with a reserved word is a normal file —
         // the check is equality on the stem, not a prefix match.
         assert_eq!(sanitize_filename("CONTACTS.txt"), "CONTACTS.txt");

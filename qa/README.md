@@ -48,9 +48,11 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # @-mention dispatches, both broadcast live to the other socket);
                                  # a member run's approval card is addressable by the human who
                                  # SPOKE and not by the room's other member; `<room_context>` names
-                                 # both members including the silent one; and each project-page tab
-                                 # has a server-side effect. Same 0.0.0.0 + LAN-leg reason as
-                                 # `multiuser_audit`. Node, not Python — see its run.sh header.
+                                 # both members including the silent one; a child that room run
+                                 # DELEGATES inherits the same block one spawn later; and each
+                                 # project-page tab has a server-side effect. Same 0.0.0.0 + LAN-leg
+                                 # reason as `multiuser_audit`. Node, not Python — see its run.sh
+                                 # header.
 
 ./qa/channels/run.sh             # both phases below
 ./qa/channels/run.sh reach       # feishu / line / qq really come up; msteams is the control.
