@@ -82,10 +82,15 @@ async fn test_handle_call_tool_invalid_params() {
 }
 
 #[tokio::test]
+#[serial_test::serial(extension_manager)]
 async fn test_handle_call_tool_without_manager() {
-    // When extension manager is not initialized, should return INTERNAL_ERROR
-    // Note: This test only works if extension manager hasn't been initialized
-    // in other tests running in the same process.
+    // When extension manager is not initialized, should return INTERNAL_ERROR.
+    //
+    // The `serial` annotation on the extension_manager group serializes this
+    // test with `test_handle_call_tool_with_manager_plugin_not_found` (and any
+    // other test that mutates the process-global manager), so the
+    // `is_extension_manager_initialized()` check is race-free against
+    // concurrent initializers.
     if !is_extension_manager_initialized() {
         let request = JsonRpcRequest::new(
             "plugins.callTool",
@@ -110,6 +115,7 @@ async fn test_handle_call_tool_without_manager() {
 }
 
 #[tokio::test]
+#[serial_test::serial(extension_manager)]
 async fn test_handle_call_tool_with_manager_plugin_not_found() {
     // Initialize manager if not already done
     if !is_extension_manager_initialized() {

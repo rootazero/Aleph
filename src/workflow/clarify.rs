@@ -210,10 +210,15 @@ mod tests {
 
     #[test]
     fn build_request_text_vs_select() {
-        assert!(!text_meta().build_request().first().has_options());
+        assert!(!text_meta()
+            .build_request()
+            .first()
+            .expect("text request should have at least one question")
+            .has_options());
         let req = select_meta().build_request();
-        assert!(req.first().has_options());
-        assert_eq!(req.first().options.len(), 2);
+        let first = req.first().expect("select request should have at least one question");
+        assert!(first.has_options());
+        assert_eq!(first.options.len(), 2);
     }
 
     #[test]

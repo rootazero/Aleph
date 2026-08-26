@@ -189,7 +189,7 @@ mod tests {
     fn embedded_token_inside_sentence_is_redacted() {
         let sentence = format!(
             "here is the API key {} and some trailing text",
-            "abcdefghij0123456789ABCDEFG"
+            "abcdefghij0123456789ABCDEFGHIJKLMNOPQ"
         );
         let r = redact_clipboard_text(&sentence);
         assert!(r.redacted);

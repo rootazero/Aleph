@@ -249,7 +249,7 @@ async fn count_lines(path: &Path) -> std::io::Result<u64> {
         Ok(count)
     })
     .await
-    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
+    .map_err(|e| std::io::Error::other(e.to_string()))?
 }
 
 #[cfg(test)]

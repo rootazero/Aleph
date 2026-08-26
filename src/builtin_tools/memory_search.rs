@@ -306,7 +306,7 @@ impl MemorySearchTool {
     /// Execute memory search (internal implementation)
     async fn call_impl(
         &self,
-        args: MemorySearchArgs,
+        mut args: MemorySearchArgs,
     ) -> std::result::Result<MemorySearchOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 

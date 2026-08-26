@@ -784,7 +784,16 @@ mod tests {
             Box::new(FileOpSupersedeStage::default()) as Box<dyn PreflightStage>,
             Box::new(ToolResultPruningStage::default()),
             Box::new(HistoricalImageStrippingStage),
-        ]);
+        ])
+        // `PreflightPipeline::new` now ships with cache-stability defaults
+        // (`cut_quantum = 16`) that protect the tail in quantum-sized
+        // increments — the right production posture, but it quantises a
+        // fresh_tail_count of `0` against an 8-message history into full
+        // protection (effective_tail = 8), which suppresses every stage and
+        // hides the orchestration we want to assert here. Opt back into the
+        // pre-tightening semantics so the test exercises the pipeline, not
+        // the cache guard.
+        .with_cache_stability(1, 0.0, 1.0);
 
         let p = pressure(0.85);
         let total_freed = pipeline.run(&mut messages, &p, 0).await;

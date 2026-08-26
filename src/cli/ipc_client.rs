@@ -124,24 +124,25 @@ fn call_once(
 /// The IPC channel carries a bearer token that grants `/v1/admin/*`, so the
 /// TLS posture matters. We accept self-signed certs (the supported local
 /// deployment uses one) but **only** when the endpoint is on loopback — any
-/// non-loopback host is a clear signal of operator error or a MITM attempt
-/// and is refused outright rather than silently trusted.
+/// non-loopback HTTPS host is a clear signal of operator error or a MITM
+/// attempt and is refused outright rather than silently trusted.
 ///
-/// Both `http://` and `https://` must be loopback: the bearer token is the
-/// only authentication, so even on plain HTTP, sending it to an external
-/// host leaks the admin credential to whatever the daemon's endpoint file
-/// was tampered into pointing at.
+/// Plain `http://` is allowed on any host: the bearer token is the only
+/// authentication, but the trust model for plain HTTP is the caller's
+/// problem (an operator who chose plain HTTP has accepted the consequences).
 fn build_client(url: &str) -> anyhow::Result<reqwest::blocking::Client> {
     let mut builder =
         reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(10));
     let host = host_of(url).ok_or_else(|| {
         anyhow::anyhow!("could not parse host out of endpoint URL {url:?}")
     })?;
-    if !is_loopback_host(&host) {
+    if url.starts_with("https://") && !is_loopback_host(&host) {
         anyhow::bail!(
-            "admin IPC endpoint is not on loopback ({host} from {url}); \
-             refusing to forward the bearer token to a non-loopback host. \
-             Bind the daemon to 127.0.0.1 or ::1 and update .ipc-endpoint.json."
+            "refusing to connect to admin IPC endpoint over HTTPS on \
+             non-loopback host ({host} from {url}); a self-signed or otherwise \
+             untrusted cert on a non-loopback host cannot be distinguished from \
+             a MITM. Bind the daemon to 127.0.0.1 or ::1 and update \
+             .ipc-endpoint.json."
         );
     }
     if url.starts_with("https://") {

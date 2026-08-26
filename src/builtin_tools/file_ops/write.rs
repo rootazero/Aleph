@@ -157,20 +157,13 @@ impl AlephTool for FileWriteTool {
         // surface is bounded consistently.
         const MAX_WRITE_CONTENT_BYTES: usize = 32 * 1024 * 1024;
         if args.content.len() > MAX_WRITE_CONTENT_BYTES {
-            notify_tool_result(
-                Self::NAME,
-                &format!(
-                    "file_write content is {} bytes; the cap is {MAX_WRITE_CONTENT_BYTES}. \
-                     Use apply_patch / batch for chunked rewrites."
-                ),
-                false,
-            );
-            return Err(crate::tools::ToolError::InvalidArgs(format!(
+            let msg = format!(
                 "file_write content is {} bytes; the cap is {MAX_WRITE_CONTENT_BYTES}. \
                  Use apply_patch / batch for chunked rewrites.",
                 args.content.len()
-            ))
-            .into());
+            );
+            notify_tool_result(Self::NAME, &msg, false);
+            return Err(crate::builtin_tools::error::ToolError::InvalidArgs(msg).into());
         }
 
         let result = execute_write(
