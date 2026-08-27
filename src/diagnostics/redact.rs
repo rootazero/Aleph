@@ -22,38 +22,42 @@ use regex::Regex;
 fn patterns() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
+        // A single raw string — concat! would re-introduce Rust string
+        // escape processing for the backslash sequences the regex needs,
+        // and a non-raw string would force every `\` to be doubled. Raw
+        // string literals do not interpret escapes, which is exactly what
+        // regex source wants.
         Regex::new(
-            concat!(
-                r"(?ix)", // case-insensitive + allow comments + whitespace
-                r"(?:
-                    # Vendor prefixes (longer first, so the alternation never
-                    # stops at a shorter prefix that happens to be a substring).
-                    sk-ant-[A-Za-z0-9_-]{8,}               |
-                    sk_live_[A-Za-z0-9]+                    |
-                    AKIA[0-9A-Z]{16}                        |
-                    AIza[0-9A-Za-z_-]{35}                   |
-                    gh[psoru]_[A-Za-z0-9]{36,}               |
-                    xox[baprs]-[A-Za-z0-9-]+                |
-                    # OpenAI-style keys.
-                    sk-[A-Za-z0-9_-]{8,}                    |
-                    # Authorization headers (whitespace-terminated).
-                    bearer\s+\S+                             |
-                    basic\s+\S+                              |
-                    # Standalone JWTs.
-                    eyJ[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+){2,4} |
-                    # `X-Api-Key:` / `X-Auth-Token:` style vendor headers
-                    # (colon or equals as separator).
-                    x-(?:api[-_]?key|auth[-_]?token|secret|token|access[-_]?token)\s*[:=]\s*\S+ |
-                    # Generic config dump shapes — `password=foo`,
-                    # `secret=bar`, `client_secret=baz`, `private_key=qux`.
-                    (?:password|secret|client_secret|private_key)\s*=\s*[^\s,;'\"&]+ |
-                    # Query-parameter shapes — bounded so a trailing URL
-                    # fragment (`&next=…`, `#…`) is not consumed.
-                    apikey=[^\s&=#?]+                       |
-                    token=[^\s&=#?]+                        |
-                    key=[^\s&=#?]+                          |
-                )"
-            ),
+            r"(?ix)
+            (?:
+                # Vendor prefixes (longer first, so the alternation never
+                # stops at a shorter prefix that happens to be a substring).
+                sk-ant-[A-Za-z0-9_-]{8,}
+            |   sk_live_[A-Za-z0-9]+
+            |   AKIA[0-9A-Z]{16}
+            |   AIza[0-9A-Za-z_-]{35}
+            |   gh[psoru]_[A-Za-z0-9]{36,}
+            |   xox[baprs]-[A-Za-z0-9-]+
+                # OpenAI-style keys.
+            |   sk-[A-Za-z0-9_-]{8,}
+                # Authorization headers (whitespace-terminated).
+            |   bearer\s+\S+
+            |   basic\s+\S+
+                # Standalone JWTs.
+            |   eyJ[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+){2,4}
+                # X-Api-Key / X-Auth-Token style vendor headers (colon or
+                # equals as separator).
+            |   x-(?:api[-_]?key|auth[-_]?token|secret|token|access[-_]?token)\s*[:=]\s*\S+
+                # Generic config dump shapes — password=foo, secret=bar,
+                # client_secret=baz, private_key=qux. Excludes a small set
+                # of delimiters so the match stops at the value boundary.
+            |   (?:password|secret|client_secret|private_key)\s*=\s*[^\s,;'&]+
+                # Query-parameter shapes — bounded so a trailing URL
+                # fragment (&next=…, #…) is not consumed.
+            |   apikey=[^\s&=#?]+
+            |   token=[^\s&=#?]+
+            |   key=[^\s&=#?]+
+            )"
         )
         .expect("redaction regex is a compile-time constant")
     })
@@ -169,11 +173,13 @@ mod tests {
 
     #[test]
     fn redacts_query_param_shapes_case_insensitively() {
-        assert_eq!(redact_secrets("?key=abc123"), "?***");
-        assert_eq!(redact_secrets("?TOKEN=abc123"), "?***");
-        assert_eq!(redact_secrets("?ApiKey=abc123"), "?***");
+        // Raw strings avoid the Rust 2021 `?IDENT` prefix-identifier
+        // reservation that turns `"?key=…"` into a syntax error.
+        assert_eq!(redact_secrets(r"?key=abc123"), "?***");
+        assert_eq!(redact_secrets(r"?TOKEN=abc123"), "?***");
+        assert_eq!(redact_secrets(r"?ApiKey=abc123"), "?***");
         // `apikey=` is masked whole, not reduced to an `api` stump.
-        assert_eq!(redact_secrets("?apikey=abc123"), "?***");
+        assert_eq!(redact_secrets(r"?apikey=abc123"), "?***");
     }
 
     #[test]
