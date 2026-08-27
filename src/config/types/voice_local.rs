@@ -80,13 +80,17 @@ impl Default for VoiceLocalConfig {
 /// `enabled = false` (default) means voice input uses the non-streaming
 /// `/v1/audio/transcriptions` path instead.
 ///
-/// ⚠️ **Self-hosted WhisperLiveKit must be started with `--pcm-input`.** Aleph
-/// streams raw s16le PCM at 16 kHz; WhisperLiveKit only bypasses FFmpeg for raw
-/// PCM when that flag is set, and its Deepgram-compatible endpoint ignores the
-/// `encoding=linear16&sample_rate=16000` query parameters Aleph sends. Without
-/// the flag the server pipes headerless PCM into FFmpeg, which decodes nothing —
-/// the stream connects, no transcript ever arrives, and the Panel silently
-/// strikes out to the batch path after two empty utterances.
+/// ⚠️ **Self-hosted WhisperLiveKit**: Aleph streams raw s16le PCM at 16 kHz.
+/// WLK ≥ 0.2.26 derives per-session raw-PCM mode from the `encoding=linear16`
+/// query parameter Aleph sends (commit `ed571b6`), so no server flag is
+/// needed. **Older WLK versions must be started with `--pcm-input`** — without
+/// it the server pipes headerless PCM into FFmpeg, which decodes nothing: the
+/// stream connects, no transcript ever arrives, and the Panel silently strikes
+/// out to the batch path after two empty utterances. Two more WLK ≥ 0.2.26
+/// semantics the adapters already satisfy: empty binary frames are rejected
+/// (4400 close — the `voice.stream.audio` handler drops them upstream), and
+/// `endpointing` defaults to 10 ms which the server rejects under `--no-vac`
+/// (the adapter pins `endpointing=false`; Panel VAD owns turn boundaries).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct StreamingConfig {

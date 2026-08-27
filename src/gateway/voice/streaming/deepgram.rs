@@ -74,30 +74,55 @@ impl DeepgramStream {
     }
 }
 
+/// Build the `/v1/listen` URL (pure, so the wire shape is host-testable).
+///
+/// `interim_results=true&utterance_end_ms=1000` so the server emits BOTH
+/// interim and final + UtteranceEnd.
+///
+/// `endpointing=false` is explicit for two reasons. Aleph never consumes
+/// `speech_final` (the Panel VAD is the authoritative turn boundary;
+/// backend signals are advisory), so disabling endpointing costs nothing on
+/// Deepgram cloud. And since WhisperLiveKit 0.2.26 (#419) the compat layer
+/// *validates* query parameters: an omitted `endpointing` defaults to 10 ms,
+/// which the server rejects outright when it runs with `--no-vac` — the
+/// session would be refused before a single frame flowed. Pinning `false`
+/// keeps the handshake legal under both VAC configurations.
+fn build_listen_url(
+    base_url: &str,
+    sample_rate: u32,
+    language: Option<&str>,
+    model: &str,
+) -> String {
+    let host = base_url
+        .trim_end_matches('/')
+        .replace("https://", "wss://")
+        .replace("http://", "ws://");
+    let mut url = format!(
+        "{host}/v1/listen?encoding=linear16&sample_rate={sample_rate}&channels=1&interim_results=true&utterance_end_ms=1000&endpointing=false"
+    );
+    if let Some(lang) = language.filter(|l| !l.is_empty()) {
+        url.push_str(&format!("&language={lang}"));
+    }
+    let model = model.trim();
+    if !model.is_empty() {
+        url.push_str(&format!("&model={model}"));
+    }
+    url
+}
+
 #[async_trait]
 impl StreamingTranscriber for DeepgramStream {
     async fn open(&self, cfg: StreamConfig) -> anyhow::Result<StreamHandles> {
-        // /v1/listen with linear16/16k/interim_results/utterance_end so the
-        // server emits BOTH interim and final + UtteranceEnd.
-        let base = self.target.base_url.trim_end_matches('/');
-        let host = base
-            .replace("https://", "wss://")
-            .replace("http://", "ws://");
         let lang = cfg
             .language
             .or_else(|| self.target.language.clone())
             .unwrap_or_default();
-        let mut url = format!(
-            "{host}/v1/listen?encoding=linear16&sample_rate={}&channels=1&interim_results=true&utterance_end_ms=1000",
-            cfg.sample_rate
+        let url = build_listen_url(
+            &self.target.base_url,
+            cfg.sample_rate,
+            Some(lang.as_str()),
+            &self.target.model,
         );
-        if !lang.is_empty() {
-            url.push_str(&format!("&language={lang}"));
-        }
-        let model = self.target.model.trim();
-        if !model.is_empty() {
-            url.push_str(&format!("&model={model}"));
-        }
 
         let mut req = url.into_client_request()?;
         if !self.target.api_key.is_empty() {
@@ -236,5 +261,40 @@ mod tests {
             "channel": { "alternatives": [] }
         });
         assert!(dec.push(&v).is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Wire-URL contract (2026-08-27 round-4, WLK #419 semantics)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn listen_url_carries_the_full_handshake_contract() {
+        let url = build_listen_url("https://api.deepgram.com", 16_000, Some("zh"), "nova-3");
+        assert!(url.starts_with("wss://api.deepgram.com/v1/listen?"));
+        for needle in [
+            "encoding=linear16",
+            "sample_rate=16000",
+            "channels=1",
+            "interim_results=true",
+            "utterance_end_ms=1000",
+            // Explicitly off: Aleph's Panel VAD owns turn boundaries, and WLK
+            // ≥0.2.26 rejects the 10 ms default when the server runs --no-vac.
+            "endpointing=false",
+            "language=zh",
+            "model=nova-3",
+        ] {
+            assert!(url.contains(needle), "missing {needle} in {url}");
+        }
+    }
+
+    #[test]
+    fn listen_url_omits_empty_language_and_model() {
+        let url = build_listen_url("http://127.0.0.1:8000/", 16_000, Some(""), "  ");
+        assert!(url.starts_with("ws://127.0.0.1:8000/v1/listen?"));
+        assert!(!url.contains("language="), "empty language must not ride the wire: {url}");
+        assert!(!url.contains("model="), "blank model must not ride the wire: {url}");
+        // No language at all behaves like an empty one.
+        let url = build_listen_url("http://h:1", 16_000, None, "");
+        assert!(!url.contains("language="));
     }
 }
