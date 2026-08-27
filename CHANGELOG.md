@@ -5,6 +5,161 @@ All notable changes to the Aleph project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [26.8.27]
+
+Four days, 361 commits, 568 files, +61.5k/−5.8k (of which +40.5k/−5.7k is
+source). Three threads and one correction. First, **project rooms grow a full
+face** — a `project_manage` tool, Kanban / Workspace / Memory tabs in the
+Panel, a roster-gated `projects.changed` push topic, and a prompt layer that
+finally tells the model who else is in the room. Second, **waiting becomes a
+wire concept**: a run sitting in its session's busy lane used to emit nothing
+at all between `chat.send` returning an id and `RunAccepted`, so every client
+painted "thinking" over a run the engine had never heard of. Third, **the
+streaming renderer stops rebuilding everything on every token**, in the Panel
+and the TUI both. Underneath all three runs a **process-global handle
+migration**: 46 `OnceLock`s became `CapabilitySlot`s, where writing a value and
+stamping that it was written are one action instead of a discipline — because a
+handle that was never installed and one installed with a permissive default
+read identically from outside, and half of this release's diagnostics work is
+the same conflation in a different subsystem.
+
+### Added
+
+- **Project rooms, end to end.** `project_manage` is the conversational face
+  (R8); the Panel gains Kanban, Workspace and Memory tabs over room-scoped
+  teams, goals and loops, plus read-only workspace browse; `projects.changed`
+  is a push topic whose delivery is gated on the roster. Authorization behind
+  every `projects.*` gate is one shared derivation rather than a predicate per
+  face, and a room-claimed session key always stamps the room's scope.
+- **A room roster layer in the prompt.** The model is told who else is in the
+  room, and a delegated child inherits the same `<room_context>` its parent
+  had — a fan-out where each member re-derives the roster is a fan-out with N
+  rosters. Covered by a real-machine fixture (`qa/teamchat_rooms`).
+- **The waiting phase, as its own wire representation.** `StreamEvent::RunQueued`
+  and its protocol twin, `TicketGuard::ahead` for lane position reported from
+  the waiter's existing wake point, and the lane carried on `chat.history` —
+  the attach-time authority, so a client that reconnects mid-wait rebuilds the
+  queued phase from a snapshot instead of guessing. The busy-input queue itself
+  is now crash-durable.
+- **`CapabilitySlot`, and a doctor check that can see through it.**
+  `install(v)` writes the value and stamps the outcome as one action; a
+  conditional install's `else` arm must `decline("what was missing")` rather
+  than silently skip. Each slot names its own `MissingSemantics` in its own
+  module — derived from what the fallback branch actually hands the reader, not
+  from the config default and not from the slot's name. `core/capability-wiring`
+  reports three states, not two: not booted (this process cannot answer), booted
+  and complete, booted with holes (named per slot, severity derived).
+- **A streaming renderer that renders only what changed.** In the Panel,
+  `TypewriterRenderer` mounts once and splits into two zones — a stable zone
+  gated on the freeze boundary and a tail zone that re-renders at O(tail) — with
+  the character reveal mapped to byte offsets by an incremental cursor instead
+  of a per-frame `chars().take().collect()` rescan. In the TUI: windowed chat
+  rendering with an `Rc`-shared streaming prefix, a per-message rendered-line
+  cache, tail-only markdown conversion, queued gateway events coalesced into a
+  single draw, and no `terminal.draw()` at all on ticks that change nothing
+  visible.
+- **Reconnect that reconciles instead of resetting.** The TUI joins the run in
+  flight on an attached session, renders peer messages, backfills turn age, and
+  stops holding other sessions' runs; the Panel registers a conversation on
+  every chat surface and repairs reconnects at the root rather than inside a
+  component with a mount condition; the `/btw` overlay settles across a
+  reconnect by asking `agent.status` about the one id it still holds.
+- **The protocol owns the receipt codes both sides classify by.** The Panel now
+  reads the server's `error_code` instead of matching keywords in a message,
+  and a Cancelled send stops being painted as a danger banner.
+- **`note_manage` can read one note by address.** Retrieval returned ranked
+  excerpts truncated to 4k each, and update replaced whole documents — so the
+  model could overwrite a note it had never been able to read in full. The
+  governance verdict archive also gets its first reader and a retention window.
+- **Markdown streaming safety in shared UI logic.** CommonMark-compliant fence
+  detection and reference-link-definition boundaries, so a partially-arrived
+  document is never split inside a construct.
+- **Model-aware summarizer budget, with a cheap-summarizer fallback retry.**
+- **Closed-set effect-evidence grades on mutating desktop actions**, so a verb
+  reports what it actually observed rather than that it was dispatched.
+- **The full desktop app keeps its remote target across restarts**, and probes
+  the gateway's `/ready` endpoint rather than a bare TCP connect before
+  navigating — a socket that accepts is not a server that can answer.
+
+### Fixed
+
+- **Eight diagnostics checks answered "I could not look" with "there is nothing
+  there."** `Path::exists()` returns `false` for two different worlds, and in a
+  subsystem whose entire job is telling an operator what is true, that
+  conflation is the job. Six sites read the error as "absent, and absent is
+  fine" — including a vault that cannot be opened reporting "no secrets stored
+  yet", the one sentence that stops an operator investigating, on a repo that
+  already records vault data loss as an observed failure. A ninth of the same
+  class was closed in `browser_runtime`, where a panicked probe task rendered
+  as `[ok]`. The fix is a chokepoint plus a source-level guard, not nine edits:
+  `Presence`/`DirListing` make the third answer an `Err(Finding)`, and
+  `Unknown` is deliberately *not* a `Presence` variant, so spending it as
+  absence has to be written out.
+- **`core/capability-wiring` was registered in the offline registry.** Its cold
+  branch fired on every call, on every machine, forever — so the exit code it
+  documents as CI-gateable could never be 0. A check whose premise can never
+  hold is not a gate.
+- **The harness line ratchet had been disarmed by grant, not by drift.** A
+  prior entry set `CEILING` to measured + 1024 and called the gap "headroom",
+  while asserting in the next sentence that the budget was still a hard cap.
+  Both cannot be true: R10's redline permitted ~20% silent growth for a day,
+  and "src/harness/ delta 0" — the claim five comparison rounds rest on — was
+  unprovable while it stood. Measured now: 5233, itemised.
+- **rust-logic-audit and review batches applied across nine subsystems:**
+  secrets/security (4 Critical), clipboard (4 Critical), config (3 Critical + 1
+  Warning), context (2 Critical), clarification (2 Critical + 2 Warning),
+  session (3 High), skill (3 High + 1 Medium), plus cli and canvas warnings.
+  SSRF and hostname handling, the DuckDuckGo `uddg` URL decode, and
+  `SECRET_SUFFIXES` were all widened.
+- **Four streaming-render defects that only a real client shows.** The message
+  bubble remounted on every token; the entrance animation played twice at
+  stream completion; the unfrozen tail was baked into the markdown cache; and a
+  cached prefix offset could outlive a content swap that shrank it.
+- **A single command could take the daemon out through stdin.** `command_text`
+  is now bounded. Separately, a truncated stdin keeps its head *and* its tail,
+  cut on char boundaries — dropping the tail throws away the one part a reader
+  is usually looking for, and the hot paths for file writes, line counts and
+  note bodies are capped alongside it.
+- **Windows reserved-name filenames were sanitized past the wrong boundary.**
+  The stem rule now cuts at the first `.` or `:`; unsafe agent ids get named
+  reasons rather than a silent rewrite.
+- **Panel and phone hardening.** Attachment size and count are capped to bound
+  base64 inflation; URL credentials are stripped and protocol-relative links
+  blocked; a reconnect no longer clobbers in-progress edits; the phone memory
+  tab no longer loses the URL fragment or panics on a disposed read.
+- **iOS: four independent trust and storage defects.** Cert-pin saves are
+  serialized against concurrent challenges, the Keychain pairing URL is scoped
+  to the device that stored it, overlapping TLS trust prompts fail closed, and
+  `isInspectable` is gated behind `DEBUG`. The project also moves to Swift 6
+  language mode, and owns its IPv6 bracket rule instead of assuming
+  Foundation's.
+- **A refused transcription endpoint took the daemon down with it.**
+- **A failed run was reported as a cancelled one.** Four error classes fanned
+  into `Cancelled` at the exit arm, so a provider auth failure rendered in the
+  trace as a neutral "stopped" — lighter than hitting the turn cap and byte-for
+  byte identical to the user pressing stop, while the session log beside it
+  said `Errored`. Every guardrail `Block` now settles through one path, so the
+  second producer of that outcome stops leaving orphan `tool_use` calls behind.
+- **`purge_all` blocked the async runtime**, and now falls back to inline
+  execution when no Tokio runtime is in scope rather than panicking.
+- **A missing session-service handle dropped work without a word.** Approval
+  records, replayed messages on the OpenAI-compat history path, both branches
+  of the slash-command fast path, both on `SimpleExecutionEngine`'s, and a
+  skipped run-id/occupancy stamp now each name what they dropped.
+- **CI told the truth about three of its own failures.** The ubuntu exit-143
+  death names its resource (memory, not disk); the security audit's path
+  filter now includes the code it lints; and `Info.plist` is staged into
+  `OUT_DIR`, because a link-arg cached in `target/` naming a file in the source
+  tree outlives what it names — and the failing case is by definition the one
+  where the build script does not run.
+- **This release's own gates were red before it started.** `cargo fmt --check`
+  failed on 26 files across all three platforms, which — under `bash -e` —
+  aborted the lint job before clippy and before the `--all-targets` check, so
+  the two steps that catch real regressions had not run in days. A `panic!` in
+  `build.rs` tripped `clippy::panic`; the lint exists to keep panics out of code
+  that ships, and a build script is not that code, so the allow is scoped to
+  that one file.
+
 ## [26.8.23]
 
 The largest release to date — 1,461 commits over 23 days, 2,513 files,
