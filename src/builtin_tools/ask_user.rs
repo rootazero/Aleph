@@ -461,7 +461,9 @@ mod tests {
         })
         .expect("flat form builds");
         assert_eq!(request.len(), 1);
-        let q = request.first().expect("constructor-built request is non-empty");
+        let q = request
+            .first()
+            .expect("constructor-built request is non-empty");
         assert_eq!(q.id, "q1");
         assert_eq!(q.prompt, "Pick?");
         // Description is wired onto the option, not merely rendered — this is
@@ -497,7 +499,11 @@ mod tests {
         })
         .expect("list form builds");
         assert_eq!(request.len(), 2);
-        assert_eq!(request.questions()[0].id, "q1", "omitted ids are positional");
+        assert_eq!(
+            request.questions()[0].id,
+            "q1",
+            "omitted ids are positional"
+        );
         assert_eq!(request.questions()[0].header.as_deref(), Some("Env"));
         assert_eq!(request.questions()[1].id, "token");
         assert!(request.questions()[1].secret);

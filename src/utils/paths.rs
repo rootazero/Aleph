@@ -725,7 +725,10 @@ pub(crate) fn is_windows_reserved_name(name: &str) -> bool {
     ];
     // `find` returns a byte index at a char boundary, so the slice is safe.
     // Trim AFTER cutting, so `con . txt` reduces to `con` the way Win32 does.
-    let stem = name.find(['.', ':']).map_or(name, |i| &name[..i]).trim_end();
+    let stem = name
+        .find(['.', ':'])
+        .map_or(name, |i| &name[..i])
+        .trim_end();
     RESERVED.iter().any(|r| stem.eq_ignore_ascii_case(r))
 }
 

@@ -2061,7 +2061,7 @@ impl super::DesktopTool {
                                  The clipboard now holds the pasted text. If you \
                                  had something important on the clipboard before, \
                                  please re-copy it."
-                                    .to_string()
+                                    .to_string(),
                             ),
                             _ => None,
                         };

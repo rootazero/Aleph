@@ -120,7 +120,9 @@ pub async fn run_node_approval(
         );
         return (
             "unavailable",
-            Some("approval notification could not be delivered to the operator surface".to_string()),
+            Some(
+                "approval notification could not be delivered to the operator surface".to_string(),
+            ),
         );
     }
 

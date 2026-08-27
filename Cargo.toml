@@ -23,7 +23,7 @@ members = [
 [workspace.package]
 # CalVer — keep in sync with the VERSION file (single source of truth).
 # build.rs re-exposes the VERSION file as env!("ALEPH_VERSION") at compile time.
-version = "26.8.23"
+version = "26.8.27"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/rootazero/Aleph"

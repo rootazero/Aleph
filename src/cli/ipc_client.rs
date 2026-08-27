@@ -35,8 +35,7 @@ where
     // `format!("{}/{...}")` slice: today the daemon writes a bare
     // `scheme://host:port`, but a future reverse-proxy prefix or query
     // string would be silently appended to the wrong segment.
-    let base =
-        url::Url::parse(&endpoint.url).context("endpoint URL is not a parseable URL")?;
+    let base = url::Url::parse(&endpoint.url).context("endpoint URL is not a parseable URL")?;
     let joined = base
         .join(route)
         .with_context(|| format!("cannot join route {route:?} to base {base}"))?;
@@ -133,9 +132,8 @@ fn call_once(
 fn build_client(url: &str) -> anyhow::Result<reqwest::blocking::Client> {
     let mut builder =
         reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(10));
-    let host = host_of(url).ok_or_else(|| {
-        anyhow::anyhow!("could not parse host out of endpoint URL {url:?}")
-    })?;
+    let host = host_of(url)
+        .ok_or_else(|| anyhow::anyhow!("could not parse host out of endpoint URL {url:?}"))?;
     if url.starts_with("https://") && !is_loopback_host(&host) {
         anyhow::bail!(
             "refusing to connect to admin IPC endpoint over HTTPS on \
@@ -159,12 +157,12 @@ fn build_client(url: &str) -> anyhow::Result<reqwest::blocking::Client> {
 /// `None` for unparseable input so the caller can produce a clear error.
 fn host_of(url: &str) -> Option<String> {
     // Strip the scheme.
-    let after_scheme = url
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .unwrap_or(url);
+    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
     // Strip userinfo (none expected today, but stay defensive).
-    let after_userinfo = after_scheme.split_once('@').map(|(_, rest)| rest).unwrap_or(after_scheme);
+    let after_userinfo = after_scheme
+        .split_once('@')
+        .map(|(_, rest)| rest)
+        .unwrap_or(after_scheme);
     // Truncate at the first `:`, `/`, or `?` that closes the host portion.
     // For IPv6 these come in the form `[::1]:port` so use `url::Url::parse`
     // to do the bracket-aware split rather than the prior byte-split which
@@ -192,7 +190,11 @@ fn host_of(url: &str) -> Option<String> {
             // Stop at the trailing `]:port` — none expected here since the
             // loop above already removed `:`, but defensive.
             let host = host.split(':').next().unwrap_or("");
-            if host.is_empty() { None } else { Some(host.to_string()) }
+            if host.is_empty() {
+                None
+            } else {
+                Some(host.to_string())
+            }
         })
 }
 

@@ -162,9 +162,7 @@ fn is_short_scalar(value: &Value, max_string_chars: usize) -> bool {
         // `max_string_chars` chars. Called for every key of every wide object
         // during structural reduction, where the typical string is short and
         // the previous `chars().count()` walk was pure waste.
-        Value::String(s) => {
-            s.len() <= max_string_chars || s.chars().count() <= max_string_chars
-        }
+        Value::String(s) => s.len() <= max_string_chars || s.chars().count() <= max_string_chars,
         Value::Number(_) | Value::Bool(_) | Value::Null => true,
         _ => false,
     }

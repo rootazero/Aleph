@@ -400,6 +400,9 @@ mod tests {
     #[tokio::test]
     async fn a_probe_that_did_run_settles_into_its_value() {
         let joined = tokio::task::spawn_blocking(|| 7usize).await;
-        assert_eq!(settle_probe("core/test", "Widget count", joined).ok(), Some(7));
+        assert_eq!(
+            settle_probe("core/test", "Widget count", joined).ok(),
+            Some(7)
+        );
     }
 }

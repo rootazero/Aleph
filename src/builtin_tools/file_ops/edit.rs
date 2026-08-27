@@ -32,9 +32,9 @@ async fn read_text_file(path: &Path) -> std::result::Result<String, ToolError> {
     // multi-GB text file into a single buffer. The cap is checked BEFORE
     // the read so the allocation never happens.
     const MAX_EDIT_BYTES: u64 = 100 * 1024 * 1024;
-    let meta = tokio::fs::metadata(path).await.map_err(|e| {
-        ToolError::Execution(format!("Failed to stat {}: {}", path.display(), e))
-    })?;
+    let meta = tokio::fs::metadata(path)
+        .await
+        .map_err(|e| ToolError::Execution(format!("Failed to stat {}: {}", path.display(), e)))?;
     if meta.len() > MAX_EDIT_BYTES {
         return Err(ToolError::InvalidArgs(format!(
             "Cannot edit {}: file is {} bytes, max {MAX_EDIT_BYTES}",

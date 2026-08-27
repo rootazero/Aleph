@@ -3083,9 +3083,15 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         let mut reversed = TYPES;
         reversed.reverse();
         for (line, want) in [
-            ("impl<T: 'static> MutableCapabilitySlot<T> {", "MutableCapabilitySlot"),
+            (
+                "impl<T: 'static> MutableCapabilitySlot<T> {",
+                "MutableCapabilitySlot",
+            ),
             ("impl<T: 'static> CapabilitySlot<T> {", "CapabilitySlot"),
-            ("impl<T: Send + Sync> SlotStatus for MutableCapabilitySlot<T> {", "MutableCapabilitySlot"),
+            (
+                "impl<T: Send + Sync> SlotStatus for MutableCapabilitySlot<T> {",
+                "MutableCapabilitySlot",
+            ),
         ] {
             for order in [TYPES, reversed] {
                 assert_eq!(
@@ -3096,7 +3102,10 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
             }
         }
         // And the boundary really is a boundary, in both directions.
-        assert!(!names_type("impl<T> MutableCapabilitySlot<T> {", "CapabilitySlot"));
+        assert!(!names_type(
+            "impl<T> MutableCapabilitySlot<T> {",
+            "CapabilitySlot"
+        ));
         assert!(names_type("impl<T> CapabilitySlot<T> {", "CapabilitySlot"));
 
         let sources = rust_sources_under(&manifest_src());
@@ -3187,7 +3196,8 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         for (ty, method) in &declared {
             let by_path = corpus.contains(&format!("{ty}::{method}("));
             let by_receiver = receivers.get(ty).is_some_and(|rs| {
-                rs.iter().any(|r| corpus.contains(&format!("{r}.{method}(")))
+                rs.iter()
+                    .any(|r| corpus.contains(&format!("{r}.{method}(")))
             });
             if !by_path && !by_receiver {
                 orphans.push(format!("{ty}::{method}"));

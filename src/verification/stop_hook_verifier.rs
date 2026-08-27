@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 use crate::verification::extension_stop_gate::LAST_MESSAGE_ENV_CAP;
-use crate::verification::stop_hooks::{StopHookContext, StopHookHandler, execute_stop_hooks_arc};
+use crate::verification::stop_hooks::{execute_stop_hooks_arc, StopHookContext, StopHookHandler};
 use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, VerifierVerdict};
 
 // `LAST_MESSAGE_ENV_CAP` is a BYTE budget (env-var size); the truncation
