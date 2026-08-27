@@ -69,7 +69,8 @@ pub fn write_text(text: &str) -> Result<()> {
     // `NSPasteboard` does not expose an atomic "declare-and-write"; the only
     // safe sequence is snapshot → clear → set → (on fail) restore.
     let prior_text: Option<String> = unsafe {
-        pb.stringForType(NSPasteboardTypeString).map(|s| s.to_string())
+        pb.stringForType(NSPasteboardTypeString)
+            .map(|s| s.to_string())
     };
 
     pb.clearContents();
@@ -86,9 +87,7 @@ pub fn write_text(text: &str) -> Result<()> {
         // leaving the user with whatever the OS gave them.
         if let Some(prior) = prior_text.as_deref() {
             let restore_ns = NSString::from_str(prior);
-            let restored = unsafe {
-                pb.setString_forType(&restore_ns, NSPasteboardTypeString)
-            };
+            let restored = unsafe { pb.setString_forType(&restore_ns, NSPasteboardTypeString) };
             if !restored {
                 tracing::warn!(
                     "clipboard write refusal: tried to restore prior text, \

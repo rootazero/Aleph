@@ -179,10 +179,7 @@ mod tests {
         assert!(!r.redacted);
         // Two-class rule catches this — pure digits are not a credential
         // signal.
-        assert_eq!(
-            r.text,
-            "1234567890123456789012345678901234567890"
-        );
+        assert_eq!(r.text, "1234567890123456789012345678901234567890");
     }
 
     #[test]

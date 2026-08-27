@@ -216,7 +216,9 @@ mod tests {
             .expect("text request should have at least one question")
             .has_options());
         let req = select_meta().build_request();
-        let first = req.first().expect("select request should have at least one question");
+        let first = req
+            .first()
+            .expect("select request should have at least one question");
         assert!(first.has_options());
         assert_eq!(first.options.len(), 2);
     }

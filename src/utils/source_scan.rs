@@ -502,7 +502,13 @@ pub fn production_code_lines(src: &str) -> String {
     let mut state = LexState::default();
     production
         .lines()
-        .map(|line| if line_is_code(line, &mut state) { line } else { "" })
+        .map(|line| {
+            if line_is_code(line, &mut state) {
+                line
+            } else {
+                ""
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -815,7 +821,11 @@ pub fn after() {}
         );
         // The removed regions are blank, not gone.
         assert_eq!(kept.lines().next().unwrap(), "", "doc line blanked");
-        assert_eq!(kept.lines().nth(5).unwrap(), "", "#[cfg(test)] line blanked");
+        assert_eq!(
+            kept.lines().nth(5).unwrap(),
+            "",
+            "#[cfg(test)] line blanked"
+        );
     }
 
     #[test]

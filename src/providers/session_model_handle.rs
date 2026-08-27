@@ -338,7 +338,10 @@ mod tests {
     fn the_pinnable_set_slot_pins_its_missing_semantics() {
         assert_eq!(pinnable_providers_slot().id(), "providers/pinnable-set");
         assert!(
-            matches!(pinnable_providers_slot().missing(), MissingSemantics::FailsOpen),
+            matches!(
+                pinnable_providers_slot().missing(),
+                MissingSemantics::FailsOpen
+            ),
             "`providers/pinnable-set` is classified FailsOpen from its consumers; changing that \
              means re-reading them, not re-typing this line"
         );

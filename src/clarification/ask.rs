@@ -317,14 +317,13 @@ pub async fn ask(
         // Bus only — see the module doc.
         publish_to_event_bus(&turn, &request)
     } else {
-        let RenderedQuestion { text, keyboard } =
-            super::render::render(
-                request
-                    .first()
-                    .expect("a ClarificationRequest built by a constructor is never empty"),
-                0,
-                request.len(),
-            );
+        let RenderedQuestion { text, keyboard } = super::render::render(
+            request
+                .first()
+                .expect("a ClarificationRequest built by a constructor is never empty"),
+            0,
+            request.len(),
+        );
         let mut message = OutboundMessage::text(turn.conversation_id.clone(), text);
         message.inline_keyboard = keyboard;
         match deps.channels.send(&channel, message).await {

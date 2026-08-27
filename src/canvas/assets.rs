@@ -218,9 +218,7 @@ impl CanvasStore {
                     Ok(_) => Err(CanvasError::NotFound(format!(
                         "asset {asset_id} in canvas {id}"
                     ))),
-                    Err(_) => {
-                        Err(CanvasError::NotFound(format!("canvas {id}")))
-                    }
+                    Err(_) => Err(CanvasError::NotFound(format!("canvas {id}"))),
                 }
             }
             Err(e) => Err(CanvasError::Internal(format!(

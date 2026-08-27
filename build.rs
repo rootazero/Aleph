@@ -4,6 +4,15 @@
 // - Watches dist/ so rust-embed re-embeds when WASM assets change
 // - Falls back to trunk build if dist/ is missing (for `cargo run` without justfile)
 
+// `clippy::panic` — which the security workflow raises to deny via `-D warnings`
+// — exists to keep panics out of code that RUNS IN PRODUCTION. A build script is
+// not that code: it never ships, it executes only on the machine doing the
+// build, and `panic!` is the one way it can report failure to cargo with a
+// source location attached (see the staging copy below, whose whole point is to
+// fail here, named, instead of handing the linker a path to nothing). The allow
+// is file-scoped on purpose: every target under `src/` keeps the lint.
+#![allow(clippy::panic)]
+
 fn main() {
     // Read version from VERSION file (single source of truth)
     // This overrides CARGO_PKG_VERSION so all code uses the same version

@@ -853,7 +853,10 @@ mod tests {
         let result = std::panic::catch_unwind(|| {
             let _budget = ContextBudget::new(&config);
         });
-        assert!(result.is_err(), "zero token_budget must fail at construction");
+        assert!(
+            result.is_err(),
+            "zero token_budget must fail at construction"
+        );
     }
 
     #[test]

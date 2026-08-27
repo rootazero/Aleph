@@ -2235,11 +2235,11 @@ mod tests {
             "the owner mark is part of the rendered line's contract: {roster:?}"
         );
 
-        let personal = crate::scope::with_scope(
-            Some(ScopeAttribution::personal("u-solo")),
-            async { child_environment_context("m", None, None, None, None) },
-        )
-        .await;
+        let personal =
+            crate::scope::with_scope(Some(ScopeAttribution::personal("u-solo")), async {
+                child_environment_context("m", None, None, None, None)
+            })
+            .await;
         assert!(
             personal.room_roster.is_none(),
             "a personal session has no room. Emitting a block here would add \
@@ -2281,7 +2281,9 @@ mod tests {
                 owner_user_id: "u-owner".to_string(),
                 scope: ScopeId::Project(project.id.clone()),
             }),
-            async { child_environment_context("m", None, Some("sess-parent"), Some("run-7"), None) },
+            async {
+                child_environment_context("m", None, Some("sess-parent"), Some("run-7"), None)
+            },
         )
         .await;
 
@@ -2341,7 +2343,10 @@ mod tests {
         assert!(standing_goal.is_none());
         assert!(graph_topology.is_none());
         assert!(timer_loop.is_none());
-        assert!(strategy.is_none(), "threaded by the builder, not the envelope");
+        assert!(
+            strategy.is_none(),
+            "threaded by the builder, not the envelope"
+        );
         assert!(strategy_guardrails.is_none());
         assert!(matches!(voice, VoiceContext::Off), "a child has no channel");
         assert!(voice_vocabulary.is_none());

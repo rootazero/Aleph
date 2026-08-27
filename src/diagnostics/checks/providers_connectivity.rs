@@ -90,7 +90,10 @@ fn resolve_key(vault: &SharedTokenManager, name: &str) -> KeyLookup {
         Ok(None) => KeyLookup::Ready(None),
         Err(e) => {
             tracing::warn!(provider = %name, error = %e, "vault read failed during connectivity probe");
-            KeyLookup::Unreadable(format!("the vault would not release `{}`: {e}", provider_vault_key(name)))
+            KeyLookup::Unreadable(format!(
+                "the vault would not release `{}`: {e}",
+                provider_vault_key(name)
+            ))
         }
     }
 }

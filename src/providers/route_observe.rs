@@ -630,7 +630,10 @@ mod tests {
     /// slot id.
     #[test]
     fn the_observability_slot_pins_its_missing_semantics() {
-        assert_eq!(global_route_observability_slot().id(), "providers/route-observability");
+        assert_eq!(
+            global_route_observability_slot().id(),
+            "providers/route-observability"
+        );
         assert!(
             matches!(global_route_observability_slot().missing(), MissingSemantics::ConsumerDecides),
             "`providers/route-observability` is classified ConsumerDecides from its consumers; changing that \

@@ -280,7 +280,13 @@ mod presence_discipline {
     /// two assertions red at the lines that name it.
     fn without_logging(body: &str) -> String {
         const LOG_MACROS: [&str; 7] = [
-            "trace!", "debug!", "info!", "warn!", "error!", "eprintln!", "println!",
+            "trace!",
+            "debug!",
+            "info!",
+            "warn!",
+            "error!",
+            "eprintln!",
+            "println!",
         ];
         let mut out = String::with_capacity(body.len());
         let mut i = 0usize;
@@ -290,7 +296,8 @@ mod presence_discipline {
                 let rest: String = bytes[i..].iter().take(m.len() + 1).collect();
                 if rest.starts_with(m) && rest[m.len()..].starts_with('(') {
                     // Left boundary: `warn!` must not match `my_warn!`.
-                    let left_ok = i == 0 || !(bytes[i - 1].is_alphanumeric() || bytes[i - 1] == '_');
+                    let left_ok =
+                        i == 0 || !(bytes[i - 1].is_alphanumeric() || bytes[i - 1] == '_');
                     if left_ok {
                         let mut depth = 0i32;
                         let mut j = i + m.len();
@@ -696,10 +703,7 @@ mod presence_discipline {
         // keeps a user macro whose name merely ends in a listed one from being
         // stripped, which would hide a real carry.
         assert!(
-            mentions(
-                &without_logging("{ my_warn!(\"{e}\"); None }"),
-                "e"
-            ),
+            mentions(&without_logging("{ my_warn!(\"{e}\"); None }"), "e"),
             "a macro that is not in the list must keep its argument visible"
         );
         assert!(

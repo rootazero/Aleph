@@ -458,7 +458,10 @@ impl Config {
         // to silence. Covered by the same JSON-value-extraction pattern used
         // for `enabled` above; a missing key leaves the field at its
         // serde-default value (`default_strip_auth` → `true`).
-        if let Some(v) = ssrf.get("strip_auth_on_cross_origin").and_then(|v| v.as_bool()) {
+        if let Some(v) = ssrf
+            .get("strip_auth_on_cross_origin")
+            .and_then(|v| v.as_bool())
+        {
             config.ssrf.strip_auth_on_cross_origin = v;
         }
     }

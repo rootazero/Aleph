@@ -170,10 +170,7 @@ async fn handle_resolve(
     // consume against, but the user's window may still have a card. Clients
     // are instructed (see the `stale` field's docstring) to re-render from
     // `clarification.pending` when `stale` is true.
-    let stale = matches!(
-        outcome,
-        crate::clarification::ResolveOutcome::Stale
-    );
+    let stale = matches!(outcome, crate::clarification::ResolveOutcome::Stale);
     let pending_questions = if stale {
         0
     } else {
