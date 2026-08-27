@@ -81,6 +81,11 @@ enum UnknownReason {
     /// The tree / focus could not be read this sample (bridge error), or the
     /// matched element's value is withheld because the field is secure.
     ObservationUnavailable,
+    /// The predicates held at the last sample but had not held for
+    /// `stable_samples` *consecutive* samples when the window closed — the
+    /// state was seen, never seen to settle. (cua-driver degrades the same
+    /// way; a satisfied-without-stability verdict must not read as a pass.)
+    StabilityUnproven,
 }
 
 impl UnknownReason {
@@ -89,6 +94,7 @@ impl UnknownReason {
             Self::TargetMissing => "target_missing",
             Self::MultiMatch => "multi_match",
             Self::ObservationUnavailable => "observation_unavailable",
+            Self::StabilityUnproven => "stability_unproven",
         }
     }
 }
@@ -180,6 +186,29 @@ pub async fn run_verify_state(
             return report(true, overall, samples, start.elapsed(), &evals, None);
         }
         if start.elapsed() >= timeout {
+            // cua-driver parity: a state that was satisfied at the last sample
+            // but never held for `stable_samples` consecutive samples is NOT a
+            // pass — it flickered through. Downgrade those predicates to
+            // `unknown/stability_unproven` before folding, so a caller reading
+            // only `status` never mistakes "seen once" for "settled".
+            let (overall, evals) = if satisfied && consecutive < need_stable {
+                let downgraded: Vec<PredEval> = evals
+                    .into_iter()
+                    .map(|e| match e.status {
+                        PredStatus::Satisfied => PredEval {
+                            status: PredStatus::Unknown(UnknownReason::StabilityUnproven),
+                            ..e
+                        },
+                        _ => e,
+                    })
+                    .collect();
+                (
+                    PredStatus::Unknown(UnknownReason::StabilityUnproven),
+                    downgraded,
+                )
+            } else {
+                (overall, evals)
+            };
             return report(
                 false,
                 overall,
@@ -380,10 +409,12 @@ fn value_status(el: &AxElement, p: &StatePredicate) -> PredStatus {
 }
 
 /// Does one element satisfy the predicate's selector (role / title /
-/// title_contains, all ANDed)? Role and title compare case-insensitively.
+/// title_contains, all ANDed)? Title compares case-insensitively; roles compare
+/// after [`normalize_role`], so a selector may name the role in any toolkit's
+/// dialect (`button`, `AXButton`, `pushbutton`).
 fn element_matches(el: &AxElement, p: &StatePredicate) -> bool {
     if let Some(role) = p.role.as_deref() {
-        if !el.role.eq_ignore_ascii_case(role) {
+        if normalize_role(&el.role) != normalize_role(role) {
             return false;
         }
     }
@@ -403,6 +434,27 @@ fn element_matches(el: &AxElement, p: &StatePredicate) -> bool {
         }
     }
     true
+}
+
+/// Normalize a role for selector comparison: case-folded, non-alphanumerics
+/// dropped, the `ax` prefix stripped, and the common cross-toolkit aliases
+/// folded (`pushbutton`→`button`, `pagetab`/`tabitem`→`tab`). The tree speaks
+/// the macOS `AX*` vocabulary on every platform (the limbs map their native
+/// roles into it); model-written selectors arrive in every dialect — the
+/// comparison, not the tree, absorbs that. (Same normalization as cua-driver's
+/// verify_state role matching.)
+fn normalize_role(role: &str) -> String {
+    let folded: String = role
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_lowercase();
+    let stripped = folded.strip_prefix("ax").unwrap_or(&folded);
+    match stripped {
+        "pushbutton" => "button".to_string(),
+        "pagetab" | "tabitem" => "tab".to_string(),
+        other => other.to_string(),
+    }
 }
 
 /// Count elements in the subtree that match the selector.
@@ -852,6 +904,52 @@ mod tests {
         assert_eq!(data["status"], "unknown");
         assert_eq!(data["reason"], "timeout");
         assert_eq!(data["stable"], serde_json::Value::Bool(false));
+    }
+
+    #[tokio::test]
+    async fn satisfied_without_stability_at_timeout_is_not_a_pass() {
+        // The element is present at every sample, but `stable_samples: 3`
+        // requires three *consecutive* satisfied samples and the window closes
+        // after the first — "seen once" must degrade to
+        // `unknown/stability_unproven`, never report satisfied.
+        let root = tree("AXWindow", vec![el("AXButton", Some("Save"))]);
+        let ax = ScriptedAx::with_trees(vec![Some(root)]);
+        let out =
+            run_verify_state(&ax, None, &[exists("AXButton", "Save")], Some(250), Some(3)).await;
+        let data = out.data.unwrap();
+        assert_eq!(data["status"], "unknown", "unstable is not satisfied");
+        assert_eq!(data["reason"], "timeout");
+        assert_eq!(
+            data["predicates"][0]["unknown_reason"],
+            "stability_unproven"
+        );
+    }
+
+    #[tokio::test]
+    async fn role_selectors_match_across_toolkit_dialects() {
+        // The tree speaks macOS `AX*`; the selector may say "button" or the
+        // AT-SPI "pushbutton" — the comparison absorbs the dialect.
+        let root = tree("AXWindow", vec![el("AXButton", Some("Save"))]);
+        for role in ["button", "Button", "pushbutton", "AXButton"] {
+            let ax = ScriptedAx::with_trees(vec![Some(root.clone())]);
+            let pred = StatePredicate {
+                assert: StateAssertion::Exists,
+                role: Some(role.to_string()),
+                title: Some("Save".to_string()),
+                title_contains: None,
+                value: None,
+            };
+            let out = run_verify_state(&ax, None, &[pred], Some(0), None).await;
+            assert_eq!(
+                out.data.unwrap()["status"],
+                "satisfied",
+                "role {role:?} should match AXButton"
+            );
+        }
+        // …while a genuinely different role still does not match.
+        let ax = ScriptedAx::with_trees(vec![Some(root)]);
+        let out = run_verify_state(&ax, None, &[exists("AXSlider", "Save")], Some(0), None).await;
+        assert_eq!(out.data.unwrap()["status"], "unknown");
     }
 
     #[tokio::test]

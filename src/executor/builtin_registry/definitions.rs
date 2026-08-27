@@ -2291,7 +2291,23 @@ mod tests {
     /// binding NOT being here earns its bytes the same way: without it a model
     /// asked to "point this room at my repo" will loop through eight actions
     /// discovering by rejection what one clause says outright.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 108_556;
+    ///
+    /// 2026-08-27: 108_556 -> 108_800 B (+244) for the `desktop` tool's
+    /// element-token contract. The round first paid for itself — the batch
+    /// struct's `pid` doc stopped duplicating `DesktopArgs::pid`'s rail
+    /// paragraph (schema ratchet still fits without a raise), and the token
+    /// semantics dropped out of the field docs into prose — what remains is
+    /// the contract itself. The three questions: (1) no schema can carry it —
+    /// the `element` field's type says "a string", while the load-bearing
+    /// facts are that a token is re-resolved against the live tree (so it
+    /// survives the window moving), that a superseded snapshot's token is a
+    /// named stale error rather than a silent mis-click, and which six verbs
+    /// accept one; (2) a stronger model cannot infer the stale-never-fallback
+    /// discipline, which is this codebase's deliberate answer (ported from
+    /// cua-driver), not a convention; (3) the consumers are `DesktopTool` and
+    /// `DesktopAxSnapshot`, shipped and dispatched, and every token refusal
+    /// path reads as an instruction only if the model was told the contract.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 108_800;
 
     #[test]
     fn catalog_description_bytes_ratchet() {

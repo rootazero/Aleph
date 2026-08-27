@@ -5,6 +5,7 @@ mod action_script;
 mod ax;
 mod ax_compress;
 mod coord_resolve;
+mod element_ref;
 mod focus_gate;
 mod gui_locate;
 mod held_inputs;
@@ -710,12 +711,14 @@ is. That path is refused by default (the operator can allow it with
 `delivery: "targeted" | "global"`.
 
 For reliable clicking, call `desktop_ax_snapshot` first: it returns the app's
-interactable elements with ready-to-use `center` [x, y] coordinates — far more
-accurate than estimating pixels from a screenshot — and its `app_pid` is the
-`pid` to pass back here. `set_value` / `ax_action` are better still for text
-fields and buttons: they address the element directly, verify the write, and are
-likewise cursor-free. Use a screenshot only when you need to *see* visual state
-the accessibility tree cannot describe.
+interactable elements with a `token` each — pass it back as `element` (alone;
+it carries its own target) to click / double_click / hover / scroll / set_value
+/ ax_action. A token is re-resolved against the live UI at action time: a moved
+window is found at its new position, and a superseded snapshot's token fails
+with a named stale error instead of clicking whatever moved there. `app_pid`
+is the `pid` to pass when targeting by raw `center` coordinates instead. `set_value` / `ax_action` are better still for text
+fields and buttons: direct addressing, verified writes, cursor-free. Use a
+screenshot only when you need to *see* visual state the tree cannot describe.
 
 Driving a web page? Reach for the `browser_*` tools first — they read the DOM, so
 they are faster and exact. Come back to this tool for what the DOM cannot reach:
@@ -773,7 +776,7 @@ Drive one app in the background (nothing else on the user's screen is disturbed)
 {"action":"type_text","app":"Notes","text":"meeting notes\n"}
 {"action":"scroll","pid":733,"x":700,"y":460,"delta_y":-300}
 
-Effect grading — every successful mutating action's `data` carries `effect`, a closed-set evidence grade: "confirmed" (publishable post-action proof — set_value's read-back matched, restart_app's poll found the app running again), "partial" (only part of the intended effect is provable: a batch that stopped early — see `delivered_count` — or a restart whose relaunch did not come back), "unverifiable" (the OS accepted the event; nothing proves the UI changed — most synthetic input), "suspected_noop" (evidence suggests nothing happened). effect grades EVIDENCE, not outcome: "unverifiable" is not failure, and OS/event acceptance never promotes an action to "confirmed". When you need certainty, assert the postcondition with verify_state or read it with observe. Refusals (success:false) carry no effect.
+Effect grading — every successful mutating action's `data` carries `effect`, a closed-set evidence grade: "confirmed" (publishable post-action proof — set_value's read-back matched, restart_app's poll found the app running again, focus_window's poll saw the foreground), "partial" (only part of the intended effect is provable: a batch that stopped early — see `delivered_count` — or a restart whose relaunch did not come back), "unverifiable" (the OS accepted the event; nothing proves the UI changed — most synthetic input), "suspected_noop" (evidence suggests nothing happened). effect grades EVIDENCE, not outcome: "unverifiable" is not failure, and OS/event acceptance never promotes an action to "confirmed". When you need certainty, assert the postcondition with verify_state or read it with observe. Refusals (success:false) carry no effect.
 
 Act→observe in one call — mutating actions accept `observe:"state"` (result gains `post_state`: frontmost app + focused element after a 300ms settle) or `observe:"screenshot"` (additionally a fresh bounded screenshot as `post_screenshot`). Use it on the last action of a step instead of a separate screenshot round-trip. In a batch, sub-actions inherit the batch-level `observe`.
 
@@ -919,8 +922,13 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
                 //     different fact and carry no grade. Batch never reaches
                 //     here (handled at step 6; its sub-actions are graded by
                 //     the recursive call, and its own grade is folded in
-                //     `execute_batch`).
-                if output.success && classify_approval(&args).is_some() {
+                //     `execute_batch`). `focus_window` is approval-exempt
+                //     (read-only class) but *state-changing*, and its trait
+                //     contract makes success a verified observation — so it is
+                //     graded too.
+                if output.success
+                    && (classify_approval(&args).is_some() || args.action == "focus_window")
+                {
                     let effect = types::effect_for(&args.action, output.data.as_ref());
                     let mut data = output.data.take().unwrap_or_else(|| serde_json::json!({}));
                     if let Some(obj) = data.as_object_mut() {

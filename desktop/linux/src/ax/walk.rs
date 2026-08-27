@@ -14,7 +14,7 @@
 use std::pin::Pin;
 
 use atspi::proxy::accessible::AccessibleProxy;
-use atspi::{CoordType, Role, State, StateSet};
+use atspi::{CoordType, Interface, Role, State, StateSet};
 
 use aleph_protocol::desktop_bridge::methods::ax::AxElement;
 use aleph_protocol::desktop_bridge::methods::screen::Region;
@@ -149,9 +149,11 @@ impl<'a> Walk<'a> {
         depth: u32,
     ) -> Option<AxElement> {
         let root_path = root.inner().path().as_str().to_owned();
-        let skeleton = self.skeleton(&root_path, depth)?;
+        let selection = self.skeleton(&root_path, depth)?;
+        let skeleton = selection.nodes;
 
-        // Charge the budget for what the skeleton selected.
+        // Charge the budget for what the skeleton selected — *non-wrapper*
+        // nodes only (see `skeleton`).
         //
         // This pass picks its nodes from the cache in one go instead of walking
         // down one `remaining -= 1` at a time like [`Self::element`], so without
@@ -159,8 +161,13 @@ impl<'a> Walk<'a> {
         // *default* path. `node_count` came back 0 for every successful query,
         // and `exhausted()` said `false` even when `skeleton` had just cut the
         // tree at the budget: a silent truncation, the one failure the flag
-        // exists to prevent.
-        self.remaining = self.max_nodes.saturating_sub(skeleton.len());
+        // exists to prevent. The hard-cap overflow is a budget cut too, so it
+        // reports as exhausted.
+        self.remaining = if selection.overflowed {
+            0
+        } else {
+            self.max_nodes.saturating_sub(selection.charged)
+        };
 
         // Bounded so a large application cannot open thousands of concurrent
         // D-Bus calls at once: past a point that queues inside the target's
@@ -187,14 +194,35 @@ impl<'a> Walk<'a> {
     /// No I/O: every field here came back in the bulk fetch. The traversal is
     /// breadth-first so that a tree hitting the node budget keeps its shallow
     /// structure — windows, toolbars, dialogs — rather than one deep spine.
-    fn skeleton(&self, root_path: &str, depth: u32) -> Option<Vec<SkeletonNode>> {
+    ///
+    /// # Wrappers are free
+    ///
+    /// A pure layout wrapper (an `AXGroup`/`AXUnknown` with no label and no
+    /// content/action interface — [`SkeletonNode::is_wrapper`]) still enters
+    /// the tree, but does **not** count against the node budget. This is the
+    /// limb-side half of the core's render elision
+    /// (`ax_compress::elide_wrapper_nodes`, ported from open-codex's
+    /// `shouldElideNode`): on an Electron/GTK tree wrapper chains are the
+    /// majority of nodes, and charging them is how a walk used to report
+    /// `truncated` while never reaching the real controls. The wrapper stays
+    /// *in* the tree so matching semantics (`verify_state` / `gui_locate` /
+    /// `set_of_marks`) are untouched — only the accounting changes. Depth is
+    /// still occupied: `max_depth` scopes *where* we look, and a wrapper chain
+    /// is a real place.
+    fn skeleton(&self, root_path: &str, depth: u32) -> Option<SkeletonSelection> {
         let cache = self.cache.as_ref()?;
         let root = cache.get(root_path)?;
 
         let mut out = vec![SkeletonNode::new(root_path.to_owned(), root, 0)];
+        let mut charged = usize::from(!out[0].is_wrapper());
+        // Absolute ceiling on the *vector* (wrappers included): free wrappers
+        // must not mean unbounded memory on a pathological tree. Hitting it is
+        // a budget cut like any other and is reported as truncation.
+        let hard_cap = self.max_nodes.saturating_mul(8).saturating_add(64);
+        let mut overflowed = false;
         let mut cursor = 0;
-        while cursor < out.len() {
-            if out.len() >= self.max_nodes {
+        'outer: while cursor < out.len() {
+            if charged >= self.max_nodes {
                 break;
             }
             let (path, level) = (out[cursor].path.clone(), out[cursor].level);
@@ -203,18 +231,30 @@ impl<'a> Walk<'a> {
                 continue;
             }
             for child_path in cache.children_of(&path) {
-                if out.len() >= self.max_nodes {
+                if charged >= self.max_nodes {
                     break;
+                }
+                if out.len() >= hard_cap {
+                    overflowed = true;
+                    break 'outer;
                 }
                 let Some(item) = cache.get(child_path) else {
                     continue;
                 };
                 let index = out.len();
                 out[cursor - 1].children.push(index);
-                out.push(SkeletonNode::new(child_path.clone(), item, level + 1));
+                let node = SkeletonNode::new(child_path.clone(), item, level + 1);
+                if !node.is_wrapper() {
+                    charged += 1;
+                }
+                out.push(node);
             }
         }
-        Some(out)
+        Some(SkeletonSelection {
+            nodes: out,
+            charged,
+            overflowed,
+        })
     }
 
     /// Build the element rooted at `proxy`, descending `depth` more levels.
@@ -375,6 +415,17 @@ impl<'a> Walk<'a> {
 /// saturated without that.
 const ENRICH_CONCURRENCY: usize = 32;
 
+/// The nodes a [`Walk::skeleton`] pass selected, with its budget accounting.
+struct SkeletonSelection {
+    nodes: Vec<SkeletonNode>,
+    /// How many *non-wrapper* nodes were selected — what the node budget is
+    /// charged for.
+    charged: usize,
+    /// The absolute vector ceiling was hit before the budget ran out — a
+    /// pathological wrapper sea. Reported as truncation like any budget cut.
+    overflowed: bool,
+}
+
 /// One node chosen for materialization, with everything the cache already knew.
 struct SkeletonNode {
     path: String,
@@ -404,6 +455,36 @@ impl SkeletonNode {
             level,
             children: Vec::new(),
         }
+    }
+
+    /// True for a pure layout wrapper: maps to `AXGroup`/`AXUnknown`, carries
+    /// no label, and exposes no content or action interface — nothing a user
+    /// (or a locator) could name or act on.
+    ///
+    /// The rule mirrors the core-side render elision
+    /// (`ax_compress::elide_wrapper_nodes`, itself open-codex's
+    /// `shouldElideNode`) so the budget accounting here and the presentation
+    /// there agree on what noise is. A wrapper that can be *acted on* (an
+    /// icon-only web control rendered as a group with an Action interface) is
+    /// a target, not decoration, and pays its budget like one. `secure` needs
+    /// no check: a password box is a text entry, which the role mapping already
+    /// keeps out of the wrapper roles.
+    fn is_wrapper(&self) -> bool {
+        let mapped = atspi_role_to_ax_role(self.role);
+        if mapped != "AXGroup" && mapped != "AXUnknown" {
+            return false;
+        }
+        if self.title.as_deref().is_some_and(|t| !t.trim().is_empty()) {
+            return false;
+        }
+        !(self.ifaces.contains(Interface::Action)
+            || self.ifaces.contains(Interface::Text)
+            || self.ifaces.contains(Interface::EditableText)
+            || self.ifaces.contains(Interface::Value)
+            || self.ifaces.contains(Interface::Hypertext)
+            || self.ifaces.contains(Interface::Hyperlink)
+            || self.ifaces.contains(Interface::Selection)
+            || self.ifaces.contains(Interface::Table))
     }
 }
 
@@ -688,6 +769,7 @@ fn truncate_chars(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atspi::InterfaceSet;
     fn states(list: &[State]) -> StateSet {
         list.iter().copied().collect()
     }
@@ -788,5 +870,49 @@ mod tests {
         // the walk cannot be constructed already over budget, and the budget is
         // the documented cap.
         assert_eq!(MAX_NODES, 1_500);
+    }
+
+    fn skeleton_node(
+        role: Role,
+        title: Option<&str>,
+        ifaces: InterfaceSet,
+    ) -> SkeletonNode {
+        SkeletonNode {
+            path: "/org/a11y/atspi/accessible/0".to_string(),
+            role,
+            states: StateSet::empty(),
+            title: title.map(str::to_string),
+            description: None,
+            ifaces,
+            level: 0,
+            children: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_bare_layout_panel_is_a_wrapper() {
+        assert!(skeleton_node(Role::Panel, None, InterfaceSet::empty()).is_wrapper());
+        assert!(skeleton_node(Role::Filler, None, InterfaceSet::empty()).is_wrapper());
+        assert!(skeleton_node(Role::Unknown, None, InterfaceSet::empty()).is_wrapper());
+        // Geometry alone does not make a wrapper real — Component is universal.
+        assert!(skeleton_node(Role::Panel, None, InterfaceSet::new(Interface::Component))
+            .is_wrapper());
+    }
+
+    #[test]
+    fn a_wrapper_with_content_or_actions_is_not_free() {
+        // A labelled group is a landmark, not noise.
+        assert!(!skeleton_node(Role::Panel, Some("Sidebar"), InterfaceSet::empty()).is_wrapper());
+        // An icon-only clickable group is a *target* — it must pay its budget.
+        assert!(!skeleton_node(Role::Panel, None, InterfaceSet::new(Interface::Action))
+            .is_wrapper());
+        assert!(!skeleton_node(Role::Panel, None, InterfaceSet::new(Interface::Text))
+            .is_wrapper());
+    }
+
+    #[test]
+    fn real_controls_are_never_wrappers() {
+        assert!(!skeleton_node(Role::Button, None, InterfaceSet::empty()).is_wrapper());
+        assert!(!skeleton_node(Role::Entry, None, InterfaceSet::empty()).is_wrapper());
     }
 }

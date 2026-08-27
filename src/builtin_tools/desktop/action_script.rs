@@ -398,6 +398,9 @@ const fn blank_batch_action() -> DesktopBatchAction {
         // as its own JSON action, never expanded from a UI-TARS line.
         expect: Vec::new(),
         stable_samples: None,
+        // A token is minted by ax_snapshot output the model reads as JSON; the
+        // UI-TARS script syntax has no way to carry one.
+        element: None,
     }
 }
 

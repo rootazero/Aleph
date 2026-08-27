@@ -310,6 +310,14 @@ pub struct DesktopArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub force: Option<bool>,
 
+    /// Element token from an `ax_snapshot` result (e.g. `"s00000001:3"`):
+    /// acts on that element, re-resolved against the live UI at action time.
+    /// Pass it alone — it conflicts with `pid` / `app` / `window_id` / `role`
+    /// / `element_title` / `x` / `y`. Accepted by click / double_click / hover
+    /// / scroll / set_value / ax_action.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub element: Option<String>,
+
     /// Postconditions for the `verify_state` action — AX-tree predicates that
     /// are ANDed and polled until they hold (stably) or the window elapses.
     /// See [`StatePredicate`]. Ignored by every other action.
@@ -505,19 +513,8 @@ pub struct DesktopBatchAction {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ax_action_name: Option<String>,
 
-    /// Target process for this action.
-    ///
-    /// For `set_value` / `ax_action` it scopes the element locator, as before.
-    /// For every coordinate-space and keyboard action (click, `double_click`,
-    /// drag, hover, scroll, `mouse_button`, `type_text`, `key_combo`, paste) it
-    /// additionally selects the **delivery rail**: with a pid the event is
-    /// posted straight into that process's event queue — the user's cursor never
-    /// moves and the app need not be frontmost. Without one the event goes to
-    /// the global input tap, which drags the user's physical cursor and is
-    /// refused unless `[desktop] allow_global_pointer = true`.
-    ///
-    /// Omit for the frontmost app on `set_value` / `ax_action`. See also
-    /// [`DesktopArgs::app`], which resolves a name to the same pid.
+    /// Target process for this sub-action (locator scope and delivery rail
+    /// selector). See [`DesktopArgs::pid`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<i32>,
 
@@ -531,6 +528,10 @@ pub struct DesktopBatchAction {
     /// [`DesktopArgs::force`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub force: Option<bool>,
+
+    /// Element token for this sub-action. See [`DesktopArgs::element`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub element: Option<String>,
 
     /// Postconditions for a `verify_state` sub-action. See [`DesktopArgs::expect`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -586,6 +587,7 @@ impl DesktopBatchAction {
             pid: None,
             observe: None,
             force: None,
+            element: None,
             expect: Vec::new(),
             stable_samples: None,
         }
@@ -636,6 +638,7 @@ impl From<&DesktopBatchAction> for DesktopArgs {
             pid: b.pid,
             observe: b.observe.clone(),
             force: b.force,
+            element: b.element.clone(),
             expect: b.expect.clone(),
             stable_samples: b.stable_samples,
         }
@@ -673,7 +676,8 @@ pub struct DesktopOutput {
 #[serde(rename_all = "snake_case")]
 pub enum ActionEffect {
     /// Publishable post-action proof exists (set_value's read-back matched,
-    /// restart_app's poll found the app running again).
+    /// restart_app's poll found the app running again, focus_window's poll saw
+    /// the window actually reach the foreground).
     Confirmed,
     /// The action provably took effect only in part: a `batch` that stopped
     /// early after delivering some sub-actions, or a `restart_app` whose quit
@@ -707,6 +711,11 @@ impl ActionEffect {
 /// produced (`data`). Stage 1 deliberately emits only grades today's code can
 /// back: every verb without a post-action proof is `Unverifiable`, which is
 /// the honest statement — not a euphemism for success.
+///
+/// Stage 2 (so far): `focus_window` joins the graded set — its trait contract
+/// (`aleph_desktop::ScreenCapability::focus_window`) is "`Ok` = the window was
+/// observed active", and all three limbs poll the real foreground answer
+/// before returning, so success *is* publishable proof.
 pub(super) fn effect_for(action: &str, data: Option<&Value>) -> ActionEffect {
     match action {
         "set_value" => match data.and_then(|d| d["verification"]["state"].as_str()) {
@@ -715,6 +724,7 @@ pub(super) fn effect_for(action: &str, data: Option<&Value>) -> ActionEffect {
             // effect is unproven — not failure, not success.
             _ => ActionEffect::Unverifiable,
         },
+        "focus_window" => ActionEffect::Confirmed,
         "restart_app" => match data.and_then(|d| d["verified"].as_bool()) {
             Some(true) => ActionEffect::Confirmed,
             // The quit half provably happened and the relaunch is disproven —

@@ -145,16 +145,61 @@ pub fn window_list() -> Result<Vec<WindowInfo>> {
 
 /// Bring `window_id` to the front and give it keyboard focus.
 ///
+/// A focus *request* the WM accepted is not the window focused: X11's
+/// `_NET_ACTIVE_WINDOW` client message is a hint the WM may refuse or redirect,
+/// and reporting success anyway is how the model ends up typing into whatever
+/// the user is actually looking at. So after dispatching, the active window is
+/// polled on the same 500 ms cadence the Windows and macOS limbs use
+/// (`action::window`'s foreground poll), and a window that never becomes active
+/// is an honest error, not a delivered request.
+///
 /// # Errors
 ///
-/// Propagates [`pick_backend`], or the backend's own failure.
+/// Propagates [`backend`]'s selection failure and the backend's own dispatch
+/// failure; returns [`DesktopError::WindowFailed`] when the window did not
+/// become active within the wait, or when the outcome could not be read back.
 pub fn focus_window(window_id: u64) -> Result<()> {
     match backend()? {
         WindowBackend::X11 => x11_focus(window_id),
         WindowBackend::Sway => sway::focus_window(window_id),
         WindowBackend::Hyprland => hyprland::focus_window(window_id),
+    }?;
+
+    let deadline = std::time::Instant::now() + FOCUS_WAIT;
+    loop {
+        match active_window() {
+            Ok(Some(id)) if id == window_id => return Ok(()),
+            Ok(_) => {}
+            Err(e) => {
+                // The dispatch succeeded but the outcome is unreadable —
+                // "delivered, unconfirmed", which must not read as success.
+                return Err(DesktopError::WindowFailed(format!(
+                    "focus request for window {window_id} was delivered, but the focused window \
+                     could not be read back ({e}) — treat focus as unconfirmed."
+                )));
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(FOCUS_POLL);
     }
+    Err(DesktopError::WindowFailed(format!(
+        "window {window_id} did not become the active window within {} ms of the focus request — \
+         the window manager refused or redirected it. Address the app directly with set_value / \
+         ax_action (they need no focus), or screenshot with its window_id to look at it without \
+         raising it.",
+        FOCUS_WAIT.as_millis()
+    )))
 }
+
+/// How long to wait for the WM to actually focus a window after the request,
+/// and how often to re-read the active window. The same cadence the Windows
+/// and macOS limbs poll on (`action::window`'s `FOREGROUND_WAIT` /
+/// `FOREGROUND_POLL`), duplicated here because those consts are `cfg`'d to
+/// their platforms.
+const FOCUS_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
+const FOCUS_POLL: std::time::Duration = std::time::Duration::from_millis(25);
 
 /// Move `window_id` so its top-left corner sits at (`x`, `y`).
 ///
