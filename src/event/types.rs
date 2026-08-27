@@ -49,10 +49,12 @@ pub enum EventType {
 /// Unified event enum - all events with a live producer in the system.
 ///
 /// Adding a new variant here requires: (a) an emitter that calls
-/// `GlobalBus::broadcast(...)` or `EventBus::publish(...)`, and (b) a
-/// subscriber registered through `EventFilter::new(vec![...])` or
-/// `handler.subscriptions()`. A variant with neither is a dead variant — see
-/// the 2026-08-16 audit for the 13 dead variants removed from this enum.
+/// `GlobalBus::global().broadcast(...)`, and (b) a subscriber registered
+/// through `EventFilter::new(vec![...])` or `handler.subscriptions()`. A
+/// variant with neither is a dead variant — see the 2026-08-16 audit for the
+/// 13 dead variants removed from this enum. (The pre-2026-08-16 doc
+/// referenced the removed per-instance `EventBus::publish(...)`; that API is
+/// gone, do not reintroduce it.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum AlephEvent {

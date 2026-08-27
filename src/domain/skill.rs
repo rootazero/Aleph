@@ -194,11 +194,12 @@ pub enum Os {
     Windows,
 }
 
-impl fmt::Display for Os {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+// `fmt::Display` for `Os` was removed 2026-08-27: zero callers outside the
+// domain module (the serde rename already covers `to_string` via
+// `serde_json::to_value(&Os::Darwin) == "darwin"`). Keeping a `Display` impl
+// here is the kind of orphan API surface the recent trait/impl cleanup
+// passes have been removing. Callers that need the canonical lowercase
+// string use `Os::as_str`.
 
 impl Os {
     /// Canonical lowercase name matching the serde rename rule.
@@ -441,15 +442,12 @@ impl From<String> for SkillContent {
     }
 }
 
-impl fmt::Display for SkillContent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// SkillManifest (Aggregate Root)
-// ---------------------------------------------------------------------------
+// `fmt::Display` for `SkillContent` was removed 2026-08-27: zero callers.
+// The field is untrusted prompt text (see the wrapping context at
+// `SkillContent::new`), so any UI that Display-formats it loses the chance
+// to apply the careful sandbox the manifest pipeline otherwise maintains.
+// Callers go through `SkillContent::as_str` (or `SkillManifest::content`)
+// to make the trust boundary explicit.
 
 /// The primary aggregate root for the skill system.
 ///

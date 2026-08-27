@@ -61,12 +61,16 @@ impl HealthCheck for LoopGraphCheck {
             }
             Ok(Presence::Present) => {}
         }
-        /// Outcome of the blocking store probe (`open` + `lint` + emptiness
-        /// check), one enum so a single `spawn_blocking` covers all three
-        /// synchronous SQLite calls.
+        /// Outcome of the blocking store probe (`open` + `lint` + `list_nodes`),
+        /// one enum so a single `spawn_blocking` covers all three synchronous
+        /// SQLite calls. Each error path is a separate variant so that
+        /// "lint succeeded but the follow-up `list_nodes` call errored" is
+        /// not collapsed into a clean `Topology sound` verdict — that was the
+        /// form-1 misreport this directory is engineered to prevent.
         enum Probe {
             Unreadable(String),
             LintFailed(String),
+            ListFailed(String),
             Done { findings: Vec<String>, empty: bool },
         }
 
@@ -80,8 +84,16 @@ impl HealthCheck for LoopGraphCheck {
                 Ok(f) => f,
                 Err(e) => return Probe::LintFailed(format!("{e}")),
             };
-            let empty = findings.is_empty()
-                && matches!(store.list_nodes(DEFAULT_AGENT), Ok(n) if n.is_empty());
+            // `list_nodes` is the only call that can tell `findings.is_empty()`
+            // apart from "no nodes at all". If it errors, the answer is
+            // *unknown* — not empty, not sound — so the failure has to
+            // surface separately rather than be folded into the `Ok(n)
+            // if n.is_empty()` short-circuit.
+            let empty = match store.list_nodes(DEFAULT_AGENT) {
+                Ok(n) if n.is_empty() => true,
+                Ok(_) => false,
+                Err(e) => return Probe::ListFailed(format!("{e}")),
+            };
             Probe::Done { findings, empty }
         })
         .await;
@@ -102,6 +114,19 @@ impl HealthCheck for LoopGraphCheck {
                     Severity::Warning,
                     "Graph lint failed",
                     e,
+                )];
+            }
+            Ok(Probe::ListFailed(e)) => {
+                return vec![Finding::problem(
+                    ID,
+                    Severity::Warning,
+                    "Graph state unknown",
+                    format!(
+                        "graph lint returned no findings, but the follow-up node-list query \
+                         failed (likely a transient IO / lock issue between the two calls): \
+                         {e}. Treating the graph as unverified rather than sound; re-run \
+                         `aleph doctor` after the IO settles."
+                    ),
                 )];
             }
             Err(e) => {

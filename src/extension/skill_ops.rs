@@ -166,7 +166,7 @@ impl ExtensionManager {
 
     /// Get the Aleph home directory
     pub fn aleph_home(&self) -> ExtensionResult<std::path::PathBuf> {
-        Ok(self.discovery.aleph_home()?)
+        Ok(self.discovery.aleph_home())
     }
 
     /// Get the Skill System v2 instance.

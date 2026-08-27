@@ -31,11 +31,11 @@
 use crate::event::filter::EventFilter;
 use crate::event::types::AlephEvent;
 use crate::sync_primitives::Arc;
-use crate::sync_primitives::{AtomicU64, Ordering};
+use crate::sync_primitives::{AsyncRwLock, AtomicU64, Ordering};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::broadcast;
 use tracing::{debug, trace};
 
 // =============================================================================
@@ -159,6 +159,13 @@ impl std::ops::Deref for SubscriptionId {
 // =============================================================================
 
 /// A subscription to global events with filtering.
+///
+/// Field visibility matches [`crate::event::Subscription`] (also re-exported
+/// as `pub Subscription`): callbacks and filters are currently inspected
+/// only inside this module, but the struct is also returned from public
+/// APIs that downstream code may pattern-match on. Keep the fields `pub`
+/// until either an explicit inspector API is added or the visibility is
+/// tightened in one patch.
 pub struct Subscription {
     /// Unique identifier for this subscription
     pub id: SubscriptionId,
@@ -191,7 +198,7 @@ pub struct GlobalBus {
     /// Broadcast sender for global events
     sender: broadcast::Sender<GlobalEvent>,
     /// Active subscriptions indexed by ID
-    subscriptions: RwLock<HashMap<SubscriptionId, Subscription>>,
+    subscriptions: AsyncRwLock<HashMap<SubscriptionId, Subscription>>,
     /// Monotonic sequence counter
     sequence: AtomicU64,
 }
@@ -215,7 +222,7 @@ impl GlobalBus {
         let (sender, _) = broadcast::channel(DEFAULT_BUFFER_SIZE);
         Self {
             sender,
-            subscriptions: RwLock::new(HashMap::new()),
+            subscriptions: AsyncRwLock::new(HashMap::new()),
             sequence: AtomicU64::new(0),
         }
     }
@@ -240,6 +247,19 @@ impl GlobalBus {
     /// broadcasts may reach the same callback out of order. Consumers that
     /// need ordering must sort on [`GlobalEvent::sequence`].
     ///
+    /// The same applies to [`subscribe_broadcast`](Self::subscribe_broadcast)
+    /// receivers on the shared channel — two concurrent broadcasts whose
+    /// `send` calls interleave on the channel can arrive out of order. Sort
+    /// by `sequence` before consuming the stream.
+    ///
+    /// # Single-delivery contract
+    ///
+    /// A subscriber that holds BOTH a [`broadcast::Receiver`] (via
+    /// [`subscribe_broadcast`](Self::subscribe_broadcast)) AND a callback
+    /// (via [`subscribe_async`](Self::subscribe_async)) will receive every
+    /// event **twice** — once from the channel send below, once from the
+    /// callback dispatch. Pick one path per subscriber.
+    ///
     /// # Arguments
     ///
     /// * `agent_id` - The source agent ID
@@ -257,7 +277,9 @@ impl GlobalBus {
             "Broadcasting global event"
         );
 
-        // Send via broadcast channel for async subscribers
+        // Send via broadcast channel for async subscribers. A subscriber
+        // who ALSO wired `subscribe_async` for the same event will see it
+        // twice — see the "Single-delivery contract" doc above.
         if let Err(e) = self.sender.send(global_event.clone()) {
             trace!("No broadcast receivers: {}", e);
         }
@@ -333,6 +355,7 @@ impl GlobalBus {
     }
 
     /// Get the current number of active subscriptions.
+    #[cfg(test)]
     pub async fn subscription_count(&self) -> usize {
         let subscriptions = self.subscriptions.read().await;
         subscriptions.len()

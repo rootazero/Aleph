@@ -51,10 +51,19 @@ impl DiscoveredPath {
     /// Create a new discovered path
     #[must_use]
     pub fn new(path: PathBuf, source: DiscoverySource, priority: u32) -> Self {
+        // An absent `file_name()` (e.g. `/`, `.`, `..`, Windows device roots)
+        // must NOT fall back to the full absolute path — the `name` field
+        // surfaces in logs, tool catalogs, and the `<available_skills>`
+        // prompt index, and a leaked absolute path is a debugging hazard
+        // (and looks indistinguishable from a real name in UIs that just
+        // render the field). Empty name is honest: downstream code that
+        // needs a displayable label can decide what to do (and there is
+        // exactly one test assertion to update if a future display layer
+        // requires a sentinel like `<unnamed>`).
         let name = path
             .file_name()
             .and_then(|n| n.to_str())
-            .map_or_else(|| path.to_string_lossy().into_owned(), |s| s.to_string());
+            .map_or(String::new(), |s| s.to_string());
 
         Self {
             path,
