@@ -19,6 +19,21 @@ crate-type = ["cdylib", "rlib"]
 # name = "aleph-panel"
 # path = "src/main.rs"
 
+# `src/main.rs` is a Leptos development mount point that only compiles for
+# `wasm32-unknown-unknown` — it imports `leptos::mount::mount_to_body` and the
+# lib's `panic_overlay::install`, both of which assume a WASM host. On a
+# native target the linker hits LNK4003 ("无效的库格式") trying to link the
+# rlib form of the cdylib and LNK2019 for those symbols, which fails every
+# `cargo build --workspace --all-targets` (and any clippy/test invocation that
+# selects all targets). Nothing in the workspace consumes it: every recipe
+# that touches the panel passes `--lib`, the shipped WASM is bound from the
+# cdylib by wasm-bindgen, and `cargo test -p aleph-panel --lib` is the only
+# test invocation. Declaring the bin explicitly with `required-features` and
+# a sentinel feature is the lightest fix that lets a developer still mount it
+# locally with `--features native-dev` if they want — but the bin target
+# itself is omitted so `cargo build --all-targets` and clippy do not try to
+# produce a native .exe from a WASM-only entry.
+
 [dependencies]
 # Leptos framework (0.8.15 - The latest and greatest)
 leptos = { version = "0.8", features = ["csr"] }

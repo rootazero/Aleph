@@ -1170,10 +1170,15 @@ mod outcome_tests {
 
         // This file DOES declare an inline test module, and that module holds
         // the very literal being searched for, so the prefix split is
-        // load-bearing here. Unanchored and CRLF-safe: `"\n#[cfg(test)]\n"`
-        // matches nothing on a Windows checkout.
+        // load-bearing here. Routed through `production_prefix` (the same
+        // CRLF-safe cut the rest of the repo uses — a hand-rolled
+        // `split("#[cfg(test)]")` here is exactly what
+        // `utils::source_scan`'s "no hand-rolled cut" guard says no to, and
+        // a previous unanchored `"\n#[cfg(test)]\n"` form matched nothing on
+        // Windows checkouts and let this test silently pass on its own
+        // literal).
         let me = code_of(include_str!("dispatch.rs"));
-        let me = me.split("#[cfg(test)]").next().unwrap_or("");
+        let me = crate::utils::source_scan::production_prefix(&me);
         let spawn_at = me
             .find("tokio::spawn(async move {")
             .expect("the harness spawn is the subject of this guard");

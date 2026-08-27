@@ -108,7 +108,18 @@ mod tests {
     #[test]
     fn the_phone_chat_router_registers_a_conversation() {
         let src = include_str!("mod.rs");
-        let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+        // Routed through `production_lines` (the same gated-ITEM walk the
+        // rest of the panel uses — a hand-rolled `split("#[cfg(test)]")`
+        // here is exactly what the `i18n_census` "no hand-rolled cut" guard
+        // says no to, and a previous form of this cut truncated at the
+        // first `#[cfg(test)]` line, under-scanning every gated `use` /
+        // helper `fn` / `mod` above the trailing test module and reporting
+        // a clean pass for whatever it could not see).
+        let production: String = crate::i18n_census::production_lines(src)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
             production.contains("ensure_active("),
             "PhoneChat no longer registers a conversation — every stream frame \

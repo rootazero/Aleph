@@ -649,7 +649,18 @@ mod tests {
             let Ok(src) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            let production = src.split("#[cfg(test)]").next().unwrap_or(&src);
+            // Routed through `production_lines` (the same gated-ITEM walk the
+            // rest of the panel uses — a hand-rolled `split("#[cfg(test)]")`
+            // here is exactly what the `i18n_census` "no hand-rolled cut" guard
+            // says no to, and a previous form of this cut truncated at the
+            // first `#[cfg(test)]` line, under-scanning every gated `use` /
+            // helper `fn` / `mod` above the trailing test module and reporting
+            // a clean pass for whatever it could not see).
+            let production: String = crate::i18n_census::production_lines(&src)
+                .into_iter()
+                .map(|(_, line)| line)
+                .collect::<Vec<_>>()
+                .join("\n");
             if !production.contains("ChatApi::send(") {
                 continue;
             }
