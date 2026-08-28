@@ -53,6 +53,15 @@ pub trait ScreenCapability: Send + Sync {
     async fn key_combo(&self, modifiers: &[String], key: &str) -> Result<()>;
     async fn scroll(&self, direction: &str, amount: i32) -> Result<()>;
     async fn window_list(&self) -> Result<Vec<WindowInfo>>;
+    /// Bring a window to the foreground.
+    ///
+    /// Contract: `Ok(())` means the window was *observed* active — every limb
+    /// polls the platform's real foreground answer after dispatching (Windows:
+    /// `GetForegroundWindow`; macOS: `isActive`; Linux: the active window per
+    /// EWMH/sway/Hyprland). A request the OS accepted but did not honour is an
+    /// `Err`, never a reported success — the tool grades a successful
+    /// `focus_window` as `confirmed` evidence, which this contract is what
+    /// makes honest.
     async fn focus_window(&self, window_id: u64) -> Result<()>;
     async fn launch_app(&self, app_name: &str) -> Result<()>;
 

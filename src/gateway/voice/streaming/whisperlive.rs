@@ -7,7 +7,7 @@ use super::{
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 
 /// Default model requested in the handshake when `[voice.streaming] model` is
 /// unset. WhisperLive loads a model per client request (unless the server is
@@ -134,8 +134,13 @@ impl WhisperLiveDecoder {
 
 /// Build the WhisperLive config handshake (the connection's first message).
 ///
-/// `audio_format=int16` so s16le frames forward verbatim. The protocol has no
-/// auth field — `[voice.streaming] api_key` is meaningless for this dialect.
+/// `audio_format=int16` so s16le frames forward verbatim.
+///
+/// Auth note: the handshake itself has no credential field, but since
+/// WhisperLive added server-side WebSocket auth (2026-08, `_websocket_auth`)
+/// the *connection* carries `[voice.streaming] api_key` as an
+/// `Authorization: Bearer` header (see [`WhisperLiveStream::open`]) — an
+/// auth-enabled server 401s the upgrade before this handshake is ever read.
 ///
 /// `vocabulary` (when set) goes out as both `hotwords` and `initial_prompt`, the
 /// two fields WhisperLive's own client documents as "domain vocabulary or names"
@@ -187,7 +192,19 @@ impl StreamingTranscriber for WhisperLiveStream {
             .base_url
             .replace("https://", "wss://")
             .replace("http://", "ws://");
-        let (ws, _) = tokio_tungstenite::connect_async(url).await?;
+        // Server-side WS auth (WhisperLive `_websocket_auth`): `Bearer` header
+        // when a key is configured. Header, not the `?token=` query form the
+        // server also accepts — query tokens land in access logs. An empty key
+        // sends nothing, matching every other voice path (BYO servers run
+        // unauthenticated by default).
+        let mut req = url.into_client_request()?;
+        if !self.target.api_key.is_empty() {
+            req.headers_mut().insert(
+                "Authorization",
+                format!("Bearer {}", self.target.api_key).parse()?,
+            );
+        }
+        let (ws, _) = tokio_tungstenite::connect_async(req).await?;
         let (mut sink, mut stream) = ws.split();
         let handshake = build_handshake(
             &self.target.model,
@@ -439,6 +456,26 @@ mod tests {
         let biased = build_handshake("", None, "Aleph, Leptos");
         assert_eq!(biased["hotwords"], "Aleph, Leptos");
         assert_eq!(biased["initial_prompt"], "Aleph, Leptos");
+    }
+
+    /// Auth rides the connection upgrade as a Bearer header (server-side
+    /// `_websocket_auth`); an empty key sends nothing. Pin the exact header
+    /// shape against a refactor back to plain-URL connects.
+    #[test]
+    fn api_key_becomes_a_bearer_upgrade_header() {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut req = "ws://127.0.0.1:9090"
+            .into_client_request()
+            .expect("valid ws url");
+        let api_key = "wl-secret";
+        req.headers_mut().insert(
+            "Authorization",
+            format!("Bearer {api_key}").parse().unwrap(),
+        );
+        assert_eq!(
+            req.headers().get("Authorization").unwrap(),
+            "Bearer wl-secret"
+        );
     }
 
     #[test]

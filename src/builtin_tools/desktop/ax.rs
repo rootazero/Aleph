@@ -401,21 +401,50 @@ pub(super) fn element_to_json(index: usize, el: &AxElement) -> serde_json::Value
 /// Flatten an AX tree into an indexed list of interactable elements,
 /// returning `(elements, truncated, total)` where `truncated` is set when the
 /// list was cut to `max_elements` and `total` is the pre-truncation count.
+///
+/// Every returned element carries a `token` minted from a snapshot issued in
+/// `session`'s lane for this app (see [`super::element_ref`]) — the reference a
+/// later `click` / `set_value` / … passes back instead of hand-copied
+/// coordinates.
 pub(super) fn flatten_interactable(
     root: &AxElement,
     max_elements: usize,
+    session: &str,
 ) -> (Vec<serde_json::Value>, bool, usize) {
     let mut collected: Vec<&AxElement> = Vec::new();
     collect_interactable(root, &mut collected);
     let total = collected.len();
     let truncated = total > max_elements;
-    let elements = collected
+    let selected: Vec<&AxElement> = collected.into_iter().take(max_elements).collect();
+
+    // Tokens bind to the *returned* list, so an index in a token always names
+    // an element the model actually saw — never one cut by `max_elements`.
+    let records = selected.iter().map(|el| record_of(el)).collect();
+    let snapshot_id = super::element_ref::issue(session, root.pid, records);
+    let elements = selected
         .into_iter()
-        .take(max_elements)
         .enumerate()
-        .map(|(index, el)| element_to_json(index, el))
+        .map(|(index, el)| {
+            let mut v = element_to_json(index, el);
+            v["token"] = json!(super::element_ref::render(snapshot_id, index));
+            v
+        })
         .collect();
     (elements, truncated, total)
+}
+
+/// The snapshot-identity record one element is issued under.
+///
+/// `center` comes from [`usable_bounds`], which [`collect_interactable`] has
+/// already filtered for — an element in this list always has a real rectangle.
+fn record_of(el: &AxElement) -> super::element_ref::ElementRecord {
+    let (x, y, w, h) = usable_bounds(el).unwrap_or((0.0, 0.0, 0.0, 0.0));
+    super::element_ref::ElementRecord {
+        pid: el.pid,
+        role: el.role.clone(),
+        title: el.title.clone(),
+        center: [x + w / 2.0, y + h / 2.0],
+    }
 }
 
 /// LLM tool: snapshot an app's interactable UI as a flat, indexed element
@@ -443,9 +472,9 @@ impl AlephTool for DesktopAxSnapshot {
     const DESCRIPTION: &'static str =
         "Snapshot an application's interactable UI as a flat, indexed element list — the \
          reliable way to drive a GUI. Each element carries its accessibility `role`, a \
-         `name`/`value`, and a pre-computed `center` [x, y]; pass that `center` straight \
-         to the `desktop` tool's `click` / `double_click` / `hover` actions. Prefer this \
-         over eyeballing pixel coordinates from a screenshot. Elements also report their own \
+         `name`/`value`, a pre-computed `center` [x, y], and a `token` for the \
+         `desktop` tool's `element` argument — prefer it over raw coordinates, \
+         which go stale silently. Elements also report their own \
          affordances: `actions` lists the exact AX action names that element supports — pass \
          one of those verbatim to the `desktop` tool's `ax_action`, never a guessed name; \
          `enabled:false` means the control is greyed out (acting on it will do nothing — fix \
@@ -487,7 +516,11 @@ impl AlephTool for DesktopAxSnapshot {
         };
         match result.element {
             Some(root) => {
-                let (elements, truncated, total) = flatten_interactable(&root, max_elements);
+                let (elements, truncated, total) = flatten_interactable(
+                    &root,
+                    max_elements,
+                    &super::held_inputs::current_session_id(),
+                );
                 // Ask the *snapshotted* app which of its elements has focus, not
                 // the system. They differ whenever the target is not frontmost,
                 // which is the ordinary case for a background app.
@@ -644,7 +677,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let (elements, truncated, total) = flatten_interactable(&tree, 200);
+        let (elements, truncated, total) = flatten_interactable(&tree, 200, "test");
         assert!(!truncated);
         assert_eq!(elements.len(), 1);
         assert_eq!(total, 1);
@@ -653,6 +686,9 @@ mod tests {
         assert_eq!(elements[0]["index"], 0);
         // center = top-left + size/2 = (100+40, 200+20).
         assert_eq!(elements[0]["center"], json!([140.0, 220.0]));
+        // Every listed element carries the token a later action references it by.
+        let token = elements[0]["token"].as_str().expect("token minted");
+        assert!(token.starts_with('s') && token.ends_with(":0"), "{token}");
     }
 
     #[test]
@@ -672,7 +708,7 @@ mod tests {
             children,
             ..Default::default()
         };
-        let (elements, truncated, total) = flatten_interactable(&tree, 3);
+        let (elements, truncated, total) = flatten_interactable(&tree, 3, "test");
         assert!(truncated);
         assert_eq!(elements.len(), 3);
         assert_eq!(total, 5);
@@ -691,7 +727,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let (elements, truncated, total) = flatten_interactable(&root, 2);
+        let (elements, truncated, total) = flatten_interactable(&root, 2, "test");
         assert_eq!(elements.len(), 2);
         assert!(truncated);
         assert_eq!(total, 3);
@@ -716,7 +752,7 @@ mod tests {
             children: vec![disabled, healthy],
             ..Default::default()
         };
-        let (elements, _, _) = flatten_interactable(&tree, 200);
+        let (elements, _, _) = flatten_interactable(&tree, 200, "test");
 
         // The greyed button says so, and lists the action names it accepts —
         // `ax_action` no longer has to guess one.

@@ -480,6 +480,14 @@ pub async fn handle_stream_audio(
             "PCM frame exceeds the 64KB streaming limit",
         );
     }
+    // An empty frame is a silent no-op, never forwarded: WhisperLiveKit ≥0.2.26
+    // (#419) rejects empty binary frames with a 4400 close (they used to mean
+    // EOF), so one empty frame would kill an otherwise healthy stream. Same
+    // silent shape as an unknown stream_id — the Panel never sees an error for
+    // a frame that carried no audio.
+    if bytes.is_empty() {
+        return JsonRpcResponse::success(request.id, serde_json::json!({}));
+    }
     // Whose stream is this? Injecting PCM into someone else's transcription
     // puts words in their mouth — the deltas they and their surfaces read come
     // back carrying it. An unknown id keeps the existing silent no-op, so a
@@ -606,6 +614,27 @@ mod tests {
         );
         let resp = handle_stream_audio(req, Arc::new(StreamRegistry::default())).await;
         assert!(resp.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn stream_audio_drops_an_empty_frame_without_touching_the_stream() {
+        // WLK ≥0.2.26 closes on empty binary frames (4400) — an empty frame
+        // must never reach the backend. It must also not error (the Panel
+        // flushes frame-shaped silence; a stray empty payload is not a crime).
+        let registry = Arc::new(StreamRegistry::default());
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let id = registry.insert(tx).await;
+        let req = JsonRpcRequest::with_id(
+            "voice.stream.audio",
+            Some(serde_json::json!({ "stream_id": id, "pcm_base64": "" })),
+            serde_json::json!(1),
+        );
+        let resp = handle_stream_audio(req, registry).await;
+        assert!(resp.error.is_none(), "empty frame is a silent no-op");
+        assert!(
+            rx.try_recv().is_err(),
+            "nothing may be forwarded to the backend"
+        );
     }
 
     #[tokio::test]

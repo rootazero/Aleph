@@ -29,6 +29,14 @@ const WRAPPER_ROLES: &[&str] = &["AXGroup", "AXUnknown"];
 /// piece of information: a label, a value, a link, an action set, or an
 /// affordance flag. Bounds alone do not count — a bare rectangle with no
 /// semantics is decoration, and "it has a frame" would keep every wrapper.
+///
+/// Affordances count only when they say something the model does not already
+/// assume — the same asymmetry as `interactable::affordance_fields`:
+/// `enabled:false` is information (greyed out), `enabled:true` is the default
+/// restated; `secure:true` is information, `secure:false` is the default.
+/// The distinction is load-bearing on Linux: the AT-SPI limb fills `enabled`
+/// and `secure` on *every* node, so treating `Some(true)`/`Some(false)` as
+/// content disabled elision for the whole platform — every wrapper survived.
 fn is_elidable_wrapper(node: &AxElement) -> bool {
     if !WRAPPER_ROLES.contains(&node.role.as_str()) {
         return false;
@@ -39,9 +47,9 @@ fn is_elidable_wrapper(node: &AxElement) -> bool {
         && node.value.as_deref().is_none_or(str::is_empty)
         && node.url.is_none()
         && node.actions.as_deref().is_none_or(|a| a.is_empty())
-        && node.enabled.is_none()
+        && node.enabled != Some(false)
         && node.settable.is_none()
-        && node.secure.is_none()
+        && node.secure != Some(true)
 }
 
 /// Elide wrapper nodes below `node`, rehoming their children in place, and
@@ -167,6 +175,27 @@ mod tests {
         let mut root = node("AXWindow", vec![node("AXImage", vec![])]);
         assert_eq!(elide_wrapper_nodes(&mut root), 0);
         assert_eq!(root.children.len(), 1);
+    }
+
+    #[test]
+    fn default_assumption_affordances_do_not_save_a_wrapper() {
+        // The AT-SPI limb fills `enabled` and `secure` on EVERY node — if
+        // Some(true)/Some(false) counted as information, elision would be dead
+        // on the whole Linux platform.
+        let mut atspi_style = node("AXGroup", vec![node("AXButton", vec![])]);
+        atspi_style.enabled = Some(true);
+        atspi_style.secure = Some(false);
+        let mut root = node("AXWindow", vec![atspi_style]);
+        assert_eq!(elide_wrapper_nodes(&mut root), 1);
+        assert_eq!(root.children[0].role, "AXButton");
+    }
+
+    #[test]
+    fn a_secure_wrapper_is_never_elided() {
+        let mut secure = node("AXGroup", vec![]);
+        secure.secure = Some(true);
+        let mut root = node("AXWindow", vec![secure]);
+        assert_eq!(elide_wrapper_nodes(&mut root), 0);
     }
 
     #[test]

@@ -347,6 +347,7 @@ mod tests {
             force: None,
             expect: Vec::new(),
             stable_samples: None,
+            element: None,
         }
     }
 

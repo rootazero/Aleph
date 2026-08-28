@@ -477,6 +477,162 @@ fn reject_malformed_coordinates(args: &DesktopArgs) -> std::result::Result<(), D
     }
 }
 
+/// Actions that accept an `element` token: the three point verbs, `scroll`
+/// (its point selects the panel to scroll), and the two locator verbs.
+const TOKEN_ACTIONS: &[&str] = &[
+    "click",
+    "double_click",
+    "hover",
+    "scroll",
+    "set_value",
+    "ax_action",
+];
+
+/// Resolve an `element` token into plain targeting fields, returning the
+/// rewritten args.
+///
+/// A token is an *identity*, not a handle (see [`super::element_ref`]): the
+/// locator verbs (`set_value` / `ax_action`) hand the identity to the limb,
+/// which re-walks the live tree per call; the point verbs re-resolve here —
+/// one bounded `query_by_role` ranked against the recorded identity — so the
+/// click lands on the element's *current* position, and a vanished element is
+/// a named error instead of a click on whatever happens to be there now.
+async fn resolve_element_token(
+    platform: &Arc<dyn aleph_desktop::DesktopPlatform>,
+    args: &DesktopArgs,
+    token: &str,
+) -> std::result::Result<DesktopArgs, DesktopOutput> {
+    let fail = |e: super::element_ref::TokenError| {
+        Err(DesktopOutput {
+            success: false,
+            data: None,
+            message: Some(super::recovery::with_hint(e.message())),
+        })
+    };
+
+    if !TOKEN_ACTIONS.contains(&args.action.as_str()) {
+        return Err(DesktopOutput {
+            success: false,
+            data: None,
+            message: Some(format!(
+                "`element` is not supported for action {:?} — it is accepted by {}. For any \
+                 other action, read the element's `center` from the snapshot and pass x/y.",
+                args.action,
+                TOKEN_ACTIONS.join(" / ")
+            )),
+        });
+    }
+    // A token carries its own target; combining it with explicit targeting is
+    // two answers to one question, so it is refused rather than arbitrated.
+    if args.pid.is_some()
+        || args.app.is_some()
+        || args.window_id.is_some()
+        || args.x.is_some()
+        || args.y.is_some()
+        || args.role.is_some()
+        || args.element_title.is_some()
+    {
+        return fail(super::element_ref::TokenError::ConflictingTarget);
+    }
+
+    let session = super::held_inputs::current_session_id();
+    let record = match super::element_ref::resolve(&session, token) {
+        Ok(r) => r,
+        Err(e) => return fail(e),
+    };
+
+    let mut out = args.clone();
+    out.element = None;
+    if matches!(args.action.as_str(), "set_value" | "ax_action") {
+        // The limb re-resolves the locator against the live tree; the recorded
+        // center rides along as the nearest-center tiebreak.
+        out.pid = Some(record.pid);
+        out.role = Some(record.role);
+        out.element_title = record.title;
+        out.x = Some(record.center[0]);
+        out.y = Some(record.center[1]);
+        return Ok(out);
+    }
+
+    // Point verbs: re-resolve the element's *current* center against the live
+    // tree. This needs the AX layer — the same one the snapshot came from.
+    let Some(ax) = platform.ax() else {
+        return Err(DesktopOutput {
+            success: false,
+            data: None,
+            message: Some(super::recovery::with_hint(
+                "element tokens re-resolve through the accessibility layer, which is not \
+                 available on this platform right now — pass x/y from a fresh screenshot \
+                 instead"
+                .to_string(),
+            )),
+        });
+    };
+    let result = ax
+        .query_by_role(aleph_protocol::desktop_bridge::methods::ax::QueryByRoleParams {
+            role: record.role.clone(),
+            pid: Some(record.pid),
+            max_nodes: aleph_protocol::desktop_bridge::methods::ax::DEFAULT_MAX_NODES,
+        })
+        .await;
+    let elements = match result {
+        Ok(r) => r.elements,
+        Err(e) => {
+            return Err(DesktopOutput {
+                success: false,
+                data: None,
+                message: Some(super::recovery::with_hint(format!(
+                    "could not re-resolve the element (AX query failed: {e}). Take a fresh \
+                     ax_snapshot and use one of its tokens"
+                ))),
+            })
+        }
+    };
+    let candidates: Vec<aleph_desktop::RankCandidate> = elements
+        .iter()
+        .filter_map(|el| {
+            let (x, y, w, h) = super::interactable::usable_bounds(el)?;
+            Some(aleph_desktop::RankCandidate {
+                role: el.role.clone(),
+                title: el.title.clone(),
+                center: (x + w / 2.0, y + h / 2.0),
+            })
+        })
+        .collect();
+    let locator = AxLocator {
+        pid: Some(record.pid),
+        role: Some(record.role.clone()),
+        title: record.title.clone(),
+        center: Some(record.center),
+    };
+    let best = aleph_desktop::rank_candidates(&candidates, &locator);
+    let fresh = best.and_then(|i| {
+        let c = &candidates[i];
+        // A recorded title the best candidate no longer even contains means the
+        // identity itself is gone (the UI rebuilt); a nearest-by-position match
+        // under a different label would be a guess, and a click on a guess is
+        // the failure mode tokens exist to prevent.
+        match (&record.title, &c.title) {
+            (Some(want), Some(have))
+                if have.to_lowercase().contains(&want.to_lowercase()) =>
+            {
+                Some(c.center)
+            }
+            (Some(_), _) => None,
+            (None, _) => Some(c.center),
+        }
+    });
+    match fresh {
+        Some((x, y)) => {
+            out.pid = Some(record.pid);
+            out.x = Some(x);
+            out.y = Some(y);
+            Ok(out)
+        }
+        None => fail(super::element_ref::TokenError::ElementGone),
+    }
+}
+
 /// Fit a clipboard image (base64 PNG from the limb) within the tool-result
 /// budget. A pasted screenshot easily exceeds it, and the generic result
 /// budget would then truncate the base64 into an undecodable image — the same
@@ -794,6 +950,21 @@ impl super::DesktopTool {
         let screen = match platform.screen() {
             Some(s) => s,
             None => return Ok(None),
+        };
+
+        // Element-token resolution happens once, ahead of rail selection, so
+        // every arm below sees plain coordinates / locator fields. The token
+        // carries its own target pid — which is also what picks the rail.
+        let owned_args;
+        let args: &DesktopArgs = match args.element.as_deref() {
+            Some(token) => match resolve_element_token(platform, args, token).await {
+                Ok(rewritten) => {
+                    owned_args = rewritten;
+                    &owned_args
+                }
+                Err(out) => return Ok(Some(out)),
+            },
+            None => args,
         };
 
         // Pick the delivery rail once, before a single event is synthesized, so
@@ -3163,6 +3334,316 @@ mod tests {
             assert!(out.success, "{:?}", out.message);
             assert_eq!(out.data.unwrap()["delivery"], "global");
             assert_eq!(calls.lock().unwrap().global, vec!["key_button".to_string()]);
+        }
+    }
+
+    // ── element tokens ──────────────────────────────────────────────
+    //
+    // The token's whole promise: an element referenced by a snapshot is
+    // re-resolved against the *live* tree at action time, a superseded token
+    // is a named error, and a stale coordinate is never acted on.
+
+    mod element_tokens {
+        use super::*;
+        use crate::builtin_tools::desktop::element_ref::{self, ElementRecord};
+        use crate::builtin_tools::desktop::{held_inputs, DesktopTool};
+        use aleph_desktop::traits::{
+            AccessibilityCapability, AutomationCapability, MediaCapability, PermissionCapability,
+            PimCapability, PowerCapability, ScreenCapability, SystemCapability,
+        };
+        use aleph_desktop::{
+            DesktopError, DesktopPlatform, OcrResult as DOcrResult, Result as DResult,
+            ScreenRegion, Screenshot, WindowInfo,
+        };
+        use aleph_protocol::desktop_bridge::methods::ax::{
+            AxActionResult, AxElement, AxLocator, PerformActionParams, QueryByRoleParams,
+            QueryFocusedParams, QueryListResult, QueryResult, QueryTreeParams, SetValueParams,
+        };
+        use aleph_protocol::desktop_bridge::methods::screen::Region;
+        use std::sync::Mutex;
+
+        /// A screen that records where clicks actually landed.
+        #[derive(Default)]
+        struct TokenScreen {
+            clicks: Mutex<Vec<(f64, f64)>>,
+        }
+
+        #[async_trait::async_trait]
+        impl ScreenCapability for TokenScreen {
+            async fn screenshot(&self, _r: Option<ScreenRegion>) -> DResult<Screenshot> {
+                Err(DesktopError::NotImplemented("screenshot".into()))
+            }
+            async fn ocr(&self, _i: Option<&[u8]>) -> DResult<DOcrResult> {
+                Err(DesktopError::NotImplemented("ocr".into()))
+            }
+            async fn click(&self, x: f64, y: f64, _b: aleph_desktop::MouseButton) -> DResult<()> {
+                self.clicks.lock().unwrap().push((x, y));
+                Ok(())
+            }
+            async fn type_text(&self, _t: &str) -> DResult<()> {
+                Ok(())
+            }
+            async fn key_combo(&self, _m: &[String], _k: &str) -> DResult<()> {
+                Ok(())
+            }
+            async fn scroll(&self, _d: &str, _a: i32) -> DResult<()> {
+                Ok(())
+            }
+            async fn window_list(&self) -> DResult<Vec<WindowInfo>> {
+                Ok(vec![])
+            }
+            async fn focus_window(&self, _id: u64) -> DResult<()> {
+                Ok(())
+            }
+            async fn launch_app(&self, _n: &str) -> DResult<()> {
+                Ok(())
+            }
+        }
+
+        /// An AX capability with a canned `query_by_role` answer and a recorded
+        /// `set_value` locator.
+        #[derive(Default)]
+        struct TokenAx {
+            by_role: Vec<AxElement>,
+            set_value_locator: Mutex<Option<AxLocator>>,
+        }
+
+        #[async_trait::async_trait]
+        impl AccessibilityCapability for TokenAx {
+            async fn query_focused(&self, _p: QueryFocusedParams) -> DResult<Option<AxElement>> {
+                Err(DesktopError::NotImplemented("query_focused".into()))
+            }
+            async fn query_tree(&self, _p: QueryTreeParams) -> DResult<QueryResult> {
+                Err(DesktopError::NotImplemented("query_tree".into()))
+            }
+            async fn query_by_role(&self, _p: QueryByRoleParams) -> DResult<QueryListResult> {
+                Ok(QueryListResult {
+                    elements: self.by_role.clone(),
+                    node_count: self.by_role.len() as u32,
+                    truncated: false,
+                })
+            }
+            async fn set_value(&self, p: SetValueParams) -> DResult<AxActionResult> {
+                *self.set_value_locator.lock().unwrap() = Some(p.locator);
+                Ok(AxActionResult {
+                    performed: true,
+                    path: "accessibility".into(),
+                    matched: None,
+                    verification: None,
+                })
+            }
+            async fn perform_action(&self, _p: PerformActionParams) -> DResult<AxActionResult> {
+                Err(DesktopError::NotImplemented("perform_action".into()))
+            }
+        }
+
+        struct TokenPlatform {
+            screen: TokenScreen,
+            ax: TokenAx,
+        }
+
+        impl DesktopPlatform for TokenPlatform {
+            fn platform_name(&self) -> &str {
+                "token-mock"
+            }
+            fn screen(&self) -> Option<&dyn ScreenCapability> {
+                Some(&self.screen)
+            }
+            fn ax(&self) -> Option<&dyn AccessibilityCapability> {
+                Some(&self.ax)
+            }
+            fn pim(&self) -> Option<&dyn PimCapability> {
+                None
+            }
+            fn system(&self) -> Option<&dyn SystemCapability> {
+                None
+            }
+            fn automation(&self) -> Option<&dyn AutomationCapability> {
+                None
+            }
+            fn permission(&self) -> Option<&dyn PermissionCapability> {
+                None
+            }
+            fn media(&self) -> Option<&dyn MediaCapability> {
+                None
+            }
+            fn power(&self) -> Option<&dyn PowerCapability> {
+                None
+            }
+        }
+
+        fn fixture(
+            by_role: Vec<AxElement>,
+        ) -> (
+            DesktopTool,
+            Arc<TokenPlatform>,
+        ) {
+            let platform = Arc::new(TokenPlatform {
+                screen: TokenScreen::default(),
+                ax: TokenAx {
+                    by_role,
+                    ..Default::default()
+                },
+            });
+            let tool = DesktopTool::new()
+                .with_platform(platform.clone() as Arc<dyn DesktopPlatform>);
+            (tool, platform)
+        }
+
+        /// Mint a snapshot in the caller's (turn-less) session lane and return
+        /// the token for element 0. Unique pids keep parallel tests off each
+        /// other's lanes.
+        fn mint(pid: i32, title: &str) -> String {
+            let session = held_inputs::current_session_id();
+            let id = element_ref::issue(
+                &session,
+                pid,
+                vec![ElementRecord {
+                    pid,
+                    role: "AXButton".to_string(),
+                    title: Some(title.to_string()),
+                    center: [10.0, 10.0],
+                }],
+            );
+            element_ref::render(id, 0)
+        }
+
+        fn live_save_button(pid: i32) -> AxElement {
+            AxElement {
+                role: "AXButton".to_string(),
+                title: Some("Save".to_string()),
+                bounds: Some(Region {
+                    x: 100.0,
+                    y: 200.0,
+                    width: 20.0,
+                    height: 20.0,
+                }),
+                pid,
+                ..Default::default()
+            }
+        }
+
+        #[tokio::test]
+        async fn a_token_click_lands_on_the_elements_current_position() {
+            let pid = 0x0E01;
+            let (tool, platform) = fixture(vec![live_save_button(pid)]);
+            let token = mint(pid, "Save");
+            let platform_trait: Arc<dyn DesktopPlatform> = platform.clone();
+            let out = tool
+                .call_via_platform(
+                    &platform_trait,
+                    &args(serde_json::json!({"action": "click", "element": token})),
+                )
+                .await
+                .unwrap()
+                .expect("click is handled");
+            assert!(out.success, "{:?}", out.message);
+            // The recorded snapshot center was (10, 10); the element has since
+            // moved — the click must land on the *live* center (110, 210).
+            assert_eq!(
+                platform.screen.clicks.lock().unwrap().as_slice(),
+                &[(110.0, 210.0)]
+            );
+        }
+
+        #[tokio::test]
+        async fn a_stale_token_is_a_named_error_and_clicks_nothing() {
+            let pid = 0x0E02;
+            let (tool, platform) = fixture(vec![live_save_button(pid)]);
+            let platform_trait: Arc<dyn DesktopPlatform> = platform.clone();
+            let out = tool
+                .call_via_platform(
+                    &platform_trait,
+                    &args(serde_json::json!({"action": "click", "element": "s0000dead:0"})),
+                )
+                .await
+                .unwrap()
+                .expect("refusal is an output");
+            assert!(!out.success);
+            let msg = out.message.unwrap();
+            assert!(msg.contains("stale"), "{msg}");
+            assert!(msg.contains("ax_snapshot"), "{msg}");
+            assert!(platform.screen.clicks.lock().unwrap().is_empty());
+        }
+
+        #[tokio::test]
+        async fn a_token_conflicts_with_explicit_targeting() {
+            let pid = 0x0E03;
+            let (tool, platform) = fixture(vec![live_save_button(pid)]);
+            let token = mint(pid, "Save");
+            let platform_trait: Arc<dyn DesktopPlatform> = platform.clone();
+            let out = tool
+                .call_via_platform(
+                    &platform_trait,
+                    &args(serde_json::json!({"action": "click", "element": token, "x": 1.0, "y": 2.0})),
+                )
+                .await
+                .unwrap()
+                .expect("refusal is an output");
+            assert!(!out.success);
+            assert!(out.message.unwrap().contains("conflicts"));
+            assert!(platform.screen.clicks.lock().unwrap().is_empty());
+        }
+
+        #[tokio::test]
+        async fn a_token_whose_element_vanished_says_so() {
+            let pid = 0x0E04;
+            let (tool, platform) = fixture(vec![]); // the live tree no longer has it
+            let token = mint(pid, "Save");
+            let platform_trait: Arc<dyn DesktopPlatform> = platform.clone();
+            let out = tool
+                .call_via_platform(
+                    &platform_trait,
+                    &args(serde_json::json!({"action": "click", "element": token})),
+                )
+                .await
+                .unwrap()
+                .expect("refusal is an output");
+            assert!(!out.success);
+            assert!(out.message.unwrap().contains("no longer matches"));
+            assert!(platform.screen.clicks.lock().unwrap().is_empty());
+        }
+
+        #[tokio::test]
+        async fn set_value_maps_a_token_to_a_locator_for_the_limb() {
+            let pid = 0x0E05;
+            let (tool, platform) = fixture(vec![]);
+            let token = mint(pid, "Save");
+            let platform_trait: Arc<dyn DesktopPlatform> = platform.clone();
+            let out = tool
+                .call_via_platform(
+                    &platform_trait,
+                    &args(
+                        serde_json::json!({"action": "set_value", "element": token, "text": "hi"}),
+                    ),
+                )
+                .await
+                .unwrap()
+                .expect("set_value is handled");
+            assert!(out.success, "{:?}", out.message);
+            let locator = platform.ax.set_value_locator.lock().unwrap().clone().unwrap();
+            assert_eq!(locator.pid, Some(pid));
+            assert_eq!(locator.role.as_deref(), Some("AXButton"));
+            assert_eq!(locator.title.as_deref(), Some("Save"));
+            assert_eq!(locator.center, Some([10.0, 10.0]));
+        }
+
+        #[tokio::test]
+        async fn a_token_on_an_unsupported_action_is_refused() {
+            let pid = 0x0E06;
+            let (tool, platform) = fixture(vec![]);
+            let token = mint(pid, "Save");
+            let platform_trait: Arc<dyn DesktopPlatform> = platform.clone();
+            let out = tool
+                .call_via_platform(
+                    &platform_trait,
+                    &args(serde_json::json!({"action": "drag", "element": token})),
+                )
+                .await
+                .unwrap()
+                .expect("refusal is an output");
+            assert!(!out.success);
+            assert!(out.message.unwrap().contains("not supported"));
         }
     }
 }

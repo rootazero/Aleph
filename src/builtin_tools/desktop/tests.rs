@@ -51,6 +51,7 @@ fn make_args(action: &str) -> DesktopArgs {
         force: None,
         expect: Vec::new(),
         stable_samples: None,
+        element: None,
     }
 }
 
@@ -807,6 +808,7 @@ mod e2e_normalized {
             force: None,
             expect: Vec::new(),
             stable_samples: None,
+            element: None,
         }];
 
         AlephTool::call(&tool, args).await.unwrap();
@@ -1678,7 +1680,7 @@ mod secure_value_never_reaches_the_model {
     #[test]
     fn not_in_the_ax_snapshot_projection() {
         let (elements, _, _) =
-            crate::builtin_tools::desktop::ax::flatten_interactable(&login_form(), 200);
+            crate::builtin_tools::desktop::ax::flatten_interactable(&login_form(), 200, "test");
         let json = serde_json::to_string(&elements).unwrap();
         assert!(!json.contains(SECRET), "desktop_ax_snapshot leaked: {json}");
         // The element itself is still reported — the model must know the field
@@ -2234,6 +2236,17 @@ mod effect_grading {
         }
     }
 
+    /// `focus_window` is the one state-changing verb whose success *is* the
+    /// proof: the trait contract is "Ok = observed active", and every limb
+    /// polls the real foreground answer before returning.
+    #[test]
+    fn focus_window_success_is_confirmed_evidence() {
+        assert_eq!(
+            types::effect_for("focus_window", None),
+            ActionEffect::Confirmed
+        );
+    }
+
     /// The injection gate is `classify_approval().is_some()`: pin both sides
     /// so a verb can neither gain nor lose its grade silently.
     #[test]
@@ -2415,6 +2428,17 @@ mod effect_grading {
         let out = AlephTool::call(&tool(false), args).await.unwrap();
         assert!(out.success, "click failed: {:?}", out.message);
         assert_eq!(out.data.as_ref().unwrap()["effect"], "unverifiable");
+    }
+
+    #[tokio::test]
+    async fn a_focused_window_carries_confirmed_evidence() {
+        // The mock limb's focus_window returns Ok — under the trait contract
+        // that *is* the observed-foreground proof, so the grade is confirmed.
+        let mut args = make_args("focus_window");
+        args.window_id = Some(1);
+        let out = AlephTool::call(&tool(false), args).await.unwrap();
+        assert!(out.success, "focus_window failed: {:?}", out.message);
+        assert_eq!(out.data.as_ref().unwrap()["effect"], "confirmed");
     }
 
     #[tokio::test]
