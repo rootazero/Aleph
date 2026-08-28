@@ -20,12 +20,25 @@ use super::session::GroupChatSession;
 /// individual session without blocking other sessions.
 pub type SharedSession = Arc<tokio::sync::Mutex<GroupChatSession>>;
 
+/// One live session row in the orchestrator's table: the lockable handle
+/// plus the round-cancellation token. The token lives OUTSIDE the session
+/// mutex so `end_session` can fire it without first acquiring the lock a
+/// hung round is holding — the round's next provider-call `select!` observes
+/// the cancellation, unwinds, and releases the lock for `end_session` to
+/// take. Storing the token inside the session would make cancel-during-
+/// flight impossible (you would need the lock to reach the token).
+struct SessionEntry {
+    handle: SharedSession,
+    cancel: tokio_util::sync::CancellationToken,
+}
+
 // Result of removing a session from the orchestrator map. The handle is
 // returned so the caller can perform a final state read or DB update while
 // holding the per-session lock atomically.
 struct RemovedSession {
     session_id: String,
     handle: SharedSession,
+    cancel: tokio_util::sync::CancellationToken,
 }
 
 /// Orchestrator for multi-agent group chat sessions.
@@ -37,7 +50,7 @@ struct RemovedSession {
 pub struct GroupChatOrchestrator {
     config: GroupChatConfig,
     persona_registry: PersonaRegistry,
-    sessions: Mutex<HashMap<String, SharedSession>>,
+    sessions: Mutex<HashMap<String, SessionEntry>>,
     db: Option<Arc<StateDatabase>>,
 }
 
@@ -159,11 +172,18 @@ impl GroupChatOrchestrator {
         // and once the session is behind the mutex we'd have to lock+unlock just
         // to read it back for persistence.
         let owner_user_id = session.owner_user_id.clone();
+        // Clone the cancel token BEFORE moving the session behind the mutex:
+        // `end_session` fires the table's copy without needing the lock (see
+        // `SessionEntry`).
+        let cancel = session.cancel_token.clone();
         let handle = Arc::new(tokio::sync::Mutex::new(session));
         self.sessions
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(session_id.clone(), Arc::clone(&handle));
+            .insert(session_id.clone(), SessionEntry {
+                handle: Arc::clone(&handle),
+                cancel,
+            });
 
         // 6. Persist to database if available
         if let Some(db) = &self.db {
@@ -205,7 +225,7 @@ impl GroupChatOrchestrator {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(session_id)
-            .cloned()
+            .map(|e| Arc::clone(&e.handle))
     }
 
     /// End a session and remove it from the active sessions map.
@@ -224,7 +244,20 @@ impl GroupChatOrchestrator {
     /// whenever a round was in flight, producing a three-way split-brain
     /// (orchestrator map / in-memory / DB).
     pub async fn end_session(&mut self, session_id: &str) -> Option<SharedSession> {
-        let RemovedSession { session_id, handle } = self.remove_session(session_id)?;
+        let RemovedSession {
+            session_id,
+            handle,
+            cancel,
+        } = self.remove_session(session_id)?;
+
+        // Interrupt any in-flight round BEFORE awaiting the session lock.
+        // The round holds the mutex across N sequential persona LLM calls;
+        // without this cancel, a hung or slow provider call would park
+        // `end_session` for the whole provider timeout. The token lives in
+        // the table (not the session) precisely so this fire needs no lock.
+        // The round's next provider-call `select!` observes the
+        // cancellation, unwinds, and releases the mutex below quickly.
+        cancel.cancel();
 
         // Authoritatively end the session under its own mutex.
         {
@@ -259,12 +292,16 @@ impl GroupChatOrchestrator {
     /// Helper: remove a session from the map and return its handle. Split
     /// out so `end_session`'s atomicity is visible (lock dropped before await).
     fn remove_session(&self, session_id: &str) -> Option<RemovedSession> {
-        let (session_id, handle) = self
+        let (session_id, entry) = self
             .sessions
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove_entry(session_id)?;
-        Some(RemovedSession { session_id, handle })
+        Some(RemovedSession {
+            session_id,
+            handle: entry.handle,
+            cancel: entry.cancel,
+        })
     }
 
     /// Returns the configured `max_rounds` value.
@@ -286,7 +323,7 @@ impl GroupChatOrchestrator {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
-            .map(|(id, handle)| (id.clone(), Arc::clone(handle)))
+            .map(|(id, e)| (id.clone(), Arc::clone(&e.handle)))
             .collect()
     }
 }

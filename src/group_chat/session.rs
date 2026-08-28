@@ -5,6 +5,8 @@
 
 use std::fmt::Write as _;
 
+use tokio_util::sync::CancellationToken;
+
 use super::protocol::{GroupChatStatus, Persona, Speaker};
 
 /// A single turn in a group chat conversation.
@@ -66,6 +68,14 @@ pub struct GroupChatSession {
     /// out. `execute_round` enforces this bound as soon as
     /// `current_round + 1 > max_rounds`.
     pub max_rounds: Option<u32>,
+    /// Cancellation handle for the in-flight round. `execute_round`
+    /// `select!`s on this token at every provider call, so a hung or
+    /// slow round can be interrupted instead of blocking the session
+    /// mutex for the whole provider timeout. The orchestrator clones the
+    /// token into its session table at creation (lock-free cancel) and
+    /// fires it from `end_session`; the token is also readable here so
+    /// the executor (which holds `&mut self`) can listen on it.
+    pub cancel_token: CancellationToken,
 }
 
 impl GroupChatSession {
@@ -95,6 +105,7 @@ impl GroupChatSession {
             source_session_key,
             owner_user_id: crate::scope::current_scope().map(|attr| attr.owner_user_id),
             max_rounds: None,
+            cancel_token: CancellationToken::new(),
         }
     }
 

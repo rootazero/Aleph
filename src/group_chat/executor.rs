@@ -242,12 +242,24 @@ impl GroupChatExecutor {
 
         let coordinator_raw = {
             let msgs = [UnifiedMessage::user(&coordinator_prompt)];
-            self.default_provider
-                .current()
-                .process(RequestPayload::new(&msgs))
-                .await
-                .map_err(|e| GroupChatError::ProviderUnavailable(e.to_string()))?
-                .text_content()
+            // `select!` on the session cancel token: an `end_session` fired
+            // while the coordinator call is in flight unwinds the round here
+            // instead of waiting out the provider timeout. Cancellation maps
+            // to `SessionInactive` — the same terminal signal the round-entry
+            // gate uses, so callers treat it uniformly.
+            let cancel = session.cancel_token.clone();
+            let provider = self.default_provider.current();
+            tokio::select! {
+                res = provider.process(RequestPayload::new(&msgs)) => {
+                    res.map_err(|e| GroupChatError::ProviderUnavailable(e.to_string()))?
+                        .text_content()
+                }
+                _ = cancel.cancelled() => {
+                    return Err(GroupChatError::SessionInactive(format!(
+                        "round {round} cancelled for session {}", session.id
+                    )));
+                }
+            }
         };
 
         // Step 3: Parse the coordinator plan, fallback on failure
@@ -366,19 +378,30 @@ impl GroupChatExecutor {
                 });
             let persona_response = {
                 let msgs = [UnifiedMessage::user(&persona_prompt)];
-                provider
-                    .process(
-                        RequestPayload::new(&msgs)
-                            .with_system(Some(&persona.system_prompt))
-                            .with_model(persona.model.clone())
-                            .with_think_level(think_level),
-                    )
-                    .await
-                    .map_err(|e| GroupChatError::PersonaInvocationFailed {
-                        persona_id: persona.id.clone(),
-                        reason: e.to_string(),
-                    })?
-                    .text_content()
+                // Same `select!`-on-cancel as the coordinator call: an
+                // `end_session` fired mid-persona unwinds the round instead
+                // of holding the session mutex through the provider timeout.
+                let cancel = session.cancel_token.clone();
+                tokio::select! {
+                    res = provider
+                        .process(
+                            RequestPayload::new(&msgs)
+                                .with_system(Some(&persona.system_prompt))
+                                .with_model(persona.model.clone())
+                                .with_think_level(think_level),
+                        ) => {
+                        res.map_err(|e| GroupChatError::PersonaInvocationFailed {
+                            persona_id: persona.id.clone(),
+                            reason: e.to_string(),
+                        })?
+                        .text_content()
+                    }
+                    _ = cancel.cancelled() => {
+                        return Err(GroupChatError::SessionInactive(format!(
+                            "round {round} cancelled for session {}", session.id
+                        )));
+                    }
+                }
             };
 
             // Accumulate prior discussion for the next persona
