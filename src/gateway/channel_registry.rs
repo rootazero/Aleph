@@ -288,6 +288,22 @@ impl ChannelRegistry {
     }
 
     /// Unregister a channel
+    ///
+    /// # Return-value contract (read before relying on `Some(..)`)
+    ///
+    /// The returned `Option<Box<dyn Channel>>` is `Some` ONLY when the
+    /// channel was never started. `start_message_forwarder` clones the
+    /// channel `Arc` into the forwarder task at `start_channel`, so after a
+    /// start the registry is never the sole strong owner and
+    /// `Arc::try_unwrap` below ALWAYS fails — this function then returns
+    /// `None` (see `unregister_unmounts_the_webhook` in this file's tests,
+    /// which pins that behavior). There is currently NO way to recover the
+    /// boxed adapter for a graceful adapter-level `shutdown` once a channel
+    /// has started; use `stop_channel` for lifecycle teardown instead of
+    /// relying on the return value. Making `Some` reachable post-start would
+    /// require the forwarder to hold a `Weak` reference instead — a
+    /// lifecycle-semantics change deferred to a dedicated batch (it changes
+    /// who keeps the adapter alive while the forwarder runs).
     pub async fn unregister(&self, channel_id: &ChannelId) -> Option<Box<dyn Channel>> {
         // Drop the HTTP surface before the instance leaves the registry —
         // including when `Arc::try_unwrap` below fails and this returns None.

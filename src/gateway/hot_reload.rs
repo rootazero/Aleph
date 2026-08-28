@@ -234,6 +234,31 @@ impl ConfigWatcher {
     }
 
     /// Reload configuration from file
+    ///
+    /// # What this does — and what it deliberately does NOT do
+    ///
+    /// This swaps the watcher's internal `current_config` (the
+    /// [`GatewayConfig`] snapshot served by `config.get`) and emits
+    /// [`ConfigEvent::Reloaded`]. It does NOT call
+    /// `crate::config::live_apply::apply_live_sections` and does NOT touch
+    /// the shared app `Config` (`Arc<RwLock<Config>>`) that `route`,
+    /// `execution`, and `policies.spend` read — so a file-watcher auto-
+    /// reload alone leaves those captured-at-boot subsystems serving the
+    /// pre-edit values. The complete apply path is the manual
+    /// `config.reload` RPC (`handlers::config::handle_reload_with_subsystems`),
+    /// which runs `apply_live_sections` over every live target.
+    ///
+    /// # The auto-apply decision (recorded, not a bug)
+    ///
+    /// Auto-applying on every file event would re-point the running runtime
+    /// on ANY save — including a half-written config from an editor's
+    /// atomic-save dance, or a programmatic writer that touches the file
+    /// repeatedly. The manual-RPC gate is the deliberate design: the
+    /// operator (or the Panel) decides WHEN a reload applies. `ReloadMode`
+    /// / `should_hot_reload` currently has no production caller — it is a
+    /// half-finished selector for a future per-section auto-apply policy;
+    /// wiring it up is a design decision for a dedicated batch, not a
+    /// drive-by fix.
     async fn reload_config(&self) -> Result<Arc<GatewayConfig>, ConfigWatcherError> {
         // Load and validate new configuration
         let new_config = GatewayConfig::load(&self.config.config_path)?;
