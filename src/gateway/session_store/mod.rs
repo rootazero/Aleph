@@ -841,3 +841,72 @@ mod owner_scope_tests {
         list_sessions_shows_a_member_a_room_they_did_not_create(sqlite_store(&temp)).await;
     }
 }
+
+#[cfg(test)]
+mod caller_census {
+    //! The narrow-writer family: session-attribution verbs whose safety
+    //! argument is "there is exactly one caller".
+    //!
+    //! Each entry's doc names its sole caller. A doc comment has no test, so
+    //! this is where that sentence becomes enforceable: a second production
+    //! call site must fail by name rather than quietly widen a verb whose
+    //! whole justification was that it is unreachable from anywhere else.
+
+    use crate::utils::source_scan::{code_text, production_prefix, rust_sources_under};
+
+    /// (verb, the one file allowed to call it).
+    const SOLE_CALLERS: &[(&str, &str)] = &[(
+        "backfill_attribution",
+        "src/projects/attribution_backfill.rs",
+    )];
+
+    /// Every production `.rs` under `src/`, reduced to the code a compiler
+    /// would see: comments AND string-literal payloads removed. Literal
+    /// payloads matter here specifically — this census's own message strings
+    /// and `SOLE_CALLERS` entries name the verb by text, and a scan that only
+    /// strips comments would match those, either firing on itself or growing
+    /// an exemption for the very file that carries this rule.
+    fn production_sources() -> Vec<(String, String)> {
+        rust_sources_under(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"))
+            .into_iter()
+            .map(|(path, raw)| (path, code_text(&production_prefix(&raw))))
+            .collect()
+    }
+
+    #[test]
+    fn each_narrow_writer_still_has_exactly_one_caller() {
+        let sources = production_sources();
+        assert!(
+            sources.len() > 500,
+            "the scanner found only {} files — it is not reading the tree it \
+             thinks it is, and a shrinking sample reports 'all clear'",
+            sources.len()
+        );
+        for (verb, owner) in SOLE_CALLERS {
+            let call_needle = format!(".{verb}(");
+            // A file that itself DECLARES the verb (the trait signature, or a
+            // backend impl — possibly delegating to a same-named inherent
+            // method, which reads as a call on the same line) is an
+            // implementor, not a consumer. Exclude by that fact, derived per
+            // run, rather than by a hand-written path list: a path allowlist
+            // rots into a licence for whatever is on it, and would not notice
+            // a third backend landing tomorrow. Same shape as the repo's
+            // existing `admin_refusal.rs::receiver_holds_a_string`.
+            let decl_needle = format!("fn {verb}(");
+            let callers: Vec<&str> = sources
+                .iter()
+                .filter(|(_, body)| body.contains(&call_needle) && !body.contains(&decl_needle))
+                .map(|(path, _)| path.as_str())
+                .collect();
+            assert_eq!(
+                callers,
+                vec![*owner],
+                "`{verb}` documents `{owner}` as its ONLY caller. Found: {callers:?}. \
+                 A file that declares `fn {verb}` (the trait signature or a backend \
+                 impl) is excluded as an implementor, not a consumer. A new caller \
+                 means the verb's safety argument changed — update the doc and this \
+                 census together."
+            );
+        }
+    }
+}
