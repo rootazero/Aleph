@@ -317,20 +317,18 @@ mod tests {
     }
 
     #[test]
-    fn test_set_log_level_returns_filter_unavailable_outside_runtime() {
-        // Tests run without `init_component_logging`, so the shared backend
-        // refuses the runtime filter update. The atomic must still be
-        // updated, and the call must surface the failure rather than
-        // silently lie.
+    fn test_set_log_level_always_updates_atomic() {
+        // The atomic is updated unconditionally by `set_log_level`, regardless
+        // of whether the live filter update succeeds. This pins the contract
+        // that `get_log_level` always reflects the last `set_log_level` call
+        // (the RPC layer surfaces filter-availability failures separately via
+        // `LoggingError::FilterUnavailable`, which this unit test deliberately
+        // does not assert — that contract is exercised in
+        // `gateway/handlers/logs.rs::tests`).
         let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let prev = get_log_level();
-        let result = set_log_level(LogLevel::Warn);
+        let _ = set_log_level(LogLevel::Warn);
         assert_eq!(get_log_level(), LogLevel::Warn, "atomic updated regardless");
-        // The contract: outside a runtime the result is `FilterUnavailable`,
-        // but a test that runs alongside `init_component_logging` (some
-        // integration tests do) sees `Ok`. Both are correct — we only assert
-        // that the atomic was updated regardless of which branch fired.
-        let _ = result;
         let _ = set_log_level(prev);
     }
 
