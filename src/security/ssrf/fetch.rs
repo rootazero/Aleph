@@ -271,19 +271,21 @@ pub async fn safe_fetch(
             strip_auth_headers(&mut current_headers);
         }
 
-        // POST → GET on 301/302/303; 307/308 preserve method and body per RFC
+        // Per RFC 7231 §6.4: 307/308 MUST preserve method and body; 301/302
+        // allow POST→GET only (any other method, including PUT/PATCH/DELETE,
+        // is preserved, and the body travels with the preserved method).
+        // 303 is treated as 301/302 here — the historical "POST→GET" change
+        // is the only allowed transition; non-POST methods keep their body.
+        // The body is dropped only when the method becomes GET.
         let status = response.status();
-        let preserve_method_and_body = matches!(
+        let body_dropped = !matches!(
             status,
             StatusCode::TEMPORARY_REDIRECT | StatusCode::PERMANENT_REDIRECT
-        );
-        if !preserve_method_and_body
-            && matches!(
-                status,
-                StatusCode::MOVED_PERMANENTLY | StatusCode::FOUND | StatusCode::SEE_OTHER
-            )
-            && current_method == Method::POST
-        {
+        ) && matches!(
+            status,
+            StatusCode::MOVED_PERMANENTLY | StatusCode::FOUND | StatusCode::SEE_OTHER
+        ) && current_method == Method::POST;
+        if body_dropped {
             current_method = Method::GET;
         }
 
@@ -300,8 +302,10 @@ pub async fn safe_fetch(
         let mut req_builder = redirect_client.request(current_method.clone(), next_url.as_str());
         // rust-doctor-disable-next-line excessive-clone
         req_builder = req_builder.headers(current_headers.clone());
-        // Body is forwarded only on 307/308; POST→GET on 301/302/303 drops body
-        if preserve_method_and_body {
+        // Forward body unless the method was converted to GET. 307/308 always
+        // preserve; 301/302/303 with non-POST methods also preserve and must
+        // travel with the body.
+        if !body_dropped {
             if let Some(body) = &request.body {
                 // rust-doctor-disable-next-line excessive-clone
                 req_builder = req_builder.body(body.clone());
