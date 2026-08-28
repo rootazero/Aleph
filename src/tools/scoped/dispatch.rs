@@ -692,6 +692,7 @@ impl ScopedToolService {
                         Err(Self::sanitize_tool_error(name, err))
                     }
                     Err(err) => Err(Self::sanitize_tool_error(name, err)),
+                }
             }
         }
     }

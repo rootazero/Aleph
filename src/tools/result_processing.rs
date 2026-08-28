@@ -397,7 +397,8 @@ const MAX_HOIST_DEPTH: usize = 16;
 /// that was preserved verbatim. One MAX_LINE_CHARS-equivalent headroom is
 /// enough to keep the model from drawing the wrong conclusion; the body
 /// is still bounded by the real budget when the budget is non-degenerate.
-const MIN_BODY_HEAD_CHARS: usize = crate::tool_output::distill::MAX_LINE_CHARS;
+const MIN_BODY_HEAD_CHARS: usize =
+    crate::tool_output::distill::MIN_BODY_HEAD_CHARS;
 
 /// Walk the whole result tree, applying both extractors at every object node.
 ///

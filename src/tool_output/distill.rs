@@ -64,6 +64,11 @@ const MAX_PATHS: usize = 20;
 /// Char cap per retained line — a single 4 000-char minified-JS error line
 /// would otherwise blow the budget on its own.
 const MAX_LINE_CHARS: usize = 400;
+/// Mirror of [`MAX_LINE_CHARS`] for cross-crate consumers that want to
+/// reserve "at least one line" of body in a budget-scaled truncator. Kept
+/// `pub(crate)` so external crates cannot couple their behavior to a number
+/// the distiller may legitimately change.
+pub(crate) const MIN_BODY_HEAD_CHARS: usize = MAX_LINE_CHARS;
 
 /// Minimum input size (bytes) below which distillation is pointless — small
 /// output is already cheap to show verbatim. Named `DISTILL`-specifically

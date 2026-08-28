@@ -144,7 +144,7 @@ pub async fn register_mcp_tools(
                         // panel/cli-only gating kicks in for destructiveHint=true
                         // servers.
                         builder = builder.with_safety_level(
-                            crate::tool_metadata::types::ToolSafetyLevel::IrreversibleHighRisk,
+                            crate::tool_metadata::ToolSafetyLevel::IrreversibleHighRisk,
                         );
                     } else if !tool.read_only {
                         // Mutating without explicit confirm: register at the
@@ -152,7 +152,7 @@ pub async fn register_mcp_tools(
                         // fact that this tool changes state, but does not
                         // trigger the panel/cli-only gate on its own.
                         builder = builder.with_safety_level(
-                            crate::tool_metadata::types::ToolSafetyLevel::Reversible,
+                            crate::tool_metadata::ToolSafetyLevel::Reversible,
                         );
                     }
                     disp.register_with_conflict_resolution(builder).await;
