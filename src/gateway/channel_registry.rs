@@ -252,7 +252,7 @@ impl ChannelRegistry {
             ))
         })?;
 
-        let channel = factory.create(config.config.clone()).await?;
+        let channel = factory.create_with_id(&config.id, config.config.clone()).await?;
         let channel_id = channel.id().clone();
 
         drop(factories);

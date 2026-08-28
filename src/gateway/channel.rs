@@ -1003,6 +1003,22 @@ pub trait ChannelFactory: Send + Sync {
 
     /// Create a channel instance from configuration
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>>;
+
+    /// Create a channel instance, given the configured instance id.
+    ///
+    /// The default implementation ignores `id` and delegates to
+    /// [`Self::create`] — preserving the historical behavior where the
+    /// configured instance id never reached the channel. Factories whose
+    /// channel needs the real id (e.g. webhook, whose per-instance policy
+    /// registration is keyed by it) override this.
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
+        let _ = id;
+        self.create(config).await
+    }
 }
 
 /// Configuration for a channel instance

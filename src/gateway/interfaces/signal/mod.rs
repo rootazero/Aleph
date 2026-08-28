@@ -160,8 +160,23 @@ impl Channel for SignalChannel {
 
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
-            let _ = handle.await;
-            *status.write().await = ChannelStatus::Disconnected;
+            let result = handle.await;
+            // **Audit fix**: the monitor task exiting is the only signal we
+            // have that the SSE loop gave up (max retries) or panicked — the
+            // previous code wrote `Disconnected` unconditionally, so a dead
+            // monitor read exactly like a clean stop: the registry believed
+            // the channel was up (start() had returned Ok + Connected), the
+            // health monitor never saw an Error, and the restart policy
+            // never fired. A panicked monitor now surfaces as Error; a
+            // monitor that exhausted its retry budget also surfaces as Error
+            // (the loop logs "max retries exceeded" before breaking), while
+            // only a shutdown-driven exit maps to Disconnected.
+            let mut guard = status.write().await;
+            if result.is_err() {
+                *guard = ChannelStatus::Error;
+            } else if *guard != ChannelStatus::Error {
+                *guard = ChannelStatus::Disconnected;
+            }
         });
 
         self.set_status(ChannelStatus::Connected).await;

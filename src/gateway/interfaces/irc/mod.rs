@@ -153,10 +153,27 @@ impl Channel for IrcChannel {
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
 
-            IrcMessageOps::run_irc_loop(config, channel_id, inbound_tx, write_cmd_rx, shutdown_rx)
-                .await;
+            // Run the loop in an INNER spawn so a panic inside the message ops
+            // surfaces as a JoinError here instead of silently leaving the
+            // status at Connected forever — previously a panic in the loop
+            // aborted this closure before the Disconnected write, and
+            // `channels.list` kept reporting the dead channel as up until
+            // the stale monitor noticed (5-minute detection window).
+            let inner = tokio::spawn(IrcMessageOps::run_irc_loop(
+                config,
+                channel_id,
+                inbound_tx,
+                write_cmd_rx,
+                shutdown_rx,
+            ));
+            let result = inner.await;
 
-            *status.write().await = ChannelStatus::Disconnected;
+            let mut guard = status.write().await;
+            if result.is_err() {
+                *guard = ChannelStatus::Error;
+            } else {
+                *guard = ChannelStatus::Disconnected;
+            }
         });
 
         self.channel_state

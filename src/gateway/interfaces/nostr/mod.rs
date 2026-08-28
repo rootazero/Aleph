@@ -171,17 +171,24 @@ impl Channel for NostrChannel {
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
 
-            NostrMessageOps::run_relay_loop(
+            // Inner spawn so a panic inside the loop surfaces as a JoinError
+            // (see the irc/mod.rs note for the failure mode this prevents).
+            let inner = tokio::spawn(NostrMessageOps::run_relay_loop(
                 config,
                 own_pubkey,
                 channel_id,
                 inbound_tx,
                 write_rx,
                 shutdown_rx,
-            )
-            .await;
+            ));
+            let result = inner.await;
 
-            *status.write().await = ChannelStatus::Disconnected;
+            let mut guard = status.write().await;
+            if result.is_err() {
+                *guard = ChannelStatus::Error;
+            } else {
+                *guard = ChannelStatus::Disconnected;
+            }
         });
 
         self.channel_state
