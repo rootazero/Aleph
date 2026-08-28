@@ -38,13 +38,45 @@ where
         .with_lane(Lane::Main);
         task.metadata_json = metadata_json;
 
-        if let Err(error) = db.insert_agent_task(&task).await {
+        if let Err(error) = db.insert_agent_task_if_absent(&task).await {
             warn!(
                 run_id = %run_id,
                 error = %error,
                 "Failed to persist execution task"
             );
             return false;
+        }
+
+        // Redelivery gate: if a row with this run_id already exists and is in
+        // a TERMINAL status (Completed / Failed / Interrupted), this is a
+        // stale redelivery of a finished run — do NOT resurrect it to
+        // Running, or the admin view flips a completed task back to a stale
+        // running marker and the task's status history becomes
+        // self-contradictory. A re-`Running` transition on a non-terminal row
+        // (e.g. a crash between insert and the first status update) is still
+        // applied so the task doesn't stay Pending forever.
+        match db.get_agent_task(run_id).await {
+            Ok(Some(existing))
+                if matches!(
+                    existing.status,
+                    TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Interrupted
+                ) =>
+            {
+                warn!(
+                    run_id = %run_id,
+                    status = %existing.status,
+                    "redelivery of a terminal-status task; leaving the terminal state intact"
+                );
+                return true;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                warn!(
+                    run_id = %run_id,
+                    error = %error,
+                    "failed to read existing task status before Running transition; continuing"
+                );
+            }
         }
 
         if let Err(error) = db.update_task_status(run_id, TaskStatus::Running).await {
