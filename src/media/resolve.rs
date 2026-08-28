@@ -57,15 +57,30 @@ pub fn transcription_service(
 
     // The entry's *name* rides along with its config: it is the only thing a
     // rejection can point at, and neither the key nor the URL carries it.
-    let picked = gen
-        .default_transcription_provider
-        .as_ref()
-        .and_then(|name| {
-            gen.transcription_providers
-                .get(name)
-                .filter(|pcfg| pcfg.enabled)
-                .and_then(|pcfg| resolve_key(name, pcfg).map(|key| (name.clone(), key, pcfg)))
-        })
+    let picked = {
+        // Surface the case where the operator explicitly named a default
+        // provider but then disabled it. Silently falling through to any
+        // enabled entry is a worse answer than a startup log line that
+        // names the override.
+        if let Some(name) = gen.default_transcription_provider.as_ref() {
+            if let Some(pcfg) = gen.transcription_providers.get(name) {
+                if !pcfg.enabled {
+                    tracing::warn!(
+                        provider = %name,
+                        "default_transcription_provider is disabled; falling back to any enabled entry"
+                    );
+                }
+            }
+        }
+        gen.default_transcription_provider
+            .as_ref()
+            .and_then(|name| {
+                gen.transcription_providers
+                    .get(name)
+                    .filter(|pcfg| pcfg.enabled)
+                    .and_then(|pcfg| resolve_key(name, pcfg).map(|key| (name.clone(), key, pcfg)))
+            })
+    }
         .or_else(|| {
             gen.transcription_providers.iter().find_map(|(name, pcfg)| {
                 if pcfg.enabled {

@@ -11,12 +11,13 @@ use tracing::warn;
 use uuid::Uuid;
 
 use super::{encode_session_key, ArtifactError, ArtifactOrigin, ArtifactRecord};
+use crate::media::cache::MAX_FILE_SIZE;
 use crate::utils::filename::sanitize_filename;
 
-/// Largest blob the store accepts, mirroring `media::cache::MAX_FILE_SIZE`
-/// (50 MB) so an attachment that made it through the media cache is never
-/// rejected here.
-pub const MAX_ARTIFACT_BYTES: u64 = 50 * 1024 * 1024;
+/// Largest blob the store accepts. References the same constant the
+/// media cache enforces, so an attachment that made it through the
+/// media cache is never rejected here.
+pub const MAX_ARTIFACT_BYTES: u64 = MAX_FILE_SIZE;
 
 /// Retained artifacts per session. A `put` past this evicts the oldest, so a
 /// long-running session cannot grow the data directory without bound.

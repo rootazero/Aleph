@@ -102,8 +102,21 @@ fn detect_image_magic(bytes: &[u8]) -> Option<MediaType> {
             format: MediaImageFormat::Png,
         });
     }
-    // JPEG: FF D8 FF
-    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+    // JPEG: FF D8 FF + an APP/quantisation-table/SOF marker. The third
+    // byte is the marker type: 0xE0..=0xEF are APP0..APP15 (JFIF, EXIF,
+    // ICC, XMP, etc.), 0xDB is DQT, 0xC0..=0xC3 are SOF0..SOF3, 0xC4 is
+    // DHT, 0x4F is the JP2 container header. Refusing unknown markers
+    // (Motion-JPEG-in-AVI byte streams, JPEG-XL codestream-in-JPEG-
+    // wrapper, etc.) keeps the false-positive surface narrow.
+    if bytes.len() >= 4
+        && bytes[0] == 0xFF
+        && bytes[1] == 0xD8
+        && bytes[2] == 0xFF
+        && matches!(
+            bytes[3],
+            0xE0..=0xEF | 0xDB | 0xC0..=0xC3 | 0xC4 | 0x4F
+        )
+    {
         return Some(MediaType::Image {
             format: MediaImageFormat::Jpeg,
         });
@@ -145,8 +158,17 @@ fn detect_document_magic(bytes: &[u8]) -> Option<MediaType> {
 }
 
 fn detect_audio_magic(bytes: &[u8]) -> Option<MediaType> {
-    // MP3: ID3 tag or sync word
-    if bytes.starts_with(b"ID3") || (bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0) {
+    // MP3: ID3 tag (always MP3 by the ID3v2 spec) OR MPEG audio sync
+    // word with layer = III. The bare 11-bit sync `0xFFE0` would also
+    // match MPEG-1 layer I/II and AAC ADTS; require the layer bits in
+    // `bytes[2]` to be `01` (Layer III) so MP2 / AAC ADTS streams are
+    // not silently classified as MP3 and routed into a provider that
+    // would 400 on the wrong mime type.
+    let mp3_sync = bytes.len() >= 3
+        && bytes[0] == 0xFF
+        && (bytes[1] & 0xE0) == 0xE0
+        && (bytes[2] >> 1) & 0b11 == 0b01;
+    if bytes.starts_with(b"ID3") || mp3_sync {
         return Some(MediaType::Audio {
             format: AudioFormat::Mp3,
             duration_secs: None,
