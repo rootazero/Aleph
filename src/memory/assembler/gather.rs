@@ -127,6 +127,23 @@ impl Gatherer {
         // Post-gather filter: drop candidates that don't match the requested
         // FactSourceFilter. FactSourceFilter::Any is a no-op (passes everything).
         pool.retain(|c| input.filter.matches(c.fact_source));
+
+        // Bound the merged pool. Six legs (notes, snapshot, raws, profile,
+        // feedback floor, daily insight) each contribute up to their own
+        // ceiling (notes is bounded by `pool_limit`; the others return
+        // whatever they return — typically small but unbounded in the
+        // raws leg). Without this cap the post-merge pool can reach
+        // `N × pool_limit` and the downstream LLM rerank pays for every
+        // extra candidate. Keep the highest-relevance candidates so the
+        // budget buys ranking quality, not raw breadth.
+        if pool.len() > input.pool_limit {
+            pool.sort_by(|a, b| {
+                b.relevance
+                    .partial_cmp(&a.relevance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            pool.truncate(input.pool_limit);
+        }
         pool
     }
 
@@ -288,9 +305,11 @@ impl Gatherer {
                 Ok(Some(insight)) => return vec![insight_to_candidate(insight)],
                 Ok(None) => {}
                 Err(e) => {
-                    warn!(error = %e, date = %date, "assembler.gather: daily insight fetch failed");
-                    // rust-doctor-disable-next-line unnecessary-allocation
-                    return Vec::new();
+                    // Continue to the next date (today → yesterday) so a
+                    // transient SQLite hiccup on today's date does not
+                    // silently drop yesterday's digest too. Only fall
+                    // through to `Vec::new()` after both dates are tried.
+                    warn!(error = %e, date = %date, "assembler.gather: daily insight fetch failed; falling back to previous date");
                 }
             }
         }

@@ -153,10 +153,10 @@ impl DreamStage for NoteDecayStage {
             // Calendar days via chrono::Duration, not 7*86400 raw seconds:
             // 7*86400 is exactly 7.0 solar days and ignores leap seconds; a
             // 1-hour NTP correction at the boundary can flip a borderline note
-            // in or out of protection.
-            let age_seconds = now - note.created_at;
-            const SEVEN_DAYS_SECS: i64 = 7 * 86_400;
-            if age_seconds < SEVEN_DAYS_SECS {
+            // in or out of protection. `created_at > cutoff` (i.e.
+            // `age_seconds < 7 days`) keeps the note in protection.
+            let cutoff = now - chrono::Duration::days(7).num_seconds();
+            if note.created_at > cutoff {
                 notes_protected += 1;
                 continue;
             }
