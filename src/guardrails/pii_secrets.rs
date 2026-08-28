@@ -315,6 +315,20 @@ impl ToolCallGuardrail for PiiSecretsGuardrail {
         NAME
     }
     async fn evaluate_tool_call(&self, _tool_name: &str, args: &Value) -> GuardrailDecision {
+        // `_tool_name` is INTENTIONALLY unused — do not wire it to
+        // `security::dangerous_tools` here. That list is an *untrusted-
+        // surface hard floor* (its own doc: "Owner / local-trusted callers
+        // are never restricted here"), and it is already enforced at the
+        // untrusted execution entry points (`handlers/tools_invoke.rs`,
+        // `execution_engine/slash_command.rs`, `tasks/heartbeat/probe.rs`).
+        // This guardrail runs inside the agent loop (`harness/agent/act.rs`),
+        // i.e. in the OWNER's context — an owner-driven agent legitimately
+        // uses `bash` / `file_write` / `self_config` to do its job. Blocking
+        // those by name at THIS layer would break the owner's agent, which is
+        // exactly the caller class the dangerous-tools design exempts. The
+        // parameter stays in the trait signature so a future guardrail that
+        // has a *per-tool* content policy (not an identity-based deny floor)
+        // can consume it without a trait change.
         // Scan and rebuild the args leaf by leaf instead of substituting
         // into the serialized JSON text: `RuntimeSecurityGuard` performs raw
         // string replacement, so a secret containing `"`, `\` or a newline
