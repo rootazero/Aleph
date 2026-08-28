@@ -2637,7 +2637,24 @@ mod tests {
     /// schema is bound to a tool with a real caller — the registry
     /// schema total is the sum of every tool the daemon advertises to
     /// the LLM, so any active tool is a live consumer.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 99_700;
+    /// 2026-08-28 (measured, raised from 99_700): 99_612 → 100_254 B (+642 B),
+    /// the `element` parameter that `81b0cdc76` ("desktop: element tokens")
+    /// added to both desktop argument structs. Against the three questions:
+    /// (1) runtime facts — the field's doc is the only place the token grammar
+    /// (`"s00000001:3"`, an `ax_snapshot` handle re-resolved against the live
+    /// UI at action time), the conflict set (`pid` / `app` / `window_id` /
+    /// `role` / `element_title` / `x` / `y`), and the list of accepting
+    /// sub-actions are stated; (2) unguessable — a model that does not know
+    /// the token conflicts with coordinates will send both and get a refusal
+    /// it cannot diagnose; (3) live consumer — every desktop mutating action
+    /// resolves it.
+    ///
+    /// Set flush against the measurement, not above it. The previous entry
+    /// left 88 B of headroom and the entry before that left none; headroom is
+    /// not bookkeeping, it is a pre-authorised allowance that the next author
+    /// spends without an edit here. Zero headroom means the next byte costs a
+    /// deliberate paragraph, which is the whole mechanism.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 100_254;
 
     /// The tool map with nothing wired — the deterministic half of what the
     /// constructor builds.
