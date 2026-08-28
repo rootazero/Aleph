@@ -465,6 +465,13 @@ pub enum SessionManagerError {
 
     #[error("Session not found: {0}")]
     NotFound(String),
+
+    /// The session exists but is in a terminal state (stopped / ended) and
+    /// cannot be silently resumed by `get_or_create`. The caller must
+    /// explicitly reopen it (e.g. via the operator IPC) before new messages
+    /// can be appended.
+    #[error("Session is stopped or ended: {0}")]
+    SessionStopped(String),
 }
 
 /// Get session type string from `SessionKey`

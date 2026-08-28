@@ -38,6 +38,23 @@ impl SessionManager {
             .ok();
 
         if let Some(mut meta) = existing {
+            // **Audit fix**: explicitly handle the stopped/closed terminal
+            // states. The previous code's fallback ("state was not 'created' or
+            // 'idle'; just bump last_active_at") ran a bare UPDATE on any
+            // non-Active session, including a row that an operator had put
+            // into `state='stopped'`. The DB kept `state='stopped'` while the
+            // caller saw `meta.state` as `Some(SessionState::Active)` (set by the
+            // earlier successful transition OR inferred from last_active_at),
+            // and inbound routing continued to treat the session as live. The
+            // contract for a stopped session must be explicit: refuse a silent
+            // resume; require an explicit reopen.
+            match meta.state {
+                Some(SessionState::Stopped) | Some(SessionState::Ended) => {
+                    return Err(SessionManagerError::SessionStopped(meta.key.clone()));
+                }
+                _ => {}
+            }
+
             // Transition Created or Idle -> Active
             let state_update = conn.execute(
                 "UPDATE sessions SET last_active_at = ?, state = 'active' WHERE key = ? AND state IN ('created', 'idle')",
