@@ -40,7 +40,7 @@ use crate::error::{AlephError, Result};
 use crate::search::providers::base::{build_client, check_status};
 use crate::search::providers::duckduckgo::{parse_ddg_html, parse_ddg_lite_html};
 use crate::search::{SearchOptions, SearchResult};
-use crate::sync_primitives::Mutex;
+use crate::sync_primitives::{Mutex, MutexGuard};
 use reqwest::Client;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -254,7 +254,7 @@ impl WebFetchSerpFallback {
     /// via `into_inner()` rather than propagating the poison error
     /// keeps the fallback path infallible: a stale poison would
     /// otherwise lock out every mirror until process restart.
-    fn lock_cooldowns(&self) -> std::sync::MutexGuard<'_, HashMap<&'static str, Instant>> {
+    fn lock_cooldowns(&self) -> MutexGuard<'_, HashMap<&'static str, Instant>> {
         self.cooldowns.lock().unwrap_or_else(|e| e.into_inner())
     }
 

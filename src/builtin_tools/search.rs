@@ -29,6 +29,12 @@ pub struct SearchArgs {
 /// `[search].max_results` schema default.
 const DEFAULT_MAX_RESULTS: usize = 5;
 
+/// Timeout for the registry-less legacy Tavily path. The provider-path
+/// `reqwest::Client` is constructed once with `build_client()` (which sets
+/// the per-request timeout); the legacy path's `Client::new()` has no
+/// timeout, so without this a hung Tavily endpoint wedges the agent loop.
+const LEGACY_FALLBACK_TIMEOUT_SECS: u64 = 10;
+
 /// A single search result
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SearchResult {
@@ -64,6 +70,10 @@ pub struct SearchTool {
     api_key: Option<String>,
     /// Multi-provider search registry (when available, takes priority over direct Tavily)
     registry: Option<Arc<SearchRegistry>>,
+    /// Per-request timeout for the legacy Tavily fallback branch (in seconds).
+    /// The provider-path `reqwest::Client` carries its own timeout via
+    /// `build_client`; this is for the bare `Client::new()` legacy path.
+    fallback_timeout: std::time::Duration,
 }
 
 impl SearchTool {
@@ -86,6 +96,7 @@ impl SearchTool {
             client: Client::new(),
             api_key,
             registry: None,
+            fallback_timeout: std::time::Duration::from_secs(LEGACY_FALLBACK_TIMEOUT_SECS),
         }
     }
 
@@ -191,6 +202,7 @@ impl SearchTool {
             .client
             .post("https://api.tavily.com/search")
             .json(&request_body)
+            .timeout(self.fallback_timeout)
             .send()
             .await
             .map_err(|e| ToolError::Network(format!("Failed to send request: {e}")))?;
