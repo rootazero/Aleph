@@ -748,7 +748,9 @@ impl ProjectStore {
     /// normalization a live `SessionKey` applies — so the operator's spelling
     /// need not match a channel adapter's exactly. Pass the original spelling
     /// as `label` if it is worth preserving for display; it is not otherwise
-    /// recoverable from the stored row.
+    /// recoverable from the stored row. The already-bound conflict error below
+    /// names the operator's original input, not the normalized key, so it
+    /// reads back the words the operator actually typed.
     pub fn bind_conversation(
         &self,
         project_id: &str,
@@ -760,14 +762,18 @@ impl ProjectStore {
     ) -> Result<ChannelBinding, ProjectError> {
         let now = now_secs();
         let peer_kind_col = binding::wire_str(peer_kind);
-        let channel_id = binding::normalize_component(channel_id);
-        let peer_id = binding::normalize_component(peer_id);
+        // Normalized forms, bound to their own names rather than shadowing
+        // `channel_id`/`peer_id`: the conflict error below must be able to
+        // quote the operator's own spelling back at them, not the key we
+        // actually store.
+        let channel_key = binding::normalize_component(channel_id);
+        let peer_key = binding::normalize_component(peer_id);
         self.with_conn(|conn| {
             let existing: Option<String> = conn
                 .query_row(
                     "SELECT project_id FROM project_channel_bindings
                      WHERE channel_id = ?1 AND peer_kind = ?2 AND peer_id = ?3",
-                    rusqlite::params![channel_id, peer_kind_col, peer_id],
+                    rusqlite::params![channel_key, peer_kind_col, peer_key],
                     |r| r.get::<_, String>(0),
                 )
                 .optional()
@@ -800,15 +806,15 @@ impl ProjectStore {
                      bound_by = excluded.bound_by,
                      bound_at = excluded.bound_at",
                 rusqlite::params![
-                    project_id, channel_id, peer_kind_col, peer_id, bound_by, now, label
+                    project_id, channel_key, peer_kind_col, peer_key, bound_by, now, label
                 ],
             )
             .map_err(db_err)?;
             Ok(ChannelBinding {
                 project_id: project_id.to_string(),
-                channel_id: channel_id.clone(),
+                channel_id: channel_key.clone(),
                 peer_kind,
-                peer_id: peer_id.clone(),
+                peer_id: peer_key.clone(),
                 bound_by: bound_by.map(str::to_string),
                 bound_at: now,
                 label: label.map(str::to_string),
@@ -1728,6 +1734,14 @@ mod tests {
     /// A binding is keyed on the conversation, so a second room cannot claim a
     /// conversation the first one already holds. The refusal must be loud: a
     /// silent overwrite would move an existing room's traffic somewhere else.
+    ///
+    /// The `project_for_conversation` assertion below also exercises
+    /// `project_for_conversation` normalizing a RAW (un-normalized) input:
+    /// it passes `"C0A1"` against a row stored under `"c0a1"`. See
+    /// `a_binding_written_with_an_operator_spelling_is_found_by_the_session_key_lookup`
+    /// for the fuller property -- that this normalization also agrees with a
+    /// live `SessionKey`'s, checked against that independent oracle rather
+    /// than a literal repeated on both sides the way this test does it.
     #[test]
     fn a_conversation_belongs_to_at_most_one_room() {
         let _guard = crate::projects::roster::TEST_GUARD
@@ -1766,6 +1780,50 @@ mod tests {
                 .unwrap(),
             Some(a.id.clone()),
             "the original binding must survive the refused attempt"
+        );
+    }
+
+    /// The conflict error must quote the operator's own spelling back at
+    /// them, not the normalized key `project_channel_bindings` actually
+    /// stores under: an operator who typed `Slack`/`#Eng` and is told
+    /// `slack:-eng is already bound` may not recognise it as their own input.
+    #[test]
+    fn the_conflict_error_names_the_operators_original_spelling() {
+        let _guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = ProjectStore::new(Connection::open_in_memory().unwrap());
+        store.create_schema().unwrap();
+        let a = store.create("room a", Some("u-alice"), None).unwrap();
+        let b = store.create("room b", Some("u-alice"), None).unwrap();
+        store
+            .bind_conversation(
+                &a.id,
+                "Slack",
+                BindingPeerKind::Group,
+                "#Eng",
+                Some("u-alice"),
+                None,
+            )
+            .expect("the first bind succeeds");
+
+        let err = store
+            .bind_conversation(
+                &b.id,
+                "Slack",
+                BindingPeerKind::Group,
+                "#Eng",
+                Some("u-alice"),
+                None,
+            )
+            .expect_err("the second room must be refused");
+        let ProjectError::Invalid(message) = err else {
+            panic!("expected ProjectError::Invalid, got {err:?}");
+        };
+        assert!(
+            message.starts_with("Slack:#Eng"),
+            "the error must echo the operator's own spelling (\"Slack:#Eng\"), \
+             not the normalized key (\"slack:-eng\"); got: {message}"
         );
     }
 
@@ -1890,11 +1948,26 @@ mod tests {
             .expect("binding must work on a migrated catalogue");
     }
 
-    /// The write path takes the operator's spelling and the read path derives
-    /// its own from a live `SessionKey`. If those two ever disagree, the
-    /// binding is invisible to every lookup while still listed as bound (it
-    /// would still show up in `projects.channel.list`), so the round trip is
-    /// the property worth pinning -- not either half alone. Ruling AD.
+    /// `bind_conversation` normalizes its own inputs via
+    /// [`binding::normalize_component`]. What is worth pinning is not that
+    /// fact alone -- it is that the normalization agrees with a live
+    /// `SessionKey`'s, checked against an INDEPENDENT oracle rather than a
+    /// second call to the same function: this binds through
+    /// `bind_conversation` with the operator's raw spelling, then derives the
+    /// expected key by constructing a real `SessionKey::group` and reading
+    /// its own sanitized fields via `conversation_of` -- never calling
+    /// `normalize_component` directly. That is the WRITE side.
+    ///
+    /// `SessionKey::group` normalizes at construction, so the value
+    /// `conversation_of` hands back is already normalized: querying
+    /// `project_for_conversation` with it cannot tell whether
+    /// `project_for_conversation` normalizes its OWN inputs, only whether
+    /// `bind_conversation` did. So this test also queries directly with the
+    /// operator's raw, un-normalized spelling -- the READ side, and the only
+    /// thing that distinguishes this test from
+    /// `a_conversation_belongs_to_at_most_one_room` covering the same ground.
+    /// Both assertions must stay: deleting either one un-pins the half it
+    /// alone proves, silently.
     #[test]
     fn a_binding_written_with_an_operator_spelling_is_found_by_the_session_key_lookup() {
         let _guard = crate::projects::roster::TEST_GUARD
@@ -1902,10 +1975,10 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let store = ProjectStore::new(Connection::open_in_memory().unwrap());
         store.create_schema().unwrap();
-        let a = store.create("room a", Some("u-alice"), None).unwrap();
+        let room = store.create("room a", Some("u-alice"), None).unwrap();
         store
             .bind_conversation(
-                &a.id,
+                &room.id,
                 "Slack",
                 BindingPeerKind::Group,
                 "#Eng",
@@ -1914,9 +1987,12 @@ mod tests {
             )
             .expect("bind with the operator's own spelling, capitals and all");
 
-        // A live inbound message builds its SessionKey from the channel
-        // adapter's raw ids the same way every real conversation does --
-        // NOT pre-normalized by the caller.
+        // WRITE side: a live inbound message builds its SessionKey from the
+        // channel adapter's raw ids the same way every real conversation
+        // does -- NOT pre-normalized by the caller. If bind_conversation's
+        // normalization disagreed with SessionKey::group's, this lookup
+        // (keyed on values conversation_of derives independently, never
+        // calling normalize_component) would miss.
         let key = crate::routing::session_key::SessionKey::group(
             "main",
             "Slack",
@@ -1927,11 +2003,27 @@ mod tests {
             binding::conversation_of(&key).expect("a group key is a conversation");
         assert_eq!(
             store.project_for_conversation(&channel, kind, &peer).unwrap(),
-            Some(a.id),
+            Some(room.id.clone()),
             "a binding written with the operator's original spelling must be \
-             found by the lookup a live SessionKey performs -- both paths must \
-             normalize through the same function or the binding is invisible \
-             to dispatch while still listed as bound"
+             found by a lookup keyed on what a live SessionKey independently \
+             derives -- bind_conversation's normalization must agree with \
+             SessionKey::group's, not merely with itself"
+        );
+
+        // READ side: query with the operator's raw spelling directly, not
+        // via conversation_of. This is what pins project_for_conversation
+        // normalizing its own inputs -- the assertion above is structurally
+        // blind to that half, since conversation_of already normalized what
+        // it fed it.
+        assert_eq!(
+            store
+                .project_for_conversation("Slack", BindingPeerKind::Group, "#Eng")
+                .unwrap(),
+            Some(room.id),
+            "project_for_conversation must normalize a raw query the same way \
+             bind_conversation normalized what it stored, or a lookup using \
+             the operator's own spelling would never find a binding that \
+             lists as bound"
         );
     }
 }
