@@ -349,6 +349,8 @@ async fn notify_node_settled(node_id: &str) -> bool {
         }
     };
     if watcher_jobs.is_empty() {
+        info!(node = %node_id,
+            "loop_graph: no watchers paired — settle claim spent without review");
         return true;
     }
     let Some(cron) = CRON_TRIGGER.get() else {
