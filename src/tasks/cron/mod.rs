@@ -293,6 +293,19 @@ impl CronService {
     pub async fn add_job(&self, job: CronJob) -> Result<String, TaskError> {
         let id = {
             let mut store = self.state.store.lock().await;
+            // Reject a duplicate id at the service boundary. The store has a
+            // `UNIQUE` constraint on `cron_jobs.id`, so a duplicate hits
+            // `persist()` and surfaces as a generic `Internal` storage error —
+            // the caller can't tell whether they hit a real bug or simply
+            // chose an id that's already in use. Same classification as the
+            // other caller-fixable refusals: the request is well-formed, the
+            // scheduler refuses to overwrite what it already has.
+            if store.get_job(&job.id).is_some() {
+                return Err(TaskError::invalid(format!(
+                    "job with id '{}' already exists",
+                    job.id
+                )));
+            }
             chain::validate(&store, &job.id, job.chain().as_ref()).map_err(TaskError::invalid)?;
             let id = service::ops::add_job(&mut store, job, self.state.clock.as_ref());
             store.persist().map_err(TaskError::internal)?;
@@ -1045,5 +1058,40 @@ mod tests {
             reads_as.contains("crons: 0"),
             "must name the value users.update's freeze really reports; got {reads_as:?}"
         );
+    }
+
+    /// Duplicate id at the service boundary surfaces as `Invalid`, not
+    /// `Internal`: before this guard the SQLite `UNIQUE` constraint
+    /// propagated as a generic storage failure indistinguishable from a real
+    /// write bug. Caller can now fix the request instead of guessing.
+    #[tokio::test]
+    async fn add_job_with_duplicate_id_is_refused_as_invalid() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let service = test_service(&dir);
+
+        let first = service.add_job(named_job("first")).await.unwrap();
+
+        // Same id, different name → service-level duplicate detection.
+        let mut dup = named_job("second");
+        dup.id = first.clone();
+        let err = service.add_job(dup).await.unwrap_err();
+        assert!(
+            matches!(err, TaskError::Invalid(_)),
+            "duplicate id must be Invalid, got {err:?}"
+        );
+        assert!(
+            err.message().contains(&first),
+            "the refusal must name the conflicting id: {err}"
+        );
+        assert!(
+            err.message().contains("already exists"),
+            "the refusal must explain the cause: {err}"
+        );
+
+        // The original job must still be there, untouched.
+        let jobs = service.list_jobs().await.unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].id, first);
+        assert_eq!(jobs[0].name, "first");
     }
 }
