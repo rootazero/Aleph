@@ -36,7 +36,16 @@ task_local! {
     /// [`resolve_connection_identity`](crate::gateway::handlers::connect::resolve_connection_identity)
     /// (single-user deployments always resolve to `"operator"`, the
     /// zero-change guarantee). `None` for non-gateway callers (cron,
-    /// internal) — the gate treats absent role as trusted.
+    /// internal).
+    ///
+    /// Readers of `None` do NOT all agree on what it means, by design —
+    /// naming which is which because this is the highest-traffic doc on the
+    /// task-local: [`role_is_operator`](crate::tools::turn_context::role_is_operator)
+    /// still treats an absent role as trusted (its own doc: "Absent role =
+    /// trusted local/internal run" — unchanged, deliberate, documented
+    /// there), but [`caller_may_choose_directory`] refuses an absent role
+    /// unless the connection is loopback (narrowed in `546984c2b`). Check the
+    /// specific predicate's own doc before assuming either behaviour.
     pub static CALLER_ROLE: Option<String>;
 
     /// Whether the originating gateway connection's peer is a loopback address

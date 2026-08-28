@@ -861,11 +861,18 @@ mod caller_census {
     )];
 
     /// Every production `.rs` under `src/`, reduced to the code a compiler
-    /// would see: comments AND string-literal payloads removed. Literal
-    /// payloads matter here specifically — this census's own message strings
-    /// and `SOLE_CALLERS` entries name the verb by text, and a scan that only
-    /// strips comments would match those, either firing on itself or growing
-    /// an exemption for the very file that carries this rule.
+    /// would see: comments AND string-literal payloads removed.
+    ///
+    /// NOT for the reason self-scanning might suggest: `production_prefix`
+    /// runs first and excises everything from THIS file's own `#[cfg(test)]`
+    /// boundary (line 394) onward, so `mod caller_census` — this module,
+    /// including `SOLE_CALLERS` and this very comment — never reaches the
+    /// corpus at all, `code_text` or not. What `code_text` actually guards
+    /// against is a DIFFERENT production file's comment or string literal (a
+    /// log message, a doc example, a stale TODO) containing the text
+    /// `.backfill_attribution(` without being a real call site;
+    /// comment-stripping alone would leave a string literal like that intact
+    /// and miscount it as a caller.
     fn production_sources() -> Vec<(String, String)> {
         rust_sources_under(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"))
             .into_iter()
@@ -876,8 +883,16 @@ mod caller_census {
     #[test]
     fn each_narrow_writer_still_has_exactly_one_caller() {
         let sources = production_sources();
+        // Measured, not chosen: 2,455 `.rs` files under src/ on 2026-08-29
+        // (`find src -name '*.rs' | wc -l`). 2,000 leaves ~18% margin for a
+        // genuine future consolidation while still catching a walk that came
+        // back with only a fraction of the tree — the same margin
+        // `shutdown_forensics.rs`'s census uses against its own measured
+        // count. The prior `> 500` floor would pass on a corpus that had
+        // silently lost 80% of its files, which is the exact failure this
+        // self-check exists to catch.
         assert!(
-            sources.len() > 500,
+            sources.len() > 2_000,
             "the scanner found only {} files — it is not reading the tree it \
              thinks it is, and a shrinking sample reports 'all clear'",
             sources.len()

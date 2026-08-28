@@ -2089,8 +2089,12 @@ mod tests {
         assert!(err.contains("config-tier"), "unexpected error: {err}");
     }
 
-    /// Config-tier ("operator") and absent-role (trusted local) callers may
-    /// choose a working directory; absent role exercises the existing default.
+    /// Config-tier ("operator") callers may choose a working directory. Does
+    /// NOT cover an absent role — this test only ever scopes `CALLER_ROLE` to
+    /// `Some("operator")` below. An absent role is refused (unless loopback)
+    /// as of `546984c2b`; that path is pinned in `caller_identity`'s own
+    /// tests (`an_unscoped_ambient_caller_may_not_choose_a_directory`), not
+    /// here.
     #[tokio::test]
     async fn config_tier_caller_may_choose_project_root() {
         let router = Arc::new(AgentRouter::new());

@@ -20,10 +20,16 @@
 //! Binding a room to a directory is the fifth writer of `workspace_path`, and
 //! since P2 that column is the default cwd of every member's run — so a writer
 //! is a permission grant, not a preference. The RPC face gates it with
-//! `caller_may_choose_directory()`, which is fail-OPEN for a caller with no
-//! connection role (cron, A2A, in-process). On this face that arm is reachable
-//! by a model in a scheduled run, and admitting it would let one room's
-//! automation repoint every other member's working directory.
+//! `caller_may_choose_directory()`, which as of 2026-08-28 (`546984c2b`)
+//! REFUSES a caller with no connection role (cron, A2A, in-process) unless the
+//! connection is loopback — narrowed from the fail-OPEN form this comment used
+//! to describe. That narrowing does not make the ambient form safe to reuse on
+//! THIS face either: `CALLER_ROLE` is dead past the `tokio::spawn` every run
+//! crosses, so a tool call here always sees `None` role and non-loopback, and
+//! the gate would always refuse — silently blocking a legitimate room's
+//! automation rather than admitting a hostile one. Reaching the right answer
+//! needs the run's actually-enforced role, read from `ScopedToolService` and
+//! passed to `caller_may_choose_directory_as` explicitly.
 //!
 //! The alternative — a stricter predicate just for this face — would be a
 //! second answer to "may this actor name a server directory", and two answers
