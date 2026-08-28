@@ -995,12 +995,63 @@ async fn handle_connection(
                                         // --- Idempotency + Lane concurrency control ---
                                         debug!("RPC dispatch: method={}", req.method);
 
-                                        // Extract idempotency_key from params (optional)
-                                        let idempotency_key = req.params
+                                        // Extract idempotency_key from params (optional).
+                                        //
+                                        // **Namespaced slot**: the raw caller-supplied string is
+                                        // NEVER the cache key by itself. The slot is scoped to
+                                        // (principal, method, key) — without the first two
+                                        // components a replay crosses identities and methods:
+                                        //   * cross-method: a `config.patch` result cached under
+                                        //     bare "1" would be served to any later
+                                        //     `tools.invoke` reusing "1" within the TTL;
+                                        //   * cross-principal / gate bypass: `method_requires_admin`
+                                        //     and `method_visibility` run INSIDE `process_request`,
+                                        //     but the Cached/Waiting arms return before it — a
+                                        //     response computed for an operator would be replayed
+                                        //     to a member unfiltered.
+                                        // `caller_user` / `caller_role` are resolved ABOVE this
+                                        // block (login-wall section), so they are already in
+                                        // scope here.
+                                        const IDEM_NS_SEP: char = '\u{1f}';
+                                        let raw_idem_key = req.params
                                             .as_ref()
                                             .and_then(|p| p.get("idempotency_key"))
-                                            .and_then(|v| v.as_str())
-                                            .map(String::from);
+                                            .and_then(|v| v.as_str());
+
+                                        // A caller-supplied key containing the namespace
+                                        // separator could forge the (principal, method)
+                                        // prefix of another slot — reject it outright.
+                                        if let Some(k) = raw_idem_key {
+                                            if k.contains(IDEM_NS_SEP) {
+                                                let resp = JsonRpcResponse::error(
+                                                    req.id.clone(),
+                                                    -32602, // JSON-RPC invalid params
+                                                    "idempotency_key contains a reserved separator character",
+                                                );
+                                                let resp_str = serde_json::to_string(&resp).unwrap_or_default();
+                                                if let Err(e) = write.send(WsMessage::Text(resp_str.into())).await {
+                                                    error!("Failed to send idempotency-key error to {}: {}", conn_id, e);
+                                                    break;
+                                                }
+                                                continue;
+                                            }
+                                        }
+
+                                        let idempotency_key = raw_idem_key.map(|k| {
+                                            let composed = format!(
+                                                "{}{}{}{}{}",
+                                                caller_user.as_deref().unwrap_or("<anon>"),
+                                                IDEM_NS_SEP,
+                                                req.method,
+                                                IDEM_NS_SEP,
+                                                k
+                                            );
+                                            debug_assert!(
+                                                composed.matches(IDEM_NS_SEP).count() == 2,
+                                                "namespaced idempotency key must carry exactly two separators"
+                                            );
+                                            composed
+                                        });
 
                                         let lane = crate::gateway::lane::Lane::for_method(&req.method);
 
