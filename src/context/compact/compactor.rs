@@ -20,6 +20,7 @@ use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
 use crate::sync_primitives::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use tokio_util::sync::CancellationToken;
 
 /// Strategy used during compaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +36,39 @@ pub enum CompactStrategy {
     CacheReuse,
     /// Compaction was skipped entirely.
     Skipped { reason: String },
+}
+
+/// What one bounded summarizer round-trip produced.
+///
+/// Three states, not two, because `Cancelled` must not be handled like
+/// `Failed`: the failure arms fall through to deterministic truncation, which
+/// splices a degraded summary AND caches it. Doing that for a turn the user
+/// stopped is how a cancellation leaves a permanent mark on the session's
+/// compaction state.
+enum SummarizerOutcome {
+    Summary(String),
+    Failed,
+    Cancelled,
+}
+
+impl From<Option<String>> for SummarizerOutcome {
+    fn from(v: Option<String>) -> Self {
+        match v {
+            Some(s) => Self::Summary(s),
+            None => Self::Failed,
+        }
+    }
+}
+
+/// The result a cancelled compaction reports: nothing moved, nothing cached.
+fn cancelled_result(tokens_before: usize) -> CompactResult {
+    CompactResult {
+        tokens_before,
+        tokens_after: tokens_before,
+        strategy_used: CompactStrategy::Skipped {
+            reason: "cancelled".to_string(),
+        },
+    }
 }
 
 /// Result of a compaction attempt.
@@ -222,6 +256,9 @@ pub struct ContextCompactor {
     /// hash-validated against the rebuilt history each turn, so a stale
     /// carry-over simply misses and falls through to a full recompaction.
     carryover_key: Option<String>,
+    /// This run's cancellation token, so a summarizer round-trip nobody will
+    /// read can be abandoned (see [`Self::with_cancel`]).
+    cancel: Option<CancellationToken>,
 }
 
 impl ContextCompactor {
@@ -236,6 +273,56 @@ impl ContextCompactor {
             cache: Mutex::new(None),
             monitor_scope: None,
             carryover_key: None,
+            cancel: None,
+        }
+    }
+
+    /// Race every summarizer round-trip against this run's cancellation token.
+    ///
+    /// The harness already threads `parent_cancel` into every LLM call it makes
+    /// itself — `race_llm_call`, `stream_llm_call`, `RescueHost::call_llm`
+    /// (whose contract is literally "raced against cancellation") — but the
+    /// compaction step is awaited directly, bounded only by
+    /// `CompactorConfig::timeout` (15 s by default). So pressing stop during
+    /// step 2c burned up to fifteen seconds on a summary nobody would read, and
+    /// the reactive rescue path can spend the same fifteen again.
+    ///
+    /// Abandoning the call is the smaller half. The larger one is that a
+    /// compaction which runs to completion **commits**: it splices the summary
+    /// and writes it into the fingerprint cache, which is seeded into the
+    /// process-wide cross-run carry-over. A cancelled turn therefore left a
+    /// permanent mark on that session's compaction state. Cancellation now
+    /// returns `Skipped { reason: "cancelled" }` before either happens.
+    ///
+    /// Taken as a builder rather than a per-call argument because the compactor
+    /// is constructed **once per run** (`harness_bridge::runner_impl`, beside
+    /// `with_cache_carryover`), so the token's lifetime is exactly the lifetime
+    /// of the work it bounds — the pairing that a shared, longer-lived
+    /// compactor would get wrong.
+    #[must_use]
+    pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
+    /// One summarizer round-trip, bounded by both the configured timeout and
+    /// this run's cancellation token.
+    ///
+    /// The three call sites (window, extend-merge, slice) all go through here
+    /// so the cancellation contract cannot hold on two of them and not the
+    /// third — the shape that produced this gap in the first place.
+    async fn summarize_bounded(&self, stage: &'static str, prompt: &str) -> SummarizerOutcome {
+        let call = async {
+            let llm_result = tokio::time::timeout(self.config.timeout, self.call_llm(prompt)).await;
+            accept_summary(stage, self.config.timeout, llm_result)
+        };
+        let Some(cancel) = self.cancel.as_ref() else {
+            return SummarizerOutcome::from(call.await);
+        };
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => SummarizerOutcome::Cancelled,
+            out = call => SummarizerOutcome::from(out),
         }
     }
 
@@ -563,8 +650,13 @@ impl ContextCompactor {
         // entire window into an empty "[Context Summary]" — permanent context
         // loss reported as a successful LlmSummary. Stripping first routes the
         // degenerate case to the deterministic-truncation fallback below.
-        let llm_result = tokio::time::timeout(self.config.timeout, self.call_llm(&prompt)).await;
-        let summary = accept_summary("window", self.config.timeout, llm_result);
+        let summary = match self.summarize_bounded("window", &prompt).await {
+            SummarizerOutcome::Summary(s) => Some(s),
+            SummarizerOutcome::Failed => None,
+            // Return BEFORE the splice and before `store_cache`: a stopped turn
+            // must leave this session's compaction state exactly as it found it.
+            SummarizerOutcome::Cancelled => return Ok(cancelled_result(tokens_before)),
+        };
 
         // The user's own turns come back verbatim above whichever summary the
         // window collapses into (B13) — computed once here because both arms
@@ -853,8 +945,13 @@ impl ContextCompactor {
             None => build_window_summary_prompt(&transcript, token_budget, focus.as_deref()),
         };
 
-        let llm_result = tokio::time::timeout(self.config.timeout, self.call_llm(&prompt)).await;
-        let merged = accept_summary("merge", self.config.timeout, llm_result);
+        let merged = match self.summarize_bounded("merge", &prompt).await {
+            SummarizerOutcome::Summary(s) => Some(s),
+            SummarizerOutcome::Failed => None,
+            // Same contract as the window path: the extend-merge arm also
+            // splices and caches, so a cancelled turn must commit neither.
+            SummarizerOutcome::Cancelled => return Ok(cancelled_result(tokens_before)),
+        };
         let (body, strategy) = match merged {
             Some(s) => (s, CompactStrategy::LlmSummary),
             None if self.config.fallback_to_truncation => {
@@ -943,13 +1040,22 @@ impl ContextCompactor {
             instructions,
         );
 
-        let llm_result = tokio::time::timeout(self.config.timeout, self.call_llm(&prompt)).await;
-
         // Strip before the emptiness check: an analysis-only response (no
         // <summary> block) strips to an empty string, which must fall back to
         // deterministic truncation rather than seed a child session with "".
-        let stripped = accept_summary("slice", self.config.timeout, llm_result);
-        Ok(stripped.unwrap_or_else(|| deterministic_truncation(messages)))
+        //
+        // A cancelled slice falls back to truncation rather than erroring: this
+        // function's two callers (the session-split child seed and manual
+        // `/compact`) must return *something* — an `Err` here would leave the
+        // split child with no seed at all. Truncation is deterministic and
+        // commits nothing to the cache, so the stopped turn still leaves no
+        // trace beyond the drain its caller was already performing.
+        Ok(match self.summarize_bounded("slice", &prompt).await {
+            SummarizerOutcome::Summary(s) => s,
+            SummarizerOutcome::Failed | SummarizerOutcome::Cancelled => {
+                deterministic_truncation(messages)
+            }
+        })
     }
 
     /// Side-channel LLM call for summarization. Routes to the cheap-tier
@@ -1331,6 +1437,91 @@ mod tests {
             }
         }
         msgs
+    }
+
+    /// A cancelled compaction must change nothing — not the messages, and not
+    /// the cache the next turn (and every later run) reads.
+    ///
+    /// The harness races every LLM call it makes itself against the run's
+    /// cancellation token; the compaction step was awaited directly, bounded
+    /// only by the 15 s summarizer timeout. Waiting that out is the visible
+    /// half ("stop sometimes takes ten seconds"). The invisible half is that
+    /// the compaction then *committed*: it spliced its summary and wrote it
+    /// into the fingerprint cache, which `with_cache_carryover` seeds into
+    /// every later run on that session key. So a stopped turn left a permanent
+    /// mark on a conversation's compaction state.
+    ///
+    /// Asserted on the two EFFECTS rather than on "the token was consulted": a
+    /// version that raced the token and then fell through to the truncation
+    /// fallback would consult it and still commit, which is most of the damage.
+    #[tokio::test]
+    async fn a_cancelled_compaction_neither_splices_nor_caches() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel();
+
+        let compactor = ContextCompactor::new(
+            Arc::new(MockProvider::new("Summary of earlier conversation.")),
+            CompactorConfig {
+                fresh_tail: 2,
+                ..Default::default()
+            },
+        )
+        .with_cancel(cancel);
+
+        let original = make_messages(12);
+        let mut messages = original.clone();
+        let result = compactor
+            .compact(&mut messages, 2, 0, None)
+            .await
+            .expect("a cancelled compaction reports, it does not error");
+
+        assert!(
+            matches!(&result.strategy_used, CompactStrategy::Skipped { reason } if reason == "cancelled"),
+            "a cancelled compaction must say so, not report a summary or a \
+             truncation: {:?}",
+            result.strategy_used
+        );
+        assert_eq!(
+            messages.len(),
+            original.len(),
+            "a cancelled compaction must not splice"
+        );
+        assert!(
+            messages
+                .iter()
+                .all(|m| !m.text_content().starts_with(SUMMARY_MARKER)),
+            "a cancelled compaction must not leave a summary behind"
+        );
+        assert!(
+            compactor
+                .cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_none(),
+            "a cancelled compaction must not write the fingerprint cache — that \
+             entry is seeded into every later run on this session key"
+        );
+    }
+
+    /// The same call with no token wired is byte-identical to before: the
+    /// subagent spawner and every test construct a compactor without one, and
+    /// `None` must mean "no cancellation", never "cancelled".
+    #[tokio::test]
+    async fn a_compactor_without_a_token_still_compacts() {
+        let compactor = ContextCompactor::new(
+            Arc::new(MockProvider::new("Summary of earlier conversation.")),
+            CompactorConfig {
+                fresh_tail: 2,
+                ..Default::default()
+            },
+        );
+        let mut messages = make_messages(12);
+        let result = compactor.compact(&mut messages, 2, 0, None).await.unwrap();
+        assert!(
+            matches!(result.strategy_used, CompactStrategy::LlmSummary),
+            "an unwired compactor must behave exactly as it did before: {:?}",
+            result.strategy_used
+        );
     }
 
     /// The single `[Context Summary]` a compaction inserts. Since B13 the

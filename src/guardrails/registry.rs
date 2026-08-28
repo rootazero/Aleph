@@ -2,11 +2,20 @@
 //! a single `Arc`-shareable handle. Constructed once at startup, held by
 //! `HarnessDeps` as `Option<Arc<GuardrailRegistry>>`.
 //!
-//! Sequential evaluation per surface: stops at the first `Block` or
-//! `Sanitize`. `Warn`s are collected along the way and the last one is
-//! returned when nothing stronger fires. `disable_all()` flips an
-//! `AtomicBool` so every evaluation short-circuits to `Allow` — the
-//! high-risk runtime rollback knob from master spec § Stage 5.
+//! Sequential evaluation per surface. Only `Block` short-circuits: a
+//! `Sanitize` rewrites the payload and the *rewritten* payload is what the
+//! next guardrail in the chain sees, so a sanitize-then-block chain cannot
+//! leak. Every `Warn` reason is collected (deduplicated) along the way, and
+//! [`settle_chain`] turns the accumulated state into the one returned
+//! decision. `disable_all()` flips an `AtomicBool` so every evaluation
+//! short-circuits to `Allow` — the high-risk runtime rollback knob from
+//! master spec § Stage 5.
+//!
+//! This paragraph is the third copy of that contract (the other two are the
+//! comments inside `evaluate_input` and `settle_chain`). It once described the
+//! *previous* design — "stops at the first `Block` or `Sanitize`… the last
+//! `Warn` is returned" — for long enough that a reader could have taken it as
+//! the spec while the code did something else.
 
 use crate::sync_primitives::{Arc, AtomicBool, Ordering};
 
@@ -100,8 +109,13 @@ impl GuardrailRegistry {
         // rewrite itself can trigger new warn signals. Warn reasons are
         // deduplicated: two guardrails firing the same signal used to produce
         // "secret leaked; secret leaked", which only adds audit-log noise.
+        //
+        // The terminal decision is [`settle_chain`]'s, not this loop's — see
+        // there for why `rewritten` and not `warns.is_empty()` is what decides
+        // whether the rewrite survives.
         let mut warns: Vec<String> = Vec::new();
         let mut current = text.to_string();
+        let mut rewritten = false;
         for g in &self.input {
             let d = g.evaluate_input(&current).await;
             match d {
@@ -111,18 +125,14 @@ impl GuardrailRegistry {
                         warns.push(reason);
                     }
                 }
-                GuardrailDecision::Sanitize(rep) => current = rep.text,
+                GuardrailDecision::Sanitize(rep) => {
+                    current = rep.text;
+                    rewritten = true;
+                }
                 GuardrailDecision::Block { .. } => return d,
             }
         }
-        if warns.is_empty() {
-            GuardrailDecision::Allow
-        } else {
-            GuardrailDecision::Sanitize(Replacement {
-                text: current,
-                source: format!("guardrails (warn: {})", warns.join("; ")),
-            })
-        }
+        settle_chain(rewritten, warns, current)
     }
 
     /// Screen the user input the harness is about to replay into a prompt.
@@ -227,9 +237,11 @@ impl GuardrailRegistry {
         }
         // Same sanitize-then-block contract as `evaluate_input`: a `Sanitize`
         // rewrites the payload that the next guardrail sees; only `Block`
-        // short-circuits. Warn reasons are deduplicated.
+        // short-circuits. Warn reasons are deduplicated, and the terminal
+        // decision is [`settle_chain`]'s.
         let mut warns: Vec<String> = Vec::new();
         let mut current = text.to_string();
+        let mut rewritten = false;
         for g in &self.output {
             let d = g.evaluate_output(&current).await;
             match d {
@@ -239,18 +251,14 @@ impl GuardrailRegistry {
                         warns.push(reason);
                     }
                 }
-                GuardrailDecision::Sanitize(rep) => current = rep.text,
+                GuardrailDecision::Sanitize(rep) => {
+                    current = rep.text;
+                    rewritten = true;
+                }
                 GuardrailDecision::Block { .. } => return d,
             }
         }
-        if warns.is_empty() {
-            GuardrailDecision::Allow
-        } else {
-            GuardrailDecision::Sanitize(Replacement {
-                text: current,
-                source: format!("guardrails (warn: {})", warns.join("; ")),
-            })
-        }
+        settle_chain(rewritten, warns, current)
     }
 
     pub async fn evaluate_tool_call(&self, tool_name: &str, args: &Value) -> GuardrailDecision {
@@ -259,9 +267,11 @@ impl GuardrailRegistry {
         }
         // Tool-call args are a `Value` (not `&str`), so `Sanitize` must rebuild
         // a new `Value` with the rewritten leaf. Same Block-only short-circuit.
-        // Warn reasons are deduplicated.
+        // Warn reasons are deduplicated, and the terminal decision is
+        // [`settle_chain`]'s.
         let mut warns: Vec<String> = Vec::new();
         let mut current = args.clone();
+        let mut rewritten = false;
         for g in &self.tool_call {
             let d = g.evaluate_tool_call(tool_name, &current).await;
             match d {
@@ -272,28 +282,63 @@ impl GuardrailRegistry {
                     }
                 }
                 GuardrailDecision::Sanitize(rep) => {
-                    if let Ok(v) = serde_json::from_str::<Value>(&rep.text) {
-                        current = v;
-                    } else {
-                        // Failed to rebuild — fail closed on the Block side
-                        // would be worse; the rewrite is a content mutation,
-                        // not a security decision, so leave `current` alone
-                        // and surface the sanitize source in the warn chain.
-                        warns.push(format!("sanitize_dropped: {}", rep.source));
+                    match serde_json::from_str::<Value>(&rep.text) {
+                        Ok(v) => {
+                            current = v;
+                            rewritten = true;
+                        }
+                        // The rewrite is not representable as JSON, so the chain
+                        // cannot re-feed the next guardrail with it. Downgrading it
+                        // to a warn and keeping `current` hands the tool the
+                        // guardrail's ORIGINAL, un-sanitized args — precisely the
+                        // fail-OPEN that `AgentHarness::apply_tool_call_guardrail`
+                        // exists to prevent (a guardrail that identified a secret
+                        // returns a rewrite, the registry drops it, and the secret
+                        // reaches the tool). Surface it verbatim instead: the
+                        // caller's reparse fails, and its fail-closed arm blocks
+                        // the call. Terminal by necessity, not by policy — there is
+                        // no payload left to continue the chain with.
+                        Err(_) => return GuardrailDecision::Sanitize(rep),
                     }
                 }
                 GuardrailDecision::Block { .. } => return d,
             }
         }
-        if warns.is_empty() && current == *args {
-            GuardrailDecision::Allow
-        } else {
-            GuardrailDecision::Sanitize(Replacement {
-                text: serde_json::to_string(&current).unwrap_or_else(|_| args.to_string()),
-                source: format!("guardrails (warn: {})", warns.join("; ")),
-            })
-        }
+        settle_chain(
+            rewritten,
+            warns,
+            serde_json::to_string(&current).unwrap_or_else(|_| args.to_string()),
+        )
     }
+}
+
+/// The one place a guardrail chain's accumulated state becomes a decision.
+///
+/// `rewritten` — not `warns.is_empty()` — is what decides whether the chain's
+/// rewrite survives. The two were conflated once, and the failure had no
+/// symptom: a sanitizing guardrail that did not *also* warn (the shape every
+/// redaction guardrail has — a PII scrubber reports nothing, it just scrubs)
+/// produced `Allow`, `current` was dropped on the floor, and the caller sent
+/// the ORIGINAL text to the provider. Nothing errored, nothing logged, and the
+/// only observable difference was the secret on the wire.
+///
+/// The three `evaluate_*` methods share this so the predicate has one home:
+/// the tool-call twin already compared payloads while its two siblings looked
+/// at warns, which is the divergence that let the leak sit in one file with the
+/// correct answer written twenty lines below it.
+fn settle_chain(rewritten: bool, warns: Vec<String>, text: String) -> GuardrailDecision {
+    if !rewritten && warns.is_empty() {
+        return GuardrailDecision::Allow;
+    }
+    // The `source` is audit copy: it must not claim a warn fired when none did.
+    // A warn-only chain still returns `Sanitize` (with `text` unchanged) so the
+    // caller records the reasons — that shape predates this helper.
+    let source = match (rewritten, warns.is_empty()) {
+        (true, true) => "guardrails (sanitized)".to_string(),
+        (true, false) => format!("guardrails (sanitized; warn: {})", warns.join("; ")),
+        (false, _) => format!("guardrails (warn: {})", warns.join("; ")),
+    };
+    GuardrailDecision::Sanitize(Replacement { text, source })
 }
 
 /// Text of a real user message. Synthetic entries are the harness's own copy

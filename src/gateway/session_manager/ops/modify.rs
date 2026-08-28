@@ -43,11 +43,18 @@ impl SessionManager {
             .lock()
             .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
-        // Get the ID threshold
+        // Get the ID threshold. Ranked through `stamp_millis_sql` because this
+        // picks the boundary of a DELETE: ordering by the raw column puts every
+        // millisecond row above every seconds row, and the rows deleted would
+        // then be the wrong ones. The `id` tiebreak makes the boundary
+        // deterministic between rows sharing a stamp.
+        let stamp = Self::stamp_millis_sql();
         let threshold_id: Option<i64> = conn
             .query_row(
-                "SELECT id FROM messages WHERE session_key = ?
-                 ORDER BY timestamp DESC LIMIT 1 OFFSET ?",
+                &format!(
+                    "SELECT id FROM messages WHERE session_key = ?
+                 ORDER BY {stamp} DESC, id DESC LIMIT 1 OFFSET ?"
+                ),
                 params![&key_str, keep],
                 |row| row.get(0),
             )

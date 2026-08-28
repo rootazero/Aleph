@@ -130,7 +130,15 @@ where
             // author, so nothing pre-P2 changes shape.
             let declared = super::BusyInputMode::from_metadata(&request.metadata);
             let busy_mode = match sibling.as_ref() {
-                Some(s) => declared.for_shared_room(&request.metadata, &s.metadata),
+                // The room question is answered by `request_scope`, the same
+                // corrector the session row and the harness scope go through —
+                // reading the raw stamp here made the rule a no-op on every
+                // producer that needs the correction.
+                Some(s) => declared.for_shared_room(
+                    super::run_loop::request_is_in_a_room(request),
+                    &request.metadata,
+                    &s.metadata,
+                ),
                 None => declared,
             };
             match busy_mode {

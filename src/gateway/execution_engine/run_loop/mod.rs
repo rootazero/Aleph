@@ -65,14 +65,84 @@ use super::engine::ExecutionEngine;
 /// `handlers::agent::room_claiming`'s ruling for the same lookup: a degraded
 /// SQLite must not turn into a mis-scoped turn *or* a refused one. The cost is
 /// bounded — the row is then stamped the way it is stamped today.
-fn request_scope(request: &RunRequest) -> Option<crate::scope::ScopeAttribution> {
-    let stamped = crate::scope::scope_from_metadata(&request.metadata);
-    let Some(pid) = room_claiming(&request.session_key) else {
+pub(super) fn request_scope(request: &RunRequest) -> Option<crate::scope::ScopeAttribution> {
+    scope_for_session(&request.metadata, &request.session_key)
+}
+
+/// [`request_scope`] with the session named explicitly.
+///
+/// The room lookup keys on a session, and for one caller that session is **not**
+/// `request.session_key`: `/btw promote` runs with the key already redirected
+/// onto the side thread, then creates the row for `main`. Correcting with the
+/// request's own key there would ask whether the *side thread* is a room — it
+/// never is — and file `main`'s row under the raw producer stamp, permanently
+/// (`stamp_attribution` is create-only and `attribution_backfill` only fills
+/// NULLs). Separating the parameter is what lets that caller ask the question
+/// about the session it is actually creating.
+///
+/// Takes the metadata map rather than an already-parsed attribution so that no
+/// caller has to touch `scope_from_metadata` itself — a raw read is exactly what
+/// `no_reader_under_execution_engine_takes_the_uncorrected_scope_stamp` forbids,
+/// and an entry point that requires one would have to exempt every caller from
+/// its own guard.
+pub(super) fn scope_for_session(
+    metadata: &std::collections::HashMap<String, String>,
+    session_key: &crate::routing::session_key::SessionKey,
+) -> Option<crate::scope::ScopeAttribution> {
+    let stamped = crate::scope::scope_from_metadata(metadata);
+    let Some(pid) = room_claiming(session_key) else {
         return stamped;
     };
     let mut attr = stamped?;
     attr.scope = crate::scope::ScopeId::Project(pid);
     Some(attr)
+}
+
+/// Whether this turn is happening inside a project room.
+///
+/// The shared-room busy-lane rule ([`super::BusyInputMode::for_shared_room`])
+/// needs this and used to answer it by parsing `SCOPE_META_KEY` out of the
+/// incoming metadata — i.e. from the producer's raw stamp, which for the six
+/// producers that need [`request_scope`]'s correction says `personal:<speaker>`
+/// about a session a room has already claimed. The rule then read "not a room"
+/// and let one member's message steer another member's in-flight run: the exact
+/// thing it exists to forbid, silently, and only on the channel/cron/A2A paths.
+pub(super) fn request_is_in_a_room(request: &RunRequest) -> bool {
+    matches!(
+        request_scope(request).map(|a| a.scope),
+        Some(crate::scope::ScopeId::Project(_))
+    )
+}
+
+/// The corrected attribution rendered back into the two wire strings
+/// [`crate::orchestrator::FlowRequest`] carries.
+///
+/// `FlowRequest` has no metadata map, so it forwards owner and scope as two
+/// explicit strings — and `Orchestrator::dispatch` rebuilds the harness-side
+/// scope task-local from exactly those two strings inside its `tokio::spawn`
+/// (task-locals do not cross a spawn, so the corrected one established by
+/// [`with_request_scope`] does not reach the loop). That makes the literal
+/// building those strings the **fourth reader** of this correction, and it read
+/// `request.metadata` verbatim — the uncorrected producer stamp.
+///
+/// The consequence is the disagreement [`request_scope`] exists to prevent,
+/// relocated one layer down: the session row, the roster predicate and every
+/// read path compose the partition from `Project(P)` while everything the run
+/// *writes* (`remember`, `note_manage`, compaction) composes it from
+/// `Personal(<speaker>)`, because `memory::project_scope` reads
+/// `scope::current_scope()`. Nothing errors. The only symptom is that the agent
+/// does not remember what was said in the room, and only for the six producers
+/// that need the correction in the first place — the Panel path, which is
+/// corrected upstream in `handlers::agent::resolve_attribution`, looks fine.
+///
+/// Rendering through [`crate::scope::ScopeAttribution`] rather than copying the
+/// map entries is what makes the fourth reader inherit the correction by
+/// construction instead of by anyone remembering it exists.
+pub(super) fn request_scope_strings(request: &RunRequest) -> (Option<String>, Option<String>) {
+    match request_scope(request) {
+        Some(attr) => (Some(attr.owner_user_id), Some(attr.scope.render())),
+        None => (None, None),
+    }
 }
 
 /// The project that has claimed `session_key` as its room conversation.

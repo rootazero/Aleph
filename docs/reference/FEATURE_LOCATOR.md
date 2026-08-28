@@ -28,6 +28,11 @@
 | Harness | 后台 build 跑完没人说一声 / 只有 poll 才知道结束 / bash 后台任务完成通知 | Background Bash Completion Announce | `builtin_tools/process_completion.rs`(事件单点+打码) + `gateway/{announce_delivery,process_announce}.rs`(共享投递梯) + journal `announced` 戳 | ✅ (§4.11, 2026-08-15 dsh 轮) |
 | Harness | /stop 之后后台孩子还各自拉起新 run / 停止反而触发跟进 | Cancel Suppresses Subagent Announce | `subagent_tool/spawn.rs`(settle 先算 lifecycle) + `record_announced` 戳 | ✅ (§4.11, 2026-08-15) |
 | Harness | 工具 panic 杀掉整轮 / panic 只剩 completion dropped | Per-Call Panic Containment | `tools/scoped/mod.rs::execute_with_cancel`(catch_unwind→ToolError) + `utils/panic_payload.rs` | ✅ (§3.2, 2026-08-15；终局帧本来就有——§3.1 Round 8 oneshot-drop 边界) |
+| Harness | 配了脱敏 guardrail 但密钥还是发出去了 / 改写不生效 / 只有告警时才脱敏 | Warn-Free Sanitize Survives | `guardrails/registry.rs::settle_chain`（三条链唯一终局判据；解析不回 JSON 的改写上抛给 fail-closed 臂） | ✅ (§3.17①, 2026-08-28) |
+| Gateway | 房间里聊了半天 agent 一点都不记得 / 记忆写进了个人分区 | FlowRequest Carries The Corrected Scope | `run_loop/mod.rs::request_scope_strings`（第四个读者）+ `scope_for_session` + `request_is_in_a_room` | ✅ (§3.17②, 2026-08-28) |
+| Gateway | 第一条消息失败后项目目录和标题永远回不来 / 会话一直未命名 | First-Message Settle On Both Arms | `execution_engine/settle.rs::settle_first_message`（成功与失败臂共用） | ✅ (§3.17③, 2026-08-28) |
+| Context | 按停之后还要等十几秒 / 停掉的回合改了压缩缓存 | Compaction Honours The Cancel Token | `context/compact/compactor.rs::{summarize_bounded, with_cancel}`（splice 与 `store_cache` 之前返回） | ✅ (§3.17④, 2026-08-28) |
+| Gateway | 斜杠命令旁边改 memory 旋钮不生效 / 旋钮不粘 | Fast Path Runs Every Stamping Twin | `slash_command.rs` + census `every_stamp_on_carry_resolver_runs_on_the_fast_path`（从会 stamp 的模块派生） | ✅ (§3.17⑤, 2026-08-28) |
 | Harness | 工具卡片永远转圈 / 模型看不到那次被拦的调用 / run 摘要少一条 | Guardrail Block Settles Once | `harness/agent/guardrails.rs::settle_blocked_call`（`Block` 的两个生产者共用同一条终局路径） | ✅ (§3.1 Round 9 ②, 2026-08-23) |
 | Harness | run 明明失败了 trace 却说"已取消" / 分不出用户按停还是 provider 挂了 | Failed ≠ Cancelled In Trace | `harness/trace.rs::LoopTraceSessionOutcome::Failed` + `agent.rs` 退出臂 + `trace_presentation` 标签/状态 | ✅ (§3.1 Round 9 ③, 2026-08-23) |
 | Harness | stop hook 说停了循环却又跑了一轮 / StopHookHalt 之后还有 turn | Policy Halt Is Final | `harness/agent.rs::run` 的 follow-up 续跑闸（`!hit_limit()`） | ✅ (§3.1 Round 9 ④, 2026-08-23) |
@@ -1463,6 +1468,38 @@
   - `resolver.rs::MAX_FLOW_DEPTH`：读起来像是委派深度上限，实际只管 flow→flow 递归（子代理根本不经过 dispatch）。**保留不删**——它 fail-closed，代价是每次 dispatch 一次比较，第一个传非零 depth 的生产者白拿一个界；但作用域必须写对。
 
 - **刻意不移植（参考项目机制 → 被哪条红线挡住）**：11 份 per-model-family 手写 prompt body + 运行时整体 swap（R9 prune-the-prompt；且 `no_sentence_is_stated_twice` 会当场红）· `String.replace` 字面量锚点叠加 prompt（锚点不匹配是**静默 no-op**）· prompt 里的 cost-sorted agent 表（Aleph 的 subagent 不自选 provider，成本对模型不可行动）· 按 agent 名字硬编码的 prompt 段（`AgentCatalogLayer` 从 registry 派生，改名不会静默删段）· 静态 fallback 链 + per-session 游标（Aleph 的 `src/providers/failover/` 有熔断/冷却/半开探测，移植等于制造第二个「provider 失败了怎么办」）· `ultrawork` 关键字正则触发的 per-message 模型覆写（R7/P8 禁止用 regex 解析自然语言；Aleph 的等价面是 `select_model` 工具与 thinking pill）· 把 delegation 收回 `Orchestrator::dispatch`（无用户可见缺陷的 L 级重构，且补偿线已 shipped——一条**有**消费者且工作正常的通道不该为架构整洁被重接）。
+
+
+### 3.17 Agent Coordinator：回合状态机的五个静默缺陷 (Turn State Machine · grok-bot-0.18 对照轮 · 2026-08-28)
+
+- **口语关键词**：agent coordinator、回合状态机、turn state machine、guardrail 脱敏没生效、密钥还是发出去了、房间里的记忆写丢了、第一条消息失败之后项目目录没了、会话一直没标题、按停之后还要等十几秒、`/compact` 停不掉、斜杠命令带的旋钮不生效
+- **背景**：对照 **grok-bot-0.18-reconstructed**（`source/packages/agent/` 的 `state.ts` / `tool-stream-executor.ts` / `pending-tool-call-contract.ts` / `summarization-orchestrator.ts`、`source/packages/agent-summarization/`、`source/host/runner/` 的 `turn-agent-composition.ts` / `turn-toolset.ts` / `turn-settle.ts` / `turn-observation.ts`）重扫 Aleph 的"复杂上下文编排 + 工具调用状态机"。**结论先写在前面：这一轮没有一条是移植**——六个映射维度（回合状态机 / 工具调用身份契约 / 上下文装配 / 压缩编排 / token 记账 / 回合组合与结算）跑下来，Aleph 在**五个维度上已经更强**，参考实现真正领先的只有两处（背景摘要、per-tool-call token 归因），而它们都因为"谁是消费者"答不上来而 DEFER。这一轮交付的五条全部是**Aleph 自己的缺陷**，共同点是：**都返回成功，都不打日志，都有一整套绿测试**。（worktree `agent-coordinator-refactor`）
+- **代码锚点**：`src/guardrails/registry.rs::settle_chain`（**新**，三条链唯一的终局判据）· `src/gateway/execution_engine/settle.rs`（**新**，两条终端臂共用的首message结算）· `src/gateway/execution_engine/run_loop/mod.rs::{request_scope, scope_for_session, request_scope_strings, request_is_in_a_room}` · `src/context/compact/compactor.rs::{summarize_bounded, SummarizerOutcome, cancelled_result, with_cancel}`
+
+  - **① `Sanitize` 在没有 `Warn` 陪同时被整个丢掉（P0，当天由 `d17351f0a` 引入，7 条红测已在 main 上）**：`evaluate_input` / `evaluate_output` 的终局是 `if warns.is_empty() { Allow }` —— 而 `current`（已改写的文本）就在那一行的上一格被丢弃。于是**一个改写了但没有同时告警的 guardrail 是完整的 no-op**，原文照常上线。而"改写但不告警"不是边缘情形，**是每一个脱敏 guardrail 的形状**：PII 清洗器不告警，告警本身就是把密钥写进审计日志的一种方式。同一个文件里第三个孪生 `evaluate_tool_call` **判据是对的**（`warns.is_empty() && current == *args`），所以正确答案就写在错误答案下面二十行。⚠️ **第二半更贵**：`evaluate_tool_call` 对"改写结果解析不回 JSON"的处置是**降级成一条 warn 并保留原参数**，而 `AgentHarness::apply_tool_call_guardrail` 的 fail-closed 臂（其 doc 逐字写着"一个识别出密钥的 guardrail 返回改写、harness 拒绝应用、未脱敏的原文到达工具"是它存在的理由）**因此永远到不了**——注册表把它要拦的那件事在上游做掉了。修法：三条链共用 `settle_chain(rewritten, warns, text)`，判据是**有没有被改写**不是有没有告警；解析不回 JSON 的改写**原样上抛**（`return Sanitize(rep)`），让调用方的 fail-closed 臂开火——终止是**必然的**（没有可继续链的载荷了），不是策略选择。守卫 `all_three_chains_surface_a_warn_free_rewrite`（**断言的是三者一致**，不是任一者的答案：失效形态是分歧）+ `a_warn_only_chain_still_carries_its_reasons_unchanged`（反向过度纠正的地板）。
+  - **② `FlowRequest` 带的是**未经修正**的 scope 戳（P1，真 bug）**：`run_loop::request_scope` 存在的理由是——一个不知道项目房间的生产者会在房间已认领的 session key 上戳 `personal:<说话人>`，而 `stamp_attribution` 只在创建时写、`attribution_backfill` 只补 NULL，所以错戳是**永久**的。三个读者走了它（会话行 / run 的外层 task-local / 侧栏 recency touch），**第四个没有**：`FlowRequest` 字面量直接抄 `request.metadata` 的两个键，注释还写着"verbatim"。而 `Orchestrator::dispatch` **正是从这两个字符串**在它的 `tokio::spawn` 内部重建 harness 侧的 scope task-local（task-local 不跨 spawn，外层那个修正过的到不了循环）⇒ **run 写的每一条记忆**（`remember` / `note_manage` / 压缩）落在说话人的个人分区，而行、名册谓词、每一条读路径都在房间分区里找。零报错，唯一症状是"agent 不记得房间里说过的话"，且只发生在需要修正的那六个生产者上（Panel 路径在 `resolve_attribution` 上游已修，看起来完全正常）。修法：`request_scope_strings` 把修正后的 attribution 渲染回那两个字符串，第四个读者**按构造**继承修正。
+    - ⚠️ **为它写的 census 第一次跑就抓到另外两个**（"一个守卫第一次跑出来的命中数才是那一类的真实大小"）：**(a)** `btw_promote` 用 `scope_from_metadata(&request.metadata)` 给 `main` 建行——而 `request.session_key` 此时**已被调用方改指到侧线程**，所以那里既不能直接用 `request_scope`（会去问侧线程是不是房间，永远不是），也不能抄原戳。故 `scope_for_session(metadata, session_key)` 把 session 参数分出来。**(b)** `BusyInputMode::for_shared_room` 自己解析 `SCOPE_META_KEY` 来回答"这是不是房间"——同样是原戳，所以在每一个需要修正的生产者上这条规则读到"不是房间"、**什么都不做**，而它存在的全部理由就是"一个成员的消息不该 steer 或 cancel 另一个成员正在跑的 run"。现在房间这一问在进程里**只有一个答案**（`request_is_in_a_room`），该方法只留它真正的主语：两个回合是不是同一个作者。
+    - 守卫 `no_reader_under_execution_engine_takes_the_uncorrected_scope_stamp`：规则是"**这棵树里不许有任何原戳读取**"，不是"`FlowRequest` 字面量要调修正函数"——要挡的是**第五个**读者，点名第四个只挡得住第四个。豁免按**外层函数**取（`carry_policy_metadata` 是转发不是消费，它的下游会自己修正），不按文件取——按文件会让整个 `execute.rs` 失明。⚠️ 用的是 `utils::source_scan` 而不是本地 `production_sources`：后者的切点是字面量 `"#[cfg(test)]\nmod tests"`，而 `execute.rs` 的四个测试模块都按被测对象命名，**一个都切不掉**。
+  - **③ 首消息的两个一次性戳只写在成功臂（P1，真 bug）**：`is_first_message` 是派发**之前**在空历史上算出的一次性闩，而 harness 在派发前就把用户消息 append 了 —— 所以第一回合失败之后 `history` 不再为空，**此后每一回合它都是 false，两个戳再也不会开火**。用户在 Panel 里选了目录、发第一条消息、撞上限流（或密钥过期、或在慢回合上按了停），于是 `identity_meta.custom["project_root"]`（Panel 重载后据以恢复目录的那个载体）永久为 null：此后每一回合都在 `~/.aleph/workspaces/<agent>` 里跑，并且模型被明确告知就在那里；auto-topic 一起丢，侧栏那一行永远保持未命名。**唯一的出路是新开一个对话**。作者其实已经认出过这一类——`announce_turn_end` 被特意搬进两条臂、`set_session_source_channel` 被整个提到 run 之前，注释里逐字写着"只在成功时公告，正是让其它每一个面都停在没变过的状态的原因"——这两个被留下了。修法：抽 `settle.rs::settle_first_message`，两条臂各调一次。守卫 `the_failure_arm_settles_the_first_message_stamps_too` **点名失败路径**（只数调用次数会被"在成功臂里复制一遍"骗过），并反向断言成功臂仍在（"搬"而不是"共用"的修法会满足前一条）。
+  - **④ 压缩不听 run 的取消令牌（P2，断线）**：生产者与消费者都完整存在，中间那根线从没接过。`run_turn_internal` 手里有 `parent_cancel` 并把它交给它自己发起的**每一次** LLM 调用（`race_llm_call` / `stream_llm_call` / `RescueHost::call_llm`，后者的契约逐字是"raced against cancellation"），唯独 `apply_budget_directive` 那 12 个参数里没有它；`ContextCompactor::compact` 根本没有取消参数，唯一的界是 `CompactorConfig::timeout`（默认 15 s）。按停的可见代价是"停有时候要等十几秒"（反应式救援路径可以再花一次同样的 15 s）；**不可见的那一半更贵**：跑完的压缩会**提交**——splice 摘要 **并** 写进指纹缓存，而那个缓存被 `with_cache_carryover` 播种进此后每一个同 session key 的 run。**一个被停掉的回合因此在会话的压缩状态上留下永久痕迹。** 修法：三个 summarizer 往返共用 `summarize_bounded`，取消返回 `Skipped{reason:"cancelled"}`，**在 splice 之前、在 `store_cache` 之前**。⚠️ `SummarizerOutcome` 刻意是**三态**：把 `Cancelled` 当 `Failed` 处理会落进确定性截断的回落臂，那一臂同样 splice 同样缓存——也就是大部分损害仍在。⚠️ 令牌用 **builder**（`with_cancel`）而不是逐调用参数：compactor 是**每 run 构造一次**的（`runner_impl` 里紧挨着 `with_cache_carryover`），所以令牌寿命与它约束的工作**恰好相等**——这正是一个共享的、更长寿的 compactor 会搞错的那个配对。**两个构造点都接了**（第二个是子代理 spawner，参数**必填不可省**：默认值会让第二个站点静默继承第一个站点刚学会的教训，而子代理恰恰是没人会注意到的地方）。守卫断言的是**两个效果**（没 splice、没写缓存）而不是"令牌被查询过"——一个查了令牌然后回落到截断的版本会满足后者。
+  - **⑤ 斜杠快路径只戳了四个 knob 里的三个（P2，真 bug）**：调用点的注释写着"the mode and think-level twins carry the same contract"——**一个数目**，写下时是对的。`memory` 作为第四个孪生落地时什么都没继承：一个在斜杠命令旁边带 `{memory:"off"}` 的客户端，这一回合不受影响（快路径不建 prompt），而会话**永远不会被戳**，于是下一个普通回合从**陈旧**的戳里解析。零报错，症状是"这个旋钮好像不生效"。守卫 `every_stamp_on_carry_resolver_runs_on_the_fast_path` **从会 stamp 的那些模块派生孪生集合**（`turn_*.rs` 里含 `persist_session_*` 的），不从任何人维护的名单派生——第五个孪生落地的当天就是红的，而那是遗漏唯一便宜的时刻。（`turn_model` 正确地不在集合里：模型 pin 的写者是 `select_model` 工具，它的 `turn_*` 模块只 rehydrate 已持久化的 pin，没有"携带"就没有可丢的东西。）
+
+- **对照结论：Aleph 已经更强的五个维度（勿重做对照）**
+  | 维度 | 参考实现 | Aleph | 判定 |
+  |---|---|---|---|
+  | 工具名解析 | `pending-tool-call-contract.ts` 把 `toolCallId → outerToolName/toolIdentifier/isDynamic/allowedToolNames` 钉在 assistant 消息的 `providerOptions` 上，执行器不再重新推导 | `ScopedToolService::call_concurrency_claim` 先 `resolve()` 归一化，闸与派发看**同一个拼写**；未知名 ⇒ `ConcurrencyClaim::global()` ⇒ 不可并行 ⇒ 落串行 ⇒ `name_repair` 修复。**该契约在 Aleph 是"未知名不可并行"这一条不变量的推论**，不需要第二份随消息走的表述 | 无需移植（实测：并行臂不修名不是缺陷，是这条不变量在工作） |
+  | 空响应恢复 | 追加 `EMPTY_RESPONSE_CONTINUATION_MESSAGE` 后重试，3 次上限 | `think.rs` 三段有界恢复（empty / ctx-overflow / max_tokens），`drain_context_overflow` 幂等、两个溢出点各调一次 | Aleph 更强（顺序脆弱性已消除）|
+  | 确定性载体 | `durable-blocks.ts`：7 个 `DurableBlockId` × 5 个 summarizer 的 leading/trailing 表 | `carried_artifacts` 是**单一源数组**，四个 splice 站点 + 直调点共用；加第三个载体是一行 | 同级（Aleph 的形状更小）|
+  | 终局记账 | `turn-settle.ts` 的 prepare/abort/commit/skip 四相 checkpoint | `settle_blocked_call` 已把"被阻塞的工具调用"收敛到**值**而不是决策分支上；本轮 ③ 把首消息结算补成同一形状 | 本轮补齐 |
+  | 取消 | `cancellationToken` 穿进重试循环，每次尝试与每次退避后各查一次 | 本轮 ④ 之后，harness 发起的**每一次** LLM 往返（含侧信道）都在 `select!` 里 | 本轮补齐 |
+
+- **DEFER（有理由，别当遗漏）**
+  - **背景摘要**（`background-summarization.ts`：`used >= startThreshold` 就在后台开跑，只有 `unused <= persistThreshold` 才提交，超时即 `backgroundSummarizationDiscarded`）—— 设计确实更好：它把"什么时候开始干活"与"什么时候承诺结果"拆成两个阈值，从而把 summarizer 往返移出用户可见的关键路径。DEFER 的理由是**它与本轮 ④ 相互作用**：一个后台跑着的压缩在 run 被取消时必须丢弃，而丢弃语义刚刚才有地方可挂（`SummarizerOutcome::Cancelled`）。先让取消契约在树上待一轮，再谈把工作挪到后台。
+  - **per-tool-call token 归因**（`agent.tool_call_result_tokens{tool_name,success}` / `toolCallResultInputTokens`）—— 数据**已经在手上**：`persist_tool_success` 里 `output.value` 就在那儿，而 `push_tool_invocation` 只带走 `(id, name, duration_ms, success, error)`。加一个 `result_bytes` 几乎免费，`RunSummary.tool_summaries` 就能回答"哪一次工具调用把上下文填满了"。DEFER 的理由是 R10 的第三问：**现在有几个真实消费者**——答案是零，Panel 的上下文表盘只画一个标量。**接线要和它的读者同批落地**，否则就是一个零消费者字段。
+  - **`prompt-context-usage-tree`**（分类 → 消息 → tool-call/result 配对 → 按 XML tag 切分的 prompt 块，逐节点 token）—— 同上，且更大：它需要一个 RPC 面和一个 Panel 视图才有意义。Aleph 现有的对位是 `prompt-size` CLI（静态）+ 逐层字节棘轮（测试期）+ `on_context_usage`（运行期，**一个标量**）。三者都不能回答"是什么占满了"。列为 backlog，不列为缺陷。
+  - **`state.ts` 的 Eager/Lazy 引用 + 恢复分相指标**（turn 引用惰性、root prompt 急切、每相耗时/字节直方图）—— Aleph 的会话事件是 SQLite 行不是 blob 引用，恢复形状不同；移植等于给一个不存在的问题造一层间接。
+
+- **打磨话术**：「'我配了脱敏 guardrail，密钥还是发出去了'＝① 的 `warns.is_empty()`，判据现在是"有没有被改写"（`settle_chain`）；'房间里聊了半天，agent 一点都不记得'＝② 的第四个读者，run 写在个人分区、所有人读房间分区；'第一条消息发失败之后，目录和标题就再也回不来了'＝③ 的一次性闩只在成功臂消费；'按了停还要等十几秒，而且停完压缩状态变了'＝④，取消现在在 splice 与 `store_cache` 之前返回；'带着斜杠命令改 memory 旋钮不生效'＝⑤ 的第四个孪生。**五条的共同问法**：这件事有几个面/几个读者/几条终端臂，以及**没被列举的那一个**在哪。」
 
 
 ## 4. Loop 层
@@ -3206,14 +3243,16 @@
 
 ### 6.9 多端共享一条线程 · 重连与崩溃后的状态重建 (Multi-Client Thread Sharing & Post-Reconnect State Rebuild)
 
-- **口语关键词**：另一个标签页的回答跑到我这来了 / 我下一句发错会话了 / 房间里看不见队友在说话 / 打开一个正在跑的会话什么也不动 / core 重启后红点不动了 / 重启后 Stop 键一直卡着 / 出错的那一轮别的端看不到 / **手机上发了消息什么都不出来** / **iOS Panel 只有我自己的气泡** / **手机上要退出去再进来才看到回答** / **重连之后那一轮再也不动了** / **TUI 里蹦出别的会话的输出** / **TUI attach 上去停不掉正在跑的那一轮**
+- **口语关键词**：**`aleph chat history` 说 Total 但明明只显示了一部分** / **翻不到更早的消息 / before 游标返回空** / **打开往期会话前面的消息不见了** / **对话从中间开始** / **我发的一整行显示成好几短行** / 另一个标签页的回答跑到我这来了 / 我下一句发错会话了 / 房间里看不见队友在说话 / 打开一个正在跑的会话什么也不动 / core 重启后红点不动了 / 重启后 Stop 键一直卡着 / 出错的那一轮别的端看不到 / **手机上发了消息什么都不出来** / **iOS Panel 只有我自己的气泡** / **手机上要退出去再进来才看到回答** / **重连之后那一轮再也不动了** / **TUI 里蹦出别的会话的输出** / **TUI attach 上去停不掉正在跑的那一轮**
 
 - **代码锚点**：
   - 服务端 — `src/gateway/execution_engine/engine.rs`（`announce_turn_end` 单一源 · `active_run_for_session`）、`session_run_registry.rs::run_id_for`、`execution_adapter.rs::active_run_for_session`（默认 `None`）、`handlers/agent.rs::AgentRunManager::active_run_for_session`、`handlers/chat.rs::handle_history`（响应新增 `active_run`）
+  - 游标单位与展示标签（round-5）— `session_store/types.rs::stamp_millis`（分界在全 crate 的唯一应用；`instant()` 经它表达）、`session_store/mod.rs::{history_page(before: Option<DateTime<Utc>>), paginate_before, mixed_unit_cursor_tests}`、`session_manager/ops/crud.rs::{stamp_millis_sql, history_sql, get_history, history_page}`、`handlers/chat.rs::{parse_before, the_window_and_the_transcript_length_come_from_one_read}`、`aleph_protocol::session_thread::HistoryWindow`、`interfaces/cli/src/commands/chat_cmd.rs::history_footer`
+  - 窗口与气泡宽度（round-4）— `handlers/chat.rs::handle_history`（响应新增 `total`）、`session_store/mod.rs::SessionStore::history_page`（默认实现一次读同时给出 `rows` 与 `total` + SQLite 单锁 `COUNT(*)`＋窗口覆写 `session_manager/ops/crud.rs`；round-6 前是两个方法 `get_history_before` / `history_len`）、`views/chat/state/mod.rs::{DEFAULT_HISTORY_LIMIT, HISTORY_PAGE, history_window_gap, ChatState::{history_limit, history_has_more, history_above}}`、`api/chat.rs::parse_history_total`、`views/chat/messages.rs::{MessageList 的载入更早控件, bubble_width_tests}`
   - 客户端（Panel）— `platform/wide/views/chat/events.rs::resolve_target`（三步解析）、`state/sessions.rs`（登记三写者 `adopt_session` / `start_new` / `ensure_active`；重连两半 `settle_runs_absent_from` / **`rejoin_target`**；`set_session_key` / `reset_running_baseline`）、**`state/reattach.rs::reattach_after_connect`（唯一的重连修复，挂 app root）**、`components/chat_sidebar.rs::hydrate_and_follow`、`context.rs::connection_epoch`、`views/chat/state.rs::settle_abandoned_run`、**`platform/phone/chat/{mod,history,composer,thread}.rs`（phone 的四个登记点）**
   - 客户端（TUI）— `interfaces/tui/src/tui/app/events.rs`（`frame_belongs_here` 三答 · `adopt_active_run` · `RunAccepted` 豁免）、`app/mod.rs::session_reconciled`、`commands.rs::{active_run_from_history, attach_session}`
 - **职责**：让**同一条会话线程**同时被多个终端观看而不互相污染，并让任意一端在**重连 / core 重启**之后把自己的视图重建到与服务端一致。
-- **状态**：✅ 2026-08-10（对标 codex `thread-store/local/writer_lock.rs` 的"一个线程一个写者"与 pi `LiveSession.connections` + `ServerSnapshot.revision` 的"逐连接快照"）· **round-2 ✅ 2026-08-23**（phone 从来收不到帧 / 重连只结算不重接 / TUI 未知 run 一律收下——见本节末尾）。
+- **状态**：✅ 2026-08-10（对标 codex `thread-store/local/writer_lock.rs` 的"一个线程一个写者"与 pi `LiveSession.connections` + `ServerSnapshot.revision` 的"逐连接快照"）· **round-2 ✅ 2026-08-23**（phone 从来收不到帧 / 重连只结算不重接 / TUI 未知 run 一律收下——见本节末尾）· **round-4 ✅ 2026-08-28**（往期会话缺开头：硬编码 50 行的尾部窗口 + 服务端 `before` 游标零客户端；用户气泡百分比宽度解析到自己身上）· **round-5 ✅ 2026-08-28**（round-4 的四条遗留：`before` 游标与它比较的那一列不共用单位解析 ⇒ 对 58% 的行是报成功的 no-op；两次读的顺序；CLI 把窗口长度印在 "Total" 后面）。
 
 - **对标结论（先说不抄什么）**：codex 的 writer lock 是**文件级跨进程**互斥，Aleph 的等价物更强且已在位——`SessionRunRegistry` 的 per-session claim（执行层）+ `SessionActor` 的单任务串行 append（存储层，且带 seq 冲突自愈重试），跨进程那一层由 `~/.aleph/data/aleph.lock` 单例覆盖。pi 的显式 `attach`/`detach` + `requireAttached` 也**不移植**：Aleph 的投递模型是 topic + 逐连接可见性投影，加一张 attach 表就是给同一个问题制造第二个真源。真正缺的是 pi 那个模型**顺带**提供的两样东西——**帧到对话的权威路由**，和**重连时的基线协商**。
 
@@ -3295,7 +3334,132 @@ round-2 结尾留了三条，本轮全部收掉。共同形状：**三条都不�
 
 ---
 
-### 6.10 白板画布 (Whiteboard Canvas · 2026-08-17，画廊入左栏轮同日)
+#### round-4（2026-08-28）：往期会话看不到开头 · 用户气泡莫名换行
+
+> 用户一次报了两条，两条都是**存的字节完全干净、任何断言文本的测试都看不见**的那一类：一条丢内容、一条丢排版。零 worktree（直接在 main 上），改动 9 个文件（`src/` 3 · `interfaces/webchat/` 4 · locales 2）。真机 QA 在本机 `aleph-server`（`http://127.0.0.1:18790`）上跑，1440×900 与 390×844（mobile+touch）两档各一遍。
+
+- **① 打开往期会话缺开头（CRITICAL，修 bug）** —— `chat_sidebar.rs` 里硬编码的 `ChatApi::history(&dash, &key, Some(50))`，而 `session_store::paginate_before` 保留的是**尾部** 50 行 ⇒ 更长的会话打开时**从中间开始**，且**没有任何一处报错**。50 也不是"50 轮"：`messages` 每个助手**步骤**一行（本机实测 6 轮的会话是 88 行、最大的一个 102 行），所以**任何超过约四轮的会话**都中招。
+  服务端的 `before` 游标（`HistoryParams::before`，RFC3339 或裸 Unix 秒，解析不出即无游标）**四轮以来零客户端**——全仓唯一的 `chat.history` 调用点从来没发过它。⚠️ **dead-code 分析对这条断线结构性失明**：服务端那半有测试、客户端那半有调用点，两端都不是死的，死的是它们之间那根没接的线。
+  修法两半：默认窗口抬到 `DEFAULT_HISTORY_LIMIT = 200` 并做成 per-conversation 信号（`ChatState::history_limit`，`clear_session` 复位——不复位的话短会话会继承长会话抬高的窗口，还会继承一个**陈旧的 `history_has_more`**，那是一条肉眼可见的谎话），外加一个"载入更早"控件**加宽窗口重跑那一条水化路径**。
+  ⚠️ **刻意不用 `before` 反向翻页**：水化会 `replay_run`（**追加**，且把一行展开成多行 narration/tool 行），未追踪的行按**页内下标**键控（`hist-{i}`）。前插第二页会同时打乱顺序**并**铸出重复的 `<For>` key。判据一句：**反向翻页之前先问下游是不是按页内下标键控的**。
+
+- **② 「上面还有多少」不能由客户端猜（第二半，同轮）** —— 200 只是把悬崖抬高，取消它缺的是**一个服务端从来没被问过的数**。`chat.history` 只回 `count`（这一页多长），于是客户端只能用 `received >= limit` 猜——**一个客户端在替服务器发明一个它从未说过的答案**，而且它在**恰好等于 limit 行**的会话上是错的（满页 ＝ 完整，被猜成截断）。
+  现响应新增 `total`（整个会话的行数），单一源 `SessionStore::history_len`：默认实现读一遍数长度（对每个 store 都正确），SQLite 覆写成 `COUNT(*)`（`SessionManager::history_len`）。三条边界都写在类型里：
+  - **`Option`，`Err ⇒ None`**。一个读失败的计数是"不知道"，永远不是一个数字。折成 `count` 就等于告诉每个客户端"transcript 是完整的"——**唯一一个朝隐藏内容方向错的答案**。而 transcript 本身已经成功了，一次数不出来的计数不该让整个调用失败。
+  - **两次读**（窗口一次、计数一次），所以中间落进一条消息时控件会晚一轮出现或退休。这与任何快照的偏差同级，且严格优于它取代的那个猜。
+  - **`total` 是整个会话，不是"比游标更老的那部分"**。一个带游标的调用方想知道的是"这条会话往回有多深"，就是这个数；"有多少条比 T 更老"是另一问，应当是另一个方法而不是这里的一个参数。
+  客户端唯一推导点 `state::history_window_gap(received, limit, total)`：给了 `total` 就算术（`saturating_sub`——两次读之间追加的消息会让窗口更长，诚实的读法是"上面没有了"而不是绕回一个巨大的数），没给才回落到猜。**猜绝不作为已给答案的交叉校验**，否则那条唯一会错的路径又被引了回来。
+  于是控件从**楼梯**变成**出口**：知道深度时标签说出确切数目、一次按下取全部；不知道时才退回 `HISTORY_PAGE` 一步。
+
+- **③ 用户气泡莫名换行（CRITICAL，修 bug）** —— 回归引入者是 `48b50182f`（项目房间 / 作者标签），它在 `justify-end` 行与气泡之间插了一层 `flex flex-col items-end gap-0.5`。而气泡的**每一个宽度都是这层的百分比**（`max-w-[80%]` 用户 chip / `w-full` 助手答复），flex item 默认 `flex: 0 1 auto` ＝ shrink-to-fit ⇒ **包装器的宽度就是气泡自己的 max-content 宽度**，百分比因此解析到它本该约束的那个盒子上。真机 800px 列宽实测：
+
+  | | 宽度 | 行数 |
+  |---|---|---|
+  | 用户气泡（坏） | **428px** ＝ 自身 535px 的 80% | **2** |
+  | 用户气泡（回归前） | 535px | 1 |
+  | 短助手答复（坏） | **72px** | — |
+  | 团队短答复（坏） | **72px** | — |
+
+  存的字节干净（没有被插入的换行），纯粹是布局。修法是让包装器声明确定宽度：单智能体 `w-full min-w-0`（`min-w-0` 保留 `bubble_class` 自己文档化的逃生口——宽子元素内部滚动而不是溢出右缘），团队行 `w-full min-w-0` ＋ 团队列 `flex-1`。
+  ⚠️ **团队那一处我一度判成"Telegram 风格的内容宽度是有意的"而打算不动**——重读发现 `bubble_class` 自己的注释逐字写着助手气泡"spans the full column"，即 72px 击穿的是**被写下来的意图**，不是风格选择。判据：**一个"看起来是设计选择"的窄，去读那个类自己的注释说它该多宽**。
+  守卫 `messages.rs::bubble_width_tests::every_wrapper_around_a_bubble_declares_a_definite_width` 写成**规则**而不是那两个已知包装器的名单（第三个布局要能白继承）：追踪最近的 `<div class="flex flex-col …">` 开标签，遇到 `class=bubble_class` 就要求它含 `w-full` 或 `flex-1`，外加 `checked >= 2` 的非空自保断言。**三次证伪过**：摘 `w-full` → 点名 `:1160`；摘 `flex-1` → 点名 `:1118`；把标记挪走 → "saw 0 — reporting green on nothing"。⚠️ 第一版用 `src.split("#[cfg(test)]")` 被本 crate 自己的元守卫 `no_guard_in_this_crate_hand_rolls_the_cfg_test_cut` 当场抓住，现走单一源 `i18n_census::production_lines`。
+
+- **真机 QA（本机 `aleph-server` + chrome-devtools，两档视口）**
+  - **出厂常量（200/200），102 行会话**：`chat.history` 线上 `{count: 102, total: 102}`；**52 个用户气泡 ＝ 磁盘上的 52 行用户消息**，首条与磁盘逐字节同前缀；无按钮、无假的"对话开头"。1440×900：包装器 996px、class 为 `flex flex-col items-end gap-0.5 w-full min-w-0`，助手气泡 996px（**整列**），26 条放得下的单行消息**零条被挤成多行**，最宽的自然宽度 769px 仍在一行。
+  - **390×844（mobile+touch）**：52/52 用户气泡、包装器 362px、助手气泡 362px（整列）、16 条放得下的单行**零条被挤**。phone 复用同一个 `MessageList` 与同一个 `hydrate_and_follow`（`platform/phone/chat/{thread,history}.rs`），所以①②③三条**白继承**——**这条是实测的，不是推断的**。
+  - **控件（临时把常量降到 20/30 重建）**：线上 `{count: 20, total: 102}` ⇒ 只渲染 11 个用户气泡、transcript 从半截开始，按钮标签 **`载入更早的 82 条消息`**（＝ 102 − 20，确切数）。**一次按下** 11 → **52**，第二次取回 `{count: 102, total: 102}`，按钮退休、`对话开头` 出现。
+  - **回落路径（在浏览器里把 `total` 从 wire 上摘掉，模拟旧 core）**：标签变成不带数目的 `载入更早的消息`，窗口按 `HISTORY_PAGE` 一步一步走 **20 → 50 → 80 → 102**，气泡 **11 → 26 → 41 → 52**，最后同样退休并出现开头标记。⚠️ 这条断言**带非空自证**（`history_frames_stripped = 4`, `messages_delivered = 54`）：**0 会同时意味着"回落是对的"和"我的探针根本没跑"**，而第一版探针只覆写了 `addEventListener`、面板走的是 `onmessage`，于是第一次跑出来的"回落不生效"是**仪器没装上**而不是缺陷。
+
+- **⚠️ 仪器判据（本轮两次，方向都是"报出一个并不存在的缺陷"）** —— 判据清单已有的"量具会骗人"在同一个测量里犯了两次，两次都**先怀疑了被测对象**：
+  - **量的是加了 padding 的盒子，不是那行字**。用气泡自身的 `height / lineHeight` 数行数：`py-2` 的 16px padding 让一条只有 `hi` 的气泡读成 `lines: 2`（22.75 + 16 ≈ 38.8，÷22.75 ≈ 1.7 → round → 2），一次就"发现" **26 条** 假的换行。判据：**数行数要量承载文本的那个元素**（`whitespace-pre-wrap` 那一层），不是它外面那个有 padding 的盒子。
+  - **离屏探针没有继承真正的字体栈**。只 copy `font` 简写的离屏 `<div>` 把一段中文量成 259px，而**就地克隆**（插回同一个父节点，继承真实的 CJK fallback）量出来是 **279px**——真实上限 263px，所以它**本来就该换行**。差 20px、2.3%，足以让手机档凭空多出 2 条"缺陷"。判据：**要量"这段字不受约束时有多宽"，就在它自己的位置上克隆它并 `white-space: pre`**，别在文档另一头搭一个看起来配置对了的探针。
+
+- **刻意未做 / 已知边界**
+  - **`DEFAULT_HISTORY_LIMIT = 200` 仍是首屏窗口**，但它**不再是悬崖**：超过它的会话开屏就带着一个说出确切数目、一次按下抵达开头的控件；不再有"静默截断"这一档。
+  - **canvas 与 phone 已实测无同类实例（不是推断）**：`canvas/editor.rs:1237` 的 `absolute top-4 right-4 flex flex-col items-end gap-2` 是同一形状，但它四个子件里唯一的百分比宽度是 `canvas/ai.rs:557` 的 `w-full` textarea，其父 `ai.rs:551` 声明 `w-72`（288px，确定宽度）；`platform/phone/` 全平台零 `max-w-[N%]`，两处 `w-full`（`alerts.rs:153` 的按钮在块级上下文 / `memory/graph.rs` 那处是注释）与六处内联 `width:100%` 的父盒都是块级或显式定尺。
+    ⚠️ **第一遍审计只 grep 了 `max-w-[N%]` 这种方括号写法，漏掉了 `w-full` / `w-1/2` 这一整族也是百分比**——而 canvas 与 phone 的全部候选实例恰好都在那一族里。判据：**"百分比宽度"在 Tailwind 里有两种拼法，扫一种等于扫了一半**。
+  - **TUI / CLI 也调 `chat.history`**（`interfaces/tui/src/tui/commands.rs`、`interfaces/cli/src/commands/{session,chat_cmd}.rs`）。`total` 是**加字段**，它们忽略未知键，行为逐字节不变；给它们接上窗口控件是另一轮的事。
+  - **`total` 与窗口是两次读**，见 ② 的边界；要做成一次读就得改 `get_history_before` 的签名并波及五个实现，收益是消掉一个"晚一轮"的偏差——不值。
+    ⚠️ **round-5 修正**：结论对（不做成一次读），但**能改的不是次数是顺序**，见下。
+
+---
+
+#### round-5（2026-08-28，同日）：处理 round-4 的四条遗留
+
+> 四条里**两条的实际状态与记录不同**，而"记录在案的 gap 开工第一步是回代码确认它还成立"这条判据正是为此存在的。零 worktree，改动 7 个文件（`src/` 4 · `shared/protocol/` 1 · `interfaces/cli/` 1 · `interfaces/webchat/` 1）。**零真机 QA**（本轮全部性质都在进程内可判，唯一需要真机的那条——重连时序——不在本轮范围）。
+
+- **① `before` 游标不是"零客户端"，是"不可能有客户端"（CRITICAL，修 bug）** —— 记录写的是"Panel 拒绝反向翻页，所以这条通道零客户端"，读起来像一次 CUT 候选。真相是它**从来不工作**：`parse_before` 产出的永远是**秒**，而比较的另一边 `MessageRecord.timestamp` 是**混合单位**的列，`paginate_before` 与 SQL 两条路都是裸比较。一个毫秒行是任何秒游标的约 1000 倍 ⇒ 永远不满足"strictly older"。
+  **本机实测**（file backend，327 个会话 / 3030 行）：**1745 行（58%）是毫秒**、1285 行是秒、**2 个会话在同一份 transcript 里两种都有**；三个最大的会话（88 / 83 / 80 行）**全毫秒** ⇒ 对它们的每一次游标调用返回 `{count: 0, messages: []}`——一个成功的应答，客户端只能读成"你已经到开头了"。
+  ⚠️ **它伪装成"没人需要"的方式**：上一轮真机 QA 用的 `agent:main:main`（102 行）**恰好全是秒**——即使当时手动探一次游标也会显示正常。
+  ⚠️ **诊断在这一轮里被收窄过一格**，而那一格决定了测试该放在哪：
+
+  | backend | `messages.timestamp` 单位 | 谁定的 | 游标 |
+  |---|---|---|---|
+  | **file**（本机在用） | **混合** | 生产者：`MessageProjector` 写 `created_at_ms`（毫秒）· `agent_instance` 等写 `timestamp()`（秒） | **坏的** |
+  | SQLite | 一律秒 | `add_message_full` **丢弃**调用方的戳、自己盖 `now()` | 一直是对的 |
+
+  第一版测试想在 SQLite 上造混合单位，跑出来的 `left` 是**插入顺序**（所有戳相等）——SQLite 上这个情形**结构上造不出来**。端到端的混合单位测试因此落在 file backend（`session_store/mod.rs::mixed_unit_cursor_tests`），并在 doc 里写明这不是覆盖缺口而是两个 store 的性质差异。
+  **修法**：单位解析收敛成一个**总函数** `types::stamp_millis`（`instant()` 现在也经它表达，所以分界在全 crate 只有一次应用），游标类型从 `Option<i64>`（"约定是秒"）换成 `Option<DateTime<Utc>>` ⇒ **传错单位从空页变成编译错误**（改完第一次编译，三处调用点全部报错，全在同一个既有测试里）。SQL 侧 `stamp_millis_sql()` 从同一个常量 format 出来，`WHERE` 与 **`ORDER BY` 一起归一化**——`get_history` 也要改，否则 `get_history_before(before=None)` 委托过去会由我自己造出一个新分歧；`messages` 表**只有 `session_key` 一条索引，`timestamp` 上没有**，所以这个表达式零索引代价。
+  ⚠️ **刻意仍不用 `before` 反向翻页**：`replay_run` 追加 + `hist-{i}` 页内下标键控这条阻塞与单位无关，round-4 的判断不变。
+
+- **② 两次读——不做成一次读（记录对），但顺序错了（记录没说）** —— `total` 与窗口是两次读，中间可以落进一条消息，而**顺序决定偏差朝哪边**。原来是先窗口后计数 ⇒ `total > received` ⇒ 在**短于 limit 的会话**上渲染出一个假的「载入更早的 1 条消息」按钮（`clear_session` 的注释逐字把这类东西叫作 "a visible lie"）。改成先计数后窗口 ⇒ 只可能 `received > total` ⇒ `saturating_sub` ⇒ 0 ⇒ 不出控件，且长会话上自愈（下一次按下缩小差额）。
+  ⚠️ 客户端 `history_window_gap` 的 doc **本来就是按"先计数"写的**（"a message appended in between makes `received` the larger"）——代码和它不一致，说谎的是代码。
+  ⚠️ **round-6 推翻了这个形状**：顺序不是那条性质，两次读才是。现在是一次读（`SessionStore::history_page`），下面这条顺序守卫已被元数守卫取代。
+  守卫是**源码级**的（`chat.rs::the_transcript_length_is_counted_before_the_window_is_read`）：运行时两种顺序在安静的 store 上返回相同结果，差别只出现在没有单测会调度的交错里；替代方案是一个在两次调用之间追加的 store double，代价约 30 个委托方法只为钉一条语句顺序。扫描止于函数**列 0 的收尾大括号**（语法终点，不是行数），先 `.replace('\r', "")`。已证伪：把 `total` 移进 `Ok` 臂 → 点名 offset 并说出后果。
+
+- **③ TUI 没问题，CLI 在撒谎（修 bug）** —— 记录写的是"TUI/CLI 忽略新字段，给它们接窗口控件是另一轮的事"。核实后：**TUI `attach_session` 发的是 `{"session_key": key}`，不带 limit ⇒ 全量**，`session export` 同理——它们从来没有截断问题，**这是查过的不是推断的**，所以给它们加机件正是 R10 禁止的（零消费者）。
+  真正的缺陷在 `aleph chat history --limit N`：footer 打印 `Total: {count} messages`，而 `count` 是**窗口长度** ⇒ 102 行的会话上印 `Total: 20 messages`。**一个"展示用"的标签比一个缺失的字段贵：缺失读起来像缺失，错的读起来像事实。**
+  修法沿用本仓对这一族的既定解药（`aleph_protocol::{workspace, session_thread, providers}` 的前三次）：新增 `session_thread::HistoryWindow{count, total}` + `above()` / `is_complete()`，两个客户端**共用同一份算术**（Panel 的 `history_window_gap` 现在委托给它，消掉第二份 `saturating_sub`），对账测试落在**同时依赖两侧的那个 crate**（`alephcore` 的 handler 测试把真实响应反序列化进契约类型）。`count` 刻意**没有 `#[serde(default)]`** ⇒ 服务端改名是响亮失败，不是一列悄悄开始描述别的东西。
+  footer 三态，第二三态的区别是重点：窗口**就是**会话 → 保留 `Total:` 原措辞（现在它是真的）· 窗口是切片 → 说出 `Showing N of M · K earlier not shown`（并说怎么取全部，因为 `--limit` 是用户自己给的、可逆）· 服务端没报 total → **什么都不声称**（`Showing N`）。
+
+- **④ 回退路径的证明（记录对，剩下的那半已收口）** —— 浏览器里摘 `total` 对**客户端那一半**是充分的（执行的确实是客户端代码，输入逐字节相同），记录这一点没错。真正没有断言的是**服务端那一半**：`.ok()` 承诺"数不出来不能让整个调用失败"。
+  收口方式是**构造而非测试**：抽出 `history_total(store, key) -> Option<usize>`——返回类型**没有 `Result` 可以 `?` 出去**，且这个函数**看不见 `count`**，所以那句唯一会撒谎的 `unwrap_or(count)` 在做决定的地方**不可表达**。这比一个 30 方法的 double 便宜，也比一条词法守卫强。
+
+- **⚠️ 本轮自己踩到的四条（都记在附录 C）**
+  - **我删掉了两个测试模块，而全量跑是 17313 passed / 0 failed。** 一次 `s[:start] + new + s[end:]` 的 `end` 去搜 `}\n\n/// …`，匹配到的是**更靠后一个模块**的收尾大括号 ⇒ `delete_from_seq_tests` 与 `owner_scope_tests`（共 14 779 字节）被一起吞掉。**测试套件对"少了几条测试"结构性失明**——这是它唯一看不见的一类损坏，所以收尾必须跑一遍「HEAD 的函数/类型名集合 ⊆ 现在的」对账（本轮它一次点名，并把一处**有意的改名**和这一处**事故**分开）。tell 在 diff 的删除行数上：`592 ++++----` 出现在一个我只打算加约 200 行的文件上。恢复后 `git diff` 对那两个模块**零删除行**，且 12 个改动文件的类型/常量/模块对账 CLEAN。
+  - **变异红了八条，而我最看重的两条没红。** 第一次变异是"去掉行侧归一化、游标留毫秒"，它对**全毫秒**转录恰好还是对的；真实的历史缺陷是"**秒**游标 vs 毫秒行"。换成那个变异后，正好是**声称能抓它的那四条**红、既存六条不受连累。**红的条数多不等于红对了。**
+  - **`i64::MIN.abs()` 溢出**（debug panic / release 回绕）——这行 `.abs()` 是 `instant()` 里**先于本轮存在**的，既存测试只试过 `i64::MAX`。写"未表示的戳要被放置而不是丢弃"这条测试时炸出来，现改 `checked_abs`。同一个 reader 在两种 profile 下对同一个存储字节行为不同。
+  - **玩具数值区分不了单位。** 首版纯核测试用 `10_000` 当"毫秒"，而分界是 `1e11` ⇒ 它被正确地读成秒，测试红在自己的输入上。分界按设计只对真实纪元值有意义（常量 doc 逐字这么写），所以这一族测试必须用真实 epoch 值。
+
+- **刻意未做 / 已知边界（round-5）**
+  - **`before` 仍然零产品客户端。** 本轮让一个已发布的 `Open` 类参数**按它文档所说的那样工作**，没有给它接消费者。CUT 仍在桌面上，但它是对外行为变更（移除已文档化的 RPC 参数），且这一问在仓里**没有第二个答案**——Panel 的加宽窗口答的是"最后 N 行"，表达不了"比 T 更老"。
+    ⚠️ **后半句经 round-6 核实是错的，别再引用它**：Panel 的加宽窗口与 CLI footer 逐字写着的 `raise --limit, or omit it` 是同一问的**两个已发布答案**，都是有意选的。保留 `before` 的理由只剩一条腿（见 round-6 ④）。
+  - **读取顺序的守卫是源码级的**，重排会红，但**语义上的重排（比如把计数搬进另一个 helper 再在窗口之后调用）它看不见**。
+  - **SQLite 的 `messages.timestamp` 记的是 INSERT 时刻不是事件时刻**（`add_message_full` 丢弃投影器的 `created_at_ms`）。这是本轮读出来的、与游标相邻但独立的保真问题，**未改**——改它要迁移存量并重新回答"这一列是什么"。
+  - **`session export` 的 `exported {count} messages` 未改**：那条路径不发 limit ⇒ `count == total`，那句话是真的。
+  - **TUI 未接 `total`**：它不截断，所以没有可说的事；若将来有人给它加 `limit`，必须同批接上窗口提示，否则就是本轮修掉的那个 P1 换一张脸。
+  - **file backend 上每次 attach 解析两遍整份 transcript**（一次给 `history_len` 的默认实现、一次给窗口）——round-4 引入，本轮只改了顺序没改次数。**便宜的规避不存在**：`read_transcript` 会跳过解析不出的行，所以一个"只数非空行"的覆写会比 `get_history` 多报，而那正好渲染成一条幻影的"还有 1 条更早的"。真要省，得让计数和窗口共用一次读，即 ② 里已经裁定"不值"的那条签名改动。
+
+- **🔧 round-6（2026-08-28，遗留清理轮）** —— round-5 留下六条，处置：**两条修掉、一条按用户裁定保留、三条核实后不需要动**。而**最贵的那条不在清单上**：清单第 3 条（SQLite 记 INSERT 时刻）不是一个孤立的保真缺陷，**它是另外四处 SQL 此刻正确的地基**。
+
+- **① 一条待办清单上的缺陷，正是别处代码此刻正确性的地基——而这条依赖从来没有被写下来过** —— 「修一个缺陷之前，grep 谁把这个缺陷写进了自己的理由」的**盲区版**：那条讲有人**写下**过理由，这条讲**没有任何人写过**。SQLite 上有四处 SQL 按**裸 `timestamp`** 排序（`ops/query.rs` 的第二份窗口拼写 · `ops/identity.rs` 的标题取样 · `sqlite_backend::truncate_messages` · `ops/modify.rs::compact_session`），今天全对，唯一的原因就是 `add_message_full` 用 `now()` 盖掉生产者的戳、让该列**统一是秒**——也就是清单第 3 条那个缺陷。**后两处选的是 DELETE 的边界**（`/undo` 与压缩）。于是谁去修那条清单项，谁就同时让 `/undo` 与压缩删错行，零报错零红测。
+  拆引信**先于**修缺陷单独落地：四处路由到既有的 `SessionManager::stamp_millis_sql()`（对全秒行 `*1000` 是保序恒等 ⇒ **逐字节 no-op**，且 `messages` 表 `timestamp` 上无索引 ⇒ 零索引代价），顺带给两处无破平的 `ORDER BY` 补上 `id` 次序。守卫 `session_manager/tests.rs::no_message_query_ranks_by_the_raw_timestamp_column`：五个文件、先剥 `\r` 与 `//` 注释行、按 `ORDER BY timestamp` / `timestamp <` / `timestamp >` 三个模式判，**自保断言**是「每个文件至少含一个 `ORDER BY`」＋「总计 ≥ 8 处排序」（一个不再含 SQL 的文件与一个没有违规的文件在报告里长得一样）。已证伪：把 `compact_session` 改回裸列 ⇒ 按文件名红。
+  判据：**改一个值的产生方式之前，先问「它今天保证了什么」，再去 grep 谁在消费那个保证**——消费者不会自称依赖，它只是**没有归一化**。而原来的不变量只写在 `MessageRecord::timestamp` 的一句 doc 里，**散文拦不住下一个真诚的修复者**。
+
+- **② 顺序守卫可以被语义重排绕过；正解不是加强守卫，是让「有顺序」变成「只有一次调用」** —— round-5 ② 论证了哪个顺序让偏差朝安全方向倒，并写了源码守卫钉住语句先后；同一轮的遗留清单又自己指出「语义上的重排（把计数搬进另一个 helper 再在窗口之后调用）它看不见」，并把「共用一次读」裁为**不值**。那个裁定的前提（"签名改动"）过高估了成本：
+  `SessionStore` 的 `get_history_before` + `history_len` 合成一个 `history_page(key, limit, before) -> HistoryPage{rows, total}`，**净减一个方法**。默认实现读一次转录、`total` 取自同一次读 ⇒ **file backend 每次 attach 从解析两遍变一遍**（round-5 遗留第 6 条，同时解决），且偏差**不存在**而不是"朝安全方向倒"。SQLite 覆写把 `COUNT(*)` 与窗口放进**同一次 `conn.lock()`**——这个库的每个写者都过同一把 `Mutex<Connection>`，所以那对答案对同一个会话成立。顺带把 `get_history` / 游标路径两份近乎重复的 SQL 收敛成 `history_sql(limit, cursored)` + `map_message_row`（列清单与位置解码同居一处——round-5 修的正是这两份拼写已经漂移过一次）。
+  守卫从**顺序**改成**元数**（`chat.rs::the_window_and_the_transcript_length_come_from_one_read`）：`assert_eq!(reads, 1)` **自带非空自证**（0 与 2 都红），再加三个「第二次读」名字的否定判据。而真正的地板是构造性的——删掉 `history_len` 之后，持 `Arc<dyn SessionStore>` 的调用方**没有第二个方法可伸手**。
+  ⚠️ **守卫第一次跑就红在我自己写的注释上**（`handle_history` 的散文里同时出现 `history_len` 与 `history_page`，正在解释为什么现在只有一次读）——仓里那条「扫描器判代码，注释是文档，两边都要先剥 `//`」又中一次。已证伪：往函数里插一行真的 `get_history` ⇒ 点名红。
+
+- **③ SQLite 现在保留生产者的戳（清单第 3 条本体）** —— `append_message` 一直把 `MessageRecord.timestamp` 交给 `add_message_full`，而后者用 `now()` 盖掉它 ⇒ SQLite 装机记的是**行被写下的时刻**，file backend 记的是**消息发生的时刻**，**两个 backend 对同一段对话给出两个日期**。活跃回合里两者差几毫秒所以看不出来；任何**晚于事件**的投影（reconciler / backfill / import）会把整段对话记成被重读的那一刻。
+  回落是**旧行为的收窄，不是新猜测**：`None`（`add_message` 便利函数，手上没有记录）/ `0`（生产者没填）/ 任何日历表示不了的量级 ⇒ 仍用 INSERT 时刻，那正是从前**每一行**得到的东西；这次改动只会把行**移出**那个集合，不会加进去。存进去的是**已归一化的毫秒**（`stamp_millis`），所以这一列往后只写一个单位、不再新增第三种混合。
+  测试跑**两个 backend**，最强的一条是 `both_backends_date_the_same_record_the_same_way`——那条性质任何单 backend 的测试都说不出口。变异（把 `occurred_at` 改回 `None`）后**恰好预期的那两条**红、另外三条绿。
+  顺带：`add_message_full` 的九个位置参数换成 `NewMessage` 结构体（穷尽解构 ⇒ 加字段是编译错）。理由不是风格：`source_seq` 与新加的 `occurred_at` **都是 `Option<i64>` 且相邻**，位置上可以静默互换——CLAUDE.md §10「位置解码是一份没有编译器背书的契约」那一条。
+
+- **④ 逐条回执** ——
+  - **`before` 零客户端 → 用户裁定「保留」（2026-08-28）**。上一轮保留它的理由之一「这一问在仓里没有第二个答案」**经核实是错的**：Panel 的加宽窗口与 CLI footer 逐字写着的 `raise --limit, or omit it` 是同一问的两个已发布答案。剩下的那条腿成立且更锋利：`before` 自 v2026.04.02 起在 wire 上，而 `HistoryParams` 不拒未知字段 ⇒ **切掉它之后，仍在发 `before` 的外部调用方会静默拿到最新窗口而不是更早那页**，不报错。要让它响亮失败，写的代码比删掉的还多。裁决与这段理由写在 `SessionStore::history_page` 的 doc 里（散文放在代码旁边，不放在只有本节读得到的地方）。
+  - **Panel 反向翻页**：仍未做，**阻塞不在游标**。wire 的 `ChatMessage` 现在**丢掉了 `MessageRecord.id`**，客户端因此只能用 `hist-{i}` 页内下标键控；要真正前插，得(a) 把 id 放上 wire、(b) 客户端改成按 id 键控、(c) `replay_run` 支持前插。这是单独一轮，不是遗留清理装得下的。
+  - **`session export` 的 `exported {count} messages`**：核实 `interfaces/cli/src/commands/session.rs::export` 确实不发 `limit`（注释逐字写着 "No `limit` ⇒ the server returns the entire message log"）⇒ `count == total`，那句话是真的。**无需改动**（查过的，不是推断的）。
+
+- **刻意未做 / 已知边界（round-6）**
+  - **零真机 QA，而这一轮的理由比上一轮强**：round-5 说"唯一需要真机的是并发追加时的顺序偏差"。那个偏差现在**不存在**（一次读 / 单锁），不是"被测过了"——所以没有留下一个只有真机能看见的性质。wire 逐字节未变（`count` / `total` 仍从 `handle_history` 同处发出），Panel 与 CLI **零改动**。
+  - **`0` 在两个 backend 上仍然分家**：file backend 把 `timestamp: 0` 原样存成 1970，SQLite 回落到 INSERT 时刻。这个分歧**早于本轮且未被本轮扩大**（从前 SQLite 对**所有**行都用 INSERT 时刻）。生产的四个 `MessageRecord` 生产者全都盖戳，`0` 只出现在测试夹具里。
+  - **`sessions.last_active_at` 仍用 `now()`**：SQLite 侧不跟随消息的戳，而 file backend 跟随（`msg.instant()`）。没动——"追加即活动"对活动时钟是说得通的，而 file backend 那条选择正是它 doc 里记的「年份 58574」那个 bug 的来源；要统一得先回答「这一列答的是哪一问」。
+  - **`compact_session` 按 `timestamp` 排序却按 `id` 删除**：本轮只让排序不再依赖列的单位，没有碰这个**排序键与删除键不同**的既存不一致（两者不同序时会删错集合）。它先于本轮存在，且需要单独判断。
+  - **17319 passed / 18 failed，18 条全部预存**：用 `git stash` 对 HEAD 跑了基线，失败清单**逐字相同**；通过数差 6 = 本轮新增的 5 条 stamp 测试 + 1 条 SQL 排序守卫（替换的守卫净增 0）。
+
+---
+
 ### 6.10 白板画布 (Whiteboard Canvas · 2026-08-17，画廊入左栏轮同日)
 
 > 子系统参考（架构/数据模型/并发协议/安全边界/刻意不做清单的全文）在 [CANVAS.md](CANVAS.md)；spec 母本与逐条偏差记录在 `docs/superpowers/specs/2026-08-16-panel-canvas-whiteboard-design.md`。本节只做落点索引。
@@ -3611,6 +3775,13 @@ round-2 结尾留了三条，本轮全部收掉。共同形状：**三条都不�
 - **唯一同时覆盖三者的做法：相信一个颜色之前，先说出你预期的那个具体后果，然后专门去查那个后果。** 不是 diff，不是颜色，也不是一个你自己写的探针。本轮三次抓住它的分别是：「`gates` 本该从 15 变成 16 而它没变」·「这个数应该是 1 而它是 3，那就先怀疑我的量具」·「同一个变异在另一棵树上是红的」。
 - **⚠️ 两个都自洽的分区，未必在回答同一个问题——可比的只有它们各自的总数。** 上面第 3 例里，**两边都精确求和**（`11+1421+307 = 1739`，`73+1458+203 = 1734`），而这恰恰不是证据：两个不同的谓词当然会各自求对自己那个对象的和。真正的差别是谓词不同（「首个标记在第 0 列」≠「前缀切完什么都不剩」），所以只有"总数"这一半可比——而那一半正好产出了 C.1 里那个真发现。**先怀疑探针**：它是没有测试的那一个。更好的做法是**让探针去调实现自己的 helper** 而不是重新推导——本轮这么做的那位复核者，figures 是唯一复现得了的。
 - **一条没被证伪过的守卫不算守卫**（本仓旧判据），而这里是它欠的后半句：**在真正会被读到的那棵树里破坏它**，并且去查**你点名的那个后果**而不是颜色。
+
+**⚠️ 上面三例的方向都是"绿得太容易"。第四种方向是反的，而且更能骗人：仪器凭空报出一个并不存在的缺陷。** 一次假 GREEN 只是没抓到东西；一次假 RED 会让人去改**本来是对的**代码。2026-08-28 的 §6.9 round-4 真机 QA 在同一次测量里犯了两次，两次的第一反应都是先怀疑被测对象：
+
+4. **量的是加了 padding 的盒子，不是那行字** —— 用气泡自身的 `height / lineHeight` 数行数，而 `py-2` 的 16px padding 让一条只有 `hi` 的单行气泡读成 `lines: 2`（22.75 + 16 ≈ 38.8，÷ 22.75 ≈ 1.7 → round → 2）。一次就"发现" **26 条**假的换行——**恰好是这一轮真正在修的那个缺陷的形状**，所以它看起来完全可信。判据：**数行数要量承载文本的那个元素**，不是它外面那个有 padding 的盒子。
+5. **离屏探针没有继承真正的字体栈** —— 只 copy `font` 简写的离屏 `<div>` 把一段中文量成 259px，而**就地克隆**（插回同一个父节点，继承真实的 CJK fallback）量出来是 **279px**，真实上限 263px ⇒ 它**本来就该换行**。差 20px / 2.3%，足以在手机档凭空造出 2 条"缺陷"。判据：**要量"这段字不受约束时有多宽"，就在它自己的位置上克隆它并 `white-space: pre`**，别在文档另一头搭一个看起来配置对了的探针。
+
+- **⚠️ 而一个报"什么都没发生"的探针，和一个根本没装上的探针，读数完全相同。** 同一轮里，为了验证"服务端不报 `total` 时控件退回一页一步"，探针在浏览器里把 `total` 从 wire 上摘掉——第一版只覆写了 `WebSocket.addEventListener`，而面板走的是 `onmessage`，于是"回落不生效"这个结论是**仪器没装上**。修法不是把两条路径都覆写就完了，而是**让探针自报它开了几枪**（`history_frames_stripped = 4` / `messages_delivered = 54`）：**0 会同时意味着"回落是对的"和"我的探针根本没跑"**，而这两件事的处置相反。同族即 C.3 的"扫描要有自保断言"，只是这次的扫描是一次真机注入。
 - **操作条款：一个补丁脚本必须在写入任何一处之前校验它的每一个锚点。** 失效形态是"写了一半、在移动过的那个锚点上退出"，那比一处都没写更糟——树因此停在一个没有人设计过的状态里。
 - **便宜的做法值得记**：`src/bin/aleph-server/**` 与 lib 是不同的 cargo target，所以 `cargo test -p alephcore --lib` 在只有 boot 文件变动时**不会重建**，而一条源码级守卫是在运行时把那些文件当**文本**读的。**构建一次，然后直接跑那个测试二进制**——每次变异 ~15 s 而不是 ~8 min。同一个性质既让这个陷阱便宜地踩进去，也让这条纪律便宜地遵守。
 

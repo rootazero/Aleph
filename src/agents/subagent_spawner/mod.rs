@@ -844,6 +844,8 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             metered_cheap.as_ref(),
             &req.agent_def.id,
             &child_id,
+            // rust-doctor-disable-next-line excessive-clone
+            req.cancel.clone(),
         );
 
         // Layer-3 per-turn aggregate budget — derive from `context_budget_config`
@@ -1358,6 +1360,13 @@ fn build_context_triple(
     cheap_summary: Option<&Arc<dyn AiProvider>>,
     agent_id: &str,
     child_id: &SessionId,
+    // The child's own stop signal. Required, not optional: this is the SECOND
+    // construction site for a compactor, and the first one already learned that
+    // a compaction awaited outside any `select!` burns its full 15 s timeout on
+    // a cancelled turn and then commits the result. A defaulted parameter here
+    // would let this site inherit that silently — and a subagent is exactly
+    // where nobody would notice, because the parent is already waiting.
+    cancel: CancellationToken,
 ) -> ContextTriple {
     use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
     let Some(cfg) = cfg else {
@@ -1375,6 +1384,7 @@ fn build_context_triple(
                 ..CompactorConfig::default()
             },
         )
+        .with_cancel(cancel)
         .with_monitor_scope(crate::thinker::prompt_builder::cache_monitor::cache_scope(
             agent_id,
             Some(&child_id.to_key_string()),

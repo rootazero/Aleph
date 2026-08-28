@@ -29,6 +29,7 @@ mod persistence;
 mod run_loop;
 mod scratchpad_progress_sink;
 mod session_run_registry;
+mod settle;
 mod simple;
 mod slash_command;
 mod steering;
@@ -265,16 +266,25 @@ impl BusyInputMode {
     /// - **Unknown author reads as "not the same person".** An unstamped
     ///   incoming turn against a stamped running one queues, rather than
     ///   assuming they match.
+    ///
+    /// `in_a_room` is a parameter rather than something this reads out of
+    /// `incoming` — it used to parse `SCOPE_META_KEY` itself, which is the
+    /// producer's RAW stamp. The six producers that need
+    /// `run_loop::request_scope`'s correction (channel inbound router, cron,
+    /// heartbeat, teams dispatcher, `session_send`, A2A) stamp
+    /// `personal:<speaker>` on a session key a room has already claimed, so on
+    /// exactly those paths this rule read "not a room" and let one member's
+    /// message steer or cancel another member's in-flight run. The room question
+    /// now has one answer in the process (`run_loop::request_is_in_a_room`) and
+    /// this method keeps only its real subject: whether the two turns have the
+    /// same author.
     #[must_use]
     pub fn for_shared_room(
         self,
+        in_a_room: bool,
         incoming: &HashMap<String, String>,
         running: &HashMap<String, String>,
     ) -> Self {
-        let in_a_room = incoming
-            .get(crate::scope::SCOPE_META_KEY)
-            .and_then(|s| crate::scope::ScopeId::parse(s))
-            .is_some_and(|s| matches!(s, crate::scope::ScopeId::Project(_)));
         if !in_a_room {
             return self;
         }
@@ -552,7 +562,7 @@ mod shared_room_lane_tests {
         let running = turn(Some("project:p-1"), Some("u-alice"));
         for knob in [BusyInputMode::Steer, BusyInputMode::Interrupt] {
             assert_eq!(
-                knob.for_shared_room(&incoming, &running),
+                knob.for_shared_room(true, &incoming, &running),
                 BusyInputMode::Queue,
                 "{knob:?} must not reach across authors"
             );
@@ -568,11 +578,11 @@ mod shared_room_lane_tests {
     fn the_same_person_speaking_twice_in_a_room_still_steers() {
         let alice = turn(Some("project:p-1"), Some("u-alice"));
         assert_eq!(
-            BusyInputMode::Steer.for_shared_room(&alice, &alice),
+            BusyInputMode::Steer.for_shared_room(true, &alice, &alice),
             BusyInputMode::Steer
         );
         assert_eq!(
-            BusyInputMode::Interrupt.for_shared_room(&alice, &alice),
+            BusyInputMode::Interrupt.for_shared_room(true, &alice, &alice),
             BusyInputMode::Interrupt
         );
     }
@@ -584,13 +594,13 @@ mod shared_room_lane_tests {
         let incoming = turn(Some("personal:u-alice"), Some("u-bob"));
         let running = turn(Some("personal:u-alice"), Some("u-alice"));
         assert_eq!(
-            BusyInputMode::Steer.for_shared_room(&incoming, &running),
+            BusyInputMode::Steer.for_shared_room(false, &incoming, &running),
             BusyInputMode::Steer
         );
         // An unstamped (pre-P1) pair likewise.
         let bare = turn(None, None);
         assert_eq!(
-            BusyInputMode::Interrupt.for_shared_room(&bare, &bare),
+            BusyInputMode::Interrupt.for_shared_room(false, &bare, &bare),
             BusyInputMode::Interrupt
         );
     }
@@ -601,12 +611,42 @@ mod shared_room_lane_tests {
         let anonymous = turn(Some("project:p-1"), None);
         let alice = turn(Some("project:p-1"), Some("u-alice"));
         assert_eq!(
-            BusyInputMode::Steer.for_shared_room(&anonymous, &alice),
+            BusyInputMode::Steer.for_shared_room(true, &anonymous, &alice),
             BusyInputMode::Queue
         );
         assert_eq!(
-            BusyInputMode::Steer.for_shared_room(&alice, &anonymous),
+            BusyInputMode::Steer.for_shared_room(true, &alice, &anonymous),
             BusyInputMode::Queue
+        );
+    }
+
+    /// The room verdict comes from the caller, never from the metadata.
+    ///
+    /// This rule used to parse `SCOPE_META_KEY` out of `incoming` itself. That
+    /// is the producer's RAW stamp, and the six producers that go through
+    /// `run_loop::request_scope`'s correction (channel inbound router, cron,
+    /// heartbeat, teams dispatcher, `session_send`, A2A) write
+    /// `personal:<speaker>` onto a session key a room has already claimed — so
+    /// on exactly those paths the rule read "not a room" and did nothing, while
+    /// two members' turns steered and cancelled each other. Both directions are
+    /// pinned: a stamp that says personal must not disarm the rule, and a stamp
+    /// that says project must not arm it on its own.
+    #[test]
+    fn the_room_verdict_comes_from_the_caller_not_from_the_stamp() {
+        let bob = turn(Some("personal:u-bob"), Some("u-bob"));
+        let alice = turn(Some("personal:u-bob"), Some("u-alice"));
+        assert_eq!(
+            BusyInputMode::Steer.for_shared_room(true, &bob, &alice),
+            BusyInputMode::Queue,
+            "a room turn carrying an uncorrected personal stamp must still queue"
+        );
+
+        let bob_p = turn(Some("project:p-1"), Some("u-bob"));
+        let alice_p = turn(Some("project:p-1"), Some("u-alice"));
+        assert_eq!(
+            BusyInputMode::Steer.for_shared_room(false, &bob_p, &alice_p),
+            BusyInputMode::Steer,
+            "a project stamp alone must not arm the rule — the corrector decides"
         );
     }
 }

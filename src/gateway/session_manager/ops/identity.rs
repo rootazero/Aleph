@@ -73,12 +73,17 @@ impl SessionManager {
         key_str: &str,
         limit: usize,
     ) -> Result<String, rusqlite::Error> {
-        let mut stmt = conn.prepare(
+        // `stamp_millis_sql`, not the bare column, and an `id` tiebreak: see
+        // `SessionManager::stamp_millis_sql`. Ties had no deterministic order
+        // before, so which of two same-second rows landed in the title sample
+        // was up to the query planner.
+        let stamp = Self::stamp_millis_sql();
+        let mut stmt = conn.prepare(&format!(
             "SELECT role, content FROM messages
              WHERE session_key = ?
-             ORDER BY timestamp DESC
-             LIMIT ?",
-        )?;
+             ORDER BY {stamp} DESC, id DESC
+             LIMIT ?"
+        ))?;
         let rows = stmt
             .query_map(params![key_str, limit as i64], |row| {
                 Ok(format!(

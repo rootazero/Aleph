@@ -573,6 +573,15 @@ impl HarnessRunner for AgentHarnessRunner {
                 // Hash-validated on read, so a history rewritten between runs
                 // (post-turn compression, splits) simply misses.
                 .with_cache_carryover(session_id.to_key_string())
+                // This run's stop signal. The harness races every LLM call it
+                // makes itself against this token; the compaction step was the
+                // one that was not, so stopping mid-compaction waited out the
+                // summarizer's full 15 s timeout and then COMMITTED its result
+                // into the cross-run cache above. Wired here, beside the
+                // carry-over, because both are per-run facts about this same
+                // compactor instance.
+                // rust-doctor-disable-next-line excessive-clone
+                .with_cancel(cancel.clone())
                 // Scope watchdog resets to this conversation — the same
                 // (agent, session) key the MeteringProvider records cache usage
                 // under, so reset and record hit the same CacheMonitor counter.

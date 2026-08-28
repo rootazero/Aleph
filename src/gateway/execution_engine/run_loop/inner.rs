@@ -1313,18 +1313,27 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 )
             });
 
+            let (owner_for_flow, scope_for_flow) = super::request_scope_strings(request);
+
             let req = crate::orchestrator::FlowRequest {
                 flow_id: None,
                 agent_id: agent.id().to_string(),
                 input: flow_input,
                 channel: request.metadata.get("platform").cloned(),
                 session_hint: Some(request.session_key.to_key_string()),
-                // P1 data isolation: forward the owner/scope attribution
-                // already stamped on this request's metadata verbatim — the
-                // two strings, not a re-derived `ScopeAttribution`, since
-                // `FlowRequest` carries them as strings (see its doc).
-                owner_user_id: request.metadata.get(crate::scope::OWNER_META_KEY).cloned(),
-                scope_id: request.metadata.get(crate::scope::SCOPE_META_KEY).cloned(),
+                // P1 data isolation: forward the owner/scope attribution as the
+                // two strings `FlowRequest` carries (see its doc) — but the
+                // CORRECTED one, from the same `request_scope` the session row,
+                // the outer task-local and the recency touch already read.
+                //
+                // This used to copy the metadata entries verbatim. That made it
+                // the one reader of four that kept the producer's raw stamp,
+                // and `dispatch` rebuilds the harness's scope task-local from
+                // precisely these two strings inside its spawn — so a project
+                // room's run wrote its memory to the speaker's personal
+                // partition while every reader looked in the room's.
+                owner_user_id: owner_for_flow,
+                scope_id: scope_for_flow,
                 parent_session: None,
                 depth: 0,
                 tool_service: Some(tool_service),

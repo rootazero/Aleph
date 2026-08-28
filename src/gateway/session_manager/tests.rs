@@ -49,7 +49,7 @@ async fn test_message_operations() {
 }
 
 #[tokio::test]
-async fn test_get_history_before_cursor_filters_by_timestamp() {
+async fn history_page_cursor_filters_by_timestamp() {
     let temp = tempdir().unwrap();
     let config = test_config(temp.path().join("test.db"));
     let manager = SessionManager::new(config).unwrap();
@@ -60,32 +60,195 @@ async fn test_get_history_before_cursor_filters_by_timestamp() {
     manager.add_message(&key, "assistant", "two").await.unwrap();
     manager.add_message(&key, "user", "three").await.unwrap();
 
-    let now = chrono::Utc::now().timestamp();
+    let now = chrono::Utc::now();
 
     // No cursor → identical to plain get_history (all three).
-    let all = manager.get_history_before(&key, None, None).await.unwrap();
+    let all = manager.history_page(&key, None, None).await.unwrap().rows;
     assert_eq!(all.len(), 3);
 
     // Cursor in the future → every message is strictly older, so all survive.
     let before_future = manager
-        .get_history_before(&key, None, Some(now + 3600))
+        .history_page(&key, None, Some(now + chrono::Duration::hours(1)))
         .await
+        .map(|p| p.rows)
         .unwrap();
     assert_eq!(before_future.len(), 3);
 
     // Cursor far in the past → nothing is older than it.
     let before_past = manager
-        .get_history_before(&key, None, Some(now - 3600))
+        .history_page(&key, None, Some(now - chrono::Duration::hours(1)))
         .await
+        .map(|p| p.rows)
         .unwrap();
     assert!(before_past.is_empty());
 
     // Limit still windows the cursor-filtered set (most-recent `limit`).
     let windowed = manager
-        .get_history_before(&key, Some(2), Some(now + 3600))
+        .history_page(&key, Some(2), Some(now + chrono::Duration::hours(1)))
         .await
+        .map(|p| p.rows)
         .unwrap();
     assert_eq!(windowed.len(), 2);
+}
+
+/// The Rust and SQL spellings of the seconds/millisecond boundary must agree.
+///
+/// Neither is expressible in terms of the other — one is a Rust `fn`, the other
+/// a string interpolated into a query — so the only check that can see them
+/// drift is evaluating both over the same values. They share the boundary
+/// constant, which is why the interesting inputs are the ones that straddle it
+/// and the ones where SQLite's own semantics could differ from Rust's (integer
+/// division / negative operands / `abs`).
+#[test]
+fn the_sql_and_rust_spellings_of_stamp_millis_agree() {
+    use crate::gateway::session_store::types::{stamp_millis, SECONDS_MILLIS_BOUNDARY};
+
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE messages (timestamp INTEGER);")
+        .unwrap();
+    let expr = SessionManager::stamp_millis_sql();
+
+    for raw in [
+        0_i64,
+        1,
+        -1,
+        1_785_062_232,               // seconds, a real stamp
+        1_785_062_232_000,           // the same instant in milliseconds
+        SECONDS_MILLIS_BOUNDARY - 1, // just below the boundary
+        SECONDS_MILLIS_BOUNDARY,     // exactly at it
+        -SECONDS_MILLIS_BOUNDARY,    // and its mirror, which `abs` catches
+        -(SECONDS_MILLIS_BOUNDARY - 1),
+        -1_785_062_232,
+    ] {
+        conn.execute("DELETE FROM messages", []).unwrap();
+        conn.execute("INSERT INTO messages (timestamp) VALUES (?)", [raw])
+            .unwrap();
+        let from_sql: i64 = conn
+            .query_row(&format!("SELECT {expr} FROM messages"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            from_sql,
+            stamp_millis(raw),
+            "SQL and Rust disagree on raw stamp {raw}; the two normalizers have \
+             drifted and the cursor now means different things on the two backends"
+        );
+    }
+}
+
+/// Every SQL statement that RANKS `messages` rows must rank them through
+/// [`SessionManager::stamp_millis_sql`], never the bare `timestamp` column.
+///
+/// The column holds two units (see [`MessageRecord::timestamp`]). Today the
+/// SQLite half happens to be uniformly seconds — `add_message_full` overwrites
+/// whatever the producer stamped — so ordering by the raw column is *currently*
+/// correct, and that is exactly the problem: the correctness is on loan from an
+/// invariant nothing enforces, and two of the statements below choose the
+/// boundary of a DELETE (`truncate_messages` behind `/undo`,
+/// `compact_session`). Anyone repairing the adjacent fidelity bug — SQLite
+/// records INSERT time rather than event time — makes the column mixed and
+/// those two start keeping and dropping the wrong rows, silently.
+///
+/// Prose in `MessageRecord::timestamp`'s doc already said the unit was
+/// ambiguous. Prose does not stop the next sincere fixer; this does.
+///
+/// Source-level because the property is about the SQL that is *written*, not
+/// about any one query's output: a statement ordering by the raw column returns
+/// identical rows on today's uniform data, so no runtime test on this database
+/// can tell the two spellings apart.
+///
+/// [`MessageRecord::timestamp`]: crate::gateway::session_store::types::MessageRecord::timestamp
+#[test]
+fn no_message_query_ranks_by_the_raw_timestamp_column() {
+    /// `\r` first (this repo is checked out CRLF on Windows, and a scanner that
+    /// anchors on `\n` finds nothing there while staying green), then comment
+    /// lines — a doc comment naming a pattern is documentation, not code, and
+    /// the whole point of this guard is that prose and code are separate. Then
+    /// runs of whitespace and Rust string continuations collapse to single
+    /// spaces so a wrapped `ORDER BY` still reads as one phrase.
+    fn flatten(src: &str) -> String {
+        let body = src
+            .replace('\r', "")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut out = String::with_capacity(body.len());
+        let mut prev_ws = false;
+        for ch in body.chars() {
+            if ch == '\\' {
+                continue;
+            }
+            if ch.is_whitespace() {
+                if !prev_ws {
+                    out.push(' ');
+                }
+                prev_ws = true;
+            } else {
+                out.push(ch);
+                prev_ws = false;
+            }
+        }
+        out
+    }
+
+    // Every module that writes SQL against `messages`. A file that stops
+    // containing SQL fails the self-check below rather than passing vacuously.
+    let files: [(&str, &str); 5] = [
+        ("session_manager/ops/crud.rs", include_str!("ops/crud.rs")),
+        ("session_manager/ops/query.rs", include_str!("ops/query.rs")),
+        (
+            "session_manager/ops/identity.rs",
+            include_str!("ops/identity.rs"),
+        ),
+        (
+            "session_manager/ops/modify.rs",
+            include_str!("ops/modify.rs"),
+        ),
+        (
+            "session_store/sqlite_backend/mod.rs",
+            include_str!("../session_store/sqlite_backend/mod.rs"),
+        ),
+    ];
+
+    // `timestamp,` (a column in a SELECT list) and `timestamp)` (inside
+    // `stamp_millis_sql` itself) are projections, not rankings, and are not
+    // matched by any of these.
+    let banned = ["ORDER BY timestamp", "timestamp <", "timestamp >"];
+
+    let mut ranked_sites = 0_usize;
+    for (label, src) in files {
+        let flat = flatten(src);
+        // Self-check: a scanner that quietly stops seeing SQL reports the same
+        // clean result as a codebase with no violations.
+        let order_bys = flat.matches("ORDER BY ").count();
+        assert!(
+            order_bys > 0,
+            "{label} no longer contains any `ORDER BY` — this guard is scanning \
+             a file with no SQL left in it and would pass vacuously. Either the \
+             queries moved (update the list) or the file was emptied."
+        );
+        ranked_sites += order_bys;
+        for pattern in banned {
+            assert!(
+                !flat.contains(pattern),
+                "{label} ranks `messages` by the raw `timestamp` column \
+                 (`{pattern}`). That column holds seconds in some rows and \
+                 milliseconds in others, so the raw comparison sorts every \
+                 millisecond row above every seconds row regardless of when \
+                 either happened. Rank through \
+                 `SessionManager::stamp_millis_sql()` — the one place the \
+                 seconds/milliseconds boundary is applied in SQL — the way \
+                 `get_history` and `history_page` already do."
+            );
+        }
+    }
+    assert!(
+        ranked_sites >= 8,
+        "only {ranked_sites} ranked SQL sites found across {} files; this guard \
+         used to see more, so either queries were removed or `flatten` stopped \
+         matching them",
+        files.len()
+    );
 }
 
 #[tokio::test]

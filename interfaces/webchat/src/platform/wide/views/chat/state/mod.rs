@@ -3,6 +3,7 @@
 use super::plan::{PlanUpdate, PlanView};
 use crate::api::sessions::SessionKnobs;
 use crate::api::teams::CoordTaskDto;
+use aleph_protocol::session_thread::HistoryWindow;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 use shared_ui_logic::state::{merge_recalled_draft, remember_own_message_id};
@@ -414,11 +415,105 @@ pub enum ArchiveGate {
     Completed,
 }
 
+/// Transcript rows the first hydration of a conversation asks for.
+///
+/// The predecessor was 50, hard-coded at the single call site, with no way to
+/// ask for more — so every conversation longer than 50 rows opened missing its
+/// beginning, permanently and with nothing on screen saying so. 50 is a handful
+/// of turns here because `messages` holds one row per assistant step, not one
+/// per turn: a six-turn agentic session on this machine had 88 rows.
+pub const DEFAULT_HISTORY_LIMIT: usize = 200;
+
+/// How much one "load earlier" press adds to [`DEFAULT_HISTORY_LIMIT`].
+///
+/// Re-fetching a larger window (rather than paging backwards with the server's
+/// `before` cursor) is deliberate: hydration REPLAYS assistant runs through
+/// `replay_run`, which appends to `messages` and expands one row into many
+/// narration/tool rows, and it keys untraced rows by their index in the page
+/// (`hist-{i}`). Prepending a second page would therefore both mis-order the
+/// transcript and mint duplicate keys. Re-hydrating reuses that one tested
+/// path and cannot drift from it.
+pub const HISTORY_PAGE: usize = 200;
+
+/// What a just-fetched transcript window implies about what sits above it:
+/// `(show the control, how many rows are up there)`.
+///
+/// Two inputs answer the same question with different authority, and the order
+/// matters. `total` is the server counting its own rows — when it is present
+/// the gap is arithmetic and exact. `received >= limit` is the client guessing
+/// from the size of what it got, and it is wrong in one specific place: a
+/// transcript that is exactly `limit` rows long comes back full and complete,
+/// and the guess calls it truncated. So the guess is the FALLBACK, reached only
+/// when the server declined to answer (a core older than the field, or a count
+/// that failed) — never a cross-check on an answer that was given.
+///
+/// The arithmetic half is [`HistoryWindow::above`], shared with the CLI rather
+/// than spelled a second time here: "how many rows are above this window" is
+/// one question, and two copies of it is how the two surfaces would come to
+/// disagree about the same response.
+///
+/// Its `saturating_sub` is load-bearing because the server takes the two
+/// numbers in two reads — and it counts FIRST, deliberately, so the skew falls
+/// this way: a message appended in between lands in the window, `received`
+/// comes back the larger, and "nothing above" is the honest reading. Counting
+/// after the window would over-report instead, which on a conversation shorter
+/// than the limit renders a "load earlier" control over a transcript with
+/// nothing earlier.
+#[must_use]
+pub fn history_window_gap(
+    received: usize,
+    limit: usize,
+    total: Option<usize>,
+) -> (bool, Option<usize>) {
+    let window = HistoryWindow {
+        count: received,
+        total,
+    };
+    match window.above() {
+        Some(above) => (above > 0, Some(above)),
+        None => (received >= limit, None),
+    }
+}
+
 /// Reactive state container provided via Leptos context.
 #[derive(Clone, Copy)]
 pub struct ChatState {
     /// All messages in the current session.
     pub messages: RwSignal<Vec<ChatMessage>>,
+    /// How many transcript rows the next hydration asks `chat.history` for.
+    ///
+    /// Lives here rather than as a parameter because all five hydration entry
+    /// points (`hydrate_and_follow` and its callers) write into this one
+    /// singleton anyway, and a parameter would have to be threaded through
+    /// every one of them to be raised from a single button.
+    ///
+    /// `chat.history` returns the TRAILING `limit` rows (`paginate_before`
+    /// keeps the most recent), so a limit smaller than the transcript drops
+    /// the OLDEST messages — silently, before this existed. Raising it and
+    /// re-hydrating is what "load earlier" does.
+    pub history_limit: RwSignal<usize>,
+    /// Whether rows exist above the window the last hydration rendered — the
+    /// gate on the "load earlier" control.
+    pub history_has_more: RwSignal<bool>,
+    /// HOW MANY rows are above the window, when the server said so.
+    ///
+    /// `chat.history` reports `total` (the whole session) alongside the
+    /// trailing page it serves, so this is `total - received`. `None` means the
+    /// server gave no answer — a core that predates the field, or a count that
+    /// failed to read — and it must be read as "unknown", never as zero.
+    ///
+    /// It is what makes the control an exit rather than a staircase: knowing
+    /// the number, one press fetches the entire remainder and the label can say
+    /// what that costs before it is paid. Not knowing it, the control degrades
+    /// to `HISTORY_PAGE` at a time — the behaviour it had when the length of
+    /// the page was the only evidence available.
+    ///
+    /// That older evidence — "the page came back full" — is still the fallback
+    /// for `history_has_more`, and it is wrong in one specific place: a
+    /// transcript that is exactly `history_limit` rows long looks truncated to
+    /// it. A server that reports `total` has no such blind spot, which is the
+    /// point of asking rather than guessing.
+    pub history_above: RwSignal<Option<usize>>,
     /// Current phase of the UI.
     pub phase: RwSignal<ChatPhase>,
     /// Active `run_id` (Some while agent is running).
@@ -664,6 +759,9 @@ impl ChatState {
     pub fn new() -> Self {
         Self {
             messages: RwSignal::new(Vec::new()),
+            history_limit: RwSignal::new(DEFAULT_HISTORY_LIMIT),
+            history_has_more: RwSignal::new(false),
+            history_above: RwSignal::new(None),
             phase: RwSignal::new(ChatPhase::Idle),
             active_run_id: RwSignal::new(None),
             session_key: RwSignal::new(None),
@@ -1634,6 +1732,13 @@ impl ChatState {
     /// Clear session state but keep `agent_id` (for new chat within same agent).
     pub fn clear_session(&self) {
         self.messages.set(Vec::new());
+        // Back to one page. Without this a session opened after a long one
+        // inherits its raised limit, which is merely wasteful — but it also
+        // inherits a stale `history_has_more`, which is a visible lie (a "load
+        // earlier" control over a three-message conversation).
+        self.history_limit.set(DEFAULT_HISTORY_LIMIT);
+        self.history_has_more.set(false);
+        self.history_above.set(None);
         self.phase.set(ChatPhase::Idle);
         self.active_run_id.set(None);
         self.session_key.set(None);
@@ -3155,5 +3260,58 @@ mod run_cost_tests {
         let c = cost(None, "unknown", 0);
         assert!(c.cost_label().is_none());
         assert!(c.tokens_label().is_none());
+    }
+}
+
+/// `history_window_gap` decides whether the transcript is missing a beginning,
+/// and how much of one.
+///
+/// The interesting cases are all about which of its two inputs wins. The
+/// server's `total` is a count; the page length is a guess; and the guess is
+/// wrong in a way that is invisible unless it is named — hence a test for the
+/// exact shape where they disagree.
+#[cfg(test)]
+mod history_window_gap_tests {
+    use super::history_window_gap;
+
+    #[test]
+    fn a_reported_total_larger_than_the_page_is_the_gap() {
+        assert_eq!(history_window_gap(200, 200, Some(1_047)), (true, Some(847)));
+    }
+
+    /// The one shape where the two inputs disagree, and the whole reason the
+    /// server was asked at all: 200 rows fetched with a limit of 200, and the
+    /// session holds exactly 200. The page is full AND complete. The guess
+    /// (`received >= limit`) calls that truncated and offers a press that can
+    /// only find nothing; the count calls it finished.
+    #[test]
+    fn a_full_page_that_is_also_the_whole_transcript_is_finished_not_truncated() {
+        assert_eq!(history_window_gap(200, 200, Some(200)), (false, Some(0)));
+        // Byte-for-byte the same window, no answer from the server: now the
+        // guess is all there is, and it says the opposite.
+        assert_eq!(history_window_gap(200, 200, None), (true, None));
+    }
+
+    #[test]
+    fn without_a_total_the_depth_stays_unknown_so_the_control_steps_one_page() {
+        // `None` for the gap is not zero — it is what makes the press add
+        // `HISTORY_PAGE` and the label stay unquantified.
+        assert_eq!(history_window_gap(200, 200, None), (true, None));
+        // A short page is complete under either rule.
+        assert_eq!(history_window_gap(37, 200, None), (false, None));
+    }
+
+    #[test]
+    fn a_message_appended_between_the_two_server_reads_reads_as_nothing_above() {
+        // `total` and the window are two reads; the window can come back
+        // longer. Saturating, not wrapping: the honest answer is "nothing
+        // above", not `usize::MAX`.
+        assert_eq!(history_window_gap(5, 200, Some(4)), (false, Some(0)));
+    }
+
+    #[test]
+    fn an_empty_session_offers_nothing_to_load() {
+        assert_eq!(history_window_gap(0, 200, Some(0)), (false, Some(0)));
+        assert_eq!(history_window_gap(0, 200, None), (false, None));
     }
 }
