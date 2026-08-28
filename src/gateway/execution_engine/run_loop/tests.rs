@@ -1166,3 +1166,202 @@ async fn an_unclaimed_key_keeps_the_producers_scope() {
         Some("personal:u-alice".to_string())
     );
 }
+
+// ============================================================================
+// Task 6 — room_claiming's second arm: a channel conversation bound to a room
+// ============================================================================
+//
+// Twins of the two arm-1 tests just above
+// (`the_loop_runs_under_the_room_scope_for_a_claimed_key`,
+// `an_unclaimed_key_keeps_the_producers_scope`), for the conversation-binding
+// arm `ProjectStore::project_for_bound_session` adds. `request_scope` is
+// exercised directly rather than through `with_request_scope`: the roster
+// gate these tests pin lives entirely inside it and needs no task-local nest
+// to observe.
+
+/// A request whose metadata carries `attr` and whose key is a channel group
+/// conversation.
+fn channel_group_request(attr: &crate::scope::ScopeAttribution, peer: &str) -> RunRequest {
+    let mut metadata = std::collections::HashMap::new();
+    crate::scope::stamp_metadata(&mut metadata, attr);
+    RunRequest {
+        session_key: crate::routing::session_key::SessionKey::group(
+            "main",
+            "telegram",
+            crate::routing::session_key::PeerKind::Group,
+            peer,
+        ),
+        ..minimal_request(metadata)
+    }
+}
+
+#[test]
+fn a_bound_conversation_upgrades_a_roster_member_to_the_room_scope() {
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+    let room = store.create("bound-room-1", Some("u-alice"), None).unwrap();
+    store.add_member(&room.id, "u-alice").unwrap();
+    store
+        .bind_conversation(
+            &room.id,
+            "telegram",
+            aleph_protocol::projects::BindingPeerKind::Group,
+            "C-up",
+            Some("u-alice"),
+            None,
+        )
+        .unwrap();
+
+    let attr = crate::scope::ScopeAttribution::personal("u-alice");
+    let resolved = super::request_scope(&channel_group_request(&attr, "C-up"))
+        .expect("a stamped run resolves a scope");
+    assert_eq!(
+        resolved.scope,
+        crate::scope::ScopeId::Project(room.id.clone()),
+        "a roster member speaking in a bound group takes the room scope"
+    );
+    assert_eq!(
+        resolved.owner_user_id, "u-alice",
+        "the owner still names whoever spoke — overwriting it would lose the byline"
+    );
+}
+
+#[test]
+fn a_bound_conversation_does_not_upgrade_a_non_member() {
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+    let room = store.create("bound-room-2", Some("u-alice"), None).unwrap();
+    store.add_member(&room.id, "u-alice").unwrap();
+    store
+        .bind_conversation(
+            &room.id,
+            "telegram",
+            aleph_protocol::projects::BindingPeerKind::Group,
+            "C-out",
+            Some("u-alice"),
+            None,
+        )
+        .unwrap();
+
+    let attr = crate::scope::ScopeAttribution::personal("u-bob");
+    let resolved = super::request_scope(&channel_group_request(&attr, "C-out"))
+        .expect("a stamped run resolves a scope");
+    assert_eq!(
+        resolved.scope,
+        crate::scope::ScopeId::Personal("u-bob".to_string()),
+        "being in the Telegram group must not be equivalent to being on the roster: \
+         the channel path has no session_visible admission check, so this is the \
+         only place that answers it"
+    );
+}
+
+#[test]
+fn an_unpaired_speaker_in_a_bound_conversation_takes_no_room_scope() {
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+    let room = store.create("bound-room-3", Some("u-alice"), None).unwrap();
+    store.add_member(&room.id, "u-alice").unwrap();
+    store
+        .bind_conversation(
+            &room.id,
+            "telegram",
+            aleph_protocol::projects::BindingPeerKind::Group,
+            "C-anon",
+            Some("u-alice"),
+            None,
+        )
+        .unwrap();
+
+    let mut request =
+        channel_group_request(&crate::scope::ScopeAttribution::personal("ignored"), "C-anon");
+    request.metadata.clear(); // an unpaired sender stamps nothing at all
+    assert!(
+        super::request_scope(&request).is_none(),
+        "an unstamped turn must resolve no scope: this is what keeps a stranger \
+         out of the room partition AND out of RoomRosterLayer, which reads the \
+         same task-local. It is true today by derivation, not by guard — hence \
+         this test."
+    );
+}
+
+#[test]
+fn a_producer_that_already_stamped_the_room_is_left_alone() {
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+    let room = store.create("bound-room-4", Some("u-alice"), None).unwrap();
+    // Deliberately NOT on the roster: this is the cron/A2A shape that
+    // `resolve_attribution`'s Path 2 produces (owner = OWNER_USER_ID, scope =
+    // Project) after its own admission check already passed.
+    store
+        .bind_conversation(
+            &room.id,
+            "telegram",
+            aleph_protocol::projects::BindingPeerKind::Group,
+            "C-cron",
+            Some("u-alice"),
+            None,
+        )
+        .unwrap();
+
+    let attr = crate::scope::ScopeAttribution {
+        owner_user_id: crate::gateway::security::store::OWNER_USER_ID.to_string(),
+        scope: crate::scope::ScopeId::Project(room.id.clone()),
+    };
+    let resolved = super::request_scope(&channel_group_request(&attr, "C-cron"))
+        .expect("a stamped run resolves a scope");
+    assert_eq!(
+        resolved.scope,
+        crate::scope::ScopeId::Project(room.id),
+        "the roster gate answers 'is this DERIVED room-scoping trustworthy'. A run \
+         whose producer already stamped the room went through admission; re-judging \
+         it would silently demote an admitted room run to a personal one."
+    );
+}
+
+/// Pins the invariant `the_loop_runs_under_the_room_scope_for_a_claimed_key`
+/// (above, via `ensure_session_under_request_scope`) already carried
+/// implicitly, stated directly in terms of the fix: the roster gate applies
+/// to arm 2 (a bound conversation) only. An explicit `projects.room_session`
+/// claim is a declaration, and this path serves producers — cron/A2A
+/// re-opening a room's session chief among them — whose stamped owner is
+/// legitimately the legacy owner and sits on no roster at all.
+#[test]
+fn an_explicit_claim_upgrades_a_producer_whose_owner_is_not_on_the_roster() {
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+    let room = store
+        .create("claimed-room-not-on-roster", Some("u-alice"), None)
+        .unwrap();
+    // Deliberately NOT added to the roster.
+    let key =
+        crate::routing::session_key::SessionKey::project_room("test-agent", &room.id);
+    store
+        .claim_session_key(&room.id, &key.to_key_string())
+        .unwrap();
+
+    let attr = crate::scope::ScopeAttribution::personal("u-nobody");
+    let mut metadata = std::collections::HashMap::new();
+    crate::scope::stamp_metadata(&mut metadata, &attr);
+    let mut request = minimal_request(metadata);
+    request.session_key = key;
+
+    let resolved =
+        super::request_scope(&request).expect("a stamped run resolves a scope");
+    assert_eq!(
+        resolved.scope,
+        crate::scope::ScopeId::Project(room.id),
+        "arm 1 is a declaration, not an inference — the roster gate applies only \
+         to arm 2, so an explicit claim outranks the producer's stamp even when \
+         its owner is on no roster at all"
+    );
+}

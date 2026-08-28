@@ -66,32 +66,114 @@ use super::engine::ExecutionEngine;
 /// `handlers::agent::room_claiming`'s ruling for the same lookup: a degraded
 /// SQLite must not turn into a mis-scoped turn *or* a refused one. The cost is
 /// bounded — the row is then stamped the way it is stamped today.
+///
+/// The upgrade — replacing a producer's own stamp with the room's — passes a
+/// roster gate first, but **only for a room discovered through arm 2** (a
+/// bound channel conversation). Arm 1 (an explicit `projects.room_session`
+/// claim) is a declaration, not an inference — a room is opened by an
+/// operator or the Panel deliberately naming this session key as the room's
+/// conversation — so it outranks the producer's stamp unconditionally, same
+/// as before this gate existed. That is load-bearing for this very path: the
+/// six producers here include cron/A2A re-opening a room's session, whose
+/// stamped `owner_user_id` is legitimately the legacy owner and is never on
+/// any roster, and the channel inbound router continuing a claimed
+/// conversation, whose stamped owner may be a member nobody re-adds on every
+/// turn. Gating arm 1 would silently demote those runs to personal.
+///
+/// Arm 2 has no equivalent declaration: a channel conversation is bound by an
+/// operator, but *being in that conversation* is not — anyone in the
+/// Telegram group could otherwise ride the binding into the room's scope.
+/// The stamp's own `owner_user_id` is used as the actor because there is no
+/// ambient caller here, unlike the admission path. A caller the roster does
+/// not admit keeps its producer's own stamp rather than being silently
+/// dropped into the room: being in the channel conversation must not be
+/// equivalent to being on the roster, and this is the only place downstream
+/// of the channel inbound router that ever asks.
 fn request_scope(request: &RunRequest) -> Option<crate::scope::ScopeAttribution> {
     let stamped = crate::scope::scope_from_metadata(&request.metadata);
-    let Some(pid) = room_claiming(&request.session_key) else {
+    let Some((pid, source)) = room_claiming(&request.session_key) else {
         return stamped;
     };
     let mut attr = stamped?;
-    attr.scope = crate::scope::ScopeId::Project(pid);
+    let target = crate::scope::ScopeId::Project(pid.clone());
+    if attr.scope == target {
+        return Some(attr);
+    }
+    if source == ClaimSource::BoundConversation
+        && !crate::gateway::visibility::project_visible_to(&pid, Some(&attr.owner_user_id))
+    {
+        return Some(attr);
+    }
+    attr.scope = target;
     Some(attr)
 }
 
-/// The project that has claimed `session_key` as its room conversation.
+/// Which of `room_claiming`'s two arms produced an id — read only by
+/// [`request_scope`]'s roster gate, which trusts arm 1 unconditionally and
+/// gates arm 2. See that function's doc for why the two are not
+/// interchangeable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClaimSource {
+    /// An explicit `projects.room_session` claim on the key itself.
+    ExplicitClaim,
+    /// A channel conversation bound to the room, discovered via
+    /// [`crate::projects::binding::conversation_of`].
+    BoundConversation,
+}
+
+/// The project that has claimed `session_key` as its room conversation, by
+/// either of the two ways a room can claim one.
 ///
 /// Twin of `handlers::agent::room_claiming`, deliberately not shared with it:
 /// that one lives on the admission path and its `None` feeds a branch that may
 /// refuse, this one lives after admission and its `None` means "leave the
-/// producer's stamp alone". Both read the same column through the same store
-/// method, which is the part that must not be duplicated.
-fn room_claiming(session_key: &crate::routing::session_key::SessionKey) -> Option<String> {
-    match crate::projects::ProjectStore::shared()
-        .project_for_session_key(&session_key.to_key_string())
-    {
+/// producer's stamp alone". Both arms below read the same columns through the
+/// same store methods as their twin, which is the part that must not be
+/// duplicated — arm 2 in particular is written once, on
+/// [`crate::projects::ProjectStore::project_for_bound_session`], and both
+/// twins call it rather than each re-composing
+/// [`crate::projects::binding::conversation_of`] with
+/// `project_for_conversation` on its own.
+///
+/// Unlike the admission-path twin, this one also reports which arm answered —
+/// see [`ClaimSource`] and [`request_scope`]'s doc for why that distinction
+/// matters here and does not on the admission path (which gates both arms the
+/// same way, because there a live caller identity is always the question).
+fn room_claiming(
+    session_key: &crate::routing::session_key::SessionKey,
+) -> Option<(String, ClaimSource)> {
+    let store = crate::projects::ProjectStore::shared();
+    // (1) The Panel-minted room conversation, claimed by `projects.room_session`.
+    let claimed = match store.project_for_session_key(&session_key.to_key_string()) {
         Ok(pid) => pid,
         Err(e) => {
             tracing::warn!(error = %e, "projects: room claim lookup failed; leaving the producer's scope stamp alone");
             None
         }
+    };
+    // (2) A channel conversation bound to a room. Keyed on the conversation,
+    // so an `agent_switch` (which changes the session key's agent component)
+    // does not un-bind it.
+    let bound = match store.project_for_bound_session(session_key) {
+        Ok(pid) => pid,
+        Err(e) => {
+            tracing::warn!(error = %e, "projects: conversation binding lookup failed; leaving the producer's scope stamp alone");
+            None
+        }
+    };
+    match (claimed, bound) {
+        (Some(a), Some(b)) if a != b => {
+            tracing::warn!(
+                claimed = %a,
+                bound = %b,
+                "projects: a session key is claimed by one room and its conversation is bound to another; \
+                 taking the explicit claim"
+            );
+            Some((a, ClaimSource::ExplicitClaim))
+        }
+        (Some(a), _) => Some((a, ClaimSource::ExplicitClaim)),
+        (None, Some(b)) => Some((b, ClaimSource::BoundConversation)),
+        (None, None) => None,
     }
 }
 

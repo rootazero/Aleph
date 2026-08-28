@@ -635,22 +635,55 @@ async fn resolve_attribution(
     }
 }
 
-/// The project that has claimed `session_key` as its room conversation.
+/// The project that has claimed `session_key` as its room conversation, by
+/// either of the two ways a room can claim one.
 ///
 /// A store failure reads as "not a room" rather than propagating, matching
 /// [`bound_workspace_of`]'s ruling for the same store: a degraded catalogue
 /// must not turn into a refused turn. The cost of that choice is bounded —
 /// the row is then stamped personal, which is what happens today anyway — and
 /// the alternative would make a SQLite hiccup look like a permissions failure.
+///
+/// Twin of `run_loop::room_claiming`, deliberately not shared with it — see
+/// that function's doc for why the split is deliberate. Arm 2 (a channel
+/// conversation bound to a room) is written once, on
+/// [`crate::projects::ProjectStore::project_for_bound_session`], and both
+/// twins call it: this is the fix for the failure class documented at
+/// [`resolve_attribution`]'s `None => { .. }` arm above — a room bound
+/// *before* anyone has spoken in it, whose first message then arrives via
+/// `chat.send`/`agent.run` instead of via the channel that owns the binding.
 fn room_claiming(session_key: &SessionKey) -> Option<String> {
-    match crate::projects::ProjectStore::shared()
-        .project_for_session_key(&session_key.to_key_string())
-    {
+    let store = crate::projects::ProjectStore::shared();
+    // (1) The Panel-minted room conversation, claimed by `projects.room_session`.
+    let claimed = match store.project_for_session_key(&session_key.to_key_string()) {
         Ok(pid) => pid,
         Err(e) => {
             tracing::warn!(error = %e, "projects: room claim lookup failed; treating as not-a-room");
             None
         }
+    };
+    // (2) A channel conversation bound to a room. Keyed on the conversation,
+    // so an `agent_switch` (which changes the session key's agent component)
+    // does not un-bind it.
+    let bound = match store.project_for_bound_session(session_key) {
+        Ok(pid) => pid,
+        Err(e) => {
+            tracing::warn!(error = %e, "projects: conversation binding lookup failed; treating as not-a-room");
+            None
+        }
+    };
+    match (claimed, bound) {
+        (Some(a), Some(b)) if a != b => {
+            tracing::warn!(
+                claimed = %a,
+                bound = %b,
+                "projects: a session key is claimed by one room and its conversation is bound to another; \
+                 taking the explicit claim"
+            );
+            Some(a)
+        }
+        (Some(a), _) => Some(a),
+        (None, b) => b,
     }
 }
 
@@ -2904,6 +2937,136 @@ mod tests {
                 .await
                 .expect_err("a non-member must not open the room's conversation");
             assert!(matches!(err, BuildRunError::ProjectNotFound(_)));
+        }
+
+        /// Ruling U's second `room_claiming` arm: a room bound to a channel
+        /// conversation — never claimed via `projects.room_session` — must
+        /// admit a roster member's very first message with no `project_id` on
+        /// the request. This is the exact gap the long comment on
+        /// `resolve_attribution`'s `None` arm documents: a room bound *before*
+        /// anyone has spoken in it, whose first message arrives via
+        /// `chat.send`/`agent.run` rather than through the bound channel.
+        #[tokio::test]
+        async fn a_bound_conversation_keeps_its_room_scope_without_a_project_id() {
+            let (store, _pid, _tmp, _guard) = room();
+            let shared = ProjectStore::shared();
+            let p = shared
+                .create("bound-conversation-room", Some("u-alice"), None)
+                .unwrap();
+            shared.add_member(&p.id, "u-bob").unwrap();
+            shared
+                .bind_conversation(
+                    &p.id,
+                    "telegram",
+                    aleph_protocol::projects::BindingPeerKind::Group,
+                    "C-admission",
+                    Some("u-alice"),
+                    None,
+                )
+                .unwrap();
+            let key = SessionKey::group(
+                "main",
+                "telegram",
+                crate::routing::session_key::PeerKind::Group,
+                "C-admission",
+            );
+
+            let req = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    build_run_request(
+                        "r-bound".into(),
+                        &key,
+                        // No `project_id` — the whole point.
+                        params(None),
+                        None,
+                        Some(&store),
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
+                )
+                .await
+                .expect("a member on the roster may speak in the bound conversation");
+
+            assert_eq!(
+                stamped(&req),
+                (Some("u-bob"), Some(format!("project:{}", p.id).as_str())),
+                "a conversation bound before anyone spoke must take the room scope \
+                 on its first message, even though nothing ever claimed the session \
+                 key itself"
+            );
+        }
+
+        /// Same symmetry [`a_claimed_room_key_still_refuses_a_non_member`] pins
+        /// for arm 1, for arm 2: being in the channel conversation must not be
+        /// equivalent to being on the roster, and the refusal must not
+        /// distinguish "found via a binding" from "named and wrong" — either
+        /// tell would make `chat.send` an existence oracle.
+        #[tokio::test]
+        async fn a_bound_conversation_still_refuses_a_non_member() {
+            let (store, _pid, _tmp, _guard) = room();
+            let shared = ProjectStore::shared();
+            let p = shared
+                .create("closed-bound-room", Some("u-alice"), None)
+                .unwrap();
+            shared
+                .bind_conversation(
+                    &p.id,
+                    "telegram",
+                    aleph_protocol::projects::BindingPeerKind::Group,
+                    "C-admission-2",
+                    Some("u-alice"),
+                    None,
+                )
+                .unwrap();
+            let key = SessionKey::group(
+                "main",
+                "telegram",
+                crate::routing::session_key::PeerKind::Group,
+                "C-admission-2",
+            );
+
+            let denied = CALLER_USER
+                .scope(
+                    Some("u-carol".to_string()),
+                    build_run_request(
+                        "r-bound-2".into(),
+                        &key,
+                        params(None),
+                        None,
+                        Some(&store),
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
+                )
+                .await
+                .expect_err("a non-member must not open the bound conversation");
+            let unknown = CALLER_USER
+                .scope(
+                    Some("u-carol".to_string()),
+                    build_run_request(
+                        "r-bound-3".into(),
+                        // Reusing the same bound key on purpose: an explicit
+                        // `project_id` short-circuits `resolve_attribution`'s
+                        // Path 2 before it ever calls `room_claiming`, so what
+                        // this proves is that the two refusals are shaped the
+                        // same regardless of how the caller reached one.
+                        &key,
+                        params(Some("p-never-minted")),
+                        None,
+                        Some(&store),
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
+                )
+                .await
+                .expect_err("an unminted id must be refused");
+
+            // No oracle: the same refusal shape whether the room was discovered
+            // through a bound conversation or named directly and wrong.
+            assert!(matches!(denied, BuildRunError::ProjectNotFound(ref id) if *id == p.id));
+            assert!(
+                matches!(unknown, BuildRunError::ProjectNotFound(ref id) if id == "p-never-minted")
+            );
+            // Neither refusal created a session row.
+            assert!(store.get_metadata(&key).await.unwrap().is_none());
         }
 
         #[tokio::test]

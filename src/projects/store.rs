@@ -883,6 +883,31 @@ impl ProjectStore {
         })
     }
 
+    /// The room a session key's conversation is bound to, if any.
+    ///
+    /// Composes [`binding::conversation_of`] (decomposing the key into the
+    /// `(channel, peer_kind, peer_id)` triple a binding is keyed on) with
+    /// [`Self::project_for_conversation`] (the stored lookup). `Ok(None)` for
+    /// a key that is not a conversation at all (a DM, a task, a main session)
+    /// as well as for a conversation nothing is bound to — both mean the same
+    /// thing to a caller asking "does a room claim this key".
+    ///
+    /// This is arm 2 of `room_claiming`, and both twins that name
+    /// (`run_loop::room_claiming`, `handlers::agent::room_claiming`) call it
+    /// rather than each re-composing `conversation_of` with
+    /// `project_for_conversation` on its own — the same rule arm 1 already
+    /// follows by calling [`Self::project_for_session_key`] directly instead
+    /// of duplicating its query.
+    pub fn project_for_bound_session(
+        &self,
+        session_key: &crate::routing::session_key::SessionKey,
+    ) -> Result<Option<String>, ProjectError> {
+        let Some((channel_id, peer_kind, peer_id)) = binding::conversation_of(session_key) else {
+            return Ok(None);
+        };
+        self.project_for_conversation(&channel_id, peer_kind, &peer_id)
+    }
+
     /// Every conversation a room is bound to, oldest first.
     ///
     /// A row whose stored `peer_kind` does not parse back via
