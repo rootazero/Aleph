@@ -341,7 +341,14 @@ impl ChannelRegistry {
         }
     }
 
-    /// List all channels
+    /// List all channels.
+    ///
+    /// **Audit fix**: the previous implementation iterated `HashMap::values`
+    /// directly, exposing HashMap's non-deterministic iteration order to every
+    /// caller. The `channels.list` RPC, every Panel render, and every
+    /// `channel.health_states` snapshot used to flicker between calls on the
+    /// same channel set. Sorted by `(channel_type, id)` so the order is
+    /// stable across runs and reproducible in tests.
     pub async fn list(&self) -> Vec<ChannelInfo> {
         let channels = self.channels.read().await;
         let mut infos = Vec::with_capacity(channels.len());
@@ -352,11 +359,18 @@ impl ChannelRegistry {
             info.status = channel.status(); // override with live status
             infos.push(info);
         }
-
+        infos.sort_by(|a, b| {
+            a.channel_type
+                .cmp(&b.channel_type)
+                .then_with(|| a.id.cmp(&b.id))
+        });
         infos
     }
 
-    /// List channels by type
+    /// List channels by type.
+    ///
+    /// Sorted by `id` so the order is deterministic across runs (see
+    /// [`Self::list`] for the full rationale).
     pub async fn list_by_type(&self, channel_type: &str) -> Vec<ChannelInfo> {
         let channels = self.channels.read().await;
         let mut infos = Vec::new();
@@ -369,7 +383,7 @@ impl ChannelRegistry {
                 infos.push(info);
             }
         }
-
+        infos.sort_by(|a, b| a.id.cmp(&b.id));
         infos
     }
 

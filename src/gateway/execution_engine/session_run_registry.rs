@@ -44,13 +44,21 @@ impl SessionRunRegistry {
         (seq, map.keys().cloned().collect())
     }
 
-    /// Broadcast the current running snapshot to the injected event bus. The
-    /// caller (`try_claim`/`release`) has already bumped `seq` and dropped the
-    /// map lock; this only reads a fresh `(seq, keys)` snapshot and publishes it,
-    /// so the map lock is never held across serialization/broadcast.
-    fn broadcast_change(&self) {
+    /// Publish the supplied (seq, running) snapshot to the injected bus.
+///
+/// **Audit fix**: the previous `broadcast_change` re-read `running_snapshot`
+/// AFTER the caller had dropped the lock. With two state transitions
+/// interleaving (e.g. claim N → release N+1 before claim's broadcast lands),
+/// the late re-read picked up `(N+1, [])` and the claim's frame was
+/// emitted with the just-claimed run already gone — the Panel saw the
+/// release shadow its own claim. Consumers reconstruct ordering from `seq`
+/// alone, so the snapshot MUST be captured atomically with the seq bump in
+/// `try_claim`/`release` and passed into this helper. The map lock is
+/// never held across `publish_frame` (which serializes and broadcasts);
+/// the seq bump + snapshot capture happens under the lock, then the lock
+/// drops and we publish.
+    fn publish_snapshot(&self, seq: u64, running: Vec<String>) {
         if let Some(bus) = self.event_bus.get() {
-            let (seq, running) = self.running_snapshot();
             let _ = bus.publish_frame(&GatewayEventFrame::RunningSetChanged { seq, running });
         }
     }
@@ -76,24 +84,35 @@ impl SessionRunRegistry {
     /// already holds, so re-publishing at the claim's seq would be a silent
     /// no-op on every connected Panel.
     pub(super) fn republish_running_set(&self) {
-        self.seq.fetch_add(1, Ordering::AcqRel);
-        self.broadcast_change();
+        let (seq, snap) = {
+            let map = self.running.lock().unwrap_or_else(|e| e.into_inner());
+            let new_seq = self.seq.fetch_add(1, Ordering::AcqRel) + 1;
+            let keys = map.keys().cloned().collect::<Vec<_>>();
+            (new_seq, keys)
+        };
+        self.publish_snapshot(seq, snap);
     }
 
     /// Atomically claim this session's single run slot. `true` = claimed,
     /// `false` = a run is already active on this session (caller routes the
     /// message to the per-session `BusyInputMode` steer/interrupt/queue path).
+    ///
+    /// **Audit fix**: the snapshot is captured under the same lock as the
+    /// seq bump so a racing `release` cannot erase the claim's broadcast
+    /// (see [`Self::publish_snapshot`] for the full TOCTOU description).
     #[must_use]
     pub(super) fn try_claim(&self, session_key: &SessionKey, run_id: &str) -> bool {
         let key = session_key.to_key_string();
-        {
+        let (seq, snap) = {
             let mut map = self.running.lock().unwrap_or_else(|e| e.into_inner());
             if map.contains_key(&key) {
                 return false;
             }
             map.insert(key.clone(), run_id.to_string());
-            self.seq.fetch_add(1, Ordering::AcqRel);
-        }
+            let new_seq = self.seq.fetch_add(1, Ordering::AcqRel) + 1;
+            let keys = map.keys().cloned().collect::<Vec<_>>();
+            (new_seq, keys)
+        };
         // Claim is the ONE place a session's run slot is actually taken, so it
         // is the authoritative "this queued message has become a run" edge —
         // the exact mirror of `release`'s `notify_slot_free` below. The busy
@@ -103,26 +122,29 @@ impl SessionRunRegistry {
         // that never came through the lane matches no ticket and this is a
         // cheap no-op.
         crate::gateway::busy_queue::mark_admitted(&key, run_id);
-        self.broadcast_change();
+        self.publish_snapshot(seq, snap);
         true
     }
 
     /// Release this session's run slot. Idempotent, and only releases when the
     /// stored `run_id` matches — a superseded run's late release can't free a
     /// newer run's claim.
+    ///
+    /// **Audit fix**: snapshot is captured under the same lock as the seq bump
+    /// so a racing `try_claim` cannot erase the release's broadcast.
     pub(super) fn release(&self, session_key: &SessionKey, run_id: &str) {
         let key = session_key.to_key_string();
-        let changed = {
+        let release_seq_snap = {
             let mut map = self.running.lock().unwrap_or_else(|e| e.into_inner());
-            if map.get(&key).map(String::as_str) == Some(run_id) {
-                map.remove(&key);
-                self.seq.fetch_add(1, Ordering::AcqRel);
-                true
-            } else {
-                false
+            if map.get(&key).map(String::as_str) != Some(run_id) {
+                return;
             }
+            map.remove(&key);
+            let new_seq = self.seq.fetch_add(1, Ordering::AcqRel) + 1;
+            let keys = map.keys().cloned().collect::<Vec<_>>();
+            Some((new_seq, keys))
         };
-        if changed {
+        if let Some((seq, snap)) = release_seq_snap {
             // Release is the ONE place a session's claim is actually given up,
             // so it is the authoritative "a queued message may try now" edge.
             // Signalling here is what lets the busy wait lane park on a wake
@@ -130,7 +152,7 @@ impl SessionRunRegistry {
             // `InputQueueActivity` parity). Cheap: a session with no waiters
             // does nothing.
             crate::gateway::busy_queue::notify_slot_free(&key);
-            self.broadcast_change();
+            self.publish_snapshot(seq, snap);
         }
     }
 

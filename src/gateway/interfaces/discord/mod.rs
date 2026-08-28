@@ -175,7 +175,16 @@ impl DiscordChannel {
             .ok_or_else(|| ChannelError::NotConnected("HTTP client not initialized".to_string()))?;
 
         if conversation_id.as_str().starts_with("dm:") {
-            let user_id: u64 = conversation_id.as_str()[3..]
+            // Use `strip_prefix` rather than byte-index slice `[3..]` — the
+            // slice would panic on a non-ASCII character straddling the
+            // boundary at index 3 (e.g. `dm:用户123`). `strip_prefix`
+            // operates on char boundaries and yields a `&str` we can parse.
+            let user_id: u64 = conversation_id
+                .as_str()
+                .strip_prefix("dm:")
+                .ok_or_else(|| {
+                    ChannelError::Internal("conversation_id does not start with 'dm:'".to_string())
+                })?
                 .parse()
                 .map_err(|e| ChannelError::Internal(format!("Invalid user ID: {e}")))?;
 
@@ -775,8 +784,19 @@ impl Channel for DiscordChannel {
         // Handle both "dm:user_id" and direct channel IDs
         let channel_id =
             if message.conversation_id.as_str().starts_with("dm:") {
-                // For DMs, we need to create a DM channel first
-                let user_id: u64 = message.conversation_id.as_str()[3..]
+                // For DMs, we need to create a DM channel first. Use
+                // `strip_prefix` instead of `[3..]` — see `resolve_channel_id`
+                // for the rationale (non-ASCII bytes straddling index 3 would
+                // otherwise panic).
+                let user_id: u64 = message
+                    .conversation_id
+                    .as_str()
+                    .strip_prefix("dm:")
+                    .ok_or_else(|| {
+                        ChannelError::Internal(
+                            "conversation_id does not start with 'dm:'".to_string(),
+                        )
+                    })?
                     .parse()
                     .map_err(|e| ChannelError::SendFailed(format!("Invalid user ID: {e}")))?;
 

@@ -604,12 +604,22 @@ impl ChannelState {
         self.health.clone()
     }
 
-    /// Read current status (non-blocking via `try_read`, fallback Connecting).
+    /// Read current status (non-blocking via `try_read`, fallback Disconnected).
+    ///
+    /// **Audit fix**: the previous fallback returned `Connecting` when the
+    /// status `RwLock`'s read guard could not be acquired (any concurrent
+    /// writer — `set_status`, `record_event`, `record_failure`, start/stop —
+    /// holds the write lock briefly). The health monitor treats `Connecting`
+    /// as a restart candidate (`channel_health_monitor.rs::should_restart`),
+    /// so a busy channel that JUST transitioned to Connected would trigger a
+    /// spurious restart. The correct fallback for "I can't observe the lock"
+    /// is the most pessimistic status that is NOT a restart signal —
+    /// `Disconnected` — so the monitor defers to a future successful read.
     #[must_use]
     pub fn status(&self) -> ChannelStatus {
         self.status
             .try_read()
-            .map_or(ChannelStatus::Connecting, |s| *s)
+            .map_or(ChannelStatus::Disconnected, |s| *s)
     }
 
     /// Set status (async, takes write lock).

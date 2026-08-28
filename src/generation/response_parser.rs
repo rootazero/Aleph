@@ -42,10 +42,22 @@ fn get_pattern() -> GenerationResult<&'static Regex> {
     if let Some(re) = GENERATE_PATTERN.get() {
         return Ok(re);
     }
-    let re = Regex::new(r"\[GENERATE:([^:]+):([^:]+):([^:]+):([^\]]+)\]").map_err(|e| {
-        GenerationError::InternalError {
-            message: format!("invalid GENERATE_PATTERN regex: {e}"),
-        }
+    // The prompt slot now allows nested brackets and disallows the literal
+    // characters used as separators) inside the type / provider / model slots.
+    // The previous `([^\]]+)` short-circuited at the first `]` — a prompt
+    // containing `]` (e.g. "a cat [sitting on a chair]") was truncated and
+    // the trailing `]]` leaked into the downstream provider as raw text,
+    // producing an unbalanced-bracket prompt that some providers reject.
+    //
+    // The new pattern:
+    //   * Type / provider / model slots: `[^\[\]:]+` — neither bracket nor colon.
+    //   * Prompt slot: balanced one-level of nesting via the alternation
+    //     `[^\[\]]|\[[^\[\]]*\]`. Two levels of nesting (e.g. `[[a]]`) are
+    //     intentionally NOT supported — that is well past legitimate prompt
+    //     content and would let an LLM craft tags that swallow unrelated text.
+    let pattern = r"\[GENERATE:([^\[\]:]+):([^\[\]:]+):([^\[\]:]+):((?:[^\[\]]|\[[^\[\]]*\])+)\]";
+    let re = Regex::new(pattern).map_err(|e| GenerationError::InternalError {
+        message: format!("invalid GENERATE_PATTERN regex: {e}"),
     })?;
     Ok(GENERATE_PATTERN.get_or_init(|| re))
 }
@@ -163,6 +175,34 @@ mod tests {
         assert_eq!(
             result.requests[0].prompt,
             "一只在海边奔跑的金毛猎犬，夕阳西下"
+        );
+    }
+
+    /// Regression test for the audit finding: prompts containing `]` were
+    /// truncated by the previous `[^\]]+` slot. A single level of bracket
+    /// nesting now round-trips intact.
+    #[test]
+    fn test_prompt_with_brackets_round_trips() {
+        let response =
+            "[GENERATE:image:dalle:nanobanana:a cat [sitting on a chair]]";
+        let result = parse_generation_requests(response).expect("static regex should be valid");
+
+        assert_eq!(result.requests.len(), 1);
+        assert_eq!(result.requests[0].prompt, "a cat [sitting on a chair]");
+        assert_eq!(result.requests[0].provider, "dalle");
+        assert_eq!(result.requests[0].model, "nanobanana");
+    }
+
+    /// Regression test for the audit finding: the previous regex would
+    /// silently swallow a tag with an empty type / provider / model slot
+    /// (e.g. a stray colon). The new pattern rejects those.
+    #[test]
+    fn test_empty_slot_is_not_matched() {
+        let response = "[GENERATE::provider:model:prompt]"; // empty type
+        let result = parse_generation_requests(response).expect("static regex should be valid");
+        assert!(
+            result.requests.is_empty(),
+            "empty type slot must not produce a request; got {result:?}"
         );
     }
 }

@@ -42,26 +42,36 @@ impl IdempotencySlot {
     /// Uses `entry().and_modify()` for atomic InFlight→Complete transition,
     /// preventing a TOCTOU race where a concurrent request could see
     /// a vacant key between `remove()` and `insert()`.
+    ///
+    /// **Audit fix**: the previous implementation fell back to
+    /// `entry().or_insert(Complete(...))` when `and_modify` reported the entry
+    /// was gone (e.g. removed by `prune`, by another slot's `Drop`, or by a
+    /// second `complete` call). That fallback re-created a `Complete` entry
+    /// AFTER a fresh caller had already raced through `try_acquire`'s vacant
+    /// arm and obtained a new `Proceed` slot — the original producer's stale
+    /// `Complete` would then overwrite the in-flight slot of the next request,
+    /// and waiters parked on the old `tx` would observe a result that no
+    /// producer evaluated for the new request's key.
+    ///
+    /// Correct behavior: do NOT resurrect an entry that the cache has
+    /// forgotten. A vanished entry means the slot's owner is gone and the
+    /// next caller deserves a fresh `Proceed`, not the value from a cancelled
+    /// run. The transition is therefore purely an `and_modify`; if it reports
+    /// `Vacant`, the function returns silently.
     pub fn complete(mut self, result: Value) {
         if let Some(cache) = self.guard.take() {
             let key = self.key.clone();
-            let mut notified = false;
 
-            // Atomic transition: InFlight → Complete (notify waiters in-place)
-            cache.entry(key.clone()).and_modify(|entry| {
+            // Atomic transition: InFlight → Complete (notify waiters in-place).
+            // If the entry was removed between `try_acquire` and now, this
+            // `and_modify` simply does nothing — which is the correct outcome
+            // (see doc comment above).
+            cache.entry(key).and_modify(|entry| {
                 if let CacheEntry::InFlight(tx) = entry {
                     let _ = tx.send(Some(result.clone()));
-                    notified = true;
                 }
-                *entry = CacheEntry::Complete(result.clone(), Instant::now());
+                *entry = CacheEntry::Complete(result, Instant::now());
             });
-
-            // If entry was already removed (e.g., expired by prune), insert fresh
-            if !notified {
-                cache
-                    .entry(key)
-                    .or_insert(CacheEntry::Complete(result, Instant::now()));
-            }
         }
     }
 
