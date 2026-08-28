@@ -384,7 +384,12 @@
     "doctor_repair_prompt": "Run the doctor tool to diagnose system health. For anything mechanically repairable (repairable=true), call doctor(fix=true) to fix it; for the rest, follow each finding's fix_hint and use the tool it names (self_config / vault_store / …). When everything has been handled, run doctor again to verify and report briefly what was fixed.",
     "doctor_detect_prompt": "Run the doctor tool as a read-only health check (fix=false — do not repair anything). Report the problems you find and how severe each one is, faithfully.",
     "doctor_command_desc": "Read-only health check; press f to repair what it finds",
-    "voice_idle_hint": "Tap for voice mode · hold to dictate"
+    "voice_idle_hint": "Tap for voice mode · hold to dictate",
+    "load_earlier": "Load earlier messages",
+    "load_earlier_n_one": "Load {{ count }} earlier message",
+    "load_earlier_n_other": "Load {{ count }} earlier messages",
+    "loading_earlier": "Loading earlier messages…",
+    "history_start": "Beginning of the conversation"
   },
   "canvas": {
     "title": "Canvas",

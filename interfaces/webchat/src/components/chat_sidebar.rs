@@ -115,11 +115,25 @@ pub(crate) async fn hydrate_session_history(
     key: String,
     locale: crate::i18n::Locale,
 ) -> (Option<String>, Vec<PendingRun>) {
-    match ChatApi::history(&dash, &key, Some(50)).await {
+    // Read once, before the await: this is the window THIS hydration asked
+    // for, and "load earlier" may raise the signal again while the fetch is in
+    // flight. Comparing the response against the limit it was actually issued
+    // with is what keeps `history_has_more` honest.
+    let limit = chat.history_limit.get_untracked();
+    match ChatApi::history(&dash, &key, Some(limit)).await {
         Ok(loaded) => {
             let active_run = loaded.active_run;
             let pending = loaded.pending;
             let history = loaded.messages;
+            // What sits above the window we are about to render. `total` is
+            // the server counting its own rows; the page length is the
+            // fallback guess for a core that does not report it. Derived in
+            // one place (`history_window_gap`) so the control cannot drift
+            // from the numbers it is describing.
+            let (has_more, above) =
+                crate::views::chat::state::history_window_gap(history.len(), limit, loaded.total);
+            chat.history_has_more.set(has_more);
+            chat.history_above.set(above);
             // Distinct assistant run_ids → fetch their persisted traces.
             let run_ids: Vec<String> = {
                 let mut seen = std::collections::HashSet::new();

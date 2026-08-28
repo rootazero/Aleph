@@ -308,6 +308,28 @@ impl SessionManager {
     }
 
     /// Get session history
+    /// The SQL spelling of [`stamp_millis`] — `messages.timestamp` normalized to
+    /// milliseconds, for ranking and for the `before` cursor.
+    ///
+    /// Built from [`SECONDS_MILLIS_BOUNDARY`] rather than repeating the literal:
+    /// a second copy of that number is a second definition of the rule, which is
+    /// the failure the constant's own doc was written to prevent. The Rust and
+    /// SQL forms are held to each other by
+    /// `stamp_millis_tests::the_sql_and_rust_spellings_agree`, which evaluates
+    /// both over the same values in a real connection — the only check that can
+    /// see them drift, since neither is expressible in terms of the other.
+    ///
+    /// There is no index on `messages(timestamp)` (only on `session_key`), so
+    /// ordering by this expression costs nothing an index would otherwise have
+    /// saved: SQLite was already sorting.
+    ///
+    /// [`stamp_millis`]: crate::gateway::session_store::types::stamp_millis
+    /// [`SECONDS_MILLIS_BOUNDARY`]: crate::gateway::session_store::types::SECONDS_MILLIS_BOUNDARY
+    pub(crate) fn stamp_millis_sql() -> String {
+        let boundary = crate::gateway::session_store::types::SECONDS_MILLIS_BOUNDARY;
+        format!("(CASE WHEN abs(timestamp) >= {boundary} THEN timestamp ELSE timestamp * 1000 END)")
+    }
+
     pub async fn get_history(
         &self,
         key: &SessionKey,
@@ -319,6 +341,14 @@ impl SessionManager {
             .lock()
             .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
+        // Rank by the NORMALIZED stamp. `messages.timestamp` holds two units
+        // (see `MessageRecord::timestamp`), so ordering by the raw column puts
+        // every millisecond row above every seconds row regardless of when
+        // either happened — and "the trailing `limit` rows" then means the
+        // wrong rows. Same expression as the cursor path below, which delegates
+        // here whenever `before` is `None`; ordering them differently would be
+        // a divergence inside one method.
+        let stamp = Self::stamp_millis_sql();
         let query = match limit {
             Some(n) => format!(
                 "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
@@ -326,13 +356,14 @@ impl SessionManager {
                     SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
                     tool_call_id, tool_name \
                     FROM messages \
-                    WHERE session_key = ? ORDER BY timestamp DESC, id DESC LIMIT {n} \
-                ) ORDER BY timestamp ASC, id ASC"
+                    WHERE session_key = ? ORDER BY {stamp} DESC, id DESC LIMIT {n} \
+                ) ORDER BY {stamp} ASC, id ASC"
             ),
-            None => "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
-                     tool_call_id, tool_name FROM messages \
-                     WHERE session_key = ? ORDER BY timestamp ASC, id ASC"
-                .to_string(),
+            None => format!(
+                "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
+                 tool_call_id, tool_name FROM messages \
+                 WHERE session_key = ? ORDER BY {stamp} ASC, id ASC"
+            ),
         };
 
         let mut stmt = conn
@@ -364,24 +395,32 @@ impl SessionManager {
 
     /// History with an optional `before` cursor — the efficient, SQL-side
     /// implementation of [`SessionStore::get_history_before`]. Only messages
-    /// with `timestamp < before` are scanned, then the most recent `limit` of
-    /// those are returned oldest-first (same windowing shape as [`get_history`]).
+    /// older than the cursor are scanned, then the most recent `limit` of those
+    /// are returned oldest-first (same windowing shape as [`get_history`]).
     ///
     /// When `before` is `None` this is exactly [`get_history`], so the plain
     /// path stays the single source of SQL truth for the non-paginated case.
     ///
+    /// Both the predicate and the ordering go through [`stamp_millis_sql`], for
+    /// the reason spelled out there: the column holds seconds in some rows and
+    /// milliseconds in others, and this comparison used to be
+    /// `timestamp < <seconds>` — which no millisecond row can satisfy. That is
+    /// why this parameter takes an instant rather than a number.
+    ///
     /// [`SessionStore::get_history_before`]: crate::gateway::session_store::SessionStore::get_history_before
     /// [`get_history`]: Self::get_history
+    /// [`stamp_millis_sql`]: Self::stamp_millis_sql
     pub async fn get_history_before(
         &self,
         key: &SessionKey,
         limit: Option<usize>,
-        before: Option<i64>,
+        before: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<MessageRecord>, SessionManagerError> {
         // No cursor → reuse the plain path; avoids a second SQL variant.
-        let Some(before_ts) = before else {
+        let Some(before) = before else {
             return self.get_history(key, limit).await;
         };
+        let before_ts = before.timestamp_millis();
 
         let key_str = key.to_key_string();
         let conn = self
@@ -392,6 +431,7 @@ impl SessionManager {
         // Mirror `get_history`'s windowing: take the most-recent `limit` rows
         // that satisfy the cursor (inner DESC LIMIT), then re-sort ASC for
         // chronological display.
+        let stamp = Self::stamp_millis_sql();
         let query = match limit {
             Some(n) => format!(
                 "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
@@ -399,13 +439,14 @@ impl SessionManager {
                     SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
                     tool_call_id, tool_name \
                     FROM messages \
-                    WHERE session_key = ? AND timestamp < ? ORDER BY timestamp DESC, id DESC LIMIT {n} \
-                ) ORDER BY timestamp ASC, id ASC"
+                    WHERE session_key = ? AND {stamp} < ? ORDER BY {stamp} DESC, id DESC LIMIT {n} \
+                ) ORDER BY {stamp} ASC, id ASC"
             ),
-            None => "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
-                     tool_call_id, tool_name FROM messages \
-                     WHERE session_key = ? AND timestamp < ? ORDER BY timestamp ASC, id ASC"
-                .to_string(),
+            None => format!(
+                "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
+                 tool_call_id, tool_name FROM messages \
+                 WHERE session_key = ? AND {stamp} < ? ORDER BY {stamp} ASC, id ASC"
+            ),
         };
 
         let mut stmt = conn
@@ -433,6 +474,32 @@ impl SessionManager {
             .collect();
 
         Ok(messages)
+    }
+
+    /// Row count for a session — the SQL-side implementation of
+    /// [`SessionStore::history_len`].
+    ///
+    /// A `COUNT(*)`, not `get_history(..).len()`: the caller wants one integer
+    /// and the default impl would materialise every row, every column, and
+    /// every metadata blob of a transcript to throw all of it away.
+    ///
+    /// [`SessionStore::history_len`]: crate::gateway::session_store::SessionStore::history_len
+    pub async fn history_len(&self, key: &SessionKey) -> Result<usize, SessionManagerError> {
+        let key_str = key.to_key_string();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE session_key = ?",
+                params![&key_str],
+                |row| row.get(0),
+            )
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+        // `COUNT(*)` is non-negative by construction; the cast is the i64 the
+        // driver hands back meeting the usize the trait promises.
+        Ok(count.max(0) as usize)
     }
 
     /// Reset (clear) a session

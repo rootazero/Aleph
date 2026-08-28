@@ -60,7 +60,7 @@ async fn test_get_history_before_cursor_filters_by_timestamp() {
     manager.add_message(&key, "assistant", "two").await.unwrap();
     manager.add_message(&key, "user", "three").await.unwrap();
 
-    let now = chrono::Utc::now().timestamp();
+    let now = chrono::Utc::now();
 
     // No cursor → identical to plain get_history (all three).
     let all = manager.get_history_before(&key, None, None).await.unwrap();
@@ -68,24 +68,68 @@ async fn test_get_history_before_cursor_filters_by_timestamp() {
 
     // Cursor in the future → every message is strictly older, so all survive.
     let before_future = manager
-        .get_history_before(&key, None, Some(now + 3600))
+        .get_history_before(&key, None, Some(now + chrono::Duration::hours(1)))
         .await
         .unwrap();
     assert_eq!(before_future.len(), 3);
 
     // Cursor far in the past → nothing is older than it.
     let before_past = manager
-        .get_history_before(&key, None, Some(now - 3600))
+        .get_history_before(&key, None, Some(now - chrono::Duration::hours(1)))
         .await
         .unwrap();
     assert!(before_past.is_empty());
 
     // Limit still windows the cursor-filtered set (most-recent `limit`).
     let windowed = manager
-        .get_history_before(&key, Some(2), Some(now + 3600))
+        .get_history_before(&key, Some(2), Some(now + chrono::Duration::hours(1)))
         .await
         .unwrap();
     assert_eq!(windowed.len(), 2);
+}
+
+/// The Rust and SQL spellings of the seconds/millisecond boundary must agree.
+///
+/// Neither is expressible in terms of the other — one is a Rust `fn`, the other
+/// a string interpolated into a query — so the only check that can see them
+/// drift is evaluating both over the same values. They share the boundary
+/// constant, which is why the interesting inputs are the ones that straddle it
+/// and the ones where SQLite's own semantics could differ from Rust's (integer
+/// division / negative operands / `abs`).
+#[test]
+fn the_sql_and_rust_spellings_of_stamp_millis_agree() {
+    use crate::gateway::session_store::types::{stamp_millis, SECONDS_MILLIS_BOUNDARY};
+
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE messages (timestamp INTEGER);")
+        .unwrap();
+    let expr = SessionManager::stamp_millis_sql();
+
+    for raw in [
+        0_i64,
+        1,
+        -1,
+        1_785_062_232,                  // seconds, a real stamp
+        1_785_062_232_000,              // the same instant in milliseconds
+        SECONDS_MILLIS_BOUNDARY - 1,    // just below the boundary
+        SECONDS_MILLIS_BOUNDARY,        // exactly at it
+        -SECONDS_MILLIS_BOUNDARY,       // and its mirror, which `abs` catches
+        -(SECONDS_MILLIS_BOUNDARY - 1),
+        -1_785_062_232,
+    ] {
+        conn.execute("DELETE FROM messages", []).unwrap();
+        conn.execute("INSERT INTO messages (timestamp) VALUES (?)", [raw])
+            .unwrap();
+        let from_sql: i64 = conn
+            .query_row(&format!("SELECT {expr} FROM messages"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            from_sql,
+            stamp_millis(raw),
+            "SQL and Rust disagree on raw stamp {raw}; the two normalizers have \
+             drifted and the cursor now means different things on the two backends"
+        );
+    }
 }
 
 #[tokio::test]

@@ -201,12 +201,17 @@ impl SessionStore for SessionManager {
         &self,
         key: &SessionKey,
         limit: Option<usize>,
-        before: Option<i64>,
+        before: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<MessageRecord>, SessionStoreError> {
         // Push the cursor into SQL rather than filtering in memory.
         self.get_history_before(key, limit, before)
             .await
             .map_err(map_err)
+    }
+
+    async fn history_len(&self, key: &SessionKey) -> Result<usize, SessionStoreError> {
+        // COUNT(*), not the default impl's "read everything and measure it".
+        self.history_len(key).await.map_err(map_err)
     }
 
     async fn search_messages(

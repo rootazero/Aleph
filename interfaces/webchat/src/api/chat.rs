@@ -133,12 +133,21 @@ pub struct ContextEstimateResponse {
 /// teammate — never received those frames, so this snapshot is the only place
 /// the fact survives for it. Absent (a core that predates the field) and
 /// empty (nothing waiting) both mean "no queue to show".
+///
+/// `total` is how many rows the whole session holds, against which `messages`
+/// is the trailing window. It is the only thing that can tell a full page from
+/// a complete short conversation — both arrive exactly `limit` long — so the
+/// "load earlier" control reads it to say how much is above and to fetch all of
+/// it in one go. `None` means the server did not answer (a core that predates
+/// the field, or a count that failed): the caller must treat that as "I do not
+/// know", never as "nothing above".
 #[derive(Debug, Clone)]
 pub struct SessionHistory {
     pub messages: Vec<ChatMessage>,
     pub active_run: Option<String>,
     pub plan: Option<aleph_protocol::plan::PlanSnapshot>,
     pub pending: Vec<PendingRun>,
+    pub total: Option<usize>,
 }
 
 /// A file attachment to send with a chat message.
@@ -148,6 +157,18 @@ pub struct ChatAttachment {
     pub mime_type: String,
     pub data_base64: String,
     pub size: u64,
+}
+
+/// Read the session's full row count off a `chat.history` response.
+///
+/// Free function for the same reason as its two neighbours: the skew and
+/// malformed cases are testable without a socket. Absent, `null`, and
+/// not-a-number all collapse to `None` — "the server gave no answer" — which
+/// the caller must not round down to "the transcript is complete". Getting
+/// that backwards is the failure this whole field exists to remove, only
+/// sited one layer lower.
+fn parse_history_total(result: &Value) -> Option<usize> {
+    result.get("total")?.as_u64().map(|n| n as usize)
 }
 
 /// Read the durable execution list off a `chat.history` response.
@@ -329,6 +350,7 @@ impl ChatApi {
                 .map(str::to_owned),
             plan: parse_history_plan(&result),
             pending: parse_history_pending(&result),
+            total: parse_history_total(&result),
         })
     }
 
@@ -379,6 +401,40 @@ impl ChatApi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `total` is the only thing that can say a transcript has a beginning the
+    /// window did not carry, so every way it can be missing has to read as "no
+    /// answer" — never as zero, which the caller would render as "nothing
+    /// above" and hide content behind a control it never drew.
+    #[test]
+    fn a_missing_or_malformed_total_reads_as_no_answer_not_as_zero() {
+        // Present and sane.
+        assert_eq!(
+            parse_history_total(&serde_json::json!({ "total": 1047 })),
+            Some(1047)
+        );
+        assert_eq!(
+            parse_history_total(&serde_json::json!({ "total": 0 })),
+            Some(0)
+        );
+
+        // A core that predates the field.
+        assert_eq!(parse_history_total(&serde_json::json!({})), None);
+        // A count the server could not read.
+        assert_eq!(
+            parse_history_total(&serde_json::json!({ "total": null })),
+            None
+        );
+        // A shape change on the core side.
+        assert_eq!(
+            parse_history_total(&serde_json::json!({ "total": "many" })),
+            None
+        );
+        assert_eq!(
+            parse_history_total(&serde_json::json!({ "total": -3 })),
+            None
+        );
+    }
 
     /// `OWN_RUNS` is a `thread_local`, and libtest runs the whole file on ONE
     /// thread under `--test-threads=1`. Tests that assert absolute lengths must

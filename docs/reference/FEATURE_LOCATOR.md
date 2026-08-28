@@ -3206,14 +3206,16 @@
 
 ### 6.9 多端共享一条线程 · 重连与崩溃后的状态重建 (Multi-Client Thread Sharing & Post-Reconnect State Rebuild)
 
-- **口语关键词**：另一个标签页的回答跑到我这来了 / 我下一句发错会话了 / 房间里看不见队友在说话 / 打开一个正在跑的会话什么也不动 / core 重启后红点不动了 / 重启后 Stop 键一直卡着 / 出错的那一轮别的端看不到 / **手机上发了消息什么都不出来** / **iOS Panel 只有我自己的气泡** / **手机上要退出去再进来才看到回答** / **重连之后那一轮再也不动了** / **TUI 里蹦出别的会话的输出** / **TUI attach 上去停不掉正在跑的那一轮**
+- **口语关键词**：**`aleph chat history` 说 Total 但明明只显示了一部分** / **翻不到更早的消息 / before 游标返回空** / **打开往期会话前面的消息不见了** / **对话从中间开始** / **我发的一整行显示成好几短行** / 另一个标签页的回答跑到我这来了 / 我下一句发错会话了 / 房间里看不见队友在说话 / 打开一个正在跑的会话什么也不动 / core 重启后红点不动了 / 重启后 Stop 键一直卡着 / 出错的那一轮别的端看不到 / **手机上发了消息什么都不出来** / **iOS Panel 只有我自己的气泡** / **手机上要退出去再进来才看到回答** / **重连之后那一轮再也不动了** / **TUI 里蹦出别的会话的输出** / **TUI attach 上去停不掉正在跑的那一轮**
 
 - **代码锚点**：
   - 服务端 — `src/gateway/execution_engine/engine.rs`（`announce_turn_end` 单一源 · `active_run_for_session`）、`session_run_registry.rs::run_id_for`、`execution_adapter.rs::active_run_for_session`（默认 `None`）、`handlers/agent.rs::AgentRunManager::active_run_for_session`、`handlers/chat.rs::handle_history`（响应新增 `active_run`）
+  - 游标单位与展示标签（round-5）— `session_store/types.rs::stamp_millis`（分界在全 crate 的唯一应用；`instant()` 经它表达）、`session_store/mod.rs::{get_history_before(before: Option<DateTime<Utc>>), paginate_before, mixed_unit_cursor_tests}`、`session_manager/ops/crud.rs::{stamp_millis_sql, get_history, get_history_before}`、`handlers/chat.rs::{parse_before, history_total, the_transcript_length_is_counted_before_the_window_is_read}`、`aleph_protocol::session_thread::HistoryWindow`、`interfaces/cli/src/commands/chat_cmd.rs::history_footer`
+  - 窗口与气泡宽度（round-4）— `handlers/chat.rs::handle_history`（响应新增 `total`）、`session_store/mod.rs::SessionStore::history_len`（默认实现 + SQLite `COUNT(*)` 覆写 `session_manager/ops/crud.rs`）、`views/chat/state/mod.rs::{DEFAULT_HISTORY_LIMIT, HISTORY_PAGE, history_window_gap, ChatState::{history_limit, history_has_more, history_above}}`、`api/chat.rs::parse_history_total`、`views/chat/messages.rs::{MessageList 的载入更早控件, bubble_width_tests}`
   - 客户端（Panel）— `platform/wide/views/chat/events.rs::resolve_target`（三步解析）、`state/sessions.rs`（登记三写者 `adopt_session` / `start_new` / `ensure_active`；重连两半 `settle_runs_absent_from` / **`rejoin_target`**；`set_session_key` / `reset_running_baseline`）、**`state/reattach.rs::reattach_after_connect`（唯一的重连修复，挂 app root）**、`components/chat_sidebar.rs::hydrate_and_follow`、`context.rs::connection_epoch`、`views/chat/state.rs::settle_abandoned_run`、**`platform/phone/chat/{mod,history,composer,thread}.rs`（phone 的四个登记点）**
   - 客户端（TUI）— `interfaces/tui/src/tui/app/events.rs`（`frame_belongs_here` 三答 · `adopt_active_run` · `RunAccepted` 豁免）、`app/mod.rs::session_reconciled`、`commands.rs::{active_run_from_history, attach_session}`
 - **职责**：让**同一条会话线程**同时被多个终端观看而不互相污染，并让任意一端在**重连 / core 重启**之后把自己的视图重建到与服务端一致。
-- **状态**：✅ 2026-08-10（对标 codex `thread-store/local/writer_lock.rs` 的"一个线程一个写者"与 pi `LiveSession.connections` + `ServerSnapshot.revision` 的"逐连接快照"）· **round-2 ✅ 2026-08-23**（phone 从来收不到帧 / 重连只结算不重接 / TUI 未知 run 一律收下——见本节末尾）。
+- **状态**：✅ 2026-08-10（对标 codex `thread-store/local/writer_lock.rs` 的"一个线程一个写者"与 pi `LiveSession.connections` + `ServerSnapshot.revision` 的"逐连接快照"）· **round-2 ✅ 2026-08-23**（phone 从来收不到帧 / 重连只结算不重接 / TUI 未知 run 一律收下——见本节末尾）· **round-4 ✅ 2026-08-28**（往期会话缺开头：硬编码 50 行的尾部窗口 + 服务端 `before` 游标零客户端；用户气泡百分比宽度解析到自己身上）· **round-5 ✅ 2026-08-28**（round-4 的四条遗留：`before` 游标与它比较的那一列不共用单位解析 ⇒ 对 58% 的行是报成功的 no-op；两次读的顺序；CLI 把窗口长度印在 "Total" 后面）。
 
 - **对标结论（先说不抄什么）**：codex 的 writer lock 是**文件级跨进程**互斥，Aleph 的等价物更强且已在位——`SessionRunRegistry` 的 per-session claim（执行层）+ `SessionActor` 的单任务串行 append（存储层，且带 seq 冲突自愈重试），跨进程那一层由 `~/.aleph/data/aleph.lock` 单例覆盖。pi 的显式 `attach`/`detach` + `requireAttached` 也**不移植**：Aleph 的投递模型是 topic + 逐连接可见性投影，加一张 attach 表就是给同一个问题制造第二个真源。真正缺的是 pi 那个模型**顺带**提供的两样东西——**帧到对话的权威路由**，和**重连时的基线协商**。
 
@@ -3295,7 +3297,102 @@ round-2 结尾留了三条，本轮全部收掉。共同形状：**三条都不�
 
 ---
 
-### 6.10 白板画布 (Whiteboard Canvas · 2026-08-17，画廊入左栏轮同日)
+#### round-4（2026-08-28）：往期会话看不到开头 · 用户气泡莫名换行
+
+> 用户一次报了两条，两条都是**存的字节完全干净、任何断言文本的测试都看不见**的那一类：一条丢内容、一条丢排版。零 worktree（直接在 main 上），改动 9 个文件（`src/` 3 · `interfaces/webchat/` 4 · locales 2）。真机 QA 在本机 `aleph-server`（`http://127.0.0.1:18790`）上跑，1440×900 与 390×844（mobile+touch）两档各一遍。
+
+- **① 打开往期会话缺开头（CRITICAL，修 bug）** —— `chat_sidebar.rs` 里硬编码的 `ChatApi::history(&dash, &key, Some(50))`，而 `session_store::paginate_before` 保留的是**尾部** 50 行 ⇒ 更长的会话打开时**从中间开始**，且**没有任何一处报错**。50 也不是"50 轮"：`messages` 每个助手**步骤**一行（本机实测 6 轮的会话是 88 行、最大的一个 102 行），所以**任何超过约四轮的会话**都中招。
+  服务端的 `before` 游标（`HistoryParams::before`，RFC3339 或裸 Unix 秒，解析不出即无游标）**四轮以来零客户端**——全仓唯一的 `chat.history` 调用点从来没发过它。⚠️ **dead-code 分析对这条断线结构性失明**：服务端那半有测试、客户端那半有调用点，两端都不是死的，死的是它们之间那根没接的线。
+  修法两半：默认窗口抬到 `DEFAULT_HISTORY_LIMIT = 200` 并做成 per-conversation 信号（`ChatState::history_limit`，`clear_session` 复位——不复位的话短会话会继承长会话抬高的窗口，还会继承一个**陈旧的 `history_has_more`**，那是一条肉眼可见的谎话），外加一个"载入更早"控件**加宽窗口重跑那一条水化路径**。
+  ⚠️ **刻意不用 `before` 反向翻页**：水化会 `replay_run`（**追加**，且把一行展开成多行 narration/tool 行），未追踪的行按**页内下标**键控（`hist-{i}`）。前插第二页会同时打乱顺序**并**铸出重复的 `<For>` key。判据一句：**反向翻页之前先问下游是不是按页内下标键控的**。
+
+- **② 「上面还有多少」不能由客户端猜（第二半，同轮）** —— 200 只是把悬崖抬高，取消它缺的是**一个服务端从来没被问过的数**。`chat.history` 只回 `count`（这一页多长），于是客户端只能用 `received >= limit` 猜——**一个客户端在替服务器发明一个它从未说过的答案**，而且它在**恰好等于 limit 行**的会话上是错的（满页 ＝ 完整，被猜成截断）。
+  现响应新增 `total`（整个会话的行数），单一源 `SessionStore::history_len`：默认实现读一遍数长度（对每个 store 都正确），SQLite 覆写成 `COUNT(*)`（`SessionManager::history_len`）。三条边界都写在类型里：
+  - **`Option`，`Err ⇒ None`**。一个读失败的计数是"不知道"，永远不是一个数字。折成 `count` 就等于告诉每个客户端"transcript 是完整的"——**唯一一个朝隐藏内容方向错的答案**。而 transcript 本身已经成功了，一次数不出来的计数不该让整个调用失败。
+  - **两次读**（窗口一次、计数一次），所以中间落进一条消息时控件会晚一轮出现或退休。这与任何快照的偏差同级，且严格优于它取代的那个猜。
+  - **`total` 是整个会话，不是"比游标更老的那部分"**。一个带游标的调用方想知道的是"这条会话往回有多深"，就是这个数；"有多少条比 T 更老"是另一问，应当是另一个方法而不是这里的一个参数。
+  客户端唯一推导点 `state::history_window_gap(received, limit, total)`：给了 `total` 就算术（`saturating_sub`——两次读之间追加的消息会让窗口更长，诚实的读法是"上面没有了"而不是绕回一个巨大的数），没给才回落到猜。**猜绝不作为已给答案的交叉校验**，否则那条唯一会错的路径又被引了回来。
+  于是控件从**楼梯**变成**出口**：知道深度时标签说出确切数目、一次按下取全部；不知道时才退回 `HISTORY_PAGE` 一步。
+
+- **③ 用户气泡莫名换行（CRITICAL，修 bug）** —— 回归引入者是 `48b50182f`（项目房间 / 作者标签），它在 `justify-end` 行与气泡之间插了一层 `flex flex-col items-end gap-0.5`。而气泡的**每一个宽度都是这层的百分比**（`max-w-[80%]` 用户 chip / `w-full` 助手答复），flex item 默认 `flex: 0 1 auto` ＝ shrink-to-fit ⇒ **包装器的宽度就是气泡自己的 max-content 宽度**，百分比因此解析到它本该约束的那个盒子上。真机 800px 列宽实测：
+
+  | | 宽度 | 行数 |
+  |---|---|---|
+  | 用户气泡（坏） | **428px** ＝ 自身 535px 的 80% | **2** |
+  | 用户气泡（回归前） | 535px | 1 |
+  | 短助手答复（坏） | **72px** | — |
+  | 团队短答复（坏） | **72px** | — |
+
+  存的字节干净（没有被插入的换行），纯粹是布局。修法是让包装器声明确定宽度：单智能体 `w-full min-w-0`（`min-w-0` 保留 `bubble_class` 自己文档化的逃生口——宽子元素内部滚动而不是溢出右缘），团队行 `w-full min-w-0` ＋ 团队列 `flex-1`。
+  ⚠️ **团队那一处我一度判成"Telegram 风格的内容宽度是有意的"而打算不动**——重读发现 `bubble_class` 自己的注释逐字写着助手气泡"spans the full column"，即 72px 击穿的是**被写下来的意图**，不是风格选择。判据：**一个"看起来是设计选择"的窄，去读那个类自己的注释说它该多宽**。
+  守卫 `messages.rs::bubble_width_tests::every_wrapper_around_a_bubble_declares_a_definite_width` 写成**规则**而不是那两个已知包装器的名单（第三个布局要能白继承）：追踪最近的 `<div class="flex flex-col …">` 开标签，遇到 `class=bubble_class` 就要求它含 `w-full` 或 `flex-1`，外加 `checked >= 2` 的非空自保断言。**三次证伪过**：摘 `w-full` → 点名 `:1160`；摘 `flex-1` → 点名 `:1118`；把标记挪走 → "saw 0 — reporting green on nothing"。⚠️ 第一版用 `src.split("#[cfg(test)]")` 被本 crate 自己的元守卫 `no_guard_in_this_crate_hand_rolls_the_cfg_test_cut` 当场抓住，现走单一源 `i18n_census::production_lines`。
+
+- **真机 QA（本机 `aleph-server` + chrome-devtools，两档视口）**
+  - **出厂常量（200/200），102 行会话**：`chat.history` 线上 `{count: 102, total: 102}`；**52 个用户气泡 ＝ 磁盘上的 52 行用户消息**，首条与磁盘逐字节同前缀；无按钮、无假的"对话开头"。1440×900：包装器 996px、class 为 `flex flex-col items-end gap-0.5 w-full min-w-0`，助手气泡 996px（**整列**），26 条放得下的单行消息**零条被挤成多行**，最宽的自然宽度 769px 仍在一行。
+  - **390×844（mobile+touch）**：52/52 用户气泡、包装器 362px、助手气泡 362px（整列）、16 条放得下的单行**零条被挤**。phone 复用同一个 `MessageList` 与同一个 `hydrate_and_follow`（`platform/phone/chat/{thread,history}.rs`），所以①②③三条**白继承**——**这条是实测的，不是推断的**。
+  - **控件（临时把常量降到 20/30 重建）**：线上 `{count: 20, total: 102}` ⇒ 只渲染 11 个用户气泡、transcript 从半截开始，按钮标签 **`载入更早的 82 条消息`**（＝ 102 − 20，确切数）。**一次按下** 11 → **52**，第二次取回 `{count: 102, total: 102}`，按钮退休、`对话开头` 出现。
+  - **回落路径（在浏览器里把 `total` 从 wire 上摘掉，模拟旧 core）**：标签变成不带数目的 `载入更早的消息`，窗口按 `HISTORY_PAGE` 一步一步走 **20 → 50 → 80 → 102**，气泡 **11 → 26 → 41 → 52**，最后同样退休并出现开头标记。⚠️ 这条断言**带非空自证**（`history_frames_stripped = 4`, `messages_delivered = 54`）：**0 会同时意味着"回落是对的"和"我的探针根本没跑"**，而第一版探针只覆写了 `addEventListener`、面板走的是 `onmessage`，于是第一次跑出来的"回落不生效"是**仪器没装上**而不是缺陷。
+
+- **⚠️ 仪器判据（本轮两次，方向都是"报出一个并不存在的缺陷"）** —— 判据清单已有的"量具会骗人"在同一个测量里犯了两次，两次都**先怀疑了被测对象**：
+  - **量的是加了 padding 的盒子，不是那行字**。用气泡自身的 `height / lineHeight` 数行数：`py-2` 的 16px padding 让一条只有 `hi` 的气泡读成 `lines: 2`（22.75 + 16 ≈ 38.8，÷22.75 ≈ 1.7 → round → 2），一次就"发现" **26 条** 假的换行。判据：**数行数要量承载文本的那个元素**（`whitespace-pre-wrap` 那一层），不是它外面那个有 padding 的盒子。
+  - **离屏探针没有继承真正的字体栈**。只 copy `font` 简写的离屏 `<div>` 把一段中文量成 259px，而**就地克隆**（插回同一个父节点，继承真实的 CJK fallback）量出来是 **279px**——真实上限 263px，所以它**本来就该换行**。差 20px、2.3%，足以让手机档凭空多出 2 条"缺陷"。判据：**要量"这段字不受约束时有多宽"，就在它自己的位置上克隆它并 `white-space: pre`**，别在文档另一头搭一个看起来配置对了的探针。
+
+- **刻意未做 / 已知边界**
+  - **`DEFAULT_HISTORY_LIMIT = 200` 仍是首屏窗口**，但它**不再是悬崖**：超过它的会话开屏就带着一个说出确切数目、一次按下抵达开头的控件；不再有"静默截断"这一档。
+  - **canvas 与 phone 已实测无同类实例（不是推断）**：`canvas/editor.rs:1237` 的 `absolute top-4 right-4 flex flex-col items-end gap-2` 是同一形状，但它四个子件里唯一的百分比宽度是 `canvas/ai.rs:557` 的 `w-full` textarea，其父 `ai.rs:551` 声明 `w-72`（288px，确定宽度）；`platform/phone/` 全平台零 `max-w-[N%]`，两处 `w-full`（`alerts.rs:153` 的按钮在块级上下文 / `memory/graph.rs` 那处是注释）与六处内联 `width:100%` 的父盒都是块级或显式定尺。
+    ⚠️ **第一遍审计只 grep 了 `max-w-[N%]` 这种方括号写法，漏掉了 `w-full` / `w-1/2` 这一整族也是百分比**——而 canvas 与 phone 的全部候选实例恰好都在那一族里。判据：**"百分比宽度"在 Tailwind 里有两种拼法，扫一种等于扫了一半**。
+  - **TUI / CLI 也调 `chat.history`**（`interfaces/tui/src/tui/commands.rs`、`interfaces/cli/src/commands/{session,chat_cmd}.rs`）。`total` 是**加字段**，它们忽略未知键，行为逐字节不变；给它们接上窗口控件是另一轮的事。
+  - **`total` 与窗口是两次读**，见 ② 的边界；要做成一次读就得改 `get_history_before` 的签名并波及五个实现，收益是消掉一个"晚一轮"的偏差——不值。
+    ⚠️ **round-5 修正**：结论对（不做成一次读），但**能改的不是次数是顺序**，见下。
+
+---
+
+#### round-5（2026-08-28，同日）：处理 round-4 的四条遗留
+
+> 四条里**两条的实际状态与记录不同**，而"记录在案的 gap 开工第一步是回代码确认它还成立"这条判据正是为此存在的。零 worktree，改动 7 个文件（`src/` 4 · `shared/protocol/` 1 · `interfaces/cli/` 1 · `interfaces/webchat/` 1）。**零真机 QA**（本轮全部性质都在进程内可判，唯一需要真机的那条——重连时序——不在本轮范围）。
+
+- **① `before` 游标不是"零客户端"，是"不可能有客户端"（CRITICAL，修 bug）** —— 记录写的是"Panel 拒绝反向翻页，所以这条通道零客户端"，读起来像一次 CUT 候选。真相是它**从来不工作**：`parse_before` 产出的永远是**秒**，而比较的另一边 `MessageRecord.timestamp` 是**混合单位**的列，`paginate_before` 与 SQL 两条路都是裸比较。一个毫秒行是任何秒游标的约 1000 倍 ⇒ 永远不满足"strictly older"。
+  **本机实测**（file backend，327 个会话 / 3030 行）：**1745 行（58%）是毫秒**、1285 行是秒、**2 个会话在同一份 transcript 里两种都有**；三个最大的会话（88 / 83 / 80 行）**全毫秒** ⇒ 对它们的每一次游标调用返回 `{count: 0, messages: []}`——一个成功的应答，客户端只能读成"你已经到开头了"。
+  ⚠️ **它伪装成"没人需要"的方式**：上一轮真机 QA 用的 `agent:main:main`（102 行）**恰好全是秒**——即使当时手动探一次游标也会显示正常。
+  ⚠️ **诊断在这一轮里被收窄过一格**，而那一格决定了测试该放在哪：
+
+  | backend | `messages.timestamp` 单位 | 谁定的 | 游标 |
+  |---|---|---|---|
+  | **file**（本机在用） | **混合** | 生产者：`MessageProjector` 写 `created_at_ms`（毫秒）· `agent_instance` 等写 `timestamp()`（秒） | **坏的** |
+  | SQLite | 一律秒 | `add_message_full` **丢弃**调用方的戳、自己盖 `now()` | 一直是对的 |
+
+  第一版测试想在 SQLite 上造混合单位，跑出来的 `left` 是**插入顺序**（所有戳相等）——SQLite 上这个情形**结构上造不出来**。端到端的混合单位测试因此落在 file backend（`session_store/mod.rs::mixed_unit_cursor_tests`），并在 doc 里写明这不是覆盖缺口而是两个 store 的性质差异。
+  **修法**：单位解析收敛成一个**总函数** `types::stamp_millis`（`instant()` 现在也经它表达，所以分界在全 crate 只有一次应用），游标类型从 `Option<i64>`（"约定是秒"）换成 `Option<DateTime<Utc>>` ⇒ **传错单位从空页变成编译错误**（改完第一次编译，三处调用点全部报错，全在同一个既有测试里）。SQL 侧 `stamp_millis_sql()` 从同一个常量 format 出来，`WHERE` 与 **`ORDER BY` 一起归一化**——`get_history` 也要改，否则 `get_history_before(before=None)` 委托过去会由我自己造出一个新分歧；`messages` 表**只有 `session_key` 一条索引，`timestamp` 上没有**，所以这个表达式零索引代价。
+  ⚠️ **刻意仍不用 `before` 反向翻页**：`replay_run` 追加 + `hist-{i}` 页内下标键控这条阻塞与单位无关，round-4 的判断不变。
+
+- **② 两次读——不做成一次读（记录对），但顺序错了（记录没说）** —— `total` 与窗口是两次读，中间可以落进一条消息，而**顺序决定偏差朝哪边**。原来是先窗口后计数 ⇒ `total > received` ⇒ 在**短于 limit 的会话**上渲染出一个假的「载入更早的 1 条消息」按钮（`clear_session` 的注释逐字把这类东西叫作 "a visible lie"）。改成先计数后窗口 ⇒ 只可能 `received > total` ⇒ `saturating_sub` ⇒ 0 ⇒ 不出控件，且长会话上自愈（下一次按下缩小差额）。
+  ⚠️ 客户端 `history_window_gap` 的 doc **本来就是按"先计数"写的**（"a message appended in between makes `received` the larger"）——代码和它不一致，说谎的是代码。
+  守卫是**源码级**的（`chat.rs::the_transcript_length_is_counted_before_the_window_is_read`）：运行时两种顺序在安静的 store 上返回相同结果，差别只出现在没有单测会调度的交错里；替代方案是一个在两次调用之间追加的 store double，代价约 30 个委托方法只为钉一条语句顺序。扫描止于函数**列 0 的收尾大括号**（语法终点，不是行数），先 `.replace('\r', "")`。已证伪：把 `total` 移进 `Ok` 臂 → 点名 offset 并说出后果。
+
+- **③ TUI 没问题，CLI 在撒谎（修 bug）** —— 记录写的是"TUI/CLI 忽略新字段，给它们接窗口控件是另一轮的事"。核实后：**TUI `attach_session` 发的是 `{"session_key": key}`，不带 limit ⇒ 全量**，`session export` 同理——它们从来没有截断问题，**这是查过的不是推断的**，所以给它们加机件正是 R10 禁止的（零消费者）。
+  真正的缺陷在 `aleph chat history --limit N`：footer 打印 `Total: {count} messages`，而 `count` 是**窗口长度** ⇒ 102 行的会话上印 `Total: 20 messages`。**一个"展示用"的标签比一个缺失的字段贵：缺失读起来像缺失，错的读起来像事实。**
+  修法沿用本仓对这一族的既定解药（`aleph_protocol::{workspace, session_thread, providers}` 的前三次）：新增 `session_thread::HistoryWindow{count, total}` + `above()` / `is_complete()`，两个客户端**共用同一份算术**（Panel 的 `history_window_gap` 现在委托给它，消掉第二份 `saturating_sub`），对账测试落在**同时依赖两侧的那个 crate**（`alephcore` 的 handler 测试把真实响应反序列化进契约类型）。`count` 刻意**没有 `#[serde(default)]`** ⇒ 服务端改名是响亮失败，不是一列悄悄开始描述别的东西。
+  footer 三态，第二三态的区别是重点：窗口**就是**会话 → 保留 `Total:` 原措辞（现在它是真的）· 窗口是切片 → 说出 `Showing N of M · K earlier not shown`（并说怎么取全部，因为 `--limit` 是用户自己给的、可逆）· 服务端没报 total → **什么都不声称**（`Showing N`）。
+
+- **④ 回退路径的证明（记录对，剩下的那半已收口）** —— 浏览器里摘 `total` 对**客户端那一半**是充分的（执行的确实是客户端代码，输入逐字节相同），记录这一点没错。真正没有断言的是**服务端那一半**：`.ok()` 承诺"数不出来不能让整个调用失败"。
+  收口方式是**构造而非测试**：抽出 `history_total(store, key) -> Option<usize>`——返回类型**没有 `Result` 可以 `?` 出去**，且这个函数**看不见 `count`**，所以那句唯一会撒谎的 `unwrap_or(count)` 在做决定的地方**不可表达**。这比一个 30 方法的 double 便宜，也比一条词法守卫强。
+
+- **⚠️ 本轮自己踩到的四条（都记在附录 C）**
+  - **我删掉了两个测试模块，而全量跑是 17313 passed / 0 failed。** 一次 `s[:start] + new + s[end:]` 的 `end` 去搜 `}\n\n/// …`，匹配到的是**更靠后一个模块**的收尾大括号 ⇒ `delete_from_seq_tests` 与 `owner_scope_tests`（共 14 779 字节）被一起吞掉。**测试套件对"少了几条测试"结构性失明**——这是它唯一看不见的一类损坏，所以收尾必须跑一遍「HEAD 的函数/类型名集合 ⊆ 现在的」对账（本轮它一次点名，并把一处**有意的改名**和这一处**事故**分开）。tell 在 diff 的删除行数上：`592 ++++----` 出现在一个我只打算加约 200 行的文件上。恢复后 `git diff` 对那两个模块**零删除行**，且 12 个改动文件的类型/常量/模块对账 CLEAN。
+  - **变异红了八条，而我最看重的两条没红。** 第一次变异是"去掉行侧归一化、游标留毫秒"，它对**全毫秒**转录恰好还是对的；真实的历史缺陷是"**秒**游标 vs 毫秒行"。换成那个变异后，正好是**声称能抓它的那四条**红、既存六条不受连累。**红的条数多不等于红对了。**
+  - **`i64::MIN.abs()` 溢出**（debug panic / release 回绕）——这行 `.abs()` 是 `instant()` 里**先于本轮存在**的，既存测试只试过 `i64::MAX`。写"未表示的戳要被放置而不是丢弃"这条测试时炸出来，现改 `checked_abs`。同一个 reader 在两种 profile 下对同一个存储字节行为不同。
+  - **玩具数值区分不了单位。** 首版纯核测试用 `10_000` 当"毫秒"，而分界是 `1e11` ⇒ 它被正确地读成秒，测试红在自己的输入上。分界按设计只对真实纪元值有意义（常量 doc 逐字这么写），所以这一族测试必须用真实 epoch 值。
+
+- **刻意未做 / 已知边界（round-5）**
+  - **`before` 仍然零产品客户端。** 本轮让一个已发布的 `Open` 类参数**按它文档所说的那样工作**，没有给它接消费者。CUT 仍在桌面上，但它是对外行为变更（移除已文档化的 RPC 参数），且这一问在仓里**没有第二个答案**——Panel 的加宽窗口答的是"最后 N 行"，表达不了"比 T 更老"。
+  - **读取顺序的守卫是源码级的**，重排会红，但**语义上的重排（比如把计数搬进另一个 helper 再在窗口之后调用）它看不见**。
+  - **SQLite 的 `messages.timestamp` 记的是 INSERT 时刻不是事件时刻**（`add_message_full` 丢弃投影器的 `created_at_ms`）。这是本轮读出来的、与游标相邻但独立的保真问题，**未改**——改它要迁移存量并重新回答"这一列是什么"。
+  - **`session export` 的 `exported {count} messages` 未改**：那条路径不发 limit ⇒ `count == total`，那句话是真的。
+  - **TUI 未接 `total`**：它不截断，所以没有可说的事；若将来有人给它加 `limit`，必须同批接上窗口提示，否则就是本轮修掉的那个 P1 换一张脸。
+  - **file backend 上每次 attach 解析两遍整份 transcript**（一次给 `history_len` 的默认实现、一次给窗口）——round-4 引入，本轮只改了顺序没改次数。**便宜的规避不存在**：`read_transcript` 会跳过解析不出的行，所以一个"只数非空行"的覆写会比 `get_history` 多报，而那正好渲染成一条幻影的"还有 1 条更早的"。真要省，得让计数和窗口共用一次读，即 ② 里已经裁定"不值"的那条签名改动。
+
+---
+
 ### 6.10 白板画布 (Whiteboard Canvas · 2026-08-17，画廊入左栏轮同日)
 
 > 子系统参考（架构/数据模型/并发协议/安全边界/刻意不做清单的全文）在 [CANVAS.md](CANVAS.md)；spec 母本与逐条偏差记录在 `docs/superpowers/specs/2026-08-16-panel-canvas-whiteboard-design.md`。本节只做落点索引。
@@ -3611,6 +3708,13 @@ round-2 结尾留了三条，本轮全部收掉。共同形状：**三条都不�
 - **唯一同时覆盖三者的做法：相信一个颜色之前，先说出你预期的那个具体后果，然后专门去查那个后果。** 不是 diff，不是颜色，也不是一个你自己写的探针。本轮三次抓住它的分别是：「`gates` 本该从 15 变成 16 而它没变」·「这个数应该是 1 而它是 3，那就先怀疑我的量具」·「同一个变异在另一棵树上是红的」。
 - **⚠️ 两个都自洽的分区，未必在回答同一个问题——可比的只有它们各自的总数。** 上面第 3 例里，**两边都精确求和**（`11+1421+307 = 1739`，`73+1458+203 = 1734`），而这恰恰不是证据：两个不同的谓词当然会各自求对自己那个对象的和。真正的差别是谓词不同（「首个标记在第 0 列」≠「前缀切完什么都不剩」），所以只有"总数"这一半可比——而那一半正好产出了 C.1 里那个真发现。**先怀疑探针**：它是没有测试的那一个。更好的做法是**让探针去调实现自己的 helper** 而不是重新推导——本轮这么做的那位复核者，figures 是唯一复现得了的。
 - **一条没被证伪过的守卫不算守卫**（本仓旧判据），而这里是它欠的后半句：**在真正会被读到的那棵树里破坏它**，并且去查**你点名的那个后果**而不是颜色。
+
+**⚠️ 上面三例的方向都是"绿得太容易"。第四种方向是反的，而且更能骗人：仪器凭空报出一个并不存在的缺陷。** 一次假 GREEN 只是没抓到东西；一次假 RED 会让人去改**本来是对的**代码。2026-08-28 的 §6.9 round-4 真机 QA 在同一次测量里犯了两次，两次的第一反应都是先怀疑被测对象：
+
+4. **量的是加了 padding 的盒子，不是那行字** —— 用气泡自身的 `height / lineHeight` 数行数，而 `py-2` 的 16px padding 让一条只有 `hi` 的单行气泡读成 `lines: 2`（22.75 + 16 ≈ 38.8，÷ 22.75 ≈ 1.7 → round → 2）。一次就"发现" **26 条**假的换行——**恰好是这一轮真正在修的那个缺陷的形状**，所以它看起来完全可信。判据：**数行数要量承载文本的那个元素**，不是它外面那个有 padding 的盒子。
+5. **离屏探针没有继承真正的字体栈** —— 只 copy `font` 简写的离屏 `<div>` 把一段中文量成 259px，而**就地克隆**（插回同一个父节点，继承真实的 CJK fallback）量出来是 **279px**，真实上限 263px ⇒ 它**本来就该换行**。差 20px / 2.3%，足以在手机档凭空造出 2 条"缺陷"。判据：**要量"这段字不受约束时有多宽"，就在它自己的位置上克隆它并 `white-space: pre`**，别在文档另一头搭一个看起来配置对了的探针。
+
+- **⚠️ 而一个报"什么都没发生"的探针，和一个根本没装上的探针，读数完全相同。** 同一轮里，为了验证"服务端不报 `total` 时控件退回一页一步"，探针在浏览器里把 `total` 从 wire 上摘掉——第一版只覆写了 `WebSocket.addEventListener`，而面板走的是 `onmessage`，于是"回落不生效"这个结论是**仪器没装上**。修法不是把两条路径都覆写就完了，而是**让探针自报它开了几枪**（`history_frames_stripped = 4` / `messages_delivered = 54`）：**0 会同时意味着"回落是对的"和"我的探针根本没跑"**，而这两件事的处置相反。同族即 C.3 的"扫描要有自保断言"，只是这次的扫描是一次真机注入。
 - **操作条款：一个补丁脚本必须在写入任何一处之前校验它的每一个锚点。** 失效形态是"写了一半、在移动过的那个锚点上退出"，那比一处都没写更糟——树因此停在一个没有人设计过的状态里。
 - **便宜的做法值得记**：`src/bin/aleph-server/**` 与 lib 是不同的 cargo target，所以 `cargo test -p alephcore --lib` 在只有 boot 文件变动时**不会重建**，而一条源码级守卫是在运行时把那些文件当**文本**读的。**构建一次，然后直接跑那个测试二进制**——每次变异 ~15 s 而不是 ~8 min。同一个性质既让这个陷阱便宜地踩进去，也让这条纪律便宜地遵守。
 
