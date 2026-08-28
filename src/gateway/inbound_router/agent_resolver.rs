@@ -6,6 +6,7 @@ use crate::gateway::channel::InboundMessage;
 use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
 use crate::gateway::router::SessionKey;
 use crate::gateway::routing_config::DmScope;
+use crate::routing::identity_links::resolve_linked_peer_id;
 
 use super::InboundMessageRouter;
 
@@ -274,10 +275,18 @@ impl InboundMessageRouter {
             // `SessionKey::peer(agent, "dm:{sender}")` idiom sanitized the
             // `dm:` prefix into the peer id, yielding `peer:dm-{sender}` and
             // splitting history between the two routing paths.
+            //
+            // Apply identity_links resolution on this zero-config fallback so
+            // a deployment configured with `[session] identity_links` and no
+            // `[[bindings]]` still collapses the same person across channels
+            // into one session, mirroring what `resolve_route` does on the
+            // bindings path (`src/routing/resolve.rs::build_session_key`).
+            let peer_id = resolve_linked_peer_id(&self.config.identity_links, channel, msg.sender_id.as_str())
+                .unwrap_or_else(|| msg.sender_id.as_str().to_string());
             SessionKey::dm(
                 agent_id,
                 channel,
-                msg.sender_id.as_str(),
+                peer_id.as_str(),
                 match self.config.dm_scope {
                     DmScope::Main => crate::routing::session_key::DmScope::Main,
                     DmScope::PerPeer => crate::routing::session_key::DmScope::PerPeer,

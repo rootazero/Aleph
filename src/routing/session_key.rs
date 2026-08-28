@@ -679,7 +679,7 @@ impl SessionKey {
             Some(&["peer", ref rest @ ..]) if !rest.is_empty() => Some(Self::DirectMessage {
                 agent_id,
                 channel: String::new(),
-                peer_id: rest.join(":"),
+                peer_id: sanitize_component(&rest.join(":")),
                 dm_scope: DmScope::PerPeer,
                 epoch: 0,
             }),
