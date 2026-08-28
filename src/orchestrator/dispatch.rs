@@ -197,6 +197,25 @@ pub enum TerminateReason {
     ReactiveCompactExhausted,
     /// `CancellationToken` fired before the loop reached `Done`.
     Cancelled,
+    /// The run ended in a `HarnessError` and no site inside the loop had
+    /// recorded a cause of its own — a provider auth failure, a transport
+    /// error, a guardrail abort. Distinct from [`Completed`](Self::Completed),
+    /// which is this enum's `Default` and therefore what an unrecorded failure
+    /// reported on every terminal frame before this variant existed.
+    ///
+    /// Written by the orchestrator bridge (`AgentHarnessRunner::run`), not by
+    /// the loop. The loop's own `Err` arm deliberately writes nothing but
+    /// `Cancelled`, so that the causes it *did* record (`ReactiveCompactExhausted`,
+    /// `StopHookHalt`, the caps) survive the exit; the bridge fills this in
+    /// only when the reason is still the default, which is unambiguous because
+    /// nothing in the crate ever assigns `Completed` (pinned by
+    /// `harness_bridge::tests::no_site_records_a_completed_terminate_reason`).
+    ///
+    /// **Not a cap**: [`is_hit_limit`](Self::is_hit_limit) is `false`, next to
+    /// `Completed` and `Cancelled`. The failure text itself reaches the user on
+    /// the separate `RunError` frame — this variant exists only to stop the
+    /// terminal summary from claiming the run finished cleanly.
+    Failed,
     /// A budget cap (`HitMaxIterations` / `ContextBudgetExhausted` /
     /// `MaxOutputTokensExhausted`) fired AFTER the model already emitted
     /// useful partial text in this run. The harness preserves the
@@ -219,11 +238,17 @@ pub enum TerminateReason {
 
 impl TerminateReason {
     /// `true` for every cap-style exit. Equivalent to the legacy
-    /// `hit_limit: bool`; `Completed` and `Cancelled` return `false`. Use
-    /// to populate [`FlowOutcome::hit_limit`] so the two fields never drift.
+    /// `hit_limit: bool`; `Completed`, `Cancelled` and `Failed` return
+    /// `false`. Use to populate [`FlowOutcome::hit_limit`] so the two fields
+    /// never drift.
+    ///
+    /// `Failed` sits with the other two on purpose: a run that died on a
+    /// provider error did not *reach* a limit, and the surfaces that gate on
+    /// this flag say "you ran out of budget, raise it" — advice that is simply
+    /// wrong for a crash.
     #[must_use]
     pub const fn is_hit_limit(&self) -> bool {
-        !matches!(self, Self::Completed | Self::Cancelled)
+        !matches!(self, Self::Completed | Self::Cancelled | Self::Failed)
     }
 
     /// Short stable string for logging / metrics — never localized.
@@ -243,6 +268,7 @@ impl TerminateReason {
             Self::DiminishingReturns => "diminishing_returns",
             Self::ReactiveCompactExhausted => "reactive_compact_exhausted",
             Self::Cancelled => "cancelled",
+            Self::Failed => "failed",
             Self::BudgetExhaustedPartialResult { .. } => "budget_exhausted_partial_result",
         }
     }

@@ -505,6 +505,16 @@ impl InboundMessageRouter {
                 // corpse ticket wedging the lane (mirrors the engine's
                 // `RunSlot` session claim).
                 Some(ticket) => {
+                    // `attempt` is `FnMut` and `deliver_with_ticket` calls it
+                    // more than once — with the SAME `emitter`, whose
+                    // `run_complete_handled` latch takes the first terminal
+                    // frame and drops the rest. That is safe for exactly one
+                    // reason: the only outcome that loops is
+                    // `ExecutionError::AgentBusy`, which `execution_engine/gate.rs`
+                    // returns *before* dispatch, so a refused attempt produces
+                    // no `RunComplete` to spend the latch on. Any other outcome
+                    // returns immediately. If a second retryable error is ever
+                    // added here, check what it emits first.
                     let mut attempt = || {
                         execution_adapter.execute(request.clone(), agent.clone(), emitter.clone())
                     };

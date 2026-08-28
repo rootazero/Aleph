@@ -531,6 +531,10 @@ fn terminate_badge(reason: &str) -> (&'static str, &'static str, Style) {
         }
         "stall_timeout" | "turn_timeout" => (mark_warn(), "执行超时", Style::Warning),
         "cancelled" => (mark_warn(), "已取消", Style::Warning),
+        // A run that died rather than capped. Its own badge, not the `_`
+        // fallback's neutral "已结束": the receipt is the only line `aleph exec`
+        // prints about how the run ended, and "ended" reads as "finished".
+        "failed" => (mark_fail(), "运行失败", Style::Error),
         "budget_exhausted_partial_result" => (mark_warn(), "预算耗尽（部分结果）", Style::Warning),
         _ => (mark_warn(), "已结束", Style::Warning),
     }
@@ -816,6 +820,23 @@ mod tests {
         };
         let footer = render_summary_footer(&s);
         assert!(footer.contains("目标未达成"));
+    }
+
+    /// A crashed run gets its own badge rather than the `_` fallback's
+    /// neutral "已结束" — this receipt is the only line `aleph exec` prints
+    /// about how the run ended, and "ended" reads as "finished".
+    #[test]
+    fn footer_names_a_failed_run_as_failed() {
+        let s = RunSummary {
+            terminate_reason: Some("failed".into()),
+            ..Default::default()
+        };
+        let footer = render_summary_footer(&s);
+        assert!(footer.contains("运行失败"), "{footer}");
+        assert!(
+            !footer.contains("完成"),
+            "a failed run must not carry the clean badge: {footer}"
+        );
     }
 
     #[test]

@@ -773,6 +773,21 @@ mod cap_notice_tests {
         assert!(cap_notice_for(&summary_with(None)).is_none());
     }
 
+    /// A run that died rather than capped still owes the channel a word.
+    ///
+    /// `"failed"` is already human, so it rides the `other => other`
+    /// fall-through rather than earning a map entry — this pins that the
+    /// fall-through is what produces the notice, so a future label map that
+    /// starts swallowing unknown tokens fails here instead of silently
+    /// restoring "a crash reads as a clean finish".
+    #[test]
+    fn a_failed_run_gets_a_notice() {
+        assert_eq!(
+            cap_notice_for(&summary_with(Some("failed"))).as_deref(),
+            Some("\n\n\u{26a0}\u{fe0f} failed")
+        );
+    }
+
     #[test]
     fn hit_max_iterations_renders_label() {
         let s = cap_notice_for(&summary_with(Some("hit_max_iterations"))).expect("notice");

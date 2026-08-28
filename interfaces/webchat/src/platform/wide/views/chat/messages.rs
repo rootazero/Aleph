@@ -877,6 +877,7 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
     let message_run_id =
         message.with_untracked(|m| m.as_ref().map(|m| run_id_from_message_id(&m.id)));
     let run_for_cost = message_run_id.clone().unwrap_or_default();
+    let run_for_halt = message_run_id.clone().unwrap_or_default();
 
     // Reactive: a message that streams into an assistant final-answer bubble
     // can gain tool calls after this row first mounts (the pre-Task-4 code
@@ -1016,6 +1017,29 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
                  title=title>
                 {money}
                 {tokens.map(|t| view! { <span class="opacity-70">{t}</span> })}
+            </div>
+        })
+    };
+
+    // Why this run stopped, when it did not stop cleanly. Sits beside
+    // `cost_view` because it answers the other half of "what happened here" and
+    // shares its lifetime exactly (same frame, same map key, same snapshot).
+    // Reactive for the same reason: the terminal summary lands after the bubble
+    // mounts. Renders nothing on the clean path — `parse_run_halt` returns
+    // `None` for `"completed"`, for a core that never sent the field, and for a
+    // failure core declined to characterise.
+    let halt_view = move || {
+        if is_user() {
+            return None;
+        }
+        let halt = chat.run_halts.with(|m| m.get(&run_for_halt).cloned())?;
+        let label = halt.label(i18n.get_locale());
+        Some(view! {
+            <div class="mt-1 text-[10px] leading-tight font-mono text-warning \
+                        flex items-center gap-1 tabular-nums"
+                 title=format!("terminate_reason: {}", halt.reason)>
+                <span>"\u{26a0}\u{fe0f}"</span>
+                <span>{label}</span>
             </div>
         })
     };
@@ -1166,6 +1190,7 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
                                 {error_view}
                                 {model_view}
                                 {cost_view}
+                                {halt_view}
                             </div>
                         </div>
                     </div>
@@ -1217,6 +1242,7 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
                             {error_view}
                             {model_view}
                             {cost_view}
+                            {halt_view}
                         </div>
                     </div>
                 }.into_any()

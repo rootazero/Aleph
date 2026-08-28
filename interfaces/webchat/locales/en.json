@@ -389,7 +389,20 @@
     "load_earlier_n_one": "Load {{ count }} earlier message",
     "load_earlier_n_other": "Load {{ count }} earlier messages",
     "loading_earlier": "Loading earlier messages…",
-    "history_start": "Beginning of the conversation"
+    "history_start": "Beginning of the conversation",
+    "halt_hit_max_iterations": "hit max iterations",
+    "halt_context_budget_exhausted": "context budget exhausted",
+    "halt_max_output_tokens": "max output tokens reached",
+    "halt_budget_partial": "budget exhausted (partial result)",
+    "halt_consecutive_failures": "repeated tool failures",
+    "halt_empty_responses": "empty model responses",
+    "halt_reactive_compact": "context overflow, compaction failed",
+    "halt_stall_timeout": "stalled",
+    "halt_turn_timeout": "turn timed out",
+    "halt_verifier_veto": "verifier blocked",
+    "halt_stop_hook": "halted by stop hook",
+    "halt_cancelled": "cancelled",
+    "halt_failed": "failed"
   },
   "canvas": {
     "title": "Canvas",
