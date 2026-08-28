@@ -78,6 +78,18 @@ impl AgentEnvFilter {
     ///
     /// Returns a string suitable for use in a SQL `WHERE` clause that filters
     /// on the `agent` column.
+    ///
+    /// # ⚠️ Do not use in new production SQL paths
+    ///
+    /// This builds the clause by **string concatenation** with a hand-rolled
+    /// escape (doubling ASCII single quotes) — a SQLite-specific surface
+    /// that bypasses the type system and silently miscompiles under a
+    /// different dialect or a non-ASCII quote. It is currently referenced
+    /// only by this module's own tests; there is no production call site.
+    /// New code that needs to filter by agent MUST use `rusqlite` parameter
+    /// binding (`conn.execute("... WHERE agent = ?1", params![id])` or
+    /// `params_from_iter` for the `IN` form) instead of embedding this
+    /// fragment.
     #[must_use]
     pub fn to_sql_filter(&self) -> String {
         match self {

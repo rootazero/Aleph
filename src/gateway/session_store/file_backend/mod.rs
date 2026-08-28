@@ -102,6 +102,10 @@ impl FileSessionStore {
     }
 }
 
+/// How far back [`FileSessionStore::sweep_archive_events`] replays delete
+/// events for archived sessions. See the method's doc comment.
+const ARCHIVE_SWEEP_DAYS: i64 = 7;
+
 impl FileSessionStore {
     pub fn new(config: FileSessionStoreConfig) -> Result<Self, SessionStoreError> {
         std::fs::create_dir_all(&config.base_dir).map_err(|e| {
@@ -119,6 +123,67 @@ impl FileSessionStore {
     pub fn with_event_bus(self, bus: Arc<GatewayEventBus>) -> Self {
         *self.event_bus.write().unwrap_or_else(|e| e.into_inner()) = Some(bus);
         self
+    }
+
+    /// Re-emit `sessions.changed(reason="delete")` for sessions archived by
+    /// a previous run whose delete event may never have reached subscribers.
+    ///
+    /// `delete_session` renames the session dir into `.archive/<date>/` and
+    /// then emits the delete event. The two steps are adjacent but not
+    /// atomic: a crash in the (tiny, synchronous) window between them leaves
+    /// the session archived — correctly gone from `list_sessions` — while
+    /// connected Panels never receive the delete frame and keep showing the
+    /// conversation until their next full refresh. This sweep closes that
+    /// window on the next boot: for every archive entry from the last
+    /// [`ARCHIVE_SWEEP_DAYS`] days it re-reads the archived `metadata.json`
+    /// (the dir name is sanitized and NOT reliably reversible, so the
+    /// original key comes from the file) and re-emits the delete event.
+    /// The event is idempotent for Panels (removing an already-absent entry
+    /// is a no-op), so replaying recent archives on every boot is safe.
+    pub async fn sweep_archive_events(&self) {
+        let archive_root = self.config.base_dir.join(".archive");
+        let mut dates = match tokio::fs::read_dir(&archive_root).await {
+            Ok(d) => d,
+            Err(_) => return, // no archive dir — nothing to sweep
+        };
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(ARCHIVE_SWEEP_DAYS);
+        let mut swept = 0usize;
+        while let Ok(Some(date_entry)) = dates.next_entry().await {
+            let date_name = date_entry.file_name().to_string_lossy().to_string();
+            // Only sweep recent archives: older ones predate any plausible
+            // live Panel session list, and re-emitting years of deletes is
+            // pure noise on every boot.
+            let Ok(date) = chrono::NaiveDate::parse_from_str(&date_name, "%Y-%m-%d") else {
+                continue;
+            };
+            let Some(date_dt) = date.and_hms_opt(0, 0, 0) else { continue };
+            if chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(date_dt, chrono::Utc)
+                < cutoff
+            {
+                continue;
+            }
+            let mut keys = match tokio::fs::read_dir(date_entry.path()).await {
+                Ok(k) => k,
+                Err(_) => continue,
+            };
+            while let Ok(Some(key_entry)) = keys.next_entry().await {
+                let meta_path = key_entry.path().join("metadata.json");
+                let Ok(contents) = tokio::fs::read_to_string(&meta_path).await else {
+                    continue;
+                };
+                let Ok(meta) = serde_json::from_str::<SessionMetadata>(&contents) else {
+                    continue;
+                };
+                self.emit_session_changed(&meta.key, "delete", None);
+                swept += 1;
+            }
+        }
+        if swept > 0 {
+            info!(
+                swept,
+                "Re-emitted delete events for recently archived sessions (crash-window sweep)"
+            );
+        }
     }
 
     /// Inject the raw-memory writer that `close_session` uses to emit

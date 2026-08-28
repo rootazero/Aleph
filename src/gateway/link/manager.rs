@@ -73,6 +73,10 @@ pub async fn scan_link_configs(dir: &Path) -> Result<Vec<LinkConfig>, LinkManage
     Ok(configs)
 }
 
+/// Maximum byte length of an expanded `${env.VAR}` value. See
+/// [`expand_env_vars`] for the rationale.
+const MAX_EXPANDED_ENV_LEN: usize = 4096;
+
 /// Recursively expand `${env.VAR_NAME}` references in a JSON value.
 ///
 /// * String values matching the pattern are replaced with the environment
@@ -81,6 +85,15 @@ pub async fn scan_link_configs(dir: &Path) -> Result<Vec<LinkConfig>, LinkManage
 /// * Object values are expanded key-by-key.
 /// * Array values are expanded element-by-element.
 /// * All other value types are returned unchanged.
+///
+/// **Bounds**: an expanded value larger than [`MAX_EXPANDED_ENV_LEN`] bytes
+/// is rejected (the original `${env.…}` string is kept and a warning is
+/// logged). A `link.yaml` referencing a multi-megabyte environment variable
+/// would otherwise silently embed the whole blob into a link config —
+/// settings keys are bounded by the channel adapter downstream, so the
+/// blast radius is config bloat and confusing adapter errors. Every
+/// expansion is also logged (var NAME only, never the value) so the audit
+/// trail shows which env vars flowed into which link configs.
 pub fn expand_env_vars(settings: &serde_json::Value) -> serde_json::Value {
     match settings {
         serde_json::Value::String(s) => {
@@ -88,7 +101,22 @@ pub fn expand_env_vars(settings: &serde_json::Value) -> serde_json::Value {
             if let Some(rest) = s.strip_prefix("${env.") {
                 if let Some(var_name) = rest.strip_suffix('}') {
                     match std::env::var(var_name) {
-                        Ok(val) => return serde_json::Value::String(val),
+                        Ok(val) => {
+                            if val.len() > MAX_EXPANDED_ENV_LEN {
+                                warn!(
+                                    var = var_name,
+                                    len = val.len(),
+                                    max = MAX_EXPANDED_ENV_LEN,
+                                    "Environment variable value exceeds expansion limit; keeping reference unexpanded"
+                                );
+                            } else {
+                                tracing::debug!(
+                                    var = var_name,
+                                    "expanded environment variable into link settings"
+                                );
+                                return serde_json::Value::String(val);
+                            }
+                        }
                         Err(_) => {
                             warn!(
                                 var = var_name,

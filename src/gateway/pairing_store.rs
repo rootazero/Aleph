@@ -324,7 +324,9 @@ impl PairingStore for SqlitePairingStore {
         code: &str,
         user_id: Option<&str>,
     ) -> Result<PairingRequest, PairingError> {
-        let conn = self.conn.lock().await;
+        // `mut` because the approve+consume pair runs inside
+        // `conn.transaction()`, which borrows the connection mutably.
+        let mut conn = self.conn.lock().await;
 
         // Find the request
         let request: Option<(String, String, String, String)> = conn
@@ -372,7 +374,13 @@ impl PairingStore for SqlitePairingStore {
         // its `VALUES` clause defaults straight to the owner via the same
         // `COALESCE(?4, ?5)`.
         let now = Utc::now().to_rfc3339();
-        let tx = conn.unchecked_transaction()?;
+        // `conn.transaction()` (not `unchecked_transaction`): the checked
+        // variant rolls back automatically if the closure panics or the
+        // transaction is dropped without commit — the approve+consume pair
+        // must be atomic (a crash between the INSERT and the DELETE would
+        // otherwise leave the request pending while the sender is already
+        // approved).
+        let tx = conn.transaction()?;
         tx.execute(
             "INSERT INTO approved_senders (channel, sender_id, approved_at, user_id)
              VALUES (?1, ?2, ?3, COALESCE(?4, ?5))
