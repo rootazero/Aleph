@@ -28,7 +28,11 @@ pub struct GeneralConfig {
     /// these providers are tried in order. Names must match keys in [providers].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fallback_providers: Vec<String>,
-    /// Session store backend: "sqlite" (default) or "file".
+    /// Session store backend: "file" (default) or "sqlite".
+    ///
+    /// The default is the one `default_session_store_backend` returns, which is
+    /// the JSON/JSONL file store. This doc said "sqlite (default)" for as long
+    /// as the function beside it returned "file".
     #[serde(default = "default_session_store_backend")]
     pub session_store_backend: String,
 }

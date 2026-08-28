@@ -135,21 +135,150 @@ fn the_sql_and_rust_spellings_of_stamp_millis_agree() {
     }
 }
 
-/// Every SQL statement that RANKS `messages` rows must rank them through
-/// [`SessionManager::stamp_millis_sql`], never the bare `timestamp` column.
+/// Every module that writes SQL against `messages`.
 ///
-/// The column holds two units (see [`MessageRecord::timestamp`]). Today the
-/// SQLite half happens to be uniformly seconds — `add_message_full` overwrites
-/// whatever the producer stamped — so ordering by the raw column is *currently*
-/// correct, and that is exactly the problem: the correctness is on loan from an
-/// invariant nothing enforces, and two of the statements below choose the
-/// boundary of a DELETE (`truncate_messages` behind `/undo`,
-/// `compact_session`). Anyone repairing the adjacent fidelity bug — SQLite
-/// records INSERT time rather than event time — makes the column mixed and
-/// those two start keeping and dropping the wrong rows, silently.
+/// One list, shared by both halves of the ordering discipline below, because
+/// two lists is how a file joins one guard and not the other. A file that stops
+/// containing SQL fails each guard's self-check rather than passing vacuously.
+const MESSAGE_SQL_FILES: [(&str, &str); 5] = [
+    ("session_manager/ops/crud.rs", include_str!("ops/crud.rs")),
+    ("session_manager/ops/query.rs", include_str!("ops/query.rs")),
+    (
+        "session_manager/ops/identity.rs",
+        include_str!("ops/identity.rs"),
+    ),
+    (
+        "session_manager/ops/modify.rs",
+        include_str!("ops/modify.rs"),
+    ),
+    (
+        "session_store/sqlite_backend/mod.rs",
+        include_str!("../session_store/sqlite_backend/mod.rs"),
+    ),
+];
+
+/// `\r` first (this repo is checked out CRLF on Windows, and a scanner that
+/// anchors on `\n` finds nothing there while staying green), then comment
+/// lines — a doc comment naming a pattern is documentation, not code, and the
+/// whole point of these guards is that prose and code are separate. Then runs
+/// of whitespace and Rust string continuations collapse to single spaces so a
+/// wrapped `ORDER BY` still reads as one phrase.
+fn flatten(src: &str) -> String {
+    let body = src
+        .replace('\r', "")
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut out = String::with_capacity(body.len());
+    let mut prev_ws = false;
+    for ch in body.chars() {
+        if ch == '\\' {
+            continue;
+        }
+        if ch.is_whitespace() {
+            if !prev_ws {
+                out.push(' ');
+            }
+            prev_ws = true;
+        } else {
+            out.push(ch);
+            prev_ws = false;
+        }
+    }
+    out
+}
+
+/// A DELETE names its rows through the same ordered `SELECT` the reads use —
+/// never by translating a boundary row's id into a second statement.
+///
+/// **The spelling this bans would be correct today.** The transcript's order is
+/// `id` (`SessionStore::history_page`), so `id > <boundary>` and "everything
+/// past the first N in reader order" name the same set. It is banned because
+/// the two spellings are only equal by coincidence of the current order, and
+/// this repo has now changed that order twice:
+///
+///   * `messages.timestamp` was the insert clock, so ranking by it WAS ranking
+///     by `id`, and `compact_session` / `truncate_messages` translated their
+///     boundary into `id < ?` / `id > ?` correctly.
+///   * `add_message_full` stopped overwriting the producer's stamp, and the two
+///     came apart: with rows `(id 1, t 300)`, `(id 2, t 100)`, `(id 3, t 200)`
+///     and `keep = 2` the boundary landed on id 2 and `id < 2` deleted the
+///     NEWEST message while the oldest survived — `Ok(1)`, no error.
+///   * The order was then settled on `id`, and they coincide again.
+///
+/// A boundary translated between statements is correct only while some
+/// unwritten invariant holds; one ordered `SELECT` that names its own victims
+/// has no second statement to disagree with. That is the same move round-6 made
+/// on `history_page` — a thing with an order to get wrong became a thing with
+/// one call.
+///
+/// It is free: both sites already name their victims this way, so there are
+/// ZERO occurrences and no allowlist — and an allowlist here would be a second
+/// place that decides which deletes may be ordered wrongly.
+///
+/// A statement that legitimately needs a row-id range (there is none today)
+/// should name its rows through the ordered subquery too; if one ever genuinely
+/// cannot, the exemption belongs in the code as a differently-shaped predicate,
+/// not as an entry here.
+#[test]
+fn no_delete_boundary_is_applied_in_a_different_order_than_it_was_ranked() {
+    let mut delete_sites = 0_usize;
+    for (label, src) in MESSAGE_SQL_FILES {
+        let flat = flatten(src);
+        // Self-check: a scanner that quietly stops seeing DELETEs reports the
+        // same clean result as a codebase with no violations.
+        delete_sites += flat.matches("DELETE FROM ").count();
+        for pattern in ["id < ?", "id > ?", "id <= ?", "id >= ?"] {
+            assert!(
+                !flat.contains(pattern),
+                "{label} translates a boundary row into `{pattern}` instead of \
+                 letting one ordered SELECT name the rows it deletes. That is \
+                 two statements that must agree about the order, and this repo \
+                 has changed the transcript's order twice — the last time, a \
+                 boundary chosen in event order and applied in insert order \
+                 deleted the NEWEST message in the session and returned \
+                 success. Name the rows with the ordered SELECT itself — \
+                 `id IN (SELECT id ... ORDER BY id ... LIMIT -1 OFFSET ?)` — \
+                 the way `compact_session` and `truncate_messages` do."
+            );
+        }
+    }
+    assert!(
+        delete_sites >= 6,
+        "only {delete_sites} `DELETE FROM` sites found across {} files; this \
+         guard used to see more, so either statements were removed or \
+         `flatten` stopped matching them",
+        MESSAGE_SQL_FILES.len()
+    );
+}
+
+/// Every SQL statement that READS the `timestamp` column as a quantity must
+/// read it through [`SessionManager::stamp_millis_sql`], never bare.
+///
+/// Since the transcript's order became `id`, the only such statement is the
+/// `before` cursor — but the ban stays whole-column rather than
+/// cursor-specific, because the property is about the column, not about which
+/// clause happens to touch it this month.
+///
+/// The column holds two units (see [`MessageRecord::timestamp`]). It used to be
+/// uniformly seconds on the SQLite half — `add_message_full` overwrote whatever
+/// the producer stamped — so ordering by the raw column was *then* correct, and
+/// that was the point of writing this guard before repairing the adjacent
+/// fidelity bug: the correctness was on loan from an invariant nothing
+/// enforced, and two of the statements below choose the boundary of a DELETE
+/// (`truncate_messages` behind `/undo`, `compact_session`). The fidelity bug is
+/// repaired now, so the loan has been called in: the column really is mixed and
+/// a raw comparison really does keep and drop the wrong rows.
 ///
 /// Prose in `MessageRecord::timestamp`'s doc already said the unit was
 /// ambiguous. Prose does not stop the next sincere fixer; this does.
+///
+/// Its sibling
+/// [`no_delete_boundary_is_applied_in_a_different_order_than_it_was_ranked`]
+/// covers the DELETEs, and
+/// [`no_message_query_orders_by_the_stamp`] covers the orderings — the stamp is
+/// no longer allowed to be an order at all, normalized or not.
 ///
 /// Source-level because the property is about the SQL that is *written*, not
 /// about any one query's output: a statement ordering by the raw column returns
@@ -159,56 +288,7 @@ fn the_sql_and_rust_spellings_of_stamp_millis_agree() {
 /// [`MessageRecord::timestamp`]: crate::gateway::session_store::types::MessageRecord::timestamp
 #[test]
 fn no_message_query_ranks_by_the_raw_timestamp_column() {
-    /// `\r` first (this repo is checked out CRLF on Windows, and a scanner that
-    /// anchors on `\n` finds nothing there while staying green), then comment
-    /// lines — a doc comment naming a pattern is documentation, not code, and
-    /// the whole point of this guard is that prose and code are separate. Then
-    /// runs of whitespace and Rust string continuations collapse to single
-    /// spaces so a wrapped `ORDER BY` still reads as one phrase.
-    fn flatten(src: &str) -> String {
-        let body = src
-            .replace('\r', "")
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let mut out = String::with_capacity(body.len());
-        let mut prev_ws = false;
-        for ch in body.chars() {
-            if ch == '\\' {
-                continue;
-            }
-            if ch.is_whitespace() {
-                if !prev_ws {
-                    out.push(' ');
-                }
-                prev_ws = true;
-            } else {
-                out.push(ch);
-                prev_ws = false;
-            }
-        }
-        out
-    }
-
-    // Every module that writes SQL against `messages`. A file that stops
-    // containing SQL fails the self-check below rather than passing vacuously.
-    let files: [(&str, &str); 5] = [
-        ("session_manager/ops/crud.rs", include_str!("ops/crud.rs")),
-        ("session_manager/ops/query.rs", include_str!("ops/query.rs")),
-        (
-            "session_manager/ops/identity.rs",
-            include_str!("ops/identity.rs"),
-        ),
-        (
-            "session_manager/ops/modify.rs",
-            include_str!("ops/modify.rs"),
-        ),
-        (
-            "session_store/sqlite_backend/mod.rs",
-            include_str!("../session_store/sqlite_backend/mod.rs"),
-        ),
-    ];
+    let files = MESSAGE_SQL_FILES;
 
     // `timestamp,` (a column in a SELECT list) and `timestamp)` (inside
     // `stamp_millis_sql` itself) are projections, not rankings, and are not
@@ -249,6 +329,274 @@ fn no_message_query_ranks_by_the_raw_timestamp_column() {
          matching them",
         files.len()
     );
+}
+
+/// No statement may ORDER `messages` by the stamp — normalized or raw.
+///
+/// The transcript's order is the order its rows were recorded: `messages.id`
+/// here, file position in `transcript.jsonl`. The reasoning is on
+/// [`SessionStore::history_page`]; what this guard adds is that the SQL half
+/// cannot quietly re-acquire a second opinion. It had one for four rounds —
+/// SQLite ranked `(stamp_millis_sql, id)` while the file store served and
+/// deleted by position — and the two agreed only because `add_message_full`
+/// was overwriting every producer's stamp with the insert clock.
+///
+/// Source-level because no runtime test on THIS database can see it: every
+/// production producer writes a stamp that is monotonic in append order, so a
+/// stamp-ordered store and a position-ordered store return identical rows for
+/// all real data. The divergence needs a hand-built transcript to observe —
+/// which is what `delete_boundary_order_tests` and
+/// `transcript_order_tests` below build, and which is why the source rule and
+/// the runtime tests are both needed rather than either alone.
+///
+/// [`SessionStore::history_page`]: crate::gateway::session_store::SessionStore::history_page
+#[test]
+fn no_message_query_orders_by_the_stamp() {
+    let mut recording_order_sites = 0_usize;
+    for (label, src) in MESSAGE_SQL_FILES {
+        let flat = flatten(src);
+        recording_order_sites += flat.matches("ORDER BY id").count();
+        for pattern in ["ORDER BY {stamp}", "ORDER BY (CASE"] {
+            assert!(
+                !flat.contains(pattern),
+                "{label} orders `messages` by the timestamp (`{pattern}`). The \
+                 transcript's order is the order its rows were recorded — \
+                 `ORDER BY id` here, file position in the file backend. \
+                 Ordering by the stamp gives this backend a second opinion \
+                 about the same conversation, and two of these statements \
+                 choose the victims of a DELETE. See \
+                 `SessionStore::history_page` for why recording order won."
+            );
+        }
+    }
+    // The ban above keys on the spelling `{stamp}`, which is a BINDING NAME —
+    // `let s = Self::stamp_millis_sql()` renames it and walks straight past.
+    // (Found by mutation: the renamed spelling tripped only the self-check
+    // below, and only because it happened to remove two `ORDER BY id` sites
+    // with it.) The thing that cannot be renamed is the call itself, so the
+    // real rule is a COUNT: `stamp_millis_sql` is called from exactly one
+    // place, the `before` cursor in `history_sql`. Ordering by it needs a
+    // second call site, and there is no spelling of a second call site that
+    // this does not see.
+    //
+    // A genuinely new predicate over this column would also trip it. That is
+    // intended: it is a column with two units, one caller, and a written
+    // reason — a second one should have to say so out loud.
+    let calls: usize = MESSAGE_SQL_FILES
+        .iter()
+        .map(|(_, src)| {
+            flatten(src)
+                .matches("stamp_millis_sql()")
+                .count()
+                // `pub(crate) fn stamp_millis_sql() -> String` is the
+                // definition, not a call.
+                .saturating_sub(usize::from(src.contains("fn stamp_millis_sql()")))
+        })
+        .sum();
+    assert_eq!(
+        calls, 1,
+        "`stamp_millis_sql()` is called from {calls} places; it must be called \
+         from exactly one — the `before` cursor in `history_sql`. Ranking by \
+         it is what this guard exists to prevent, and the ban above can be \
+         evaded by renaming the interpolated binding, so the count is the part \
+         that holds. If you are adding a legitimate second PREDICATE over \
+         `messages.timestamp`, say why here and raise the number."
+    );
+
+    // Self-check: a scanner that stops seeing the orderings reports the same
+    // clean result as a codebase with none.
+    assert!(
+        recording_order_sites >= 8,
+        "only {recording_order_sites} `ORDER BY id` sites found across {} \
+         files; this guard used to see 8, so either statements were removed or \
+         `flatten` stopped matching them",
+        MESSAGE_SQL_FILES.len()
+    );
+}
+
+/// The runtime half of the guards above: what a boundary applied in the wrong
+/// order actually did to a session.
+///
+/// A source guard can only say "this spelling is banned". These say what the
+/// banned spelling produced, in the one arrangement that tells the two orders
+/// apart — a transcript whose event order differs from its insert order, which
+/// is what any reconciler, backfill or import creates and what
+/// `add_message_full` now faithfully records.
+#[cfg(test)]
+mod delete_boundary_order_tests {
+    use super::*;
+    use crate::gateway::session_store::types::MessageRecord;
+    use crate::gateway::session_store::SessionStore;
+
+    /// Real epoch seconds, not 100/200/300: `stamp_millis` classifies by
+    /// magnitude, so a fixture built from toy numbers is a fixture that has
+    /// never been on the interesting side of any threshold this code reads.
+    const T_OLD: i64 = 1_700_000_100;
+    const T_MID: i64 = 1_700_000_200;
+    const T_NEW: i64 = 1_700_000_300;
+
+    fn row(content: &str, timestamp: i64) -> MessageRecord {
+        MessageRecord {
+            id: content.into(),
+            role: "user".into(),
+            content: content.into(),
+            timestamp,
+            metadata: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            tool_call_id: None,
+            tool_name: None,
+        }
+    }
+
+    /// Recording order `new, old, mid` — ids 1, 2, 3 — with stamps that put
+    /// them in a different order (`old, mid, new`), so the two candidate orders
+    /// disagree about every position.
+    ///
+    /// No production producer writes a transcript like this: the projector
+    /// stamps `created_at_ms`, monotonic in `seq`, and the other two stamp
+    /// `Utc::now()`. That is the point — the divergence between "the order rows
+    /// were recorded" and "the order their stamps claim" is unobservable on
+    /// real data, so it has to be built by hand or not seen at all.
+    async fn session_whose_events_are_out_of_insert_order(
+        temp: &tempfile::TempDir,
+        keep: usize,
+    ) -> (SessionManager, SessionKey) {
+        let manager = SessionManager::new(SessionManagerConfig {
+            db_path: temp.path().join("test.db"),
+            // High enough that nothing auto-compacts underneath the test.
+            max_messages: 100,
+            compaction_keep: keep,
+            ..Default::default()
+        })
+        .unwrap();
+        let key = SessionKey::main("out-of-order");
+        manager.get_or_create(&key).await.unwrap();
+        for (content, at) in [("new", T_NEW), ("old", T_OLD), ("mid", T_MID)] {
+            manager
+                .append_message(&key, row(content, at))
+                .await
+                .unwrap();
+        }
+        (manager, key)
+    }
+
+    async fn contents(manager: &SessionManager, key: &SessionKey) -> Vec<String> {
+        manager
+            .get_history(key, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.content)
+            .collect()
+    }
+
+    /// The transcript is served in the order its rows were recorded.
+    ///
+    /// This is the whole decision in one assertion, and it is the premise the
+    /// two DELETE tests below stand on: "the newest `keep`" and "the oldest
+    /// `keep`" are only meaningful once "the order" has one answer.
+    #[tokio::test]
+    async fn the_transcript_is_served_in_the_order_it_was_recorded() {
+        let temp = tempdir().unwrap();
+        let (manager, key) = session_whose_events_are_out_of_insert_order(&temp, 5).await;
+
+        let served = contents(&manager, &key).await;
+
+        assert_eq!(
+            served,
+            vec!["new".to_string(), "old".to_string(), "mid".to_string()],
+            "the transcript came back as {served:?}. It must come back in the \
+             order its rows were recorded; `old, mid, new` is this backend \
+             sorting by the producers' stamps, which is a second opinion about \
+             the same conversation that the file backend cannot hold."
+        );
+    }
+
+    /// Compaction keeps the last `compaction_keep` messages of the transcript.
+    ///
+    /// **This reverses a previous round's assertion**, which had a name, a
+    /// reason and a passing test: `compaction_drops_the_oldest_not_the_earliest_inserted`
+    /// kept `["mid", "new"]` here, because the transcript's order was then the
+    /// producers' stamps. The order is now the order rows were recorded
+    /// (`SessionStore::history_page`), so the tail is `["old", "mid"]` and the
+    /// row compaction drops is `new` — the first one recorded. Nothing about
+    /// the old assertion was wrong for the order it was written under; the
+    /// order changed.
+    ///
+    /// What is NOT reversed, and is what this test still protects: the victims
+    /// are named by the same ordered `SELECT` that defines the order. The
+    /// spelling that preceded both rounds took the id of the boundary row and
+    /// deleted `id < that`, which under stamp ranking destroyed the most recent
+    /// message in the conversation and returned `Ok(1)`.
+    #[tokio::test]
+    async fn compaction_keeps_the_tail_of_the_recorded_order() {
+        let temp = tempdir().unwrap();
+        let (manager, key) = session_whose_events_are_out_of_insert_order(&temp, 2).await;
+
+        let deleted = manager.compact_session(&key).await.unwrap();
+
+        assert_eq!(
+            deleted, 1,
+            "expected exactly the one row over the keep line"
+        );
+        let kept = contents(&manager, &key).await;
+        assert_eq!(
+            kept,
+            vec!["old".to_string(), "mid".to_string()],
+            "compaction kept {kept:?} — it must keep the LAST two rows of the \
+             transcript. `mid, new` is the keep line being drawn by the \
+             producers' stamps instead."
+        );
+    }
+
+    /// `/undo` keeps the first `keep_count` rows of the transcript — the same
+    /// cut the file backend makes with `drain(keep_count..)`, which is the
+    /// reason this order was chosen over the stamps.
+    ///
+    /// Reversed from `undo_drops_the_newest_not_the_latest_inserted` for the
+    /// reason given on the compaction test above.
+    ///
+    /// Two defects met here originally. The boundary landed on id 3 ("mid") and
+    /// `id > 3` matched nothing, so the tail survived; and the call could not
+    /// get that far anyway, because the FTS transaction was shadowed instead of
+    /// committed and the second `BEGIN` was refused — `session.truncate` had
+    /// never once succeeded on this backend. That is what `.expect("truncate
+    /// must reach the database at all")` is still here for.
+    #[tokio::test]
+    async fn undo_keeps_the_head_of_the_recorded_order() {
+        let temp = tempdir().unwrap();
+        let (manager, key) = session_whose_events_are_out_of_insert_order(&temp, 5).await;
+
+        let result = manager
+            .truncate_messages(&key, 2)
+            .await
+            .expect("truncate must reach the database at all");
+
+        assert_eq!(result.messages_removed, 1, "expected the single last row");
+        let kept = contents(&manager, &key).await;
+        assert_eq!(
+            kept,
+            vec!["new".to_string(), "old".to_string()],
+            "`/undo` kept {kept:?} — it must keep the FIRST two rows of the \
+             transcript. `old, mid` is the cut being made by the producers' \
+             stamps instead."
+        );
+    }
+
+    /// `keep_count == 0` clears the session. It used to be a hand-written arm;
+    /// `OFFSET 0` names every row, so the arm went away and this is what says
+    /// the behaviour did not go with it.
+    #[tokio::test]
+    async fn undo_to_zero_clears_the_session() {
+        let temp = tempdir().unwrap();
+        let (manager, key) = session_whose_events_are_out_of_insert_order(&temp, 5).await;
+
+        let result = manager.truncate_messages(&key, 0).await.unwrap();
+
+        assert_eq!(result.messages_removed, 3);
+        assert!(contents(&manager, &key).await.is_empty());
+    }
 }
 
 #[tokio::test]
@@ -727,4 +1075,89 @@ async fn goal_tree_budget_sums_own_plus_member_deltas_only() {
         total, 340,
         "only own row + enrolled member delta count; unenrolled spend is invisible"
     );
+}
+
+/// The SQLite half of the idle sweep's existence floor. The file half — and the
+/// reasoning both share — is in
+/// `session_store::file_backend::reap_tests::cleanup_expired_measures_idleness_from_when_the_session_existed`
+/// and on [`SessionStore::cleanup_expired`].
+///
+/// This half is the newer hazard of the two: SQLite's `last_active_at` was
+/// `Utc::now()` at insert until `add_message_full` began following the message,
+/// so before that a conversation could not arrive already-expired no matter
+/// what its stamps said. The file backend has taken the message clock since it
+/// was written.
+///
+/// [`SessionStore::cleanup_expired`]: crate::gateway::session_store::SessionStore::cleanup_expired
+#[cfg(test)]
+mod idle_sweep_floor_tests {
+    use super::*;
+    use crate::gateway::session_store::SessionStore;
+    use rusqlite::params;
+
+    const DAY: i64 = 86_400;
+
+    /// Set both clocks directly. `last_active_at` alone would be reachable
+    /// through `append_message`, but `created_at` has exactly one writer —
+    /// session creation — which is what makes it usable as a floor.
+    fn set_clocks(manager: &SessionManager, key: &SessionKey, idle_secs: i64, existed_secs: i64) {
+        let now = chrono::Utc::now().timestamp();
+        manager
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE sessions SET last_active_at = ?1, created_at = ?2 WHERE key = ?3",
+                params![now - idle_secs, now - existed_secs, key.to_key_string()],
+            )
+            .unwrap();
+    }
+
+    async fn exists(manager: &SessionManager, key: &SessionKey) -> bool {
+        <SessionManager as SessionStore>::get_metadata(manager, key)
+            .await
+            .unwrap()
+            .is_some()
+    }
+
+    #[tokio::test]
+    async fn cleanup_expired_measures_idleness_from_when_the_session_existed() {
+        let temp = tempdir().unwrap();
+        let manager = SessionManager::new(SessionManagerConfig {
+            db_path: temp.path().join("test.db"),
+            session_expiry_secs: (30 * DAY) as u64,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let aged = SessionKey::ephemeral("aged");
+        let replayed = SessionKey::ephemeral("replayed");
+        manager.get_or_create(&aged).await.unwrap();
+        manager.get_or_create(&replayed).await.unwrap();
+        // Quiet for 100 days and around for 100 days.
+        set_clocks(&manager, &aged, 100 * DAY, 100 * DAY);
+        // A conversation from 100 days ago, projected into this row moments
+        // ago: an import, a backfill, a reconciler replaying an old event.
+        set_clocks(&manager, &replayed, 100 * DAY, 5);
+
+        let deleted = <SessionManager as SessionStore>::cleanup_expired(&manager)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            deleted, 1,
+            "expected exactly the session that has been idle as long as it has \
+             existed"
+        );
+        assert!(
+            !exists(&manager, &aged).await,
+            "the genuinely idle session survived — the floor disabled the sweep \
+             instead of bounding it"
+        );
+        assert!(
+            exists(&manager, &replayed).await,
+            "a session created five seconds ago was swept as expired, because \
+             the conversation it records happened 100 days ago"
+        );
+    }
 }

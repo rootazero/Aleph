@@ -3477,6 +3477,45 @@ round-2 结尾留了三条，本轮全部收掉。共同形状：**三条都不�
 
 ---
 
+#### round-7（2026-08-28，同日）：round-6 的三条遗留 —— 删除边界、会话时钟、"生产者没说时间"
+
+> round-6 的「刻意未做」里有两条是同一个缺陷的两半，而其中一条**当天就变成了活的**：round-6 让 `messages.timestamp` 记事件时刻，于是「排序键与删除键不同序」从纸面隐患变成可触发的删错行。改动 8 个文件，**零真机 QA**。
+
+- **① 一个边界在 A 序里被选出、却在 B 序里被应用（CRITICAL，修 bug）** —— `compact_session` 与 `truncate_messages` 都按 `(stamp_millis_sql, id)` 排名取出一个 `threshold_id`，然后 `DELETE … id < ?` / `id > ?`——**`id` 是 INSERT 序**。两序恒合过（该列就是 insert 时钟），round-6 之后不合了。实测：行 `(id1,t300) (id2,t100) (id3,t200)`、`keep = 2` ⇒ 压缩**保留了 `["old","mid"]`、删掉了 `"new"`**，即会话里最新的那条消息被销毁、而压缩唯一该丢的那条活着，返回 `Ok(1)`。
+  修法不是让两序对齐，是**让删除集由同一条排好序的查询自己命名**（`id IN (SELECT id … ORDER BY … LIMIT -1 OFFSET ?)`），于是没有"边界"需要在两个序之间翻译——与 round-6 ②「把有顺序变成只有一次调用」是同一招。`keep_count == 0` 那条手写臂顺带消失（`OFFSET 0` 就是全体）。
+  守卫两半：既有的 `no_message_query_ranks_by_the_raw_timestamp_column` 只管**排序**，新增 `no_delete_boundary_is_applied_in_a_different_order_than_it_was_ranked` 管**应用**（禁 `id < ?` / `id > ?`；重写后存量为 **0**，所以零豁免清单）。变异证过分工：一个排序正确、只把边界应用错的版本让**旧守卫全绿、新守卫点名 `modify.rs`**。
+
+- **② 顺手抓到的 P1：一次 `/undo` 在 sqlite 上从未成功过** —— `truncate_messages` 有**两个** `unchecked_transaction()`，第一个（FTS）被 `let tx = ` **遮蔽而非提交**。Rust 里遮蔽不 drop，它活到作用域尾，所以第二个 `BEGIN` 跑在第一个里面，SQLite 拒绝：逐字 `DatabaseError("cannot start a transaction within a transaction")` ⇒ **`session.truncate` 自那笔"audit fix"起每次都是 INTERNAL_ERROR**。默认 backend 是 file，所以只打到显式配 sqlite 的装机。（顺带：`default_session_store_backend()` 返回 `"file"` 而它旁边的 doc 写着 `"sqlite" (default)`，已改。）
+
+- **③ `sessions.last_active_at` 跟随消息（round-6 遗留第 3 条）** —— 这一列答的是**「这段对话里最新的那件事什么时候发生的」**，读者三类：列表的 recency 排序 · 客户端渲染的 `updated_at` · 两个会 DELETE 的 idle sweep。三类都要事件钟；独立佐证是 `migration.rs::repair_session_metadata` 重建元数据时取的正是 `messages.last().instant()`。故 SQLite 跟随 file backend：`add_message_full` 里**一次解析、两个投影**（`at_ms` 给行，`now = at.timestamp()` 给会话），不是两次 `Utc::now()`。
+  ⚠️ **一度想加单调 `max()` 防止倒退（倒退会让 sweep 提前删），推翻了**：`get_or_create` 每回合用 `Utc::now()` 写这一列，`max` 会让最粗的那个写者永久钉住它 ⇒ 又变回 insert 钟。**跨写者的单调不是保护，是让粒度最粗的写者赢。**
+
+- **④ "生产者没说时间"收敛到一处（round-6 遗留第 2 条）** —— 两个 backend 对它写下过**互相矛盾**的理由：SQLite「insert 时刻是关于这一行唯一为真的陈述」，file「不要凭空发明，否则会延长一个输入已知是垃圾的会话的寿命」。谁对？**file 那条保护的是元数据字段，而把有毒的戳放进了转录**——1970 领跑每一次排序、并坐在每个按该列排名的 DELETE 的被删端。所以判据搬到**入口**：`types::producer_instant(Option<i64>) -> Option<DateTime>`（`None` / `0` / 不可表示 ⇒ `None`），两个 backend 各自 `unwrap_or_else(Utc::now)`。生产的四个生产者全都盖戳，所以这是**结算一条规则**而不是一个活症状。
+
+#### round-8（2026-08-28，同日）：round-7 的三条遗留 —— 权威序、单位归一、idle 地板；**并补上这一族的第一次真机 QA**
+
+- **① 权威序 = 行被记录的次序（用户裁定，2026-08-28）** —— round-7 只让删除集与**自己的**排名一致，没有回答"哪个排名"。而两个 backend 各自有答案：file 按**追加序**服务与删除（`read_transcript` 不排序、`truncate_messages` 是 `drain(keep_count..)`），SQLite 按 `(stamp_millis_sql, id)` 排名。两者恒合过（`add_message_full` 用 insert 时钟覆写每个生产者的戳），round-6 的保真修复让它们**可分**——而其中两条路径是 DELETE，所以"可分"意味着两个 backend 会销毁同一段对话的**不同行**，各自返回成功。
+  裁决：**追加序**（SQLite 五处 `ORDER BY {stamp}` → `ORDER BY id`；`stamp_millis_sql` 只留给 `before` 游标这一个**谓词**）。三条理由，按份量：
+  1. **只有它两个存储都能原生、全序表达**。让 file backend 按戳排序意味着每次读都排一遍，把存量 `timestamp: 0` 的行搬到每段对话的**开头**，且服务出去的顺序不再等于磁盘上的字节。
+  2. **它保因果**。回复被追加在它回答的那条之后；事件钟可以把两者调个个儿（一条在途延迟的频道消息），而"答在问前面"是读者修不回来的。
+  3. **它对真实数据逐字节 no-op**。`session_projector::project_event` 是唯一的追加咽喉，盖 `SessionEventRecord::created_at_ms`（随 `seq` 单调）；`ProjectionReconciler` 只补 `max(seq)` **以上的尾巴**（`watermark` 抑制 `seq <= watermark`，中间的洞永远不补）；另两个生产者盖 `Utc::now()`。所以两序在生产数据上本来就重合——这是结算一条规则，不是修一个活症状。`messages.source_seq` 在非 NULL 处与 `id` 一致，是同一个序的第三个见证。
+  ⚠️ **守卫必须两半**：源码级 `no_message_query_orders_by_the_stamp`（禁 `ORDER BY {stamp}` / `ORDER BY (CASE`，自保断言"至少 8 处 `ORDER BY id`"）只管得了 SQL 那半；**file 那半没有 SQL 可扫**，"它开始排序了"只有一条跨 backend 的运行时测试看得见（`transcript_order_tests::{both_backends_serve_the_transcript_in_recording_order, both_backends_undo_the_same_rows}`）。
+  ⚠️ **本轮推翻了 round-7 自己刚写下的两条断言**（`compaction_drops_the_oldest_not_the_earliest_inserted` / `undo_drops_the_newest_not_the_latest_inserted`）。它们对**它们被写下时的那个序**是正确的；序变了，所以它们变了。两条测试的 doc 逐字说明了这一点，以及**没有**跟着变的那半：删除集仍由同一条排好序的查询命名。
+
+- **② file backend 也在边界归一到毫秒（round-7 遗留第 2 条）** —— 只归一**新行**。两个 backend 从此写同一个单位，`agent_instance` 写秒 / 投影器写毫秒的分裂就此停止扩大。**存量行两侧都不迁**：`stamp_millis` 因此是永久的而非过渡的——没跑过迁移的装机正是还留着旧行的那一台，所以迁移买不到"读者可以不再归一"这唯一的收益。测试断言**裸字段**而不是走读者（每个读者都归一，所以经读者写的测试在没归一的 store 上照样绿）。
+
+- **③ idle sweep 的"存在时长"地板（round-7 遗留第 3 条）** —— round-7 让 SQLite 的 `last_active_at` 跟随消息之后，一段**比它被写下来更早发生**的对话（导入 / 回填 / reconciler 重放旧事件）一落盘就"已闲置 100 天"，两个 sweep 会在 materialise 它的**那一次开机**里把它删掉。判据：`last_active_at` 是量闲置的正确钟、却是错误的**起点**；地板是 `created_at`（唯一写者是会话创建）——**没有东西能闲置得比它存在得还久**。落在三处：两个 backend 的 `cleanup_expired` + file 的 `reap_task_sessions`（sqlite 那侧是默认 no-op，只有 file backend 会为每个 `Isolated` run 建目录）。
+  这不是"接受一个新行为"，是**修一个比 round-7 老得多的隐患**：file backend 自写下之日起就按消息钟比较。既有的 `reaps_only_old_cron_sessions` 是它的控制组，其 `seed` 顺带被改对了（一个真的老会话两个钟都老——只老一个钟描述的是另一种东西）。
+
+- **④ 真机 QA `qa/session_order/run.sh`（这一族的第一次）** —— round-5/6/7 都是"零真机 QA"，理由各自成立；本轮有两条只有 booted server 能settle 的性质：**配置键真的选中一个 backend**（单测在一个进程里建两个 store —— 比较它们的正确做法，但对挑选它们的那个键结构性失明，而 `default_session_store_backend()` 的 doc 漂移正是这个缝），以及 **`session_truncate` 的 RPC 路径**（round-7 ② 那个 P1 只在 handler 面上可见）。
+  夹具的中间那一步是它有意义的原因：服务端写的一切都是单调的，所以一段只是被**驱动**出来的对话，排戳的 store 与排追加序的 store 会给出同样的答案——**不打乱就等于没测**。故 `scramble_stamps.py` 在两次 `chat.history` 之间、服务停机时把戳改成**降序**（`BASE - i*60s`，两个 backend 各自一种拼法：JSONL 就地重写 / `UPDATE messages … WHERE id`），重启后断言服务序**未变**、`session.truncate` 到达数据库、它留下的是**头部**、且两个 backend 销毁**同一批行**。两个 backend 各自一份 scratch `ALEPH_HOME`，所以"它们一致"不可能是"它们读的是同一个文件"。
+
+- **刻意未做 / 已知边界（round-8）**
+  - **`before` 游标是按戳的谓词，服务序是追加序**。两者在生产数据上一致（戳单调），在被打乱的转录上不一致——那正是 QA 夹具制造的状态，而夹具在那一步只断言**服务序**，不断言游标。要让游标也随追加序，得把 `before` 换成一个位置游标，那是一次 wire 改动，且 `before` 的保留本身是 2026-08-28 的用户裁定（`SessionStore::history_page` 的 doc）。
+  - **存量行不迁**（见 ②）。`stamp_millis` / `stamp_millis_sql` 是永久设施。
+  - **`created_at` 的时钟偏斜**：一个 `created_at` 落在未来的会话永远不会被 sweep 掉。方向是安全的（不删），量级由偏斜决定。
+  - **`compact_session` 只有 sqlite 有**（file backend 没有对应动词），所以那一半的跨 backend 一致性无从断言，只有 `/undo` 有。
+
 ### 6.10 白板画布 (Whiteboard Canvas · 2026-08-17，画廊入左栏轮同日)
 
 > 子系统参考（架构/数据模型/并发协议/安全边界/刻意不做清单的全文）在 [CANVAS.md](CANVAS.md)；spec 母本与逐条偏差记录在 `docs/superpowers/specs/2026-08-16-panel-canvas-whiteboard-design.md`。本节只做落点索引。

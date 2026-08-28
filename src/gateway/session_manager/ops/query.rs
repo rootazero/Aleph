@@ -151,20 +151,20 @@ impl SessionManager {
 
         let mut messages = Vec::new();
         if message_limit > 0 {
-            // Ranked through the shared normalizer, not the raw column — the
-            // same expression `get_history` uses, and for the same reason: two
+            // `id` — the order rows were recorded, which is the transcript's
+            // order everywhere (`SessionStore::history_page`). The same
+            // spelling `history_sql` uses, and for the same reason: two
             // spellings of "the trailing N rows" that order differently is a
-            // divergence waiting for the column to hold two units.
-            let stamp = Self::stamp_millis_sql();
+            // divergence between two views of one conversation.
             let mut stmt = conn
-                .prepare(&format!(
+                .prepare(
                     "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
                      tool_call_id, tool_name FROM ( \
                         SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
                         tool_call_id, tool_name \
-                        FROM messages WHERE session_key = ? ORDER BY {stamp} DESC, id DESC LIMIT ? \
-                    ) ORDER BY {stamp} ASC, id ASC"
-                ))
+                        FROM messages WHERE session_key = ? ORDER BY id DESC LIMIT ? \
+                    ) ORDER BY id ASC",
+                )
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
             messages = stmt
                 .query_map(params![&key_str, message_limit as i64], |row| {

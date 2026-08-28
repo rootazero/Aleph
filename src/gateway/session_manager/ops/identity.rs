@@ -73,17 +73,17 @@ impl SessionManager {
         key_str: &str,
         limit: usize,
     ) -> Result<String, rusqlite::Error> {
-        // `stamp_millis_sql`, not the bare column, and an `id` tiebreak: see
-        // `SessionManager::stamp_millis_sql`. Ties had no deterministic order
-        // before, so which of two same-second rows landed in the title sample
-        // was up to the query planner.
-        let stamp = Self::stamp_millis_sql();
-        let mut stmt = conn.prepare(&format!(
+        // `id` — the order rows were recorded, which is the transcript's order
+        // everywhere (`SessionStore::history_page`). It is also total, so the
+        // tie-break this query needed when it ranked the stamps is gone with
+        // the ranking: two rows can share a stamp, and which of them landed in
+        // the derived title was once left to the query planner.
+        let mut stmt = conn.prepare(
             "SELECT role, content FROM messages
              WHERE session_key = ?
-             ORDER BY {stamp} DESC, id DESC
-             LIMIT ?"
-        ))?;
+             ORDER BY id DESC
+             LIMIT ?",
+        )?;
         let rows = stmt
             .query_map(params![key_str, limit as i64], |row| {
                 Ok(format!(
@@ -177,9 +177,14 @@ impl SessionManager {
             .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         let keys: Vec<String> = {
+            // `created_at` as well as `last_active_at`: nothing can have been
+            // idle for longer than it has existed. See
+            // `SessionStore::cleanup_expired`.
             let mut stmt = conn
                 .prepare(
-                    "SELECT key FROM sessions WHERE last_active_at < ? AND session_type = 'ephemeral'",
+                    "SELECT key FROM sessions
+                     WHERE last_active_at < ?1 AND created_at < ?1
+                       AND session_type = 'ephemeral'",
                 )
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
