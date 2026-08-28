@@ -259,8 +259,24 @@ mod tests {
     async fn the_compression_layer_passes_through_a_precompressed_response() {
         use tower::ServiceExt;
 
+        // Discover the precompressed asset rather than naming
+        // `aleph_panel_bg.wasm`: `interfaces/webchat/dist/` is gitignored and
+        // produced by `just wasm`, so on a bare checkout — including this
+        // crate's own CI job, which runs `cargo test` with no WASM toolchain —
+        // that path 404s and the hard-coded version was red for everyone who
+        // had not built the Panel. Its two siblings below
+        // (`brotli_is_served_when_the_client_accepts_it`,
+        // `identity_is_served_when_brotli_is_not_accepted`) already skip on the
+        // same condition; this one was the odd one out in its own module. The
+        // guard for "dist should exist at all" is `check_panel_dist.mjs`.
+        let Some(name) = ControlPlaneAssets::iter()
+            .find(|n| ControlPlaneAssets::get(&format!("{n}.br")).is_some())
+        else {
+            return;
+        };
+
         let request = axum::http::Request::builder()
-            .uri("/aleph_panel_bg.wasm")
+            .uri(format!("/{name}"))
             .header(header::ACCEPT_ENCODING, "br, gzip")
             .body(axum::body::Body::empty())
             .expect("request");

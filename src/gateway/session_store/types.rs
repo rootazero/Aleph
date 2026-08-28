@@ -13,22 +13,40 @@ pub struct MessageRecord {
     /// depends on the backend, and the difference is not that one of them
     /// "writes milliseconds" — it is WHO decides:
     ///
-    /// - The **file** backend preserves whatever the producer put here
-    ///   (`append_transcript` serializes the record verbatim). There are two
-    ///   producers: [`MessageProjector`] stamps `created_at_ms`
-    ///   (milliseconds) and direct writers such as `agent_instance` stamp
-    ///   `timestamp()` (seconds). That is why both spellings can appear inside
-    ///   a SINGLE transcript — measured on a real install, 2026-08-28: 1745 of
-    ///   3030 rows in milliseconds, and two sessions carrying both.
-    /// - The **SQLite** backend never stores a caller's stamp at all
-    ///   (`add_message_full` overwrites it with its own
-    ///   `now().timestamp()`), so its column is uniformly seconds. A separate
-    ///   consequence, out of scope here: those rows record INSERT time rather
-    ///   than event time.
+    /// - The **file** backend used to preserve whatever the producer put here,
+    ///   verbatim. There are two kinds of producer: [`MessageProjector`] stamps
+    ///   `created_at_ms` (milliseconds) and direct writers such as
+    ///   `agent_instance` stamp `timestamp()` (seconds). That is why both
+    ///   spellings appear inside a SINGLE transcript — measured on a real
+    ///   install, 2026-08-28: 1745 of 3030 rows in milliseconds, and two
+    ///   sessions carrying both.
+    /// - The **SQLite** backend keeps the producer's stamp too, normalized to
+    ///   milliseconds on the way in. It used to overwrite the stamp with its
+    ///   own `now().timestamp()` — recording INSERT time rather than event
+    ///   time, and making its column uniformly seconds.
     ///
-    /// The unit cannot simply be corrected at the source: the value doubles as
-    /// the `before` pagination cursor, and every session already on disk would
-    /// have to be migrated with it. So the resolution lives here, at the type,
+    /// **Both** backends now normalize to milliseconds at the boundary, so
+    /// every row written from 2026-08-28 on is in one unit and neither store
+    /// widens the mixture any further. Rows written before that are NOT
+    /// migrated, on either side, which is why [`stamp_millis`] is permanent
+    /// rather than transitional: the install that never runs a migration is
+    /// exactly the install that still holds the old rows, so no reader could
+    /// ever be given the right to stop normalizing — the only thing a migration
+    /// could have bought.
+    ///
+    /// The value is NOT the transcript's order. That is the order the rows were
+    /// recorded — `messages.id`, file position — see
+    /// [`SessionStore::history_page`]. This is data about a row; it is compared
+    /// (the `before` cursor) and rendered, never ranked.
+    ///
+    /// A row nobody dated gets the insert clock on both backends rather than
+    /// 1970 — see [`producer_instant`], which is where "the producer did not
+    /// say when" is decided, once, for both.
+    ///
+    /// The unit could not simply be corrected for the rows already written:
+    /// the value doubles as the `before` pagination cursor, and every session
+    /// on disk would have to be migrated with it. So the resolution lives here,
+    /// at the type,
     /// where both readers and the cursor see the same interpretation — via
     /// [`stamp_millis`], which is the crate's single application of the
     /// boundary. That last clause used to be a promise the cursor did not
@@ -38,6 +56,7 @@ pub struct MessageRecord {
     /// read as "you have reached the beginning".
     ///
     /// [`MessageProjector`]: crate::gateway::session_projector
+    /// [`SessionStore::history_page`]: crate::gateway::session_store::SessionStore::history_page
     pub timestamp: i64,
     pub metadata: Option<Value>,
     /// Tokens the LLM call that produced this message was billed for. Zero on
@@ -156,6 +175,35 @@ pub(crate) fn stamp_millis(raw: i64) -> i64 {
     } else {
         raw * 1000
     }
+}
+
+/// The instant an INCOMING row's producer named — `None` when it named none.
+///
+/// The twin of [`stamp_millis`], which answers the same question for a row
+/// already on disk; this one answers it at the boundary, once, for both
+/// backends. It exists because the two of them used to answer it apart and
+/// differently: `add_message_full` narrowed `0` and unrepresentable magnitudes
+/// to the insert clock while `append_transcript` serialized them verbatim, so
+/// one undated record came back as "now" from SQLite and as 1970 from the file
+/// store. Both spellings had a written reason and the reasons contradicted
+/// each other, which is the shape of a rule with two owners.
+///
+/// Three inputs mean the same thing — "the producer did not say when":
+/// `None` (a caller with no record to speak for, e.g. the `add_message`
+/// convenience), `0` (a producer that left the field at its zero value), and a
+/// magnitude no calendar can represent.
+///
+/// Saying nothing is not the same as saying 1970, and the caller must not
+/// store it as such: a 1970 row leads every ranking, so it heads the
+/// transcript a reader sees and sits at the deleted end of every DELETE that
+/// ranks this column (`truncate_messages`, `compact_session`). Callers resolve
+/// `None` to the insert clock — the one true statement available about a row
+/// nobody dated, and exactly what every such row already got from SQLite.
+#[must_use]
+pub(crate) fn producer_instant(raw: Option<i64>) -> Option<chrono::DateTime<chrono::Utc>> {
+    raw.filter(|r| *r != 0)
+        .map(stamp_millis)
+        .and_then(chrono::DateTime::from_timestamp_millis)
 }
 
 impl MessageRecord {

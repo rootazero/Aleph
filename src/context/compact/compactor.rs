@@ -707,7 +707,29 @@ impl ContextCompactor {
                     let summary_msg = UnifiedMessage::user(summary_text.clone());
 
                     splice_preserved(messages, window_start..window_end, preserved, summary_msg);
-                    self.store_cache(window_start, window_end, window_hash, summary_text);
+                    // Spliced for THIS turn, deliberately not cached.
+                    //
+                    // `cache`'s own doc calls itself "the fingerprint cache of
+                    // the last SUCCESSFUL compaction", and `store_cache` writes
+                    // through to `COMPACTION_CARRYOVER`, a process-wide slot
+                    // that `with_cache_carryover` seeds into every later run on
+                    // this session key. Caching a truncation therefore turned
+                    // one transient 502 (or one 15 s timeout) into a permanent
+                    // verdict: the harness rebuilds `messages` from an
+                    // append-only log, so `hash_window` matches forever, and
+                    // every later turn takes `reapply_cached` and re-splices
+                    // the degraded text without ever retrying the summarizer —
+                    // silently, since `CacheReuse` is excluded from the
+                    // degradation warning. The original turns are still in the
+                    // session log, so what was discarded was recoverable.
+                    //
+                    // This is the same permanence `SummarizerOutcome::Cancelled`
+                    // was split out to avoid; that split fixed the stopped-turn
+                    // arm and left the failed-turn arm, which latches on its
+                    // own. Not caching costs one summarizer attempt per
+                    // high-pressure turn while the summarizer is down — a call
+                    // that failed, against context that cannot be recovered any
+                    // other way — and self-heals the moment it comes back.
 
                     Ok(CompactResult {
                         tokens_before,
@@ -996,7 +1018,17 @@ impl ContextCompactor {
             merged_preserved,
             UnifiedMessage::user(summary_text.clone()),
         );
-        self.store_cache(c.start, cut_end, extended_hash, summary_text);
+        // Advance the cover only on a real merge — same reason the window path
+        // does not cache its truncation. The sibling arm above ("merge failed
+        // and truncation is disabled") already states the rule: *the cache
+        // stays on its old, still-valid cover, so the next turn retries the
+        // merge*. The truncation arm is that same failure wearing a fallback,
+        // so caching under `extended_hash` would replay the gutted gap on every
+        // later rebuild and — via `store_cache`'s write-through to the
+        // process-global carry-over — on every later run too.
+        if matches!(strategy, CompactStrategy::LlmSummary) {
+            self.store_cache(c.start, cut_end, extended_hash, summary_text);
+        }
 
         Ok(CompactResult {
             tokens_before,
@@ -1188,6 +1220,7 @@ fn carried_artifacts(window: &[UnifiedMessage]) -> Vec<UnifiedMessage> {
     [
         super::plan_carry::plan_carry_message(window),
         super::file_carry::file_carry_message(window),
+        super::image_carry::image_carry_message(window),
     ]
     .into_iter()
     .flatten()
@@ -1395,6 +1428,24 @@ fn accept_summary(
 
 /// Deterministic truncation: keep only the first line of each message.
 pub(crate) fn deterministic_truncation(messages: &[UnifiedMessage]) -> String {
+    /// First line, then capped — because the first line is not a bound.
+    ///
+    /// "Keep one line" reduces nothing on the content type that dominates a
+    /// long agent context: [`UnifiedMessage::text_content`] renders a
+    /// `ContentBlock::Json` through serde_json's compact formatter, which
+    /// emits no newlines at all (interior ones are escaped), and every
+    /// `ToolResult` `build_prompt` constructs is exactly one such block. So
+    /// `lines().next()` returned an 8 KB payload verbatim and uncapped, while
+    /// deleting the assistant prose around it — this fallback runs precisely
+    /// when the summarizer failed, i.e. when losing the prose costs most.
+    ///
+    /// [`cap_transcript_text`] is the same cap the summarizer's *input* path
+    /// already applies to every message ([`serialize_transcript`]); the two
+    /// paths disagreeing on whether a message has a size was the asymmetry.
+    fn head(text: &str) -> std::borrow::Cow<'_, str> {
+        cap_transcript_text(text.lines().next().unwrap_or(""))
+    }
+
     let mut lines = Vec::with_capacity(messages.len());
     for msg in messages {
         let role = match msg {
@@ -1402,14 +1453,12 @@ pub(crate) fn deterministic_truncation(messages: &[UnifiedMessage]) -> String {
             UnifiedMessage::Assistant { .. } => "assistant",
             UnifiedMessage::ToolResult { tool_name, .. } => {
                 let text = msg.text_content();
-                let first_line = text.lines().next().unwrap_or("");
-                lines.push(format!("tool_result({tool_name}): {first_line}"));
+                lines.push(format!("tool_result({tool_name}): {}", head(&text)));
                 continue;
             }
         };
         let text = msg.text_content();
-        let first_line = text.lines().next().unwrap_or("");
-        lines.push(format!("{role}: {first_line}"));
+        lines.push(format!("{role}: {}", head(&text)));
     }
     lines.join("\n")
 }
@@ -1437,6 +1486,37 @@ mod tests {
             }
         }
         msgs
+    }
+
+    /// The truncation fallback must bound a JSON tool result.
+    ///
+    /// The unit has to match the shape of the content: a `ContentBlock::Json`
+    /// renders through serde_json's compact formatter and contains no
+    /// newlines, so "keep the first line" kept the entire payload — on exactly
+    /// the message type that dominates a long agent context, and on exactly
+    /// the path taken when the summarizer has already failed.
+    ///
+    /// Written over a payload with NO newline at all, because a fixture whose
+    /// JSON happened to be pretty-printed would pass against the old code too.
+    #[test]
+    fn the_truncation_fallback_bounds_a_single_line_json_tool_result() {
+        let payload = serde_json::json!({ "body": "x".repeat(50_000) });
+        let rendered = payload.to_string();
+        assert!(
+            !rendered.contains('\n'),
+            "fixture must be single-line or it cannot exercise the bug"
+        );
+
+        let out = deterministic_truncation(&[UnifiedMessage::tool_result_json(
+            "call-1", "file_read", payload, false,
+        )]);
+
+        assert!(
+            out.chars().count() < TRANSCRIPT_MSG_MAX_CHARS + 200,
+            "fallback kept {} chars of a 50 KB single-line payload",
+            out.chars().count()
+        );
+        assert!(out.starts_with("tool_result(file_read): "));
     }
 
     /// A cancelled compaction must change nothing — not the messages, and not
@@ -1929,6 +2009,65 @@ mod tests {
         assert!(summary_text(&messages).starts_with("[Context Summary]"));
     }
 
+    /// A truncation fallback serves this turn and commits to nothing.
+    ///
+    /// `store_cache` writes through to `COMPACTION_CARRYOVER`, a process-wide
+    /// per-session slot that seeds every later run, and the harness rebuilds
+    /// `messages` from an append-only log — so a cached truncation matches its
+    /// own fingerprint forever and no later turn ever retries the summarizer.
+    /// One transient 502 therefore became this conversation's permanent
+    /// compaction state, silently: `CacheReuse` is excluded from the
+    /// degradation warning. `SummarizerOutcome::Cancelled` was split out of
+    /// `Failed` to stop exactly this permanence on the stopped-turn arm; this
+    /// asserts the failed-turn arm no longer latches either.
+    ///
+    /// Asserted on both slots, because they fail differently: the local one
+    /// keeps a broken run broken, the carry-over keeps every FUTURE run broken.
+    #[tokio::test]
+    async fn a_truncation_fallback_is_not_written_to_the_cache_or_the_carryover() {
+        let key = "compaction-degradation-does-not-latch";
+        carryover_remove(&COMPACTION_CARRYOVER, key);
+
+        let provider =
+            Arc::new(MockProvider::new("ignored").with_error(MockError::Provider("fail".into())));
+        let compactor = ContextCompactor::new(
+            provider,
+            CompactorConfig {
+                fallback_to_truncation: true,
+                ..Default::default()
+            },
+        )
+        .with_cache_carryover(key);
+
+        let mut messages = make_messages(12);
+        let result = compactor.compact(&mut messages, 6, 0, None).await.unwrap();
+
+        assert_eq!(
+            result.strategy_used,
+            CompactStrategy::DeterministicTruncation,
+            "fixture must reach the fallback or it proves nothing"
+        );
+        assert!(
+            summary_text(&messages).starts_with("[Context Summary]"),
+            "the degraded summary must still serve THIS turn"
+        );
+        assert!(
+            compactor
+                .cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_none(),
+            "a failed summarization must not become this run's cached cover"
+        );
+        assert!(
+            carryover_get(&COMPACTION_CARRYOVER, key).is_none(),
+            "a failed summarization must not be seeded into every later run on \
+             this session key — the original turns are still in the session log"
+        );
+
+        carryover_remove(&COMPACTION_CARRYOVER, key);
+    }
+
     #[tokio::test]
     async fn truncation_fallback_carries_a_prior_summary_body_forward() {
         // CTX-02 regression: when the LLM call fails over a window that
@@ -1959,17 +2098,20 @@ mod tests {
             summary.contains("ORIGINAL_GOAL_MARKER") && summary.contains("step two"),
             "prior summary body must survive the truncation fallback verbatim; got:\n{summary}"
         );
-        // The stored cache entry is what every future rebuild reapplies — it
-        // must carry the full body too, not the gutted marker line.
-        let cached = compactor
-            .cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .expect("fallback compaction stores a cache entry");
+        // This used to read the stored cache entry and assert the body was not
+        // gutted there either. The fallback no longer stores one at all (see
+        // `a_truncation_fallback_is_not_written_to_the_cache_or_the_carryover`),
+        // which subsumes that check: there is no cover for a later rebuild to
+        // reapply, so the next turn re-derives from the session log and retries
+        // the summarizer. The spliced-summary assertion above is what carries
+        // this test's own property.
         assert!(
-            cached.summary.contains("ORIGINAL_GOAL_MARKER"),
-            "cache must not retain a gutted summary"
+            compactor
+                .cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_none(),
+            "a failed summarization must not become a cached cover"
         );
     }
 
@@ -2078,18 +2220,21 @@ mod tests {
             !summary_text(&messages).contains(sentinel),
             "summary must not swallow the transient recall tail"
         );
-        // …nor the fingerprint-cache entry `store_cache` retained (the cache
-        // re-injects its summary into future turns via `reapply_cached`, so
-        // transient content here would outlive the turn that pushed it).
-        let cached = compactor
-            .cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .expect("a successful compaction stores a cache entry");
+        // (3) …and nothing survives the turn as a cover for `reapply_cached`.
+        // This used to assert that the entry `store_cache` retained did not
+        // contain the sentinel; the fallback path now writes no entry at all
+        // (see `a_truncation_fallback_is_not_written_to_the_cache_or_the_carryover`),
+        // which is the stronger form of the same statement — transient content
+        // cannot outlive this turn through a cover that does not exist.
+        // Assertions (1) and (2) are what still prove the window boundary,
+        // which is this test's actual subject.
         assert!(
-            !cached.summary.contains(sentinel),
-            "store_cache must never retain transient recall content"
+            compactor
+                .cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_none(),
+            "the truncation fallback must leave no cover for a future turn"
         );
     }
 
@@ -2949,6 +3094,60 @@ mod tests {
             user_turn < summary && summary < plan && plan < files,
             "order must match every other drain: user turns, summary, then carriers \
              (got user={user_turn} summary={summary} plan={plan} files={files})"
+        );
+    }
+
+    /// The image the preflight stage deliberately protects must survive the
+    /// drain that runs immediately after it on the same vector.
+    ///
+    /// `HistoricalImageStrippingStage` keeps the newest screenshot and replaces
+    /// the older ones with placeholders; compaction then drains a head-anchored
+    /// window containing it, and nothing carried it out —
+    /// `preserved_user_messages` is text-only by contract and `text_content`
+    /// skips images. So a desktop run compacted *because of* its screenshots
+    /// and lost every one of them, and the stripping stage's own test stayed
+    /// green because it only ever measured its own stage.
+    ///
+    /// Asserted on the pixels reaching the post-compaction vector rather than
+    /// on `image_carry_message` being called: a carrier wired into four of the
+    /// five drain sites would satisfy the latter.
+    #[tokio::test]
+    async fn the_live_screenshot_survives_a_compaction() {
+        let compactor = ContextCompactor::new(
+            Arc::new(MockProvider::new("Summary of earlier conversation.")),
+            CompactorConfig::default(),
+        );
+
+        let mut messages = vec![UnifiedMessage::User {
+            content: vec![
+                ContentBlock::Text {
+                    text: "here is the screen".to_string(),
+                    cache_control: None,
+                },
+                ContentBlock::Image {
+                    data: "LIVE_PIXELS".to_string(),
+                    mime_type: "image/png".to_string(),
+                },
+            ],
+        }];
+        for i in 0..14 {
+            messages.push(UnifiedMessage::assistant(format!("step {i}")));
+        }
+
+        let result = compactor.compact(&mut messages, 6, 0, None).await.unwrap();
+        assert_eq!(
+            result.strategy_used,
+            CompactStrategy::LlmSummary,
+            "fixture must take a real drain path or it proves nothing"
+        );
+
+        let survived = messages
+            .iter()
+            .flat_map(UnifiedMessage::content_blocks)
+            .any(|b| matches!(b, ContentBlock::Image { data, .. } if data == "LIVE_PIXELS"));
+        assert!(
+            survived,
+            "compaction deleted the screen the model is about to act on"
         );
     }
 

@@ -518,10 +518,14 @@ mod tests {
         let result = registry.register("dalle".to_string(), provider2);
         assert!(result.is_err());
 
-        if let Err(GenerationError::InternalError { message }) = result {
-            assert!(message.contains("already registered"));
-        } else {
-            panic!("Expected InternalError");
+        // Not `InternalError`: a duplicate registration is a config bug (two
+        // sections claiming one name), and the dedicated variant is what maps
+        // it to `invalid_config` with actionable guidance instead of "please
+        // try again". Asserting the variant — not just `is_err()` — is what
+        // keeps that distinction from silently regressing to the catch-all.
+        match result {
+            Err(GenerationError::DuplicateProvider { name }) => assert_eq!(name, "dalle"),
+            other => panic!("Expected DuplicateProvider, got {other:?}"),
         }
     }
 

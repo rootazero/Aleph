@@ -460,6 +460,23 @@ mod tests {
         assert_eq!(tracker.index_for("call_3"), 2);
     }
 
+    /// Split the emitted stream into the SSE **events** a client reads.
+    ///
+    /// The wire is a byte stream framed by `\n\n`, not a list of stream items:
+    /// whether the finish chunk and `[DONE]` arrive as one `String` or two is
+    /// invisible to every OpenAI client. Asserting on `frames.len()` made that
+    /// invisible detail load-bearing, and when 442b7ab05 deliberately split
+    /// `[DONE]` into its own item to let a trailing `Usage` through, five of
+    /// these tests went red while the bytes on the wire were still correct.
+    /// Counting events instead pins what a client can actually observe.
+    fn sse_events(frames: &[String]) -> Vec<String> {
+        frames
+            .concat()
+            .split_terminator("\n\n")
+            .map(|e| e.trim_start_matches("data: ").to_string())
+            .collect()
+    }
+
     #[tokio::test]
     async fn test_provider_deltas_to_sse_text() {
         let deltas: Vec<anyhow::Result<ProviderDelta>> = vec![
@@ -473,12 +490,13 @@ mod tests {
             .collect()
             .await;
 
-        // Should have: text chunk, text chunk, finish chunk + [DONE]
-        assert_eq!(frames.len(), 3);
-        assert!(frames[0].contains("Hello "));
-        assert!(frames[1].contains("world"));
-        assert!(frames[2].contains("stop"));
-        assert!(frames[2].contains("[DONE]"));
+        // text chunk, text chunk, finish chunk, [DONE]
+        let events = sse_events(&frames);
+        assert_eq!(events.len(), 4, "{events:?}");
+        assert!(events[0].contains("Hello "));
+        assert!(events[1].contains("world"));
+        assert!(events[2].contains("stop"));
+        assert_eq!(events[3], "[DONE]");
     }
 
     #[tokio::test]
@@ -502,16 +520,17 @@ mod tests {
             .collect()
             .await;
 
-        // text chunk, then (finish chunk + usage chunk + [DONE]) in one frame.
-        assert_eq!(frames.len(), 2);
-        let final_frame = &frames[1];
-        // Finish reason and usage both present; usage rides an empty-choices chunk.
-        assert!(final_frame.contains("\"finish_reason\":\"stop\""));
-        assert!(final_frame.contains("\"choices\":[]"));
-        assert!(final_frame.contains("\"prompt_tokens\":10"));
-        assert!(final_frame.contains("\"completion_tokens\":5"));
-        assert!(final_frame.contains("\"total_tokens\":15"));
-        assert!(final_frame.contains("[DONE]"));
+        // text chunk, finish chunk, usage chunk, [DONE] — usage is its own
+        // empty-choices event AFTER the finish reason, which is the ordering
+        // the OpenAI Python SDK reads `usage` out of.
+        let events = sse_events(&frames);
+        assert_eq!(events.len(), 4, "{events:?}");
+        assert!(events[1].contains("\"finish_reason\":\"stop\""));
+        assert!(events[2].contains("\"choices\":[]"));
+        assert!(events[2].contains("\"prompt_tokens\":10"));
+        assert!(events[2].contains("\"completion_tokens\":5"));
+        assert!(events[2].contains("\"total_tokens\":15"));
+        assert_eq!(events[3], "[DONE]");
     }
 
     #[tokio::test]
@@ -535,12 +554,14 @@ mod tests {
             .collect()
             .await;
 
-        assert_eq!(frames.len(), 2);
-        let final_frame = &frames[1];
-        assert!(final_frame.contains("\"finish_reason\":\"stop\""));
-        assert!(!final_frame.contains("prompt_tokens"));
-        assert!(!final_frame.contains("\"choices\":[]"));
-        assert!(final_frame.contains("[DONE]"));
+        // text chunk, finish chunk, [DONE] — and no usage event anywhere.
+        let events = sse_events(&frames);
+        assert_eq!(events.len(), 3, "{events:?}");
+        assert!(events[1].contains("\"finish_reason\":\"stop\""));
+        assert_eq!(events[2], "[DONE]");
+        let wire = frames.concat();
+        assert!(!wire.contains("prompt_tokens"));
+        assert!(!wire.contains("\"choices\":[]"));
     }
 
     #[tokio::test]
@@ -566,12 +587,14 @@ mod tests {
             .collect()
             .await;
 
-        // start frame + arg frame + finish frame (ToolCallEnd is skipped)
-        assert_eq!(frames.len(), 3);
-        assert!(frames[0].contains("get_weather"));
-        assert!(frames[0].contains("function"));
-        assert!(frames[1].contains("NYC"));
-        assert!(frames[2].contains("tool_calls")); // finish_reason
+        // start event + arg event + finish event + [DONE] (ToolCallEnd is skipped)
+        let events = sse_events(&frames);
+        assert_eq!(events.len(), 4, "{events:?}");
+        assert!(events[0].contains("get_weather"));
+        assert!(events[0].contains("function"));
+        assert!(events[1].contains("NYC"));
+        assert!(events[2].contains("tool_calls")); // finish_reason
+        assert_eq!(events[3], "[DONE]");
     }
 
     #[tokio::test]
@@ -587,10 +610,15 @@ mod tests {
             .collect()
             .await;
 
-        // Thinking is skipped, so: text + finish+done
-        assert_eq!(frames.len(), 2);
-        assert!(!frames[0].contains("hmm"));
-        assert!(frames[0].contains("answer"));
+        // Thinking is skipped, so: text chunk, finish chunk, [DONE].
+        let events = sse_events(&frames);
+        assert_eq!(events.len(), 3, "{events:?}");
+        assert!(events[0].contains("answer"));
+        assert_eq!(events[2], "[DONE]");
+        assert!(
+            !frames.concat().contains("hmm"),
+            "chain-of-thought must not reach an OpenAI-compatible client"
+        );
     }
 
     #[tokio::test]

@@ -20,6 +20,10 @@ mod event_snap;
 /// reason [`plan_carry`] is: the only legitimate producer is a drain.
 mod file_carry;
 pub mod fit;
+/// Re-emit the newest screenshot below the summary, so the image the preflight
+/// image-stripping stage deliberately protects survives the drain that runs
+/// immediately after it on the same vector.
+mod image_carry;
 /// User-driven `/compact`: summarize the conversation prefix and soft-retire it
 /// from the event log. Orthogonal to the pressure-driven in-turn compaction in
 /// [`compactor`] — that one produces a transient summary for one prompt, this

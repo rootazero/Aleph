@@ -11,21 +11,42 @@ impl SecurityStore {
 
     /// Store shared token hash together with the HMAC secret and plaintext for persistence across restarts.
     ///
-    /// **Audit fix**: the previous implementation ran a bare
-    /// `DELETE FROM shared_token` followed by a separate `INSERT`, with no
-    /// transaction wrapping the pair. A concurrent `validate_shared_token_hash`
-    /// running on the same connection (the `self.conn` `Mutex` does NOT
-    /// serialize a writer against a reader that already holds the row in
-    /// SQLite's MVCC) could observe the table empty between the two
-    /// statements and downgrade an already-connected Panel from `operator`
-    /// to `guest`. The fix uses a single `INSERT ... ON CONFLICT DO UPDATE`
-    /// (UPSERT) so the row is replaced atomically without ever being absent.
+    /// This is a **replace**, not an append: after it returns, `shared_token`
+    /// holds exactly one row and every previously issued token stops
+    /// validating. Both halves of that sentence are load-bearing, and the two
+    /// obvious ways to write it each buy one half at the price of the other.
     ///
-    /// Both the old and the new code require that `shared_token` carry a
-    /// `UNIQUE` constraint on a single-row key — see the schema migration
-    /// in `migrations/0001_init.sql` (`token_hash TEXT PRIMARY KEY`). If the
-    /// schema is missing the constraint the UPSERT degrades to a plain
-    /// `INSERT` and a duplicate-row error.
+    /// The first version was a bare `DELETE FROM shared_token` followed by a
+    /// separate `INSERT` with no transaction around the pair, so a concurrent
+    /// [`SecurityStore::validate_shared_token_hash`] could observe the table
+    /// empty between the two statements and downgrade an already-connected
+    /// Panel from `operator` to `guest`.
+    ///
+    /// The fix for that replaced the pair with a lone
+    /// `INSERT ... ON CONFLICT(token_hash) DO UPDATE`, reasoning that the
+    /// UPSERT's conflict target made the write atomic. It did — but
+    /// `token_hash` is the PRIMARY KEY and a *rotated* token has a *different*
+    /// hash, so it never conflicted with the row it was meant to replace: it
+    /// inserted a second row and left the first one standing. Every token this
+    /// store had ever issued kept validating, because
+    /// `validate_shared_token_hash` asks whether the hash exists in the table
+    /// at all. `gateway.token.rotate` — the operator-facing revocation verb —
+    /// therefore revoked nothing, and on a `host = "0.0.0.0"` gateway anyone
+    /// still holding a superseded token kept operator access. The two tests
+    /// that name this property (`test_regenerate_invalidates_old`,
+    /// `test_reset_token_reencrypts_secrets`) went red at that commit and are
+    /// what proves the arrangement below.
+    ///
+    /// So the write is a transaction, and the order inside it is the point:
+    /// **insert first, then delete every other row**. The new row exists
+    /// before the old ones are dropped, so the table is never empty at any
+    /// instant a reader could observe — the property the UPSERT was reaching
+    /// for — while the `<>` delete supplies the revocation the UPSERT lost.
+    /// The delete is also the repair path for a store that already accumulated
+    /// rows under the previous version.
+    ///
+    /// Requires `shared_token` to carry a single-row key constraint — see the
+    /// schema in [`SecurityStore`] (`token_hash TEXT PRIMARY KEY`).
     pub fn set_shared_token_with_secret(
         &self,
         hash: &str,
@@ -33,7 +54,8 @@ impl SecurityStore {
         plaintext: Option<&str>,
     ) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
             "INSERT INTO shared_token (token_hash, created_at, hmac_secret, plaintext_token)
              VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(token_hash) DO UPDATE SET
@@ -42,7 +64,11 @@ impl SecurityStore {
                  plaintext_token = excluded.plaintext_token",
             params![hash, current_timestamp_ms(), secret.as_slice(), plaintext],
         )?;
-        Ok(())
+        tx.execute(
+            "DELETE FROM shared_token WHERE token_hash <> ?1",
+            params![hash],
+        )?;
+        tx.commit()
     }
 
     /// Load the persisted HMAC secret (if any) from the `shared_token` table.
@@ -241,6 +267,38 @@ mod tests {
                 user_id: None,
             })
             .unwrap();
+    }
+
+    /// `get_shared_token_secret` and `get_shared_token_plaintext` both read
+    /// `LIMIT 1` with no `ORDER BY`, so "which row" is whatever SQLite hands
+    /// back. That is only safe while there is exactly one row, which makes
+    /// single-row-ness a property those two readers depend on rather than a
+    /// restatement of the revocation test in `shared_token.rs`: a second row
+    /// does not merely keep an old token alive, it lets a restart adopt one.
+    #[test]
+    fn rotating_the_shared_token_leaves_exactly_one_row() {
+        let store = store();
+        let secret = [7u8; 32];
+        store
+            .set_shared_token_with_secret("hash-old", &secret, Some("aleph-old"))
+            .unwrap();
+        store
+            .set_shared_token_with_secret("hash-new", &secret, Some("aleph-new"))
+            .unwrap();
+
+        let rows: i64 = {
+            let conn = store.conn.lock().unwrap_or_else(|e| e.into_inner());
+            conn.query_row("SELECT COUNT(*) FROM shared_token", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(rows, 1, "rotation must replace the row, not append one");
+        assert!(!store.validate_shared_token_hash("hash-old").unwrap());
+        assert!(store.validate_shared_token_hash("hash-new").unwrap());
+        assert_eq!(
+            store.get_shared_token_plaintext().unwrap().as_deref(),
+            Some("aleph-new"),
+            "the surviving row must be the current token, not an arbitrary one"
+        );
     }
 
     #[test]
