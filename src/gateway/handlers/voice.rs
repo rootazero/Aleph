@@ -492,7 +492,7 @@ pub async fn handle_stream_audio(
     // puts words in their mouth — the deltas they and their surfaces read come
     // back carrying it. An unknown id keeps the existing silent no-op, so a
     // refusal is indistinguishable from a stream that just stopped.
-    if !registry.caller_may_use(&params.stream_id).await {
+    if !registry.caller_may_act_on_known_id(&params.stream_id).await {
         return JsonRpcResponse::success(request.id, serde_json::json!({}));
     }
     if let Some(tx) = registry.audio_sender(&params.stream_id).await {
@@ -531,7 +531,7 @@ pub async fn handle_stream_stop(
     };
     // Same ownership question, same silent shape: `stop` on a foreign stream
     // cuts off someone else's dictation mid-sentence.
-    if registry.caller_may_use(&params.stream_id).await {
+    if registry.caller_may_act_on_known_id(&params.stream_id).await {
         registry.remove(&params.stream_id).await;
     }
     JsonRpcResponse::success(request.id, serde_json::json!({}))

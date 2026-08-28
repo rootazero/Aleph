@@ -28,11 +28,13 @@
 //! boost and the post-ASR repair).
 //!
 //! Entries are bounded two ways (mirroring `streaming::relay`'s StreamRegistry
-//! capacity+TTL hygiene): a lazy TTL sweep once the map grows past
-//! [`SWEEP_THRESHOLD`], and a hard [`MAX_ENTRIES`] ceiling that evicts the
-//! oldest entries. Live sessions re-write their entry on every inbound
-//! message, so reaping a stale entry can never break a live voice turn — the
-//! next dispatch simply re-inserts it before the harness bridge reads.
+//! capacity+TTL hygiene): a TTL sweep on EVERY `set` (an abandoned compact
+//! session set used to linger forever under the old size threshold, because
+//! live sessions re-write their own entry on every dispatch and so never
+//! crossed it), and a hard [`MAX_ENTRIES`] ceiling that evicts the oldest
+//! entries. Live sessions re-write their entry on every inbound message, so
+//! reaping a stale entry can never break a live voice turn — the next
+//! dispatch simply re-inserts it before the harness bridge reads.
 //!
 //! R10 note: pure plumbing, not cognition. It records the mechanical answer to
 //! "is voice mode on for this session right now, and with what turn facts?"
@@ -53,10 +55,6 @@ use crate::sync_primitives::Mutex;
 /// only abandoned sessions ever age out; six hours is far beyond any read
 /// window (the harness bridge reads within the same turn that wrote).
 const ENTRY_TTL: Duration = Duration::from_secs(6 * 60 * 60);
-
-/// The O(n) sweep runs only once the map grows past this many entries — below
-/// it the residual leak is a few KB and not worth a per-write pass.
-const SWEEP_THRESHOLD: usize = 64;
 
 /// Hard ceiling after the TTL sweep: evict oldest-first until under the cap.
 const MAX_ENTRIES: usize = 1024;
@@ -108,6 +106,14 @@ fn lock() -> crate::sync_primitives::MutexGuard<'static, HashMap<String, VoiceTu
 /// (and the Panel run builder) immediately before dispatching the run.
 /// `None` clears any stale entry (voice off this turn).
 pub fn set(session_key: &str, state: Option<VoiceTurnState>) {
+    set_with_now(session_key, state, Instant::now());
+}
+
+/// As [`set`] but with an explicit `now`, so a test can move the judging
+/// instant forward and exercise the TTL eviction without waiting six real
+/// hours (or hitting the freshly-booted-VM `Instant` subtraction panic the
+/// `enforce_bounds` doc comment describes).
+pub fn set_with_now(session_key: &str, state: Option<VoiceTurnState>, now: Instant) {
     let mut guard = lock();
     match state {
         Some(s) => {
@@ -117,7 +123,7 @@ pub fn set(session_key: &str, state: Option<VoiceTurnState>) {
             guard.remove(session_key);
         }
     }
-    enforce_bounds(&mut guard, Instant::now());
+    enforce_bounds(&mut guard, now);
 }
 
 /// Reap dead-session entries once the map is worth sweeping, then enforce the
@@ -133,9 +139,12 @@ pub fn set(session_key: &str, state: Option<VoiceTurnState>) {
 /// recent than the offset, which is routine on a freshly booted CI VM (Windows
 /// counts `Instant` from system boot, so a six-hour-old instant may not exist).
 fn enforce_bounds(map: &mut HashMap<String, VoiceTurnState>, now: Instant) {
-    if map.len() <= SWEEP_THRESHOLD {
-        return;
-    }
+    // Sweep on EVERY set: the lock is already held, and an O(n) retain over a
+    // map that tops out at MAX_ENTRIES (1024, realistically <<64) costs
+    // nothing — while the previous `SWEEP_THRESHOLD` early-exit let a compact
+    // but abandoned session set (<64 entries) linger forever, because live
+    // sessions re-write their own entry on every dispatch and so never cross
+    // the threshold.
     map.retain(|_, v| now.saturating_duration_since(v.recorded_at) < ENTRY_TTL);
     while map.len() > MAX_ENTRIES {
         let oldest = map
@@ -225,38 +234,39 @@ mod tests {
         set("voice-session-a", None);
     }
 
-    /// Below the threshold the sweep must not run at all — a stale entry is a
-    /// few KB, and the pass is O(n) on every write.
+    /// The TTL sweep now runs on EVERY set (no threshold early-exit): an
+    /// abandoned compact session set is reaped as soon as any entry ages out,
+    /// regardless of how few entries the map holds.
     #[test]
-    fn under_threshold_nothing_is_swept() {
+    fn stale_entries_are_swept_regardless_of_size() {
         let base = Instant::now();
         let mut map = HashMap::new();
-        for i in 0..SWEEP_THRESHOLD {
+        for i in 0..8 {
             map.insert(format!("stale-{i}"), stamped(base));
         }
-        enforce_bounds(&mut map, base + ENTRY_TTL + Duration::from_secs(1));
-        assert_eq!(map.len(), SWEEP_THRESHOLD);
-    }
-
-    #[test]
-    fn stale_entries_are_swept_past_threshold() {
-        // Fill past the sweep threshold with ancient entries plus one fresh
-        // one; the pass must reap the ancients and keep the fresh.
-        let base = Instant::now();
-        let mut map = HashMap::new();
-        for i in 0..=SWEEP_THRESHOLD {
-            map.insert(format!("stale-{i}"), stamped(base));
-        }
-        // "Ancient" = the judging instant sits one second past the TTL.
+        // One fresh entry that must survive.
         let now = base + ENTRY_TTL + Duration::from_secs(1);
         map.insert("fresh".into(), stamped(now));
 
         enforce_bounds(&mut map, now);
 
-        for i in 0..=SWEEP_THRESHOLD {
+        for i in 0..8 {
             assert!(!map.contains_key(&format!("stale-{i}")));
         }
         assert!(map.contains_key("fresh"));
+        assert_eq!(map.len(), 1);
+    }
+
+    #[test]
+    fn fresh_entries_survive_a_sweep() {
+        // Everything under the TTL: nothing is reaped regardless of size.
+        let base = Instant::now();
+        let mut map = HashMap::new();
+        for i in 0..8 {
+            map.insert(format!("live-{i}"), stamped(base));
+        }
+        enforce_bounds(&mut map, base + Duration::from_secs(60));
+        assert_eq!(map.len(), 8);
     }
 
     #[test]

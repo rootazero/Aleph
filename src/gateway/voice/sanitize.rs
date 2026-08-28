@@ -140,6 +140,17 @@ fn strip_think_blocks(text: &str) -> String {
 /// Sanitize reply text for speech synthesis: drop thinking blocks and code
 /// fences, strip inline markdown markers, collapse blank runs, soften bare
 /// URLs, and clamp length.
+///
+/// # Empty-output contract
+///
+/// A reply consisting entirely of stripped content (code fences, thinking
+/// blocks, table separators, or emoji-only text with no speakable words)
+/// sanitizes to an EMPTY string. Callers MUST check for this before invoking
+/// a TTS provider — `voice/outbound.rs` already does
+/// (`if spoken.trim().is_empty() { return None }` and the reply falls back
+/// to text), and any new call site must do the same: feeding a zero-length
+/// string to a provider either errors with a confusing message or silently
+/// synthesizes nothing.
 #[must_use]
 pub fn sanitize_for_tts(text: &str) -> String {
     let text = strip_think_blocks(text);
