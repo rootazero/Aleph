@@ -307,6 +307,11 @@ impl SessionService for InProcessActorSessionService {
             }
         }
         self.broadcasters.write().await.remove(id);
+        // Mirror `senders`/`broadcasters`: a detached session will not call
+        // `wake()` again, so leaving its per-key mutex in the map is a slow
+        // unbounded leak across many distinct ephemeral sessions (subagents,
+        // compaction children). A future `wake()` simply re-creates the entry.
+        self.wake_locks.lock().await.remove(id);
         Ok(())
     }
 }
@@ -562,5 +567,41 @@ mod tests {
         // Re-attach works; head_seq reflects persisted events.
         let handle = svc.attach(id.clone()).await.unwrap();
         assert_eq!(handle.head_seq, 1);
+    }
+
+    /// Regression for the slow unbounded leak audit found in `wake_locks`:
+    /// `detach()` removes the actor's sender/broadcaster, but every `wake()`
+    /// that ever ran on a session also created a per-key `Arc<Mutex<()>>`
+    /// here. A long-running daemon that wakes and detaches many distinct
+    /// sessions would accumulate them forever. The fix is a single
+    /// `wake_locks.remove(id)` at the end of `detach()`, mirroring the
+    /// senders/broadcasters cleanup.
+    ///
+    /// Future `wake()` calls simply re-create the entry, so the leak fix has
+    /// no behavioural effect on rewake of the same session.
+    #[tokio::test]
+    async fn detach_releases_the_wake_lock_entry() {
+        let svc = fresh_service().await;
+        let id = sample_id("wake-lock-leak");
+
+        // First wake() allocates the per-key wake_lock.
+        svc.wake(&id).await.unwrap();
+        {
+            let locks = svc.wake_locks.lock().await;
+            assert!(
+                locks.contains_key(&id),
+                "wake() must populate the wake_lock map"
+            );
+        }
+
+        svc.detach(&id).await.unwrap();
+        {
+            let locks = svc.wake_locks.lock().await;
+            assert!(
+                !locks.contains_key(&id),
+                "detach() must release the wake_lock entry to avoid \
+                 unbounded growth across many distinct sessions"
+            );
+        }
     }
 }
