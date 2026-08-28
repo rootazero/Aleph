@@ -175,6 +175,17 @@ pub struct GroupChatMessage {
     pub sequence: u32,
     /// Whether this is the final message of the current round.
     pub is_final: bool,
+    /// Mentioned personas that were NOT included in the coordinator's plan
+    /// for this round. Populated by the executor on the LAST message of the
+    /// round (`is_final == true`); empty on intermediate persona messages.
+    /// Carrying the data on every message (rather than as a side-channel
+    /// field) keeps the streaming consumer's view self-contained: when it
+    /// sees the final message it can both finalize the round AND surface the
+    /// dropped list without re-reading prior frames.
+    ///
+    /// Defaults to empty when missing so older consumers keep working.
+    #[serde(default)]
+    pub dropped_targets: Vec<String>,
 }
 
 // =============================================================================
@@ -326,6 +337,7 @@ mod tests {
             round: 2,
             sequence: 3,
             is_final: true,
+            dropped_targets: vec![],
         };
 
         assert_eq!(msg.session_id, "session-001");

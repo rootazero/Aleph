@@ -12,7 +12,7 @@ use crate::sync_primitives::{Arc, AtomicBool, Ordering};
 
 use serde_json::Value;
 
-use crate::guardrails::decision::GuardrailDecision;
+use crate::guardrails::decision::{GuardrailDecision, Replacement};
 use crate::guardrails::traits::{InputGuardrail, OutputGuardrail, ToolCallGuardrail};
 use crate::session::events::{SessionEvent, SessionEventRecord};
 use crate::thinker::nudges::REDACTED_USER_MESSAGE;
@@ -90,22 +90,32 @@ impl GuardrailRegistry {
         // the last one. The previous `last_warn: Option<Warn>` silently
         // dropped every earlier warning, so operators saw at most one reason
         // even when three guardrails each fired (H2 in
-        // review/guardrails-statics). Block / Sanitize still short-circuit.
+        // review/guardrails-statics).
+        //
+        // `Sanitize` rewrites the text and re-feeds subsequent guardrails with
+        // the rewritten payload — a `Block` after a `Sanitize` MUST surface,
+        // otherwise a sanitize-then-block chain silently leaks. Only `Block`
+        // short-circuits; `Sanitize` is a content rewrite, not a terminal
+        // decision. Warns are accumulated across all three phases because a
+        // rewrite itself can trigger new warn signals.
         let mut warns: Vec<String> = Vec::new();
+        let mut current = text.to_string();
         for g in &self.input {
-            let d = g.evaluate_input(text).await;
+            let d = g.evaluate_input(&current).await;
             match d {
                 GuardrailDecision::Allow => continue,
                 GuardrailDecision::Warn { reason } => warns.push(reason),
-                _ => return d,
+                GuardrailDecision::Sanitize(rep) => current = rep.text,
+                GuardrailDecision::Block { .. } => return d,
             }
         }
         if warns.is_empty() {
             GuardrailDecision::Allow
         } else {
-            GuardrailDecision::Warn {
-                reason: warns.join("; "),
-            }
+            GuardrailDecision::Sanitize(Replacement {
+                text: current,
+                source: format!("guardrails (warn: {})", warns.join("; ")),
+            })
         }
     }
 
@@ -209,21 +219,27 @@ impl GuardrailRegistry {
         if !self.is_enabled() || self.output.is_empty() {
             return GuardrailDecision::Allow;
         }
+        // Same sanitize-then-block contract as `evaluate_input`: a `Sanitize`
+        // rewrites the payload that the next guardrail sees; only `Block`
+        // short-circuits.
         let mut warns: Vec<String> = Vec::new();
+        let mut current = text.to_string();
         for g in &self.output {
-            let d = g.evaluate_output(text).await;
+            let d = g.evaluate_output(&current).await;
             match d {
                 GuardrailDecision::Allow => continue,
                 GuardrailDecision::Warn { reason } => warns.push(reason),
-                _ => return d,
+                GuardrailDecision::Sanitize(rep) => current = rep.text,
+                GuardrailDecision::Block { .. } => return d,
             }
         }
         if warns.is_empty() {
             GuardrailDecision::Allow
         } else {
-            GuardrailDecision::Warn {
-                reason: warns.join("; "),
-            }
+            GuardrailDecision::Sanitize(Replacement {
+                text: current,
+                source: format!("guardrails (warn: {})", warns.join("; ")),
+            })
         }
     }
 
@@ -231,21 +247,36 @@ impl GuardrailRegistry {
         if !self.is_enabled() || self.tool_call.is_empty() {
             return GuardrailDecision::Allow;
         }
+        // Tool-call args are a `Value` (not `&str`), so `Sanitize` must rebuild
+        // a new `Value` with the rewritten leaf. Same Block-only short-circuit.
         let mut warns: Vec<String> = Vec::new();
+        let mut current = args.clone();
         for g in &self.tool_call {
-            let d = g.evaluate_tool_call(tool_name, args).await;
+            let d = g.evaluate_tool_call(tool_name, &current).await;
             match d {
                 GuardrailDecision::Allow => continue,
                 GuardrailDecision::Warn { reason } => warns.push(reason),
-                _ => return d,
+                GuardrailDecision::Sanitize(rep) => {
+                    if let Ok(v) = serde_json::from_str::<Value>(&rep.text) {
+                        current = v;
+                    } else {
+                        // Failed to rebuild — fail closed on the Block side
+                        // would be worse; the rewrite is a content mutation,
+                        // not a security decision, so leave `current` alone
+                        // and surface the sanitize source in the warn chain.
+                        warns.push(format!("sanitize_dropped: {}", rep.source));
+                    }
+                }
+                GuardrailDecision::Block { .. } => return d,
             }
         }
-        if warns.is_empty() {
+        if warns.is_empty() && current == *args {
             GuardrailDecision::Allow
         } else {
-            GuardrailDecision::Warn {
-                reason: warns.join("; "),
-            }
+            GuardrailDecision::Sanitize(Replacement {
+                text: serde_json::to_string(&current).unwrap_or_else(|_| args.to_string()),
+                source: format!("guardrails (warn: {})", warns.join("; ")),
+            })
         }
     }
 }

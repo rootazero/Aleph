@@ -20,6 +20,14 @@ use super::session::GroupChatSession;
 /// individual session without blocking other sessions.
 pub type SharedSession = Arc<tokio::sync::Mutex<GroupChatSession>>;
 
+// Result of removing a session from the orchestrator map. The handle is
+// returned so the caller can perform a final state read or DB update while
+// holding the per-session lock atomically.
+struct RemovedSession {
+    session_id: String,
+    handle: SharedSession,
+}
+
 /// Orchestrator for multi-agent group chat sessions.
 ///
 /// Owns the persona registry and a map of active sessions.
@@ -124,7 +132,16 @@ impl GroupChatOrchestrator {
             participants,
             source_channel.clone(),
             source_session_key.clone(),
-        );
+        )
+        // Stamp the per-session round budget from config so `execute_round`
+        // can enforce it. The config value is u32-clamped in `max_rounds()`;
+        // we propagate the same clamp here. `0` is treated as "unbounded"
+        // (None) for backwards compat with the existing default of 0 in
+        // several test fixtures.
+        .with_max_rounds({
+            let cap = self.max_rounds();
+            if cap == 0 { None } else { Some(cap) }
+        });
         // Capture the ownership stamp BEFORE moving `session` into the Arc<Mutex>;
         // `GroupChatSession::new` reads it from `crate::scope::current_scope()`
         // and once the session is behind the mutex we'd have to lock+unlock just
@@ -184,37 +201,29 @@ impl GroupChatOrchestrator {
     /// Returns the [`SharedSession`] handle if the session existed, so the
     /// caller can still read its final state. Returns `None` if the session
     /// was not found.
+    ///
+    /// **Atomicity contract**: this function awaits the per-session lock
+    /// AFTER releasing the orchestrator-map lock, so a round that holds the
+    /// session mutex cannot slip past `end_session` while the map already
+    /// shows the session gone. The orchestrator mutex is dropped before the
+    /// await (no nested-lock deadlock is possible — no code path in
+    /// `execute_round` reacquires the orchestrator mutex). The previous
+    /// implementation used `try_lock`, which left `session.status == Active`
+    /// whenever a round was in flight, producing a three-way split-brain
+    /// (orchestrator map / in-memory / DB).
     pub async fn end_session(&mut self, session_id: &str) -> Option<SharedSession> {
-        let handle = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(session_id)?;
+        let RemovedSession { session_id, handle } = self.remove_session(session_id)?;
 
-        match handle.try_lock() {
-            Ok(mut session) => session.end(),
-            Err(_) => {
-                // The session is removed from the map but NOT marked ended —
-                // a ghost session if the caller also forgets `session.end()`.
-                // Warn-level (was debug) so the orphaned-active state is
-                // observable in production logs rather than silent (M5 in
-                // review/group_chat-statics). `blocking_lock` is not an
-                // option here: `end_session` is sync and may run inside a
-                // tokio runtime, where `blocking_lock` panics.
-                tracing::warn!(
-                    subsystem = "group_chat",
-                    session_id = %session_id,
-                    "session lock contended during end_session; caller MUST lock and call \
-                     session.end() to mark the session ended, or the session stays Active \
-                     while detached from the orchestrator"
-                );
-            }
+        // Authoritatively end the session under its own mutex.
+        {
+            let mut session = handle.lock().await;
+            session.end();
         }
 
         // Persist status change to database
         if let Some(db) = &self.db {
             if let Err(e) = db
-                .update_group_chat_session_status(session_id, GroupChatStatus::Ended.as_str())
+                .update_group_chat_session_status(&session_id, GroupChatStatus::Ended.as_str())
                 .await
             {
                 tracing::warn!(
@@ -233,6 +242,17 @@ impl GroupChatOrchestrator {
         );
 
         Some(handle)
+    }
+
+    /// Helper: remove a session from the map and return its handle. Split
+    /// out so `end_session`'s atomicity is visible (lock dropped before await).
+    fn remove_session(&self, session_id: &str) -> Option<RemovedSession> {
+        let (session_id, handle) = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove_entry(session_id)?;
+        Some(RemovedSession { session_id, handle })
     }
 
     /// Returns the configured `max_rounds` value.

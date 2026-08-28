@@ -74,8 +74,20 @@ impl PiiSecretsGuardrail {
                 })
             }
             Ok(GuardResult::Blocked { reason, .. }) => GuardrailDecision::Block {
+                // Post-substitution leak blocks ("...in resolved outbound content")
+                // are a security-infra failure, not a content-policy violation
+                // the model could self-correct — mapping them to `Fixable` would
+                // let the orchestrator's class-based retry loop re-run a request
+                // whose root cause is "we just leaked a resolved secret". Any
+                // other `Blocked` reason from `process_outbound` IS model-correctable
+                // (model emitted a secret into a tool arg / output) and stays
+                // `Fixable`.
+                class: if reason.contains("resolved outbound") {
+                    ErrorClass::Unexpected
+                } else {
+                    ErrorClass::Fixable
+                },
                 reason,
-                class: ErrorClass::Fixable,
             },
             Err(SecurityGuardError::SecretResolutionFailed(e)) => {
                 // Strip the requested secret name from `reason` before it

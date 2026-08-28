@@ -188,6 +188,21 @@ impl GroupChatExecutor {
         // with an unrecoverable half-round (the previous code's behavior).
         let round = session.current_round.saturating_add(1);
 
+        // Enforce the per-session round budget. Without this gate a hostile or
+        // misconfigured coordinator could loop the executor for unbounded
+        // LLM-billed rounds — the `max_rounds` config field was previously
+        // declared but never consulted at the round entry point. `current_round`
+        // is updated only after a fully successful commit, so the bound is
+        // checked against the projected next round, not the last completed one.
+        if let Some(cap) = session.max_rounds {
+            if round > cap {
+                return Err(GroupChatError::SessionInactive(format!(
+                    "round {round} exceeds max_rounds ({cap}) for session {}",
+                    session.id
+                )));
+            }
+        }
+
         // Step 1: Stage user message as a System turn (NOT yet added to history).
         let mut staged_turns: Vec<(u32, u32, Speaker, String)> = Vec::new();
         // persistence sequence: user=0, coordinator=1, persona_0=2, persona_1=3, ...
@@ -233,16 +248,22 @@ impl GroupChatExecutor {
         // Warn when a mentioned persona was dropped by the coordinator — a valid
         // mention that the coordinator chose to exclude leaves the caller with
         // no feedback. Detection is cheap (linear over typically < 10 targets /
-        // respondents) so we don't bother with a HashSet.
+        // respondents) so we don't bother with a HashSet. The same list is
+        // surfaced to the caller via the last `GroupChatMessage` returned
+        // (carried in the per-round result struct below) so a misbehaving or
+        // rate-limited coordinator is observable in the round outcome, not
+        // only in logs.
+        let mut dropped_targets: Vec<String> = Vec::new();
         for target in targets {
-            if !plan.respondents.iter().any(|r| r.persona_id == *target)
-                && session.participants.iter().any(|p| &p.id == target)
-            {
+            let is_participant = session.participants.iter().any(|p| &p.id == target);
+            let is_in_plan = plan.respondents.iter().any(|r| r.persona_id == *target);
+            if is_participant && !is_in_plan {
                 tracing::warn!(
                     subsystem = "group_chat",
                     target = %target,
                     "mentioned persona not included in coordinator plan"
                 );
+                dropped_targets.push(target.clone());
             }
         }
 
@@ -418,6 +439,17 @@ impl GroupChatExecutor {
                     .unwrap_or(u32::MAX)
                     .saturating_add(seq_offset);
             let is_final = p.i + 1 == total_respondents;
+            // Dropped-mention surfacing: only the FINAL message carries the
+            // dropped_targets list — intermediate messages default to empty so
+            // older consumers (which did not know about the field) keep
+            // working. The audit finding is that the caller never learned a
+            // mention was silently dropped by the coordinator; without this
+            // the only signal was a `tracing::warn!` line.
+            let dropped_for_this_msg = if is_final {
+                std::mem::take(&mut dropped_targets)
+            } else {
+                Vec::new()
+            };
             messages.push(GroupChatMessage {
                 session_id: session_id.clone(),
                 speaker,
@@ -425,6 +457,7 @@ impl GroupChatExecutor {
                 round,
                 sequence,
                 is_final,
+                dropped_targets: dropped_for_this_msg,
             });
         }
 

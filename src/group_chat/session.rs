@@ -59,6 +59,13 @@ pub struct GroupChatSession {
     /// sessions only. The stamp is the same one `SessionMetadata`, `LoopState`
     /// and `Goal` carry.
     pub owner_user_id: Option<String>,
+    /// Per-session round budget. Stamped at creation from the orchestrator's
+    /// `max_rounds()` config so a misconfigured or hostile coordinator can
+    /// never run unbounded LLM-billed rounds. `None` means unbounded —
+    /// reserved for tests / harness-internal sessions that explicitly opt
+    /// out. `execute_round` enforces this bound as soon as
+    /// `current_round + 1 > max_rounds`.
+    pub max_rounds: Option<u32>,
 }
 
 impl GroupChatSession {
@@ -87,7 +94,16 @@ impl GroupChatSession {
             source_channel,
             source_session_key,
             owner_user_id: crate::scope::current_scope().map(|attr| attr.owner_user_id),
+            max_rounds: None,
         }
+    }
+
+    /// Builder-style setter for `max_rounds`. Returns the modified session
+    /// so callers can chain `GroupChatSession::new(...).with_max_rounds(n)`.
+    #[must_use]
+    pub fn with_max_rounds(mut self, max_rounds: Option<u32>) -> Self {
+        self.max_rounds = max_rounds;
+        self
     }
 
     /// Record a new turn in the conversation history.
