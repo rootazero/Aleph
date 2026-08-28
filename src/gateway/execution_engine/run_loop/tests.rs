@@ -636,6 +636,123 @@ fn scope_stamping_producers_are_all_accounted_for() {
     }
 }
 
+/// Nothing under `execution_engine/` may read the raw scope stamp out of a
+/// request's metadata — the corrected one is what every reader must get.
+///
+/// [`super::request_scope`] exists because a producer that never heard of
+/// project rooms stamps `personal:<speaker>` on a session key a room has
+/// already claimed. Three readers went through it (the session row, the run's
+/// outer task-local, the sidebar recency touch) and a fourth did not: the
+/// `FlowRequest` literal copied `OWNER_META_KEY` / `SCOPE_META_KEY` straight
+/// out of the map. Since `Orchestrator::dispatch` rebuilds the harness-side
+/// scope task-local from exactly those two strings inside its `tokio::spawn`,
+/// the run *wrote* its memory under `Personal(<speaker>)` while the row, the
+/// roster predicate and every read composed `Project(P)`.
+///
+/// The failure is silent by construction — both scopes are valid, both compose
+/// a legal partition id, and the only observable difference is that the agent
+/// does not remember what was said in the room. So the guard is source-level:
+/// at runtime a corrected read and an uncorrected one are the same two strings
+/// whenever the session is not a room, which is most of the time and all of the
+/// fixtures.
+///
+/// Phrased as "no direct read outside the corrector" rather than "the
+/// `FlowRequest` literal calls `request_scope_strings`": a fifth reader is the
+/// thing that has to be caught, and naming the fourth one catches only it.
+///
+/// Uses [`crate::utils::source_scan`] rather than this module's local
+/// `production_sources`, whose cut is the literal `"#[cfg(test)]\nmod tests"`
+/// — `execute.rs` names its four test modules after what they test, so none of
+/// them is cut and every fixture in them would read as a production site.
+#[test]
+fn no_reader_under_execution_engine_takes_the_uncorrected_scope_stamp() {
+    use crate::utils::source_scan::{code_text, production_prefix};
+
+    // The corrector itself, which is the one place allowed to read the raw
+    // stamp — it is what turns it into the corrected one.
+    const CORRECTOR: &str = "src/gateway/execution_engine/run_loop/mod.rs";
+    // `carry_policy_metadata` FORWARDS the stamp to a continuation's fresh
+    // metadata map; it never consumes it. The continuation is a run of its own
+    // and gets the correction from its own `request_scope`, keyed on its own
+    // session — correcting here would key the lookup on the wrong session.
+    const FORWARDER: &str = "carry_policy_metadata";
+
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    let root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway/execution_engine");
+    let mut files = Vec::new();
+    walk(&root, &mut files);
+
+    let mut offenders: Vec<String> = Vec::new();
+    let mut scanned = 0usize;
+    for file in files {
+        let rel = file
+            .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+            .unwrap_or(&file)
+            .to_string_lossy()
+            .replace('\\', "/");
+        if rel == CORRECTOR || rel.ends_with("/tests.rs") || rel.contains("_tests.rs") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        scanned += 1;
+        let body = code_text(&production_prefix(&text));
+        for (n, line) in body.lines().enumerate() {
+            let hit = line.contains("scope::OWNER_META_KEY")
+                || line.contains("scope::SCOPE_META_KEY")
+                || line.contains("scope::scope_from_metadata");
+            if !hit {
+                continue;
+            }
+            // The forwarder's key list names both constants on their own lines,
+            // so the exemption is taken on the ENCLOSING FUNCTION — found by
+            // walking back to the nearest `fn` declaration — not on the file,
+            // which would blind the whole of `execute.rs`.
+            let enclosing_fn = body
+                .lines()
+                .take(n + 1)
+                .filter(|l| {
+                    let t = l.trim_start();
+                    t.starts_with("fn ") || t.contains(" fn ")
+                })
+                .last();
+            if enclosing_fn.is_some_and(|l| l.contains(FORWARDER)) {
+                continue;
+            }
+            offenders.push(format!("{rel}:{}: {}", n + 1, line.trim()));
+        }
+    }
+
+    assert!(
+        scanned > 10,
+        "expected to scan the execution_engine tree; scanned {scanned} files — \
+         the walk stopped matching, so a green result would mean nothing"
+    );
+    assert!(
+        offenders.is_empty(),
+        "these read the producer's RAW scope stamp instead of the corrected one \
+         from `run_loop::request_scope` / `request_scope_strings`. A project \
+         room's run then writes its memory to the speaker's personal partition \
+         while every reader looks in the room's — no error, no warn, no red \
+         test, just an agent that does not remember the room:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 /// The call every [`Ingress::Human`] producer's path must contain, written the
 /// one way the codebase writes it.
 const IDLE_STAMP: &str = "dreaming::record_activity()";

@@ -424,3 +424,138 @@ async fn redact_session_input_never_blocks() {
         texts(&out)
     );
 }
+
+// ---------------------------------------------------------------------------
+// Twin parity: a warn-free rewrite must survive on all three surfaces
+// ---------------------------------------------------------------------------
+
+/// The shape every real redaction guardrail has: it rewrites and reports
+/// nothing. A PII scrubber does not "warn" — warning about a secret is one way
+/// to leak it into the audit log. So this is the *common* case, not an edge one.
+struct SilentScrubber;
+#[async_trait]
+impl InputGuardrail for SilentScrubber {
+    fn name(&self) -> &str {
+        "silent_scrubber"
+    }
+    async fn evaluate_input(&self, text: &str) -> GuardrailDecision {
+        scrub(text)
+    }
+}
+#[async_trait]
+impl OutputGuardrail for SilentScrubber {
+    fn name(&self) -> &str {
+        "silent_scrubber"
+    }
+    async fn evaluate_output(&self, text: &str) -> GuardrailDecision {
+        scrub(text)
+    }
+}
+#[async_trait]
+impl ToolCallGuardrail for SilentScrubber {
+    fn name(&self) -> &str {
+        "silent_scrubber"
+    }
+    async fn evaluate_tool_call(&self, _tool: &str, args: &Value) -> GuardrailDecision {
+        scrub(&args.to_string())
+    }
+}
+fn scrub(text: &str) -> GuardrailDecision {
+    if text.contains("SECRET") {
+        GuardrailDecision::Sanitize(crate::guardrails::decision::Replacement {
+            text: text.replace("SECRET", "[REDACTED]"),
+            source: "silent_scrubber".into(),
+        })
+    } else {
+        GuardrailDecision::Allow
+    }
+}
+
+struct WarnOnly;
+#[async_trait]
+impl InputGuardrail for WarnOnly {
+    fn name(&self) -> &str {
+        "warn_only"
+    }
+    async fn evaluate_input(&self, _text: &str) -> GuardrailDecision {
+        GuardrailDecision::Warn {
+            reason: "looks odd".into(),
+        }
+    }
+}
+
+/// The three `evaluate_*` chains must answer a warn-free rewrite identically.
+///
+/// They did not: `evaluate_tool_call` decided on "did the payload change",
+/// while `evaluate_input` / `evaluate_output` decided on "did anything warn"
+/// and therefore returned `Allow` — discarding the rewrite and putting the
+/// original secret on the wire, with no error and no log. Two of three twins
+/// wrong, and the correct predicate sat twenty lines below them in the same
+/// file. This pins the *parity* rather than any one twin's answer: the failure
+/// mode is divergence, so the assertion has to be about the set.
+#[tokio::test]
+async fn all_three_chains_surface_a_warn_free_rewrite() {
+    let r = GuardrailRegistry::builder()
+        .with_input(Arc::new(SilentScrubber))
+        .with_output(Arc::new(SilentScrubber))
+        .with_tool_call(Arc::new(SilentScrubber))
+        .build();
+
+    let surfaces: Vec<(&str, GuardrailDecision)> = vec![
+        ("input", r.evaluate_input("the password is SECRET").await),
+        ("output", r.evaluate_output("the password is SECRET").await),
+        (
+            "tool_call",
+            r.evaluate_tool_call("t", &serde_json::json!({ "token": "SECRET" }))
+                .await,
+        ),
+    ];
+
+    for (surface, decision) in &surfaces {
+        let GuardrailDecision::Sanitize(rep) = decision else {
+            panic!("{surface}: a warn-free rewrite must surface as Sanitize, got {decision:?}");
+        };
+        assert!(
+            !rep.text.contains("SECRET"),
+            "{surface}: the rewrite must be the one the caller swaps in, got {:?}",
+            rep.text,
+        );
+        assert!(
+            rep.text.contains("[REDACTED]"),
+            "{surface}: the scrubbed text must survive, got {:?}",
+            rep.text,
+        );
+        assert!(
+            !rep.source.contains("warn:"),
+            "{surface}: no guardrail warned, so the audit source must not claim one did, got {:?}",
+            rep.source,
+        );
+    }
+}
+
+/// A chain that only warns still surfaces as a no-op `Sanitize` carrying the
+/// reasons — the pre-existing contract the fix above must not have traded away.
+/// Without this, "stop dropping the rewrite" is one over-correction away from
+/// "`Allow` unless rewritten", which silently discards every warn reason
+/// instead — the same class of loss, pointed the other way.
+#[tokio::test]
+async fn a_warn_only_chain_still_carries_its_reasons_unchanged() {
+    let r = GuardrailRegistry::builder()
+        .with_input(Arc::new(WarnOnly))
+        .build();
+    let d = r.evaluate_input("plain text").await;
+    let GuardrailDecision::Sanitize(rep) = d else {
+        panic!("a warn must still surface, got {d:?}");
+    };
+    assert_eq!(rep.text, "plain text", "a warn must not rewrite anything");
+    assert!(
+        rep.source.contains("warn:"),
+        "the reasons must reach the caller, got {:?}",
+        rep.source
+    );
+    assert!(
+        !rep.source.contains("sanitized"),
+        "nothing was rewritten, so the source must not say it was, got {:?}",
+        rep.source
+    );
+}

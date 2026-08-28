@@ -74,8 +74,16 @@ where
         // row), and a silent empty case is exactly the asymmetry this path
         // exists to refuse. A user who typed `/btw promote` did interact with
         // the conversation; a refreshed-and-abandoned tab still does not.
+        // Scoped by `main`, not by `request.session_key` — the caller has
+        // already redirected the latter onto the side thread, and a side thread
+        // is never a room. The row this creates belongs to the conversation the
+        // user typed in, so if THAT one is a project room the raw producer
+        // stamp has to be corrected the same way `run_loop` corrects it for an
+        // ordinary turn. `stamp_attribution` writes only on create and
+        // `attribution_backfill` only fills NULLs, so a wrong stamp here is
+        // permanent and takes the room out of every member's sight.
         crate::scope::with_scope(
-            crate::scope::scope_from_metadata(&request.metadata),
+            super::run_loop::scope_for_session(&request.metadata, main),
             agent.ensure_session(main),
         )
         .await;

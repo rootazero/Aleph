@@ -1028,78 +1028,10 @@ where
                 // itself is single-sourced from the orchestrator drain.
                 self.announce_turn_end(&request);
 
-                // Persist the user-chosen project folder onto the session so the
-                // Panel can restore it after a reload (project workspaces G3).
-                // Stamped on the first message, mirroring source-channel/topic
-                // stamping; the project↔session binding is fixed at session
-                // creation, so a later switch starts a fresh session and
-                // re-stamps. Best-effort: a metadata write failure never blocks
-                // the turn.
-                if is_first_message {
-                    if let (Some(sm), Some(root)) = (
-                        self.session_manager.clone(),
-                        request
-                            .workspace_override
-                            .as_ref()
-                            .map(|p| p.display().to_string()),
-                    ) {
-                        let key = request.session_key.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = sm.set_project_root(&key, Some(&root)).await {
-                                warn!(error = %e, "failed to persist session project_root");
-                            }
-                        });
-                    }
-                }
-
-                // Auto-generate session topic on first real message
-                if is_first_message {
-                    if let (Some(sm), Some(eb)) =
-                        (self.session_manager.clone(), self.event_bus.clone())
-                    {
-                        let topic_provider = self
-                            .provider_registry
-                            .get("haiku")
-                            .unwrap_or_else(|| self.provider_registry.default_provider());
-                        let topic_session_key = request.session_key.clone();
-                        let topic_message = request.input.clone();
-                        info!(
-                            session_key = %topic_session_key.to_key_string(),
-                            "Auto-topic: spawning generation for first message"
-                        );
-                        tokio::spawn(async move {
-                            let topic_text = super::topic::generate_conversation_topic(
-                                &topic_provider,
-                                &topic_message,
-                            )
-                            .await;
-
-                            if let Err(e) = sm.set_topic(&topic_session_key, &topic_text).await {
-                                warn!(error = %e, "Auto-topic: failed to persist topic");
-                            } else {
-                                let event_json = serde_json::json!({
-                                    "method": "stream.session_updated",
-                                    "params": {
-                                        "session_key": topic_session_key.to_key_string(),
-                                        "topic": topic_text,
-                                    }
-                                });
-                                eb.publish(event_json.to_string());
-                                info!(
-                                    session_key = %topic_session_key.to_key_string(),
-                                    topic = %topic_text,
-                                    "Auto-topic: session topic set"
-                                );
-                            }
-                        });
-                    } else {
-                        info!(
-                            "Auto-topic: skipped (session_manager={}, event_bus={})",
-                            self.session_manager.is_some(),
-                            self.event_bus.is_some()
-                        );
-                    }
-                }
+                // The project-folder stamp and the auto-topic — see
+                // `settle::settle_first_message` for why they live in a helper
+                // both arms call rather than in this one.
+                self.settle_first_message(&request, is_first_message);
 
                 // Record conversation turn for compression scheduling. Content-blind:
                 // the turn-threshold cadence only. "Was this a correction worth
@@ -1306,6 +1238,14 @@ where
                 // surface — a second Panel tab, a room peer, the sidebar row —
                 // showing a session that visibly never changed.
                 self.announce_turn_end(&request);
+                // Same argument, one step further: the two FIRST-MESSAGE stamps
+                // are keyed on a one-shot latch over an empty history, and the
+                // harness appended this turn's user message before dispatch. So
+                // a first turn that failed is not "a turn that will be retried"
+                // — it is the only chance those stamps ever get. Skipping them
+                // here left the conversation permanently untitled and
+                // permanently unbound from the folder the user picked.
+                self.settle_first_message(&request, is_first_message);
                 // Preserve the typed variant so downstream callers (cron / heartbeat
                 // executors) can dispatch on `ExecutionError::Timeout`,
                 // `Cancelled`, etc. Collapsing to `Failed(string)` here made the
