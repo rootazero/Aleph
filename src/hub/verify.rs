@@ -91,11 +91,13 @@ pub fn verdict_with_health(
 /// attack/failure surface we want to gate against: an attacker who can write to
 /// the target slot can drop a symlink and have verify report "present"; a
 /// half-finished install can leave an empty directory that also passes
-/// `exists()`. `symlink_metadata` resolves symlinks — the *target* of the
-/// symlink is what gets classified, and a symlink whose target is missing
-/// errors out. The existing install flow stages-then-renames atomically so a
-/// real plugin is always a directory; rejecting the other shapes keeps verify
-/// honest.
+/// `exists()`. `symlink_metadata` is used deliberately here because it does
+/// NOT follow symlinks — `metadata` would dereference the link and report on
+/// the target instead, defeating the `file_type().is_symlink()` rejection
+/// below. A dangling symlink still classifies cleanly as a symlink via this
+/// call (no `NotFound` error, since we stat the link itself, not its target).
+/// The existing install flow stages-then-renames atomically so a real plugin
+/// is always a directory; rejecting the other shapes keeps verify honest.
 fn verify_on_disk_path(path: &str, label: &str) -> VerifyReport {
     let p = std::path::Path::new(path);
     let meta = match std::fs::symlink_metadata(p) {
