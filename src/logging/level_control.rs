@@ -127,10 +127,11 @@ fn warn_invalid_level_once(value: u8) {
 
 /// Initialize the log level from environment or default.
 ///
-/// `RUST_LOG` parsing: walk all comma-separated directives and keep the
-/// **last** simple-level entry (i.e. one without a `target=` prefix). Per-crate
-/// directives like `h2=warn` are skipped — the global atomic only stores one
-/// level for `alephcore`. Falls back to `Info` when nothing parses.
+/// `RUST_LOG` parsing: walk all comma-separated directives; the last match
+/// wins, where a match is either (a) a plain-level directive (no `target=`
+/// prefix), or (b) a `target=value` whose target names us (see
+/// [`is_alephcore_target`]). Per-target entries for non-`alephcore` crates
+/// (e.g. `h2=warn`) are skipped. Falls back to `Info` when nothing parses.
 pub(crate) fn init_log_level() {
     INIT.call_once(|| {
         let Ok(rust_log) = std::env::var("RUST_LOG") else {
