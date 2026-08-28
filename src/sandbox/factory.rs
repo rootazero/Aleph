@@ -37,6 +37,24 @@ pub fn build_sandbox(
     if !cfg.enabled {
         return Arc::new(NoopSandbox);
     }
+
+    // F-1 mitigation: deny_read_globs is silently dropped on Linux (the
+    // bwrap driver literal-drops it via `let _ = deny_read_globs;`).
+    // Operators who configure the secret-deny floor believe the
+    // protection is active; today it is enforced only on macOS seatbelt
+    // and Windows AppContainer. Surface the gap at boot so a Linux
+    // operator with deny globs configured is not silently misled.
+    #[cfg(target_os = "linux")]
+    if !cfg.deny_read_globs.is_empty() {
+        tracing::warn!(
+            target: "sandbox",
+            patterns = ?cfg.deny_read_globs,
+            "[sandbox] deny_read_globs configured but Linux/bwrap has no native \
+             glob-deny primitive; landlock enforcement pending (SP-2 follow-up). \
+             A code-exec run CAN read these files until that lands."
+        );
+    }
+
     let rate_limiter = Arc::new(SandboxRateLimiter::new(rate_limit_config));
     let mut hooks = SandboxHooks::new();
 
