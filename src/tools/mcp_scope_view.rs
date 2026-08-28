@@ -9,9 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::extension::registry::ToolRegistration;
 use crate::session::events::ToolOutput;
-use crate::tools::service::{
-    to_metadata_form, ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource,
-};
+use crate::tools::service::{ToolDefinition, ToolError, ToolService};
 
 pub struct McpScopedToolService {
     parent: Arc<dyn ToolService>,
@@ -23,48 +21,34 @@ impl McpScopedToolService {
         Self { parent, extras }
     }
 
-    /// Metadata for an extras-only (plugin-provided) tool. The one field that
-    /// must not stay default is the wall-clock budget: a definition without one
-    /// made the harness treat a slow call as a run-level stall instead of a
-    /// recoverable tool error. Plugins declare no budget, so this resolves to
-    /// the global default.
-    fn extras_metadata(name: &str) -> ToolDefinitionMetadata {
-        ToolDefinitionMetadata {
-            max_duration_ms: Some(crate::tools::budget::resolve_tool_budget_ms(name, None)),
-            ..ToolDefinitionMetadata::default()
-        }
-    }
-
-    /// Append extras (per-agent MCP-scope tools) that don't shadow a parent
-    /// definition. Shared by `list()` and `dispatchable_list()` so the two
-    /// views cannot drift on extras handling.
-    fn merge_extras(
-        mut out: Vec<ToolDefinition>,
-        extras: &[ToolRegistration],
-    ) -> Vec<ToolDefinition> {
-        let parent_names: std::collections::HashSet<String> =
-            out.iter().map(|d| d.name.clone()).collect();
-        for t in extras {
-            if !parent_names.contains(&t.name) {
-                out.push(ToolDefinition {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    input_schema: t.parameters.clone(),
-                    source: ToolSource::Extension {
-                        plugin_id: t.plugin_id.clone(),
-                    },
-                    metadata: Self::extras_metadata(&t.name),
-                });
-            }
-        }
-        out
+    /// Whether `name` is an extras-only entry — present in `self.extras` but
+    /// NOT served by the parent. Stage I MVP cannot dispatch these: there is
+    /// no extension-runtime handle carried by this service, so calling them
+    /// via `execute` would silently hit the parent's NotFound. We therefore
+    /// keep the surfaces (`list` / `describe` / `metadata_schema` /
+    /// `dispatchable_list`) and the dispatch (`execute` / `execute_with_cancel`)
+    /// in lock-step: either a tool is exposed everywhere AND callable, or it
+    /// is absent from all four surfaces and surfaces a clear `NotFound` on
+    /// dispatch. Stage II replaces this with an actual extension-runtime
+    /// handle; until then, extras are reserved, not advertised.
+    async fn is_extras_only(&self, name: &str) -> bool {
+        self.extras.iter().any(|t| t.name == name)
+            && self.parent.describe(name).await.is_none()
     }
 }
 
 #[async_trait]
 impl ToolService for McpScopedToolService {
     async fn execute(&self, name: &str, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
-        // Parent first. Stage I MVP: extras execution deferred to Task 12.
+        // Extras-only entries are not dispatchable in Stage I. Surface a
+        // clear NotFound rather than silently forwarding to the parent (which
+        // would return the same NotFound but imply the tool was once wired —
+        // it was not). The error preserves the name so the model can adjust.
+        if self.is_extras_only(name).await {
+            return Err(ToolError::NotFound {
+                name: name.to_string(),
+            });
+        }
         self.parent.execute(name, input).await
     }
 
@@ -74,13 +58,24 @@ impl ToolService for McpScopedToolService {
         input: serde_json::Value,
         cancel: CancellationToken,
     ) -> Result<ToolOutput, ToolError> {
+        // Same guard as `execute`: extras-only entries cannot be dispatched,
+        // so cancel-aware execution also short-circuits with NotFound.
+        if self.is_extras_only(name).await {
+            return Err(ToolError::NotFound {
+                name: name.to_string(),
+            });
+        }
         // Delegate to the parent's cancel-aware path so the inner
         // `ScopedToolService` actually threads the token into `LoopTool::execute`.
         self.parent.execute_with_cancel(name, input, cancel).await
     }
 
     async fn list(&self) -> Vec<ToolDefinition> {
-        Self::merge_extras(self.parent.list().await, &self.extras)
+        // Stage I MVP: extras are NOT advertised. Keeping the surfaces and
+        // dispatch consistent prevents the model from invoking a name that
+        // would NotFound. Stage II (extension-runtime handle) re-introduces
+        // the merge once dispatch lands.
+        self.parent.list().await
     }
 
     async fn dispatchable_list(&self) -> Vec<ToolDefinition> {
@@ -89,26 +84,15 @@ impl ToolService for McpScopedToolService {
         // parent `ScopedToolService`'s deferred MCP names from the
         // name-repairer's candidate set — a correct call to a deferred tool
         // would miss the Exact tier and could be fuzzily rewritten into a
-        // different resident tool. Extras merge identically to `list()`.
-        Self::merge_extras(self.parent.dispatchable_list().await, &self.extras)
+        // different resident tool.
+        self.parent.dispatchable_list().await
     }
 
     async fn describe(&self, name: &str) -> Option<ToolDefinition> {
-        if let Some(d) = self.parent.describe(name).await {
-            return Some(d);
-        }
-        self.extras
-            .iter()
-            .find(|t| t.name == name)
-            .map(|t| ToolDefinition {
-                name: t.name.clone(),
-                description: t.description.clone(),
-                input_schema: t.parameters.clone(),
-                source: ToolSource::Extension {
-                    plugin_id: t.plugin_id.clone(),
-                },
-                metadata: Self::extras_metadata(&t.name),
-            })
+        // Extras are not advertised in Stage I, so `describe` mirrors the
+        // parent's view. Future Stage II will add an extras fallback here
+        // once dispatch catches up.
+        self.parent.describe(name).await
     }
 
     /// Forwarded: extras add per-agent MCP tools, they do not add a gate.
@@ -124,44 +108,13 @@ impl ToolService for McpScopedToolService {
         input: &serde_json::Value,
     ) -> crate::tools::concurrency::ConcurrencyClaim {
         // Defer to the parent: it owns the authoritative bounded scope for
-        // every tool it exposes. Extras-only entries currently route execute()
-        // through the parent too (Stage I MVP), so deferring is correct here.
+        // every tool it exposes.
         self.parent.call_concurrency_claim(name, input).await
     }
 
     fn metadata_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]> {
-        // For Stage I MVP, compute merged schema from list snapshot.
-        // AllowlistToolService above us gates which tools the LLM actually sees,
-        // so extras not in the allowlist are filtered out there.
-        let parent_schema = self.parent.metadata_schema();
-        if self.extras.is_empty() {
-            return parent_schema;
-        }
-        // Collect parent names so extras don't shadow existing tools.
-        let parent_names: std::collections::HashSet<String> =
-            parent_schema.iter().map(|t| t.name.clone()).collect();
-        // Build extras defs and convert to metadata form, then merge.
-        let extra_defs: Vec<ToolDefinition> = self
-            .extras
-            .iter()
-            .filter(|t| !parent_names.contains(&t.name))
-            .map(|t| ToolDefinition {
-                name: t.name.clone(),
-                description: t.description.clone(),
-                input_schema: t.parameters.clone(),
-                source: ToolSource::Extension {
-                    plugin_id: t.plugin_id.clone(),
-                },
-                metadata: Self::extras_metadata(&t.name),
-            })
-            .collect();
-        if extra_defs.is_empty() {
-            return parent_schema;
-        }
-        let extra_schema = to_metadata_form(&extra_defs);
-        let mut merged: Vec<crate::tool_metadata::ToolDefinition> =
-            parent_schema.iter().cloned().collect();
-        merged.extend(extra_schema.iter().cloned());
-        merged.into()
+        // Stage I MVP: pass through the parent's schema. Extras are not
+        // dispatchable yet, so they cannot appear in the LLM-visible schema.
+        self.parent.metadata_schema()
     }
 }
