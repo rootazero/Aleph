@@ -206,15 +206,23 @@ pub fn set_log_level(level: LogLevel) -> Result<(), LoggingError> {
         }
     };
     let old_level = LogLevel::from_u8(old_u8);
-    if let Err(error) = aleph_logging::set_log_level(level.to_filter_string()) {
-        tracing::warn!(%error, "Runtime log filter is unavailable");
-        return Err(LoggingError::FilterUnavailable(error));
+    if old_u8 != next {
+        if let Err(error) = aleph_logging::set_log_level(level.to_filter_string()) {
+            tracing::warn!(%error, "Runtime log filter is unavailable");
+            return Err(LoggingError::FilterUnavailable(error));
+        }
+        tracing::info!(
+            old_level = ?old_level,
+            new_level = ?level,
+            "Log level changed"
+        );
+    } else {
+        tracing::trace!(
+            old_level = ?old_level,
+            new_level = ?level,
+            "log level set was a no-op"
+        );
     }
-    tracing::info!(
-        old_level = ?old_level,
-        new_level = ?level,
-        "Log level changed"
-    );
     Ok(())
 }
 
