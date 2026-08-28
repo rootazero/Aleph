@@ -652,6 +652,19 @@ impl ChannelState {
         InboundMessageSender::from(self.inbound_broadcast.clone())
     }
 
+    /// Subscribe a fresh inbound receiver.
+    ///
+    /// Named `take_receiver` for historical reasons, but this is NOT
+    /// `mpsc::Receiver::take()` semantics: `broadcast` supports many
+    /// subscribers, so every call yields a fresh `Receiver` and the return
+    /// value is always `Some`. The previous doc comment claimed "can only
+    /// be called once", which was wrong — two callers both "took" the
+    /// receiver and silently over-subscribed (the second consumer sees a
+    /// `Lagged` stream of messages the first already pulled, not a shared
+    /// queue). Callers needing a single-consumer gate should use
+    /// [`crate::gateway::channel_registry::ChannelRegistry::take_inbound_receiver`],
+    /// which consumes an `Option` and genuinely returns `None` the second
+    /// time.
     #[must_use]
     pub fn take_receiver(&self) -> Option<broadcast::Receiver<InboundMessage>> {
         Some(self.inbound_broadcast.subscribe())

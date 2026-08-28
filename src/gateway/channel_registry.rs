@@ -766,6 +766,11 @@ impl ChannelRegistry {
     /// Take the inbound message receiver
     ///
     /// This can only be called once - subsequent calls return None.
+    ///
+    /// Unlike `ChannelState::take_receiver()` — which was named after
+    /// `mpsc::Receiver::take()` semantics that `broadcast` does not have —
+    /// THIS method genuinely consumes the receiver via `Option::take()`,
+    /// so the single-consumer contract is real here.
     pub fn take_inbound_receiver(&self) -> Option<broadcast::Receiver<InboundMessage>> {
         let mut rx_guard = self.inbound_rx.lock().unwrap_or_else(|e| e.into_inner());
         rx_guard.take()
@@ -822,7 +827,16 @@ impl ChannelRegistry {
                             skipped = skipped,
                             "Channel forwarder lagged; resuming from latest message"
                         );
-                        health.write().await.record_event();
+                        // **Audit fix**: do NOT call `record_event()` here.
+                        // Lagged means OUR forwarder fell behind the
+                        // broadcast ring — it is not proof of transport
+                        // liveness on the channel. Stamping `last_event_at`
+                        // here reset the staleness window from the lag
+                        // instant, so a wedged channel whose inbound queue
+                        // backed up exactly at its last real message would
+                        // evade the health monitor for another full
+                        // DEFAULT_STALE_SECS. The monitor only trusts real
+                        // messages now.
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         // Channel sender was dropped (channel removed). Exit.
