@@ -164,6 +164,50 @@ impl GroupChatSession {
         text
     }
 
+    /// Build the coordinator's history text with a sliding window.
+    ///
+    /// Rounds newer than `current_round - window_rounds` are included
+    /// verbatim; anything older is collapsed into a single summary line so
+    /// the coordinator prompt stays bounded (an unbounded history grew
+    /// linearly with session length — a 50-round × 4-persona session pushed
+    /// >100k tokens into every coordinator call). `window_rounds == 0`
+    /// disables the window entirely and returns the full history, matching
+    /// [`Self::build_history_text`].
+    #[must_use]
+    pub fn build_history_text_windowed(&self, window_rounds: u32) -> String {
+        if window_rounds == 0 || self.current_round <= window_rounds {
+            return self.build_history_text();
+        }
+        let cutoff = self.current_round - window_rounds;
+        let mut text = String::new();
+        let mut older_turns = 0usize;
+        let mut older_rounds_seen: std::collections::BTreeSet<u32> =
+            std::collections::BTreeSet::new();
+        let mut recent: Vec<&GroupChatTurn> = Vec::new();
+        for turn in &self.history {
+            if turn.round <= cutoff {
+                older_turns += 1;
+                older_rounds_seen.insert(turn.round);
+            } else {
+                recent.push(turn);
+            }
+        }
+        if older_turns > 0 {
+            let _ = writeln!(
+                text,
+                "[Summary]: {} earlier turn(s) across {} round(s) omitted \
+                 (window keeps the most recent {} rounds).\n",
+                older_turns,
+                older_rounds_seen.len(),
+                window_rounds
+            );
+        }
+        for turn in recent {
+            let _ = writeln!(text, "[{}]: {}\n", turn.speaker.name(), turn.content);
+        }
+        text
+    }
+
     /// End this session, setting its status to `Ended`.
     pub fn end(&mut self) {
         if self.status != GroupChatStatus::Ended {

@@ -34,6 +34,12 @@ pub struct GroupChatExecutor {
     provider_registry: Option<Arc<ProviderRegistry>>,
     coordinator_visible: bool,
     db: Option<Arc<StateDatabase>>,
+    /// Sliding-window size for the coordinator's history text. Older rounds
+    /// are collapsed into a one-line summary (see
+    /// [`GroupChatSession::build_history_text_windowed`]); `0` disables the
+    /// window. Sourced from `GroupChatConfig::history_window_rounds` by the
+    /// startup wiring.
+    history_window_rounds: u32,
     /// Set of `(persona_id, provider_name)` pairs we've already warned about
     /// falling back to the default provider. Kept behind a sync mutex so the
     /// `&self` `resolve_provider` lookup can dedupe across rounds without
@@ -52,6 +58,7 @@ impl GroupChatExecutor {
             provider_registry: None,
             coordinator_visible: false,
             db: None,
+            history_window_rounds: 0,
             provider_fallback_warned: crate::sync_primitives::Mutex::new(
                 std::collections::HashSet::new(),
             ),
@@ -72,6 +79,14 @@ impl GroupChatExecutor {
     #[must_use]
     pub const fn with_coordinator_visible(mut self, visible: bool) -> Self {
         self.coordinator_visible = visible;
+        self
+    }
+
+    /// Set the coordinator history sliding-window size (rounds). `0` disables
+    /// the window and keeps the full history (the pre-fix behavior).
+    #[must_use]
+    pub const fn with_history_window(mut self, window_rounds: u32) -> Self {
+        self.history_window_rounds = window_rounds;
         self
     }
 
@@ -216,7 +231,7 @@ impl GroupChatExecutor {
         persist_seq = persist_seq.saturating_add(1);
 
         // Step 2: Build coordinator prompt and call LLM
-        let history = session.build_history_text();
+        let history = session.build_history_text_windowed(self.history_window_rounds);
         let coordinator_prompt = build_coordinator_prompt(
             &session.participants,
             user_message,

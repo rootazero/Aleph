@@ -37,6 +37,15 @@ pub struct GroupChatConfig {
     /// Default: false
     #[serde(default)]
     pub coordinator_visible: bool,
+
+    /// Number of most recent rounds included verbatim in the coordinator's
+    /// history text. Older rounds are collapsed into a one-line summary so
+    /// the coordinator prompt stays bounded: without a window, a 50-round ×
+    /// 4-persona session pushed >100k tokens into every coordinator call,
+    /// growing cost and latency linearly and eventually hitting the
+    /// provider's context limit. Default: 20
+    #[serde(default = "default_history_window_rounds")]
+    pub history_window_rounds: u32,
 }
 
 const fn default_max_personas_per_session() -> usize {
@@ -47,12 +56,17 @@ const fn default_max_rounds() -> usize {
     10
 }
 
+const fn default_history_window_rounds() -> u32 {
+    20
+}
+
 impl Default for GroupChatConfig {
     fn default() -> Self {
         Self {
             max_personas_per_session: default_max_personas_per_session(),
             max_rounds: default_max_rounds(),
             coordinator_visible: false,
+            history_window_rounds: default_history_window_rounds(),
         }
     }
 }
