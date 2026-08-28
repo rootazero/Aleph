@@ -356,50 +356,57 @@ impl GenerationProvider for OpenAiImageProvider {
 
             debug!(url = %url, "Sending request to OpenAI");
 
-            // Make API request
-            let response = self
-                .client
-                .post(&url)
-                .header("Authorization", format!("Bearer {}", self.api_key))
-                .header("Content-Type", "application/json")
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| {
-                    if e.is_timeout() {
-                        GenerationError::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-                    } else if e.is_connect() {
-                        GenerationError::network(format!("Connection failed: {e}"))
-                    } else {
-                        GenerationError::network(e.to_string())
-                    }
+            // Single attempt: HTTP call + response classification, retried by
+            // `retry_transient` on 429/5xx/timeout/network errors (the
+            // classifications in `parse_error_response` mark those
+            // `is_retryable()`). Non-retryable errors (auth, content filter,
+            // invalid params, serialization) return on the first attempt.
+            let attempt = || async {
+                let response = self
+                    .client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .header("Content-Type", "application/json")
+                    .json(&body)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        if e.is_timeout() {
+                            GenerationError::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+                        } else if e.is_connect() {
+                            GenerationError::network(format!("Connection failed: {e}"))
+                        } else {
+                            GenerationError::network(e.to_string())
+                        }
+                    })?;
+
+                let status = response.status();
+                let response_text = response.text().await.map_err(|e| {
+                    GenerationError::network(format!("Failed to read response body: {e}"))
                 })?;
 
-            let status = response.status();
-            let response_text = response.text().await.map_err(|e| {
-                GenerationError::network(format!("Failed to read response body: {e}"))
-            })?;
+                // Handle non-success status codes
+                if !status.is_success() {
+                    error!(
+                        status = %status,
+                        body = %response_text,
+                        "OpenAI API request failed"
+                    );
+                    return Err(self.parse_error_response(status, &response_text));
+                }
 
-            // Handle non-success status codes
-            if !status.is_success() {
-                error!(
-                    status = %status,
-                    body = %response_text,
-                    "OpenAI API request failed"
-                );
-                return Err(self.parse_error_response(status, &response_text));
-            }
-
-            // Parse successful response
-            let api_response: ImageGenerationResponse = serde_json::from_str(&response_text)
-                .map_err(|e| {
+                // Parse successful response
+                serde_json::from_str::<ImageGenerationResponse>(&response_text).map_err(|e| {
                     error!(
                         error = %e,
                         body = %response_text,
                         "Failed to parse OpenAI response"
                     );
                     GenerationError::serialization(format!("Failed to parse response: {e}"))
-                })?;
+                })
+            };
+
+            let api_response = super::http::retry_transient("openai-image.generate", attempt).await?;
 
             // Extract first image (DALL-E 3 only supports n=1)
             let first_image = api_response.data.first().ok_or_else(|| {
