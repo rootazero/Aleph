@@ -422,8 +422,12 @@ mod tests {
 
     #[test]
     fn test_task_status_recoverable() {
+        // `Running` is recoverable (a clean shutdown would have moved it
+        // elsewhere). `Interrupted` is terminal — the boot reconciliation
+        // path treats it as such; including it here was the source of the
+        // subsystem disagreement fixed in the 2026-08-28 logic audit.
         assert!(TaskStatus::Running.is_recoverable());
-        assert!(TaskStatus::Interrupted.is_recoverable());
+        assert!(!TaskStatus::Interrupted.is_recoverable());
         assert!(!TaskStatus::Completed.is_recoverable());
         assert!(!TaskStatus::Failed.is_recoverable());
     }

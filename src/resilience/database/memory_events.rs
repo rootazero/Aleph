@@ -576,7 +576,7 @@ mod tests {
         }
 
         let events = db
-            .get_memory_events_since_seq("fact-003", 1, "", usize::MAX)
+            .get_memory_events_since_seq("fact-003", 1, "", 1000)
             .await
             .unwrap();
         assert_eq!(events.len(), 2); // seq 2 and 3
