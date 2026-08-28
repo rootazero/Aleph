@@ -73,5 +73,6 @@ pub use trace_presentation::{
     AgentTracePresentationOptions, AgentTracePresentationPreset, AgentTracePresentationStatus,
 };
 pub use trace_replay::{
-    AgentTraceReplay, AgentTraceReplayEntry, AgentTraceReplayListItem, AgentTraceTaskSummary,
+    AgentTraceListCursor, AgentTraceListPage, AgentTraceListRow, AgentTraceReplay,
+    AgentTraceReplayEntry, AgentTraceTaskSummary,
 };

@@ -106,12 +106,33 @@ async fn visible_running_keys(store: &dyn SessionStore, keys: Vec<String>) -> Ve
 /// admin-gating it (the `gateway.` family default) made the seed and the gauge
 /// dead for exactly the population the filtering is for.
 ///
-/// **`run_concurrency.per_agent` is DROPPED for a scoped caller**, for the same
-/// reason and by the same predicate: `{agent_id, in_use}` names which agent
-/// personas hold a live run *right now*, which is the identity-and-timing fact
-/// the two session arrays were narrowed to remove, not a load number. An
-/// unrestricted caller (internal / operator — `visible_owner_filter()` is
-/// `None`) still gets the whole snapshot.
+/// **`run_concurrency.per_agent` is DROPPED for a MEMBER**, and it deliberately
+/// asks a DIFFERENT question from the two arrays above: `{agent_id, in_use}`
+/// names agent PERSONAS, which are server-global configuration rather than
+/// per-user rows, so withholding it is a privilege decision. It therefore asks
+/// the privilege predicate — `caller_identity::caller_is_member`, the single
+/// source `method_admin`'s gate, `exec_approvals`, `exec_grants` and
+/// `config.get` already converged on.
+///
+/// ⚠️ It asked `visible_owner_filter().is_some()` until 2026-08-29, and the
+/// sentence that stood right here claimed "an unrestricted caller (internal /
+/// operator — `visible_owner_filter()` is `None`) still gets the whole
+/// snapshot". The operator half of that was false.
+/// `handlers::connect::resolve_connection_identity` scopes EVERY authorized
+/// connection — loopback included — with `CALLER_USER = Some(OWNER_USER_ID)`,
+/// so the filter is `Some(..)` for an operator and `per_agent` was dropped for
+/// every client on every deployment, the stock single-user desktop included.
+/// The field had a producer and a wire slot and no reachable reader, which
+/// looks exactly like a field nobody wired. The test below could not see it
+/// either: its "unrestricted" arm scoped no caller at all, which is the
+/// internal-caller case, never the operator's.
+///
+/// The two arrays that NAME SESSIONS keep the ownership predicate, and that is
+/// not an oversight left behind: a session is a per-user row and P2's product
+/// boundary there is owner-only by ruling (see
+/// [`crate::gateway::visibility::visible_owner_filter`]'s doc). Privilege and
+/// ownership are different questions and this one response answers both — one
+/// per field, not one per handler.
 ///
 /// What genuinely IS load and stays process-wide for everyone:
 /// `global_in_use` / `global_total` / `per_agent_cap` / `waiting` and
@@ -125,10 +146,12 @@ pub async fn handle_gateway_metrics_run_concurrency(
 ) -> JsonRpcResponse {
     let mut run_concurrency =
         serde_json::to_value(run_manager.concurrency_snapshot()).unwrap_or_else(|_| json!({}));
-    // `per_agent` is the third identity array in this response. Drop it for a
-    // scoped caller exactly as the two session arrays are narrowed — same
-    // predicate, same reason.
-    if visibility::visible_owner_filter().is_some() {
+    // `per_agent` is the third identity array in this response, but it names
+    // agent personas rather than sessions — server-global config, so the
+    // question is PRIVILEGE and the predicate is the privilege one. See this
+    // function's doc for why the ownership filter was the wrong question here
+    // and how it made the field unreadable on every deployment.
+    if crate::gateway::caller_identity::caller_is_member() {
         if let Some(obj) = run_concurrency.as_object_mut() {
             obj.remove("per_agent");
         }
@@ -547,42 +570,73 @@ mod tests {
     /// `[{agent_id, in_use}]` — which agent personas hold a live run *right
     /// now* — so leaving it verbatim hands a member the same live-activity
     /// correlation the two session arrays were narrowed to remove. It is
-    /// dropped for a scoped caller, not summarised and not excused in a
-    /// comment; an unrestricted (internal / operator) caller still gets it.
+    /// dropped for a MEMBER, not summarised and not excused in a comment.
     ///
-    /// Both arms run against the same handler in the same test, so the
-    /// "present unless dropped" premise is proved here rather than assumed.
+    /// ⚠️ **The operator arm is the one that matters, and it is the one this
+    /// test did not have.** Until 2026-08-29 the "unrestricted" arm below
+    /// scoped no caller at all — which is the INTERNAL caller (cron, A2A, an
+    /// in-process test), never a connection. Every real connection, loopback
+    /// included, carries `CALLER_USER = Some(OWNER_USER_ID)`, so the
+    /// then-current ownership predicate dropped `per_agent` for every client on
+    /// every deployment while this test stayed green. A fixture that cannot
+    /// reach the case is not coverage of it, so all three arms are here now and
+    /// each names the task-locals a real connection of that kind carries.
     #[tokio::test]
-    async fn the_per_agent_breakdown_is_withheld_from_a_scoped_caller() {
+    async fn the_per_agent_breakdown_is_withheld_from_a_member_and_only_a_member() {
+        use crate::gateway::caller_identity::CALLER_ROLE;
+        use crate::gateway::security::store::OWNER_USER_ID;
+
         let (sessions, _temp) = empty_session_store();
 
-        let unrestricted = handle_gateway_metrics_run_concurrency(
-            JsonRpcRequest::with_id("gateway.metrics.run_concurrency", None, json!(1)),
-            real_run_manager(),
-            sessions.clone(),
-        )
-        .await
-        .result
-        .expect("ok");
-        assert!(
-            unrestricted["run_concurrency"]["per_agent"].is_array(),
-            "the premise: an unrestricted caller receives the whole snapshot"
-        );
-
-        let scoped = CALLER_USER
-            .scope(Some("u-alice".to_string()), async {
-                handle_gateway_metrics_run_concurrency(
-                    JsonRpcRequest::with_id("gateway.metrics.run_concurrency", None, json!(2)),
-                    real_run_manager(),
-                    sessions.clone(),
+        async fn snapshot(
+            sessions: Arc<dyn SessionStore>,
+            id: i64,
+            user: Option<&str>,
+            role: Option<&str>,
+        ) -> serde_json::Value {
+            CALLER_USER
+                .scope(
+                    user.map(str::to_string),
+                    CALLER_ROLE.scope(role.map(str::to_string), async {
+                        handle_gateway_metrics_run_concurrency(
+                            JsonRpcRequest::with_id(
+                                "gateway.metrics.run_concurrency",
+                                None,
+                                json!(id),
+                            ),
+                            real_run_manager(),
+                            sessions,
+                        )
+                        .await
+                    }),
                 )
                 .await
-            })
-            .await
-            .result
-            .expect("ok");
+                .result
+                .expect("ok")
+        }
+
+        // (a) Internal caller: no identity scoped at all.
+        let internal = snapshot(sessions.clone(), 1, None, None).await;
         assert!(
-            scoped["run_concurrency"]
+            internal["run_concurrency"]["per_agent"].is_array(),
+            "the premise: an unscoped internal caller receives the whole snapshot"
+        );
+
+        // (b) An OPERATOR connection — loopback or an admin-bound device. This
+        //     is what `resolve_connection_identity` actually stamps, and it is
+        //     the arm whose absence hid the defect.
+        let operator = snapshot(sessions.clone(), 2, Some(OWNER_USER_ID), Some("operator")).await;
+        assert!(
+            operator["run_concurrency"]["per_agent"].is_array(),
+            "an operator carries CALLER_USER = Some(OWNER_USER_ID); the field \
+             this response exists to serve must survive that, or no shipped \
+             surface can ever read it"
+        );
+
+        // (c) A MEMBER connection.
+        let member = snapshot(sessions.clone(), 3, Some("u-alice"), Some("member")).await;
+        assert!(
+            member["run_concurrency"]
                 .as_object()
                 .expect("run_concurrency is an object")
                 .get("per_agent")
@@ -590,8 +644,8 @@ mod tests {
             "a member must not learn which agent personas are running right now"
         );
         // The LOAD numbers — the reason the carve-out exists at all — survive.
-        assert_eq!(scoped["run_concurrency"]["global_total"], 8);
-        assert_eq!(scoped["run_concurrency"]["global_in_use"], 0);
-        assert_eq!(scoped["run_concurrency"]["waiting"], 0);
+        assert_eq!(member["run_concurrency"]["global_total"], 8);
+        assert_eq!(member["run_concurrency"]["global_in_use"], 0);
+        assert_eq!(member["run_concurrency"]["waiting"], 0);
     }
 }

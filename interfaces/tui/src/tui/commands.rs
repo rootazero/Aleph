@@ -16,7 +16,7 @@ use aleph_protocol::providers::{
 };
 use aleph_protocol::{
     AgentRunAccepted, AgentRunRequest, AgentRunStatusReport, AgentRunStatusRequest,
-    AgentTraceReplay, AgentTraceTaskSummary, RunPhase, SessionSnapshot,
+    AgentTraceListPage, AgentTraceReplay, RunPhase, SessionSnapshot,
 };
 
 use aleph_client::{AlephClient, CliError, CliResult};
@@ -358,11 +358,15 @@ pub(super) async fn execute_local_command(
         }
         LocalCommand::ReplayList => {
             let params = json!({ "limit": 10 });
+            // The server answers `{traces, next_cursor}`. This asked for
+            // `Vec<AgentTraceTaskSummary>` — a THIRD shape, different from both
+            // the server's and the CLI's — so `/replay list` had never once
+            // rendered a row. One contract type now, shared by both clients.
             match client
-                .call::<_, Vec<AgentTraceTaskSummary>>("trace.list", Some(params))
+                .call::<_, AgentTraceListPage>("trace.list", Some(params))
                 .await
             {
-                Ok(tasks) => state.add_system_message(format_replay_list(&tasks)),
+                Ok(page) => state.add_system_message(format_replay_list(&page)),
                 Err(e) => state.add_system_message(format!("Replay list error: {e}")),
             }
         }
@@ -1133,23 +1137,29 @@ fn pop_last_turn_locally(state: &mut AppState) {
     }
 }
 
-fn format_replay_list(tasks: &[AgentTraceTaskSummary]) -> String {
-    if tasks.is_empty() {
+fn format_replay_list(page: &AgentTraceListPage) -> String {
+    if page.traces.is_empty() {
         return "Recent replays:\n  (none)\n\nUse /replay <task_id> after traces are persisted."
             .to_string();
     }
 
     let mut lines = vec!["Recent replays:".to_string()];
-    for task in tasks {
+    for task in &page.traces {
         lines.push(format!(
             "  {} [{}] {} traces  {}",
             task.task_id,
             task.status,
-            task.trace_count,
+            task.event_count,
             truncate_text(&task.prompt_preview, 72)
         ));
     }
     lines.push(String::new());
+    if page.next_cursor.is_some() {
+        lines.push(format!(
+            "(showing {} — more exist)",
+            page.traces.len()
+        ));
+    }
     lines.push("Use /replay <task_id> to load one.".to_string());
     lines.join("\n")
 }

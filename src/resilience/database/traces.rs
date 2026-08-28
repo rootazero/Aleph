@@ -95,6 +95,24 @@ fn task_trace_from_row(row: &rusqlite::Row) -> rusqlite::Result<TaskTrace> {
     })
 }
 
+/// The `trace.list` projection, shared verbatim by both branches of
+/// [`StateDatabase::list_trace_tasks_paged`].
+///
+/// Positional decoding is a contract without a compiler: the two SELECTs and
+/// one `row_map` are three hand-written statements of one column order, and
+/// adding a column to two of them is a RUNTIME error in the third. One
+/// constant, interpolated, makes that impossible. (This repo has taken that
+/// hit before — see the criteria list's "一个 `from_row` 配 N 个 `SELECT`".)
+///
+/// `substr(..., 1, 200)` counts CHARACTERS in SQLite, so the preview cannot
+/// split a multi-byte codepoint the way a byte slice would.
+const TRACE_LIST_COLUMNS: &str = "tr.task_id, \
+     COUNT(*) AS event_count, \
+     MAX(tr.timestamp) AS last_timestamp, \
+     t.status, \
+     t.started_at, \
+     substr(t.task_prompt, 1, 200)";
+
 impl StateDatabase {
     // =========================================================================
     // Task Traces CRUD
@@ -283,39 +301,7 @@ impl StateDatabase {
         })
         .await
     }
-
-    /// List all distinct task IDs that have traces
-    pub async fn list_trace_tasks(&self) -> Result<Vec<TaskTraceInfo>, AlephError> {
-        self.with_conn(move |conn| {
-            let mut stmt = conn
-                .prepare(
-                    r#"
-                    SELECT task_id, COUNT(*) as event_count, MAX(timestamp) as last_timestamp
-                    FROM task_traces
-                    GROUP BY task_id
-                    ORDER BY last_timestamp DESC
-                    "#,
-                )
-                .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
-
-            let tasks = stmt
-                .query_map([], |row| {
-                    Ok(TaskTraceInfo {
-                        task_id: row.get(0)?,
-                        event_count: row.get(1)?,
-                        last_timestamp: row.get(2)?,
-                    })
-                })
-                .map_err(|e| AlephError::config(format!("Failed to query traces: {e}")))?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| AlephError::config(format!("Failed to collect traces: {e}")))?;
-
-            Ok(tasks)
-        })
-        .await
-    }
-
-    /// Paginated sibling of `list_trace_tasks`. Returns at most `limit`
+    /// Returns at most `limit`
     /// (clamped to 1..200) trace-task summaries ordered by
     /// `(last_timestamp DESC, task_id DESC)` so each page is a strict prefix
     /// of the deterministic ordering.
@@ -329,8 +315,19 @@ impl StateDatabase {
     ///
     /// Keeps each page O(limit) regardless of total trace volume, so
     /// callers can paginate without scanning the whole table on every
-    /// request. The existing `list_trace_tasks` is preserved for callers
-    /// that want everything in one shot.
+    /// request.
+    ///
+    /// The unpaginated sibling `list_trace_tasks` was removed on 2026-08-29:
+    /// zero callers repo-wide, so R10 says CUT rather than reconnect. Its doc
+    /// claimed it was "preserved for callers that want everything in one shot"
+    /// — a promise to a caller that never arrived, and the second SELECT that
+    /// would have had to learn about the `agent_tasks` join below.
+    ///
+    /// The rows carry `status` / `started_at` / `prompt_preview` from the
+    /// `agent_tasks` parent since the same date. They are not new facts: the FK
+    /// `task_traces.task_id -> agent_tasks(id) ON DELETE RESTRICT` guarantees
+    /// the parent exists, and `trace.list`'s three clients had all been written
+    /// as though those fields were already on the wire.
     pub async fn list_trace_tasks_paged(
         &self,
         limit: usize,
@@ -338,11 +335,18 @@ impl StateDatabase {
     ) -> Result<Vec<TaskTraceInfo>, AlephError> {
         let clamped_limit = limit.clamp(1, 200) as i64;
         self.with_conn(move |conn| {
+            // Column order is the ONE contract shared by both branches below;
+            // they interpolate `TRACE_LIST_COLUMNS` rather than each spelling
+            // out a SELECT list, so adding a column cannot leave one branch
+            // decoding by a stale index.
             let row_map = |row: &rusqlite::Row<'_>| {
                 Ok(TaskTraceInfo {
                     task_id: row.get(0)?,
                     event_count: row.get(1)?,
                     last_timestamp: row.get(2)?,
+                    status: row.get(3)?,
+                    started_at: row.get(4)?,
+                    prompt_preview: row.get(5)?,
                 })
             };
 
@@ -358,17 +362,18 @@ impl StateDatabase {
             match before {
                 Some((ts, task_id)) => {
                     let mut stmt = conn
-                        .prepare(
+                        .prepare(&format!(
                             r#"
-                            SELECT task_id, COUNT(*) as event_count, MAX(timestamp) as last_timestamp
-                            FROM task_traces
-                            GROUP BY task_id
-                            HAVING MAX(timestamp) < ?1
-                                OR (MAX(timestamp) = ?1 AND task_id < ?2)
-                            ORDER BY last_timestamp DESC, task_id DESC
+                            SELECT {TRACE_LIST_COLUMNS}
+                            FROM task_traces tr
+                            LEFT JOIN agent_tasks t ON t.id = tr.task_id
+                            GROUP BY tr.task_id
+                            HAVING MAX(tr.timestamp) < ?1
+                                OR (MAX(tr.timestamp) = ?1 AND tr.task_id < ?2)
+                            ORDER BY last_timestamp DESC, tr.task_id DESC
                             LIMIT ?3
-                            "#,
-                        )
+                            "#
+                        ))
                         .map_err(|e| {
                             AlephError::config(format!("Failed to prepare paged query: {e}"))
                         })?;
@@ -382,15 +387,16 @@ impl StateDatabase {
                 }
                 None => {
                     let mut stmt = conn
-                        .prepare(
+                        .prepare(&format!(
                             r#"
-                            SELECT task_id, COUNT(*) as event_count, MAX(timestamp) as last_timestamp
-                            FROM task_traces
-                            GROUP BY task_id
-                            ORDER BY last_timestamp DESC, task_id DESC
+                            SELECT {TRACE_LIST_COLUMNS}
+                            FROM task_traces tr
+                            LEFT JOIN agent_tasks t ON t.id = tr.task_id
+                            GROUP BY tr.task_id
+                            ORDER BY last_timestamp DESC, tr.task_id DESC
                             LIMIT ?1
-                            "#,
-                        )
+                            "#
+                        ))
                         .map_err(|e| {
                             AlephError::config(format!("Failed to prepare paged query: {e}"))
                         })?;

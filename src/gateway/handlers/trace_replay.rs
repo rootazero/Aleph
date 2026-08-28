@@ -53,7 +53,7 @@ use crate::gateway::visibility;
 use crate::resilience::StateDatabase;
 use crate::security::audit::{AuditEntry, SecurityAuditLog};
 use crate::sync_primitives::Arc;
-use aleph_protocol::{AgentTraceReplay, AgentTraceReplayEntry, AgentTraceTaskSummary};
+use aleph_protocol::{AgentTraceListCursor, AgentTraceListPage, AgentTraceListRow, AgentTraceReplay, AgentTraceReplayEntry, AgentTraceTaskSummary};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -356,32 +356,44 @@ pub async fn handle_list(
             // page's last entry (see `list_trace_tasks_paged`).
             let exhausted = tasks.len() < limit;
             let next_cursor = if exhausted {
-                Value::Null
+                None
             } else {
-                tasks.last().map_or(Value::Null, |t| {
-                    json!({
-                        "last_timestamp": t.last_timestamp,
-                        "task_id": t.task_id,
-                    })
+                tasks.last().map(|t| AgentTraceListCursor {
+                    last_timestamp: t.last_timestamp,
+                    task_id: t.task_id.clone(),
                 })
             };
-            let traces: Vec<Value> = tasks
-                .into_iter()
-                .map(|t| {
-                    json!({
-                        "task_id": t.task_id,
-                        "event_count": t.event_count,
-                        "last_timestamp": t.last_timestamp
+            // CONSTRUCTED from the contract type, never hand-written as
+            // `json!`. Parsing against a contract can only prove the response
+            // is a SUPERSET of it; constructing from one makes both halves of
+            // the mismatch — a missing field and an extra one — unrepresentable.
+            // See `AgentTraceListRow`'s doc for the three clients this broke.
+            let page = AgentTraceListPage {
+                traces: tasks
+                    .into_iter()
+                    .map(|t| AgentTraceListRow {
+                        task_id: t.task_id,
+                        // Same defensive word `handle_get` uses when the parent
+                        // row is gone; the FK makes that unreachable in a
+                        // healthy database.
+                        status: t
+                            .status
+                            .map_or_else(|| "unknown".to_string(), |s| s.to_lowercase()),
+                        started_at: t.started_at,
+                        last_timestamp: t.last_timestamp,
+                        event_count: usize::try_from(t.event_count).unwrap_or(0),
+                        prompt_preview: t.prompt_preview.unwrap_or_default(),
                     })
-                })
-                .collect();
-            JsonRpcResponse::success(
-                request.id,
-                json!({
-                    "traces": traces,
-                    "next_cursor": next_cursor,
-                }),
-            )
+                    .collect(),
+                next_cursor,
+            };
+            match serde_json::to_value(&page) {
+                Ok(v) => JsonRpcResponse::success(request.id, v),
+                Err(e) => {
+                    tracing::error!(error = %e, "trace.list: serialize failed");
+                    JsonRpcResponse::error(request.id, INTERNAL_ERROR, "Failed to list traces")
+                }
+            }
         }
         Err(e) => {
             tracing::error!("Failed to list traces: {}", e);
@@ -969,6 +981,86 @@ mod tests {
         assert!(
             rx.try_recv().is_err(),
             "a roster member reading the room's own run is not a cross-user read"
+        );
+    }
+
+    /// The `trace.list` wire shape must be EXACTLY `AgentTraceListPage` — no
+    /// missing key, and no extra one.
+    ///
+    /// ⚠️ Both halves are load-bearing and only one of them is what a
+    /// "does it parse?" test proves. `serde` ignores unknown keys, so parsing a
+    /// live response into the contract type can only ever show the response is
+    /// a SUPERSET of the contract; it is structurally blind to over-sending,
+    /// which is how `workspace.get` shipped four fields with neither a writer
+    /// nor a reader. So the expected key set here is DERIVED from the contract
+    /// type itself and compared for EQUALITY — a field added to the response by
+    /// hand reds this test, and so does a field renamed out from under a
+    /// client.
+    ///
+    /// The last two assertions are the other half of the 2026-08-29 fix: the
+    /// three facts `status` / `started_at` / `prompt_preview` are not padding,
+    /// they are read from the `agent_tasks` parent through the LEFT JOIN. If
+    /// that join is ever dropped, every row degrades to `"unknown"` + `""` —
+    /// a column of dashes that reads as "no value yet" rather than as a broken
+    /// query, which is precisely the failure mode this family keeps repeating.
+    #[tokio::test]
+    async fn the_trace_list_response_has_exactly_the_contract_keys() {
+        use std::collections::BTreeSet;
+
+        fn keys(v: &Value) -> BTreeSet<String> {
+            v.as_object()
+                .expect("object")
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        }
+
+        let db = Arc::new(StateDatabase::in_memory().unwrap());
+        let temp = TempDir::new().unwrap();
+        let sessions = session_store(&temp);
+        let key = SessionKey::main("conv-contract");
+        seed_session(&sessions, &key, "u-alice", &["run-contract"]).await;
+        seed_run_in(&db, "run-contract", &key, &["t0", "t1"]).await;
+
+        let result = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_list(req(json!({})), db, sessions, None),
+            )
+            .await
+            .result
+            .expect("success");
+
+        // (1) It parses — the client half.
+        let page: AgentTraceListPage =
+            serde_json::from_value(result.clone()).expect("the response IS the contract type");
+        assert_eq!(page.traces.len(), 1, "self-guard: one seeded run");
+
+        // (2) It over-sends nothing — the half `from_value` cannot see.
+        //     Expected keys derived from the type, never listed by hand.
+        let expected = serde_json::to_value(&page).expect("re-serialize");
+        assert_eq!(
+            keys(&result),
+            keys(&expected),
+            "envelope keys must equal AgentTraceListPage's exactly"
+        );
+        assert_eq!(
+            keys(&result["traces"][0]),
+            keys(&expected["traces"][0]),
+            "row keys must equal AgentTraceListRow's exactly"
+        );
+
+        // (3) The parent-row facts really arrive.
+        let row = &page.traces[0];
+        assert_eq!(row.event_count, 2);
+        assert_ne!(
+            row.status, "unknown",
+            "the agent_tasks LEFT JOIN must reach the parent row — `unknown` \
+             here means every STATUS cell in `aleph trace list` is a dash"
+        );
+        assert!(
+            !row.prompt_preview.is_empty(),
+            "prompt_preview must come from agent_tasks.task_prompt"
         );
     }
 

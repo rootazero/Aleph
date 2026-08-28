@@ -337,19 +337,39 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         return SessionIdentity::ByTeamId(team_id.to_string());
     }
     match topic {
-        // The two clarification frames are `…OrAdmin`, not plain
-        // `BySessionKey`, because the OTHER TWO FACES of the same verb already
-        // are: `clarification.pending` returns every item to an unrestricted
-        // caller (`visible_owner_filter() == None`) and `clarification.resolve`
-        // accepts any session `visibility::session_visible` admits — which is
-        // every session, for an operator. Leaving the event face narrower made
-        // an operator's pending LIST show questions whose CARDS never arrived,
-        // and left them holding resolve authority over a question they were
-        // never shown. Same divergence, same fix, and the same direction the
-        // twin `approval.*` family took on 2026-08-08.
+        // The two clarification frames are plain `BySessionKey`: they must
+        // admit exactly whom their two RPC faces admit, and those faces are
+        // OWNER-keyed — `clarification.pending` filters every item through
+        // `visibility::session_visible` and `clarification.resolve` refuses a
+        // session that same predicate rejects.
+        //
+        // ⚠️ This arm was `…OrAdmin` from 2026-08-08 to 2026-08-29, on the
+        // stated premise that `session_visible` "is every session, for an
+        // operator". It is not. `handlers::connect::resolve_connection_identity`
+        // gives a loopback or admin connection `CALLER_USER =
+        // Some(OWNER_USER_ID)`, never `None`, so `visible_owner_filter()` is
+        // `Some(..)` for an operator and `session_visible` compares OWNERSHIP
+        // for them exactly as for anyone else. The `is_none()` arm those two
+        // handlers widen on is reachable only from an UNSCOPED internal caller
+        // (cron / A2A / in-process test). The premise was written down three
+        // times — here, in `every_frame_variant_is_classified`'s `expected()`,
+        // and in the pin test's own assertion message — and was false in all
+        // three, so the widening pushed a member's question CARD to an operator
+        // who then got `session not found` from both `clarification.pending`
+        // and `clarification.resolve`.
+        //
+        // The twin `approval.*` family stays `…OrAdmin`, and that is not an
+        // inconsistency: ITS RPC faces really are role-keyed (`exec_approvals`
+        // and `exec_grants` both ask `caller_identity::caller_is_member`). An
+        // approval is an AUTHORIZATION question an operator can answer on
+        // someone else's behalf; a clarification is a CONTENT question only the
+        // asker can answer. Different question, different predicate — and the
+        // pin below now DERIVES the expected verdict from the RPC predicate
+        // instead of restating it, so this arm cannot drift from those faces
+        // again without a red test.
         "stream.ask_user" | "stream.clarification_ended" => {
             match str_field(data, "session_key").filter(|k| !k.is_empty()) {
-                Some(k) => SessionIdentity::BySessionKeyOrAdmin(k),
+                Some(k) => SessionIdentity::BySessionKey(k),
                 // Fail closed: a frame with no session names nobody, and the
                 // widest possible delivery is the wrong answer to "who owns
                 // this".
@@ -2192,33 +2212,89 @@ mod tests {
     /// than being retired: it no longer names a producer, it asserts the
     /// **policy** that survives them.
     ///
-    /// The clarification event face must admit exactly who its RPC faces admit.
+    /// The clarification event face must admit exactly whom its RPC faces admit
+    /// — and this pin DERIVES the expected verdict from the RPC predicate
+    /// rather than restating it as a literal `SessionIdentity`.
     ///
-    /// The same verb has three faces: `clarification.pending` (an unrestricted
-    /// caller sees every item), `clarification.resolve` (accepts any session
-    /// `visibility::session_visible` admits, which for an operator is all of
-    /// them), and these two frames. While they were plain `BySessionKey` the
-    /// three disagreed: an operator's pending LIST showed questions whose CARDS
-    /// were never delivered, and they held resolve authority over a question
-    /// they had not been shown. Same divergence and same fix as the twin
-    /// `approval.*` family took on 2026-08-08.
+    /// That distinction is the whole point. The previous version of this test
+    /// asserted the literal `BySessionKeyOrAdmin` and explained itself with
+    /// "`clarification.pending` already lists it to both, and
+    /// `clarification.resolve` already accepts it from both" — a sentence about
+    /// ANOTHER MODULE'S behaviour, restated here by hand, that was false.
+    /// `resolve_connection_identity` scopes an operator's connection with
+    /// `CALLER_USER = Some(OWNER_USER_ID)` (loopback and every admin-bound
+    /// device alike), so `visible_owner_filter()` is `Some(..)` for them and
+    /// both RPC faces compare ownership. A restated fact has no compiler; three
+    /// copies of it drifted together and the event face shipped one rung wider
+    /// than the two verbs it was pinned to.
     ///
-    /// The empty-key arm is not a leftover: a frame that names no session names
-    /// nobody, and `Global` there would make a malformed payload the widest
-    /// possible delivery.
-    #[test]
-    fn the_clarification_frames_admit_the_same_callers_their_rpc_faces_do() {
+    /// So: build a session owned by someone else, put the caller in an
+    /// OPERATOR's real task-local shoes, and require the two faces to return
+    /// the same boolean. Whichever way a future change moves the policy, it can
+    /// only move both faces at once.
+    ///
+    /// The empty-key arm stays a literal: a frame that names no session names
+    /// nobody, there is no RPC verdict to derive it from, and `Global` there
+    /// would make a malformed payload the widest possible delivery.
+    #[tokio::test]
+    async fn the_clarification_frames_admit_the_same_callers_their_rpc_faces_do() {
+        use crate::gateway::security::store::OWNER_USER_ID;
+
+        let (store, _temp) = test_store();
+        let key = SessionKey::main("conv-clarify-owned-by-a-member");
+        stamp_owner(&store, &key, "u-alice").await;
+        let meta = store.get_metadata(&key).await.unwrap().unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+        let index = EventVisibilityIndex::new();
+
+        // The RPC half, evaluated exactly as `clarification.pending` /
+        // `clarification.resolve` evaluate it — through the ONE predicate they
+        // both call, with the actor an operator connection actually carries.
+        let rpc_admits =
+            crate::gateway::visibility::session_visible_to(&meta, OWNER_USER_ID);
+
         for topic in ["stream.ask_user", "stream.clarification_ended"] {
-            assert_eq!(
-                session_identity_of(
+            let payload = serde_json::json!({ "session_key": key.to_key_string() });
+            let event_admits = index
+                .event_admits_for(
                     topic,
-                    Some(&serde_json::json!({ "session_key": "agent:main:main" }))
-                ),
-                SessionIdentity::BySessionKeyOrAdmin("agent:main:main".to_string()),
-                "`{topic}` must reach the session owner AND an operator — \
-                 `clarification.pending` already lists it to both, and \
-                 `clarification.resolve` already accepts it from both."
+                    Some(&payload),
+                    Some(OWNER_USER_ID),
+                    Some("operator"),
+                    &store,
+                    None,
+                )
+                .await;
+            assert_eq!(
+                event_admits, rpc_admits,
+                "`{topic}` must admit an operator exactly when \
+                 `visibility::session_visible_to` does — the event face said \
+                 {event_admits}, the RPC faces say {rpc_admits}. Move both or \
+                 neither."
             );
+
+            // The owner of the session is admitted on both faces; this arm
+            // proves the equality above is not vacuously `false == false`.
+            assert!(
+                index
+                    .event_admits_for(
+                        topic,
+                        Some(&payload),
+                        Some("u-alice"),
+                        Some("member"),
+                        &store,
+                        None,
+                    )
+                    .await,
+                "`{topic}` must always reach the asker — a parked tool whose \
+                 card nobody receives is a 600s stall"
+            );
+            assert!(
+                crate::gateway::visibility::session_visible_to(&meta, "u-alice"),
+                "self-guard: the RPC predicate must admit the owner, else the \
+                 assertion above is comparing two unrelated falsehoods"
+            );
+
             assert_eq!(
                 session_identity_of(topic, Some(&serde_json::json!({ "session_key": "" }))),
                 SessionIdentity::OperatorOnly,
@@ -2452,12 +2528,14 @@ mod tests {
                 | GatewayEventFrame::RunRetrying { run_id, .. } => {
                     SessionIdentity::ByRunId(run_id.clone())
                 }
-                // The clarification pair is admin-inclusive because its two RPC
-                // faces already are — see
-                // `the_clarification_frames_admit_the_same_callers_their_rpc_faces_do`.
+                // The clarification pair is owner-scoped because its two RPC
+                // faces are — see
+                // `the_clarification_frames_admit_the_same_callers_their_rpc_faces_do`,
+                // which DERIVES that verdict from the RPC predicate rather than
+                // restating it.
                 GatewayEventFrame::AskUser { session_key, .. }
                 | GatewayEventFrame::ClarificationEnded { session_key, .. } => {
-                    SessionIdentity::BySessionKeyOrAdmin(session_key.clone())
+                    SessionIdentity::BySessionKey(session_key.clone())
                 }
                 // Carries session_key directly — routed by session, not run
                 // (see the frame's own doc comment).

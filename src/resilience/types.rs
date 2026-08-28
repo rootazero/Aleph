@@ -380,12 +380,26 @@ impl TaskTrace {
     }
 }
 
-/// Summary info for trace listing
+/// Summary info for trace listing — one row of `trace.list`.
+///
+/// The last three fields come from the `agent_tasks` parent row through a LEFT
+/// JOIN. They are not optional-because-unknown: `task_traces.task_id` is a
+/// foreign key to `agent_tasks(id)` with `ON DELETE RESTRICT`, so a trace row
+/// **cannot** outlive its task and the join always matches. They are `Option`
+/// only so a manually-corrupted database degrades to "unknown" rather than
+/// dropping the whole listing — the same defensive arm `trace.get` keeps.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskTraceInfo {
     pub task_id: String,
     pub event_count: i64,
+    /// Epoch **seconds**: `MAX(task_traces.timestamp)`.
     pub last_timestamp: i64,
+    /// `agent_tasks.status` verbatim (capitalised as stored).
+    pub status: Option<String>,
+    /// Epoch **seconds**, `agent_tasks.started_at`.
+    pub started_at: Option<i64>,
+    /// First 200 characters of `agent_tasks.task_prompt`.
+    pub prompt_preview: Option<String>,
 }
 
 // =============================================================================
