@@ -2369,16 +2369,23 @@ mod tests {
             ..base_params()
         };
 
+        // Config-tier: this test is about tier-1-vs-tier-2 precedence, not
+        // about the `project_root` gate itself, so it needs a role the gate
+        // admits (`caller_may_choose_directory` no longer treats an absent
+        // role as admitted — see `caller_may_choose_directory_as`).
         let request = crate::gateway::caller_identity::CALLER_USER
             .scope(
                 Some("u-alice".to_string()),
-                build_run_request(
-                    "run-explicit".to_string(),
-                    &session_key,
-                    params,
-                    None,
-                    None,
-                    &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                crate::gateway::caller_identity::CALLER_ROLE.scope(
+                    Some("operator".to_string()),
+                    build_run_request(
+                        "run-explicit".to_string(),
+                        &session_key,
+                        params,
+                        None,
+                        None,
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
                 ),
             )
             .await
