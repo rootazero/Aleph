@@ -2,6 +2,7 @@
 //!
 //! Contains `run_agent_loop` (the think-act two-step loop).
 
+mod author_census;
 mod inner;
 mod project_context;
 #[cfg(test)]
