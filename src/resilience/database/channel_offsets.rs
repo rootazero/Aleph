@@ -34,8 +34,12 @@ impl StateDatabase {
 
     /// Upsert the last processed `update_id` for a channel.
     ///
-    /// Uses INSERT OR REPLACE so the row is created on first call and
-    /// updated on subsequent calls.
+    /// Monotonic: the persisted `last_update_id` is the MAX of the existing
+    /// and the newly supplied value. A late or out-of-order writer can NOT
+    /// regress the offset (which would cause message re-processing or
+    /// duplication on restart — the very failure mode this table exists to
+    /// prevent). `bot_id` and `updated_at` are written unconditionally
+    /// because they are metadata, not the cursor.
     pub async fn set_channel_offset(
         &self,
         channel_id: &str,
@@ -48,8 +52,12 @@ impl StateDatabase {
         self.with_conn(move |conn| {
             conn.execute(
                 r#"
-                INSERT OR REPLACE INTO channel_offsets (channel_id, bot_id, last_update_id, updated_at)
+                INSERT INTO channel_offsets (channel_id, bot_id, last_update_id, updated_at)
                 VALUES (?1, ?2, ?3, ?4)
+                ON CONFLICT(channel_id) DO UPDATE SET
+                    last_update_id = MAX(last_update_id, excluded.last_update_id),
+                    bot_id         = excluded.bot_id,
+                    updated_at     = excluded.updated_at
                 "#,
                 params![channel_id, bot_id, update_id, now],
             )

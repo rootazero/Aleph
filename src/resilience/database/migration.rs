@@ -156,11 +156,12 @@ fn migrate_task_traces_body(conn: &Connection) -> Result<(), AlephError> {
         CREATE TABLE task_traces (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             task_id TEXT NOT NULL,
-            step_index INTEGER NOT NULL,
+            step_index INTEGER NOT NULL CHECK (step_index >= 0),
             event_kind TEXT NOT NULL,
             event_json TEXT NOT NULL,
             timestamp INTEGER NOT NULL,
-            FOREIGN KEY(task_id) REFERENCES agent_tasks(id)
+            FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE RESTRICT,
+            UNIQUE(task_id, step_index)
         );
         "#,
     )
@@ -190,6 +191,138 @@ fn migrate_task_traces_body(conn: &Connection) -> Result<(), AlephError> {
         "#,
     )
     .map_err(|e| AlephError::config(format!("Failed to finalize task_traces migration: {e}")))?;
+
+    Ok(())
+}
+
+/// Migrate to add `UNIQUE(task_id, step_index)` and `CHECK (step_index >= 0)`
+/// to `task_traces`.
+///
+/// The new-column DDL in `schema.rs` already includes both constraints for
+/// fresh databases. This migration back-fills them on databases that were
+/// created before the constraints existed. A DB that already has the
+/// constraint (idempotent re-run) is detected via the `sqlite_master`
+/// index list and skipped.
+///
+/// `task_traces` may carry duplicate `(task_id, step_index)` rows from
+/// earlier code that did not enforce the invariant — Shadow Replay would
+/// re-apply the same event in such cases. We deduplicate by keeping the
+/// lowest `id` (the earliest inserted row) before adding the constraint,
+/// so the migration is safe to run on real-world databases.
+///
+/// # Safety
+/// - Uses savepoint for atomic migration
+/// - Idempotent: skips if the constraint already exists
+pub fn migrate_task_traces_unique_step_index(conn: &Connection) -> Result<(), AlephError> {
+    conn.execute_batch("SAVEPOINT migration_task_traces_unique_step")
+        .map_err(|e| {
+            AlephError::config(format!(
+                "Failed to begin task_traces unique-step migration: {e}"
+            ))
+        })?;
+
+    let table_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='task_traces'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            let _ = conn.execute_batch("ROLLBACK TO migration_task_traces_unique_step");
+            AlephError::config(format!("Failed to check task_traces table: {e}"))
+        })?;
+
+    if table_exists == 0 {
+        // Schema bootstrap path; nothing to migrate.
+        conn.execute_batch("RELEASE migration_task_traces_unique_step")
+            .map_err(|e| {
+                AlephError::config(format!(
+                    "Failed to commit task_traces unique-step migration: {e}"
+                ))
+            })?;
+        return Ok(());
+    }
+
+    let constraint_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master \
+             WHERE type='index' AND tbl_name='task_traces' \
+               AND sql LIKE '%UNIQUE%task_id%step_index%'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            let _ = conn.execute_batch("ROLLBACK TO migration_task_traces_unique_step");
+            AlephError::config(format!("Failed to check UNIQUE constraint: {e}"))
+        })?;
+
+    if constraint_exists > 0 {
+        conn.execute_batch("RELEASE migration_task_traces_unique_step")
+            .map_err(|e| {
+                AlephError::config(format!(
+                    "Failed to commit task_traces unique-step migration: {e}"
+                ))
+            })?;
+        return Ok(());
+    }
+
+    // Deduplicate any pre-existing duplicate (task_id, step_index) pairs by
+    // keeping the smallest `id` per pair. SQLite ships no row_number(); the
+    // MIN(id) per group + self-join gives us a delete set.
+    let deleted = conn.execute(
+        r#"
+        DELETE FROM task_traces
+         WHERE id NOT IN (
+             SELECT MIN(id) FROM task_traces GROUP BY task_id, step_index
+         )
+        "#,
+        [],
+    )?;
+    if deleted > 0 {
+        tracing::warn!(
+            deleted,
+            "Removed duplicate (task_id, step_index) rows from task_traces before adding UNIQUE constraint"
+        );
+    }
+
+    // SQLite cannot ALTER TABLE … ADD CONSTRAINT; rebuild the table with the
+    // UNIQUE / CHECK constraints in place, then re-apply the index.
+    conn.execute_batch(
+        r#"
+        CREATE TABLE task_traces_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            step_index INTEGER NOT NULL CHECK (step_index >= 0),
+            event_kind TEXT NOT NULL,
+            event_json TEXT NOT NULL,
+            timestamp INTEGER NOT NULL,
+            FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE RESTRICT,
+            UNIQUE(task_id, step_index)
+        );
+        INSERT INTO task_traces_new
+            (id, task_id, step_index, event_kind, event_json, timestamp)
+        SELECT id, task_id, step_index, event_kind, event_json, timestamp
+          FROM task_traces;
+        DROP TABLE task_traces;
+        ALTER TABLE task_traces_new RENAME TO task_traces;
+        CREATE INDEX IF NOT EXISTS idx_task_traces_task ON task_traces(task_id, step_index);
+        "#,
+    )
+    .map_err(|e| {
+        let _ = conn.execute_batch("ROLLBACK TO migration_task_traces_unique_step");
+        AlephError::config(format!(
+            "Failed to add UNIQUE(task_id, step_index) to task_traces: {e}"
+        ))
+    })?;
+
+    tracing::info!("Added UNIQUE(task_id, step_index) and CHECK(step_index >= 0) to task_traces");
+
+    conn.execute_batch("RELEASE migration_task_traces_unique_step")
+        .map_err(|e| {
+            AlephError::config(format!(
+                "Failed to commit task_traces unique-step migration: {e}"
+            ))
+        })?;
 
     Ok(())
 }

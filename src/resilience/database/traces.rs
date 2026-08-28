@@ -316,8 +316,16 @@ impl StateDatabase {
     }
 
     /// Paginated sibling of `list_trace_tasks`. Returns at most `limit`
-    /// (clamped to 1..200) trace-task summaries whose `last_timestamp` is
-    /// strictly less than `before_timestamp` (when set), ordered DESC.
+    /// (clamped to 1..200) trace-task summaries ordered by
+    /// `(last_timestamp DESC, task_id DESC)` so each page is a strict prefix
+    /// of the deterministic ordering.
+    ///
+    /// `before` is the optional cursor: `(last_timestamp, task_id)` of the
+    /// last entry of the previous page (or `None` for the first page).
+    /// Tie-break on `task_id` is required because `TaskTrace::new` stamps
+    /// timestamp as epoch SECONDS — rapid inserts collide, and a strict
+    /// `HAVING MAX(timestamp) < ?` cursor would silently drop every task
+    /// whose `last_timestamp` equals the previous page's last entry.
     ///
     /// Keeps each page O(limit) regardless of total trace volume, so
     /// callers can paginate without scanning the whole table on every
@@ -326,7 +334,7 @@ impl StateDatabase {
     pub async fn list_trace_tasks_paged(
         &self,
         limit: usize,
-        before_timestamp: Option<i64>,
+        before: Option<(i64, String)>,
     ) -> Result<Vec<TaskTraceInfo>, AlephError> {
         let clamped_limit = limit.clamp(1, 200) as i64;
         self.with_conn(move |conn| {
@@ -341,8 +349,14 @@ impl StateDatabase {
             let collect_err =
                 |e: rusqlite::Error| AlephError::config(format!("Failed to collect paged traces: {e}"));
 
-            match before_timestamp {
-                Some(ts) => {
+            // Cursor rows are those ordered STRICTLY before `(ts, task_id)`
+            // in the `(last_timestamp DESC, task_id DESC)` ordering. With that
+            // ordering, "strictly before" means:
+            //   last_timestamp < cursor_ts
+            //     OR (last_timestamp = cursor_ts AND task_id < cursor_task_id)
+            // The cursor's own row is excluded (it was on the previous page).
+            match before {
+                Some((ts, task_id)) => {
                     let mut stmt = conn
                         .prepare(
                             r#"
@@ -350,15 +364,16 @@ impl StateDatabase {
                             FROM task_traces
                             GROUP BY task_id
                             HAVING MAX(timestamp) < ?1
-                            ORDER BY last_timestamp DESC
-                            LIMIT ?2
+                                OR (MAX(timestamp) = ?1 AND task_id < ?2)
+                            ORDER BY last_timestamp DESC, task_id DESC
+                            LIMIT ?3
                             "#,
                         )
                         .map_err(|e| {
                             AlephError::config(format!("Failed to prepare paged query: {e}"))
                         })?;
                     let rows = stmt
-                        .query_map(params![ts, clamped_limit], row_map)
+                        .query_map(params![ts, task_id, clamped_limit], row_map)
                         .map_err(|e| {
                             AlephError::config(format!("Failed to query paged traces: {e}"))
                         })?;
@@ -372,7 +387,7 @@ impl StateDatabase {
                             SELECT task_id, COUNT(*) as event_count, MAX(timestamp) as last_timestamp
                             FROM task_traces
                             GROUP BY task_id
-                            ORDER BY last_timestamp DESC
+                            ORDER BY last_timestamp DESC, task_id DESC
                             LIMIT ?1
                             "#,
                         )
@@ -708,10 +723,8 @@ mod tests {
     #[tokio::test]
     async fn list_paged_cursor_advances_without_overlap() {
         let db = StateDatabase::in_memory().unwrap();
-        // Timestamps in TaskTrace::new() come from chrono::Utc::now().timestamp()
-        // — Unix epoch SECONDS — so rapid inserts collide. We need strictly
-        // differing timestamps because the cursor uses HAVING MAX(timestamp) < ?.
-        // Build TaskTrace by hand with explicit increasing timestamps.
+        // Build TaskTrace by hand with explicit increasing timestamps so the
+        // (timestamp DESC, task_id DESC) ordering is deterministic.
         let base_ts = chrono::Utc::now().timestamp();
         for i in 0..4i64 {
             let tid = format!("task-{i}");
@@ -734,9 +747,13 @@ mod tests {
 
         let page_a = db.list_trace_tasks_paged(2, None).await.unwrap();
         assert_eq!(page_a.len(), 2);
-        let cursor = page_a.last().unwrap().last_timestamp;
+        let cursor_ts = page_a.last().unwrap().last_timestamp;
+        let cursor_tid = page_a.last().unwrap().task_id.clone();
 
-        let page_b = db.list_trace_tasks_paged(2, Some(cursor)).await.unwrap();
+        let page_b = db
+            .list_trace_tasks_paged(2, Some((cursor_ts, cursor_tid)))
+            .await
+            .unwrap();
         assert!(!page_b.is_empty());
         for r in &page_b {
             assert!(
@@ -745,6 +762,61 @@ mod tests {
                 r.task_id
             );
         }
+    }
+
+    /// The cursor must NOT drop rows whose `last_timestamp` collides with
+    /// the previous page's last entry. Compound `(timestamp, task_id)` cursor
+    /// is the fix.
+    #[tokio::test]
+    async fn list_paged_does_not_drop_rows_on_timestamp_collision() {
+        let db = StateDatabase::in_memory().unwrap();
+        let pinned_ts = chrono::Utc::now().timestamp();
+        let ids: Vec<String> = (0..5).map(|i| format!("task-{i}")).collect();
+        for tid in &ids {
+            db.insert_agent_task(&AgentTask::new(tid, "s", "coder", "x", RiskLevel::Low))
+                .await
+                .unwrap();
+            let trace = TaskTrace {
+                id: 0,
+                task_id: tid.clone(),
+                step_index: 0,
+                event: AgentTraceEvent::TextEmitted {
+                    iteration: 0,
+                    stream: AgentTraceTextKind::Final,
+                    text: "x".into(),
+                },
+                timestamp: pinned_ts,
+            };
+            db.insert_trace(&trace).await.unwrap();
+        }
+
+        // Paginate with limit=2 across all 5 colliding tasks. Visit them all.
+        let mut seen: Vec<String> = Vec::new();
+        let mut cursor: Option<(i64, String)> = None;
+        loop {
+            let page = db.list_trace_tasks_paged(2, cursor).await.unwrap();
+            if page.is_empty() {
+                break;
+            }
+            let last = page.last().unwrap();
+            cursor = Some((last.last_timestamp, last.task_id.clone()));
+            for info in &page {
+                assert!(
+                    !seen.contains(&info.task_id),
+                    "duplicate task_id {} across pages",
+                    info.task_id
+                );
+                seen.push(info.task_id.clone());
+            }
+            if page.len() < 2 {
+                break;
+            }
+        }
+        assert_eq!(
+            seen.len(),
+            ids.len(),
+            "all 5 colliding tasks must be visited; got {seen:?}"
+        );
     }
 
     // -------------------------------------------------------------------------

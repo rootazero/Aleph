@@ -182,20 +182,31 @@ impl StateDatabase {
     }
 
     /// Get events for a fact since a given sequence number.
+    ///
+    /// `agent_id` applies the same scoping as [`get_memory_events_for_fact`]:
+    /// an empty string is the wildcard for system callers (handler,
+    /// projector, migration), any other value restricts to events authored
+    /// by that actor. The bounded `limit` prevents unbounded materialisation
+    /// on a hot fact_id with a long history (default 1000; pass `usize::MAX`
+    /// from a system caller to opt out).
     pub async fn get_memory_events_since_seq(
         &self,
         fact_id: &str,
         since_seq: u64,
+        agent_id: &str,
+        limit: usize,
     ) -> Result<Vec<MemoryEventEnvelope>, AlephError> {
         let fact_id = fact_id.to_string();
+        let agent_id = agent_id.to_string();
         self.with_conn(move |conn| {
             let mut stmt = conn
                 .prepare(
                     r#"
                     SELECT id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id
                     FROM memory_events
-                    WHERE fact_id = ?1 AND seq > ?2
+                    WHERE fact_id = ?1 AND seq > ?2 AND (?3 = '' OR actor = ?3)
                     ORDER BY seq ASC
+                    LIMIT ?4
                     "#,
                 )
                 .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
@@ -205,8 +216,17 @@ impl StateDatabase {
                     "Sequence number {since_seq} exceeds i64::MAX and cannot be used in SQLite query"
                 ))
             })?;
+            let limit_i64 = i64::try_from(limit).map_err(|_| {
+                AlephError::other(format!(
+                    "Limit {limit} exceeds maximum supported SQLite value ({})",
+                    i64::MAX
+                ))
+            })?;
             let rows = stmt
-                .query_map(params![fact_id, since_seq_i64], MemoryEventRow::from_row)
+                .query_map(
+                    params![fact_id, since_seq_i64, agent_id, limit_i64],
+                    MemoryEventRow::from_row,
+                )
                 .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
 
             let mut envelopes = Vec::new();
@@ -555,7 +575,10 @@ mod tests {
             db.append_memory_event(&envelope).await.unwrap();
         }
 
-        let events = db.get_memory_events_since_seq("fact-003", 1).await.unwrap();
+        let events = db
+            .get_memory_events_since_seq("fact-003", 1, "", usize::MAX)
+            .await
+            .unwrap();
         assert_eq!(events.len(), 2); // seq 2 and 3
         assert_eq!(events[0].seq, 2);
     }

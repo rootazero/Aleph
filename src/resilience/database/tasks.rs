@@ -150,7 +150,20 @@ impl StateDatabase {
         .await
     }
 
-    /// Update task status
+    /// Update task status.
+    ///
+    /// Returns `AlephError::config("...task_id not found...")` when no row
+    /// matches the supplied `task_id` (or when the row's status already
+    /// equals `status` — the WHERE clause matches zero rows). The previous
+    /// form silently returned `Ok(())` on a missing-row UPDATE, leaving
+    /// callers no way to detect a typo'd `task_id` or a redelivery against
+    /// a finished run.
+    ///
+    /// `completed_at` is set on terminal transitions (`Completed`, `Failed`)
+    /// only when currently NULL — a second `Completed` (or `Failed`) update
+    /// is a no-op for `completed_at` and preserves the original timestamp.
+    /// Mirrors the `started_at` pattern: idempotent updates do not clobber
+    /// forensic history.
     pub async fn update_task_status(
         &self,
         task_id: &str,
@@ -165,9 +178,8 @@ impl StateDatabase {
                 .transaction()
                 .map_err(|e| AlephError::config(format!("Failed to begin transaction: {e}")))?;
 
-            let result = (|| -> rusqlite::Result<()> {
-                // Simple update - timestamps handled separately for clarity
-                tx.execute(
+            let result = (|| -> rusqlite::Result<usize> {
+                let updated = tx.execute(
                     r#"
                     UPDATE agent_tasks
                     SET status = ?1, updated_at = ?2
@@ -184,19 +196,30 @@ impl StateDatabase {
                     )?;
                 }
 
-                // Update completed_at for terminal states
+                // Update completed_at for terminal states only when currently
+                // NULL — preserves the originally-recorded completion time on
+                // idempotent re-applies of the same terminal status.
                 if matches!(status, TaskStatus::Completed | TaskStatus::Failed) {
                     tx.execute(
-                        "UPDATE agent_tasks SET completed_at = ?1 WHERE id = ?2",
+                        "UPDATE agent_tasks SET completed_at = ?1 WHERE id = ?2 AND completed_at IS NULL",
                         params![now, task_id],
                     )?;
                 }
 
-                Ok(())
+                Ok(updated)
             })();
 
             match result {
-                Ok(()) => {
+                Ok(updated) => {
+                    if updated == 0 {
+                        // Surface a typed error so callers can distinguish
+                        // "task vanished" from "infrastructure broke". The
+                        // transaction is still committed (no writes happened)
+                        // so dropping it here is the correct rollback path.
+                        return Err(AlephError::config(format!(
+                            "update_task_status: task_id {task_id:?} not found (or already in status {status:?})"
+                        )));
+                    }
                     tx.commit().map_err(|e| {
                         AlephError::config(format!("Failed to commit transaction: {e}"))
                     })?;
@@ -305,12 +328,42 @@ impl StateDatabase {
     /// and returns them so the caller can report each one. Orphans are not
     /// resumed; `interrupted` is a terminal state. Idempotent: a second call
     /// immediately after the first finds nothing.
+    ///
+    /// The SELECT and UPDATE run inside a single SQLite statement
+    /// (`UPDATE … RETURNING`) so a task that transitions to `running`
+    /// between the SELECT and the UPDATE cannot be silently clobbered: it
+    /// is either captured in the returned list AND marked `interrupted`,
+    /// or it stays `running`. The previous two-statement form (`SELECT`
+    /// running rows then `UPDATE … WHERE status = 'running'`) had a
+    /// TOCTOU window where a freshly-running task could be flipped to
+    /// `interrupted` without ever appearing in the returned list — the
+    /// user's restart receipt would silently drop the task.
     pub async fn reconcile_orphaned_tasks(&self) -> Result<Vec<AgentTask>, AlephError> {
-        let orphans = self.get_recoverable_tasks().await?;
-        if !orphans.is_empty() {
-            self.mark_running_as_interrupted().await?;
-        }
-        Ok(orphans)
+        let now = chrono::Utc::now().timestamp();
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    UPDATE agent_tasks
+                       SET status = 'interrupted', updated_at = ?1
+                     WHERE status = 'running'
+                    RETURNING id, parent_session_id, agent_id, task_prompt, status,
+                              risk_level, lane, checkpoint_snapshot_path, last_tool_call_id,
+                              recursion_depth, parent_task_id, created_at, updated_at,
+                              started_at, completed_at, metadata_json
+                    "#,
+                )
+                .map_err(|e| AlephError::config(format!("Failed to prepare reconcile: {e}")))?;
+
+            let rows = stmt
+                .query_map(params![now], agent_task_from_row)
+                .map_err(|e| AlephError::config(format!("Failed to run reconcile: {e}")))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| AlephError::config(format!("Failed to collect reconcile rows: {e}")))?;
+
+            Ok(rows)
+        })
+        .await
     }
 }
 
