@@ -9,7 +9,7 @@
 
 use std::io::Write;
 
-use alephcore::runtimes::{self, ensure_capability, find_spec, CapabilityLedger, CapabilityStatus};
+use alephcore::runtimes::{self, ensure_capability, find_spec, CapabilityLedger};
 use alephcore::sync_primitives::{Arc, AsyncRwLock as RwLock};
 
 use crate::cli::BootstrapRuntimeArgs;
