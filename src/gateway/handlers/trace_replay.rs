@@ -245,10 +245,24 @@ async fn caller_could_reach(
 struct TraceListParams {
     #[serde(default)]
     limit: Option<usize>,
-    /// Cursor: return tasks whose `last_timestamp` is strictly less than this
-    /// value. Use the `next_cursor` from the previous response.
+    /// Cursor: return tasks ordered strictly before
+    /// `(timestamp, task_id)` in the `(last_timestamp DESC, task_id DESC)`
+    /// ordering. `Some(None)` is the start of the list; `None` falls back
+    /// to the legacy single-timestamp cursor (`before_timestamp`) for
+    /// backward compatibility with older callers.
+    #[serde(default)]
+    before: Option<Option<TraceCursor>>,
+    /// Legacy single-timestamp cursor. Used only when `before` is absent;
+    /// the compound `before` supersedes it because the timestamp alone
+    /// drops rows that share a second with the previous page.
     #[serde(default)]
     before_timestamp: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TraceCursor {
+    last_timestamp: i64,
+    task_id: String,
 }
 
 const DEFAULT_LIMIT: usize = 50;
@@ -274,9 +288,28 @@ pub async fn handle_list(
     };
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
 
-    match db
-        .list_trace_tasks_paged(limit, params.before_timestamp)
-        .await
+    // Prefer the compound cursor (`before`) over the legacy single-timestamp
+    // form (`before_timestamp`). The compound form is required for correctness
+    // when tasks share an epoch-second timestamp; the legacy form silently
+    // drops such rows. We surface a deprecation note in the response so
+    // operators can spot any client still using the old key.
+    let cursor = match params.before {
+        Some(Some(c)) => Some((c.last_timestamp, c.task_id)),
+        Some(None) => None,
+        None => {
+            if params.before_timestamp.is_some() {
+                tracing::warn!(
+                    "trace.list: client supplied legacy single-timestamp cursor; \
+                     switch to `before: {{ last_timestamp, task_id }}` to avoid \
+                     silently dropping rows on timestamp collisions"
+                );
+            }
+            params
+                .before_timestamp
+                .map(|ts| (ts, "\u{10ffff}".to_string()))
+        }
+    };
+    match db.list_trace_tasks_paged(limit, cursor).await
     {
         Ok(tasks) => {
             // An unscoped caller (cron / in-process) resolves to `None` here
@@ -317,14 +350,20 @@ pub async fn handle_list(
 
             // Cursor exhaustion: if fewer than `limit` rows returned, there's
             // no next page. Otherwise, the next page starts strictly before
-            // the smallest last_timestamp in this page.
+            // the last entry in (last_timestamp DESC, task_id DESC) order.
+            // The compound cursor is required: a single-timestamp cursor
+            // drops rows whose `last_timestamp` collides with the previous
+            // page's last entry (see `list_trace_tasks_paged`).
             let exhausted = tasks.len() < limit;
             let next_cursor = if exhausted {
                 Value::Null
             } else {
-                tasks
-                    .last()
-                    .map_or(Value::Null, |t| json!(t.last_timestamp))
+                tasks.last().map_or(Value::Null, |t| {
+                    json!({
+                        "last_timestamp": t.last_timestamp,
+                        "task_id": t.task_id,
+                    })
+                })
             };
             let traces: Vec<Value> = tasks
                 .into_iter()

@@ -223,14 +223,28 @@ impl StateDatabase {
             CREATE INDEX IF NOT EXISTS idx_agent_tasks_parent_task ON agent_tasks(parent_task_id);
 
             -- Task execution traces (for Shadow Replay / deterministic recovery)
+            --
+            -- `UNIQUE(task_id, step_index)` is the schema-level guard for the
+            -- monotonic replay invariant (mirrors `UNIQUE(fact_id, seq)` on
+            -- `memory_events`): a caller that supplies a duplicate or
+            -- regressing `(task_id, step_index)` is rejected on INSERT rather
+            -- than silently corrupting replay ordering. `CHECK
+            -- (step_index >= 0)` rejects negative indices — the column is
+            -- `INTEGER` (signed), so without the guard any value fits.
+            --
+            -- `task_id` FK uses `ON DELETE RESTRICT` (forensic integrity
+            -- over convenience — a task can never be deleted while it still
+            -- has traces, surfacing the dependency instead of silently
+            -- orphaning the audit trail).
             CREATE TABLE IF NOT EXISTS task_traces (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_id TEXT NOT NULL,
-                step_index INTEGER NOT NULL,
+                step_index INTEGER NOT NULL CHECK (step_index >= 0),
                 event_kind TEXT NOT NULL,  -- turn_started, tool_call_completed, etc.
                 event_json TEXT NOT NULL,
                 timestamp INTEGER NOT NULL,
-                FOREIGN KEY(task_id) REFERENCES agent_tasks(id)
+                FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE RESTRICT,
+                UNIQUE(task_id, step_index)
             );
 
             CREATE INDEX IF NOT EXISTS idx_task_traces_task ON task_traces(task_id, step_index);
@@ -262,10 +276,12 @@ impl StateDatabase {
                 speaker_id TEXT,
                 speaker_name TEXT NOT NULL,
                 content TEXT NOT NULL,
-                timestamp INTEGER NOT NULL
+                timestamp INTEGER NOT NULL,
+                UNIQUE(session_id, round, sequence)
             );
 
             CREATE INDEX IF NOT EXISTS idx_gc_turns_session ON group_chat_turns(session_id);
+            CREATE INDEX IF NOT EXISTS idx_gc_turns_seq ON group_chat_turns(session_id, round, sequence);
             "#
     }
 

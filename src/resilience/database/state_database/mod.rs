@@ -104,6 +104,7 @@ impl StateDatabase {
         // landed). Existing databases keep their orphaned tables (harmless);
         // new databases simply don't create them.
         migration::migrate_task_traces_to_agent_trace(conn)?;
+        migration::migrate_task_traces_unique_step_index(conn)?;
         migration::migrate_add_channel_offsets(conn)?;
         migration::migrate_add_paired_users(conn)?;
         migration::migrate_add_sticker_descriptions(conn)?;
@@ -135,6 +136,18 @@ impl StateDatabase {
         let conn = Connection::open_in_memory()
             .map_err(|e| AlephError::config(format!("Failed to open in-memory database: {}", e)))?;
 
+        // Mirror the production pragmas so FK violations surface in tests
+        // exactly where they would in production — otherwise `foreign_keys=ON`
+        // regressions can land undetected. Without this, an in-memory test
+        // happily inserts an orphan `task_traces` row referencing a
+        // non-existent `agent_tasks.id` and never exercises the constraint.
+        conn.execute_batch(
+            "PRAGMA foreign_keys=ON;
+             PRAGMA journal_mode=MEMORY;
+             PRAGMA synchronous=OFF;",
+        )
+        .map_err(|e| AlephError::config(format!("Failed to set in-memory pragmas: {e}")))?;
+
         // Initialize the database schema
         Self::create_schema(&conn, DEFAULT_EMBEDDING_DIM)?;
 
@@ -145,8 +158,16 @@ impl StateDatabase {
         )
         .map_err(|e| AlephError::config(format!("Failed to update schema_info: {}", e)))?;
 
+        // Drop obsolete tables (matches `new()` / `new_with_dim()`).
+        // Without this, a future migration that drops a real table leaves
+        // in-memory tests with a stale schema that disagrees with production.
+        Self::drop_obsolete_tables(&conn).map_err(|e| {
+            AlephError::config(format!("Failed to drop obsolete facts tables: {e}"))
+        })?;
+
         // Run migrations (same as new()) so in-memory DBs have full schema
         migration::migrate_task_traces_to_agent_trace(&conn)?;
+        migration::migrate_task_traces_unique_step_index(&conn)?;
         migration::migrate_add_channel_offsets(&conn)?;
         migration::migrate_add_paired_users(&conn)?;
         migration::migrate_add_sticker_descriptions(&conn)?;
