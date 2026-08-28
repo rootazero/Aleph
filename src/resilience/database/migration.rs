@@ -269,15 +269,19 @@ pub fn migrate_task_traces_unique_step_index(conn: &Connection) -> Result<(), Al
     // Deduplicate any pre-existing duplicate (task_id, step_index) pairs by
     // keeping the smallest `id` per pair. SQLite ships no row_number(); the
     // MIN(id) per group + self-join gives us a delete set.
-    let deleted = conn.execute(
-        r#"
-        DELETE FROM task_traces
-         WHERE id NOT IN (
-             SELECT MIN(id) FROM task_traces GROUP BY task_id, step_index
-         )
-        "#,
-        [],
-    )?;
+    let deleted = conn
+        .execute(
+            r#"
+            DELETE FROM task_traces
+             WHERE id NOT IN (
+                 SELECT MIN(id) FROM task_traces GROUP BY task_id, step_index
+             )
+            "#,
+            [],
+        )
+        .map_err(|e| AlephError::config(format!(
+            "Failed to dedupe task_traces before adding UNIQUE constraint: {e}"
+        )))?;
     if deleted > 0 {
         tracing::warn!(
             deleted,
