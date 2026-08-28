@@ -66,6 +66,20 @@ pub async fn handle_token_rotate(
 
     JsonRpcResponse::success(
         request.id,
-        json!({ "token": token, "revoked_devices": revoked_devices }),
+        {
+            // Token rotation is the "revoke all remotes" action — the most
+            // consequential single call on the admin surface. The audit entry
+            // records the rotation and how many paired devices were revoked
+            // alongside it, never the new token itself.
+            if let Some(log) = crate::security::audit::global() {
+                log.log(crate::security::audit::AuditEntry::authority_change(
+                    crate::gateway::caller_identity::current_caller_user(),
+                    format!(
+                        "gateway.token.rotate: rotated shared token; revoked {revoked_devices} paired device(s)"
+                    ),
+                ));
+            }
+            json!({ "token": token, "revoked_devices": revoked_devices })
+        },
     )
 }

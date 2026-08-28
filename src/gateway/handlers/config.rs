@@ -585,6 +585,22 @@ pub async fn handle_patch_config(
         "Config patched via RPC"
     );
 
+    // config.patch is a highest-privilege mutation (it can rewrite auth,
+    // provider keys routing, and channel wiring). The audit entry records
+    // the patched path and applied sections — never the patch body, which
+    // may embed secret-adjacent values.
+    if !result.diff.is_empty() {
+        if let Some(log) = crate::security::audit::global() {
+            log.log(crate::security::audit::AuditEntry::authority_change(
+                crate::gateway::caller_identity::current_caller_user(),
+                format!(
+                    "config.patch: path '{path}' applied sections {:?}",
+                    result.applied_sections
+                ),
+            ));
+        }
+    }
+
     match serde_json::to_value(&result) {
         Ok(mut v) => {
             // Attach the reload impact so Panel users get the same

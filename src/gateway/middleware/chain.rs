@@ -58,12 +58,18 @@ impl MiddlewareChain {
         let validated = self.validate.layer(rate_limited);
 
         let mut svc = validated;
+        // Capture the request id BEFORE moving `request` into the service
+        // call: JSON-RPC correlation is by `id`, and answering a chain-level
+        // error with `id: null` leaves the client's pending promise for that
+        // request hanging until a client-side timeout (the Panel has several
+        // call sites with no timeout).
+        let request_id = request.id.clone();
         match svc.call(request).await {
             Ok(resp) => resp,
             Err(e) => {
                 tracing::warn!(error = ?e, "middleware chain error");
                 JsonRpcResponse::error(
-                    None,
+                    request_id,
                     crate::gateway::protocol::INTERNAL_ERROR,
                     "Middleware chain error",
                 )
