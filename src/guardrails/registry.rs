@@ -97,14 +97,20 @@ impl GuardrailRegistry {
         // otherwise a sanitize-then-block chain silently leaks. Only `Block`
         // short-circuits; `Sanitize` is a content rewrite, not a terminal
         // decision. Warns are accumulated across all three phases because a
-        // rewrite itself can trigger new warn signals.
+        // rewrite itself can trigger new warn signals. Warn reasons are
+        // deduplicated: two guardrails firing the same signal used to produce
+        // "secret leaked; secret leaked", which only adds audit-log noise.
         let mut warns: Vec<String> = Vec::new();
         let mut current = text.to_string();
         for g in &self.input {
             let d = g.evaluate_input(&current).await;
             match d {
                 GuardrailDecision::Allow => continue,
-                GuardrailDecision::Warn { reason } => warns.push(reason),
+                GuardrailDecision::Warn { reason } => {
+                    if !warns.contains(&reason) {
+                        warns.push(reason);
+                    }
+                }
                 GuardrailDecision::Sanitize(rep) => current = rep.text,
                 GuardrailDecision::Block { .. } => return d,
             }
@@ -221,14 +227,18 @@ impl GuardrailRegistry {
         }
         // Same sanitize-then-block contract as `evaluate_input`: a `Sanitize`
         // rewrites the payload that the next guardrail sees; only `Block`
-        // short-circuits.
+        // short-circuits. Warn reasons are deduplicated.
         let mut warns: Vec<String> = Vec::new();
         let mut current = text.to_string();
         for g in &self.output {
             let d = g.evaluate_output(&current).await;
             match d {
                 GuardrailDecision::Allow => continue,
-                GuardrailDecision::Warn { reason } => warns.push(reason),
+                GuardrailDecision::Warn { reason } => {
+                    if !warns.contains(&reason) {
+                        warns.push(reason);
+                    }
+                }
                 GuardrailDecision::Sanitize(rep) => current = rep.text,
                 GuardrailDecision::Block { .. } => return d,
             }
@@ -249,13 +259,18 @@ impl GuardrailRegistry {
         }
         // Tool-call args are a `Value` (not `&str`), so `Sanitize` must rebuild
         // a new `Value` with the rewritten leaf. Same Block-only short-circuit.
+        // Warn reasons are deduplicated.
         let mut warns: Vec<String> = Vec::new();
         let mut current = args.clone();
         for g in &self.tool_call {
             let d = g.evaluate_tool_call(tool_name, &current).await;
             match d {
                 GuardrailDecision::Allow => continue,
-                GuardrailDecision::Warn { reason } => warns.push(reason),
+                GuardrailDecision::Warn { reason } => {
+                    if !warns.contains(&reason) {
+                        warns.push(reason);
+                    }
+                }
                 GuardrailDecision::Sanitize(rep) => {
                     if let Ok(v) = serde_json::from_str::<Value>(&rep.text) {
                         current = v;
