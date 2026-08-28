@@ -587,9 +587,21 @@ impl GatewayServer {
 
     /// Get a mutable reference to the handler registry
     ///
-    /// Note: This consumes the Arc and returns a new one.
-    /// Should only be called during setup, before `run()`.
+    /// # Panics — boot-phase-only API
+    ///
+    /// `Arc::get_mut` succeeds only while THIS server holds the sole strong
+    /// reference to the registry. It panics (via `unreachable!`) the moment
+    /// the registry has been cloned anywhere — e.g. into a middleware chain,
+    /// a handler context, or a spawned task. Call ONLY during server setup,
+    /// before `run()` and before any clone of [`Self::handlers`] escapes.
+    /// A panic here is a startup-ordering bug in the boot sequence, not a
+    /// runtime condition to handle: if you see it in the field, some code
+    /// cloned the registry before the last `handlers_mut` call finished.
     pub fn handlers_mut(&mut self) -> &mut HandlerRegistry {
+        debug_assert!(
+            Arc::strong_count(&self.handlers) == 1,
+            "handlers_mut called while the registry is shared — this is a boot-ordering bug"
+        );
         Arc::get_mut(&mut self.handlers)
             .unwrap_or_else(|| unreachable!("Cannot modify handlers after server is running"))
     }
