@@ -556,7 +556,16 @@ impl ExtensionManager {
         {
             let mut registry = self.plugin_registry.write().await;
             registry.clear();
+            // `registered_plugin_ids` only tracks SUCCESSFUL parses —
+            // shadow resolution gates on the id coming from a parsed
+            // manifest. A parse failure must NOT poison this set: if the
+            // highest-priority copy of a plugin fails to parse, a
+            // lower-priority copy with the same id should still be
+            // allowed to take over. Parse failures are deduped in a
+            // separate set so the error record is only registered once
+            // per id.
             let mut registered_plugin_ids = std::collections::HashSet::new();
+            let mut failed_plugin_ids = std::collections::HashSet::new();
 
             for found in plugin_dirs.iter().rev() {
                 let dir_path = &found.path;
@@ -719,7 +728,11 @@ impl ExtensionManager {
                         summary
                             .errors
                             .push(format!("{}: {}", dir_path.display(), e));
-                        if registered_plugin_ids.insert(fallback_id.clone()) {
+                        // Use `failed_plugin_ids` (not `registered_plugin_ids`)
+                        // so a successful lower-priority parse with the same id
+                        // is allowed to take over after a higher-priority parse
+                        // failure. See comment on the set declaration above.
+                        if failed_plugin_ids.insert(fallback_id.clone()) {
                             let record = PluginRecord::new(
                                 fallback_id,
                                 dir_path
