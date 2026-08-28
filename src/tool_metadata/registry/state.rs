@@ -53,4 +53,27 @@ impl ToolState {
         );
         removed
     }
+
+    /// Set the active flag on a single tool by canonical name.
+    ///
+    /// Returns true if a tool with that name was found and its `is_active`
+    /// value actually changed. The state write is scoped to the same write
+    /// lock as `register_with_conflict_resolution` so an activate/deactivate
+    /// cannot race with a registration that re-inserts the same tool — the
+    /// later mutation wins, which matches the read-then-mutate contract of
+    /// every sibling method.
+    pub async fn set_active(&self, name: &str, active: bool) -> bool {
+        let mut tools = self.tools.write().await;
+        let mut changed = false;
+        for (_id, tool) in tools.iter_mut() {
+            if tool.name == name && tool.is_active != active {
+                tool.is_active = active;
+                changed = true;
+            }
+        }
+        if changed {
+            debug!(name = name, active = active, "Toggled tool active flag");
+        }
+        changed
+    }
 }
