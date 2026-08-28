@@ -11,6 +11,8 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::utils::source_scan::{code_text, production_prefix};
+
     /// Every file that must stamp `AUTHOR_USER_KEY`, and the function whose
     /// body has to contain the write. Named, not globbed: a producer that
     /// stops stamping must fail by name.
@@ -27,56 +29,9 @@ mod tests {
         ),
     ];
 
-    /// Everything before the first *inline* `#[cfg(test)] mod <name> { ... }`
-    /// block. A bare declaration (`#[cfg(test)] mod tests;`, pointing at a
-    /// sibling file like `tests.rs`) is production code — more production
-    /// code follows it — and must NOT be mistaken for the boundary: doing so
-    /// silently discards everything after the first such declaration,
-    /// including real producers.
-    fn production_prefix(src: &str) -> String {
-        // CRLF-safe: the repo is checked out with CRLF on Windows, so a
-        // separator anchored to "\n#[cfg(test)]\n" never matches and the whole
-        // file (tests included) would be scanned.
-        let normalized = src.replace('\r', "");
-        const MARKER: &str = "#[cfg(test)]";
-        let mut search_from = 0usize;
-        loop {
-            let Some(rel) = normalized[search_from..].find(MARKER) else {
-                return normalized;
-            };
-            let at = search_from + rel;
-            let after = normalized[at + MARKER.len()..].trim_start();
-            let is_inline_module = match after.strip_prefix("mod ") {
-                Some(tail) => match (tail.find('{'), tail.find(';')) {
-                    (Some(brace), Some(semi)) => brace < semi,
-                    (Some(_), None) => true,
-                    _ => false,
-                },
-                None => false,
-            };
-            if is_inline_module {
-                return normalized[..at].to_string();
-            }
-            search_from = at + MARKER.len();
-        }
-    }
-
-    /// Drops every `//`/`///`/`//!` comment line. A doc comment naming a
-    /// symbol is not evidence the symbol is actually written anywhere — see
-    /// this module's own doc for the defect this exists to stop from
-    /// recurring: the ONLY reason `AUTHOR_USER_KEY`'s absent producer went
-    /// unnoticed for as long as it did was that a doc comment vouching for it
-    /// was the sole hit when grepping the key's name.
-    fn strip_comment_lines(src: &str) -> String {
-        src.lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
     #[test]
     fn the_run_loop_seeds_the_room_author_from_the_author_key() {
-        let prod = strip_comment_lines(&production_prefix(include_str!("mod.rs")));
+        let prod = code_text(&production_prefix(include_str!("mod.rs")));
         assert!(
             prod.contains("AUTHOR_USER_KEY"),
             "run_loop must read AUTHOR_USER_KEY — without this the census below \
@@ -92,14 +47,19 @@ mod tests {
     fn every_named_origin_site_stamps_the_author_key() {
         let mut checked = 0usize;
         for (path, src, function) in ORIGIN_SITES {
-            let prod = production_prefix(src);
+            // Comments and string literals stripped once: `prod.contains(function)`
+            // below is the rename-detection canary, and reading it against raw
+            // `production_prefix` output would let a stray comment mentioning an
+            // old function name satisfy the very check meant to catch a rename —
+            // the same defect class this census exists to prevent.
+            let prod = code_text(&production_prefix(src));
             assert!(
                 prod.contains(function),
                 "{path}: the census names `{function}` but that function is not in \
                  the production half of the file — the census input rotted"
             );
             assert!(
-                strip_comment_lines(&prod).contains("AUTHOR_USER_KEY"),
+                prod.contains("AUTHOR_USER_KEY"),
                 "{path}: `run_loop::with_request_scope`'s doc names this file as an \
                  origin site for AUTHOR_USER_KEY, but nothing here stamps it. Either \
                  stamp it, or delete the claim from that doc — a doc comment naming \
@@ -107,6 +67,17 @@ mod tests {
             );
             checked += 1;
         }
+        // A measured floor alongside the exact count: `checked == ORIGIN_SITES.len()`
+        // shrinks with ORIGIN_SITES, so an emptied list would pass it trivially
+        // (0 == 0) — the one failure this census exists to catch. The floor
+        // cannot detect a loop that SKIPS an entry, which is what the exact
+        // count is still for; keep both.
+        assert!(
+            checked >= 2,
+            "the census inspected {checked} origin sites; it must cover at least the two \
+             that build a run request — an emptied ORIGIN_SITES would otherwise pass \
+             `checked == len()` trivially"
+        );
         assert_eq!(
             checked,
             ORIGIN_SITES.len(),
