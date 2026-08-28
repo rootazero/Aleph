@@ -271,8 +271,21 @@ impl LoopRegistry {
             if !legal {
                 continue;
             }
-            let next = live
-                .clone()
+            // Leaving Active retires a tick that is still asleep — it never
+            // ran, so give its claim back (see `refund_iteration`). A tick
+            // already executing has cleared the marker itself, so nothing
+            // is refunded then. Without this, a freeze on a 1-cap loop
+            // could leave a Paused row with `iterations_used: 1/1` having
+            // executed nothing — the same bug class `stop_all` defends
+            // against.
+            let retires_unrun_tick =
+                from == LoopStatus::Active && live.pending_tick_wake_ms.is_some();
+            let base = if retires_unrun_tick {
+                live.clone().refund_iteration()
+            } else {
+                live.clone()
+            };
+            let next = base
                 .with_status(LoopStatus::Paused)
                 .with_stop_reason(Some(reason.clone()))
                 .with_pending_tick(None);
