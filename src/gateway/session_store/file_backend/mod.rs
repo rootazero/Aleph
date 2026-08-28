@@ -967,6 +967,34 @@ impl SessionStore for FileSessionStore {
         Ok(true)
     }
 
+    /// See the trait doc. Validation of the key/scope shape happens before
+    /// the row is even locked — no reason to take the lock for an input this
+    /// verb was never going to accept.
+    async fn rescope_attribution(
+        &self,
+        key: &SessionKey,
+        scope_id: &str,
+    ) -> Result<bool, SessionStoreError> {
+        crate::gateway::session_store::conversation_key(key)?;
+        if crate::scope::ScopeId::parse(scope_id)
+            .filter(|s| matches!(s, crate::scope::ScopeId::Project(_)))
+            .is_none()
+        {
+            return Err(SessionStoreError::Unsupported);
+        }
+        let key_str = key.to_key_string();
+        let mut guard = self.lock_metadata(&key_str).await?;
+        // No row yet — a freshly bound room whose members have not spoken.
+        // Not an error, per the trait doc: the bind still succeeds, and
+        // there is nothing here for this verb to move yet.
+        let Some(meta) = guard.existing_mut() else {
+            return Ok(false);
+        };
+        meta.scope_id = Some(scope_id.to_string());
+        guard.commit().await?;
+        Ok(true)
+    }
+
     async fn set_project_root(
         &self,
         key: &SessionKey,
@@ -1834,5 +1862,83 @@ mod branch_checkpoint_attribution_tests {
 
         assert_eq!(branched.owner_user_id, None);
         assert_eq!(branched.scope_id, None);
+    }
+}
+
+#[cfg(test)]
+mod rescope_attribution_tests {
+    use super::*;
+    use crate::routing::session_key::PeerKind;
+    use crate::scope::{with_scope, ScopeAttribution};
+
+    fn temp_store() -> (FileSessionStore, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = FileSessionStoreConfig {
+            base_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        (FileSessionStore::new(config).expect("store"), dir)
+    }
+
+    /// The one exception to "session scope is immutable once set": an operator
+    /// binding a channel conversation to a room. Everything else must keep
+    /// getting the create-only behaviour.
+    #[tokio::test]
+    async fn rescoping_a_group_row_to_a_room_moves_only_the_scope() {
+        let (store, _dir) = temp_store();
+        let key = SessionKey::group("main", "telegram", PeerKind::Group, "C1");
+        with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            store.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+
+        let changed = store
+            .rescope_attribution(&key, "project:p-1")
+            .await
+            .expect("a file backend supports rescoping");
+        assert!(changed, "the row moved");
+
+        let meta = store.get_metadata(&key).await.unwrap().unwrap();
+        assert_eq!(meta.scope_id.as_deref(), Some("project:p-1"));
+        assert_eq!(
+            meta.owner_user_id.as_deref(),
+            Some("u-alice"),
+            "the owner still names whoever spoke first — the room's visibility is \
+             decided by the roster, so overwriting the owner would only lose the byline"
+        );
+    }
+
+    /// A non-group key must be refused. Rescoping is a visibility grant, and a
+    /// DM has exactly one human on the far side: there is no roster to grant to.
+    #[tokio::test]
+    async fn rescoping_refuses_a_key_that_is_not_a_conversation() {
+        let (store, _dir) = temp_store();
+        let key = SessionKey::main("main");
+        let result = store.rescope_attribution(&key, "project:p-1").await;
+        assert!(
+            result.is_err(),
+            "only a group conversation may be rescoped into a room"
+        );
+    }
+
+    /// A group nobody has spoken in yet has no row. That is not an error —
+    /// it is the common case for a freshly bound room, and the trait doc
+    /// pins `Ok(false)` for it specifically so a store that cannot tell the
+    /// difference between "unsupported" and "nothing to move" cannot use it
+    /// to mean either.
+    #[tokio::test]
+    async fn rescoping_a_row_that_does_not_exist_yet_reports_no_change() {
+        let (store, _dir) = temp_store();
+        let key = SessionKey::group("main", "telegram", PeerKind::Group, "C-unspoken");
+        let changed = store
+            .rescope_attribution(&key, "project:p-1")
+            .await
+            .expect("a file backend supports rescoping");
+        assert!(
+            !changed,
+            "there is no row yet for a group nobody has spoken in"
+        );
     }
 }

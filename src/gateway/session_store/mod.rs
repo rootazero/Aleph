@@ -150,6 +150,52 @@ pub trait SessionStore: Send + Sync {
         Err(SessionStoreError::Unsupported)
     }
 
+    /// Move an EXISTING session row's scope into a project room.
+    ///
+    /// This is the one exception to spec §10 ("session scope is immutable once
+    /// set"), and it is deliberately narrow. `stamp_attribution` stays
+    /// create-only for every other path; this verb exists because binding a
+    /// channel conversation to a room is a decision a human makes, with a
+    /// reason, that is recorded in the audit log — while `backfill_attribution`
+    /// can only heal rows that were never stamped at all.
+    ///
+    /// Without it a bound conversation splits in two: the RUN takes the room
+    /// scope (memory partition, roster, room context) while the ROW keeps
+    /// `personal:<first speaker>`, so every other member's `session_visible_to`
+    /// says false and the group stays invisible in their session list.
+    ///
+    /// `key` must be a `SessionKey::Group`; refuse anything else in the verb
+    /// itself, not at the call site, so "only a conversation may be rescoped"
+    /// is a property of the method rather than a rule each caller has to
+    /// remember. A DM has one human on the far side and no roster to grant
+    /// visibility to. Implementors: check this with [`conversation_key`]
+    /// rather than re-deriving the match, so the property has one author
+    /// across every backend, not one per implementor.
+    ///
+    /// Move ONLY the scope. `owner_user_id` still names whoever spoke first:
+    /// for a project-scoped row, visibility is decided by the roster, so
+    /// overwriting the owner would buy nothing and lose the byline.
+    ///
+    /// Its only caller will be the channel-binding handler
+    /// (`handlers::projects_channel::handle_bind`, Task 9), which pins it via
+    /// `session_store::caller_census::SOLE_CALLERS` in the same commit that
+    /// creates that file — see this method's introducing commit for why that
+    /// row is not added yet.
+    ///
+    /// `Ok(false)` means there was no such row — a conversation nobody has
+    /// spoken in yet, which is the common case for a freshly bound group and
+    /// is not an error. Default is `Unsupported` rather than `Ok(false)` for
+    /// the same reason `backfill_attribution`'s is: a store that cannot do
+    /// this has not "found nothing to move".
+    async fn rescope_attribution(
+        &self,
+        key: &SessionKey,
+        scope_id: &str,
+    ) -> Result<bool, SessionStoreError> {
+        let _ = (key, scope_id);
+        Err(SessionStoreError::Unsupported)
+    }
+
     async fn list_checkpoints(
         &self,
         key: &SessionKey,
@@ -363,6 +409,23 @@ pub trait SessionStore: Send + Sync {
             pairs.push((msg.role, msg.content));
         }
         Ok(pairs)
+    }
+}
+
+/// The shape check behind [`SessionStore::rescope_attribution`]: "only a
+/// conversation may be rescoped" is a property of the verb, not a rule each
+/// caller — or each backend — has to remember.
+///
+/// Factored out so it has exactly one author. Both shipped backends
+/// (`file_backend`, `sqlite_backend`) call this rather than re-deriving the
+/// `matches!(key, SessionKey::Group { .. })` check inline; a future third
+/// implementor of `rescope_attribution` should too, rather than writing its
+/// own copy that can drift from this one.
+pub(crate) fn conversation_key(key: &SessionKey) -> Result<(), SessionStoreError> {
+    if matches!(key, SessionKey::Group { .. }) {
+        Ok(())
+    } else {
+        Err(SessionStoreError::Unsupported)
     }
 }
 
