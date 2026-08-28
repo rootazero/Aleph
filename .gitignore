@@ -153,3 +153,6 @@ examples/*
 .audit-prompt-batch*.md
 __pycache__/
 *.pyc
+
+# Local backup scratch folder
+backup/
