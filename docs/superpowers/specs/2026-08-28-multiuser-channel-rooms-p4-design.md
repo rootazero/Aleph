@@ -131,26 +131,30 @@ fn room_claiming(session_key) -> Option<String>
 
 ```
 let mut attr = stamped?;                                   // 未配对 ⇒ 无身份 ⇒ 不取房间 scope
-if !roster_admits(&pid, &attr.owner_user_id) {
+let target = ScopeId::Project(pid);
+if attr.scope == target { return Some(attr); }             // 生产者已经房间化：别再判一次
+if !visibility::project_visible_to(&pid, Some(&attr.owner_user_id)) {
     return Some(attr);                                     // 非成员：保持 personal
 }
-attr.scope = ScopeId::Project(pid);
+attr.scope = target;
 ```
 
-两条必须写下理由的细节：
+三条必须写下理由的细节：
 
-1. **这条闸对 Panel 路径逐字节 no-op**（能到达房间 key 的人必然在名册上），所以统一规则的代价是零——不给频道路径开一张单独的许可证。
-2. **`is_member` 的 `Err` 臂方向与 round-8 Ruling P9 相反，两条都要各自留理由**：
-   - P9：读不到名册 ⇒ **激活**（沉默的代价是一次没人回应的求助）。
-   - 本条：读不到名册 ⇒ **不取房间 scope**（放行的代价是把房间共享分区交给一个可能不在名册上的人）。
-
-   两条规则的主语不同（该不该回应 / 该写哪个分区）。不写下来，下一个人会「顺手统一」成其中一条。
+1. **闸只作用于「升格」，不作用于「已经是房间的」**（`attr.scope == target` 的早返回）。这一条是**防回归**的：`resolve_attribution` 的 Path 2 会给 cron 之类的无限制调用者产出 `owner = OWNER_USER_ID` + `scope = Project(pid)`，而 `OWNER_USER_ID` 未必在名册上——无条件跑闸会把一个**已经过准入**的房间 run 静默降级成个人 run。谓词只该问它被引入来回答的那一问：「一次由会话认领**推导**出来的房间化，可信吗」。
+2. **这条闸对 Panel 路径逐字节 no-op**：Panel 的两条路径都让 `stamped.scope` 已经等于 `Project(pid)`，命中第一条早返回。统一规则的代价因此是零——不给频道路径开一张单独的许可证。
+3. **谓词用 `visibility::project_visible_to(pid, Some(actor))`，不直接调 `roster::is_member`**。⚠️ **规划期读实更正**：`roster::is_member(project_id, user_id) -> bool` 是**同步内存投影读**，**没有 `Err` 臂**（`src/projects/roster.rs:71`）——设计初稿里「`Err` 臂方向与 Ruling P9 相反」那段论证**不成立**，据此作废。真实的三态是：投影里没有该房间 / 没有该成员 / 本进程尚未发布投影，三者都读作 `false`，即**未知一律 fail-closed**，而 fail-closed 正是这道闸要的方向。Ruling P9 读的是**另一个**东西（`ProjectStore::members()`，那个才返回 `Result`），两条规则因此不冲突也不需要互相让步；把这句话写进代码注释，否则下一个人会去找那个并不存在的 `Err` 臂。
 
 ### 4.5 未配对回合的收窄
 
-未配对的人在**绑定群**里说话：今天无戳 ⇒ adoption-by-absence ⇒ 写进机主私人分区。绑定把这条既存边缘变成常态，因此收窄为：**绑定会话中的无归属回合不写记忆、不注入房间上下文**（复用 round-7 `Principal::Unattributed` 的诚实记账语义），而不是继续借用机主身份。
+⚠️ **规划期读实更正：这一条不需要新代码，它已经由 `stamped?` 那一行 fail-closed 了。**
 
-收窄**只作用于绑定会话**；未绑定的任何路径逐字节不变 ⇒ 单用户装机零变更保证不破。
+未配对的人没有 `u-` 身份 ⇒ `scope_from_metadata` 返回 `None` ⇒ `request_scope` 在 `let mut attr = stamped?` 处直接返回 `None` ⇒ **该 run 没有 scope task-local** ⇒ 既不会取房间分区，也不会渲染 `RoomRosterLayer`（它读的正是那个 task-local）。设计初稿提出的「收窄」在现有代码里已经成立。
+
+因此本条从「新增收窄」降级为**两件事**：
+
+1. **补一条断言把它钉住**（`an_unpaired_speaker_in_a_bound_conversation_takes_no_room_scope`）——它今天为真是**推导**出来的，不是被守着的；`stamped?` 那一行将来若被改成 `unwrap_or_default()` 之类，房间分区会在没有任何测试变红的情况下对陌生人打开。
+2. **把残留边界记录下来而不是修它**：未盖戳的回合仍按 adoption-by-absence 落进机主分区——这是**先于房间存在**的行为，与绑定无关（每一个群今天都如此）。修它需要一个「无归属 run」的新概念，而它此刻**零消费者**（R10 撤回模式）。写进 §9 不做清单。
 
 ---
 
@@ -294,6 +298,7 @@ round-7 最贵的教训——两两冲突扫描**抓不到**「一个句柄没�
 - **`ScopeId::Org`** —— 仍无生产者，不碰。
 - **给频道路径加第二个 scope 盖戳** —— 房间 scope 只由 `request_scope` 一个推导决定。
 - **合并两个 `room_claiming` 孪生** —— doc 已写明 deliberately not shared。
+- **「无归属 run」概念** —— 未盖戳的回合落进机主分区是**先于房间存在**的行为（每个群今天都如此），与绑定无关。给它一个 `Unattributed` run 语义此刻零消费者（R10 撤回模式）。见 §4.5。
 - **Kanban 拖拽写 RPC**（round-8 ⑤）· **Memory tab 的 curated 段**（待产品裁决）—— 与频道绑定不同路，留账本。
 
 ---
