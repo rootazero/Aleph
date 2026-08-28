@@ -49,6 +49,13 @@ impl Speaker {
 /// Maximum number of characters allowed in a persona's `system_prompt`.
 const MAX_SYSTEM_PROMPT_LEN: usize = 2000;
 
+/// Valid values for [`Persona::thinking_level`]. Mirrors
+/// `crate::agents::thinking::ThinkLevel`'s `FromStr` arm set — kept as a
+/// literal list here so `validate()` doesn't need to import the agents
+/// module (group_chat is consumed by channels; keeping the dependency edge
+/// one-way avoids a cycle when agents code later wants Persona types).
+const VALID_THINKING_LEVELS: &[&str] = &["low", "medium", "high", "xhigh"];
+
 /// Defines a persona that can participate in group chat discussions.
 ///
 /// Each persona has a unique identity, a system prompt that shapes its behavior,
@@ -94,6 +101,23 @@ impl Persona {
             return Err(GroupChatError::InvalidPersona(format!(
                 "persona system_prompt exceeds maximum length of {MAX_SYSTEM_PROMPT_LEN} characters"
             )));
+        }
+        // `src/agents/thinking.rs` contract: callers must REJECT an invalid
+        // thinking_level rather than silently default. The executor used to
+        // warn + fall back to the provider default at round time — an
+        // operator typo (`thinking_level: "hgh"`) would silently run the
+        // persona at a depth nobody picked. Validate eagerly at
+        // create_session so the misconfiguration surfaces where it was made.
+        if let Some(level) = &self.thinking_level {
+            let normalized = level.trim().to_ascii_lowercase();
+            if !VALID_THINKING_LEVELS.contains(&normalized.as_str()) {
+                return Err(GroupChatError::InvalidPersona(format!(
+                    "persona '{}' thinking_level '{}' is not one of {}",
+                    self.id,
+                    level,
+                    VALID_THINKING_LEVELS.join(", ")
+                )));
+            }
         }
         Ok(())
     }

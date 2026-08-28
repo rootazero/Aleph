@@ -100,6 +100,18 @@ impl GroupChatOrchestrator {
         // 3. Resolve personas (validates that all presets exist)
         let participants = self.persona_registry.resolve(&sources)?;
 
+        // 3a. Validate EVERY resolved persona, not just inline ones. Inline
+        // personas were already validated at step 2 (before resolve, so an
+        // inline error isn't masked by a missing preset) — revalidating them
+        // here is idempotent. Preset personas loaded from config skip the
+        // step-2 path, and a config typo like `thinking_level = "hgh"` would
+        // otherwise only surface as a silent provider-default fallback at
+        // round time (see `Persona::validate` for the REJECT-not-default
+        // contract this enforces).
+        for p in &participants {
+            p.validate()?;
+        }
+
         if participants.is_empty() {
             return Err(GroupChatError::InvalidPersona(
                 "at least one persona is required".into(),

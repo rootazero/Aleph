@@ -261,11 +261,12 @@ pub fn provider_deltas_to_sse(
                                     continue;
                                 }
                                 ProviderDelta::Usage(u) => {
-                                    usage_acc = Some(Usage {
+                                    let converted = Usage {
                                         prompt_tokens: u.input_tokens,
                                         completion_tokens: u.output_tokens,
                                         total_tokens: u.input_tokens + u.output_tokens,
-                                    });
+                                    };
+                                    usage_acc = Some(converted.clone());
                                     // Trailing Usage: some OpenAI-compatible
                                     // vendors send usage AFTER the stop frame.
                                     // If the previous `Done` arm deferred
@@ -275,8 +276,9 @@ pub fn provider_deltas_to_sse(
                                     // accumulate and let `Done` handle the
                                     // final emission order.
                                     if done_pending {
-                                        let usage_frame =
-                                            sse_data(&usage_chunk(&id, created, &model, u));
+                                        let usage_frame = sse_data(&usage_chunk(
+                                            &id, created, &model, converted,
+                                        ));
                                         let frame = format!("{usage_frame}{SSE_DONE}");
                                         return Some((
                                             frame,

@@ -49,7 +49,7 @@ impl SessionManager {
             // contract for a stopped session must be explicit: refuse a silent
             // resume; require an explicit reopen.
             match meta.state {
-                Some(SessionState::Stopped) | Some(SessionState::Ended) => {
+                Some(SessionState::Stopped) => {
                     return Err(SessionManagerError::SessionStopped(meta.key.clone()));
                 }
                 _ => {}

@@ -287,6 +287,7 @@ impl GroupChatExecutor {
                 round,
                 sequence: 0,
                 is_final: plan.respondents.is_empty(),
+                dropped_targets: Vec::new(),
             });
             seq_offset = 1;
         }
@@ -385,6 +386,26 @@ impl GroupChatExecutor {
         // GroupChatMessages, and persist every staged turn. Past this point
         // any DB persistence error is best-effort (logged) and the round is
         // considered successful from the caller's perspective.
+        //
+        // **Audit fix**: when the coordinator returns an empty plan
+        // (`respondents: []`), `prepared` is empty and nothing persona-side
+        // was produced. The previous code still appended the user/system turn
+        // to history, advanced `current_round`, and wrote an orphan `system`
+        // row to `group_chat_turns` — replays then showed a round gap. An
+        // empty plan is a no-op round: skip the commit entirely so the next
+        // round reuses the same round number and no orphan row lands in the
+        // DB. The caller still gets an empty `messages` list (or just the
+        // coordinator's raw plan when `coordinator_visible` is on) and can
+        // decide whether to surface the no-op.
+        if prepared.is_empty() {
+            tracing::debug!(
+                subsystem = "group_chat",
+                session_id = %session.id,
+                round = round,
+                "coordinator returned an empty plan; round not committed"
+            );
+            return Ok(messages);
+        }
         // Append the user/system turn to history (matches the original
         // semantic that `add_turn` records both user prompts and persona
         // responses).

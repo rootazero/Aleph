@@ -362,7 +362,7 @@ impl ChannelRegistry {
         infos.sort_by(|a, b| {
             a.channel_type
                 .cmp(&b.channel_type)
-                .then_with(|| a.id.cmp(&b.id))
+                .then_with(|| a.id.0.cmp(&b.id.0))
         });
         infos
     }
@@ -383,7 +383,7 @@ impl ChannelRegistry {
                 infos.push(info);
             }
         }
-        infos.sort_by(|a, b| a.id.cmp(&b.id));
+        infos.sort_by(|a, b| a.id.0.cmp(&b.id.0));
         infos
     }
 

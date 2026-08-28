@@ -21,6 +21,11 @@ fn map_err(e: crate::gateway::session_manager::SessionManagerError) -> SessionSt
         crate::gateway::session_manager::SessionManagerError::NotFound(msg) => {
             SessionStoreError::NotFound(msg)
         }
+        // A stopped session surfaces through the store as `Stopped` — the
+        // caller must explicitly reopen rather than retry the same call.
+        crate::gateway::session_manager::SessionManagerError::SessionStopped(msg) => {
+            SessionStoreError::Stopped(msg)
+        }
     }
 }
 

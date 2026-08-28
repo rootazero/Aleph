@@ -174,7 +174,7 @@ pub struct ChatCompletionChunk {
 }
 
 /// Token usage statistics.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,

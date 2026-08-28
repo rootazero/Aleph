@@ -37,7 +37,11 @@ impl SessionRunRegistry {
     }
 
     /// Internally-consistent `(seq, running_keys)` read under the map lock.
+    ///
+    /// Used by tests; production broadcasts go through [`Self::publish_snapshot`]
+    /// with the snapshot captured at the seq-bump site.
     #[must_use]
+    #[allow(dead_code)]
     pub(super) fn running_snapshot(&self) -> (u64, Vec<String>) {
         let map = self.running.lock().unwrap_or_else(|e| e.into_inner());
         let seq = self.seq.load(Ordering::Acquire);
