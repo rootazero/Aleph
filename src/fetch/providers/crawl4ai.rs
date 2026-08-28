@@ -2,7 +2,6 @@ use crate::config::types::FetchBackendConfig;
 use crate::config::Crawl4aiConfig;
 use crate::error::{AlephError, Result};
 use crate::fetch::FetchProvider;
-use crate::security::ssrf::{validate_url_async, SsrfPolicy};
 use async_trait::async_trait;
 
 const NAME: &str = "crawl4ai";
@@ -33,13 +32,11 @@ impl Crawl4aiFetchProvider {
 #[async_trait]
 impl FetchProvider for Crawl4aiFetchProvider {
     async fn fetch(&self, url: &str) -> Result<String> {
-        // SSRF guard: the agent must not be able to instruct crawl4ai (which
-        // is often self-hosted on the same network as internal services) to
-        // crawl loopback / RFC1918 / metadata endpoints. Operators can widen
-        // the policy via `[security] ssrf` configuration.
-        validate_url_async(url, &SsrfPolicy::default())
-            .await
-            .map_err(|e| AlephError::tool(format!("fetch URL blocked by SSRF policy: {e}")))?;
+        // SSRF contract: caller (WebFetchTool) has already validated `url`
+        // against the operator's SsrfPolicy. We do NOT re-validate here so
+        // the operator's policy is authoritative and we avoid a second DNS
+        // resolution that would widen the rebinding TOCTOU window. See
+        // `FetchProvider::fetch` doc comment.
         self.inner
             .fetch_markdown(url)
             .await

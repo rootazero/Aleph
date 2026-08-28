@@ -54,7 +54,19 @@ impl FetchProviderFactory for FirecrawlFetchFactory {
         _backend: &FetchBackendConfig,
         ctx: &FetchBuildCtx,
     ) -> Result<Option<Arc<dyn FetchProvider>>> {
-        // Decision A: reuse the [search] firecrawl backend + vault `search:firecrawl`.
+        // Decision A (intentional coupling, see
+        // docs/superpowers/specs/2026-06-28-fetch-provider-category-design.md):
+        // the fetch Firecrawl backend ALWAYS reuses the `[search]` Firecrawl
+        // backend (base_url from `search.backends["firecrawl"]`) and the
+        // vault secret `search:firecrawl`. The `_backend` argument is
+        // ignored on purpose: there is no separate fetch Firecrawl deployment.
+        //
+        // Operators with multi-tenant setups that want fetch and search to
+        // hit different Firecrawl endpoints should run a separate Firecrawl
+        // instance reachable from both `[search]` and `[fetch]` configs
+        // (the current Firecrawl factory reads from `[search]` regardless).
+        // Future change: honor `backend.base_url` / `backend.api_key` when
+        // they are `Some`, falling back to search only when absent.
         let Some(search) = ctx.search else {
             return Ok(None);
         };
