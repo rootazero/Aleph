@@ -59,10 +59,20 @@ impl TaskStatus {
         }
     }
 
-    /// Check if task can be auto-resumed on restart
+    /// Check if task can be auto-resumed on restart.
+    ///
+    /// `Interrupted` is intentionally excluded: it is a terminal state
+    /// (written by `reconcile_orphaned_tasks` after a crash) and the
+    /// reconciliation boot path treats it as such. Including it here used
+    /// to make `should_auto_resume` / `needs_resume_confirmation` claim
+    /// `Interrupted` rows were recoverable while the boot path silently
+    /// left them as orphans — two subsystems disagreeing about the same
+    /// status. Callers that want to audit already-interrupted rows should
+    /// query them directly (`SELECT … WHERE status = 'interrupted'`)
+    /// rather than overloading `is_recoverable`.
     #[must_use]
     pub const fn is_recoverable(&self) -> bool {
-        matches!(self, Self::Running | Self::Interrupted)
+        matches!(self, Self::Running)
     }
 }
 
@@ -278,12 +288,25 @@ impl AgentTask {
     }
 
     /// Check if task should auto-resume on restart
+    ///
+    /// TODO(2026-08-28 rust-logic-audit): wire this into the boot recovery
+    /// loop alongside `is_recoverable`. Today the boot path uses
+    /// `reconcile_orphaned_tasks` (which treats `Interrupted` as terminal),
+    /// so this method has zero production callers and is dead public API.
+    /// Either wire it up or delete it — see the resilience audit report
+    /// `docs/engineering-reports/review-results/resilience-2026-08-28.md`
+    /// (warning #15) for the decision tree.
+    #[allow(dead_code)]
     #[must_use]
     pub fn should_auto_resume(&self) -> bool {
         self.status.is_recoverable() && self.risk_level == RiskLevel::Low
     }
 
-    /// Check if task needs user confirmation to resume
+    /// Check if task needs user confirmation to resume.
+    ///
+    /// Same TODO as [`should_auto_resume`](Self::should_auto_resume): dead
+    /// until the boot recovery loop is wired to consult it.
+    #[allow(dead_code)]
     #[must_use]
     pub fn needs_resume_confirmation(&self) -> bool {
         self.status.is_recoverable() && self.risk_level == RiskLevel::High
@@ -399,8 +422,12 @@ mod tests {
 
     #[test]
     fn test_task_status_recoverable() {
+        // `Running` is recoverable (a clean shutdown would have moved it
+        // elsewhere). `Interrupted` is terminal — the boot reconciliation
+        // path treats it as such; including it here was the source of the
+        // subsystem disagreement fixed in the 2026-08-28 logic audit.
         assert!(TaskStatus::Running.is_recoverable());
-        assert!(TaskStatus::Interrupted.is_recoverable());
+        assert!(!TaskStatus::Interrupted.is_recoverable());
         assert!(!TaskStatus::Completed.is_recoverable());
         assert!(!TaskStatus::Failed.is_recoverable());
     }
