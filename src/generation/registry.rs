@@ -42,6 +42,14 @@ use std::collections::HashMap;
 /// wrap it in an `Arc<RwLock<GenerationProviderRegistry>>`.
 pub struct GenerationProviderRegistry {
     providers: HashMap<String, Arc<dyn GenerationProvider>>,
+    /// Canonical-name → config-name index. The primary table is keyed by the
+    /// user's config section name (preserving multi-instance setups like
+    /// `dalle-prod` / `dalle-dev`), but every provider also answers to its
+    /// canonical [`GenerationProvider::name`] (e.g. `"openai-image"`). Log
+    /// lines emitted by the provider itself carry the canonical name while
+    /// registry-side logs carry the config name — this index is what lets
+    /// the two be correlated during incident triage.
+    canonical_index: HashMap<String, String>,
 }
 
 impl GenerationProviderRegistry {
@@ -59,6 +67,7 @@ impl GenerationProviderRegistry {
     pub fn new() -> Self {
         Self {
             providers: HashMap::new(),
+            canonical_index: HashMap::new(),
         }
     }
 
@@ -102,6 +111,29 @@ impl GenerationProviderRegistry {
             // with actionable guidance instead of "please try again".
             return Err(GenerationError::DuplicateProvider { name });
         }
+        // Index the canonical name so `get("openai-image")` resolves the
+        // provider registered as config section `"dalle"`. First registration
+        // of a canonical name wins: two config sections backed by the same
+        // provider type (multi-instance) keep their primary entries, and the
+        // canonical lookup deterministically resolves to the FIRST one
+        // registered (with a warn so the ambiguity is observable).
+        let canonical = provider.name().to_string();
+        if canonical != name {
+            match self.canonical_index.entry(canonical.clone()) {
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(name.clone());
+                }
+                std::collections::hash_map::Entry::Occupied(existing) => {
+                    tracing::warn!(
+                        canonical = %canonical,
+                        kept = %existing.get(),
+                        ignored = %name,
+                        "canonical name already claimed by another config section; \
+                         canonical lookup keeps the first registration"
+                    );
+                }
+            }
+        }
         self.providers.insert(name, provider);
         Ok(())
     }
@@ -137,7 +169,22 @@ impl GenerationProviderRegistry {
     /// ```
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Arc<dyn GenerationProvider>> {
-        self.providers.get(name).cloned()
+        // Primary lookup by config section name; fall back to the canonical
+        // name (e.g. a log line referencing "openai-image" can find the
+        // provider registered as "dalle").
+        self.providers.get(name).cloned().or_else(|| {
+            self.canonical_index
+                .get(name)
+                .and_then(|config_name| self.providers.get(config_name).cloned())
+        })
+    }
+
+    /// The config section name a canonical provider name resolves to, if any.
+    /// Useful for log correlation: `canonical_name_of("openai-image")` answers
+    /// `"dalle"` when the provider was registered under that section.
+    #[must_use]
+    pub fn config_name_for_canonical(&self, canonical: &str) -> Option<&str> {
+        self.canonical_index.get(canonical).map(String::as_str)
     }
 
     /// Get a provider by name or return an error
@@ -326,7 +373,19 @@ impl GenerationProviderRegistry {
     /// assert!(not_found.is_none());
     /// ```
     pub fn remove(&mut self, name: &str) -> Option<Arc<dyn GenerationProvider>> {
-        self.providers.remove(name)
+        let removed = self.providers.remove(name)?;
+        // Keep the canonical index consistent: drop the mapping only when it
+        // points at the removed entry (a multi-instance sibling's mapping —
+        // if any — was never claimed by this name in the first place).
+        let canonical = removed.name().to_string();
+        if self
+            .canonical_index
+            .get(&canonical)
+            .is_some_and(|v| v == name)
+        {
+            self.canonical_index.remove(&canonical);
+        }
+        Some(removed)
     }
 
     /// Remove all providers from the registry
@@ -346,6 +405,7 @@ impl GenerationProviderRegistry {
     /// ```
     pub fn clear(&mut self) {
         self.providers.clear();
+        self.canonical_index.clear();
     }
 
     /// Get an iterator over all providers
