@@ -12,14 +12,20 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
-/// Credential shapes to mask. Order matters inside the alternation:
-/// longer-prefix vendor shapes (AWS, Anthropic, GitHub, Slack, Stripe,
-/// Google) must precede `sk-[A-Za-z0-9_-]{8,}`; `apikey=` and the X-…
-/// header family must precede `key=\S+`; and query-param shapes use
-/// `[^\s&=#?]+` instead of `\S+` so a URL fragment like
-/// `?token=abc&next=https://other/?key=xyz` is masked *to the boundary of
-/// the parameter* rather than swallowing the whole redirect tail.
-fn patterns() -> &'static Regex {
+/// Credential shapes to mask, split into TWO passes applied in order.
+///
+/// Pass 1 (vendor + header shapes) runs before pass 2 (query-param
+/// shapes) because of the leftmost-match rule: in `key=AIza…` the
+/// generic `key=` branch starts 4 bytes before the `AIza` branch and
+/// would otherwise swallow the whole pair. Vendor-first yields
+/// `key=***`, preserving the parameter label.
+///
+/// Within pass 1, alternation order still matters: longer-prefix vendor
+/// shapes (AWS, Anthropic, GitHub, Slack, Stripe, Google) must precede
+/// `sk-[A-Za-z0-9_-]{8,}`; the PEM-block assignment branch must precede
+/// the generic `password=`/`secret=` branch, whose value class stops at
+/// whitespace and would otherwise leak `PRIVATE KEY-----<first line>`.
+fn vendor_patterns() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         // A single raw string — concat! would re-introduce Rust string
@@ -32,10 +38,12 @@ fn patterns() -> &'static Regex {
             (?:
                 # Vendor prefixes (longer first, so the alternation never
                 # stops at a shorter prefix that happens to be a substring).
+                # Google keys: {35,} not {35} — under-masking is the
+                # failure mode that matters for redaction.
                 sk-ant-[A-Za-z0-9_-]{8,}
             |   sk_live_[A-Za-z0-9]+
             |   AKIA[0-9A-Z]{16}
-            |   AIza[0-9A-Za-z_-]{35}
+            |   AIza[0-9A-Za-z_-]{35,}
             |   gh[psoru]_[A-Za-z0-9]{36,}
             |   xox[baprs]-[A-Za-z0-9-]+
                 # OpenAI-style keys.
@@ -48,25 +56,48 @@ fn patterns() -> &'static Regex {
                 # X-Api-Key / X-Auth-Token style vendor headers (colon or
                 # equals as separator).
             |   x-(?:api[-_]?key|auth[-_]?token|secret|token|access[-_]?token)\s*[:=]\s*\S+
+                # PEM block assigned to a config field — must precede the
+                # generic branch below, whose value class stops at the
+                # first whitespace and would leak `PRIVATE KEY-----…`.
+            |   (?:password|secret|client_secret|private_key)\s*=\s*-----BEGIN[A-Z\x20]*KEY-----[^\s,;'&]*
                 # Generic config dump shapes — password=foo, secret=bar,
                 # client_secret=baz, private_key=qux. Excludes a small set
                 # of delimiters so the match stops at the value boundary.
             |   (?:password|secret|client_secret|private_key)\s*=\s*[^\s,;'&]+
-                # Query-parameter shapes — bounded so a trailing URL
-                # fragment (&next=…, #…) is not consumed.
-            |   apikey=[^\s&=#?]+
-            |   token=[^\s&=#?]+
-            |   key=[^\s&=#?]+
             )"
         )
-        .expect("redaction regex is a compile-time constant")
+        .expect("redaction vendor regex is a compile-time constant")
+    })
+}
+
+/// Query-parameter shapes — bounded so a trailing URL fragment
+/// (`&next=…`, `#…`) is not consumed. The value class excludes `*` so a
+/// value already masked by the vendor pass (`key=***`) is left alone,
+/// and escapes `#` because in (?x) mode a bare `#` starts a comment
+/// even inside a character class (previously: unclosed-class panic on
+/// first use).
+fn query_param_patterns() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?ix)
+            (?:
+                apikey=[^\s&=\#?*]+
+            |   token=[^\s&=\#?*]+
+            |   key=[^\s&=\#?*]+
+            )",
+        )
+        .expect("redaction query-param regex is a compile-time constant")
     })
 }
 
 /// Replace common credential shapes in `input` with `***`.
 #[must_use]
 pub fn redact_secrets(input: &str) -> String {
-    patterns().replace_all(input, "***").into_owned()
+    let first = vendor_patterns().replace_all(input, "***");
+    query_param_patterns()
+        .replace_all(&first, "***")
+        .into_owned()
 }
 
 #[cfg(test)]
@@ -195,7 +226,10 @@ mod tests {
             "the next= redirect must survive redaction; got {out}"
         );
         assert!(!out.contains("token=abc123"), "token must be masked: {out}");
-        assert!(!out.contains("?key=xyz"), "trailing key= must be masked: {out}");
+        assert!(
+            !out.contains("?key=xyz"),
+            "trailing key= must be masked: {out}"
+        );
     }
 
     #[test]
