@@ -532,6 +532,39 @@ impl SeatbeltDriver {
         profile.push_str(PLATFORM_DEFAULTS_POLICY);
         profile.push('\n');
 
+        // The per-user Mach TMPDIR (`/var/folders/<xx>/<yy>/T/`) is NOT under
+        // the /tmp / /var/tmp scratch grants above — macOS hands every process
+        // its own per-user path, and the grants a profile writes are literal.
+        // Without it, anything that touches $TMPDIR dies with EPERM: the Xcode
+        // `xcrun` shim's `xcrun_db` cache write is the one that killed every
+        // `python3` call (`/usr/bin/python3` is the shim; its cache write to
+        // $TMPDIR was denied, exit 71, caught live 2026-08-28). Read from the
+        // DAEMON's env — same user, same per-user folder as the child.
+        // Read-write, not read-only: scratch exists to be written.
+        if let Ok(tmpdir) = std::env::var("TMPDIR") {
+            let trimmed = tmpdir.trim_end_matches('/');
+            if !trimmed.is_empty() {
+                profile.push_str(
+                    "; per-user Mach TMPDIR scratch (xcrun shims, python cache, …)\n",
+                );
+                // Seatbelt matches against RESOLVED paths, and `/var` is a
+                // firmlink to `/private/var` — grant both spellings, the same
+                // pattern the /tmp + /private/tmp pair above already uses.
+                let mut spellings = vec![trimmed.to_string()];
+                if let Some(rest) = trimmed.strip_prefix("/var/") {
+                    spellings.push(format!("/private/var/{rest}"));
+                } else if let Some(rest) = trimmed.strip_prefix("/tmp/") {
+                    spellings.push(format!("/private/tmp/{rest}"));
+                }
+                for path in spellings {
+                    profile.push_str(&format!(
+                        "(allow file-read* file-test-existence file-write* (subpath \"{}\"))\n",
+                        escape_sbpl(&path)
+                    ));
+                }
+            }
+        }
+
         // Filesystem policy
         self.add_fs_policy(&mut profile, &policy.filesystem, cwd)?;
 
@@ -996,6 +1029,39 @@ mod tests {
             assert!(
                 !sigs.contains(&foreign),
                 "{foreign} belongs to another backend"
+            );
+        }
+    }
+
+    /// The per-user Mach TMPDIR grant: present whenever the daemon's own env
+    /// carries TMPDIR (always on a real macOS boot), and pointing at that
+    /// exact path — the xcrun shim's cache write died here (exit 71) before
+    /// this grant existed.
+    #[test]
+    fn profile_grants_per_user_tmpdir_scratch() {
+        let Ok(tmpdir) = std::env::var("TMPDIR") else {
+            // No TMPDIR in this environment ⇒ no grant emitted ⇒ nothing to
+            // assert (CI sandboxes sometimes strip it).
+            return;
+        };
+        let driver = SeatbeltDriver::new();
+        let policy = SandboxPolicy::default();
+        let profile = driver
+            .generate_profile(&policy, Path::new("/tmp/test-workspace"))
+            .unwrap();
+        let trimmed = tmpdir.trim_end_matches('/');
+        assert!(
+            profile.contains(&format!("(subpath \"{trimmed}\")")),
+            "profile must grant scratch access to the per-user TMPDIR {trimmed}"
+        );
+        // Seatbelt matches resolved paths; /var is a firmlink to /private/var,
+        // so the firmlink twin must be granted alongside (the /tmp + /private/tmp
+        // pattern in PLATFORM_DEFAULTS_POLICY).
+        if let Some(rest) = trimmed.strip_prefix("/var/") {
+            let twin = format!("/private/var/{rest}");
+            assert!(
+                profile.contains(&format!("(subpath \"{twin}\")")),
+                "profile must grant the firmlink twin {twin}"
             );
         }
     }
