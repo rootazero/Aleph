@@ -154,7 +154,10 @@ pub async fn verify_install(
                         // Unhealthy/Restarting/Dead/Stopped. Treating Degraded
                         // as "not running" caused verify_install to mis-report a
                         // recoverable post-install blip as a hard failure (see
-                        // review/hub-statics).
+                        // review/hub-statics). Variants are enumerated
+                        // explicitly so a future addition to HealthStatus fails
+                        // to compile here instead of silently being classified
+                        // as "not running".
                         let (running, observation) = match info.health {
                             crate::mcp::manager::HealthStatus::Healthy => {
                                 (true, HealthObservation::Healthy)
@@ -162,7 +165,28 @@ pub async fn verify_install(
                             crate::mcp::manager::HealthStatus::Degraded { .. } => {
                                 (true, HealthObservation::Degraded)
                             }
-                            _ => (false, HealthObservation::Unknown),
+                            // Circuit breaker open: server won't reliably
+                            // answer MCP requests, even though the manager
+                            // still holds the entry. Fail closed so the
+                            // post-install probe reflects what the user sees.
+                            crate::mcp::manager::HealthStatus::Unhealthy => {
+                                (false, HealthObservation::Unknown)
+                            }
+                            // Mid-restart: transient. Fail closed; the next
+                            // reconcile sweep will re-verify once the new
+                            // process settles.
+                            crate::mcp::manager::HealthStatus::Restarting { .. } => {
+                                (false, HealthObservation::Unknown)
+                            }
+                            // Max restarts exceeded; manager has given up.
+                            crate::mcp::manager::HealthStatus::Dead => {
+                                (false, HealthObservation::Unknown)
+                            }
+                            // Operator explicitly halted. Not running, by
+                            // intent.
+                            crate::mcp::manager::HealthStatus::Stopped => {
+                                (false, HealthObservation::Unknown)
+                            }
                         };
                         let other =
                             info.resource_count + info.resource_template_count + info.prompt_count;
