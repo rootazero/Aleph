@@ -116,6 +116,7 @@ impl SearchTool {
             client: Client::new(),
             api_key: resolved_key,
             registry: None,
+            fallback_timeout: std::time::Duration::from_secs(LEGACY_FALLBACK_TIMEOUT_SECS),
         }
     }
 
@@ -126,6 +127,7 @@ impl SearchTool {
             client: Client::new(),
             api_key: None,
             registry: Some(registry),
+            fallback_timeout: std::time::Duration::from_secs(LEGACY_FALLBACK_TIMEOUT_SECS),
         }
     }
 
@@ -262,6 +264,7 @@ impl Clone for SearchTool {
             client: Client::new(),
             api_key: self.api_key.clone(),
             registry: self.registry.clone(),
+            fallback_timeout: self.fallback_timeout,
         }
     }
 }

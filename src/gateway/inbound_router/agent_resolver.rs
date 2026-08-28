@@ -281,7 +281,7 @@ impl InboundMessageRouter {
             // `[[bindings]]` still collapses the same person across channels
             // into one session, mirroring what `resolve_route` does on the
             // bindings path (`src/routing/resolve.rs::build_session_key`).
-            let peer_id = resolve_linked_peer_id(&self.config.identity_links, channel, msg.sender_id.as_str())
+            let peer_id = resolve_linked_peer_id(&self.route_session_config.identity_links, channel, msg.sender_id.as_str())
                 .unwrap_or_else(|| msg.sender_id.as_str().to_string());
             SessionKey::dm(
                 agent_id,

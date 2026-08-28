@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::sync_primitives::{Mutex, MutexGuard};
+use crate::sync_primitives::Mutex;
 
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
