@@ -12,7 +12,11 @@ use tokio::sync::watch;
 /// Cache entry: in-flight or completed.
 enum CacheEntry {
     /// Request is being processed; duplicates subscribe to this receiver.
-    InFlight(watch::Sender<Option<Value>>),
+    /// The `Instant` stamps when the slot was acquired so `prune` can evict a
+    /// slot whose producer future was leaked (a task holding it across a hung
+    /// dependency would otherwise pin the key as `InFlight` forever — every
+    /// retry of that key then timed out for the process lifetime).
+    InFlight(watch::Sender<Option<Value>>, Instant),
     /// Result cached until TTL expires.
     Complete(Value, Instant),
 }
@@ -42,26 +46,36 @@ impl IdempotencySlot {
     /// Uses `entry().and_modify()` for atomic InFlight→Complete transition,
     /// preventing a TOCTOU race where a concurrent request could see
     /// a vacant key between `remove()` and `insert()`.
+    ///
+    /// **Audit fix**: the previous implementation fell back to
+    /// `entry().or_insert(Complete(...))` when `and_modify` reported the entry
+    /// was gone (e.g. removed by `prune`, by another slot's `Drop`, or by a
+    /// second `complete` call). That fallback re-created a `Complete` entry
+    /// AFTER a fresh caller had already raced through `try_acquire`'s vacant
+    /// arm and obtained a new `Proceed` slot — the original producer's stale
+    /// `Complete` would then overwrite the in-flight slot of the next request,
+    /// and waiters parked on the old `tx` would observe a result that no
+    /// producer evaluated for the new request's key.
+    ///
+    /// Correct behavior: do NOT resurrect an entry that the cache has
+    /// forgotten. A vanished entry means the slot's owner is gone and the
+    /// next caller deserves a fresh `Proceed`, not the value from a cancelled
+    /// run. The transition is therefore purely an `and_modify`; if it reports
+    /// `Vacant`, the function returns silently.
     pub fn complete(mut self, result: Value) {
         if let Some(cache) = self.guard.take() {
             let key = self.key.clone();
-            let mut notified = false;
 
-            // Atomic transition: InFlight → Complete (notify waiters in-place)
-            cache.entry(key.clone()).and_modify(|entry| {
-                if let CacheEntry::InFlight(tx) = entry {
+            // Atomic transition: InFlight → Complete (notify waiters in-place).
+            // If the entry was removed between `try_acquire` and now, this
+            // `and_modify` simply does nothing — which is the correct outcome
+            // (see doc comment above).
+            cache.entry(key).and_modify(|entry| {
+                if let CacheEntry::InFlight(tx, _) = entry {
                     let _ = tx.send(Some(result.clone()));
-                    notified = true;
                 }
-                *entry = CacheEntry::Complete(result.clone(), Instant::now());
+                *entry = CacheEntry::Complete(result, Instant::now());
             });
-
-            // If entry was already removed (e.g., expired by prune), insert fresh
-            if !notified {
-                cache
-                    .entry(key)
-                    .or_insert(CacheEntry::Complete(result, Instant::now()));
-            }
         }
     }
 
@@ -72,7 +86,7 @@ impl IdempotencySlot {
 
     fn do_discard(&mut self) {
         if let Some(cache) = self.guard.take() {
-            if let Some((_, CacheEntry::InFlight(tx))) = cache.remove(&self.key) {
+            if let Some((_, CacheEntry::InFlight(tx, _))) = cache.remove(&self.key) {
                 let _ = tx.send(None);
             }
         }
@@ -118,7 +132,7 @@ impl IdempotencyGuard {
                     }
                     // Expired — drop ref, fall through to entry() below
                 }
-                CacheEntry::InFlight(tx) => {
+                CacheEntry::InFlight(tx, _) => {
                     return AcquireResult::Waiting(tx.subscribe());
                 }
             }
@@ -142,14 +156,14 @@ impl IdempotencyGuard {
                             None
                         }
                     }
-                    CacheEntry::InFlight(tx) => return AcquireResult::Waiting(tx.subscribe()),
+                    CacheEntry::InFlight(tx, _) => return AcquireResult::Waiting(tx.subscribe()),
                 };
                 if let Some(value) = cached {
                     return AcquireResult::Cached(value);
                 }
                 // Still expired — replace with InFlight without releasing the lock.
                 let (tx, _rx) = watch::channel(None);
-                *e.get_mut() = CacheEntry::InFlight(tx);
+                *e.get_mut() = CacheEntry::InFlight(tx, Instant::now());
                 AcquireResult::Proceed(IdempotencySlot {
                     key: key.to_string(),
                     guard: Some(self.cache.clone()),
@@ -157,7 +171,7 @@ impl IdempotencyGuard {
             }
             Entry::Vacant(e) => {
                 let (tx, _rx) = watch::channel(None);
-                e.insert(CacheEntry::InFlight(tx));
+                e.insert(CacheEntry::InFlight(tx, Instant::now()));
                 AcquireResult::Proceed(IdempotencySlot {
                     key: key.to_string(),
                     guard: Some(self.cache.clone()),
@@ -167,8 +181,16 @@ impl IdempotencyGuard {
     }
 
     /// Remove expired entries. Returns number of entries pruned.
+    ///
+    /// `Complete` entries are pruned at `ttl`. `InFlight` entries are pruned
+    /// at `2 × ttl`: a healthy request never stays in flight that long, so a
+    /// slot older than the bound belongs to a leaked producer future (the
+    /// `IdempotencySlot` drop guard covers panics, but not a future parked
+    /// forever on a hung dependency). Evicting it lets the next retry of the
+    /// key acquire a fresh `Proceed` instead of timing out forever.
     #[must_use]
     pub fn prune(&self) -> usize {
+        let inflight_ceiling = self.ttl.saturating_mul(2);
         let mut pruned = 0;
         self.cache.retain(|_, entry| {
             match entry {
@@ -180,7 +202,14 @@ impl IdempotencyGuard {
                         true
                     }
                 }
-                CacheEntry::InFlight(_) => true, // Keep in-flight entries
+                CacheEntry::InFlight(_, started_at) => {
+                    if started_at.elapsed() >= inflight_ceiling {
+                        pruned += 1;
+                        false
+                    } else {
+                        true
+                    }
+                }
             }
         });
         pruned

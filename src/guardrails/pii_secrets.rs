@@ -26,6 +26,10 @@ use crate::security::runtime_guard::{
 
 const NAME: &str = "pii_secrets";
 
+/// Maximum recursion depth for [`PiiSecretsGuardrail::scan_tool_args`]. See
+/// the doc comment on the function for the DoS rationale.
+const MAX_SCAN_DEPTH: u32 = 32;
+
 pub struct PiiSecretsGuardrail {
     guard: Arc<RuntimeSecurityGuard>,
     resolver: Option<Arc<dyn AsyncSecretResolver>>,
@@ -74,8 +78,20 @@ impl PiiSecretsGuardrail {
                 })
             }
             Ok(GuardResult::Blocked { reason, .. }) => GuardrailDecision::Block {
+                // Post-substitution leak blocks ("...in resolved outbound content")
+                // are a security-infra failure, not a content-policy violation
+                // the model could self-correct — mapping them to `Fixable` would
+                // let the orchestrator's class-based retry loop re-run a request
+                // whose root cause is "we just leaked a resolved secret". Any
+                // other `Blocked` reason from `process_outbound` IS model-correctable
+                // (model emitted a secret into a tool arg / output) and stays
+                // `Fixable`.
+                class: if reason.contains("resolved outbound") {
+                    ErrorClass::Unexpected
+                } else {
+                    ErrorClass::Fixable
+                },
                 reason,
-                class: ErrorClass::Fixable,
             },
             Err(SecurityGuardError::SecretResolutionFailed(e)) => {
                 // Strip the requested secret name from `reason` before it
@@ -146,6 +162,15 @@ impl PiiSecretsGuardrail {
 
     /// Walk string leaves (and object keys) of `args`, scanning each through
     /// the orchestrator, and rebuild the value with the results.
+    ///
+    /// **Depth bound**: each recursion level heap-allocates a `BoxFuture`, so
+    /// a pathologically deep payload (a 10k-nested `Value::Array` pasted into
+    /// a tool arg) allocated linearly with depth — a memory-exhaustion DoS on
+    /// attacker-supplied tool args on the tool-dispatch hot path. Recursion
+    /// is capped at [`MAX_SCAN_DEPTH`]; exceeding it fails closed with a
+    /// `Block { class: Unexpected }` rather than scanning a partial tree
+    /// (which would let a deep leaf evade inspection). Legitimate tool args
+    /// nest <10 levels; 32 leaves generous headroom.
     fn scan_tool_args<'a>(
         &'a self,
         value: &'a Value,
@@ -153,7 +178,32 @@ impl PiiSecretsGuardrail {
         warnings: &'a mut Vec<String>,
         sources: &'a mut Vec<String>,
     ) -> BoxFuture<'a, Result<Value, GuardrailDecision>> {
+        self.scan_tool_args_at_depth(value, resolver_ref, warnings, sources, 0)
+    }
+
+    fn scan_tool_args_at_depth<'a>(
+        &'a self,
+        value: &'a Value,
+        resolver_ref: Option<&'a dyn AsyncSecretResolver>,
+        warnings: &'a mut Vec<String>,
+        sources: &'a mut Vec<String>,
+        depth: u32,
+    ) -> BoxFuture<'a, Result<Value, GuardrailDecision>> {
         Box::pin(async move {
+            if depth > MAX_SCAN_DEPTH {
+                tracing::warn!(
+                    subsystem = "guardrails",
+                    depth = depth,
+                    max = MAX_SCAN_DEPTH,
+                    "tool-arg scan depth exceeded; failing closed"
+                );
+                return Err(GuardrailDecision::Block {
+                    reason: format!(
+                        "tool call arguments nested deeper than {MAX_SCAN_DEPTH} levels"
+                    ),
+                    class: ErrorClass::Unexpected,
+                });
+            }
             match value {
                 Value::String(s) => Ok(Value::String(
                     self.scan_tool_arg_leaf(s, resolver_ref, warnings, sources)
@@ -163,8 +213,14 @@ impl PiiSecretsGuardrail {
                     let mut out = Vec::with_capacity(items.len());
                     for item in items {
                         out.push(
-                            self.scan_tool_args(item, resolver_ref, warnings, sources)
-                                .await?,
+                            self.scan_tool_args_at_depth(
+                                item,
+                                resolver_ref,
+                                warnings,
+                                sources,
+                                depth + 1,
+                            )
+                            .await?,
                         );
                     }
                     Ok(Value::Array(out))
@@ -176,7 +232,13 @@ impl PiiSecretsGuardrail {
                             .scan_tool_arg_leaf(key, resolver_ref, warnings, sources)
                             .await?;
                         let new_val = self
-                            .scan_tool_args(val, resolver_ref, warnings, sources)
+                            .scan_tool_args_at_depth(
+                                val,
+                                resolver_ref,
+                                warnings,
+                                sources,
+                                depth + 1,
+                            )
                             .await?;
                         out.insert(new_key, new_val);
                     }
@@ -202,6 +264,18 @@ impl PiiSecretsGuardrail {
                     } else if let Ok(num) = scanned.parse::<serde_json::Number>() {
                         Ok(Value::Number(num))
                     } else {
+                        // The wire shape changed from Number to String: a
+                        // downstream tool that type-validates its args (u64
+                        // schema) will now see a String. Log the delta so the
+                        // audit trail records the shape change — silently
+                        // coercing here would make a redacted phone number
+                        // indistinguishable from a legitimate string arg.
+                        tracing::warn!(
+                            subsystem = "guardrails",
+                            original_type = "number",
+                            resulting_type = "string",
+                            "number leaf redaction changed JSON wire type"
+                        );
                         Ok(Value::String(scanned))
                     }
                 }
@@ -241,6 +315,20 @@ impl ToolCallGuardrail for PiiSecretsGuardrail {
         NAME
     }
     async fn evaluate_tool_call(&self, _tool_name: &str, args: &Value) -> GuardrailDecision {
+        // `_tool_name` is INTENTIONALLY unused — do not wire it to
+        // `security::dangerous_tools` here. That list is an *untrusted-
+        // surface hard floor* (its own doc: "Owner / local-trusted callers
+        // are never restricted here"), and it is already enforced at the
+        // untrusted execution entry points (`handlers/tools_invoke.rs`,
+        // `execution_engine/slash_command.rs`, `tasks/heartbeat/probe.rs`).
+        // This guardrail runs inside the agent loop (`harness/agent/act.rs`),
+        // i.e. in the OWNER's context — an owner-driven agent legitimately
+        // uses `bash` / `file_write` / `self_config` to do its job. Blocking
+        // those by name at THIS layer would break the owner's agent, which is
+        // exactly the caller class the dangerous-tools design exempts. The
+        // parameter stays in the trait signature so a future guardrail that
+        // has a *per-tool* content policy (not an identity-based deny floor)
+        // can consume it without a trait change.
         // Scan and rebuild the args leaf by leaf instead of substituting
         // into the serialized JSON text: `RuntimeSecurityGuard` performs raw
         // string replacement, so a secret containing `"`, `\` or a newline

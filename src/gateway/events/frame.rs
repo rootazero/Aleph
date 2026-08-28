@@ -297,6 +297,32 @@ pub enum GatewayEventFrame {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tool_call_id: Option<String>,
     },
+    /// A still-unanswered approval, re-announced so the surface that can
+    /// interrupt the human does it again.
+    ///
+    /// A separate variant from [`Self::ApprovalRequested`] on purpose: a
+    /// reminder is not a second request. Re-publishing the request frame would
+    /// have re-stated a fact that is already on every feed keyed off it — the
+    /// Panel dashboard's bounded activity ring would fill with one row per
+    /// reminder and push real events out of it — while this variant lets each
+    /// consumer answer for itself whether a repeat is news. Only the R5 banner
+    /// leg treats it as news, and it does so through the very same derivation
+    /// as the request (one arm in [`approval_for`]), so the interrupt the
+    /// operator sees cannot drift from the one the request raised.
+    ///
+    /// Raised only for a card with NO deadline
+    /// ([`crate::exec::manager::NO_APPROVAL_TIMEOUT`]): a bounded card ends on
+    /// its own, an unbounded one ends only when a human acts, so it is the only
+    /// kind whose wait a reminder can shorten.
+    ///
+    /// [`approval_for`]: crate::gateway::surface::r5_router::approval_for
+    ApprovalReminder {
+        approval_id: String,
+        /// Same routing information the request carried — the banner's only
+        /// scoping input, and what keeps a reminder from reaching anyone the
+        /// request itself was withheld from.
+        session_key: String,
+    },
     ApprovalResolved {
         approval_id: String,
         session_key: String,
@@ -766,6 +792,7 @@ impl GatewayEventFrame {
             Self::PairingRequested { .. } => "pairing.requested",
             Self::PairingCompleted { .. } => "pairing.completed",
             Self::ApprovalRequested { .. } => "approval.requested",
+            Self::ApprovalReminder { .. } => "approval.reminder",
             Self::ApprovalResolved { .. } => "approval.resolved",
             Self::ApprovalExpired { .. } => "approval.expired",
             Self::SessionLifecycleChanged { .. } => "session.lifecycle.changed",

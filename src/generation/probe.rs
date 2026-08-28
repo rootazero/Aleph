@@ -80,7 +80,30 @@ fn probe_url(base_url: Option<&str>, provider_type: &str) -> Option<String> {
 
 /// Map an HTTP status (or a transport error) onto a probe outcome. Pure so it
 /// is exhaustively host-testable without a live network.
-fn interpret(status: Option<u16>, transport_err: Option<&str>) -> GenerationProbeOutcome {
+///
+/// **404 is not success for no-models providers.** `google_veo`,
+/// `elevenlabs`, `bfl`, `suno` and `midjourney` do not expose `GET /v1/models`
+/// at all, so the generic "any non-401/403 status means success" rule
+/// classified their 404 as "连接成功" and the handler wrote `verified = true`
+/// into the config. The UI badge then showed "verified" for a credential that
+/// has never been exercised against a real endpoint. For those provider types
+/// a 404 means "we probed the wrong endpoint", not "credentials work".
+fn interpret(
+    provider_type: &str,
+    status: Option<u16>,
+    transport_err: Option<&str>,
+) -> GenerationProbeOutcome {
+    // Providers with no `/v1/models` endpoint: a 404 here is an artifact of
+    // the probe URL, not evidence the credentials work.
+    const NO_MODELS_ENDPOINT: &[&str] =
+        &["google_veo", "veo", "elevenlabs", "bfl", "bfl_flux", "flux", "suno", "midjourney"];
+    if matches!(status, Some(404)) && NO_MODELS_ENDPOINT.contains(&provider_type) {
+        return GenerationProbeOutcome {
+            success: false,
+            message: "端点不提供 /v1/models，无法用轻量请求验证；请通过一次真实生成测试凭据"
+                .to_string(),
+        };
+    }
     if let Some(e) = transport_err {
         return GenerationProbeOutcome {
             success: false,
@@ -121,7 +144,7 @@ pub async fn probe_generation_provider(
 
     let client = match reqwest::Client::builder().timeout(PROBE_TIMEOUT).build() {
         Ok(c) => c,
-        Err(e) => return interpret(None, Some(&e.to_string())),
+        Err(e) => return interpret(provider_type, None, Some(&e.to_string())),
     };
 
     match client
@@ -130,8 +153,8 @@ pub async fn probe_generation_provider(
         .send()
         .await
     {
-        Ok(resp) => interpret(Some(resp.status().as_u16()), None),
-        Err(e) => interpret(None, Some(&e.to_string())),
+        Ok(resp) => interpret(provider_type, Some(resp.status().as_u16()), None),
+        Err(e) => interpret(provider_type, None, Some(&e.to_string())),
     }
 }
 
@@ -236,24 +259,39 @@ mod tests {
 
     #[test]
     fn interpret_transport_error_fails() {
-        let o = interpret(None, Some("dns error"));
+        let o = interpret("openai_image", None, Some("dns error"));
         assert!(!o.success);
         assert!(o.message.contains("无法连接"));
     }
 
     #[test]
     fn interpret_auth_rejection_fails() {
-        assert!(!interpret(Some(401), None).success);
-        assert!(!interpret(Some(403), None).success);
+        assert!(!interpret("openai_image", Some(401), None).success);
+        assert!(!interpret("openai_image", Some(403), None).success);
     }
 
     #[test]
     fn interpret_reachable_succeeds() {
         // 200 (models listed), 404 (no /models but reachable), 405, 400 all mean
         // the server answered and did not reject the credentials.
-        assert!(interpret(Some(200), None).success);
-        assert!(interpret(Some(404), None).success);
-        assert!(interpret(Some(405), None).success);
-        assert!(interpret(Some(400), None).success);
+        assert!(interpret("openai_image", Some(200), None).success);
+        assert!(interpret("openai_image", Some(404), None).success);
+        assert!(interpret("openai_image", Some(405), None).success);
+        assert!(interpret("openai_image", Some(400), None).success);
+    }
+
+    /// Regression: providers without a /v1/models endpoint must NOT be
+    /// reported as verified on a 404 — the handler writes `verified = true`
+    /// into the config from this outcome.
+    #[test]
+    fn interpret_404_fails_for_no_models_providers() {
+        for pt in ["google_veo", "elevenlabs", "bfl", "suno", "midjourney"] {
+            assert!(
+                !interpret(pt, Some(404), None).success,
+                "provider '{pt}' must not be verified on a 404"
+            );
+        }
+        // …but a 404 is still fine for providers that DO have /v1/models.
+        assert!(interpret("openai_image", Some(404), None).success);
     }
 }

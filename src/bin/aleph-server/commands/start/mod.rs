@@ -2963,6 +2963,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         drop(app_cfg);
 
         let coordinator_visible = gc_config.coordinator_visible;
+        let history_window_rounds = gc_config.history_window_rounds;
         let orchestrator = GroupChatOrchestrator::new(gc_config, &persona_configs);
         let shared_orch: alephcore::gateway::handlers::group_chat::SharedOrchestrator =
             Arc::new(tokio::sync::Mutex::new(orchestrator));
@@ -2978,7 +2979,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 let handle: Arc<dyn alephcore::providers::DefaultProviderHandle> =
                     Arc::new(alephcore::providers::StaticDefault::new(snapshot));
                 Arc::new(
-                    GroupChatExecutor::new(handle).with_coordinator_visible(coordinator_visible),
+                    GroupChatExecutor::new(handle)
+                        .with_coordinator_visible(coordinator_visible)
+                        .with_history_window(history_window_rounds),
                 )
             })
         } else {

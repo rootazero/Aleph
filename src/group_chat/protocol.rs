@@ -49,6 +49,13 @@ impl Speaker {
 /// Maximum number of characters allowed in a persona's `system_prompt`.
 const MAX_SYSTEM_PROMPT_LEN: usize = 2000;
 
+/// Valid values for [`Persona::thinking_level`]. Mirrors
+/// `crate::agents::thinking::ThinkLevel`'s `FromStr` arm set — kept as a
+/// literal list here so `validate()` doesn't need to import the agents
+/// module (group_chat is consumed by channels; keeping the dependency edge
+/// one-way avoids a cycle when agents code later wants Persona types).
+const VALID_THINKING_LEVELS: &[&str] = &["low", "medium", "high", "xhigh"];
+
 /// Defines a persona that can participate in group chat discussions.
 ///
 /// Each persona has a unique identity, a system prompt that shapes its behavior,
@@ -94,6 +101,23 @@ impl Persona {
             return Err(GroupChatError::InvalidPersona(format!(
                 "persona system_prompt exceeds maximum length of {MAX_SYSTEM_PROMPT_LEN} characters"
             )));
+        }
+        // `src/agents/thinking.rs` contract: callers must REJECT an invalid
+        // thinking_level rather than silently default. The executor used to
+        // warn + fall back to the provider default at round time — an
+        // operator typo (`thinking_level: "hgh"`) would silently run the
+        // persona at a depth nobody picked. Validate eagerly at
+        // create_session so the misconfiguration surfaces where it was made.
+        if let Some(level) = &self.thinking_level {
+            let normalized = level.trim().to_ascii_lowercase();
+            if !VALID_THINKING_LEVELS.contains(&normalized.as_str()) {
+                return Err(GroupChatError::InvalidPersona(format!(
+                    "persona '{}' thinking_level '{}' is not one of {}",
+                    self.id,
+                    level,
+                    VALID_THINKING_LEVELS.join(", ")
+                )));
+            }
         }
         Ok(())
     }
@@ -175,6 +199,17 @@ pub struct GroupChatMessage {
     pub sequence: u32,
     /// Whether this is the final message of the current round.
     pub is_final: bool,
+    /// Mentioned personas that were NOT included in the coordinator's plan
+    /// for this round. Populated by the executor on the LAST message of the
+    /// round (`is_final == true`); empty on intermediate persona messages.
+    /// Carrying the data on every message (rather than as a side-channel
+    /// field) keeps the streaming consumer's view self-contained: when it
+    /// sees the final message it can both finalize the round AND surface the
+    /// dropped list without re-reading prior frames.
+    ///
+    /// Defaults to empty when missing so older consumers keep working.
+    #[serde(default)]
+    pub dropped_targets: Vec<String>,
 }
 
 // =============================================================================
@@ -326,6 +361,7 @@ mod tests {
             round: 2,
             sequence: 3,
             is_final: true,
+            dropped_targets: vec![],
         };
 
         assert_eq!(msg.session_id, "session-001");

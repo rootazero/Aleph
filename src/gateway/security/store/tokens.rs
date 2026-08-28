@@ -10,6 +10,22 @@ impl SecurityStore {
     // OAuth secrets, channel webhook secrets, etc. See `SharedTokenManager`.
 
     /// Store shared token hash together with the HMAC secret and plaintext for persistence across restarts.
+    ///
+    /// **Audit fix**: the previous implementation ran a bare
+    /// `DELETE FROM shared_token` followed by a separate `INSERT`, with no
+    /// transaction wrapping the pair. A concurrent `validate_shared_token_hash`
+    /// running on the same connection (the `self.conn` `Mutex` does NOT
+    /// serialize a writer against a reader that already holds the row in
+    /// SQLite's MVCC) could observe the table empty between the two
+    /// statements and downgrade an already-connected Panel from `operator`
+    /// to `guest`. The fix uses a single `INSERT ... ON CONFLICT DO UPDATE`
+    /// (UPSERT) so the row is replaced atomically without ever being absent.
+    ///
+    /// Both the old and the new code require that `shared_token` carry a
+    /// `UNIQUE` constraint on a single-row key — see the schema migration
+    /// in `migrations/0001_init.sql` (`token_hash TEXT PRIMARY KEY`). If the
+    /// schema is missing the constraint the UPSERT degrades to a plain
+    /// `INSERT` and a duplicate-row error.
     pub fn set_shared_token_with_secret(
         &self,
         hash: &str,
@@ -17,10 +33,13 @@ impl SecurityStore {
         plaintext: Option<&str>,
     ) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute("DELETE FROM shared_token", [])?;
         conn.execute(
             "INSERT INTO shared_token (token_hash, created_at, hmac_secret, plaintext_token)
-             VALUES (?1, ?2, ?3, ?4)",
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(token_hash) DO UPDATE SET
+                 created_at = excluded.created_at,
+                 hmac_secret = excluded.hmac_secret,
+                 plaintext_token = excluded.plaintext_token",
             params![hash, current_timestamp_ms(), secret.as_slice(), plaintext],
         )?;
         Ok(())

@@ -588,6 +588,23 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             Vec::new()
         };
 
+        // RAII guard for the media cache: every terminal arm of the retry
+        // loop below runs `mp.cleanup(session_key)` manually, but a
+        // cancel/timeout drop (the `tokio::select!` in `execute.rs` parking
+        // this future mid-`await`) never reaches those arms — the cache at
+        // `<temp_dir>/<session_key>` then persists until the OS reaps /tmp,
+        // accumulating unbounded disk usage on a busy server (and orphaning
+        // downloads fetched via the SSRF-guarded cache path). The guard's
+        // `Drop` runs cleanup on EVERY exit path — success, error, and
+        // future-drop alike — while the success arms call `cleanup_now()` to
+        // keep the cleanup at its original, log-adjacent position and disarm
+        // the guard so it does not double-clean.
+        let mut media_cleanup_guard = MediaCleanupGuard {
+            processor: self.media_processor.clone(),
+            session_key: request.session_key.to_key_string(),
+            active: !media_blocks.is_empty(),
+        };
+
         // === Retry loop: resolve provider → build agent loop → run ===
         const MAX_FALLBACK_ATTEMPTS: usize = 3;
         let mut attempt = 0usize;
@@ -1411,11 +1428,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             match dispatch_result {
                 Ok(response) => {
-                    if !media_blocks.is_empty() {
-                        if let Some(mp) = self.media_processor.as_ref() {
-                            mp.cleanup(&request.session_key.to_key_string());
-                        }
-                    }
+                    // Cleanup runs now (and disarms the RAII guard) so it
+                    // stays adjacent to the success log line; the guard's
+                    // Drop covers every non-success path.
+                    media_cleanup_guard.cleanup_now();
                     info!(
                         run_id = run_id,
                         attempt = attempt,
@@ -1424,11 +1440,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     return Ok(response);
                 }
                 Err(super::super::helpers::DispatchFailure::Cancelled) => {
-                    if !media_blocks.is_empty() {
-                        if let Some(mp) = self.media_processor.as_ref() {
-                            mp.cleanup(&request.session_key.to_key_string());
-                        }
-                    }
+                    media_cleanup_guard.cleanup_now();
                     return Err(ExecutionError::Cancelled);
                 }
                 Err(super::super::helpers::DispatchFailure::Transient {
@@ -1487,11 +1499,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     provider: prov_name,
                     message,
                 }) => {
-                    if !media_blocks.is_empty() {
-                        if let Some(mp) = self.media_processor.as_ref() {
-                            mp.cleanup(&request.session_key.to_key_string());
-                        }
-                    }
+                    media_cleanup_guard.cleanup_now();
                     error!(
                         run_id = run_id,
                         attempt = attempt,
@@ -1504,11 +1512,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     )));
                 }
                 Err(super::super::helpers::DispatchFailure::Fatal(msg)) => {
-                    if !media_blocks.is_empty() {
-                        if let Some(mp) = self.media_processor.as_ref() {
-                            mp.cleanup(&request.session_key.to_key_string());
-                        }
-                    }
+                    media_cleanup_guard.cleanup_now();
                     error!(
                         run_id = run_id,
                         attempt = attempt,
@@ -1655,4 +1659,41 @@ fn publish_artifact_invalidation(
 ) {
     let Some(bus) = event_bus else { return };
     crate::gateway::event_emitter::artifact_ping::publish_artifact_ping_on(bus, session_key);
+}
+
+/// RAII guard for the per-session media cache.
+///
+/// Bound to the run scope in `run_agent_loop_inner`: its `Drop` runs the
+/// cleanup on EVERY exit path from the retry loop — including the
+/// cancel/timeout future-drop that never reaches the manual cleanup calls in
+/// the `match dispatch_result` arms. Success arms call [`Self::cleanup_now`]
+/// to keep the cleanup at its original position and disarm the guard so the
+/// work never runs twice.
+struct MediaCleanupGuard {
+    processor: Option<Arc<crate::media::processor::MediaProcessor>>,
+    session_key: String,
+    active: bool,
+}
+
+impl MediaCleanupGuard {
+    /// Run the cleanup immediately (at the call site's original position)
+    /// and disarm so `Drop` does not repeat it.
+    fn cleanup_now(&mut self) {
+        if self.active {
+            if let Some(mp) = &self.processor {
+                mp.cleanup(&self.session_key);
+            }
+            self.active = false;
+        }
+    }
+}
+
+impl Drop for MediaCleanupGuard {
+    fn drop(&mut self) {
+        if self.active {
+            if let Some(mp) = &self.processor {
+                mp.cleanup(&self.session_key);
+            }
+        }
+    }
 }

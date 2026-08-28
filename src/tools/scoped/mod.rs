@@ -368,6 +368,10 @@ impl ToolService for ScopedToolService {
         // on the deterministic failure. Both are scoped here — the immediate
         // caller of every tool's `execute` — so they stay visible without
         // crossing a `tokio::spawn`.
+        // Compute before the `async move` below consumes `self`: the resolved
+        // tier this dispatch runs under (`None` = no tier in play, e.g. a bare
+        // test service — and the lift reads that as fail-closed).
+        let tier_at_dispatch = self.effective_exec_tier();
         let fut = async move {
             match self.turn_context.clone() {
                 Some(turn) => {
@@ -381,6 +385,24 @@ impl ToolService for ScopedToolService {
                         .await
                 }
                 None => self.execute_inner(name, input, cancel).await,
+            }
+        };
+
+        // Publish the turn's resolved exec tier alongside its routing context
+        // (`TURN_EXEC_TIER`, consumed by `approval::lift_ask_under_full_tier`).
+        // The tier is read BEFORE the move above consumes `self`; an unset
+        // tier scopes nothing, which is the lift's fail-closed `None`.
+        let fut = {
+            let tier = tier_at_dispatch;
+            async move {
+                match tier {
+                    Some(t) => {
+                        crate::tools::turn_context::TURN_EXEC_TIER
+                            .scope(t, fut)
+                            .await
+                    }
+                    None => fut.await,
+                }
             }
         };
 

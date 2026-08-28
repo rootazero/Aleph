@@ -83,7 +83,18 @@ pub async fn handle_secrets_set(request: JsonRpcRequest, ctx: Arc<AuthContext>) 
     }
 
     match ctx.shared_token_mgr.store_secret(&key, &params.value) {
-        Ok(()) => JsonRpcResponse::success(request.id, json!({ "key": key })),
+        Ok(()) => {
+            // Vault writes are the highest-privilege mutation on the admin
+            // surface; they used to leave no forensic row. The audit entry
+            // records the key NAME only — never the value.
+            if let Some(log) = crate::security::audit::global() {
+                log.log(crate::security::audit::AuditEntry::authority_change(
+                    crate::gateway::caller_identity::current_caller_user(),
+                    format!("secrets.set: stored key '{key}'"),
+                ));
+            }
+            JsonRpcResponse::success(request.id, json!({ "key": key }))
+        }
         Err(e) => {
             warn!(error = %e, key = %key, "secrets.set failed");
             JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("store failed: {e}"))
@@ -122,7 +133,15 @@ pub async fn handle_secrets_delete(
     };
 
     match ctx.shared_token_mgr.delete_secret(&key) {
-        Ok(true) => JsonRpcResponse::success(request.id, json!({ "deleted": true, "key": key })),
+        Ok(true) => {
+            if let Some(log) = crate::security::audit::global() {
+                log.log(crate::security::audit::AuditEntry::authority_change(
+                    crate::gateway::caller_identity::current_caller_user(),
+                    format!("secrets.delete: deleted key '{key}'"),
+                ));
+            }
+            JsonRpcResponse::success(request.id, json!({ "deleted": true, "key": key }))
+        }
         Ok(false) => JsonRpcResponse::error(request.id, NOT_FOUND, format!("no secret: {key}")),
         Err(e) => {
             warn!(error = %e, key = %key, "secrets.delete failed");

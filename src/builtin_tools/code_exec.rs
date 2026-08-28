@@ -168,7 +168,26 @@ impl CodeExecArgs {
             } else {
                 NetworkPolicy::None
             },
-            spawn_subprocess: self.allow_subprocess,
+            // A shell needs fork for ANY composition (`&&`, `|`, `$()`, even
+            // a redirection); without it the tool fails selectively, which is
+            // how a model mislearns "bash is blocked" from one compound
+            // command. The ban never contained anything: bash exec's a single
+            // simple command in place, so `rm -rf x` ran under it regardless.
+            // `code_check` already ships this same reasoning for its checkers.
+            // Interpreters are NOT exempt — node/python are already running
+            // when they ask to spawn, so there the gate really does gate.
+            //
+            // NOT on Linux: there `allow_fork` does not gate forking at all —
+            // bwrap spends it on `--unshare-pid` (PID-namespace isolation), and
+            // shells fork fine under that. Taking the exemption there would
+            // hand a sandboxed shell shared process visibility with every other
+            // process of the same uid, trading a control that works for a
+            // problem Linux does not have. Measured per platform: macOS
+            // `(deny process-fork)` is the incoherent ban this fixes; Windows
+            // clamps the job object to 1 active process, the same breakage;
+            // Linux is untouched.
+            spawn_subprocess: self.allow_subprocess
+                || (cfg!(not(target_os = "linux")) && matches!(self.language, Language::Shell)),
             max_memory_mb: None,
             timeout_secs: None,
         }
@@ -1118,6 +1137,87 @@ mod tests {
         assert_eq!(cmd.capabilities.network, NetworkPolicy::None);
         assert!(!cmd.capabilities.spawn_subprocess);
         assert_eq!(cmd.timeout, Some(Duration::from_secs(3)));
+    }
+
+    /// A shell invocation asks for fork WITHOUT the model setting
+    /// `allow_subprocess`.
+    ///
+    /// Measured on macOS/seatbelt: `(deny process-fork)` does not stop a shell
+    /// running a program — bash exec's a single simple command in place, so
+    /// `bash -c 'rm -rf x'` runs fine. What it stops is COMPOSITION: `a && b`,
+    /// `a | b`, `$(a)`, and even `a > /dev/null` all die with
+    /// `bash: fork: Operation not permitted` (exit 128). So the ban bought no
+    /// containment and cost the shell nearly everything, while failing
+    /// SELECTIVELY — which is how a model learns the false lesson "bash is
+    /// blocked" from one compound command. `code_check` already shipped this
+    /// same reasoning for its checkers.
+    #[tokio::test]
+    async fn shell_asks_for_fork_by_default() {
+        let mock = MockSandbox::new(ok_output(""));
+        let sandbox: Arc<dyn Sandbox> = mock.clone();
+        let tool = CodeExecTool::new().with_sandbox(sandbox);
+
+        SESSION_ID
+            .scope(sid(), async {
+                tool.call(CodeExecArgs {
+                    language: Language::Shell,
+                    code: "echo a && echo b".to_string(),
+                    working_dir: None,
+                    timeout_seconds: None,
+                    allow_network: false,
+                    allow_subprocess: false,
+                    extra_writable_paths: vec![],
+                    justification: None,
+                })
+                .await
+                .unwrap()
+            })
+            .await;
+
+        let calls = mock.calls.lock().await;
+        assert_eq!(
+            calls[0].capabilities.spawn_subprocess,
+            cfg!(not(target_os = "linux")),
+            "off Linux a default shell call must be able to fork or every \
+             compound command fails with exit 128; on Linux the same flag buys \
+             PID isolation instead and must stay off"
+        );
+    }
+
+    /// The other half, and the one that keeps this change narrow: an
+    /// INTERPRETER is already running when it asks to spawn, so denying fork
+    /// there is a control that actually controls. Only the shell is exempt.
+    #[tokio::test]
+    async fn interpreters_do_not_ask_for_fork_by_default() {
+        for language in [Language::Python, Language::JavaScript] {
+            let label = format!("{language:?}");
+            let mock = MockSandbox::new(ok_output(""));
+            let sandbox: Arc<dyn Sandbox> = mock.clone();
+            let tool = CodeExecTool::new().with_sandbox(sandbox);
+
+            SESSION_ID
+                .scope(sid(), async {
+                    tool.call(CodeExecArgs {
+                        language,
+                        code: "1".to_string(),
+                        working_dir: None,
+                        timeout_seconds: None,
+                        allow_network: false,
+                        allow_subprocess: false,
+                        extra_writable_paths: vec![],
+                        justification: None,
+                    })
+                    .await
+                    .unwrap()
+                })
+                .await;
+
+            let calls = mock.calls.lock().await;
+            assert!(
+                !calls[0].capabilities.spawn_subprocess,
+                "{label} must still route subprocess spawning through approval"
+            );
+        }
     }
 
     #[tokio::test]

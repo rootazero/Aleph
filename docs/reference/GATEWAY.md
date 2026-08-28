@@ -942,24 +942,25 @@ per-IP concurrent-connection cap (`gateway.max_connections_per_ip`, default 64,
 `0` disables, loopback exempt) bounds slot-exhaustion — a remote peer
 opening many idle sockets.
 
-### Reverse proxies (no X-Forwarded-For resolution)
+### Reverse proxies (opt-in `X-Forwarded-For` resolution)
 
 The IP-keyed abuse protections (per-IP connection cap, rate limiter, `Auth`-scope
-lockout) key off the **raw socket peer address** (`peer_addr.ip()`, verbatim).
-`X-Forwarded-For` / trusted-proxy resolution was removed with the LAN-trust
-revert and is **not** reinstated — a `trusted_proxies` key in config is a
-silently-ignored legacy field, and there is no `src/gateway/trusted_proxy.rs`.
-Keeping the loopback check on the raw peer is deliberate: it means `is_loopback`
-(the zero-config-operator grant) can never be forged by a spoofed `X-Forwarded-For`
-header.
+lockout) key off the **raw socket peer address** by default. `X-Forwarded-For`
+honoring is opt-in via `[gateway.trusted_proxy] enabled = true` and the
+companion `trusted_ips` allowlist in `src/gateway/trusted_proxy.rs`.
+
+**Operators must NEVER include `127.0.0.1` / `::1` in `trusted_ips`.** The
+loopback check is the zero-config-operator grant, and an XFF forwarded from
+a loopback peer must not be allowed to satisfy it — a malicious client on
+the loopback interface would otherwise be indistinguishable from the
+operator. When `enabled = false` (the default) the resolver is a no-op and
+every per-IP check sees the raw peer.
 
 The trade-off: when the gateway is fronted by a reverse proxy, every client
 collapses to the proxy's socket address, so the per-IP protections bound the
-*proxy* rather than individual clients. Terminate client-identity trust upstream
-(the proxy) if you need per-client limits, and treat the Gateway token as the
-transport auth. (Restoring fail-closed, allowlist-gated trusted-proxy XFF
-resolution — never letting a forwarded header influence `is_loopback` — is
-tracked as a future enhancement.)
+*proxy* rather than individual clients. Terminate client-identity trust
+upstream (the proxy) if you need per-client limits, and treat the Gateway
+token as the transport auth.
 
 ### Method-level authorization
 

@@ -143,6 +143,15 @@ pub enum GenerationError {
     /// Serialization/deserialization error
     #[error("Serialization error: {message}")]
     SerializationError { message: String },
+
+    /// A provider with this name is already registered in the registry.
+    ///
+    /// This is a configuration-level error (a duplicate
+    /// `[generation.<name>]` section), NOT an internal failure — mapping it
+    /// to `InternalError` used to tell the user to "try again" for a bug
+    /// that retrying can never fix.
+    #[error("Provider '{name}' is already registered")]
+    DuplicateProvider { name: String },
 }
 
 impl GenerationError {
@@ -556,6 +565,12 @@ impl GenerationError {
             Self::SerializationError { message } => {
                 format!("Data processing error: {message}. Please try again.")
             }
+            Self::DuplicateProvider { name } => {
+                format!(
+                    "Provider '{name}' is registered twice. Remove the duplicate \
+                     [generation.{name}] section from your config and restart."
+                )
+            }
         }
     }
 }
@@ -606,6 +621,10 @@ impl From<GenerationError> for AlephError {
             GenerationError::JobFailedError { message, .. } => Self::provider(message),
             GenerationError::DownloadError { message, .. } => Self::network(message),
             GenerationError::SerializationError { message } => Self::IoError(message),
+            GenerationError::DuplicateProvider { name } => Self::invalid_config(format!(
+                "Duplicate generation provider '{name}' — remove the duplicate \
+                 [generation.{name}] section from your config"
+            )),
         }
     }
 }

@@ -273,6 +273,25 @@ impl ChannelFactory for WebhookChannelFactory {
 
         Ok(Box::new(WebhookChannel::new("webhook", config)))
     }
+
+    /// The webhook channel's runtime id IS the configured instance id —
+    /// `subsystems.rs` registers per-instance policy (busy_input_mode,
+    /// permission_level, tool_permissions, default_workspace, slash access)
+    /// under the configured id, and hardcoding `"webhook"` silently dropped
+    /// that policy for any instance named anything else (e.g.
+    /// `webhook-prod`).
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
+        let config: WebhookChannelConfig = serde_json::from_value(config)
+            .map_err(|e| ChannelError::ConfigError(format!("Invalid Webhook config: {e}")))?;
+
+        config.validate().map_err(ChannelError::ConfigError)?;
+
+        Ok(Box::new(WebhookChannel::new(id, config)))
+    }
 }
 
 #[cfg(test)]

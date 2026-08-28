@@ -72,7 +72,7 @@ pub struct BashExecArgs {
     /// Request elevated network access for this call (sandbox approval-gated).
     #[serde(default)]
     pub allow_network: bool,
-    /// Request permission to fork subprocesses (sandbox approval-gated).
+    /// No-op: a shell already forks. (Real escalation on code_exec py/js.)
     #[serde(default)]
     pub allow_subprocess: bool,
     /// Extra writable paths beyond the session workspace (sandbox approval-gated).
@@ -175,9 +175,9 @@ deaths surface as `exit_code = 128 + N` with a `stderr` note naming the
 signal — `137` (SIGKILL, usually OOM), `139` (SIGSEGV, a crash), `134`
 (SIGABRT, an assertion/panic abort).
 
-Capability escalations (`allow_network`, `allow_subprocess`,
-`extra_writable_paths`) trigger an approval prompt the first time per
-session; subsequent same-or-narrower requests reuse the grant. When you
+Capability escalations (`allow_network`, `extra_writable_paths`) trigger an
+approval prompt the first time per session; subsequent same-or-narrower
+requests reuse the grant. Forking is not one. When you
 escalate, pass `justification` with a one-line reason WHY (e.g. "clone the
 repo over https") — it is shown to the human approver so they can decide.
 

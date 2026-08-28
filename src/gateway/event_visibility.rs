@@ -494,7 +494,18 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         // the last one still `Global` + role-gated, which delivered it to
         // operators only — so a member whose own call was parked got the card
         // and no interrupt. Same discriminator, same two answers.
-        "approval.requested" | "approval.resolved" | "approval.expired" | "surface.approval" => {
+        // `approval.reminder` is the fifth member. It is a re-announcement of
+        // `approval.requested`, carrying the same `approval_id` and the same
+        // `session_key`, so it answers here exactly as the request does. Left
+        // off this list it would have fallen to the `_ => Global` arm at the
+        // bottom and broadcast one user's parked approval to every connection —
+        // a leak the typed derivation above cannot catch, because the two are
+        // separate matches over the same fact.
+        "approval.requested"
+        | "approval.reminder"
+        | "approval.resolved"
+        | "approval.expired"
+        | "surface.approval" => {
             match str_field(data, "session_key").filter(|k| !k.is_empty()) {
                 // A real session: the owner resolves their own, and the admin
                 // arm keeps an operator receiving a member's card as before.
@@ -2363,6 +2374,61 @@ mod tests {
         }
     }
 
+    /// Every `approval.*` topic the frame enum can emit is named by the
+    /// owner-scoped arm of [`session_identity_of`].
+    ///
+    /// The arm is a hand-written list of topic STRINGS, while the frames are an
+    /// enum — two derivations of one fact, and only one of them has a compiler.
+    /// Adding a variant to the family forces an arm in
+    /// `every_frame_variant_is_classified`'s exhaustive `expected()`, and forces
+    /// nothing at all here: the new topic falls through to `_ =>
+    /// SessionIdentity::Global` and is broadcast to every connection, carrying
+    /// an approval id and the session key of whoever it belongs to. That is how
+    /// `approval.reminder` was nearly shipped.
+    ///
+    /// So this reads the topic names out of `frame.rs` rather than listing them
+    /// — a sixth member of the family reds this test by name on the day it is
+    /// written, not on the day someone audits the arm.
+    #[test]
+    fn every_approval_topic_is_owner_scoped() {
+        let frames = crate::utils::source_scan::production_prefix(include_str!(
+            "../gateway/events/frame.rs"
+        ));
+        // `Self::X { .. } => "approval.y",` — the one place a variant's topic
+        // is decided.
+        let topics: Vec<String> = frames
+            .split('"')
+            .filter(|t| t.starts_with("approval."))
+            .map(str::to_string)
+            .collect();
+        assert!(
+            topics.len() >= 4,
+            "self-guard: expected at least the four historical approval topics,              scanned {topics:?} — a scan that finds nothing passes every              assertion below vacuously"
+        );
+
+        let arm = crate::utils::source_scan::production_prefix(include_str!(
+            "event_visibility.rs"
+        ));
+        for topic in &topics {
+            // Classification, not just spelling: a real session key must reach
+            // its owner, and a blank one must stay with the operator.
+            assert_eq!(
+                session_identity_of(topic, Some(&serde_json::json!({"session_key": "agent:main:s1"}))),
+                SessionIdentity::BySessionKeyOrAdmin("agent:main:s1".to_string()),
+                "{topic} must be owner-scoped, not Global"
+            );
+            assert_eq!(
+                session_identity_of(topic, Some(&serde_json::json!({"session_key": ""}))),
+                SessionIdentity::OperatorOnly,
+                "{topic} with no owner must fail closed to the operator"
+            );
+            assert!(
+                arm.contains(&format!("\"{topic}\"")),
+                "{topic} is not named in session_identity_of's arm — it would                  fall to `_ => Global`"
+            );
+        }
+    }
+
     #[test]
     fn every_frame_variant_is_classified() {
         fn expected(frame: &GatewayEventFrame) -> SessionIdentity {
@@ -2417,6 +2483,10 @@ mod tests {
                 // `session_key`, raised by a cluster node over reverse RPC) has
                 // no owner to compare against and stays operator-only.
                 GatewayEventFrame::ApprovalRequested { session_key, .. }
+                // A reminder is the same fact re-announced, so it is scoped by
+                // the same key: it must not reach anyone the request itself was
+                // withheld from.
+                | GatewayEventFrame::ApprovalReminder { session_key, .. }
                 | GatewayEventFrame::ApprovalResolved { session_key, .. }
                 | GatewayEventFrame::ApprovalExpired { session_key, .. }
                 // The banner leg joined the family once it started carrying the
@@ -2638,6 +2708,10 @@ mod tests {
                 channel_id: String::new(),
                 conversation_id: String::new(),
                 tool_call_id: None,
+            },
+            GatewayEventFrame::ApprovalReminder {
+                approval_id: "a1".into(),
+                session_key: "agent:main:main".into(),
             },
             GatewayEventFrame::ApprovalResolved {
                 approval_id: "a1".into(),

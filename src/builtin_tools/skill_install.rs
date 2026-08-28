@@ -5,7 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::skill::SkillId;
-use crate::error::Result;
+use crate::error::{AlephError, Result};
 use crate::skill::{InstallResult, SkillSystem};
 use crate::tools::AlephTool;
 
@@ -62,7 +62,18 @@ impl AlephTool for SkillInstallTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let skill_id = SkillId::new(&args.skill_id);
+        // `SkillId::new` only enforces its non-empty invariant under
+        // `debug_assert!`; in release the assertion is a no-op and an empty
+        // `skill_id` flows through to `install_dependency` as an empty
+        // registry key. Validate the JSON-RPC boundary here so the
+        // invariant the doc comment promises is actually upheld.
+        let raw = args.skill_id.trim();
+        if raw.is_empty() {
+            return Err(AlephError::tool(
+                "'skill_id' is required for 'skill_install'",
+            ));
+        }
+        let skill_id = SkillId::new(raw);
         let result = self
             .system
             .install_dependency(&skill_id, args.spec_id.as_deref())

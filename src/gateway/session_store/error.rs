@@ -10,4 +10,8 @@ pub enum SessionStoreError {
     Io(#[from] std::io::Error),
     #[error("Unsupported operation on this backend")]
     Unsupported,
+    /// The session exists but is in a terminal state (stopped) and cannot be
+    /// silently resumed — the caller must explicitly reopen it first.
+    #[error("Session is stopped: {0}")]
+    Stopped(String),
 }

@@ -7,6 +7,16 @@ use async_trait::async_trait;
 pub trait FetchProvider: Send + Sync {
     /// Fetch `url` and return extracted markdown. Errors bubble up so the
     /// registry can fall through to the next provider / built-in fetch.
+    ///
+    /// **SSRF contract**: callers MUST SSRF-validate `url` against the
+    /// operator-configured [`crate::security::ssrf::SsrfPolicy`] BEFORE
+    /// invoking `fetch`. Providers do not re-validate — they trust the
+    /// caller's gate. This keeps the operator's policy authoritative and
+    /// avoids redundant DNS resolutions (which would otherwise widen the
+    /// DNS-rebinding TOCTOU window). The production caller is
+    /// [`crate::builtin_tools::web_fetch`], which performs this check at
+    /// the entry point; the gateway health-check caller uses a hardcoded
+    /// `https://example.com` so it cannot leak.
     async fn fetch(&self, url: &str) -> Result<String>;
 
     /// Stable provider name (matches the `[fetch].backends` key).

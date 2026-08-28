@@ -296,6 +296,16 @@ impl Channel for IMessageChannel {
         // replies requires macOS-runtime chat-GUID resolution (out of scope;
         // BlueBubbles transport handles groups robustly).
         if !message.text.is_empty() {
+            // Re-check `running` immediately before the AppleScript call: a
+            // `stop()` landing between the gate above and the script
+            // invocation would otherwise fire one stale outbound message per
+            // restart window (the script is a real side effect — it texts a
+            // human). Same rationale applies to the attachment loop below.
+            if !self.running.load(Ordering::SeqCst) {
+                return Err(ChannelError::NotConnected(
+                    "iMessage channel stopped before send".to_string(),
+                ));
+            }
             match parse_target(target) {
                 Ok(IMessageTarget::ChatId { id }) => {
                     MessageSender::send_to_chat(&format!("chat_id:{id}"), &message.text)
@@ -319,6 +329,11 @@ impl Channel for IMessageChannel {
         // Send attachments
         for attachment in &message.attachments {
             if let Some(path) = &attachment.path {
+                if !self.running.load(Ordering::SeqCst) {
+                    return Err(ChannelError::NotConnected(
+                        "iMessage channel stopped before attachment send".to_string(),
+                    ));
+                }
                 MessageSender::send_file(target, std::path::Path::new(path))
                     .await
                     .map_err(|e| ChannelError::SendFailed(e.to_string()))?;

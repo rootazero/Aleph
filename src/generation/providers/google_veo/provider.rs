@@ -126,13 +126,34 @@ impl GoogleVeoProvider {
     /// Get the URL for polling operation status
     ///
     /// Validates `operation_name` to prevent path traversal attacks from tampered API responses.
-    pub(crate) fn operation_url(&self, operation_name: &str) -> String {
-        let sanitized = operation_name
-            .trim_start_matches('/')
-            .trim_start_matches('\\')
-            .replace("..", "")
-            .replace('\\', "");
-        format!("{}/v1beta/{}", self.endpoint, sanitized)
+    ///
+    /// **Allow-list, not block-list.** The previous chain
+    /// `replace("..", "").replace('\\', "")` was bypassable:
+    /// `....foo` lost only the first `..` and left `..foo`, and
+    /// `..\\..\\foo` became `....foo` then `..foo` — the result could still
+    /// contain `..`. The replacement now keeps only characters in the
+    /// Google operation-name alphabet (alphanumerics, `_`, `-`, `/`) and
+    /// rejects anything else outright with a provider error rather than
+    /// silently mangling a suspicious name into a valid-looking one.
+    pub(crate) fn operation_url(&self, operation_name: &str) -> GenerationResult<String> {
+        const MAX_OPERATION_NAME_LEN: usize = 512;
+        let trimmed = operation_name.trim_start_matches(['/', '\\']);
+        let valid = !trimmed.is_empty()
+            && trimmed.len() <= MAX_OPERATION_NAME_LEN
+            && trimmed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '/'))
+            // A segment of only dots (or empty between slashes) is never a
+            // valid operation name and is the classic traversal shape.
+            && !trimmed.split('/').any(|seg| seg.is_empty() || seg.chars().all(|c| c == '.'));
+        if !valid {
+            return Err(GenerationError::provider(
+                format!("invalid operation name from google-veo: {operation_name:?}"),
+                None,
+                "google-veo",
+            ));
+        }
+        Ok(format!("{}/v1beta/{}", self.endpoint, trimmed))
     }
 
     /// Check if using Veo 3 model
@@ -264,7 +285,7 @@ impl GoogleVeoProvider {
         &self,
         operation_name: &str,
     ) -> GenerationResult<VeoOperationResponse> {
-        let url = self.operation_url(operation_name);
+        let url = self.operation_url(operation_name)?;
         let mut attempts = 0;
 
         loop {

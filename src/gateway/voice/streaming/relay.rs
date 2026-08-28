@@ -14,6 +14,13 @@ use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
 /// timeout (often 60s+).
 const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Bound on waiting for the FIRST delta after the backend stream opens. See
+/// the first-delta watchdog note in `start_stream`'s pump: this covers the
+/// "backend accepted the WS upgrade but never sends a frame" wedge that
+/// `OPEN_TIMEOUT` cannot see. Generous enough for a cold ASR server's first
+/// transcription chunk.
+const FIRST_DELTA_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// Upper bound on concurrently open backend streams. The Panel holds exactly
 /// one per listening period; anything approaching this is leaked entries, so
 /// the oldest is evicted (dropping its sole sender closes the backend).
@@ -109,6 +116,31 @@ impl StreamRegistry {
         }
     }
 
+    /// May the current caller act on `id`, where `id` must also EXIST?
+    ///
+    /// [`Self::caller_may_use`] answers `true` for an unknown id (so the
+    /// refusal path is indistinguishable from a just-stopped stream and the
+    /// predicate never leaks which ids exist). That is the right answer for
+    /// an action whose downstream step is already a no-op on a missing id —
+    /// but it reads as "unknown ids are usable", which is a footgun for any
+    /// new caller that forgets the downstream no-op. This variant answers the
+    /// stricter question: known-and-owned. Callers that want "act only on a
+    /// real, owned stream" use this; callers that specifically need the
+    /// existence-hiding behavior keep [`Self::caller_may_use`]. Both return
+    /// through the same silent-no-op response shape, so the external
+    /// observable (id enumeration resistance) is unchanged.
+    pub async fn caller_may_act_on_known_id(&self, id: &str) -> bool {
+        let guard = self.inner.lock().await;
+        match guard.get(id) {
+            None => false,
+            Some(e) => match (&e.owner, crate::scope::ambient_owner()) {
+                (None, _) => true,
+                (Some(_), None) => true,
+                (Some(owner), Some(caller)) => *owner == caller,
+            },
+        }
+    }
+
     /// The owner stamped at mint time, for the delta payload.
     pub async fn owner_of(&self, id: &str) -> Option<String> {
         self.inner
@@ -170,7 +202,40 @@ pub async fn start_stream(
     let pump_owner = reg.owner_of(&id).await;
     tokio::spawn(async move {
         // pump owns ONLY delta_rx — no live audio_tx, so the backend can close.
-        while let Some(delta) = delta_rx.recv().await {
+        //
+        // **First-delta watchdog**: `OPEN_TIMEOUT` covers only
+        // `transcriber.open` — the WS upgrade. A backend that accepts the
+        // upgrade but never sends a first frame (wedged WhisperLiveKit,
+        // half-open TCP) used to leave this pump parked on `recv()` forever:
+        // the stream looked alive in the registry, the client waited for
+        // transcription that would never come, and nothing timed out short
+        // of the OS TCP keepalive. The FIRST receive is therefore bounded;
+        // a timeout is treated exactly like a stream death (fall through to
+        // the shared cleanup path, which publishes the terminal
+        // `{closed: true}` marker and removes the registry entry). Steady-
+        // state receives stay unbounded — natural pauses between utterances
+        // are normal in streaming ASR.
+        let mut first_pending = true;
+        loop {
+            let delta = if first_pending {
+                match tokio::time::timeout(FIRST_DELTA_TIMEOUT, delta_rx.recv()).await {
+                    Ok(d) => {
+                        first_pending = false;
+                        d
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            stream_id = %pump_id,
+                            timeout_secs = FIRST_DELTA_TIMEOUT.as_secs(),
+                            "no first delta from streaming ASR backend; treating as wedged"
+                        );
+                        break;
+                    }
+                }
+            } else {
+                delta_rx.recv().await
+            };
+            let Some(delta) = delta else { break };
             let data = serde_json::json!({
                 "stream_id": pump_id,
                 "delta": delta,

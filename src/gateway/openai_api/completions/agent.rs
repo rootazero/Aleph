@@ -462,6 +462,22 @@ async fn handle_streaming(
 /// the second one's text into the first one's run and answered it with HTTP 200
 /// and an empty completion: a successful-looking reply to a question that had
 /// silently been given to someone else.
+///
+/// # On the queue-vs-parallel trade-off (reviewed; intentional)
+///
+/// The audit suggested keying each request on a per-request UUID so two
+/// in-flight calls with the same `x-aleph-user` run in PARALLEL instead of
+/// queuing. That is deliberately NOT done here: the stable peer key is what
+/// gives a single-message client conversational continuity across successive
+/// calls (the session keeps its transcript), and a per-request UUID would
+/// silently drop that — every call would start a fresh, empty session. The
+/// queue is the price of keeping BOTH correctness (no cross-run text
+/// folding) and continuity. A client that genuinely wants parallel,
+/// independent sessions opts in explicitly by sending a DISTINCT
+/// `x-aleph-user` value per request (e.g. a UUID) — the peer id is read
+/// from that header, so the parallel-session behavior is already available
+/// to any client that asks for it, without changing the safe default for
+/// the single-threaded caller the default serves.
 fn busy_input_metadata() -> HashMap<String, String> {
     let mut metadata = HashMap::new();
     metadata.insert(

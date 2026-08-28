@@ -252,7 +252,7 @@ impl ChannelRegistry {
             ))
         })?;
 
-        let channel = factory.create(config.config.clone()).await?;
+        let channel = factory.create_with_id(&config.id, config.config.clone()).await?;
         let channel_id = channel.id().clone();
 
         drop(factories);
@@ -288,6 +288,22 @@ impl ChannelRegistry {
     }
 
     /// Unregister a channel
+    ///
+    /// # Return-value contract (read before relying on `Some(..)`)
+    ///
+    /// The returned `Option<Box<dyn Channel>>` is `Some` ONLY when the
+    /// channel was never started. `start_message_forwarder` clones the
+    /// channel `Arc` into the forwarder task at `start_channel`, so after a
+    /// start the registry is never the sole strong owner and
+    /// `Arc::try_unwrap` below ALWAYS fails — this function then returns
+    /// `None` (see `unregister_unmounts_the_webhook` in this file's tests,
+    /// which pins that behavior). There is currently NO way to recover the
+    /// boxed adapter for a graceful adapter-level `shutdown` once a channel
+    /// has started; use `stop_channel` for lifecycle teardown instead of
+    /// relying on the return value. Making `Some` reachable post-start would
+    /// require the forwarder to hold a `Weak` reference instead — a
+    /// lifecycle-semantics change deferred to a dedicated batch (it changes
+    /// who keeps the adapter alive while the forwarder runs).
     pub async fn unregister(&self, channel_id: &ChannelId) -> Option<Box<dyn Channel>> {
         // Drop the HTTP surface before the instance leaves the registry —
         // including when `Arc::try_unwrap` below fails and this returns None.
@@ -341,7 +357,14 @@ impl ChannelRegistry {
         }
     }
 
-    /// List all channels
+    /// List all channels.
+    ///
+    /// **Audit fix**: the previous implementation iterated `HashMap::values`
+    /// directly, exposing HashMap's non-deterministic iteration order to every
+    /// caller. The `channels.list` RPC, every Panel render, and every
+    /// `channel.health_states` snapshot used to flicker between calls on the
+    /// same channel set. Sorted by `(channel_type, id)` so the order is
+    /// stable across runs and reproducible in tests.
     pub async fn list(&self) -> Vec<ChannelInfo> {
         let channels = self.channels.read().await;
         let mut infos = Vec::with_capacity(channels.len());
@@ -352,11 +375,18 @@ impl ChannelRegistry {
             info.status = channel.status(); // override with live status
             infos.push(info);
         }
-
+        infos.sort_by(|a, b| {
+            a.channel_type
+                .cmp(&b.channel_type)
+                .then_with(|| a.id.0.cmp(&b.id.0))
+        });
         infos
     }
 
-    /// List channels by type
+    /// List channels by type.
+    ///
+    /// Sorted by `id` so the order is deterministic across runs (see
+    /// [`Self::list`] for the full rationale).
     pub async fn list_by_type(&self, channel_type: &str) -> Vec<ChannelInfo> {
         let channels = self.channels.read().await;
         let mut infos = Vec::new();
@@ -369,7 +399,7 @@ impl ChannelRegistry {
                 infos.push(info);
             }
         }
-
+        infos.sort_by(|a, b| a.id.0.cmp(&b.id.0));
         infos
     }
 
@@ -752,6 +782,11 @@ impl ChannelRegistry {
     /// Take the inbound message receiver
     ///
     /// This can only be called once - subsequent calls return None.
+    ///
+    /// Unlike `ChannelState::take_receiver()` — which was named after
+    /// `mpsc::Receiver::take()` semantics that `broadcast` does not have —
+    /// THIS method genuinely consumes the receiver via `Option::take()`,
+    /// so the single-consumer contract is real here.
     pub fn take_inbound_receiver(&self) -> Option<broadcast::Receiver<InboundMessage>> {
         let mut rx_guard = self.inbound_rx.lock().unwrap_or_else(|e| e.into_inner());
         rx_guard.take()
@@ -808,7 +843,16 @@ impl ChannelRegistry {
                             skipped = skipped,
                             "Channel forwarder lagged; resuming from latest message"
                         );
-                        health.write().await.record_event();
+                        // **Audit fix**: do NOT call `record_event()` here.
+                        // Lagged means OUR forwarder fell behind the
+                        // broadcast ring — it is not proof of transport
+                        // liveness on the channel. Stamping `last_event_at`
+                        // here reset the staleness window from the lag
+                        // instant, so a wedged channel whose inbound queue
+                        // backed up exactly at its last real message would
+                        // evade the health monitor for another full
+                        // DEFAULT_STALE_SECS. The monitor only trusts real
+                        // messages now.
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         // Channel sender was dropped (channel removed). Exit.

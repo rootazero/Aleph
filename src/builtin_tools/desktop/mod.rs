@@ -395,7 +395,7 @@ impl DesktopTool {
 
         let (agent_id, context) = crate::approval::audit_identity("desktop", action, target);
         let request = ActionRequest {
-            action_type,
+            action_type: action_type.clone(),
             target: target.to_string(),
             display_target: String::new(),
             agent_id,
@@ -404,6 +404,7 @@ impl DesktopTool {
         };
 
         let decision = policy.check(&request).await;
+        let decision = crate::approval::lift_ask(decision, action_type.clone());
 
         match decision {
             ApprovalDecision::Allow => {

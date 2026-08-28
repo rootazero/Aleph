@@ -187,7 +187,11 @@ impl DirectoryScanner {
             scan_component_dir(scan_dir, component_name, &mut discovered);
         }
 
-        // Sort by priority (lower first, so higher priority items can override)
+        // Sort by priority (lower first). The single consumer in
+        // `extension::ExtensionManager` uses first-wins dedup via
+        // `seen.insert(canonical)`, so the LOWER priority is the one that
+        // survives a name/path collision — keep that invariant documented
+        // here so callers know which direction the dedup goes.
         discovered.sort_by_key(|d| d.priority);
 
         trace!(
@@ -221,6 +225,14 @@ impl DirectoryScanner {
         for parent in extra_parents {
             self.scan_plugin_parent(parent, &mut discovered, DiscoverySource::Project, 20);
         }
+        // Match `discover_component`: ascending-priority sort so the single
+        // downstream consumer's first-wins dedup (which keeps the FIRST
+        // entry on a canonical-path collision) has the same semantics across
+        // both APIs. Without this, `discover_plugins_with_extra` returns
+        // global-then-project in raw read_dir order, which makes the dedup
+        // pick GLOBAL on a project/global clash — the opposite of what
+        // `discover_component` does for skills/commands/agents.
+        discovered.sort_by_key(|d| d.priority);
         trace!(
             "Discovered {} plugins ({} extra parents)",
             discovered.len(),
@@ -239,7 +251,15 @@ impl DirectoryScanner {
         source: DiscoverySource,
         priority: u32,
     ) {
-        if !is_existing_dir_no_follow(plugins_dir) {
+        // The top-level parent follows symlinks (`is_dir()`), mirroring
+        // `scan_component_dir`'s behaviour for `~/.aleph/skills` etc. A
+        // symlinked `~/.aleph/plugins` pointing to a real directory on
+        // another filesystem is a legitimate layout (e.g. shared plugins
+        // volume on macOS) and must NOT be silently skipped. The per-entry
+        // symlink screening below still catches a *child* symlink pointing
+        // outside the expected tree — that is the security boundary this
+        // helper guards, not the parent itself.
+        if !plugins_dir.is_dir() {
             return;
         }
         let entries = match std::fs::read_dir(plugins_dir) {

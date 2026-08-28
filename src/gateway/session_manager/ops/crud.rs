@@ -38,6 +38,23 @@ impl SessionManager {
             .ok();
 
         if let Some(mut meta) = existing {
+            // **Audit fix**: explicitly handle the stopped/closed terminal
+            // states. The previous code's fallback ("state was not 'created' or
+            // 'idle'; just bump last_active_at") ran a bare UPDATE on any
+            // non-Active session, including a row that an operator had put
+            // into `state='stopped'`. The DB kept `state='stopped'` while the
+            // caller saw `meta.state` as `Some(SessionState::Active)` (set by the
+            // earlier successful transition OR inferred from last_active_at),
+            // and inbound routing continued to treat the session as live. The
+            // contract for a stopped session must be explicit: refuse a silent
+            // resume; require an explicit reopen.
+            match meta.state {
+                Some(SessionState::Stopped) => {
+                    return Err(SessionManagerError::SessionStopped(meta.key.clone()));
+                }
+                _ => {}
+            }
+
             // Transition Created or Idle -> Active
             let state_update = conn.execute(
                 "UPDATE sessions SET last_active_at = ?, state = 'active' WHERE key = ? AND state IN ('created', 'idle')",
@@ -147,13 +164,28 @@ impl SessionManager {
 
         // Use scope block to ensure lock is released before any await
         let (message_id, needs_compaction) = {
-            let conn = self
+            // `mut` because the message insert + session counters run inside
+            // `conn.transaction()` (see below).
+            let mut conn = self
                 .conn
                 .lock()
                 .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
+            // **Audit fix**: the message INSERT, FTS sync and the
+            // `message_count = message_count + 1` UPDATE previously ran as
+            // separate statements with no transaction — a crash between them
+            // left `message_count` one behind reality (the value
+            // `sessions.list` returns to the Panel). The trio now commits or
+            // rolls back together. The FTS insert stays best-effort INSIDE
+            // the transaction: a failed FTS write is swallowed (`.ok()`) so
+            // search degrades without rolling back the message row — the
+            // same tolerance the pre-transaction code had.
+            let tx = conn
+                .transaction()
+                .map_err(|e| SessionManagerError::DatabaseError(format!("Begin tx failed: {e}")))?;
+
             // Insert message
-            conn.execute(
+            tx.execute(
                 "INSERT INTO messages (session_key, role, content, timestamp, metadata, \
                  input_tokens, output_tokens, tool_call_id, tool_name, source_seq) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -174,17 +206,17 @@ impl SessionManager {
                 SessionManagerError::DatabaseError(format!("Insert message failed: {e}"))
             })?;
 
-            let message_id = conn.last_insert_rowid();
+            let message_id = tx.last_insert_rowid();
 
             // Sync FTS5 index (non-fatal — search degrades gracefully)
-            conn.execute(
+            tx.execute(
                 "INSERT INTO messages_fts(rowid, content) VALUES (?, ?)",
                 params![message_id, content],
             )
             .ok();
 
             // Only transition to Running if current state allows it
-            let valid_transition: bool = conn
+            let valid_transition: bool = tx
                 .query_row(
                     "SELECT state FROM sessions WHERE key = ?",
                     params![&key_str],
@@ -196,7 +228,7 @@ impl SessionManager {
                 .unwrap_or(true);
 
             let derived_title: Option<String> = if role == "user" {
-                conn.query_row(
+                tx.query_row(
                     "SELECT derived_title FROM sessions WHERE key = ?",
                     params![&key_str],
                     |row| row.get::<_, Option<String>>(0),
@@ -246,7 +278,13 @@ impl SessionManager {
                 params.push(dt);
             }
             params.push(&key_str);
-            conn.execute(&session_update_sql, params.as_slice()).ok();
+            tx.execute(&session_update_sql, params.as_slice())
+                .map_err(|e| {
+                    SessionManagerError::DatabaseError(format!("Update session failed: {e}"))
+                })?;
+
+            tx.commit()
+                .map_err(|e| SessionManagerError::DatabaseError(format!("Commit failed: {e}")))?;
 
             // Check if compaction needed
             let count: i64 = conn

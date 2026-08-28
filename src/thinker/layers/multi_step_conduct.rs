@@ -2,10 +2,14 @@
 //! narrate progress in interactive conversations (priority 805).
 //!
 //! Closes two prompt gaps:
-//!   1. Nothing told the model *when* to autonomously reach for the
-//!      `scratchpad` tool. `ExecutionPlanLayer` only re-surfaces a plan that
-//!      already exists; it never triggers plan *creation*. So a task list only
-//!      appeared when the user hand-typed a trigger phrase.
+//!   1. Plan *creation* needs a stated trigger, not just a mechanism.
+//!      `ExecutionPlanLayer` only re-surfaces a plan that already exists; and
+//!      the first version of this section phrased the trigger as the model's
+//!      judgment call ("for genuinely multi-step work") — weaker models
+//!      reliably judge "just write the code" and never open a plan (observed
+//!      on MiniMax-M3, 2026-08-27). The trigger is now a rule: 3+ steps, or
+//!      any build/fix/create of code or files, starts with `scratchpad`
+//!      BEFORE the first file or shell call.
 //!   2. Across a long run of tool calls the model emitted no visible text, so
 //!      the interactive panel showed only a "thinking" spinner. The streaming
 //!      pipeline already forwards every assistant delta live — the model just
@@ -65,15 +69,21 @@ impl PromptLayer for MultiStepConductLayer {
             return;
         }
 
-        // Section 1 — the scratchpad planning tool exists (Aleph-specific
-        // mechanism the model can't infer). The old when-to-plan / don't-plan-
-        // trivial cognition prose was cut — a capable model decides that from
-        // the task shape (§1.1 prune-the-prompt).
+        // Section 1 — plan first, then execute. The scratchpad mechanism is
+        // Aleph-specific and cannot be inferred, so name the tool AND the
+        // sequence. The trigger is stated as a rule, not a suggestion: the
+        // earlier soft phrasing ("for genuinely multi-step work") left the
+        // decision to the model, and weaker models reliably answered it with
+        // "just write the code" — observed twice in a row on MiniMax-M3
+        // (2026-08-27, two snake-game sessions that never opened a plan).
+        // "A single file_write finishes it" is the standard rationalization,
+        // so the build/fix/create case is named explicitly.
         output.push_str("## Planning Multi-Step Work\n\n");
         output.push_str(
-            "For genuinely multi-step work, use the `scratchpad` tool to set an objective and an \
-             execution list, then work it one item at a time with `start_item` / `complete_item`. \
-             Skip it for anything that finishes in a step or two.\n\n",
+            "Tasks taking 3+ steps, and any build or fix of code or files, start with \
+             `scratchpad` BEFORE any file or shell call: `set_objective`, then `set_plan` \
+             (ordered list), then work it (`start_item` / `complete_item`). Never write code \
+             before the plan exists; it is the task list the user sees.\n\n",
         );
 
         // Section 2 — narrate progress. The non-inferable fact is the UX one:
@@ -152,14 +162,19 @@ mod tests {
         assert!(out.is_empty());
     }
 
+    /// Section 1 states the plan-first rule and names the mechanism.
     #[test]
     fn interactive_paradigm_emits_both_sections() {
         let out = render(&ctx_for(InteractionParadigm::WebRich));
         assert!(out.contains("## Planning Multi-Step Work"));
         assert!(out.contains("scratchpad"));
+        assert!(out.contains("set_objective") && out.contains("set_plan"));
         assert!(out.contains("start_item") && out.contains("complete_item"));
-        // Anti-over-trigger intent preserved in compressed form.
-        assert!(out.contains("Skip it for anything that finishes in a step or two"));
+        // The rule, not a suggestion: plan BEFORE the first mutating call.
+        assert!(out.contains("BEFORE any file or shell call"));
+        assert!(out.contains("Never write code before the plan exists"));
+        // The single-step carve-out lives in the tool's own DESCRIPTION (one
+        // statement, one place), so this layer does not repeat it.
         assert!(out.contains("## Narrate Your Progress"));
         assert!(out.contains("stream to the user live"));
         // The sample-phrasing cage and narration micromanagement are gone.

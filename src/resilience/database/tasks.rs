@@ -78,6 +78,52 @@ impl StateDatabase {
         .await
     }
 
+    /// Insert a new agent task only when the primary key is absent.
+    ///
+    /// Returns `true` when the row was inserted, `false` when a row with the
+    /// same `id` already exists. Callers on a redelivery path (resume, retry,
+    /// queue redelivery, panel refresh) use this to avoid a duplicate-row
+    /// primary-key error on an already-known `run_id`, then decide what to do
+    /// based on the EXISTING row's status (see
+    /// `ExecutionEngine::persist_run_task_started`).
+    pub async fn insert_agent_task_if_absent(&self, task: &AgentTask) -> Result<bool, AlephError> {
+        let task = task.clone();
+        self.with_conn(move |conn| {
+            let affected = conn
+                .execute(
+                    r#"
+                    INSERT OR IGNORE INTO agent_tasks (
+                        id, parent_session_id, agent_id, task_prompt, status,
+                        risk_level, lane, checkpoint_snapshot_path, last_tool_call_id,
+                        recursion_depth, parent_task_id, created_at, updated_at,
+                        started_at, completed_at, metadata_json
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                    "#,
+                    params![
+                        task.id,
+                        task.parent_session_id,
+                        task.agent_id,
+                        task.task_prompt,
+                        task.status.to_string(),
+                        task.risk_level.to_string(),
+                        task.lane.to_string(),
+                        task.checkpoint_snapshot_path,
+                        task.last_tool_call_id,
+                        task.recursion_depth,
+                        task.parent_task_id,
+                        task.created_at,
+                        task.updated_at,
+                        task.started_at,
+                        task.completed_at,
+                        task.metadata_json,
+                    ],
+                )
+                .map_err(|e| AlephError::config(format!("Failed to insert agent task: {e}")))?;
+            Ok(affected > 0)
+        })
+        .await
+    }
+
     /// Get an agent task by ID
     pub async fn get_agent_task(&self, task_id: &str) -> Result<Option<AgentTask>, AlephError> {
         let task_id = task_id.to_string();

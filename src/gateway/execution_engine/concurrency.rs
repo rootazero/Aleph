@@ -141,6 +141,26 @@ impl ConcurrencyLimiter {
     /// full. The per-agent permit is taken first so a saturated agent waits on
     /// its own sub-cap without consuming a scarce global slot. Time spent
     /// blocked here is reflected in `snapshot().waiting`.
+    ///
+    /// # Order trade-off (reviewed; intentional)
+    ///
+    /// Agent-first means a run parked on the GLOBAL semaphore holds its agent
+    /// permit while it waits. The audit flagged the corner: with
+    /// `max_runs_per_agent=3, max_runs_global=1`, three runs of agent A each
+    /// hold an agent slot and queue on the single global slot, so a fourth
+    /// agent-A run is rejected (agent cap reads full) even though only one is
+    /// executing. That is real, and it is the price of the invariant this
+    /// order protects: a saturated agent must NEVER hold a global slot while
+    /// merely *waiting* for admission. The reverse order (global-first) would
+    /// let a flood of one agent's runs occupy every global slot in the wait
+    /// queue and starve every OTHER agent out of the global semaphore — the
+    /// cross-tenant failure mode this limiter exists to prevent. Agent-first
+    /// contains the blast radius to the offending agent (its own extra runs
+    /// fail fast); global-first spreads it to all tenants. Given the defaults
+    /// (`global=8, per_agent=3`) the flagged corner needs an aggressively
+    /// mis-sized config to matter, and the fix direction would reopen the
+    /// worse failure. Keeping agent-first; this note is the record of the
+    /// decision.
     pub(super) async fn acquire(&self, agent_id: &str) -> RunPermit {
         let _wait = WaitGuard::enter(&self.waiting);
         let agent_sem = self.agent_sem(agent_id);

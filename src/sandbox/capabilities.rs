@@ -68,6 +68,35 @@ impl SandboxCapabilities {
         Self::default()
     }
 
+    /// The per-session capability floor: what a call may use WITHOUT raising a
+    /// capability-approval card. Identical to [`Self::strict`] except that
+    /// forking is not treated as an escalation.
+    ///
+    /// Fork is not the boundary this sandbox enforces — the filesystem jail and
+    /// the network denial are. Measured on macOS/seatbelt: `(deny process-fork)`
+    /// does not stop a shell from running a program, because bash exec's a
+    /// single simple command in place (`bash -c 'rm -rf x'` runs). It stops only
+    /// COMPOSITION — `a && b`, `a | b`, `$(a)`, even `a > /dev/null` — each
+    /// dying with `bash: fork: Operation not permitted`, exit 128. Keeping fork
+    /// outside the floor therefore bought no containment while putting an
+    /// approval card in front of nearly every ordinary shell command.
+    ///
+    /// Deliberately NOT folded into `strict()`/`default()`: those stay tight, so
+    /// an interpreter that asks to spawn children still routes through approval
+    /// (see `interpreters_do_not_ask_for_fork_by_default`). This is the floor,
+    /// and it has exactly one consumer — `SessionWorkspace::baseline`.
+    #[must_use]
+    pub fn session_baseline() -> Self {
+        Self {
+            // Only where the shell actually takes the fork exemption
+            // (`CodeExecArgs::as_capabilities`). On Linux `allow_fork` buys
+            // `--unshare-pid`, not forking, so no shell asks for it there and
+            // lifting the floor would only widen what skips approval.
+            spawn_subprocess: cfg!(not(target_os = "linux")),
+            ..Self::strict()
+        }
+    }
+
     /// Return a copy with `fs_read` and `fs_write` sorted so that
     /// `Hash`/`Eq` are order-independent. Used before storing in
     /// `granted_elevations` cache to prevent duplicate entries for
@@ -221,6 +250,24 @@ fn network_within(child: &NetworkPolicy, baseline: &NetworkPolicy) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shell's implicit fork must sit INSIDE the session baseline,
+    /// otherwise every ordinary `a && b` raises a capability-approval card —
+    /// trading a broken shell for an approval storm. Fork is not the boundary
+    /// in this sandbox; the filesystem jail and the network denial are.
+    #[test]
+    fn shell_fork_is_within_the_session_baseline() {
+        let shell = SandboxCapabilities {
+            spawn_subprocess: cfg!(not(target_os = "linux")),
+            ..Default::default()
+        };
+        assert!(shell.is_within(&SandboxCapabilities::session_baseline()));
+        // And the floor is never wider than the exemption it exists for.
+        assert_eq!(
+            SandboxCapabilities::session_baseline().spawn_subprocess,
+            cfg!(not(target_os = "linux"))
+        );
+    }
 
     #[test]
     fn strict_is_default() {

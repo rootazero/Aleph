@@ -5,6 +5,8 @@
 
 use std::fmt::Write as _;
 
+use tokio_util::sync::CancellationToken;
+
 use super::protocol::{GroupChatStatus, Persona, Speaker};
 
 /// A single turn in a group chat conversation.
@@ -59,6 +61,21 @@ pub struct GroupChatSession {
     /// sessions only. The stamp is the same one `SessionMetadata`, `LoopState`
     /// and `Goal` carry.
     pub owner_user_id: Option<String>,
+    /// Per-session round budget. Stamped at creation from the orchestrator's
+    /// `max_rounds()` config so a misconfigured or hostile coordinator can
+    /// never run unbounded LLM-billed rounds. `None` means unbounded —
+    /// reserved for tests / harness-internal sessions that explicitly opt
+    /// out. `execute_round` enforces this bound as soon as
+    /// `current_round + 1 > max_rounds`.
+    pub max_rounds: Option<u32>,
+    /// Cancellation handle for the in-flight round. `execute_round`
+    /// `select!`s on this token at every provider call, so a hung or
+    /// slow round can be interrupted instead of blocking the session
+    /// mutex for the whole provider timeout. The orchestrator clones the
+    /// token into its session table at creation (lock-free cancel) and
+    /// fires it from `end_session`; the token is also readable here so
+    /// the executor (which holds `&mut self`) can listen on it.
+    pub cancel_token: CancellationToken,
 }
 
 impl GroupChatSession {
@@ -87,7 +104,17 @@ impl GroupChatSession {
             source_channel,
             source_session_key,
             owner_user_id: crate::scope::current_scope().map(|attr| attr.owner_user_id),
+            max_rounds: None,
+            cancel_token: CancellationToken::new(),
         }
+    }
+
+    /// Builder-style setter for `max_rounds`. Returns the modified session
+    /// so callers can chain `GroupChatSession::new(...).with_max_rounds(n)`.
+    #[must_use]
+    pub fn with_max_rounds(mut self, max_rounds: Option<u32>) -> Self {
+        self.max_rounds = max_rounds;
+        self
     }
 
     /// Record a new turn in the conversation history.
@@ -143,6 +170,50 @@ impl GroupChatSession {
     pub fn build_history_text(&self) -> String {
         let mut text = String::new();
         for turn in &self.history {
+            let _ = writeln!(text, "[{}]: {}\n", turn.speaker.name(), turn.content);
+        }
+        text
+    }
+
+    /// Build the coordinator's history text with a sliding window.
+    ///
+    /// Rounds newer than `current_round - window_rounds` are included
+    /// verbatim; anything older is collapsed into a single summary line so
+    /// the coordinator prompt stays bounded (an unbounded history grew
+    /// linearly with session length — a 50-round × 4-persona session pushed
+    /// >100k tokens into every coordinator call). `window_rounds == 0`
+    /// disables the window entirely and returns the full history, matching
+    /// [`Self::build_history_text`].
+    #[must_use]
+    pub fn build_history_text_windowed(&self, window_rounds: u32) -> String {
+        if window_rounds == 0 || self.current_round <= window_rounds {
+            return self.build_history_text();
+        }
+        let cutoff = self.current_round - window_rounds;
+        let mut text = String::new();
+        let mut older_turns = 0usize;
+        let mut older_rounds_seen: std::collections::BTreeSet<u32> =
+            std::collections::BTreeSet::new();
+        let mut recent: Vec<&GroupChatTurn> = Vec::new();
+        for turn in &self.history {
+            if turn.round <= cutoff {
+                older_turns += 1;
+                older_rounds_seen.insert(turn.round);
+            } else {
+                recent.push(turn);
+            }
+        }
+        if older_turns > 0 {
+            let _ = writeln!(
+                text,
+                "[Summary]: {} earlier turn(s) across {} round(s) omitted \
+                 (window keeps the most recent {} rounds).\n",
+                older_turns,
+                older_rounds_seen.len(),
+                window_rounds
+            );
+        }
+        for turn in recent {
             let _ = writeln!(text, "[{}]: {}\n", turn.speaker.name(), turn.content);
         }
         text

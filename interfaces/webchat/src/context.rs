@@ -1684,6 +1684,10 @@ impl DashboardState {
         let state = *self;
         let subscription_id =
             self.subscribe_events(move |event: GatewayEvent| match event.topic.as_str() {
+                // `approval.reminder` is deliberately absent: it announces
+                // nothing new about the pending set, so refetching on it would
+                // be one round trip per reminder for a list that cannot have
+                // changed. Its audience is the desktop shell's OS banner.
                 "approval.requested" | "approval.resolved" | "approval.expired" => {
                     spawn_local(async move {
                         if let Ok(list) = ExecApprovalApi::list_pending(&state).await {

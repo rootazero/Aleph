@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 
-use crate::diagnostics::check::{settle_probe, HealthCheck, Posture};
+use crate::diagnostics::check::{settle_probe, unknown_finding, HealthCheck, Posture};
 use crate::diagnostics::finding::{Finding, RepairOutcome, Severity};
 use crate::utils::instance_lock::diagnose_holder;
 
@@ -54,24 +54,40 @@ impl HealthCheck for StaleLockCheck {
         // held … the singleton is free" at `Info` — byte-identical to a real
         // pass. `check::settle_probe` is the one place that decides what a
         // probe that did not run means.
-        let holder = match settle_probe(
+        //
+        // A probe that DID run but whose filesystem read errored (EACCES, AV
+        // lock, ACL revoke) returns `Ok(Err(e))` — also an unknown answer,
+        // also not a free singleton. Folding that into the `Ok(None)` arm
+        // below is the bug: the operator would see `[ok] No lock held` for a
+        // holder file the doctor could not read, the exact reassuring line in
+        // front of the vault-data-loss condition.
+        let probe = settle_probe(
             ID,
             SUBJECT,
             tokio::task::spawn_blocking(move || diagnose_holder(&data_dir)).await,
-        ) {
-            Ok(h) => h,
+        );
+        let holder = match probe {
             Err(finding) => return vec![finding],
-        };
-        let holder = match holder {
-            // No lock file at all — nothing is holding the singleton.
-            None => {
+            Ok(Err(e)) => {
+                return vec![unknown_finding(
+                    ID,
+                    SUBJECT,
+                    format!(
+                        "the holder sidecar exists but could not be read: {e}. \
+                         Treating the singleton state as unknown rather than free; \
+                         check ownership and permissions on {} and try again.",
+                        self.data_dir.join(HOLDER_FILENAME).display()
+                    ),
+                )];
+            }
+            Ok(Ok(None)) => {
                 return vec![Finding::ok(
                     ID,
                     "No lock held",
                     "No aleph.lock present; the singleton is free.",
                 )];
             }
-            Some(h) => h,
+            Ok(Ok(Some(h))) => h,
         };
 
         if holder.process_alive {

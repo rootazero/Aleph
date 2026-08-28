@@ -62,6 +62,10 @@ pub struct PendingApprovalView {
 impl PendingApprovalView {
     /// Whole seconds left before this approval times out. Clamped at 0 — an
     /// expired-but-not-yet-refetched row must never render a negative countdown.
+    ///
+    /// `expires_at_ms == 0` is the no-expiry sentinel (attended approvals wait
+    /// forever): the answer is meaningless, and the card renders the static
+    /// no-timeout line instead of calling this.
     #[must_use]
     pub const fn remaining_secs(&self, now_ms: i64) -> i64 {
         let remaining = self.expires_at_ms - now_ms;

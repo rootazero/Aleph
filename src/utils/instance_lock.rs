@@ -147,20 +147,37 @@ pub fn try_acquire(data_dir: &Path) -> std::io::Result<AcquireOutcome> {
 }
 
 /// Read holder metadata from the sidecar WITHOUT competing for the lock.
-/// Returns None if the sidecar does not exist or is empty.
-#[must_use]
-pub fn diagnose_holder(data_dir: &Path) -> Option<HolderDiagnostic> {
+///
+/// Returns:
+/// - `Ok(Some(diag))` — the sidecar exists, was readable, and parsed cleanly.
+/// - `Ok(None)`        — the sidecar is determinately absent or empty (a clean
+///                       "no holder" answer; the operator genuinely has no
+///                       lock to clear).
+/// - `Err(io::Error)`  — the sidecar exists but the filesystem refused to
+///                       answer (`EACCES`, AV lock, ACL revoke, ...). The
+///                       answer is *unknown* — NOT "no lock held" — and the
+///                       caller is expected to surface this as a diagnostic
+///                       warning rather than fold it into the reassuring
+///                       absent path. A doctor that reports `[ok] No lock
+///                       held` for an unreadable holder file is the line in
+///                       front of the exact vault-data-loss condition that
+///                       AGENTS.md names.
+pub fn diagnose_holder(data_dir: &Path) -> std::io::Result<Option<HolderDiagnostic>> {
     let holder_path = data_dir.join(HOLDER_FILENAME);
-    let buf = std::fs::read_to_string(&holder_path).ok()?;
+    let buf = match std::fs::read_to_string(&holder_path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
     if buf.trim().is_empty() {
-        return None;
+        return Ok(None);
     }
     let (pid, expected_start) = parse_holder(&buf);
-    Some(HolderDiagnostic {
+    Ok(Some(HolderDiagnostic {
         pid,
         process_alive: process_matches(pid, expected_start),
         lock_path: data_dir.join(LOCK_FILENAME),
-    })
+    }))
 }
 
 /// Write the holder record to the unlocked sidecar: line 1 = PID, line 2 = the
@@ -272,7 +289,10 @@ mod tests {
     #[test]
     fn diagnose_holder_returns_none_when_no_file() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(diagnose_holder(dir.path()).is_none());
+        assert!(matches!(
+            diagnose_holder(dir.path()),
+            Ok(None) // sidecar absent → "no holder" answer, not a read error
+        ));
     }
 
     // Cross-platform now: `diagnose_holder` reads the unlocked sidecar, so it
@@ -281,9 +301,43 @@ mod tests {
     fn diagnose_holder_returns_pid_when_held() {
         let dir = tempfile::tempdir().unwrap();
         let _hold = try_acquire(dir.path()).unwrap();
-        let diag = diagnose_holder(dir.path()).expect("file should exist");
+        let diag = diagnose_holder(dir.path())
+            .expect("sidecar should be readable")
+            .expect("sidecar should hold a holder record");
         assert_eq!(diag.pid as u32, std::process::id());
         assert!(diag.process_alive);
+    }
+
+    /// A holder sidecar that exists but is unreadable (EACCES, AV lock, ...)
+    /// must propagate the IO error, NOT be silently folded into the absent
+    /// path. The `stale_lock` doctor check depends on this: a `[ok] No lock
+    /// held` for an unreadable sidecar is the reassuring line in front of the
+    /// vault-data-loss condition.
+    #[cfg(unix)]
+    #[test]
+    fn diagnose_holder_propagates_io_error_for_unreadable_sidecar() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let holder = dir.path().join(HOLDER_FILENAME);
+        std::fs::write(&holder, b"123\n456\n").unwrap();
+        // Drop read permission on the sidecar itself. The directory stays
+        // traversable so the *existence* check passes; only the read fails.
+        std::fs::set_permissions(&holder, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = diagnose_holder(dir.path());
+        // Restore permissions so the tempdir cleanup can succeed even if the
+        // assertion below fails.
+        let restore =
+            std::fs::set_permissions(&holder, std::fs::Permissions::from_mode(0o600));
+        let _ = restore;
+
+        match result {
+            Err(e) => assert_ne!(e.kind(), std::io::ErrorKind::NotFound),
+            Ok(opt) => panic!(
+                "an unreadable sidecar must surface as Err, not Ok({opt:?}); \
+                 folding into the absent path is the bug"
+            ),
+        }
     }
 
     /// A symlink planted at `aleph.lock` is either an attacker redirect or a

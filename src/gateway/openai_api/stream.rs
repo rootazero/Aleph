@@ -94,25 +94,51 @@ pub fn provider_deltas_to_sse(
     let id = completion_id();
     let created = now_timestamp();
 
-    // State: (delta_stream, tracker, accumulated_usage, done_flag)
-    let state = (deltas, ToolCallTracker::default(), None::<Usage>, false);
+    // State: (delta_stream, tracker, accumulated_usage, done_pending,
+    //         terminated_flag).
+    //
+    // **Audit fix**: the previous state machine emitted `[DONE]` the moment a
+    // `Done` delta was processed and set `terminated = true`, which dropped
+    // any subsequent `Usage` delta. Several OpenAI-compatible vendors send
+    // usage AFTER the stop frame, so `include_usage=true` consumers (OpenAI
+    // Python SDK ≥1.40) silently got `usage: null`. The fix splits the
+    // "Done delta processed" / "[DONE] emitted and stream ended" transitions
+    // so a trailing Usage is flushed before `[DONE]`.
+    //
+    // `done_pending` is set on `Done`: the finish chunk is emitted (with any
+    // pending usage), `[DONE]` is HELD, and the loop iterates once more. If
+    // the next delta is `Usage(u)` we emit a usage chunk before `[DONE]`,
+    // satisfying the OpenAI wire spec. If the next delta is anything else
+    // (or the stream ends) we emit `[DONE]` and terminate.
+    let state = (
+        deltas,
+        ToolCallTracker::default(),
+        None::<Usage>,
+        false, // done_pending
+        false, // terminated
+    );
 
     stream::unfold(
         state,
-        move |(mut deltas, mut tracker, mut usage_acc, done)| {
+        move |(mut deltas, mut tracker, mut usage_acc, done_pending, terminated)| {
             let id = id.clone();
             let model = model.clone();
 
             async move {
-                if done {
+                if terminated {
                     return None;
+                }
+                // Flush `[DONE]` after a previous `Done` arm if the next
+                // delta turned out to be a non-Usage frame. See `done_pending`
+                // lifecycle note above.
+                if done_pending {
+                    return Some((SSE_DONE.to_string(), (deltas, tracker, usage_acc, false, true)));
                 }
 
                 loop {
                     match deltas.next().await {
                         None => {
-                            // Stream ended without a Done delta. Flush a usage
-                            // chunk first when requested, then [DONE].
+                            // Stream ended. Flush usage (if any) then [DONE].
                             let frame = match (include_usage, usage_acc.take()) {
                                 (true, Some(u)) => format!(
                                     "{}{SSE_DONE}",
@@ -120,7 +146,7 @@ pub fn provider_deltas_to_sse(
                                 ),
                                 _ => SSE_DONE.to_string(),
                             };
-                            return Some((frame, (deltas, tracker, usage_acc, true)));
+                            return Some((frame, (deltas, tracker, usage_acc, false, true)));
                         }
                         Some(Err(e)) => {
                             // Infrastructure error — emit error JSON + [DONE]
@@ -131,7 +157,7 @@ pub fn provider_deltas_to_sse(
                                 }
                             });
                             let frame = format!("data: {error_frame}\n\n{SSE_DONE}");
-                            return Some((frame, (deltas, tracker, usage_acc, true)));
+                            return Some((frame, (deltas, tracker, usage_acc, false, true)));
                         }
                         Some(Ok(delta)) => {
                             match delta {
@@ -150,7 +176,7 @@ pub fn provider_deltas_to_sse(
                                     );
                                     return Some((
                                         sse_data(&chunk),
-                                        (deltas, tracker, usage_acc, false),
+                                        (deltas, tracker, usage_acc, false, false),
                                     ));
                                 }
                                 ProviderDelta::ToolCallStart {
@@ -179,7 +205,7 @@ pub fn provider_deltas_to_sse(
                                     );
                                     return Some((
                                         sse_data(&chunk),
-                                        (deltas, tracker, usage_acc, false),
+                                        (deltas, tracker, usage_acc, false, false),
                                     ));
                                 }
                                 ProviderDelta::ToolCallArgDelta {
@@ -209,7 +235,7 @@ pub fn provider_deltas_to_sse(
                                     );
                                     return Some((
                                         sse_data(&chunk),
-                                        (deltas, tracker, usage_acc, false),
+                                        (deltas, tracker, usage_acc, false, false),
                                     ));
                                 }
                                 ProviderDelta::ToolCallEnd { .. } => {
@@ -235,13 +261,32 @@ pub fn provider_deltas_to_sse(
                                     continue;
                                 }
                                 ProviderDelta::Usage(u) => {
-                                    usage_acc = Some(Usage {
+                                    let converted = Usage {
                                         prompt_tokens: u.input_tokens,
                                         completion_tokens: u.output_tokens,
                                         total_tokens: u.input_tokens + u.output_tokens,
-                                    });
-                                    // Don't emit a frame here; usage (if requested
-                                    // via stream_options) ships as a dedicated
+                                    };
+                                    usage_acc = Some(converted.clone());
+                                    // Trailing Usage: some OpenAI-compatible
+                                    // vendors send usage AFTER the stop frame.
+                                    // If the previous `Done` arm deferred
+                                    // `[DONE]` (done_pending is set), emit the
+                                    // usage chunk immediately followed by
+                                    // `[DONE]` and terminate. Otherwise just
+                                    // accumulate and let `Done` handle the
+                                    // final emission order.
+                                    if done_pending {
+                                        let usage_frame = sse_data(&usage_chunk(
+                                            &id, created, &model, converted,
+                                        ));
+                                        let frame = format!("{usage_frame}{SSE_DONE}");
+                                        return Some((
+                                            frame,
+                                            (deltas, tracker, usage_acc, false, true),
+                                        ));
+                                    }
+                                    // No frame yet — usage (if requested via
+                                    // stream_options) ships as a dedicated
                                     // terminal chunk after the finish chunk.
                                     continue;
                                 }
@@ -281,8 +326,13 @@ pub fn provider_deltas_to_sse(
                                             &id, created, &model, u,
                                         )));
                                     }
-                                    frame.push_str(SSE_DONE);
-                                    return Some((frame, (deltas, tracker, usage_acc, true)));
+                                    // Defer `[DONE]` emission so a trailing
+                                    // `Usage` delta (sent by some
+                                    // OpenAI-compatible vendors after the stop
+                                    // frame) can be flushed first. See the
+                                    // `done_pending` lifecycle note in the
+                                    // state init above.
+                                    return Some((frame, (deltas, tracker, usage_acc, true, false)));
                                 }
                                 ProviderDelta::Error(e) => {
                                     let error_frame = serde_json::json!({
@@ -292,7 +342,7 @@ pub fn provider_deltas_to_sse(
                                         }
                                     });
                                     let frame = format!("data: {error_frame}\n\n{SSE_DONE}");
-                                    return Some((frame, (deltas, tracker, usage_acc, true)));
+                                    return Some((frame, (deltas, tracker, usage_acc, false, true)));
                                 }
                             }
                         }

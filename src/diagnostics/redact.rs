@@ -12,23 +12,92 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
-/// Credential shapes to mask. Order matters inside the alternation:
-/// `apikey=` must precede `key=` so `apikey=abc` is masked whole instead of
-/// leaving an `api` stump behind.
-fn patterns() -> &'static Regex {
+/// Credential shapes to mask, split into TWO passes applied in order.
+///
+/// Pass 1 (vendor + header shapes) runs before pass 2 (query-param
+/// shapes) because of the leftmost-match rule: in `key=AIza…` the
+/// generic `key=` branch starts 4 bytes before the `AIza` branch and
+/// would otherwise swallow the whole pair. Vendor-first yields
+/// `key=***`, preserving the parameter label.
+///
+/// Within pass 1, alternation order still matters: longer-prefix vendor
+/// shapes (AWS, Anthropic, GitHub, Slack, Stripe, Google) must precede
+/// `sk-[A-Za-z0-9_-]{8,}`; the PEM-block assignment branch must precede
+/// the generic `password=`/`secret=` branch, whose value class stops at
+/// whitespace and would otherwise leak `PRIVATE KEY-----<first line>`.
+fn vendor_patterns() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        // A single raw string — concat! would re-introduce Rust string
+        // escape processing for the backslash sequences the regex needs,
+        // and a non-raw string would force every `\` to be doubled. Raw
+        // string literals do not interpret escapes, which is exactly what
+        // regex source wants.
+        Regex::new(
+            r"(?ix)
+            (?:
+                # Vendor prefixes (longer first, so the alternation never
+                # stops at a shorter prefix that happens to be a substring).
+                # Google keys: {35,} not {35} — under-masking is the
+                # failure mode that matters for redaction.
+                sk-ant-[A-Za-z0-9_-]{8,}
+            |   sk_live_[A-Za-z0-9]+
+            |   AKIA[0-9A-Z]{16}
+            |   AIza[0-9A-Za-z_-]{35,}
+            |   gh[psoru]_[A-Za-z0-9]{36,}
+            |   xox[baprs]-[A-Za-z0-9-]+
+                # OpenAI-style keys.
+            |   sk-[A-Za-z0-9_-]{8,}
+                # Authorization headers (whitespace-terminated).
+            |   bearer\s+\S+
+            |   basic\s+\S+
+                # Standalone JWTs.
+            |   eyJ[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+){2,4}
+                # X-Api-Key / X-Auth-Token style vendor headers (colon or
+                # equals as separator).
+            |   x-(?:api[-_]?key|auth[-_]?token|secret|token|access[-_]?token)\s*[:=]\s*\S+
+                # PEM block assigned to a config field — must precede the
+                # generic branch below, whose value class stops at the
+                # first whitespace and would leak `PRIVATE KEY-----…`.
+            |   (?:password|secret|client_secret|private_key)\s*=\s*-----BEGIN[A-Z\x20]*KEY-----[^\s,;'&]*
+                # Generic config dump shapes — password=foo, secret=bar,
+                # client_secret=baz, private_key=qux. Excludes a small set
+                # of delimiters so the match stops at the value boundary.
+            |   (?:password|secret|client_secret|private_key)\s*=\s*[^\s,;'&]+
+            )"
+        )
+        .expect("redaction vendor regex is a compile-time constant")
+    })
+}
+
+/// Query-parameter shapes — bounded so a trailing URL fragment
+/// (`&next=…`, `#…`) is not consumed. The value class excludes `*` so a
+/// value already masked by the vendor pass (`key=***`) is left alone,
+/// and escapes `#` because in (?x) mode a bare `#` starts a comment
+/// even inside a character class (previously: unclosed-class panic on
+/// first use).
+fn query_param_patterns() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?i)(sk-[A-Za-z0-9_-]{8,}|bearer\s+\S+|basic\s+\S+|eyJ[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+){2,4}|apikey=\S+|token=\S+|key=\S+)",
+            r"(?ix)
+            (?:
+                apikey=[^\s&=\#?*]+
+            |   token=[^\s&=\#?*]+
+            |   key=[^\s&=\#?*]+
+            )",
         )
-        .expect("redaction regex is a compile-time constant")
+        .expect("redaction query-param regex is a compile-time constant")
     })
 }
 
 /// Replace common credential shapes in `input` with `***`.
 #[must_use]
 pub fn redact_secrets(input: &str) -> String {
-    patterns().replace_all(input, "***").into_owned()
+    let first = vendor_patterns().replace_all(input, "***");
+    query_param_patterns()
+        .replace_all(&first, "***")
+        .into_owned()
 }
 
 #[cfg(test)]
@@ -39,6 +108,43 @@ mod tests {
     fn redacts_openai_style_keys() {
         let out = redact_secrets("auth failed for sk-abcdefgh12345678");
         assert_eq!(out, "auth failed for ***");
+    }
+
+    #[test]
+    fn redacts_anthropic_style_keys() {
+        let out = redact_secrets("using sk-ant-api03-abcdefgh12345678abcdefgh12");
+        assert_eq!(out, "using ***");
+    }
+
+    #[test]
+    fn redacts_stripe_live_keys() {
+        let out = redact_secrets("paid via sk_live_abcdefgh12345678");
+        assert_eq!(out, "paid via ***");
+    }
+
+    #[test]
+    fn redacts_aws_access_keys() {
+        let out = redact_secrets("creds: AKIAIOSFODNN7EXAMPLE leaked");
+        assert_eq!(out, "creds: *** leaked");
+    }
+
+    #[test]
+    fn redacts_github_personal_access_tokens() {
+        let out = redact_secrets("oauth: ghp_abcdefghijklmnopqrstuvwxyz0123456789");
+        assert_eq!(out, "oauth: ***");
+    }
+
+    #[test]
+    fn redacts_google_api_keys() {
+        let out = redact_secrets("key=AIzaSyA-aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456");
+        assert_eq!(out, "key=***");
+    }
+
+    #[test]
+    fn redacts_slack_tokens() {
+        let slack_token = concat!("xoxb-", "1234567890-", "abcdefghijklmnopqrstuvwx");
+        let out = redact_secrets(&format!("webhook {slack_token} leaked"));
+        assert_eq!(out, "webhook *** leaked");
     }
 
     #[test]
@@ -61,12 +167,69 @@ mod tests {
     }
 
     #[test]
+    fn redacts_x_api_key_headers() {
+        assert_eq!(
+            redact_secrets("X-API-Key: abcdefgh12345678 sent"),
+            "*** sent"
+        );
+        assert_eq!(
+            redact_secrets("X-Auth-Token=abcdefgh12345678 sent"),
+            "*** sent"
+        );
+        assert_eq!(
+            redact_secrets("x-secret: abcdefgh12345678 sent"),
+            "*** sent"
+        );
+    }
+
+    #[test]
+    fn redacts_generic_password_secret_shapes() {
+        assert_eq!(
+            redact_secrets("config dump: password=hunter2 leaked"),
+            "config dump: *** leaked"
+        );
+        assert_eq!(
+            redact_secrets("body: secret=topsecret123 in the clear"),
+            "body: *** in the clear"
+        );
+        assert_eq!(
+            redact_secrets("oauth body=client_secret=topsecret123 json"),
+            "oauth body=*** json"
+        );
+        assert_eq!(
+            redact_secrets("loaded private_key=-----BEGIN PRIVATE KEY-----ABCDEFGHIJKLMNOPQRSTUV"),
+            "loaded ***"
+        );
+    }
+
+    #[test]
     fn redacts_query_param_shapes_case_insensitively() {
-        assert_eq!(redact_secrets("?key=abc123"), "?***");
-        assert_eq!(redact_secrets("?TOKEN=abc123"), "?***");
-        assert_eq!(redact_secrets("?ApiKey=abc123"), "?***");
+        // Raw strings avoid the Rust 2021 `?IDENT` prefix-identifier
+        // reservation that turns `"?key=…"` into a syntax error.
+        assert_eq!(redact_secrets(r"?key=abc123"), "?***");
+        assert_eq!(redact_secrets(r"?TOKEN=abc123"), "?***");
+        assert_eq!(redact_secrets(r"?ApiKey=abc123"), "?***");
         // `apikey=` is masked whole, not reduced to an `api` stump.
-        assert_eq!(redact_secrets("?apikey=abc123"), "?***");
+        assert_eq!(redact_secrets(r"?apikey=abc123"), "?***");
+    }
+
+    #[test]
+    fn query_param_redaction_does_not_swallow_url_fragments() {
+        // Greedy `\S+` would consume `&next=https://other/?key=xyz` and
+        // leave the operator unable to inspect the `next=` redirect. The
+        // bounded `[^\s&=#?]+` stops at the parameter boundary instead.
+        let out = redact_secrets(
+            "https://api.example.com/?token=abc123&next=https://other.example/?key=xyz",
+        );
+        assert!(
+            out.contains("&next=https://other.example/"),
+            "the next= redirect must survive redaction; got {out}"
+        );
+        assert!(!out.contains("token=abc123"), "token must be masked: {out}");
+        assert!(
+            !out.contains("?key=xyz"),
+            "trailing key= must be masked: {out}"
+        );
     }
 
     #[test]
@@ -77,6 +240,8 @@ mod tests {
         assert_eq!(redact_secrets("the key insight"), "the key insight");
         // Short sk- fragments are not key-shaped.
         assert_eq!(redact_secrets("sk-short"), "sk-short");
+        // AKIA-shaped strings under the 16-char suffix are not key-shaped.
+        assert_eq!(redact_secrets("AKIA-short"), "AKIA-short");
     }
 
     #[test]

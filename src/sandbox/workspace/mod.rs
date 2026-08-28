@@ -157,7 +157,7 @@ impl WorkspaceSandbox {
 
         let ws = Arc::new(SessionWorkspace {
             cwd,
-            baseline: SandboxCapabilities::strict(),
+            baseline: SandboxCapabilities::session_baseline(),
             granted_elevations: RwLock::new(HashSet::new()),
         });
         sessions.insert(

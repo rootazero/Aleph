@@ -36,6 +36,11 @@ struct PendingRecord {
     /// operator only ever sees a bare tool name.
     #[serde(default)]
     reason: Option<String>,
+    /// Absolute deadline the server stamped on the record. `0` is the
+    /// no-expiry sentinel (attended approvals wait forever, ruled 2026-08-28);
+    /// `remaining_ms` is meaningless for those and must not be read.
+    #[serde(default)]
+    expires_at_ms: i64,
     /// Which decision tiers this card may offer, kebab-case. Absent from an
     /// older core, where the historical session ceiling is the right reading —
     /// `default_decisions` supplies it rather than an empty list, since an
@@ -78,7 +83,14 @@ impl ExecApprovalApi {
                 session_key: p.record.session_key,
                 tool_call_id: p.record.tool_call_id,
                 reason: p.record.reason,
-                expires_at_ms: now + p.remaining_ms as i64,
+                // `0` (no-expiry sentinel) passes through untouched; only a
+                // real deadline is re-based from the server's remaining_ms
+                // snapshot onto the local clock.
+                expires_at_ms: if p.record.expires_at_ms == 0 {
+                    0
+                } else {
+                    now + p.remaining_ms as i64
+                },
                 allowed_decisions: p.record.allowed_decisions,
             })
             .collect())

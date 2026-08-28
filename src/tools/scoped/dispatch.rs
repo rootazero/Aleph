@@ -751,10 +751,12 @@ impl ScopedToolService {
         // with no origin channel. Fail closed — auto-deny any confirm-gated tool
         // (`requires_confirmation` ∪ `Ask`-tier permission ∪ operator-override
         // `confirm_tools`, all of which funnel here) with an audit line, rather
-        // than awaiting an approval that can never arrive (which parks the whole
-        // run on the 120 s approval timeout, per gated tool, before failing
-        // anyway). Interactive turns leave `unattended = false` and are
-        // unaffected.
+        // than awaiting an approval that can never arrive. Removing this block
+        // would not merely cost a timeout per gated tool: since 2026-08-28 an
+        // approval on a turn that reads as attended has NO deadline, so an
+        // unattended run reaching the requester would park until the run's own
+        // wall clock (48 h by default) rather than failing anyway. Interactive
+        // turns leave `unattended = false` and are unaffected.
         //
         // ## This block runs FIRST, above both memory short-circuits, and that
         // ## is the trust boundary — not an accident of ordering.

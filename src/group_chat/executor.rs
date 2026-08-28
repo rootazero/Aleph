@@ -34,6 +34,12 @@ pub struct GroupChatExecutor {
     provider_registry: Option<Arc<ProviderRegistry>>,
     coordinator_visible: bool,
     db: Option<Arc<StateDatabase>>,
+    /// Sliding-window size for the coordinator's history text. Older rounds
+    /// are collapsed into a one-line summary (see
+    /// [`GroupChatSession::build_history_text_windowed`]); `0` disables the
+    /// window. Sourced from `GroupChatConfig::history_window_rounds` by the
+    /// startup wiring.
+    history_window_rounds: u32,
     /// Set of `(persona_id, provider_name)` pairs we've already warned about
     /// falling back to the default provider. Kept behind a sync mutex so the
     /// `&self` `resolve_provider` lookup can dedupe across rounds without
@@ -52,6 +58,7 @@ impl GroupChatExecutor {
             provider_registry: None,
             coordinator_visible: false,
             db: None,
+            history_window_rounds: 0,
             provider_fallback_warned: crate::sync_primitives::Mutex::new(
                 std::collections::HashSet::new(),
             ),
@@ -72,6 +79,14 @@ impl GroupChatExecutor {
     #[must_use]
     pub const fn with_coordinator_visible(mut self, visible: bool) -> Self {
         self.coordinator_visible = visible;
+        self
+    }
+
+    /// Set the coordinator history sliding-window size (rounds). `0` disables
+    /// the window and keeps the full history (the pre-fix behavior).
+    #[must_use]
+    pub const fn with_history_window(mut self, window_rounds: u32) -> Self {
+        self.history_window_rounds = window_rounds;
         self
     }
 
@@ -188,6 +203,21 @@ impl GroupChatExecutor {
         // with an unrecoverable half-round (the previous code's behavior).
         let round = session.current_round.saturating_add(1);
 
+        // Enforce the per-session round budget. Without this gate a hostile or
+        // misconfigured coordinator could loop the executor for unbounded
+        // LLM-billed rounds — the `max_rounds` config field was previously
+        // declared but never consulted at the round entry point. `current_round`
+        // is updated only after a fully successful commit, so the bound is
+        // checked against the projected next round, not the last completed one.
+        if let Some(cap) = session.max_rounds {
+            if round > cap {
+                return Err(GroupChatError::SessionInactive(format!(
+                    "round {round} exceeds max_rounds ({cap}) for session {}",
+                    session.id
+                )));
+            }
+        }
+
         // Step 1: Stage user message as a System turn (NOT yet added to history).
         let mut staged_turns: Vec<(u32, u32, Speaker, String)> = Vec::new();
         // persistence sequence: user=0, coordinator=1, persona_0=2, persona_1=3, ...
@@ -201,7 +231,7 @@ impl GroupChatExecutor {
         persist_seq = persist_seq.saturating_add(1);
 
         // Step 2: Build coordinator prompt and call LLM
-        let history = session.build_history_text();
+        let history = session.build_history_text_windowed(self.history_window_rounds);
         let coordinator_prompt = build_coordinator_prompt(
             &session.participants,
             user_message,
@@ -212,12 +242,24 @@ impl GroupChatExecutor {
 
         let coordinator_raw = {
             let msgs = [UnifiedMessage::user(&coordinator_prompt)];
-            self.default_provider
-                .current()
-                .process(RequestPayload::new(&msgs))
-                .await
-                .map_err(|e| GroupChatError::ProviderUnavailable(e.to_string()))?
-                .text_content()
+            // `select!` on the session cancel token: an `end_session` fired
+            // while the coordinator call is in flight unwinds the round here
+            // instead of waiting out the provider timeout. Cancellation maps
+            // to `SessionInactive` — the same terminal signal the round-entry
+            // gate uses, so callers treat it uniformly.
+            let cancel = session.cancel_token.clone();
+            let provider = self.default_provider.current();
+            tokio::select! {
+                res = provider.process(RequestPayload::new(&msgs)) => {
+                    res.map_err(|e| GroupChatError::ProviderUnavailable(e.to_string()))?
+                        .text_content()
+                }
+                _ = cancel.cancelled() => {
+                    return Err(GroupChatError::SessionInactive(format!(
+                        "round {round} cancelled for session {}", session.id
+                    )));
+                }
+            }
         };
 
         // Step 3: Parse the coordinator plan, fallback on failure
@@ -233,16 +275,22 @@ impl GroupChatExecutor {
         // Warn when a mentioned persona was dropped by the coordinator — a valid
         // mention that the coordinator chose to exclude leaves the caller with
         // no feedback. Detection is cheap (linear over typically < 10 targets /
-        // respondents) so we don't bother with a HashSet.
+        // respondents) so we don't bother with a HashSet. The same list is
+        // surfaced to the caller via the last `GroupChatMessage` returned
+        // (carried in the per-round result struct below) so a misbehaving or
+        // rate-limited coordinator is observable in the round outcome, not
+        // only in logs.
+        let mut dropped_targets: Vec<String> = Vec::new();
         for target in targets {
-            if !plan.respondents.iter().any(|r| r.persona_id == *target)
-                && session.participants.iter().any(|p| &p.id == target)
-            {
+            let is_participant = session.participants.iter().any(|p| &p.id == target);
+            let is_in_plan = plan.respondents.iter().any(|r| r.persona_id == *target);
+            if is_participant && !is_in_plan {
                 tracing::warn!(
                     subsystem = "group_chat",
                     target = %target,
                     "mentioned persona not included in coordinator plan"
                 );
+                dropped_targets.push(target.clone());
             }
         }
 
@@ -266,6 +314,7 @@ impl GroupChatExecutor {
                 round,
                 sequence: 0,
                 is_final: plan.respondents.is_empty(),
+                dropped_targets: Vec::new(),
             });
             seq_offset = 1;
         }
@@ -329,19 +378,30 @@ impl GroupChatExecutor {
                 });
             let persona_response = {
                 let msgs = [UnifiedMessage::user(&persona_prompt)];
-                provider
-                    .process(
-                        RequestPayload::new(&msgs)
-                            .with_system(Some(&persona.system_prompt))
-                            .with_model(persona.model.clone())
-                            .with_think_level(think_level),
-                    )
-                    .await
-                    .map_err(|e| GroupChatError::PersonaInvocationFailed {
-                        persona_id: persona.id.clone(),
-                        reason: e.to_string(),
-                    })?
-                    .text_content()
+                // Same `select!`-on-cancel as the coordinator call: an
+                // `end_session` fired mid-persona unwinds the round instead
+                // of holding the session mutex through the provider timeout.
+                let cancel = session.cancel_token.clone();
+                tokio::select! {
+                    res = provider
+                        .process(
+                            RequestPayload::new(&msgs)
+                                .with_system(Some(&persona.system_prompt))
+                                .with_model(persona.model.clone())
+                                .with_think_level(think_level),
+                        ) => {
+                        res.map_err(|e| GroupChatError::PersonaInvocationFailed {
+                            persona_id: persona.id.clone(),
+                            reason: e.to_string(),
+                        })?
+                        .text_content()
+                    }
+                    _ = cancel.cancelled() => {
+                        return Err(GroupChatError::SessionInactive(format!(
+                            "round {round} cancelled for session {}", session.id
+                        )));
+                    }
+                }
             };
 
             // Accumulate prior discussion for the next persona
@@ -364,6 +424,26 @@ impl GroupChatExecutor {
         // GroupChatMessages, and persist every staged turn. Past this point
         // any DB persistence error is best-effort (logged) and the round is
         // considered successful from the caller's perspective.
+        //
+        // **Audit fix**: when the coordinator returns an empty plan
+        // (`respondents: []`), `prepared` is empty and nothing persona-side
+        // was produced. The previous code still appended the user/system turn
+        // to history, advanced `current_round`, and wrote an orphan `system`
+        // row to `group_chat_turns` — replays then showed a round gap. An
+        // empty plan is a no-op round: skip the commit entirely so the next
+        // round reuses the same round number and no orphan row lands in the
+        // DB. The caller still gets an empty `messages` list (or just the
+        // coordinator's raw plan when `coordinator_visible` is on) and can
+        // decide whether to surface the no-op.
+        if prepared.is_empty() {
+            tracing::debug!(
+                subsystem = "group_chat",
+                session_id = %session.id,
+                round = round,
+                "coordinator returned an empty plan; round not committed"
+            );
+            return Ok(messages);
+        }
         // Append the user/system turn to history (matches the original
         // semantic that `add_turn` records both user prompts and persona
         // responses).
@@ -418,6 +498,17 @@ impl GroupChatExecutor {
                     .unwrap_or(u32::MAX)
                     .saturating_add(seq_offset);
             let is_final = p.i + 1 == total_respondents;
+            // Dropped-mention surfacing: only the FINAL message carries the
+            // dropped_targets list — intermediate messages default to empty so
+            // older consumers (which did not know about the field) keep
+            // working. The audit finding is that the caller never learned a
+            // mention was silently dropped by the coordinator; without this
+            // the only signal was a `tracing::warn!` line.
+            let dropped_for_this_msg = if is_final {
+                std::mem::take(&mut dropped_targets)
+            } else {
+                Vec::new()
+            };
             messages.push(GroupChatMessage {
                 session_id: session_id.clone(),
                 speaker,
@@ -425,6 +516,7 @@ impl GroupChatExecutor {
                 round,
                 sequence,
                 is_final,
+                dropped_targets: dropped_for_this_msg,
             });
         }
 

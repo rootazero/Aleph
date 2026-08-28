@@ -1,7 +1,6 @@
 use crate::error::{AlephError, Result};
 use crate::fetch::FetchProvider;
 use crate::search::providers::base::build_client;
-use crate::security::ssrf::{validate_url_async, SsrfPolicy};
 use crate::utils::reqwest_limit::bytes_with_limit;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -52,6 +51,11 @@ impl FirecrawlFetchProvider {
                 "Firecrawl base URL must use http:// or https:// scheme",
             ));
         }
+        // Full URL parse so misconfigured base URLs (e.g. trailing space,
+        // empty host, unparseable authority) are rejected at construction
+        // rather than producing an opaque transport error on first POST.
+        url::Url::parse(&base_url)
+            .map_err(|e| AlephError::invalid_config(format!("invalid Firecrawl base URL: {e}")))?;
         let api_key = api_key.into();
         if api_key.trim().is_empty() {
             return Err(AlephError::invalid_config(
@@ -69,15 +73,11 @@ impl FirecrawlFetchProvider {
 #[async_trait]
 impl FetchProvider for FirecrawlFetchProvider {
     async fn fetch(&self, url: &str) -> Result<String> {
-        // SSRF guard: reject URLs targeting loopback / RFC1918 / link-local /
-        // metadata endpoints before we hand them to the upstream provider.
-        // Without this, a self-hosted firecrawl (which may be on the same
-        // host as internal services) can be coerced into scraping internal
-        // endpoints via the agent's fetch tool. The operator can widen the
-        // policy via `[security] ssrf` configuration.
-        validate_url_async(url, &SsrfPolicy::default())
-            .await
-            .map_err(|e| AlephError::tool(format!("fetch URL blocked by SSRF policy: {e}")))?;
+        // SSRF contract: caller (WebFetchTool) has already validated `url`
+        // against the operator's SsrfPolicy. We do NOT re-validate here so
+        // the operator's policy is authoritative and we avoid a second DNS
+        // resolution that would widen the rebinding TOCTOU window. See
+        // `FetchProvider::fetch` doc comment.
         let resp = self
             .client
             .post(format!("{}/v2/scrape", self.base_url))

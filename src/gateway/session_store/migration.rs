@@ -451,6 +451,267 @@ async fn write_batch(
     Ok(())
 }
 
+/// Outcome summary of [`repair_session_metadata`], surfaced in the startup log
+/// and asserted on in tests.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MetadataRepairReport {
+    /// `last_active_at` values found in milliseconds (the pre-2026-08-09 raw
+    /// `msg.timestamp` assignment) and rewritten in seconds.
+    pub timestamps_normalized: usize,
+    /// Unparseable `metadata.json` documents rebuilt from their intact
+    /// `transcript.jsonl` (the pre-2026-08-12 torn-write damage).
+    pub rebuilt_from_transcript: usize,
+    /// Unparseable documents with no usable transcript — renamed to
+    /// `metadata.json.corrupt` so the listing stops warning on every poll.
+    /// The conversation was already invisible; quarantine changes nothing the
+    /// user can see and keeps the evidence on disk.
+    pub quarantined: usize,
+}
+
+impl MetadataRepairReport {
+    /// Anything to report? The startup log line is emitted only when true — a
+    /// clean install stays silent.
+    #[must_use]
+    pub fn did_work(self) -> bool {
+        self.timestamps_normalized + self.rebuilt_from_transcript + self.quarantined > 0
+    }
+}
+
+/// Repair the two classes of on-disk damage left behind by already-fixed
+/// writer bugs. The writers were fixed (seconds via `msg.instant()` on
+/// 2026-08-09; atomic write + per-key lock on 2026-08-12), but neither fix
+/// touched the damage already persisted, so:
+///
+/// 1. **Millisecond `last_active_at`** — 1.78e12 sorts numerically above every
+///    seconds value (1.78e9) forever, so `list_sessions`' descending sort pins
+///    every legacy row above every new conversation. From the user's seat,
+///    new sessions "never appear in the sidebar". Normalized in place.
+/// 2. **Torn `metadata.json`** — a hybrid of two documents parses as nothing,
+///    and `list_sessions` skips it, so the conversation vanishes from every
+///    surface while its transcript sits intact beside it. Rebuilt from that
+///    transcript; the fields a transcript cannot answer (token counters,
+///    model, cost) stay at their defaults rather than being invented.
+///
+/// Best-effort and idempotent, like [`normalize_session_dir_names`]: every
+/// error is logged and swallowed, a repaired file is byte-stable on the next
+/// run, and the pass never blocks startup.
+pub async fn repair_session_metadata(base_dir: &Path) -> MetadataRepairReport {
+    let mut report = MetadataRepairReport::default();
+    let mut entries = match tokio::fs::read_dir(base_dir).await {
+        Ok(e) => e,
+        Err(_) => return report,
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let is_dir = entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false);
+        if !is_dir {
+            continue;
+        }
+        let dir = entry.path();
+        let meta_path = dir.join("metadata.json");
+        let contents = match tokio::fs::read_to_string(&meta_path).await {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let dir_name = match dir.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        match serde_json::from_str::<SessionMetadata>(&contents) {
+            Ok(mut meta) => {
+                // Only `last_active_at` was ever assigned a raw millisecond
+                // value (`= msg.timestamp`); `created_at` took `timestamp()`
+                // on the same path. One field, one fix — do not widen this to
+                // other i64 columns without an on-disk specimen proving they
+                // carry ms too.
+                if meta.last_active_at.abs()
+                    >= crate::gateway::session_store::types::SECONDS_MILLIS_BOUNDARY
+                {
+                    meta.last_active_at /= 1000;
+                    match persist_metadata(&meta_path, &meta).await {
+                        Ok(()) => report.timestamps_normalized += 1,
+                        Err(e) => info!(
+                            path = %meta_path.display(),
+                            error = %e,
+                            "Metadata repair: timestamp normalization write failed"
+                        ),
+                    }
+                }
+            }
+            Err(_) => {
+                match rebuild_metadata_from_transcript(&dir, &dir_name).await {
+                    Ok(Some(meta)) => match persist_metadata(&meta_path, &meta).await {
+                        Ok(()) => {
+                            report.rebuilt_from_transcript += 1;
+                            info!(
+                                path = %meta_path.display(),
+                                "Metadata repair: rebuilt torn metadata.json from transcript"
+                            );
+                        }
+                        Err(e) => info!(
+                            path = %meta_path.display(),
+                            error = %e,
+                            "Metadata repair: rebuild write failed"
+                        ),
+                    },
+                    // No usable transcript — nothing to rebuild from.
+                    // Quarantine so `list_sessions` stops warning about this
+                    // file on every single poll.
+                    Ok(None) => {
+                        let quarantine = dir.join("metadata.json.corrupt");
+                        if !quarantine.exists()
+                            && tokio::fs::rename(&meta_path, &quarantine).await.is_ok()
+                        {
+                            report.quarantined += 1;
+                            info!(
+                                path = %meta_path.display(),
+                                "Metadata repair: no transcript to rebuild from; \
+                                 quarantined as metadata.json.corrupt"
+                            );
+                        }
+                    }
+                    Err(e) => info!(
+                        path = %meta_path.display(),
+                        error = %e,
+                        "Metadata repair: transcript read failed"
+                    ),
+                }
+            }
+        }
+    }
+
+    if report.did_work() {
+        info!(
+            timestamps_normalized = report.timestamps_normalized,
+            rebuilt_from_transcript = report.rebuilt_from_transcript,
+            quarantined = report.quarantined,
+            "Repaired on-disk session metadata left by pre-fix writer bugs"
+        );
+    }
+    report
+}
+
+/// Write a repaired document through the same atomic temp+rename the live
+/// writers use — a repair that itself tore a write would recreate the exact
+/// damage it exists to heal.
+async fn persist_metadata(
+    path: &Path,
+    meta: &SessionMetadata,
+) -> Result<(), crate::error::AlephError> {
+    let contents =
+        serde_json::to_string_pretty(meta).map_err(|e| crate::error::AlephError::ConfigError {
+            message: format!("Failed to serialize metadata: {e}"),
+            suggestion: None,
+        })?;
+    crate::utils::atomic_write::atomic_write_file(path, &contents).await
+}
+
+/// Reconstruct a minimal but honest [`SessionMetadata`] from a session's
+/// `transcript.jsonl`. Returns `Ok(None)` when the transcript is missing or
+/// holds no parseable message — the caller quarantines instead.
+///
+/// `dir_name` becomes the key: on POSIX the dir name IS the key byte-for-byte
+/// (`sanitize_key_for_dir` only touches `/`, `\\`, NUL), and a Windows dir
+/// name is the key's sanitized form, which round-trips through
+/// `session_dir()` to the same dir — either way the listing and lookups keep
+/// resolving to this directory.
+async fn rebuild_metadata_from_transcript(
+    dir: &Path,
+    dir_name: &str,
+) -> Result<Option<SessionMetadata>, std::io::Error> {
+    let transcript = match tokio::fs::read_to_string(dir.join("transcript.jsonl")).await {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let messages: Vec<MessageRecord> = transcript
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<MessageRecord>(l).ok())
+        .collect();
+    if messages.is_empty() {
+        return Ok(None);
+    }
+
+    // Derive what the key encodes; a key that doesn't parse (shouldn't happen
+    // for a dir the store itself created) still yields a listable session,
+    // just with fallback agent/type labels.
+    let parsed = crate::gateway::router::SessionKey::from_key_string(dir_name);
+    let (agent_id, session_type) = match &parsed {
+        Some(crate::gateway::router::SessionKey::Main { agent_id, .. }) => {
+            (agent_id.clone(), "main")
+        }
+        Some(crate::gateway::router::SessionKey::DirectMessage { agent_id, .. }) => {
+            (agent_id.clone(), "peer")
+        }
+        Some(crate::gateway::router::SessionKey::Group { agent_id, .. }) => {
+            (agent_id.clone(), "group")
+        }
+        Some(crate::gateway::router::SessionKey::Task { agent_id, .. }) => {
+            (agent_id.clone(), "task")
+        }
+        Some(crate::gateway::router::SessionKey::Subagent { .. }) => {
+            ("main".to_string(), "subagent")
+        }
+        Some(crate::gateway::router::SessionKey::Ephemeral { .. }) | None => {
+            ("main".to_string(), "ephemeral")
+        }
+    };
+
+    // `instant()` resolves the transcript's own mixed units — the same mixed
+    // units this repair pass exists because of. Reading `timestamp` raw here
+    // would rebuild the document with the damage baked back in.
+    let created_at = messages
+        .first()
+        .and_then(MessageRecord::instant)
+        .map_or_else(|| chrono::Utc::now().timestamp(), |dt| dt.timestamp());
+    let last_active_at = messages
+        .last()
+        .and_then(MessageRecord::instant)
+        .map_or(created_at, |dt| dt.timestamp());
+
+    // Title and preview mirror the live writer (`append_message`): first user
+    // message truncated to 60 chars, last message to 120.
+    let derived_title = messages
+        .iter()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.trim())
+        .filter(|t| !t.is_empty())
+        .map(|t| {
+            if t.chars().count() > 60 {
+                t.chars().take(60).collect::<String>() + "..."
+            } else {
+                t.to_string()
+            }
+        });
+    let preview = messages.last().map(|m| m.content.trim()).map(|p| {
+        if p.chars().count() > 120 {
+            p.chars().take(120).collect::<String>() + "..."
+        } else {
+            p.to_string()
+        }
+    });
+
+    Ok(Some(SessionMetadata {
+        key: dir_name.to_string(),
+        agent_id,
+        session_type: session_type.to_string(),
+        created_at,
+        last_active_at,
+        message_count: messages.len() as i64,
+        // Everything below is what a transcript cannot answer. Defaults, not
+        // fabrications: a zero token count reads as "unknown", an invented one
+        // would read as measured.
+        total_tokens: 0,
+        auto_reset_at: None,
+        state: Some(crate::gateway::session_manager::SessionState::Idle),
+        derived_title,
+        last_message_preview: preview,
+        ..Default::default()
+    }))
+}
+
 #[cfg(test)]
 mod normalize_tests {
     use super::*;
@@ -519,5 +780,199 @@ mod normalize_tests {
         assert_eq!(renamed, 0, "must not clobber an existing target");
         assert!(base.join("stale-dup").exists());
         assert!(base.join(&canonical).exists());
+    }
+}
+
+#[cfg(test)]
+mod repair_tests {
+    use super::*;
+
+    fn msg(id: &str, role: &str, content: &str, timestamp: i64) -> MessageRecord {
+        MessageRecord {
+            id: id.to_string(),
+            role: role.to_string(),
+            content: content.to_string(),
+            timestamp,
+            metadata: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            tool_call_id: None,
+            tool_name: None,
+        }
+    }
+
+    async fn seed_session(
+        base: &Path,
+        dir_name: &str,
+        metadata: &str,
+        messages: &[MessageRecord],
+    ) -> std::path::PathBuf {
+        let dir = base.join(dir_name);
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        tokio::fs::write(dir.join("metadata.json"), metadata)
+            .await
+            .unwrap();
+        if !messages.is_empty() {
+            let mut body = String::new();
+            for m in messages {
+                body.push_str(&serde_json::to_string(m).unwrap());
+                body.push('\n');
+            }
+            tokio::fs::write(dir.join("transcript.jsonl"), body)
+                .await
+                .unwrap();
+        }
+        dir
+    }
+
+    fn full_meta_json(last_active_at: i64) -> String {
+        serde_json::to_string_pretty(&SessionMetadata {
+            key: "agent:main:main:s1".to_string(),
+            agent_id: "main".to_string(),
+            session_type: "main".to_string(),
+            created_at: 1_784_900_000,
+            last_active_at,
+            message_count: 3,
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    /// The headline regression: a legacy ms-stamped session outranks every
+    /// seconds-stamped one in the descending sort, pinning new conversations
+    /// below the fold. After repair it must read as seconds.
+    #[tokio::test]
+    async fn millisecond_last_active_at_is_normalized_to_seconds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let dir = seed_session(
+            base,
+            "agent:main:main:s1",
+            &full_meta_json(1_785_082_006_020), // ms, the legacy damage
+            &[],
+        )
+        .await;
+
+        let report = repair_session_metadata(base).await;
+        assert_eq!(report.timestamps_normalized, 1);
+
+        let repaired: SessionMetadata = serde_json::from_str(
+            &tokio::fs::read_to_string(dir.join("metadata.json"))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(repaired.last_active_at, 1_785_082_006);
+        // Nothing else moves.
+        assert_eq!(repaired.created_at, 1_784_900_000);
+        assert_eq!(repaired.message_count, 3);
+    }
+
+    /// Seconds-stamped files are byte-stable: the pass is idempotent and does
+    /// not touch healthy metadata.
+    #[tokio::test]
+    async fn seconds_last_active_at_is_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let original = full_meta_json(1_785_082_006);
+        let dir = seed_session(base, "agent:main:main:s1", &original, &[]).await;
+
+        let report = repair_session_metadata(base).await;
+        assert_eq!(report, MetadataRepairReport::default());
+        assert_eq!(
+            tokio::fs::read_to_string(dir.join("metadata.json"))
+                .await
+                .unwrap(),
+            original
+        );
+    }
+
+    /// A torn document with an intact transcript gets a rebuilt metadata whose
+    /// answers all come from the transcript — and the listing parse succeeds.
+    #[tokio::test]
+    async fn torn_metadata_is_rebuilt_from_transcript() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        // The exact damage shape caught in production: a complete JSON
+        // document followed by the tail of an older, longer one.
+        let torn = format!(
+            "{}\n  \"estimated_cost_usd\": 0.17\n}}",
+            full_meta_json(1_785_082_006).trim_end_matches('}')
+        );
+        let messages = [
+            msg("m1", "user", "帮我写一个贪吃蛇游戏", 1_785_082_000_000), // ms row
+            msg(
+                "m2",
+                "assistant",
+                "已完成，见 index.html",
+                1_785_082_006_000,
+            ),
+        ];
+        let dir = seed_session(base, "agent:main:main:s1", &torn, &messages).await;
+
+        let report = repair_session_metadata(base).await;
+        assert_eq!(report.rebuilt_from_transcript, 1);
+
+        let repaired: SessionMetadata = serde_json::from_str(
+            &tokio::fs::read_to_string(dir.join("metadata.json"))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(repaired.key, "agent:main:main:s1");
+        assert_eq!(repaired.agent_id, "main");
+        assert_eq!(repaired.session_type, "main");
+        assert_eq!(repaired.message_count, 2);
+        assert_eq!(
+            repaired.derived_title.as_deref(),
+            Some("帮我写一个贪吃蛇游戏")
+        );
+        assert_eq!(
+            repaired.last_message_preview.as_deref(),
+            Some("已完成，见 index.html")
+        );
+        // Mixed-unit transcript rows resolve through `instant()` — seconds out.
+        assert_eq!(repaired.last_active_at, 1_785_082_006);
+        assert_eq!(repaired.created_at, 1_785_082_000);
+        // Unrecoverable counters stay at defaults, not invented values.
+        assert_eq!(repaired.total_tokens, 0);
+    }
+
+    /// A torn document with no transcript at all cannot be rebuilt — it is
+    /// quarantined so `list_sessions` stops warning on every poll, and the
+    /// evidence stays on disk.
+    #[tokio::test]
+    async fn torn_metadata_without_transcript_is_quarantined() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let dir = seed_session(base, "agent:main:heartbeat:hb-1", "{not json", &[]).await;
+
+        let report = repair_session_metadata(base).await;
+        assert_eq!(report.quarantined, 1);
+        assert!(!dir.join("metadata.json").exists());
+        assert_eq!(
+            tokio::fs::read_to_string(dir.join("metadata.json.corrupt"))
+                .await
+                .unwrap(),
+            "{not json"
+        );
+
+        // Idempotent: a second run has nothing left to quarantine.
+        let second = repair_session_metadata(base).await;
+        assert_eq!(second, MetadataRepairReport::default());
+    }
+
+    /// Directories without metadata.json (`.archive`, scratch dirs) are not
+    /// the pass's business.
+    #[tokio::test]
+    async fn dirs_without_metadata_are_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        tokio::fs::create_dir_all(base.join(".archive"))
+            .await
+            .unwrap();
+
+        let report = repair_session_metadata(base).await;
+        assert_eq!(report, MetadataRepairReport::default());
     }
 }

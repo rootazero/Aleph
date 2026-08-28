@@ -32,7 +32,9 @@ use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, ADMIN_REQUIRED_MESSAGE, AUTH_REQUIRED,
     IDEMPOTENCY_KEY_REQUIRED, INTERNAL_ERROR, PARSE_ERROR, RATE_LIMITED,
 };
-use crate::gateway::rate_limiter::{scope_for_method, RateLimitError, RateLimitKey, RateLimiter};
+use crate::gateway::rate_limiter::{
+    scope_for_method, RateLimitError, RateLimitKey, RateLimitScope, RateLimiter,
+};
 use crate::gateway::state_version::StateVersionTracker;
 
 use super::per_client_buffer::PerClientBuffer;
@@ -828,12 +830,32 @@ async fn handle_connection(
                                     // Loopback exemption is based on network origin
                                     // (the resolved client IP, so a reverse proxy
                                     // running on loopback never exempts the remote
-                                    // clients behind it), not identity (device_id). For
-                                    // authenticated connections the rl_identity is the
-                                    // device_id which never looks like a loopback IP.
+                                    // clients behind it), not identity (device_id).
+                                    //
+                                    // This layer keys on the CLIENT IP — it is the
+                                    // network-origin isolator (the principal-axis
+                                    // check lives in middleware/rate_limit.rs).
+                                    // `connect` would otherwise map to the strict
+                                    // Auth scope (10/min + 5-min lockout): every
+                                    // user behind one NAT / reverse-proxy egress
+                                    // shares that single IP bucket, so one client
+                                    // retrying a stale token locked every other
+                                    // user at that address out of the handshake
+                                    // for the full lockout. Remap to the
+                                    // lockout-free default bucket instead — the
+                                    // same remap middleware/rate_limit.rs performs
+                                    // on the pooled "rpc" identity — so a token
+                                    // storm only exhausts the offending origin's
+                                    // own window, which recovers as the window
+                                    // slides.
                                     if !ctx.client_ip.is_loopback() {
                                     let rl_identity = ctx.client_ip.to_string();
-                                    let rl_scope = scope_for_method(&req.method);
+                                    let rl_scope_raw = scope_for_method(&req.method);
+                                    let rl_scope = if matches!(rl_scope_raw, RateLimitScope::Auth) {
+                                        RateLimitScope::RpcDefault
+                                    } else {
+                                        rl_scope_raw
+                                    };
                                     let rl_key = RateLimitKey::new(&rl_identity, rl_scope);
                                     if let Err(e) = ctx.rate_limiter.check_and_record(&rl_key) {
                                         let rl_response = match e {
@@ -973,12 +995,63 @@ async fn handle_connection(
                                         // --- Idempotency + Lane concurrency control ---
                                         debug!("RPC dispatch: method={}", req.method);
 
-                                        // Extract idempotency_key from params (optional)
-                                        let idempotency_key = req.params
+                                        // Extract idempotency_key from params (optional).
+                                        //
+                                        // **Namespaced slot**: the raw caller-supplied string is
+                                        // NEVER the cache key by itself. The slot is scoped to
+                                        // (principal, method, key) — without the first two
+                                        // components a replay crosses identities and methods:
+                                        //   * cross-method: a `config.patch` result cached under
+                                        //     bare "1" would be served to any later
+                                        //     `tools.invoke` reusing "1" within the TTL;
+                                        //   * cross-principal / gate bypass: `method_requires_admin`
+                                        //     and `method_visibility` run INSIDE `process_request`,
+                                        //     but the Cached/Waiting arms return before it — a
+                                        //     response computed for an operator would be replayed
+                                        //     to a member unfiltered.
+                                        // `caller_user` / `caller_role` are resolved ABOVE this
+                                        // block (login-wall section), so they are already in
+                                        // scope here.
+                                        const IDEM_NS_SEP: char = '\u{1f}';
+                                        let raw_idem_key = req.params
                                             .as_ref()
                                             .and_then(|p| p.get("idempotency_key"))
-                                            .and_then(|v| v.as_str())
-                                            .map(String::from);
+                                            .and_then(|v| v.as_str());
+
+                                        // A caller-supplied key containing the namespace
+                                        // separator could forge the (principal, method)
+                                        // prefix of another slot — reject it outright.
+                                        if let Some(k) = raw_idem_key {
+                                            if k.contains(IDEM_NS_SEP) {
+                                                let resp = JsonRpcResponse::error(
+                                                    req.id.clone(),
+                                                    -32602, // JSON-RPC invalid params
+                                                    "idempotency_key contains a reserved separator character",
+                                                );
+                                                let resp_str = serde_json::to_string(&resp).unwrap_or_default();
+                                                if let Err(e) = write.send(WsMessage::Text(resp_str.into())).await {
+                                                    error!("Failed to send idempotency-key error to {}: {}", conn_id, e);
+                                                    break;
+                                                }
+                                                continue;
+                                            }
+                                        }
+
+                                        let idempotency_key = raw_idem_key.map(|k| {
+                                            let composed = format!(
+                                                "{}{}{}{}{}",
+                                                caller_user.as_deref().unwrap_or("<anon>"),
+                                                IDEM_NS_SEP,
+                                                req.method,
+                                                IDEM_NS_SEP,
+                                                k
+                                            );
+                                            debug_assert!(
+                                                composed.matches(IDEM_NS_SEP).count() == 2,
+                                                "namespaced idempotency key must carry exactly two separators"
+                                            );
+                                            composed
+                                        });
 
                                         let lane = crate::gateway::lane::Lane::for_method(&req.method);
 

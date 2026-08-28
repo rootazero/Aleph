@@ -36,6 +36,18 @@ p.add_argument("--feishu-token", default="qa-feishu-verification-token")
 # event still goes through, and the fixture does not have to implement Lark's
 # AES envelope to exercise the inbound path.
 p.add_argument("--feishu-encrypt-key", default="qa-feishu-encrypt-key-0123456789")
+# Phase 3 only. `Ask` in `[policies.tool_permissions]` routes through the very
+# same confirmation gate as `confirm_tools` (see `ScopedToolService`), so one
+# override turns the mock provider's existing `file_read` call into a parked
+# approval without touching the provider fixture. It is a SEPARATE boot rather
+# than a runtime patch because `policies` classifies as
+# `ReloadImpact::Restart` — a `config.patch` would be saved and ignored, and
+# the phase would then assert against a gate that was never armed.
+p.add_argument(
+    "--ask-tool",
+    default="",
+    help="tool name to put behind the confirmation gate (phase 3)",
+)
 args = p.parse_args()
 
 src = open(args.path).read()
@@ -159,6 +171,24 @@ group_policy = "mention_only"
 [channels.msteams]
 enabled = true
 app_id = "qa-msteams"
+"""
+
+if args.ask_tool:
+    # The generated baseline already carries a `[policies.tool_permissions]`
+    # block. Appending a second one is a DUPLICATE KEY, which TOML rejects for
+    # the whole document — and the server answers that by falling back to
+    # defaults with a warning, then binding the default port. The phase then
+    # fails on "address already in use", which says nothing about the config
+    # that actually broke. Drop the existing block (and its `.overrides`
+    # subsection) so the one below is the only answer.
+    src = drop_sections(src, lambda s: s.startswith("policies.tool_permissions"))
+    src += f"""
+# ── phase 3: park one tool behind the confirmation gate ───────────────────
+[policies.tool_permissions]
+default = "allow"
+
+[policies.tool_permissions.overrides]
+{args.ask_tool} = "ask"
 """
 
 open(args.path, "w").write(src)

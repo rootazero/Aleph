@@ -133,9 +133,14 @@ pub(crate) fn validate_path_component(name: &str) -> DiscoveryResult<()> {
             "path component cannot contain path separators: {name}"
         )));
     }
-    if name.contains("..") {
+    // The previous `name.contains("..")` rejected legitimate names like
+    // `skills..v2` / `my..plugin` — substring match over a string that is
+    // already known to contain no separators is the same as `name == ".."`
+    // (the only traversal component that can actually escape after the
+    // separator check above). Tighten to the traversal case only.
+    if name == ".." {
         return Err(DiscoveryError::InvalidPath(format!(
-            "path component cannot contain parent directory references: {name}"
+            "path component cannot be parent directory reference: {name}"
         )));
     }
     Ok(())

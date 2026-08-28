@@ -21,6 +21,11 @@ fn map_err(e: crate::gateway::session_manager::SessionManagerError) -> SessionSt
         crate::gateway::session_manager::SessionManagerError::NotFound(msg) => {
             SessionStoreError::NotFound(msg)
         }
+        // A stopped session surfaces through the store as `Stopped` — the
+        // caller must explicitly reopen rather than retry the same call.
+        crate::gateway::session_manager::SessionManagerError::SessionStopped(msg) => {
+            SessionStoreError::Stopped(msg)
+        }
     }
 }
 
@@ -272,36 +277,48 @@ impl SessionStore for SessionManager {
                 .unwrap_or(0),
         };
 
-        // Sync FTS index before deleting source rows.
+        // Sync FTS index inside the same transaction as the source delete so a
+        // crash / FTS error rolls back the source rows (the FTS would
+        // otherwise over-count messages the source delete already removed).
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
         match threshold_id {
             Some(threshold) => {
-                conn.execute(
+                tx.execute(
                     "DELETE FROM messages_fts WHERE rowid IN (
                         SELECT id FROM messages WHERE session_key = ? AND id > ?
                     )",
                     params![&key_str, threshold],
                 )
-                .ok();
+                .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
             }
             None => {
-                conn.execute(
+                tx.execute(
                     "DELETE FROM messages_fts WHERE rowid IN (
                         SELECT id FROM messages WHERE session_key = ?
                     )",
                     params![&key_str],
                 )
-                .ok();
+                .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
             }
         }
 
+        // **Audit fix**: FTS delete + source delete + count update are wrapped in
+        // a single transaction so a failure in any step rolls back the others
+        // (see `delete_messages_from_seq` for the full rationale).
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
+
         let deleted = match threshold_id {
-            Some(threshold) => conn
+            Some(threshold) => tx
                 .execute(
                     "DELETE FROM messages WHERE session_key = ? AND id > ?",
                     params![&key_str, threshold],
                 )
                 .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?,
-            None => conn
+            None => tx
                 .execute(
                     "DELETE FROM messages WHERE session_key = ?",
                     params![&key_str],
@@ -309,22 +326,24 @@ impl SessionStore for SessionManager {
                 .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?,
         };
 
-        let new_count: i64 = conn
+        let new_count: i64 = tx
             .query_row(
                 "SELECT COUNT(*) FROM messages WHERE session_key = ?",
                 params![&key_str],
                 |row| row.get(0),
             )
-            .unwrap_or(0);
+            .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
 
         // Keep the session row's message_count consistent. We do NOT bump
         // compaction_count — this is a manual revert, not a compaction.
-        conn.execute(
+        tx.execute(
             "UPDATE sessions SET message_count = ? WHERE key = ?",
             params![new_count, &key_str],
         )
-        .ok();
+        .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
 
+        tx.commit()
+            .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
         Ok(TruncateResult {
             messages_removed: deleted,
             tokens_removed_estimate: tokens_removed.max(0) as u64,
@@ -347,36 +366,52 @@ impl SessionStore for SessionManager {
             .lock()
             .map_err(|e| SessionStoreError::DatabaseError(format!("Lock error: {e}")))?;
 
+        // **Audit fix**: wrap the FTS delete + source delete + count
+        // update in a single transaction so a failure in any step rolls back
+        // the others. The previous code ran them as separate `conn.execute`
+        // calls with `.ok()` on the FTS path: a failed FTS cleanup left the
+        // index over-counting the rows the source delete removed, so a
+        // subsequent cross-session `search_messages` returned hits for
+        // content the user had explicitly rewound. The session_count UPDATE
+        // is included in the same transaction so a crash mid-way leaves the
+        // table consistent.
+        //
         // `source_seq IS NULL` rows (legacy transcripts, boot-time orphan
         // notices) are not event-sourced and survive untouched.
-        conn.execute(
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
+
+        tx.execute(
             "DELETE FROM messages_fts WHERE rowid IN (
                 SELECT id FROM messages WHERE session_key = ? AND source_seq >= ?
             )",
             params![&key_str, from],
         )
-        .ok();
+        .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
 
-        let deleted = conn
+        let deleted = tx
             .execute(
                 "DELETE FROM messages WHERE session_key = ? AND source_seq >= ?",
                 params![&key_str, from],
             )
             .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
 
-        let new_count: i64 = conn
+        let new_count: i64 = tx
             .query_row(
                 "SELECT COUNT(*) FROM messages WHERE session_key = ?",
                 params![&key_str],
                 |row| row.get(0),
             )
-            .unwrap_or(0);
-        conn.execute(
+            .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
+        tx.execute(
             "UPDATE sessions SET message_count = ? WHERE key = ?",
             params![new_count, &key_str],
         )
-        .ok();
+        .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
 
+        tx.commit()
+            .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
         Ok(deleted)
     }
 

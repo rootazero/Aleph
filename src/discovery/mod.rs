@@ -74,8 +74,15 @@ impl DiscoveryManager {
     ///
     /// Returns the path resolved at construction (honouring the `ALEPH_HOME`
     /// override), so it cannot disagree with the scanner's own view.
-    pub fn aleph_home(&self) -> DiscoveryResult<PathBuf> {
-        Ok(self.scanner.aleph_home().to_path_buf())
+    ///
+    /// Infallible: the scanner caches the path at construction (resolving
+    /// `ALEPH_HOME` or defaulting to `~/.aleph`), and any failure that
+    /// could occur here would already have prevented the scanner from
+    /// being built. Returning `DiscoveryResult` here just pushed `?` onto
+    /// callers for an error that cannot happen.
+    #[must_use]
+    pub fn aleph_home(&self) -> PathBuf {
+        self.scanner.aleph_home().to_path_buf()
     }
 
     /// Discover all skill directories

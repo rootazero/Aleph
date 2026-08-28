@@ -28,6 +28,14 @@ impl FetchRegistry {
 
         // Strategy V: Firecrawl shares the [search] config (Decision A) and needs
         // no [fetch] backend entry. Derive it from search when not already built.
+        //
+        // KNOWN LIMITATION: there is no per-fetch-backend disable gate. The
+        // synthetic entry below is hardcoded `enabled: true`; the only way to
+        // suppress the auto-built Firecrawl provider is the top-level
+        // `[fetch].enabled = false`, which disables all fetch backends at once.
+        // Operators that want Firecrawl for search but not for fetch currently
+        // cannot express this; future work may add a per-fetch-backend
+        // `enabled` flag in `FetchBackendConfig`.
         if !providers.contains_key("firecrawl") {
             if let Some(factory) = factories.get("firecrawl") {
                 let synthetic = FetchBackendConfig {

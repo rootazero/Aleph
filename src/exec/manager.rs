@@ -16,6 +16,14 @@ use super::socket::ApprovalDecisionType;
 /// Default timeout for approval requests (2 minutes)
 pub const DEFAULT_APPROVAL_TIMEOUT_MS: u64 = 120_000;
 
+/// The no-expiry sentinel for [`ExecApprovalRecord::expires_at_ms`]: the card
+/// waits forever. Ruled 2026-08-28 (verbatim: "不要使用超时，应该使用通知+永
+/// 久等待") — an attended approval notifies and parks until answered. The
+/// banner/card IS the persistent notification; the wait has no deadline.
+/// Unattended turns never get this value: see
+/// [`crate::approval::approval_timeout_for_current_turn`].
+pub const NO_APPROVAL_TIMEOUT: u64 = 0;
+
 /// Record of an approval request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecApprovalRecord {
@@ -141,7 +149,16 @@ impl ExecApprovalRecord {
             executable,
             resolved_path,
             created_at_ms: now,
-            expires_at_ms: now.saturating_add(timeout_ms),
+            // `NO_APPROVAL_TIMEOUT` (0) is a SENTINEL, not a duration:
+            // `now + 0` would stamp "expires immediately", and the first
+            // sweep would retire the card as a silent timeout — the exact
+            // failure the no-timeout ruling exists to remove. Map it to the
+            // no-expiry `expires_at_ms == 0` instead.
+            expires_at_ms: if timeout_ms == NO_APPROVAL_TIMEOUT {
+                0
+            } else {
+                now.saturating_add(timeout_ms)
+            },
             resolved_at_ms: None,
             decision: None,
             resolved_by: None,
@@ -162,9 +179,19 @@ impl ExecApprovalRecord {
         }
     }
 
-    /// Check if expired
+    /// Check if expired. `expires_at_ms == 0` is the NO-EXPIRY sentinel
+    /// (ruled 2026-08-28: an attended approval notifies and waits forever —
+    /// see [`approval_timeout_for_current_turn`]); such a record never
+    /// expires, and `list_pending`/`cleanup_expired` retire it only when its
+    /// waiter is gone (`PendingEntry::is_live`).
+    ///
+    /// [`approval_timeout_for_current_turn`]:
+    /// crate::approval::approval_timeout_for_current_turn
     #[must_use]
     pub(crate) fn is_expired(&self) -> bool {
+        if self.expires_at_ms == 0 {
+            return false;
+        }
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -319,17 +346,23 @@ impl ExecApprovalManager {
     ) -> (
         String,
         oneshot::Receiver<Option<ApprovalDecisionType>>,
-        Duration,
+        Option<Duration>,
     ) {
         // Use remaining time from now, not the full original timeout window.
         // This prevents granting a full timeout if the wait begins long after
-        // the record was created.
+        // the record was created. `expires_at_ms == 0` is the no-expiry
+        // sentinel: the caller waits indefinitely (notify + wait, ruled
+        // 2026-08-28).
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        let remaining_ms = record.expires_at_ms.saturating_sub(now_ms);
-        let timeout = Duration::from_millis(remaining_ms);
+        let timeout = if record.expires_at_ms == 0 {
+            None
+        } else {
+            let remaining_ms = record.expires_at_ms.saturating_sub(now_ms);
+            Some(Duration::from_millis(remaining_ms))
+        };
 
         let (tx, rx) = oneshot::channel();
         let id = record.id.clone();
@@ -374,10 +407,13 @@ impl ExecApprovalManager {
         &self,
         id: String,
         rx: oneshot::Receiver<Option<ApprovalDecisionType>>,
-        timeout: Duration,
+        timeout: Option<Duration>,
     ) -> ResolvedDecision {
-        // Wait with timeout
-        let result = tokio::time::timeout(timeout, rx).await;
+        // `None` = the no-expiry sentinel: wait indefinitely (notify + wait).
+        let result = match timeout {
+            Some(t) => tokio::time::timeout(t, rx).await,
+            None => Ok(rx.await),
+        };
 
         // Remove from pending, harvesting the record the resolver annotated.
         let deny_reason = {
@@ -873,6 +909,13 @@ impl ExecApprovalManager {
         let now = Instant::now();
 
         pending.retain(|id, entry| {
+            // No-expiry entries (attended approvals, notify + wait) are never
+            // time-swept; their one retirement is a dead waiter — an aborted
+            // run drops its receiver, and a card nobody waits on can never be
+            // answered usefully.
+            if entry.record.expires_at_ms == 0 {
+                return entry.sender.as_ref().is_some_and(|s| !s.is_closed());
+            }
             let elapsed = now.duration_since(entry.created_at);
             let timeout_ms = entry
                 .record
@@ -942,6 +985,38 @@ mod tests {
         assert_eq!(record.id, request.id);
         assert_eq!(record.command, "npm install");
         assert!(record.expires_at_ms > record.created_at_ms);
+    }
+
+    /// The no-timeout ruling (2026-08-28): `NO_APPROVAL_TIMEOUT` is a sentinel,
+    /// not a duration — `now + 0` would stamp "expires immediately" and the
+    /// first sweep would retire the card as a silent timeout. The record must
+    /// carry the no-expiry `expires_at_ms == 0` and never report expired.
+    #[test]
+    fn no_approval_timeout_maps_to_no_expiry_sentinel() {
+        let manager = ExecApprovalManager::new();
+        let record = manager.create(&mock_request(), NO_APPROVAL_TIMEOUT);
+        assert_eq!(record.expires_at_ms, 0);
+        assert!(!record.is_expired());
+    }
+
+    /// End-to-end: a no-expiry card is not time-swept, waits indefinitely, and
+    /// resolves when the operator answers — and the sweep still retires it once
+    /// the waiter is gone (aborted run), so it cannot linger forever.
+    #[tokio::test]
+    async fn no_expiry_card_waits_until_resolved_and_is_not_swept() {
+        let manager = ExecApprovalManager::new();
+        let record = manager.create(&mock_request(), NO_APPROVAL_TIMEOUT);
+        let (id, rx, timeout) = manager.register_pending(record);
+        assert!(timeout.is_none(), "no-expiry card must not carry a deadline");
+
+        // Two sweeps must not retire a live no-expiry card.
+        manager.cleanup_expired();
+        manager.cleanup_expired();
+        assert!(manager.get_pending(&id).is_some());
+
+        manager.resolve(&id, ApprovalDecisionType::AllowOnce, None);
+        let resolved = manager.await_registered(id.clone(), rx, timeout).await;
+        assert_eq!(resolved.decision, Some(ApprovalDecisionType::AllowOnce));
     }
 
     /// Defect D: with two tool calls in flight the client cannot pair approvals

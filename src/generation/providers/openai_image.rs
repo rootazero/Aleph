@@ -167,20 +167,38 @@ impl OpenAiImageProvider {
     }
 
     /// Build the API request body from a `GenerationRequest`
-    fn build_request_body(&self, request: &GenerationRequest) -> ImageGenerationRequest {
+    fn build_request_body(&self, request: &GenerationRequest) -> GenerationResult<ImageGenerationRequest> {
         let model = request
             .params
             .model
             .clone()
             .unwrap_or_else(|| self.model.clone());
 
-        // Build size string from width/height if both are provided and positive
+        // Build size string from width/height if both are provided and positive,
+        // then validate against the provider's allow-list BEFORE the HTTP call.
+        // The previous code forwarded any `w x h` string to DALL-E and let the
+        // provider 400 back `invalid_parameters` — a wasted round-trip whose
+        // error message obscured what sizes ARE accepted.
         let size = match (request.params.width, request.params.height) {
-            (Some(w), Some(h)) if w > 0 && h > 0 => Some(format!("{w}x{h}")),
+            (Some(w), Some(h)) if w > 0 && h > 0 => {
+                let candidate = format!("{w}x{h}");
+                const ALLOWED_SIZES: &[&str] =
+                    &["1024x1024", "1024x1792", "1792x1024", "512x512"];
+                if !ALLOWED_SIZES.contains(&candidate.as_str()) {
+                    return Err(GenerationError::unsupported_dimension(
+                        format!(
+                            "size '{candidate}' is not supported by DALL-E; use one of {}",
+                            ALLOWED_SIZES.join(", ")
+                        ),
+                        Some("1024x1024".to_string()),
+                    ));
+                }
+                Some(candidate)
+            }
             _ => None,
         };
 
-        ImageGenerationRequest {
+        Ok(ImageGenerationRequest {
             model,
             prompt: request.prompt.clone(),
             size,
@@ -189,7 +207,7 @@ impl OpenAiImageProvider {
             n: request.params.n,
             response_format: Some("url".to_string()), // Default to URL format
             user: request.user_id.clone(),
-        }
+        })
     }
 
     /// Parse API error response and convert to `GenerationError`
@@ -333,55 +351,62 @@ impl GenerationProvider for OpenAiImageProvider {
             );
 
             // Build request body
-            let body = self.build_request_body(&request);
+            let body = self.build_request_body(&request)?;
             let url = self.generations_url();
 
             debug!(url = %url, "Sending request to OpenAI");
 
-            // Make API request
-            let response = self
-                .client
-                .post(&url)
-                .header("Authorization", format!("Bearer {}", self.api_key))
-                .header("Content-Type", "application/json")
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| {
-                    if e.is_timeout() {
-                        GenerationError::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-                    } else if e.is_connect() {
-                        GenerationError::network(format!("Connection failed: {e}"))
-                    } else {
-                        GenerationError::network(e.to_string())
-                    }
+            // Single attempt: HTTP call + response classification, retried by
+            // `retry_transient` on 429/5xx/timeout/network errors (the
+            // classifications in `parse_error_response` mark those
+            // `is_retryable()`). Non-retryable errors (auth, content filter,
+            // invalid params, serialization) return on the first attempt.
+            let attempt = || async {
+                let response = self
+                    .client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .header("Content-Type", "application/json")
+                    .json(&body)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        if e.is_timeout() {
+                            GenerationError::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+                        } else if e.is_connect() {
+                            GenerationError::network(format!("Connection failed: {e}"))
+                        } else {
+                            GenerationError::network(e.to_string())
+                        }
+                    })?;
+
+                let status = response.status();
+                let response_text = response.text().await.map_err(|e| {
+                    GenerationError::network(format!("Failed to read response body: {e}"))
                 })?;
 
-            let status = response.status();
-            let response_text = response.text().await.map_err(|e| {
-                GenerationError::network(format!("Failed to read response body: {e}"))
-            })?;
+                // Handle non-success status codes
+                if !status.is_success() {
+                    error!(
+                        status = %status,
+                        body = %response_text,
+                        "OpenAI API request failed"
+                    );
+                    return Err(self.parse_error_response(status, &response_text));
+                }
 
-            // Handle non-success status codes
-            if !status.is_success() {
-                error!(
-                    status = %status,
-                    body = %response_text,
-                    "OpenAI API request failed"
-                );
-                return Err(self.parse_error_response(status, &response_text));
-            }
-
-            // Parse successful response
-            let api_response: ImageGenerationResponse = serde_json::from_str(&response_text)
-                .map_err(|e| {
+                // Parse successful response
+                serde_json::from_str::<ImageGenerationResponse>(&response_text).map_err(|e| {
                     error!(
                         error = %e,
                         body = %response_text,
                         "Failed to parse OpenAI response"
                     );
                     GenerationError::serialization(format!("Failed to parse response: {e}"))
-                })?;
+                })
+            };
+
+            let api_response = super::http::retry_transient("openai-image.generate", attempt).await?;
 
             // Extract first image (DALL-E 3 only supports n=1)
             let first_image = api_response.data.first().ok_or_else(|| {
@@ -660,7 +685,7 @@ mod tests {
         let provider = OpenAiImageProvider::new("sk-test-key", None, None, None).unwrap();
         let request = GenerationRequest::image("A beautiful sunset");
 
-        let body = provider.build_request_body(&request);
+        let body = provider.build_request_body(&request).unwrap();
 
         assert_eq!(body.model, "dall-e-3");
         assert_eq!(body.prompt, "A beautiful sunset");
@@ -686,7 +711,7 @@ mod tests {
             )
             .with_user_id("user-123");
 
-        let body = provider.build_request_body(&request);
+        let body = provider.build_request_body(&request).unwrap();
 
         assert_eq!(body.model, "dall-e-3");
         assert_eq!(body.prompt, "A beautiful sunset");
@@ -703,9 +728,26 @@ mod tests {
         let request = GenerationRequest::image("A test prompt")
             .with_params(GenerationParams::builder().model("dall-e-2").build());
 
-        let body = provider.build_request_body(&request);
+        let body = provider.build_request_body(&request).unwrap();
 
         assert_eq!(body.model, "dall-e-2");
+    }
+
+    /// Regression: an unsupported DALL-E size must be rejected locally with
+    /// `unsupported_dimension` instead of burning an HTTP round-trip for a
+    /// provider-side 400.
+    #[test]
+    fn test_build_request_body_rejects_unsupported_size() {
+        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None).unwrap();
+        let request = GenerationRequest::image("A test prompt").with_params(
+            GenerationParams::builder().width(512).height(768).build(),
+        );
+
+        let err = provider.build_request_body(&request).unwrap_err();
+        assert!(
+            err.to_string().contains("not supported"),
+            "error should name the unsupported size: {err}"
+        );
     }
 
     // === Error parsing tests ===

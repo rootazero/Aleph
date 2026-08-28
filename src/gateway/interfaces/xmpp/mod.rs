@@ -159,16 +159,23 @@ impl Channel for XmppChannel {
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
 
-            XmppMessageOps::run_xmpp_loop(
+            // Inner spawn so a panic inside the loop surfaces as a JoinError
+            // (see the irc/mod.rs note for the failure mode this prevents).
+            let inner = tokio::spawn(XmppMessageOps::run_xmpp_loop(
                 config,
                 channel_id,
                 inbound_tx,
                 write_cmd_rx,
                 shutdown_rx,
-            )
-            .await;
+            ));
+            let result = inner.await;
 
-            *status.write().await = ChannelStatus::Disconnected;
+            let mut guard = status.write().await;
+            if result.is_err() {
+                *guard = ChannelStatus::Error;
+            } else {
+                *guard = ChannelStatus::Disconnected;
+            }
         });
 
         self.channel_state

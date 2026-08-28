@@ -232,6 +232,13 @@ pub(super) async fn initialize_session_store(
         match alephcore::gateway::session_store::file_backend::FileSessionStore::new(config) {
             Ok(mut store) => {
                 store = store.with_event_bus(event_bus.clone());
+                // Crash-window sweep: a delete_session archived on a previous
+                // run may have crashed between the rename and the event
+                // emission, leaving Panels showing a deleted conversation
+                // until their next full refresh. Re-emit recent archives'
+                // delete events now that the bus exists. Best-effort; never
+                // blocks startup.
+                store.sweep_archive_events().await;
                 // Spec 1 G3-A: wire the session-end emit for the file
                 // backend too (the SQLite path does this via
                 // `with_raw_memory_writer` in start/mod.rs).
@@ -252,6 +259,25 @@ pub(super) async fn initialize_session_store(
                     .await;
                 if normalized > 0 && !daemon {
                     println!("Normalized {normalized} migrated session directory name(s)");
+                }
+                // Repair damage persisted by already-fixed writer bugs: legacy
+                // millisecond `last_active_at` values (they sort above every
+                // seconds-stamped session, pinning new conversations below the
+                // fold) and torn `metadata.json` documents (skipped by every
+                // listing, so the conversation vanishes). Idempotent,
+                // best-effort, never blocks startup.
+                let repaired =
+                    alephcore::gateway::session_store::migration::repair_session_metadata(
+                        store.config().base_dir.as_path(),
+                    )
+                    .await;
+                if repaired.did_work() && !daemon {
+                    println!(
+                        "Repaired session metadata: {} timestamp(s) normalized, {} rebuilt from transcript, {} quarantined",
+                        repaired.timestamps_normalized,
+                        repaired.rebuilt_from_transcript,
+                        repaired.quarantined
+                    );
                 }
                 if alephcore::gateway::session_store::migration::migration_needed(
                     &store.config().base_dir,

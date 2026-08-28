@@ -493,7 +493,7 @@ pub async fn create_channel_from_config(
         }
     };
 
-    match factory.create(config).await {
+    match factory.create_with_id(id, config).await {
         Ok(channel) => Some(channel),
         Err(e) => {
             tracing::warn!("Failed to create channel '{}': {}", id, e);

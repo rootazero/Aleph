@@ -604,12 +604,22 @@ impl ChannelState {
         self.health.clone()
     }
 
-    /// Read current status (non-blocking via `try_read`, fallback Connecting).
+    /// Read current status (non-blocking via `try_read`, fallback Disconnected).
+    ///
+    /// **Audit fix**: the previous fallback returned `Connecting` when the
+    /// status `RwLock`'s read guard could not be acquired (any concurrent
+    /// writer — `set_status`, `record_event`, `record_failure`, start/stop —
+    /// holds the write lock briefly). The health monitor treats `Connecting`
+    /// as a restart candidate (`channel_health_monitor.rs::should_restart`),
+    /// so a busy channel that JUST transitioned to Connected would trigger a
+    /// spurious restart. The correct fallback for "I can't observe the lock"
+    /// is the most pessimistic status that is NOT a restart signal —
+    /// `Disconnected` — so the monitor defers to a future successful read.
     #[must_use]
     pub fn status(&self) -> ChannelStatus {
         self.status
             .try_read()
-            .map_or(ChannelStatus::Connecting, |s| *s)
+            .map_or(ChannelStatus::Disconnected, |s| *s)
     }
 
     /// Set status (async, takes write lock).
@@ -642,6 +652,19 @@ impl ChannelState {
         InboundMessageSender::from(self.inbound_broadcast.clone())
     }
 
+    /// Subscribe a fresh inbound receiver.
+    ///
+    /// Named `take_receiver` for historical reasons, but this is NOT
+    /// `mpsc::Receiver::take()` semantics: `broadcast` supports many
+    /// subscribers, so every call yields a fresh `Receiver` and the return
+    /// value is always `Some`. The previous doc comment claimed "can only
+    /// be called once", which was wrong — two callers both "took" the
+    /// receiver and silently over-subscribed (the second consumer sees a
+    /// `Lagged` stream of messages the first already pulled, not a shared
+    /// queue). Callers needing a single-consumer gate should use
+    /// [`crate::gateway::channel_registry::ChannelRegistry::take_inbound_receiver`],
+    /// which consumes an `Option` and genuinely returns `None` the second
+    /// time.
     #[must_use]
     pub fn take_receiver(&self) -> Option<broadcast::Receiver<InboundMessage>> {
         Some(self.inbound_broadcast.subscribe())
@@ -980,6 +1003,22 @@ pub trait ChannelFactory: Send + Sync {
 
     /// Create a channel instance from configuration
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>>;
+
+    /// Create a channel instance, given the configured instance id.
+    ///
+    /// The default implementation ignores `id` and delegates to
+    /// [`Self::create`] — preserving the historical behavior where the
+    /// configured instance id never reached the channel. Factories whose
+    /// channel needs the real id (e.g. webhook, whose per-instance policy
+    /// registration is keyed by it) override this.
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
+        let _ = id;
+        self.create(config).await
+    }
 }
 
 /// Configuration for a channel instance

@@ -175,7 +175,16 @@ impl DiscordChannel {
             .ok_or_else(|| ChannelError::NotConnected("HTTP client not initialized".to_string()))?;
 
         if conversation_id.as_str().starts_with("dm:") {
-            let user_id: u64 = conversation_id.as_str()[3..]
+            // Use `strip_prefix` rather than byte-index slice `[3..]` — the
+            // slice would panic on a non-ASCII character straddling the
+            // boundary at index 3 (e.g. `dm:用户123`). `strip_prefix`
+            // operates on char boundaries and yields a `&str` we can parse.
+            let user_id: u64 = conversation_id
+                .as_str()
+                .strip_prefix("dm:")
+                .ok_or_else(|| {
+                    ChannelError::Internal("conversation_id does not start with 'dm:'".to_string())
+                })?
                 .parse()
                 .map_err(|e| ChannelError::Internal(format!("Invalid user ID: {e}")))?;
 
@@ -227,6 +236,11 @@ struct Handler {
     status: Arc<RwLock<ChannelStatus>>,
     bot_user_id: Arc<RwLock<Option<u64>>>,
     thread_bindings: Arc<RwLock<HashMap<u64, ThreadBinding>>>,
+    /// Signalled once by `ready()` so `start()` can await the actual gateway
+    /// handshake instead of guessing with a fixed sleep (a slow network made
+    /// the 500ms guess return while the channel still read `Connecting`, and
+    /// an immediate `send_attempt` then failed `NotConnected`).
+    ready_notify: Arc<tokio::sync::Notify>,
 }
 
 impl Handler {
@@ -309,6 +323,8 @@ impl EventHandler for Handler {
         // Store bot user ID for mention detection
         *self.bot_user_id.write().await = Some(ready.user.id.get());
         *self.status.write().await = ChannelStatus::Connected;
+        // Unblock `start()`: the channel is genuinely ready now.
+        self.ready_notify.notify_one();
     }
 
     async fn message(&self, ctx: Context, msg: Message) {
@@ -675,12 +691,14 @@ impl Channel for DiscordChannel {
         }
 
         // Create event handler
+        let ready_notify = Arc::new(tokio::sync::Notify::new());
         let handler = Handler {
             inbound_tx: self.channel_state.sender(),
             config: self.config.clone(),
             status: self.channel_state.status_handle(),
             bot_user_id: Arc::new(RwLock::new(None)),
             thread_bindings: Arc::new(RwLock::new(HashMap::new())),
+            ready_notify: ready_notify.clone(),
         };
 
         // Build client
@@ -732,8 +750,24 @@ impl Channel for DiscordChannel {
             }
         });
 
-        // Wait a moment for connection
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        // Wait for the gateway `ready` event rather than guessing with a
+        // fixed sleep. The previous 500ms delay raced the actual handshake:
+        // on a slow network `start()` returned while the channel still read
+        // `Connecting`, and an immediate `send_attempt` failed `NotConnected`
+        // (the message went to the durable queue — or was dropped — without
+        // ever reaching Discord). A timeout keeps a wedged gateway from
+        // blocking start forever; the channel then surfaces the failure via
+        // its normal Error/Disconnected transitions instead of a silent hang.
+        const READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+        if tokio::time::timeout(READY_TIMEOUT, ready_notify.notified())
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                "Discord gateway did not signal ready within {:?}; channel may not be connected yet",
+                READY_TIMEOUT
+            );
+        }
 
         Ok(())
     }
@@ -775,8 +809,19 @@ impl Channel for DiscordChannel {
         // Handle both "dm:user_id" and direct channel IDs
         let channel_id =
             if message.conversation_id.as_str().starts_with("dm:") {
-                // For DMs, we need to create a DM channel first
-                let user_id: u64 = message.conversation_id.as_str()[3..]
+                // For DMs, we need to create a DM channel first. Use
+                // `strip_prefix` instead of `[3..]` — see `resolve_channel_id`
+                // for the rationale (non-ASCII bytes straddling index 3 would
+                // otherwise panic).
+                let user_id: u64 = message
+                    .conversation_id
+                    .as_str()
+                    .strip_prefix("dm:")
+                    .ok_or_else(|| {
+                        ChannelError::Internal(
+                            "conversation_id does not start with 'dm:'".to_string(),
+                        )
+                    })?
                     .parse()
                     .map_err(|e| ChannelError::SendFailed(format!("Invalid user ID: {e}")))?;
 

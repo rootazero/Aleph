@@ -56,14 +56,27 @@ pub async fn handle_cluster_enroll(
     };
 
     match enroll_node_device(&ctx.security_store, &params.node_name) {
-        Ok((node_id, minted)) => JsonRpcResponse::success(
-            request.id,
-            serde_json::json!({
-                "node_id": node_id,
-                // Backward-compatible superset: older Panels ignore it.
-                "reused": !minted,
-            }),
-        ),
+        Ok((node_id, minted)) => {
+            if let Some(log) = crate::security::audit::global() {
+                log.log(crate::security::audit::AuditEntry::authority_change(
+                    crate::gateway::caller_identity::current_caller_user(),
+                    format!(
+                        "cluster.enroll: node '{}' ({}) {}",
+                        params.node_name,
+                        node_id,
+                        if minted { "enrolled" } else { "reused existing enrollment" }
+                    ),
+                ));
+            }
+            JsonRpcResponse::success(
+                request.id,
+                serde_json::json!({
+                    "node_id": node_id,
+                    // Backward-compatible superset: older Panels ignore it.
+                    "reused": !minted,
+                }),
+            )
+        }
         Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
     }
 }
@@ -89,14 +102,28 @@ pub async fn handle_cluster_deregister(
     };
 
     match deregister_node(&ctx.node_registry, &ctx.security_store, &params.node) {
-        Ok(outcome) => JsonRpcResponse::success(
-            request.id,
-            serde_json::json!({
-                "node_id": outcome.node_id,
-                "evicted": outcome.evicted,
-                "device_removed": outcome.device_removed,
-            }),
-        ),
+        Ok(outcome) => {
+            if let Some(log) = crate::security::audit::global() {
+                log.log(crate::security::audit::AuditEntry::authority_change(
+                    crate::gateway::caller_identity::current_caller_user(),
+                    format!(
+                        "cluster.deregister: node '{}' ({}): evicted={}, device_removed={}",
+                        params.node,
+                        outcome.node_id,
+                        outcome.evicted,
+                        outcome.device_removed
+                    ),
+                ));
+            }
+            JsonRpcResponse::success(
+                request.id,
+                serde_json::json!({
+                    "node_id": outcome.node_id,
+                    "evicted": outcome.evicted,
+                    "device_removed": outcome.device_removed,
+                }),
+            )
+        }
         Err(DeregisterError::NotFound) => JsonRpcResponse::error(
             request.id,
             NODE_NOT_FOUND,

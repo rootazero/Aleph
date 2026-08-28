@@ -15,10 +15,17 @@ use super::protocol::{GroupChatRequest, Persona, PersonaSource};
 /// Supported commands:
 ///
 /// - `/groupchat start [--preset id1,id2] [--role "Name: prompt"] [--topic "..."] message`
+/// - `/groupchat continue <session_id> <message>`
+/// - `/groupchat mention <session_id> <message with @persona_id references>`
 /// - `/groupchat end [session_id]`
 ///
 /// This parser is used by the inbound router for any channel that doesn't
 /// provide its own parser.
+///
+/// **Audit fix**: `Continue` and `Mention` were declared in
+/// [`GroupChatRequest`] but the default parser returned `None` for them, so
+/// channels without their own parser silently rejected those commands —
+/// inconsistent UX across channels.
 pub struct DefaultGroupChatCommandParser;
 
 impl DefaultGroupChatCommandParser {
@@ -36,6 +43,12 @@ impl DefaultGroupChatCommandParser {
         if after == "start" || after.starts_with("start ") {
             let args = after.strip_prefix("start")?.trim();
             parse_start_command(args)
+        } else if after == "continue" || after.starts_with("continue ") {
+            let args = after.strip_prefix("continue")?.trim();
+            parse_continue_command(args)
+        } else if after == "mention" || after.starts_with("mention ") {
+            let args = after.strip_prefix("mention")?.trim();
+            parse_mention_command(args)
         } else if after == "end" || after.starts_with("end ") {
             let session_id = after.strip_prefix("end")?.trim().to_string();
             Some(GroupChatRequest::End { session_id })
@@ -43,6 +56,58 @@ impl DefaultGroupChatCommandParser {
             None
         }
     }
+}
+
+/// Parses `/groupchat continue <session_id> <message...>`.
+///
+/// The first whitespace-delimited token is the session id; the rest is the
+/// message verbatim (quotes are preserved so a channel-specific parser can
+/// still apply its own conventions downstream).
+fn parse_continue_command(args: &str) -> Option<GroupChatRequest> {
+    let (session_id, message) = args.split_once(char::is_whitespace)?;
+    let session_id = session_id.trim();
+    let message = message.trim();
+    if session_id.is_empty() || message.is_empty() {
+        return None;
+    }
+    Some(GroupChatRequest::Continue {
+        session_id: session_id.to_string(),
+        message: message.to_string(),
+    })
+}
+
+/// Parses `/groupchat mention <session_id> <message with @persona_id ...>`.
+///
+/// Mention targets are extracted from `@id` tokens in the message body — a
+/// token starting with `@` whose remainder is a plausible persona id
+/// (alphanumerics, `_`, `-`). The message is passed through unchanged so the
+/// coordinator still sees the raw text the user typed.
+fn parse_mention_command(args: &str) -> Option<GroupChatRequest> {
+    let (session_id, message) = args.split_once(char::is_whitespace)?;
+    let session_id = session_id.trim();
+    let message = message.trim();
+    if session_id.is_empty() || message.is_empty() {
+        return None;
+    }
+    let targets: Vec<String> = message
+        .split_whitespace()
+        .filter_map(|tok| {
+            let id = tok.strip_prefix('@')?;
+            let id: String = id
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                .collect();
+            if id.is_empty() { None } else { Some(id) }
+        })
+        .collect();
+    if targets.is_empty() {
+        return None;
+    }
+    Some(GroupChatRequest::Mention {
+        session_id: session_id.to_string(),
+        message: message.to_string(),
+        targets,
+    })
 }
 
 /// Parses the argument string for a `/groupchat start` command.

@@ -34,6 +34,16 @@ pub async fn handle_status(request: JsonRpcRequest, start_time: Instant) -> Json
 pub async fn handle_shutdown(request: JsonRpcRequest) -> JsonRpcResponse {
     tracing::info!("Graceful shutdown requested via RPC");
 
+    // A daemon shutdown ends every connected session and drops in-flight
+    // runs; it used to leave no forensic row. Record WHO asked before the
+    // process exits (the audit sink flushes synchronously on `log`).
+    if let Some(log) = crate::security::audit::global() {
+        log.log(crate::security::audit::AuditEntry::authority_change(
+            crate::gateway::caller_identity::current_caller_user(),
+            "daemon.shutdown: graceful shutdown requested".to_string(),
+        ));
+    }
+
     // Schedule shutdown after response is sent. We use process exit directly
     // rather than libc::kill/SIGTERM so the gateway core stays platform-neutral
     // (architecture redline R1). The binary's own SIGTERM handler does the same.
