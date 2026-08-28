@@ -119,13 +119,24 @@ pub enum EdgeKind {
     Watches,
     /// Governing loop → child loop: owns the child's reference/objective.
     OwnsReference,
-    /// Arbiter loop → each conflicting loop (≥2 edges).
+    /// **DOCUMENTATION-ONLY: does not participate in lint/render.** Arbiter
+    /// loop → each conflicting loop (≥2 edges). Arbitration is an EVENT
+    /// adjudicated in an LLM turn, not a resident mechanism; a deterministic
+    /// conflict detector is on the NOT-build list (GRAPH_LAYER.md §4.3). The
+    /// audit template and the loop-governance skill tell the auditor to record
+    /// arbitration as a `note` on a `watches` edge instead of using this verb
+    /// — this row exists only so the operator can state the intent in the
+    /// schema. Adding a real consumer would violate R7.
     Arbitrates,
     /// Audit loop → any node: periodically verifies its numbers still touch reality.
     Audits,
     /// Loop → anchor node grounding its verdicts.
     AnchoredBy,
-    /// Upstream loop → downstream loop (data flow; documentation-only edge).
+    /// **DOCUMENTATION-ONLY: does not participate in lint/render.** Upstream
+    /// loop → downstream loop (pure data-flow annotation). Like `Arbitrates`,
+    /// this verb carries no semantic work — the DOT export renders the kind
+    /// string and `edges_for_render` excludes it on purpose. If a future
+    /// tool starts reading it, that is the moment to widen this note.
     Feeds,
 }
 
