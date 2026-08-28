@@ -252,6 +252,11 @@ pub fn distill_output(text: &str) -> Option<OutputDigest> {
         let stripped = strip_ansi(raw_line);
         let stripped = stripped.trim_end();
         if stripped.is_empty() {
+            // Blank lines are a dedup boundary: identical errors that are
+            // separated by blank lines (e.g. repeated pytest failures across
+            // `---` separators, retry attempts) should each be counted once,
+            // not collapsed by the hash carried over from a prior block.
+            prev_hash = None;
             continue;
         }
 

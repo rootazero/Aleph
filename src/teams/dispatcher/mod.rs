@@ -239,6 +239,13 @@ impl TeamDispatcher {
                         EventType::TeamTaskUpdated,
                         EventType::TeamTaskCompleted,
                         EventType::TeamTaskFailed,
+                        // A disbanded team's tasks are still claimable from the
+                        // dispatcher's perspective — the team row goes to
+                        // `disbanded` but the task rows are untouched, and
+                        // the dispatcher would happily run a phantom-team
+                        // task for the rest of the run. Surface the disband
+                        // here so the dispatcher reacts at the next tick.
+                        EventType::TeamDisbanded,
                     ]),
                     move |_event| {
                         signal.notify_one();
