@@ -32,7 +32,9 @@ use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, ADMIN_REQUIRED_MESSAGE, AUTH_REQUIRED,
     IDEMPOTENCY_KEY_REQUIRED, INTERNAL_ERROR, PARSE_ERROR, RATE_LIMITED,
 };
-use crate::gateway::rate_limiter::{scope_for_method, RateLimitError, RateLimitKey, RateLimiter};
+use crate::gateway::rate_limiter::{
+    scope_for_method, RateLimitError, RateLimitKey, RateLimitScope, RateLimiter,
+};
 use crate::gateway::state_version::StateVersionTracker;
 
 use super::per_client_buffer::PerClientBuffer;
@@ -828,12 +830,32 @@ async fn handle_connection(
                                     // Loopback exemption is based on network origin
                                     // (the resolved client IP, so a reverse proxy
                                     // running on loopback never exempts the remote
-                                    // clients behind it), not identity (device_id). For
-                                    // authenticated connections the rl_identity is the
-                                    // device_id which never looks like a loopback IP.
+                                    // clients behind it), not identity (device_id).
+                                    //
+                                    // This layer keys on the CLIENT IP — it is the
+                                    // network-origin isolator (the principal-axis
+                                    // check lives in middleware/rate_limit.rs).
+                                    // `connect` would otherwise map to the strict
+                                    // Auth scope (10/min + 5-min lockout): every
+                                    // user behind one NAT / reverse-proxy egress
+                                    // shares that single IP bucket, so one client
+                                    // retrying a stale token locked every other
+                                    // user at that address out of the handshake
+                                    // for the full lockout. Remap to the
+                                    // lockout-free default bucket instead — the
+                                    // same remap middleware/rate_limit.rs performs
+                                    // on the pooled "rpc" identity — so a token
+                                    // storm only exhausts the offending origin's
+                                    // own window, which recovers as the window
+                                    // slides.
                                     if !ctx.client_ip.is_loopback() {
                                     let rl_identity = ctx.client_ip.to_string();
-                                    let rl_scope = scope_for_method(&req.method);
+                                    let rl_scope_raw = scope_for_method(&req.method);
+                                    let rl_scope = if matches!(rl_scope_raw, RateLimitScope::Auth) {
+                                        RateLimitScope::RpcDefault
+                                    } else {
+                                        rl_scope_raw
+                                    };
                                     let rl_key = RateLimitKey::new(&rl_identity, rl_scope);
                                     if let Err(e) = ctx.rate_limiter.check_and_record(&rl_key) {
                                         let rl_response = match e {
