@@ -135,7 +135,6 @@ impl Channel for FeishuChannel {
         // canonical channel_state, which is set in both branches.
         self.channel_state.status()
     }
-    }
 
     async fn start(&mut self) -> ChannelResult<()> {
         if self.test_mode {
