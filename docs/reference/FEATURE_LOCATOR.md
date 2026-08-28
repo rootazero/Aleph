@@ -3247,8 +3247,8 @@
 
 - **代码锚点**：
   - 服务端 — `src/gateway/execution_engine/engine.rs`（`announce_turn_end` 单一源 · `active_run_for_session`）、`session_run_registry.rs::run_id_for`、`execution_adapter.rs::active_run_for_session`（默认 `None`）、`handlers/agent.rs::AgentRunManager::active_run_for_session`、`handlers/chat.rs::handle_history`（响应新增 `active_run`）
-  - 游标单位与展示标签（round-5）— `session_store/types.rs::stamp_millis`（分界在全 crate 的唯一应用；`instant()` 经它表达）、`session_store/mod.rs::{get_history_before(before: Option<DateTime<Utc>>), paginate_before, mixed_unit_cursor_tests}`、`session_manager/ops/crud.rs::{stamp_millis_sql, get_history, get_history_before}`、`handlers/chat.rs::{parse_before, history_total, the_transcript_length_is_counted_before_the_window_is_read}`、`aleph_protocol::session_thread::HistoryWindow`、`interfaces/cli/src/commands/chat_cmd.rs::history_footer`
-  - 窗口与气泡宽度（round-4）— `handlers/chat.rs::handle_history`（响应新增 `total`）、`session_store/mod.rs::SessionStore::history_len`（默认实现 + SQLite `COUNT(*)` 覆写 `session_manager/ops/crud.rs`）、`views/chat/state/mod.rs::{DEFAULT_HISTORY_LIMIT, HISTORY_PAGE, history_window_gap, ChatState::{history_limit, history_has_more, history_above}}`、`api/chat.rs::parse_history_total`、`views/chat/messages.rs::{MessageList 的载入更早控件, bubble_width_tests}`
+  - 游标单位与展示标签（round-5）— `session_store/types.rs::stamp_millis`（分界在全 crate 的唯一应用；`instant()` 经它表达）、`session_store/mod.rs::{history_page(before: Option<DateTime<Utc>>), paginate_before, mixed_unit_cursor_tests}`、`session_manager/ops/crud.rs::{stamp_millis_sql, history_sql, get_history, history_page}`、`handlers/chat.rs::{parse_before, the_window_and_the_transcript_length_come_from_one_read}`、`aleph_protocol::session_thread::HistoryWindow`、`interfaces/cli/src/commands/chat_cmd.rs::history_footer`
+  - 窗口与气泡宽度（round-4）— `handlers/chat.rs::handle_history`（响应新增 `total`）、`session_store/mod.rs::SessionStore::history_page`（默认实现一次读同时给出 `rows` 与 `total` + SQLite 单锁 `COUNT(*)`＋窗口覆写 `session_manager/ops/crud.rs`；round-6 前是两个方法 `get_history_before` / `history_len`）、`views/chat/state/mod.rs::{DEFAULT_HISTORY_LIMIT, HISTORY_PAGE, history_window_gap, ChatState::{history_limit, history_has_more, history_above}}`、`api/chat.rs::parse_history_total`、`views/chat/messages.rs::{MessageList 的载入更早控件, bubble_width_tests}`
   - 客户端（Panel）— `platform/wide/views/chat/events.rs::resolve_target`（三步解析）、`state/sessions.rs`（登记三写者 `adopt_session` / `start_new` / `ensure_active`；重连两半 `settle_runs_absent_from` / **`rejoin_target`**；`set_session_key` / `reset_running_baseline`）、**`state/reattach.rs::reattach_after_connect`（唯一的重连修复，挂 app root）**、`components/chat_sidebar.rs::hydrate_and_follow`、`context.rs::connection_epoch`、`views/chat/state.rs::settle_abandoned_run`、**`platform/phone/chat/{mod,history,composer,thread}.rs`（phone 的四个登记点）**
   - 客户端（TUI）— `interfaces/tui/src/tui/app/events.rs`（`frame_belongs_here` 三答 · `adopt_active_run` · `RunAccepted` 豁免）、`app/mod.rs::session_reconciled`、`commands.rs::{active_run_from_history, attach_session}`
 - **职责**：让**同一条会话线程**同时被多个终端观看而不互相污染，并让任意一端在**重连 / core 重启**之后把自己的视图重建到与服务端一致。
@@ -3404,6 +3404,7 @@ round-2 结尾留了三条，本轮全部收掉。共同形状：**三条都不�
 
 - **② 两次读——不做成一次读（记录对），但顺序错了（记录没说）** —— `total` 与窗口是两次读，中间可以落进一条消息，而**顺序决定偏差朝哪边**。原来是先窗口后计数 ⇒ `total > received` ⇒ 在**短于 limit 的会话**上渲染出一个假的「载入更早的 1 条消息」按钮（`clear_session` 的注释逐字把这类东西叫作 "a visible lie"）。改成先计数后窗口 ⇒ 只可能 `received > total` ⇒ `saturating_sub` ⇒ 0 ⇒ 不出控件，且长会话上自愈（下一次按下缩小差额）。
   ⚠️ 客户端 `history_window_gap` 的 doc **本来就是按"先计数"写的**（"a message appended in between makes `received` the larger"）——代码和它不一致，说谎的是代码。
+  ⚠️ **round-6 推翻了这个形状**：顺序不是那条性质，两次读才是。现在是一次读（`SessionStore::history_page`），下面这条顺序守卫已被元数守卫取代。
   守卫是**源码级**的（`chat.rs::the_transcript_length_is_counted_before_the_window_is_read`）：运行时两种顺序在安静的 store 上返回相同结果，差别只出现在没有单测会调度的交错里；替代方案是一个在两次调用之间追加的 store double，代价约 30 个委托方法只为钉一条语句顺序。扫描止于函数**列 0 的收尾大括号**（语法终点，不是行数），先 `.replace('\r', "")`。已证伪：把 `total` 移进 `Ok` 臂 → 点名 offset 并说出后果。
 
 - **③ TUI 没问题，CLI 在撒谎（修 bug）** —— 记录写的是"TUI/CLI 忽略新字段，给它们接窗口控件是另一轮的事"。核实后：**TUI `attach_session` 发的是 `{"session_key": key}`，不带 limit ⇒ 全量**，`session export` 同理——它们从来没有截断问题，**这是查过的不是推断的**，所以给它们加机件正是 R10 禁止的（零消费者）。
@@ -3422,11 +3423,40 @@ round-2 结尾留了三条，本轮全部收掉。共同形状：**三条都不�
 
 - **刻意未做 / 已知边界（round-5）**
   - **`before` 仍然零产品客户端。** 本轮让一个已发布的 `Open` 类参数**按它文档所说的那样工作**，没有给它接消费者。CUT 仍在桌面上，但它是对外行为变更（移除已文档化的 RPC 参数），且这一问在仓里**没有第二个答案**——Panel 的加宽窗口答的是"最后 N 行"，表达不了"比 T 更老"。
+    ⚠️ **后半句经 round-6 核实是错的，别再引用它**：Panel 的加宽窗口与 CLI footer 逐字写着的 `raise --limit, or omit it` 是同一问的**两个已发布答案**，都是有意选的。保留 `before` 的理由只剩一条腿（见 round-6 ④）。
   - **读取顺序的守卫是源码级的**，重排会红，但**语义上的重排（比如把计数搬进另一个 helper 再在窗口之后调用）它看不见**。
   - **SQLite 的 `messages.timestamp` 记的是 INSERT 时刻不是事件时刻**（`add_message_full` 丢弃投影器的 `created_at_ms`）。这是本轮读出来的、与游标相邻但独立的保真问题，**未改**——改它要迁移存量并重新回答"这一列是什么"。
   - **`session export` 的 `exported {count} messages` 未改**：那条路径不发 limit ⇒ `count == total`，那句话是真的。
   - **TUI 未接 `total`**：它不截断，所以没有可说的事；若将来有人给它加 `limit`，必须同批接上窗口提示，否则就是本轮修掉的那个 P1 换一张脸。
   - **file backend 上每次 attach 解析两遍整份 transcript**（一次给 `history_len` 的默认实现、一次给窗口）——round-4 引入，本轮只改了顺序没改次数。**便宜的规避不存在**：`read_transcript` 会跳过解析不出的行，所以一个"只数非空行"的覆写会比 `get_history` 多报，而那正好渲染成一条幻影的"还有 1 条更早的"。真要省，得让计数和窗口共用一次读，即 ② 里已经裁定"不值"的那条签名改动。
+
+- **🔧 round-6（2026-08-28，遗留清理轮）** —— round-5 留下六条，处置：**两条修掉、一条按用户裁定保留、三条核实后不需要动**。而**最贵的那条不在清单上**：清单第 3 条（SQLite 记 INSERT 时刻）不是一个孤立的保真缺陷，**它是另外四处 SQL 此刻正确的地基**。
+
+- **① 一条待办清单上的缺陷，正是别处代码此刻正确性的地基——而这条依赖从来没有被写下来过** —— 「修一个缺陷之前，grep 谁把这个缺陷写进了自己的理由」的**盲区版**：那条讲有人**写下**过理由，这条讲**没有任何人写过**。SQLite 上有四处 SQL 按**裸 `timestamp`** 排序（`ops/query.rs` 的第二份窗口拼写 · `ops/identity.rs` 的标题取样 · `sqlite_backend::truncate_messages` · `ops/modify.rs::compact_session`），今天全对，唯一的原因就是 `add_message_full` 用 `now()` 盖掉生产者的戳、让该列**统一是秒**——也就是清单第 3 条那个缺陷。**后两处选的是 DELETE 的边界**（`/undo` 与压缩）。于是谁去修那条清单项，谁就同时让 `/undo` 与压缩删错行，零报错零红测。
+  拆引信**先于**修缺陷单独落地：四处路由到既有的 `SessionManager::stamp_millis_sql()`（对全秒行 `*1000` 是保序恒等 ⇒ **逐字节 no-op**，且 `messages` 表 `timestamp` 上无索引 ⇒ 零索引代价），顺带给两处无破平的 `ORDER BY` 补上 `id` 次序。守卫 `session_manager/tests.rs::no_message_query_ranks_by_the_raw_timestamp_column`：五个文件、先剥 `\r` 与 `//` 注释行、按 `ORDER BY timestamp` / `timestamp <` / `timestamp >` 三个模式判，**自保断言**是「每个文件至少含一个 `ORDER BY`」＋「总计 ≥ 8 处排序」（一个不再含 SQL 的文件与一个没有违规的文件在报告里长得一样）。已证伪：把 `compact_session` 改回裸列 ⇒ 按文件名红。
+  判据：**改一个值的产生方式之前，先问「它今天保证了什么」，再去 grep 谁在消费那个保证**——消费者不会自称依赖，它只是**没有归一化**。而原来的不变量只写在 `MessageRecord::timestamp` 的一句 doc 里，**散文拦不住下一个真诚的修复者**。
+
+- **② 顺序守卫可以被语义重排绕过；正解不是加强守卫，是让「有顺序」变成「只有一次调用」** —— round-5 ② 论证了哪个顺序让偏差朝安全方向倒，并写了源码守卫钉住语句先后；同一轮的遗留清单又自己指出「语义上的重排（把计数搬进另一个 helper 再在窗口之后调用）它看不见」，并把「共用一次读」裁为**不值**。那个裁定的前提（"签名改动"）过高估了成本：
+  `SessionStore` 的 `get_history_before` + `history_len` 合成一个 `history_page(key, limit, before) -> HistoryPage{rows, total}`，**净减一个方法**。默认实现读一次转录、`total` 取自同一次读 ⇒ **file backend 每次 attach 从解析两遍变一遍**（round-5 遗留第 6 条，同时解决），且偏差**不存在**而不是"朝安全方向倒"。SQLite 覆写把 `COUNT(*)` 与窗口放进**同一次 `conn.lock()`**——这个库的每个写者都过同一把 `Mutex<Connection>`，所以那对答案对同一个会话成立。顺带把 `get_history` / 游标路径两份近乎重复的 SQL 收敛成 `history_sql(limit, cursored)` + `map_message_row`（列清单与位置解码同居一处——round-5 修的正是这两份拼写已经漂移过一次）。
+  守卫从**顺序**改成**元数**（`chat.rs::the_window_and_the_transcript_length_come_from_one_read`）：`assert_eq!(reads, 1)` **自带非空自证**（0 与 2 都红），再加三个「第二次读」名字的否定判据。而真正的地板是构造性的——删掉 `history_len` 之后，持 `Arc<dyn SessionStore>` 的调用方**没有第二个方法可伸手**。
+  ⚠️ **守卫第一次跑就红在我自己写的注释上**（`handle_history` 的散文里同时出现 `history_len` 与 `history_page`，正在解释为什么现在只有一次读）——仓里那条「扫描器判代码，注释是文档，两边都要先剥 `//`」又中一次。已证伪：往函数里插一行真的 `get_history` ⇒ 点名红。
+
+- **③ SQLite 现在保留生产者的戳（清单第 3 条本体）** —— `append_message` 一直把 `MessageRecord.timestamp` 交给 `add_message_full`，而后者用 `now()` 盖掉它 ⇒ SQLite 装机记的是**行被写下的时刻**，file backend 记的是**消息发生的时刻**，**两个 backend 对同一段对话给出两个日期**。活跃回合里两者差几毫秒所以看不出来；任何**晚于事件**的投影（reconciler / backfill / import）会把整段对话记成被重读的那一刻。
+  回落是**旧行为的收窄，不是新猜测**：`None`（`add_message` 便利函数，手上没有记录）/ `0`（生产者没填）/ 任何日历表示不了的量级 ⇒ 仍用 INSERT 时刻，那正是从前**每一行**得到的东西；这次改动只会把行**移出**那个集合，不会加进去。存进去的是**已归一化的毫秒**（`stamp_millis`），所以这一列往后只写一个单位、不再新增第三种混合。
+  测试跑**两个 backend**，最强的一条是 `both_backends_date_the_same_record_the_same_way`——那条性质任何单 backend 的测试都说不出口。变异（把 `occurred_at` 改回 `None`）后**恰好预期的那两条**红、另外三条绿。
+  顺带：`add_message_full` 的九个位置参数换成 `NewMessage` 结构体（穷尽解构 ⇒ 加字段是编译错）。理由不是风格：`source_seq` 与新加的 `occurred_at` **都是 `Option<i64>` 且相邻**，位置上可以静默互换——CLAUDE.md §10「位置解码是一份没有编译器背书的契约」那一条。
+
+- **④ 逐条回执** ——
+  - **`before` 零客户端 → 用户裁定「保留」（2026-08-28）**。上一轮保留它的理由之一「这一问在仓里没有第二个答案」**经核实是错的**：Panel 的加宽窗口与 CLI footer 逐字写着的 `raise --limit, or omit it` 是同一问的两个已发布答案。剩下的那条腿成立且更锋利：`before` 自 v2026.04.02 起在 wire 上，而 `HistoryParams` 不拒未知字段 ⇒ **切掉它之后，仍在发 `before` 的外部调用方会静默拿到最新窗口而不是更早那页**，不报错。要让它响亮失败，写的代码比删掉的还多。裁决与这段理由写在 `SessionStore::history_page` 的 doc 里（散文放在代码旁边，不放在只有本节读得到的地方）。
+  - **Panel 反向翻页**：仍未做，**阻塞不在游标**。wire 的 `ChatMessage` 现在**丢掉了 `MessageRecord.id`**，客户端因此只能用 `hist-{i}` 页内下标键控；要真正前插，得(a) 把 id 放上 wire、(b) 客户端改成按 id 键控、(c) `replay_run` 支持前插。这是单独一轮，不是遗留清理装得下的。
+  - **`session export` 的 `exported {count} messages`**：核实 `interfaces/cli/src/commands/session.rs::export` 确实不发 `limit`（注释逐字写着 "No `limit` ⇒ the server returns the entire message log"）⇒ `count == total`，那句话是真的。**无需改动**（查过的，不是推断的）。
+
+- **刻意未做 / 已知边界（round-6）**
+  - **零真机 QA，而这一轮的理由比上一轮强**：round-5 说"唯一需要真机的是并发追加时的顺序偏差"。那个偏差现在**不存在**（一次读 / 单锁），不是"被测过了"——所以没有留下一个只有真机能看见的性质。wire 逐字节未变（`count` / `total` 仍从 `handle_history` 同处发出），Panel 与 CLI **零改动**。
+  - **`0` 在两个 backend 上仍然分家**：file backend 把 `timestamp: 0` 原样存成 1970，SQLite 回落到 INSERT 时刻。这个分歧**早于本轮且未被本轮扩大**（从前 SQLite 对**所有**行都用 INSERT 时刻）。生产的四个 `MessageRecord` 生产者全都盖戳，`0` 只出现在测试夹具里。
+  - **`sessions.last_active_at` 仍用 `now()`**：SQLite 侧不跟随消息的戳，而 file backend 跟随（`msg.instant()`）。没动——"追加即活动"对活动时钟是说得通的，而 file backend 那条选择正是它 doc 里记的「年份 58574」那个 bug 的来源；要统一得先回答「这一列答的是哪一问」。
+  - **`compact_session` 按 `timestamp` 排序却按 `id` 删除**：本轮只让排序不再依赖列的单位，没有碰这个**排序键与删除键不同**的既存不一致（两者不同序时会删错集合）。它先于本轮存在，且需要单独判断。
+  - **17319 passed / 18 failed，18 条全部预存**：用 `git stash` 对 HEAD 跑了基线，失败清单**逐字相同**；通过数差 6 = 本轮新增的 5 条 stamp 测试 + 1 条 SQL 排序守卫（替换的守卫净增 0）。
 
 ---
 

@@ -169,29 +169,6 @@ fn parse_before(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
         .map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
-/// How long the whole transcript is, or `None` when that could not be read.
-///
-/// `messages` is the TRAILING window, so at exactly `limit` rows a full page
-/// and a complete short conversation are byte-for-byte identical. Without this
-/// number a client can only guess from the length it received — a client
-/// inventing an answer the server never gave, and wrong precisely when the
-/// transcript is `limit` rows to the row.
-///
-/// **`Option`, never `Result`, and it cannot see the page.** A count that
-/// failed to read is "we do not know"; folding the error into the window
-/// length would tell every client the transcript is complete, which is the one
-/// answer wrong in the direction that HIDES content. Two properties keep that
-/// out by construction rather than by vigilance: the return type gives the
-/// caller no error to propagate (a failed count must not fail a transcript
-/// that already succeeded), and this function is not passed `count`, so the
-/// tempting `unwrap_or(count)` is not expressible where the decision is made.
-///
-/// Call it BEFORE reading the window — see the note at the call site for which
-/// way the two-read skew should fall.
-async fn history_total(store: &Arc<dyn SessionStore>, key: &SessionKey) -> Option<usize> {
-    store.history_len(key).await.ok()
-}
-
 /// Parameters for chat.clear request
 #[derive(Debug, Clone, Deserialize)]
 pub struct ClearParams {
@@ -506,31 +483,24 @@ pub async fn handle_history(
     // or unparseable, yielding the most-recent window).
     let before_ts = params.before.as_deref().and_then(parse_before);
 
-    // BEFORE the window, deliberately. These are two reads of a store that a
-    // live run is appending to, so one of them is always slightly stale, and
-    // the ORDER decides which way the client's `total - received` can be
-    // wrong. Counting first can only UNDER-report: a row appended in between
-    // lands in the window, `received` comes back the larger, and the client's
-    // `saturating_sub` reads that as "nothing above" — correct for a short
-    // conversation, and self-healing for a long one (the next press narrows
-    // the gap). Counting after the window over-reports instead, and on a
-    // conversation shorter than the limit that renders a "load 1 earlier
-    // message" button over a transcript with nothing above it — a visible lie,
-    // and the one skew a user would report as a bug.
-    //
-    // (Rows can also LEAVE between the reads — `chat.clear`, `chat.rewind` —
-    // which flips the sign back. Those are user-initiated and rare against a
-    // run that appends on every step, and they leave a transient control over
-    // a transcript the same action just emptied.)
-    let total = history_total(&session_manager, &session_key).await;
-
-    // Get history from session manager, honoring the `before` cursor.
+    // ONE call for both answers. This used to be two — a `history_len` and
+    // then the window — against a store a live run appends to, so the count
+    // and the transcript described two different sessions and the client's
+    // `total - received` was wrong by whatever landed in between. It was
+    // managed with a comment arguing which ORDER made the skew fall the safer
+    // way plus a source-level guard pinning that order, and a guard on
+    // statement order is satisfiable lexically while being broken semantically
+    // (move the count into a helper, call the helper after the window). There
+    // is no order here to get wrong, and `SessionStore` no longer offers a
+    // second call to reach for.
     match session_manager
-        .get_history_before(&session_key, params.limit, before_ts)
+        .history_page(&session_key, params.limit, before_ts)
         .await
     {
-        Ok(messages) => {
-            let chat_messages: Vec<ChatMessage> = messages
+        Ok(page) => {
+            let total = page.total;
+            let chat_messages: Vec<ChatMessage> = page
+                .rows
                 .into_iter()
                 .map(|m| {
                     // Resolved before anything moves out of `m`: the accessor
@@ -883,27 +853,32 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// The two reads must stay in this order, and only the source can say so.
+    /// `handle_history` answers both of its questions — "here is a window" and
+    /// "here is how long the whole conversation is" — with ONE store call.
     ///
-    /// `total` and the window are separate reads of a store a live run appends
-    /// to, so one is always slightly stale and the ORDER decides which way the
-    /// client's `total - received` can be wrong. Counting first can only
-    /// under-report, which `saturating_sub` renders as "nothing above" and the
-    /// next press corrects. Counting second over-reports, and on a conversation
-    /// shorter than the limit that draws a "load 1 earlier message" button over
-    /// a transcript with nothing earlier — a visible lie, and the shape a user
-    /// would report as a bug.
+    /// It used to make two, and two reads of a store a live run is appending to
+    /// describe two different sessions: the client's `total - received` came
+    /// out wrong by whatever landed in between. That was managed by arguing
+    /// which ORDER made the skew fall the safer way, pinned by a guard that
+    /// asserted the count appeared earlier in this function than the window
+    /// did. The hole in it is that statement order is not the property: moving
+    /// the count into a helper and calling the helper after the window
+    /// satisfies the guard and breaks the thing it was protecting.
     ///
-    /// Source-level because a runtime test cannot see it: both orders return
-    /// the same values on a quiet store, and the difference only appears under
-    /// an interleaving no unit test schedules. The alternative — a store double
-    /// that appends between the two calls — costs ~30 delegating methods to
-    /// pin one statement order.
+    /// So the property asserted here is arity, not order. One read has no order
+    /// to get wrong, and `SessionStore` deliberately exposes no second method
+    /// (`history_len` is gone) for a caller holding a trait object to reach
+    /// for — this is what remains to catch someone reintroducing one on the
+    /// concrete type or via a second `get_history`.
+    ///
+    /// `assert_eq!(reads, 1)` is its own self-check: it fails at zero (the
+    /// scanner stopped finding the call and would otherwise pass vacuously) as
+    /// well as at two.
     ///
     /// `\r` is stripped first: this repo is checked out CRLF on Windows, and a
     /// scanner that anchors on `\n` finds nothing there while staying green.
     #[test]
-    fn the_transcript_length_is_counted_before_the_window_is_read() {
+    fn the_window_and_the_transcript_length_come_from_one_read() {
         let src = include_str!("chat.rs").replace('\r', "");
         let start = src
             .find("pub async fn handle_history(")
@@ -914,24 +889,35 @@ mod tests {
         let body_end = src[start..]
             .find("\n}\n")
             .expect("handle_history has no column-0 closing brace");
-        let body = &src[start..start + body_end];
+        // Comment lines are dropped before anything is matched: a scanner
+        // judges CODE, and the prose inside this very function names both
+        // `history_len` and `history_page` while explaining why there is now
+        // one read. (Caught by this guard failing on its own first run.)
+        let body: String = src[start..start + body_end]
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let body = body.as_str();
 
-        let count_at = body
-            .find("history_total(")
-            .expect("handle_history no longer calls history_total — `total` is \
-                     the only thing that can tell a full page from a complete \
-                     short conversation");
-        let window_at = body
-            .find(".get_history_before(")
-            .expect("handle_history no longer reads the window through \
-                     get_history_before");
-        assert!(
-            count_at < window_at,
-            "handle_history reads the window (offset {window_at}) before it \
-             counts the transcript (offset {count_at}). Swap them back: \
-             counting second over-reports, and a short conversation then \
-             renders a 'load earlier' control over nothing."
+        let reads = body.matches(".history_page(").count();
+        assert_eq!(
+            reads, 1,
+            "handle_history makes {reads} calls to `history_page`, not 1. The \
+             window and the transcript's length have to come from the same \
+             read: they are two answers about a session a live run is \
+             appending to, and two reads answer about two different sessions."
         );
+
+        for second_read in ["history_len", "history_total", ".get_history("] {
+            assert!(
+                !body.contains(second_read),
+                "handle_history reads the transcript a second time via \
+                 `{second_read}`. Everything it needs comes back from the one \
+                 `history_page` call; a second read reintroduces the skew \
+                 between the count and the window that this shape removed."
+            );
+        }
     }
 
     /// End-to-end over the handler: `chat.history` must report how long the

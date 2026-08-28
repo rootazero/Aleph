@@ -57,6 +57,48 @@ pub struct MessageRecord {
     pub tool_name: Option<String>,
 }
 
+/// A window of a session's transcript together with how long the whole
+/// transcript is — the two answers a reader needs, from ONE read.
+///
+/// They are returned together because they used to be fetched apart, and
+/// "apart" is not a style choice: `messages` is appended to by a live run, so
+/// two reads see two different sessions and the client's `total - count`
+/// arithmetic is wrong by whatever landed between them. The gateway handler
+/// carried a comment arguing which ORDER made the skew fall the safer way, and
+/// a source-level guard to keep that order — a discipline that a future edit
+/// could satisfy lexically while breaking semantically (move the count into a
+/// helper, call the helper after the window). One call has no order to get
+/// wrong.
+///
+/// It is also the read the file backend was doing twice: its length fell
+/// through to the trait default, which parses the entire transcript to take its
+/// `.len()`, and then the window parsed it again. Every Panel attach paid for
+/// both. Counting the file's lines instead would have been the cheap escape and
+/// the wrong one — `read_transcript` skips blank and unparseable lines, so a
+/// line count over-reports and renders a "load 1 earlier message" control over
+/// a transcript with nothing earlier.
+#[derive(Debug, Clone)]
+pub struct HistoryPage {
+    /// The rows asked for: the trailing `limit` of those a `before` cursor
+    /// admits, oldest-first.
+    pub rows: Vec<MessageRecord>,
+    /// How many rows the whole session holds, ignoring the window — or `None`
+    /// when that could not be read.
+    ///
+    /// `Option`, never folded into `rows.len()`. A window serves the TRAILING
+    /// `limit`, so at exactly `limit` rows a full page and a complete short
+    /// conversation are byte-for-byte identical; a reader that guesses from the
+    /// length it received is inventing an answer, and it is wrong precisely
+    /// when the transcript is `limit` rows to the row. Reporting a failed count
+    /// as the window length would tell every client the transcript is complete
+    /// — the one answer wrong in the direction that HIDES content.
+    ///
+    /// This is the whole session, NOT the part a `before` cursor would admit. A
+    /// caller paginating with a cursor wants "how far back does this go", which
+    /// is this.
+    pub total: Option<usize>,
+}
+
 /// Above this a raw [`MessageRecord::timestamp`] is read as milliseconds,
 /// below it as seconds.
 ///
@@ -106,7 +148,10 @@ pub(crate) fn stamp_millis(raw: i64) -> i64 {
     // `from_timestamp_millis` then correctly reports it as unrepresentable.
     // (This predates the cursor work; it was reachable from any reader through
     // `instant()`, and only surfaced because a test finally passed `i64::MIN`.)
-    if raw.checked_abs().is_none_or(|a| a >= SECONDS_MILLIS_BOUNDARY) {
+    if raw
+        .checked_abs()
+        .is_none_or(|a| a >= SECONDS_MILLIS_BOUNDARY)
+    {
         raw
     } else {
         raw * 1000

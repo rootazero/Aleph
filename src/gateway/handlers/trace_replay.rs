@@ -149,7 +149,7 @@ pub async fn handle_by_runs(
     }
 
     let owned_runs: HashSet<String> = match sessions
-        .get_history_before(&session_key, Some(MAX_HISTORY_SCAN), None)
+        .get_history(&session_key, Some(MAX_HISTORY_SCAN))
         .await
     {
         Ok(messages) => messages

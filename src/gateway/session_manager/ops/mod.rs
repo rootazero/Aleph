@@ -13,6 +13,7 @@ mod query;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use crud::NewMessage;
 pub(crate) use emit::*;
 
 fn map_session_metadata(row: &rusqlite::Row) -> Result<SessionMetadata, rusqlite::Error> {

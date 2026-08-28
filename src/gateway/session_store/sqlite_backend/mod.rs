@@ -2,11 +2,12 @@ use async_trait::async_trait;
 use rusqlite::{params, OptionalExtension};
 
 use crate::gateway::router::SessionKey;
+use crate::gateway::session_manager::ops::NewMessage;
 use crate::gateway::session_manager::{SessionManager, SessionManagerConfig, SessionState};
 use crate::gateway::session_store::error::SessionStoreError;
 use crate::gateway::session_store::types::{
-    CheckpointSummary, DeleteResult, MessageRecord, SearchHit, SessionFilter, SessionMetadata,
-    SessionPatch, SessionPreview, TruncateResult,
+    CheckpointSummary, DeleteResult, HistoryPage, MessageRecord, SearchHit, SessionFilter,
+    SessionMetadata, SessionPatch, SessionPreview, TruncateResult,
 };
 use crate::gateway::session_store::SessionStore;
 
@@ -175,14 +176,21 @@ impl SessionStore for SessionManager {
                 .and_then(|seq| i64::try_from(seq).ok());
         self.add_message_full(
             key,
-            &msg.role,
-            &msg.content,
-            metadata_str.as_deref(),
-            msg.input_tokens,
-            msg.output_tokens,
-            msg.tool_call_id.as_deref(),
-            msg.tool_name.as_deref(),
-            source_seq,
+            NewMessage {
+                role: &msg.role,
+                content: &msg.content,
+                metadata: metadata_str.as_deref(),
+                input_tokens: msg.input_tokens,
+                output_tokens: msg.output_tokens,
+                tool_call_id: msg.tool_call_id.as_deref(),
+                tool_name: msg.tool_name.as_deref(),
+                source_seq,
+                // The producer's own stamp, forwarded rather than dropped. This
+                // insert used to replace it with `now()`, so a SQLite install
+                // dated every message by when its row was written while the file
+                // backend dated the same conversation by when it happened.
+                occurred_at: Some(msg.timestamp),
+            },
         )
         .await
         .map_err(map_err)?;
@@ -197,21 +205,17 @@ impl SessionStore for SessionManager {
         self.get_history(key, limit).await.map_err(map_err)
     }
 
-    async fn get_history_before(
+    async fn history_page(
         &self,
         key: &SessionKey,
         limit: Option<usize>,
         before: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Result<Vec<MessageRecord>, SessionStoreError> {
-        // Push the cursor into SQL rather than filtering in memory.
-        self.get_history_before(key, limit, before)
-            .await
-            .map_err(map_err)
-    }
-
-    async fn history_len(&self, key: &SessionKey) -> Result<usize, SessionStoreError> {
-        // COUNT(*), not the default impl's "read everything and measure it".
-        self.history_len(key).await.map_err(map_err)
+    ) -> Result<HistoryPage, SessionStoreError> {
+        // Pushes both down: the cursor into the WHERE clause rather than an
+        // in-memory filter, and the length into a `COUNT(*)` rather than the
+        // default impl's "read everything and measure it" — and takes the
+        // connection once so the two answers describe the same session.
+        self.history_page(key, limit, before).await.map_err(map_err)
     }
 
     async fn search_messages(
@@ -253,9 +257,16 @@ impl SessionStore for SessionManager {
         let threshold_id: Option<i64> = if keep_count == 0 {
             None
         } else {
+            // Ranked through `stamp_millis_sql`: this is the boundary of a
+            // DELETE (`/undo`), and the raw column ranks every millisecond row
+            // above every seconds row, so a mixed-unit column would make this
+            // keep and drop the wrong rows.
+            let stamp = SessionManager::stamp_millis_sql();
             conn.query_row(
-                "SELECT id FROM messages WHERE session_key = ?
-                 ORDER BY timestamp ASC, id ASC LIMIT 1 OFFSET ?",
+                &format!(
+                    "SELECT id FROM messages WHERE session_key = ?
+                 ORDER BY {stamp} ASC, id ASC LIMIT 1 OFFSET ?"
+                ),
                 params![&key_str, (keep_count - 1) as i64],
                 |row| row.get(0),
             )
