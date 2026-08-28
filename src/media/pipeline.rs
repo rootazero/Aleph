@@ -62,6 +62,20 @@ impl MediaPipeline {
             }
         }
 
+        // 1b. Same policy check for inline payloads. The cache layer's
+        // `safe_fetch` enforces `MAX_FILE_SIZE = 50 MB` on URL inputs
+        // (see `cache.rs::resolve_url`) and the data-URL pre-decode cap
+        // catches inline payloads (see `cache.rs::decode_data_url`),
+        // so this is defense-in-depth — a misrouted Base64 image
+        // reaches the vision provider only after the policy module
+        // has had a chance to refuse it. Base64 inflates by 4/3, so
+        // estimate the decoded length and check against the same
+        // policy cap the FilePath branch uses.
+        if let MediaInput::Base64 { data, .. } = input {
+            let estimated = data.len().saturating_mul(3) / 4;
+            self.policy.check_size(media_type, estimated as u64)?;
+        }
+
         // 2. Find providers that support this media type
         let eligible: Vec<_> = self
             .providers
@@ -75,7 +89,10 @@ impl MediaPipeline {
             });
         }
 
-        // 3. Try providers in priority order with fallback
+        // 3. Try providers in priority order with fallback. Track every
+        // failure so the operator-visible error names all of them, not
+        // just the last one (the most diagnostic is usually the first).
+        let mut attempts: Vec<(String, String)> = Vec::with_capacity(eligible.len());
         let mut last_err = MediaError::NoProvider {
             media_type: media_type.category().to_string(),
         };
@@ -89,9 +106,25 @@ impl MediaPipeline {
                         error = %e,
                         "Media provider failed, trying next"
                     );
+                    attempts.push((provider.name().to_string(), e.to_string()));
                     last_err = e;
                 }
             }
+        }
+
+        if attempts.len() > 1 {
+            // Surface every provider's failure in the final error so
+            // operator UI / logging can name them all without reaching
+            // back through the WARN-level trace above.
+            let summary = attempts
+                .iter()
+                .map(|(n, e)| format!("{n}: {e}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(MediaError::ProviderError {
+                provider: "all".to_string(),
+                message: format!("all {} providers failed: {summary}", attempts.len()),
+            });
         }
 
         Err(last_err)

@@ -552,6 +552,29 @@ impl McpTransport for SseTransport {
             let _ = tx.send(()).await;
         }
 
+        // Mirror the stdio drain pattern (see transport/stdio.rs): take
+        // the listener JoinHandle out, await it with a small grace bound,
+        // and only fall through to abort if it has not exited by then.
+        // Without this, the listener task may still be holding the
+        // `EventSource` (and pinning its reqwest internals) when the
+        // MCP manager reports "shutdown done", which produces
+        // "process still running" pressure under tight shutdown budgets.
+        let handle = {
+            let mut guard = self.listener_handle.write().await;
+            guard.take()
+        };
+        if let Some(handle) = handle {
+            match tokio::time::timeout(Duration::from_millis(100), handle).await {
+                Ok(_) => {}
+                Err(_) => {
+                    tracing::debug!(
+                        server = %self.server_name,
+                        "SSE listener did not exit within grace; abandoning handle"
+                    );
+                }
+            }
+        }
+
         let mut alive = self.alive.write().await;
         *alive = false;
         Ok(())

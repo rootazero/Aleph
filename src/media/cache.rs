@@ -18,7 +18,11 @@ use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
 use crate::utils::filename::sanitize_filename;
 
 /// Maximum file size allowed (50 MB — for video files).
-const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024;
+///
+/// `pub` so `crate::artifacts::store` can reference the same constant
+/// instead of duplicating it; the artifact store must accept every
+/// payload the media cache produced, so they cannot drift.
+pub const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024;
 
 /// HTTP download timeout (60s — large media files).
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);

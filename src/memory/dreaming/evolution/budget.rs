@@ -27,6 +27,17 @@ impl EditBudget {
     pub const DEFAULT_EDITS: u32 = 32;
     pub const DEFAULT_BYTES: u64 = 256 * 1024;
 
+    /// Minimum bytes per edit. A 1-byte supersede (or any other edit too
+    /// small to be a real destructive act) is silently rejected so the
+    /// budget cannot fund degenerate churn: with `bytes_remaining = 1` and
+    /// `edits_remaining = 1` the budget would otherwise admit a no-op
+    /// edit, the next cycle would re-distill, and the cycle-timeout shape
+    /// would never converge on a stable state. Picked at 64 because the
+    /// smallest meaningful destructive edit (a one-line note rewrite) is
+    /// well over that floor and a degenerate 1–63 byte edit is never
+    /// meaningful.
+    pub const MIN_EDIT_BYTES: u64 = 64;
+
     #[must_use]
     pub const fn new(edits: u32, bytes: u64) -> Self {
         Self {
@@ -38,8 +49,12 @@ impl EditBudget {
     /// Attempt to spend one edit of `bytes`. Returns `true` and decrements when
     /// the budget covers it; returns `false` (and leaves the budget untouched)
     /// when exhausted, signalling the caller to stop editing this cycle.
+    ///
+    /// The byte spend is clamped to at least [`Self::MIN_EDIT_BYTES`] so a
+    /// near-exhausted budget cannot fund a degenerate 1-byte edit.
     pub fn try_spend(&mut self, bytes: u64) -> bool {
-        if self.edits_remaining == 0 || self.bytes_remaining < bytes {
+        let spend = bytes.max(Self::MIN_EDIT_BYTES);
+        if self.edits_remaining == 0 || self.bytes_remaining < spend {
             return false;
         }
         self.edits_remaining -= 1;

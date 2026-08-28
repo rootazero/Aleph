@@ -68,7 +68,13 @@ pub async fn stored_bearer_token(server: &str, server_url: &str) -> Option<Strin
     }
 
     let client_id = entry.client_info.as_ref()?.client_id.clone();
-    let provider = OAuthProvider::new(storage, server, server_url, "");
+    let provider = match OAuthProvider::new(storage, server, server_url, "") {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(server, error = %e, "OAuth client build failed during token refresh");
+            return None;
+        }
+    };
     let metadata = match provider.discover_metadata().await {
         Ok(m) => m,
         Err(e) => {
