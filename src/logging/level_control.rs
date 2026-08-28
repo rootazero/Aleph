@@ -84,6 +84,12 @@ impl LogLevel {
 
     /// Convert from u8. Out-of-range values (memory corruption, ABI mismatch
     /// across hot-reload) fall back to `Info` and emit a single warn.
+    ///
+    /// On fallback, the atomic is also rewritten to `Info` so the stored
+    /// value and the reported value agree; otherwise subsequent `get_log_level`
+    /// calls would re-hit the corrupt byte, re-warn (suppressed by the
+    /// once-guard) and keep returning `Info` while the atomic remained
+    /// permanently out of range — masking the corruption indefinitely.
     fn from_u8(value: u8) -> Self {
         match value {
             0 => Self::Error,
@@ -93,6 +99,7 @@ impl LogLevel {
             4 => Self::Trace,
             _ => {
                 warn_invalid_level_once(value);
+                CURRENT_LOG_LEVEL.store(LogLevel::Info.to_u8(), Ordering::Release);
                 Self::Info
             }
         }
