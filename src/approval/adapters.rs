@@ -126,8 +126,15 @@ impl ChannelApprovalBridgeAdapter {
 /// and there is no combinator, so this composite is the seam.
 ///
 /// Fail-closed, but NOT fail-fast: with no channel route the approval goes to
-/// the operator and parks until the approval timeout, whose `Timeout` outcome
-/// is not an approval. There is no cheap proof that an operator is watching —
+/// the operator and parks. How long depends on the turn
+/// ([`crate::approval::approval_timeout_for_current_turn`]): an unattended one
+/// parks until the bounded default, whose `Timeout` outcome is not an approval;
+/// an ATTENDED one parks with no deadline at all, and is released only by an
+/// answer, by cancelling the run, or by the run's own wall clock. That last
+/// case is the reason the operator leg re-raises its interrupt on a schedule
+/// (`OperatorApprovalRequester::remind_until_answered`) — an unbounded wait is
+/// an improvement over a silent expiry only if somebody is eventually fetched
+/// to it. There is no cheap proof that an operator is watching —
 /// the event bus only knows raw broadcast subscribers, and internal ones (the
 /// R5 router, the provider hot-reload watcher) always exist, so a subscriber
 /// count can only ever say "yes". A guard built on it would always pass, which

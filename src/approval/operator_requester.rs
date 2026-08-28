@@ -13,9 +13,12 @@
 //! The `approval.` topic family used to be admin-gated wholesale, so "operator
 //! tier" was a property of the transport. That prefix rule is gone (see
 //! `src/gateway/CLAUDE.md` 地雷 K: a member MUST receive the card for their own
-//! parked tool call, or their run dies on the 120 s timeout and the documented
-//! workaround is `exec_tier:"full"` — the least safe tier becoming the only
-//! usable one). The judgement now lives in
+//! parked tool call, or their run dies on the approval timeout and the
+//! documented workaround is `exec_tier:"full"` — the least safe tier becoming
+//! the only usable one. The timeout was 120 s when that was written; an
+//! attended card has had no deadline since 2026-08-28, which changes the
+//! symptom from a dying run to a permanently parked one and leaves the ruling
+//! untouched). The judgement now lives in
 //! [`crate::gateway::event_visibility::session_identity_of`], which reads the
 //! frame's `session_key`: non-empty ⇒ owner-or-admin, empty ⇒ operator-only.
 //!
@@ -113,6 +116,44 @@ impl OperatorApprovalRequester {
         } else {
             session_key.to_string()
         }
+    }
+
+    /// Re-announce a still-parked approval on `schedule`, forever.
+    ///
+    /// Never returns: it is a `select!` arm whose only job is to lose the race
+    /// against the wait, so the caller is freed by the answer and this future is
+    /// dropped mid-sleep. Making it return on some "give up" condition would be
+    /// the silent timeout again, wearing a different name — the card would still
+    /// be parked, and nothing would ever say so again.
+    ///
+    /// Publish failures are logged and the schedule continues. A reminder is
+    /// best-effort by construction (the initial publish is the one that is
+    /// fatal, and it already happened): a bus hiccup on minute two must not
+    /// cancel minute seven.
+    async fn remind_until_answered(
+        event_bus: &GatewayEventBus,
+        approval_id: &str,
+        frame_session_key: &str,
+        schedule: impl Iterator<Item = std::time::Duration> + Send,
+    ) {
+        for delay in schedule {
+            tokio::time::sleep(delay).await;
+            if let Err(e) = event_bus.publish_frame(&GatewayEventFrame::ApprovalReminder {
+                approval_id: approval_id.to_string(),
+                session_key: frame_session_key.to_string(),
+            }) {
+                tracing::debug!(error = %e, id = %approval_id, "approval reminder publish failed");
+            } else {
+                tracing::info!(
+                    id = %approval_id,
+                    "re-raised the operator interrupt for a still-parked approval"
+                );
+            }
+        }
+        // `reminder_schedule` yields an endless iterator, so this is dead code
+        // — reachable only if a future caller hands in a finite one, which is
+        // the mistake this arm exists to make impossible.
+        std::future::pending::<()>().await;
     }
 }
 
@@ -248,10 +289,33 @@ impl ApprovalRequester for OperatorApprovalRequester {
             }
         }
 
-        let resolved = self
-            .manager
-            .await_registered(approval_id.clone(), rx, timeout)
-            .await;
+        // The wait and its reminders, as one future. `select!` rather than a
+        // spawned task on purpose: the reminder loop never completes, so the
+        // arm that finishes is always the wait, and losing the race DROPS the
+        // loop. A spawned task would have to be aborted on every one of this
+        // function's exits, and the reminder for a card answered ten seconds
+        // ago is exactly the "notification about something that already
+        // happened" this whole ruling exists to stop.
+        let resolved = {
+            let wait = self
+                .manager
+                .await_registered(approval_id.clone(), rx, timeout);
+            match crate::approval::reminder_schedule(timeout) {
+                None => wait.await,
+                Some(schedule) => {
+                    let remind = Self::remind_until_answered(
+                        &self.event_bus,
+                        &approval_id,
+                        &frame_session_key,
+                        schedule,
+                    );
+                    tokio::select! {
+                        resolved = wait => resolved,
+                        () = remind => unreachable!("the reminder loop never returns"),
+                    }
+                }
+            }
+        };
         let decision = resolved.decision;
 
         // Same scoping as the request frame: an escalation the member could not
@@ -371,6 +435,159 @@ mod tests {
         mgr.resolve(&id, ApprovalDecisionType::AllowOnce, None);
         let outcome = handle.await.unwrap();
         assert_eq!(outcome.outcome, ApprovalOutcome::Approved);
+    }
+
+    /// A parked card with NO deadline re-raises the operator's interrupt on the
+    /// backoff schedule, and STOPS the moment it is answered.
+    ///
+    /// This is the whole of the notify-and-wait ruling's second half. Removing
+    /// the deadline made a missed card wait instead of expiring, which is only
+    /// an improvement if something eventually fetches the human — and the thing
+    /// that does fires exactly once, at raise time. Both halves are asserted
+    /// here because they fail in opposite directions: no reminder is the silent
+    /// wait the ruling replaced, and a reminder AFTER the answer is a
+    /// notification about something that already happened.
+    ///
+    /// Paused clock: the schedule is minutes long, and the reminder loop's only
+    /// suspension point is its sleep, so auto-advance drives it deterministically.
+    #[tokio::test(start_paused = true)]
+    async fn an_unanswered_card_is_re_announced_and_stops_when_answered() {
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let manager = Arc::new(ExecApprovalManager::new());
+        let requester = OperatorApprovalRequester::new(manager.clone(), event_bus.clone());
+        let mut rx = event_bus.subscribe_typed();
+
+        let mgr = manager.clone();
+        let handle = tokio::spawn(async move {
+            TURN_CONTEXT
+                .scope(guest_turn("run-remind"), async move {
+                    requester
+                        .request_approval(&ApprovalAction::for_tool_call(
+                            "file_ops",
+                            &serde_json::json!({"operation": "delete"}),
+                            "destructive",
+                        ))
+                        .await
+                })
+                .await
+        });
+
+        // The raise, then two reminders — proving the schedule advances rather
+        // than firing once.
+        let mut id = None;
+        let mut reminders = 0;
+        while reminders < 2 {
+            // Bounded on purpose. A bare `recv().await` here would HANG the
+            // whole suite the day the wiring breaks — and a suite that never
+            // prints its result line is worse than one that prints a failure.
+            // The bound is far past every step of the schedule, and the paused
+            // clock advances to the EARLIEST pending deadline, so the reminders
+            // still fire first and the budget does not distort them.
+            let next = tokio::time::timeout(Duration::from_secs(3600), rx.recv())
+                .await
+                .expect("no reminder arrived within an hour of schedule time");
+            match next.expect("bus closed") {
+                GatewayEventFrame::ApprovalRequested {
+                    approval_id: got, ..
+                } => {
+                    assert!(id.is_none(), "the request must be announced exactly once");
+                    id = Some(got);
+                }
+                GatewayEventFrame::ApprovalReminder { approval_id, .. } => {
+                    assert_eq!(
+                        Some(&approval_id),
+                        id.as_ref(),
+                        "a reminder must name the card it is reminding about"
+                    );
+                    reminders += 1;
+                }
+                _ => {}
+            }
+        }
+        let id = id.expect("expected an ApprovalRequested frame");
+        assert!(
+            manager.get_pending(&id).is_some(),
+            "the card must still be parked while it is being re-announced"
+        );
+
+        mgr.resolve(&id, ApprovalDecisionType::AllowOnce, None);
+        assert_eq!(handle.await.unwrap().outcome, ApprovalOutcome::Approved);
+
+        // Far past every remaining step of the schedule. The loop is a `select!`
+        // arm, so answering DROPS it; a spawned reminder task would still be
+        // sleeping here and would ring into a resolved card.
+        tokio::time::advance(Duration::from_secs(3600)).await;
+        while let Ok(frame) = rx.try_recv() {
+            assert!(
+                !matches!(frame, GatewayEventFrame::ApprovalReminder { .. }),
+                "a reminder fired after the card was answered"
+            );
+        }
+    }
+
+    /// An UNATTENDED turn keeps its bounded wait, and a bounded wait is never
+    /// re-announced: it ends on its own, so an interrupt could only fetch a
+    /// human to a card that is about to stop existing — and there is no human
+    /// on any surface to fetch, which is what "unattended" means.
+    ///
+    /// # This is NOT the guard on `reminder_schedule`'s predicate
+    ///
+    /// Deleting the `timeout.is_some()` early return leaves this test GREEN.
+    /// The first backoff step and the bounded default are both 120 s, so the
+    /// reminder and the expiry come due in the same instant and `select!`
+    /// resolves the tie in the wait's favour — the mutation is invisible from
+    /// out here. What actually pins the predicate is
+    /// `reminder_tests::a_bounded_wait_raises_no_reminders`, which asserts it
+    /// directly (verified: that mutation reds it by name).
+    ///
+    /// This test earns its place on the other half — that the bounded wait
+    /// really runs to expiry on a live requester — not on the negative.
+    #[tokio::test(start_paused = true)]
+    async fn a_bounded_card_is_never_re_announced() {
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let manager = Arc::new(ExecApprovalManager::new());
+        let requester = OperatorApprovalRequester::new(manager.clone(), event_bus.clone());
+        let mut rx = event_bus.subscribe_typed();
+
+        let mut turn = guest_turn("run-unattended");
+        turn.unattended = true;
+        let handle = tokio::spawn(async move {
+            TURN_CONTEXT
+                .scope(turn, async move {
+                    requester
+                        .request_approval(&ApprovalAction::for_tool_call(
+                            "file_ops",
+                            &serde_json::json!({"operation": "delete"}),
+                            "destructive",
+                        ))
+                        .await
+                })
+                .await
+        });
+
+        // Nobody answers: the bounded wait runs out on its own.
+        let outcome = handle.await.unwrap();
+        assert_eq!(
+            outcome.outcome,
+            ApprovalOutcome::Timeout,
+            "an unattended card must still expire — parking it forever wedges a \
+             run no human is watching"
+        );
+        let mut saw_expired = false;
+        while let Ok(frame) = rx.try_recv() {
+            match frame {
+                GatewayEventFrame::ApprovalReminder { .. } => {
+                    panic!("a bounded card must raise no reminders")
+                }
+                GatewayEventFrame::ApprovalExpired { .. } => saw_expired = true,
+                _ => {}
+            }
+        }
+        assert!(
+            saw_expired,
+            "self-guard: the bounded wait must actually have run to expiry, or \
+             the no-reminder assertion above passed without the clock moving"
+        );
     }
 
     #[tokio::test]

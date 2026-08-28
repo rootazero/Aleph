@@ -161,6 +161,62 @@ pub fn approval_timeout_for_current_turn() -> u64 {
     }
 }
 
+/// How long to leave a parked, unanswered approval alone before re-raising the
+/// operator's interrupt, and the same answer for every reminder after it.
+///
+/// The no-timeout ruling removed the deadline; it did not remove the way a card
+/// gets missed. What replaced "the card expires" is "the card waits" — which is
+/// only an improvement if the human eventually looks, and the one thing that
+/// fetches a human who has walked away fires exactly once, at raise time
+/// (`r5_router` → `surface.approval` → the shell's OS banner). A persistent card
+/// nobody is looking at is not a notification.
+///
+/// The schedule backs off — 2 min, 5 min, then every 15 min — because the two
+/// failure modes are not symmetric. Under-reminding costs a wait the user did
+/// not intend; over-reminding trains them to dismiss the banner, which costs
+/// every future approval. A fixed short interval would ring dozens of times
+/// against a card left overnight; the cap keeps a very long park at four
+/// interrupts an hour.
+///
+/// The last entry repeats forever: the list is a schedule, not a budget. Giving
+/// up after the last entry would reintroduce the silent timeout in the one place
+/// it is least visible — the run would still be parked, but nothing would ever
+/// say so again.
+///
+/// Reminders are raised ONLY for a card with no deadline
+/// ([`crate::exec::manager::NO_APPROVAL_TIMEOUT`]); see
+/// [`reminder_schedule`].
+pub const APPROVAL_REMINDER_BACKOFF_SECS: &[u64] = &[120, 300, 900];
+
+/// The reminder schedule for a wait of `timeout`, as an endless sequence of
+/// sleeps between successive re-announcements.
+///
+/// `None` — no reminders — for a BOUNDED wait, and that is the whole predicate:
+/// a bounded card ends on its own, so a reminder can only fire against a card
+/// that is about to stop mattering. Deriving it from the deadline the wait is
+/// actually running under (rather than re-asking "is this turn attended?") keeps
+/// one answer to "does anything besides a human end this wait" — a second
+/// derivation could disagree with the first, and the disagreement would be
+/// invisible in both directions: reminders for a card that expires anyway, or
+/// silence on one that never will.
+pub fn reminder_schedule(
+    timeout: Option<std::time::Duration>,
+) -> Option<impl Iterator<Item = std::time::Duration>> {
+    if timeout.is_some() {
+        return None;
+    }
+    let last = *APPROVAL_REMINDER_BACKOFF_SECS
+        .last()
+        .expect("APPROVAL_REMINDER_BACKOFF_SECS is a non-empty literal");
+    Some(
+        APPROVAL_REMINDER_BACKOFF_SECS
+            .iter()
+            .copied()
+            .chain(std::iter::repeat(last))
+            .map(std::time::Duration::from_secs),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -666,5 +722,60 @@ mod lift_tests {
                 ));
             })
             .await;
+    }
+}
+
+#[cfg(test)]
+mod reminder_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// A bounded wait ends on its own, so nothing needs re-announcing. The
+    /// predicate is the DEADLINE, not the turn's attendedness: re-asking
+    /// "is this attended?" here would be a second derivation, free to disagree
+    /// with the one that actually chose the timeout.
+    #[test]
+    fn a_bounded_wait_raises_no_reminders() {
+        assert!(reminder_schedule(Some(Duration::from_secs(120))).is_none());
+        assert!(reminder_schedule(Some(Duration::ZERO)).is_none());
+    }
+
+    /// The unbounded wait backs off and then repeats its last step FOREVER.
+    /// A schedule that ran out would be the silent timeout again in its least
+    /// visible form: still parked, and nothing left to say so.
+    #[test]
+    fn an_unbounded_wait_backs_off_then_repeats_the_last_step() {
+        let got: Vec<u64> = reminder_schedule(None)
+            .expect("no deadline must schedule reminders")
+            .take(6)
+            .map(|d| d.as_secs())
+            .collect();
+        assert_eq!(got, vec![120, 300, 900, 900, 900, 900]);
+    }
+
+    /// The first reminder must land AFTER the bounded default would have
+    /// expired. Otherwise a wait that is about to end on its own could still
+    /// ring — the one case `reminder_schedule` returns `None` for, arriving by
+    /// a second route if the constants ever drift toward each other.
+    #[test]
+    fn the_first_reminder_is_later_than_the_bounded_default() {
+        let first = *APPROVAL_REMINDER_BACKOFF_SECS
+            .first()
+            .expect("non-empty literal");
+        assert!(
+            first * 1000 >= crate::exec::manager::DEFAULT_APPROVAL_TIMEOUT_MS,
+            "first reminder at {first}s would fire inside the {}ms bounded wait",
+            crate::exec::manager::DEFAULT_APPROVAL_TIMEOUT_MS
+        );
+    }
+
+    /// The schedule is monotonically non-decreasing. A dip would mean the
+    /// interrupts get MORE frequent the longer a card is ignored, which is the
+    /// shape that trains a user to dismiss the banner.
+    #[test]
+    fn the_backoff_never_decreases() {
+        for w in APPROVAL_REMINDER_BACKOFF_SECS.windows(2) {
+            assert!(w[0] <= w[1], "backoff dips: {APPROVAL_REMINDER_BACKOFF_SECS:?}");
+        }
     }
 }

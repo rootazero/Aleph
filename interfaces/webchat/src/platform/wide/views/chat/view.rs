@@ -215,7 +215,8 @@ pub fn ChatView() -> impl IntoView {
                     // Message list (scrollable) — or the welcome hero when empty
                     <MessageList />
                     // Parked-approval banner: a tool gated on approval blocks
-                    // the run for up to 120s, and the bell badge alone proved
+                    // the run until somebody answers (an attended card no
+                    // longer expires at all), and the bell badge alone proved
                     // too quiet (2026-08-28, s143: two file_ops approvals
                     // expired unanswered while the user watched the very
                     // conversation that was waiting). The inline card under
@@ -341,7 +342,8 @@ fn ingest_dropped_file(file: web_sys::File, attachments: RwSignal<Vec<PendingAtt
 /// that PARKS the run the user is watching: this banner keys on the session
 /// alone and floats above the message flow for as long as the conversation
 /// being viewed has an unanswered card. Multiple parked calls collapse to the
-/// oldest one — resolving it refetches (`approval.**`) and the next appears.
+/// oldest one — the server's `list_pending` order, not a local re-derivation —
+/// and resolving it refetches (`approval.**`) so the next appears.
 #[component]
 fn SessionApprovalBanner() -> impl IntoView {
     let chat = expect_context::<ChatState>();
@@ -353,8 +355,16 @@ fn SessionApprovalBanner() -> impl IntoView {
             .pending_approvals
             .get()
             .into_iter()
-            .filter(|p| p.session_key == key)
-            .min_by_key(|p| p.expires_at_ms)
+            // FIRST match, not `min_by_key(expires_at_ms)`. The deadline was a
+            // usable stand-in for age only while every card shared one timeout;
+            // now `0` is the no-expiry sentinel, so an unbounded card sorts
+            // ahead of every bounded one no matter which was raised first, and
+            // a set of unbounded cards ties at 0 with no order at all. The
+            // server already answers this question — `list_pending` sorts by
+            // `created_at_ms` with the id breaking ties — and `pending_approvals`
+            // preserves that order, so reading it is both correct and one
+            // derivation instead of two.
+            .find(|p| p.session_key == key)
     });
 
     view! {
