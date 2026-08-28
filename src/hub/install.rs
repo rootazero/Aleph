@@ -140,7 +140,7 @@ pub fn install_git_skill(
     // segment from a crafted catalog entry could read outside the clone.
     if leaf
         .split(['/', '\\'])
-        .any(|seg| seg == ".." || seg.is_empty())
+        .any(|seg| seg == "." || seg == ".." || seg.is_empty())
     {
         return Err(format!("unsafe skill subdir '{leaf}'"));
     }
@@ -218,7 +218,19 @@ pub fn install_git_skill(
             installed_at: None,
         },
     );
-    let _ = manifest.save(skills_dir);
+    // Best-effort persistence of the install registry: the skill is already
+    // on disk and visible to the skill system, but a failed write means the
+    // next official sync will reprocess this entry as if newly added. Surface
+    // the partial failure so an operator can recover the registry row.
+    if let Err(e) = manifest.save(skills_dir) {
+        tracing::warn!(
+            error = %e,
+            skill = %safe_name,
+            skills_dir = %skills_dir.display(),
+            "installed skill but failed to persist install registry; \
+             next official sync may reprocess the entry as new",
+        );
+    }
     // Note: the per-entry `.git-cache/<id>` clone is intentionally left on
     // disk so a follow-up install with a stronger pin (sha256) can re-clone
     // cheaply without a network round-trip. The disk leak that this creates
