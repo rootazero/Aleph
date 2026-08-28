@@ -96,9 +96,11 @@ impl GenerationProviderRegistry {
         provider: Arc<dyn GenerationProvider>,
     ) -> GenerationResult<()> {
         if self.providers.contains_key(&name) {
-            return Err(GenerationError::internal(format!(
-                "Provider '{name}' is already registered"
-            )));
+            // A duplicate registration is a config bug (e.g. two
+            // `[generation.openai_image]` sections), not an internal
+            // failure — the dedicated variant maps to `invalid_config`
+            // with actionable guidance instead of "please try again".
+            return Err(GenerationError::DuplicateProvider { name });
         }
         self.providers.insert(name, provider);
         Ok(())

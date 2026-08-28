@@ -23,6 +23,14 @@ use crate::generation::providers::{
 };
 use crate::generation::VoiceInfo;
 
+/// The date the static voice catalogs were last audited against the vendor
+/// docs. Voice lists are inherently stale-prone — vendors add voices between
+/// releases (OpenAI added `sage`/`verse`/`marin`/`cedar` in 2025), and users
+/// otherwise have no signal that their picker is out of date. Surfaced in the
+/// Settings RPC payload so the UI can show a "catalog as of …" hint; bump
+/// this constant whenever a `static_voice_list()` is updated.
+pub const CATALOG_GENERATED_AT: &str = "2026-08-27";
+
 /// Voices known statically for a `provider_type`, using the same aliases the
 /// provider factory accepts (`create_provider`) so a type that constructs a
 /// speech provider always resolves a catalog here too.
