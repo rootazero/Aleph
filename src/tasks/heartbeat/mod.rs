@@ -117,6 +117,10 @@ impl HeartbeatService {
     }
 
     /// Add a new task. Returns the task ID.
+    ///
+    /// Rejects duplicate ids at the service boundary so the caller sees a
+    /// proper "already exists" error rather than a generic storage failure
+    /// from the SQLite `UNIQUE` constraint. Mirrors `CronService::add_job`.
     pub async fn add_task<C: Clock>(
         &self,
         task: HeartbeatTask,
@@ -124,6 +128,12 @@ impl HeartbeatService {
     ) -> Result<String, TaskError> {
         let id = {
             let mut store = self.state.store.lock().await;
+            if store.get_task(&task.id).is_some() {
+                return Err(TaskError::invalid(format!(
+                    "task with id '{}' already exists",
+                    task.id
+                )));
+            }
             let id = ops::add_task(&mut store, task, clock);
             store.persist().map_err(TaskError::internal)?;
             id
@@ -250,5 +260,40 @@ mod tests {
         assert!(!service.state().is_shutdown());
         service.request_shutdown();
         assert!(service.state().is_shutdown());
+    }
+
+    /// Duplicate id at the service boundary surfaces as `Invalid`, not
+    /// `Internal`: before this guard the SQLite `UNIQUE` constraint
+    /// propagated as a generic storage failure indistinguishable from a real
+    /// write bug. Mirrors the cron service-level guard.
+    #[tokio::test]
+    async fn add_task_with_duplicate_id_is_refused_as_invalid() {
+        let service = make_service();
+        let clock = FakeClock::new(1_000_000);
+
+        let first = service.add_task(make_task("first"), &clock).await.unwrap();
+
+        // Same id, different name → service-level duplicate detection.
+        let mut dup = make_task("second");
+        dup.id = first.clone();
+        let err = service.add_task(dup, &clock).await.unwrap_err();
+        assert!(
+            matches!(err, TaskError::Invalid(_)),
+            "duplicate id must be Invalid, got {err:?}"
+        );
+        assert!(
+            err.message().contains(&first),
+            "the refusal must name the conflicting id: {err}"
+        );
+        assert!(
+            err.message().contains("already exists"),
+            "the refusal must explain the cause: {err}"
+        );
+
+        // The original task must still be there, untouched.
+        let tasks = service.list_tasks().await;
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].id, first);
+        assert_eq!(tasks[0].name, "first");
     }
 }
