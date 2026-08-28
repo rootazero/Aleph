@@ -1068,6 +1068,50 @@ The secret pattern catalogs live in `src/secrets/leak_detector.rs` and
 `-----BEGIN[A-Z ]*PRIVATE KEY-----` in both, so bare PKCS#8 headers cannot slip
 one catalog but not the other).
 
+### The guardrail chain settles on "was it rewritten", not on "did anyone warn" (2026-08-28)
+
+**Location**: `src/guardrails/registry.rs` — `evaluate_input` / `evaluate_output`
+/ `evaluate_tool_call`, all three settling through `settle_chain`.
+
+A guardrail chain runs each registered guardrail in order, feeding the next one
+the **rewritten** payload, so a `Sanitize` followed by a `Block` cannot leak.
+Only `Block` short-circuits. `Warn` reasons accumulate (deduplicated). What the
+chain returns is then decided in exactly one place, and the predicate is
+**`rewritten`** — did any guardrail ask for a rewrite — not `warns.is_empty()`.
+
+The distinction is the whole contract. `warns.is_empty()` was the predicate for
+one commit, and under it a guardrail that rewrote the payload without *also*
+warning returned `Allow` and its rewrite was discarded: the original text went
+to the provider. That is not an edge case — it is the shape **every redaction
+guardrail has**. A PII scrubber does not warn; warning about a secret is one way
+to write it into the audit log. So for the class of guardrail this layer exists
+to serve, sanitization was a complete no-op, with no error and no log line, and
+the only observable difference was the secret on the wire.
+
+Two consequences follow, and both are load-bearing:
+
+- **A rewrite that does not parse back as JSON is surfaced, not swallowed.**
+  `evaluate_tool_call` must rebuild a `Value` from the guardrail's replacement
+  text. When that fails there is no payload left to continue the chain with, so
+  the chain ends there and returns the unparseable `Sanitize` **verbatim**.
+  `AgentHarness::apply_tool_call_guardrail` then fails its own reparse and
+  blocks the call — which is what its fail-closed arm is for. Downgrading the
+  failure to a warn and keeping the previous args instead hands the tool the
+  guardrail's **original, un-sanitized** arguments, and does so by making the
+  harness's fail-closed arm unreachable.
+- **The `source` string may not claim a warn that did not fire.** It is audit
+  copy: `guardrails (sanitized)` / `guardrails (sanitized; warn: …)` /
+  `guardrails (warn: …)`, chosen from the two facts rather than formatted from
+  one of them.
+
+The regression test is `all_three_chains_surface_a_warn_free_rewrite`, and it
+asserts the three surfaces **agree** rather than asserting any one surface's
+answer: the failure mode here was divergence — the tool-call twin had the
+correct predicate while its two siblings did not, twenty lines apart in the same
+file. `a_warn_only_chain_still_carries_its_reasons_unchanged` is the floor in
+the other direction, so "stop dropping the rewrite" cannot be over-corrected
+into "`Allow` unless rewritten", which would discard every warn reason instead.
+
 ### Asking a human FOR a secret is a third path, and masking is not its answer
 
 `ask_user` questions carry a `secret` flag (codex `isSecret`). It is **not** a
