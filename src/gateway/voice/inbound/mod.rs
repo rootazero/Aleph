@@ -165,6 +165,13 @@ async fn get_audio_bytes(attachment: &Attachment) -> Result<(Vec<u8>, String), S
     }
 
     if let Some(ref path) = attachment.path {
+        // NOTE on the threat model: `path` is set by the CHANNEL ADAPTER
+        // (e.g. a channel that downloaded the media to a local temp dir), so
+        // it is trusted input under the R7 brain-limb contract — the adapter
+        // is the limb that owns the inbound bytes. Channels that let a
+        // remote peer supply the path verbatim would be an LFI vector; that
+        // is the adapter's responsibility to prevent, and is flagged in the
+        // audit as a follow-up for the webhook channel's payload parsing.
         let bytes = tokio::fs::read(path)
             .await
             .map_err(|e| format!("Failed to read audio file {path}: {e}"))?;
@@ -173,17 +180,30 @@ async fn get_audio_bytes(attachment: &Attachment) -> Result<(Vec<u8>, String), S
 
     if let Some(ref url) = attachment.url {
         debug!(url = %url, "Downloading audio for transcription");
-        let resp = reqwest::get(url)
+        // **SSRF guard**: the previous `reqwest::get(url)` followed redirects
+        // by default and reached arbitrary external hosts — including cloud
+        // metadata endpoints (169.254.169.254) and anything a crafted
+        // attachment URL pointed at. `safe_fetch` validates the URL AND every
+        // redirect hop against the SSRF policy (scheme allowlist, hostname
+        // blocklist, private/loopback/metadata IP rejection), pins DNS to
+        // close the rebinding TOCTOU window, strips auth headers on
+        // cross-origin redirects, and caps the body so a hostile upstream
+        // cannot OOM the process before the transcription path sees it.
+        //
+        // Channel-CDN media URLs (discord/telegram/etc.) are public https
+        // hosts and pass the default policy unchanged.
+        const MAX_AUDIO_BYTES: usize = 100 * 1024 * 1024; // 100 MiB
+        let policy = crate::security::ssrf::SsrfPolicy::default();
+        let mut request =
+            crate::security::ssrf::SafeFetchRequest::get(std::time::Duration::from_secs(60));
+        request.max_body_bytes = Some(MAX_AUDIO_BYTES);
+        let resp = crate::security::ssrf::safe_fetch(url, &policy, request)
             .await
             .map_err(|e| format!("Failed to download audio from {url}: {e}"))?;
-        if !resp.status().is_success() {
-            return Err(format!("Audio download failed: HTTP {}", resp.status()));
+        if !resp.status.is_success() {
+            return Err(format!("Audio download failed: HTTP {}", resp.status));
         }
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| format!("Failed to read audio bytes: {e}"))?;
-        return Ok((bytes.to_vec(), filename));
+        return Ok((resp.body, filename));
     }
 
     Err("Audio attachment has no data, path, or URL".to_string())
