@@ -358,4 +358,48 @@ mod tests {
             "no intact marker may survive, got: {result:?}"
         );
     }
+
+    /// Every char the supplement catches must NOT be caught by the SSOT.
+    /// If a future change adds one of these to `unicode_guard::is_invisible_char`,
+    /// the prompt layer's supplement should drop that range — otherwise we
+    /// pay the cost of two sources of truth without the supplement being
+    /// actually supplementary. This is the SSOT-drift guard for the dual-
+    /// source-of-truth debt documented in `is_format_char`.
+    #[test]
+    fn supplement_does_not_overlap_with_unicode_guard_ssot() {
+        use crate::security::unicode_guard;
+        let supplement_ranges: &[(u32, u32)] = &[
+            (0x00AD, 0x00AD),          // Soft Hyphen
+            (0x061C, 0x061C),          // Arabic Letter Mark
+            (0x070F, 0x070F),          // Syriac Abbreviation Mark
+            (0x0890, 0x0891),          // Arabic Pound/Piastre Mark
+            (0x08E2, 0x08E2),          // Arabic Disputed End of Ayah
+            (0x180E, 0x180E),          // Mongolian Vowel Separator
+            (0x2028, 0x2029),          // Zl/Zp line/paragraph separators
+            (0x200B, 0x200F),          // Zero-width and direction marks
+            (0x202A, 0x202E),          // Bidirectional formatting
+            (0x2060, 0x2064),          // Invisible operators
+            (0x2066, 0x206F),          // Bidi isolates + deprecated
+            (0xFEFF, 0xFEFF),          // BOM / ZWNBSP
+            (0xFFF9, 0xFFFB),          // Interlinear annotation anchors
+            (0x110BD, 0x110BD),        // Kaithi Number Sign
+            (0x110CD, 0x110CD),        // Kaithi Number Sign Above
+            (0x13430, 0x1343F),        // Egyptian Hieroglyph format chars
+            (0x1BCA0, 0x1BCA3),        // Shorthand format controls
+            (0x1D173, 0x1D17A),        // Musical symbol format chars
+            (0xE0001, 0xE0001),        // Language Tag
+            (0xE0020, 0xE007F),        // Tag components
+        ];
+        for (lo, hi) in supplement_ranges {
+            for cp in *lo..=*hi {
+                if let Some(c) = char::from_u32(cp) {
+                    assert!(
+                        !unicode_guard::is_invisible_char(c),
+                        "supplement range {lo:#06X}..={hi:#06X} includes {c:?} which is now in \
+                         unicode_guard::is_invisible_char; remove the overlap from the supplement"
+                    );
+                }
+            }
+        }
+    }
 }
