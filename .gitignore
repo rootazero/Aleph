@@ -88,6 +88,13 @@ platforms/macos/Aleph/Frameworks/*.dylib.*
 # Packaged installers
 Aleph.dmg
 
+# Panel WASM bundle — release pipeline owns dist/ from now on; the
+# commit history carried it as pre-built Panel until 0dc1ff85a, which
+# dropped the eight tracked files. The .gitignore entry keeps a future
+# `trunk build` / `just wasm` from re-introducing them.
+/interfaces/webchat/dist/
+**/interfaces/webchat/dist/
+
 # ==============================================================================
 # Generated tooling output (analysis / scratch dirs)
 # ==============================================================================
