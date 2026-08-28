@@ -105,7 +105,7 @@ mod tests {
     fn test_operation_url() {
         let provider = GoogleVeoProvider::new("test-api-key", None, None).unwrap();
         assert_eq!(
-            provider.operation_url("operations/12345"),
+            provider.operation_url("operations/12345").unwrap(),
             "https://generativelanguage.googleapis.com/v1beta/operations/12345"
         );
     }
