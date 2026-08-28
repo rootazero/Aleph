@@ -125,12 +125,16 @@ impl Channel for FeishuChannel {
         if self.test_mode {
             return self.channel_state.status();
         }
-        match self.runtime.as_ref().map(|r| r.connection_state()) {
-            Some(feishu_runtime::RuntimeState::Connected) => ChannelStatus::Connected,
-            Some(feishu_runtime::RuntimeState::Connecting) => ChannelStatus::Connecting,
-            Some(feishu_runtime::RuntimeState::Error) => ChannelStatus::Error,
-            _ => ChannelStatus::Disconnected,
-        }
+        // **Audit fix**: the previous implementation read `self.runtime` to
+        // report the connection state, but the webhook branch of `start()`
+        // never constructs a `FeishuRuntime` (it just spawns the webhook
+        // server) — `self.runtime` stays `None`. The fall-through `_` arm
+        // reports `Disconnected` for a webhook-started feishu channel that
+        // is genuinely serving HTTP traffic, hiding the live webhook from
+        // `channels.list` and confusing the health monitor. Prefer the
+        // canonical channel_state, which is set in both branches.
+        self.channel_state.status()
+    }
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
@@ -165,10 +169,22 @@ impl Channel for FeishuChannel {
         // `api_handle`.
         api_handle::publish(self.info.id.as_str(), &api, &self.config);
 
-        let bot_info = api
-            .get_bot_info()
-            .await
-            .map_err(|e| ChannelError::AuthFailed(format!("Bot info failed: {e}")))?;
+        // **Audit fix**: the previous code published the api_handle then
+        // returned the bare `?` from `get_bot_info` without withdrawing the
+        // handle. A failed start() left a `Weak<FeishuApi>` + `FeishuConfig`
+        // entry pinned in the static TABLE — `get()` would either return a
+        // stale config snapshot or a never-refreshed token for the next
+        // `try_create_feishu_emitter`. Mirror `stop()`'s withdraw-on-error
+        // contract here.
+        let bot_info = match api.get_bot_info().await {
+            Ok(info) => info,
+            Err(e) => {
+                api_handle::withdraw(self.info.id.as_str());
+                return Err(ChannelError::AuthFailed(format!(
+                    "Bot info failed: {e}"
+                )));
+            }
+        };
         tracing::info!("Feishu bot connected: {:?}", bot_info.app_name);
 
         let bot_open_id = api.bot_open_id().await.unwrap_or_default();
