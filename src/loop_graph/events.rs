@@ -32,10 +32,9 @@
 //!   refusal (`Store rejected an invalid edge`) is a separate event kind we don't
 //!   emit today, on purpose — see "NOT-build" in GRAPH_LAYER §7.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-
 use serde::{Deserialize, Serialize};
+
+use crate::sync_primitives::{Arc, AtomicU64, Ordering};
 use tokio::sync::broadcast;
 
 use crate::loop_graph::types::{EdgeKind, NodeKind};
