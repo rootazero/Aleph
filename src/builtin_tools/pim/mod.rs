@@ -496,6 +496,7 @@ impl PimTool {
         };
 
         let decision = policy.check(&request).await;
+        let decision = crate::approval::lift_ask(decision, ActionType::PimWrite);
 
         match decision {
             ApprovalDecision::Allow => {

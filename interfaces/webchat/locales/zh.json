@@ -188,6 +188,7 @@
     "approval_header": "操作授权",
     "approval_requested_by": "请求方",
     "approval_expires": "剩余",
+    "approval_no_expiry": "等待处理 · 无超时",
     "approval_allow_once": "批准一次",
     "approval_allow_session": "本会话批准",
     "approval_allow_always": "永久允许",

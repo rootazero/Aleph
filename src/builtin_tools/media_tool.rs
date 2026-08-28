@@ -70,7 +70,7 @@ impl MediaTool {
             timestamp: chrono::Utc::now(),
         };
 
-        match policy.check(&request).await {
+        match crate::approval::lift_ask(policy.check(&request).await, ActionType::MediaCapture) {
             ApprovalDecision::Allow => {
                 policy.record(&request, &ApprovalDecision::Allow).await;
                 None

@@ -116,6 +116,27 @@ task_local! {
 }
 
 tokio::task_local! {
+    /// The exec tier the running turn resolved to (`ask` / `auto` / `full`;
+    /// `plan` composes through the plan gate instead), scoped by
+    /// `ScopedToolService::execute` — the same chokepoint that scopes
+    /// [`TURN_CONTEXT`] — from `ScopedToolService::effective_exec_tier`.
+    ///
+    /// Sole consumer: [`crate::approval::lift_ask_under_full_tier`], which
+    /// lets a policy-level `Ask` resolve to `Allow` when the operator already
+    /// answered the question by picking the Full tier for this conversation.
+    /// Unset (cron, internal, tests, any non-gateway run) reads as `None`,
+    /// and `None` lifts nothing — the fail-closed default.
+    pub static TURN_EXEC_TIER: crate::config::types::policies::ExecTier;
+}
+
+/// The exec tier of the turn currently executing a tool, when the dispatch
+/// chokepoint published one. See [`TURN_EXEC_TIER`].
+#[must_use]
+pub fn current_exec_tier() -> Option<crate::config::types::policies::ExecTier> {
+    TURN_EXEC_TIER.try_with(|t| *t).ok()
+}
+
+tokio::task_local! {
     /// Raw channel user id of the human whose message triggered the current
     /// run — the approval "originator".
     ///

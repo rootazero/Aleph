@@ -62,7 +62,7 @@ impl SystemTool {
         let policy = self.approval_policy.as_ref()?;
         let (agent_id, context) = crate::approval::audit_identity("system", action, &target);
         let request = ActionRequest {
-            action_type,
+            action_type: action_type.clone(),
             target,
             display_target: String::new(),
             agent_id,
@@ -70,6 +70,7 @@ impl SystemTool {
             timestamp: chrono::Utc::now(),
         };
         let decision = policy.check(&request).await;
+        let decision = crate::approval::lift_ask(decision, action_type.clone());
         match decision {
             ApprovalDecision::Allow => {
                 policy.record(&request, &decision).await;
@@ -201,13 +202,13 @@ Examples:
 
         // Gate state-changing actions behind the approval policy (the same OS
         // ops DesktopTool gates), so an agent cannot bypass that gate via the
-        // `system` tool. ⚠️ The curated built-in default for these action types
-        // is `Ask` (and `DesktopReadClipboard` has no curated entry at all),
-        // and this layer resolves `Ask` to a refusal string with no interactive
-        // consumer — so on a policy-file-absent install the gated actions are
-        // REFUSED, not allowed. Whether that fail-dead posture is the intended
-        // shipped behavior is a pending user ruling (FEATURE_LOCATOR §7.3,
-        // 2026-08-23 entry, item ⓒ); do not "fix" the wiring before it lands.
+        // `system` tool. The curated built-in default for these action types
+        // is `Ask`, and this layer has no interactive consumer for `Ask` —
+        // it resolves to a refusal string. Ruled 2026-08-27 (FEATURE_LOCATOR
+        // §7.3 item ⓒ): an `Ask` under an ambient Full exec tier lifts to
+        // `Allow` (`approval::lift_ask`, applied to every
+        // tool-internal policy gate) — the operator's tier pick IS the answer
+        // to the ask. Under any other tier the fail-closed posture stands.
         let gated = match args.action.as_str() {
             "launch_app" | "quit_app" | "restart_app" => Some((
                 ActionType::DesktopLaunchApp,
@@ -224,17 +225,12 @@ Examples:
                 ActionType::DesktopType,
                 args.body.clone().unwrap_or_default(),
             )),
-            // BT-A-R4-03: previously `clipboard_read` fell through the
-            // `_ => None` arm while `clipboard_write` was gated. The
-            // disclosure risk (passwords, 2FA codes, copied secrets) is
-            // symmetric. ⚠️ `DesktopReadClipboard` has no curated default
-            // entry, so this arm resolves to `Ask` — a refusal with no
-            // consumer — on every policy-file-absent install, while the
-            // `desktop` tool's own `clipboard_read` is approval-exempt: one
-            // capability, two paths, two treatments. Adding a curated entry
-            // here is deliberately deferred to the pending ⓒ ruling
-            // (FEATURE_LOCATOR §7.3, 2026-08-23 entry) — wiring it now would
-            // pre-empt that decision.
+            // `clipboard_read` fell through the `_ => None` arm while
+            // `clipboard_write` was gated. The disclosure risk (passwords, 2FA
+            // codes, copied secrets) is symmetric. `DesktopReadClipboard` has
+            // no curated default entry, so this arm resolves to `Ask` — under
+            // a non-Full tier that is the fail-closed refusal described above;
+            // under Full it lifts (`approval::lift_ask`).
             "clipboard_read" => Some((
                 ActionType::DesktopReadClipboard,
                 args.body.clone().unwrap_or_default(),
@@ -642,6 +638,51 @@ mod tests {
         assert!(!out.success);
         assert!(out.message.unwrap().contains("requires"));
         assert!(opened.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn open_path_ask_refuses_without_tier_but_runs_under_full_tier() {
+        use crate::approval::{ConfigApprovalPolicy, DefaultDecision, PolicyConfig};
+        use crate::config::types::policies::ExecTier;
+        use std::collections::HashMap;
+
+        let (tool, opened) = tool_with_recorder();
+        let policy = ConfigApprovalPolicy::new(PolicyConfig {
+            defaults: HashMap::from([(ActionType::DesktopLaunchApp, DefaultDecision::Ask)]),
+            allowlist: Vec::new(),
+            blocklist: Vec::new(),
+        });
+        let tool = tool.with_approval_policy(Arc::new(policy));
+        let args = || SystemArgs {
+            action: "open_path".into(),
+            app_name: None,
+            path: Some("/tmp/report.html".into()),
+            title: None,
+            body: None,
+        };
+
+        // No ambient tier: the curated Ask stays the fail-closed refusal —
+        // exactly the shipped posture for Ask/Auto conversations.
+        let out = tool.call(args()).await.unwrap();
+        assert!(!out.success, "Ask without a tier must still refuse");
+        assert!(opened.lock().unwrap().is_empty());
+
+        // Full tier: the operator's pick is the answer to the ask (ruled
+        // 2026-08-27, FEATURE_LOCATOR §7.3 ⓒ) — the call reaches the OS.
+        crate::tools::turn_context::TURN_EXEC_TIER
+            .scope(ExecTier::Full, async {
+                let out = tool.call(args()).await.unwrap();
+                assert!(
+                    out.success,
+                    "Full tier must lift the Ask: {:?}",
+                    out.message
+                );
+            })
+            .await;
+        assert_eq!(
+            opened.lock().unwrap().as_slice(),
+            &["/tmp/report.html".to_string()]
+        );
     }
 
     struct CountingSystem {

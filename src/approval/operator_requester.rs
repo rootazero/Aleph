@@ -53,7 +53,7 @@
 use async_trait::async_trait;
 
 use crate::exec::decision::ApprovalRequest;
-use crate::exec::manager::{ExecApprovalManager, DEFAULT_APPROVAL_TIMEOUT_MS};
+use crate::exec::manager::ExecApprovalManager;
 use crate::exec::socket::ApprovalDecisionType;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::events::GatewayEventFrame;
@@ -170,7 +170,10 @@ impl ApprovalRequester for OperatorApprovalRequester {
         };
         // Kept for the outcome mapping below: `request` is moved into `create`.
         let allowed_decisions = action.allowed_decisions.clone();
-        let mut record = self.manager.create(&request, DEFAULT_APPROVAL_TIMEOUT_MS);
+        let mut record = self.manager.create(
+            &request,
+            crate::approval::approval_timeout_for_current_turn(),
+        );
         // The RPC leg of the same fact the blank frame key carries. Stamped on
         // the record (not derived from its `session_key`, which stays real for
         // the grant cascade) so `exec.approvals.pending` and

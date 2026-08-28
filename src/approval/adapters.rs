@@ -36,7 +36,7 @@ use crate::sync_primitives::Arc;
 use crate::approval::operator_requester::OperatorApprovalRequester;
 use crate::approval::session_route::channel_route;
 use crate::exec::approval::channel_bridge::ChannelApprovalBridge;
-use crate::exec::manager::{ExecApprovalManager, DEFAULT_APPROVAL_TIMEOUT_MS};
+use crate::exec::manager::ExecApprovalManager;
 use crate::gateway::channel::{ChannelId, ConversationId};
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester, ApprovalResponse};
 use crate::sandbox::exec_approval::ApprovalAction;
@@ -50,11 +50,16 @@ use crate::sandbox::exec_approval::ApprovalAction;
 pub struct ChannelApprovalBridgeAdapter {
     bridge: Arc<ChannelApprovalBridge>,
     approval_manager: Arc<ExecApprovalManager>,
-    timeout_ms: u64,
 }
 
 impl ChannelApprovalBridgeAdapter {
-    /// Construct a new adapter. Uses the default 2-minute approval timeout.
+    /// Construct a new adapter.
+    ///
+    /// The approval timeout is chosen per request
+    /// ([`crate::approval::approval_timeout_for_current_turn`]): an attended
+    /// channel turn waits forever (notify + wait, ruled 2026-08-28), an
+    /// unattended one fails closed after the bounded default. It is not a
+    /// construction-time constant because the same adapter serves both.
     #[must_use]
     pub const fn new(
         bridge: Arc<ChannelApprovalBridge>,
@@ -63,7 +68,6 @@ impl ChannelApprovalBridgeAdapter {
         Self {
             bridge,
             approval_manager,
-            timeout_ms: DEFAULT_APPROVAL_TIMEOUT_MS,
         }
     }
 
@@ -183,7 +187,7 @@ impl ApprovalRequester for ChannelApprovalBridgeAdapter {
                 &conversation_id,
                 &session_key,
                 originator.as_deref(),
-                self.timeout_ms,
+                crate::approval::approval_timeout_for_current_turn(),
             )
             .await
     }
