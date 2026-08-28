@@ -40,7 +40,14 @@ fn classify_topic(topic: &str) -> Option<ActivitySeverity> {
         // Live ASR deltas fire many times per second and would both spam the
         // feed and leak the user's spoken words into it.
         | "voice.transcribe.delta"
-        | "channel.typing" => None,
+        | "channel.typing"
+        // A reminder is a REPEAT of `approval.requested`, which is already on
+        // this feed as a Warning. Classifying it at all would add one row per
+        // reminder to a bounded ring buffer — a card left overnight would push
+        // every real event out of the dashboard, which is the reverse of what
+        // an activity feed is for. The repeat is news to exactly one consumer
+        // (the R5 banner) and it does not read this table.
+        | "approval.reminder" => None,
 
         "agent.run.error" | "channel.error" | "approval.expired" => Some(ActivitySeverity::Danger),
 

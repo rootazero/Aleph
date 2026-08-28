@@ -260,6 +260,25 @@ pub(super) async fn initialize_session_store(
                 if normalized > 0 && !daemon {
                     println!("Normalized {normalized} migrated session directory name(s)");
                 }
+                // Repair damage persisted by already-fixed writer bugs: legacy
+                // millisecond `last_active_at` values (they sort above every
+                // seconds-stamped session, pinning new conversations below the
+                // fold) and torn `metadata.json` documents (skipped by every
+                // listing, so the conversation vanishes). Idempotent,
+                // best-effort, never blocks startup.
+                let repaired =
+                    alephcore::gateway::session_store::migration::repair_session_metadata(
+                        store.config().base_dir.as_path(),
+                    )
+                    .await;
+                if repaired.did_work() && !daemon {
+                    println!(
+                        "Repaired session metadata: {} timestamp(s) normalized, {} rebuilt from transcript, {} quarantined",
+                        repaired.timestamps_normalized,
+                        repaired.rebuilt_from_transcript,
+                        repaired.quarantined
+                    );
+                }
                 if alephcore::gateway::session_store::migration::migration_needed(
                     &store.config().base_dir,
                 ) {

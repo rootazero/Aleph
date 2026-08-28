@@ -214,6 +214,18 @@ pub fn ChatView() -> impl IntoView {
                 <div class="relative flex-1 min-h-0">
                     // Message list (scrollable) — or the welcome hero when empty
                     <MessageList />
+                    // Parked-approval banner: a tool gated on approval blocks
+                    // the run until somebody answers (an attended card no
+                    // longer expires at all), and the bell badge alone proved
+                    // too quiet (2026-08-28, s143: two file_ops approvals
+                    // expired unanswered while the user watched the very
+                    // conversation that was waiting). The inline card under
+                    // the tool row pairs by `tool_call_id` and only renders
+                    // while that row is in view; this banner keys on the
+                    // SESSION instead, so a parked call in the conversation
+                    // being looked at is always visible — pairing failure
+                    // degrades to the banner, never to silence.
+                    <SessionApprovalBanner />
                     // Team participants — top-left avatar cluster + popover
                     // (replaces the old left roster rail). Top-left keeps it
                     // clear of the band's workspace toggle + notification bell,
@@ -320,4 +332,53 @@ fn ingest_dropped_file(file: web_sys::File, attachments: RwSignal<Vec<PendingAtt
     reader.set_onload(Some(onload.as_ref().unchecked_ref()));
     onload.forget();
     let _ = reader.read_as_data_url(&file);
+}
+
+/// Sticky banner for pending approvals addressed to the CURRENT conversation.
+///
+/// The inline card (`messages::ToolCallsBlock`) pairs an approval to its tool
+/// row by `tool_call_id` and only renders while that row is in view; the bell
+/// catch-all is one small badge. Neither is the right affordance for a gate
+/// that PARKS the run the user is watching: this banner keys on the session
+/// alone and floats above the message flow for as long as the conversation
+/// being viewed has an unanswered card. Multiple parked calls collapse to the
+/// oldest one — the server's `list_pending` order, not a local re-derivation —
+/// and resolving it refetches (`approval.**`) so the next appears.
+#[component]
+fn SessionApprovalBanner() -> impl IntoView {
+    let chat = expect_context::<ChatState>();
+    let dashboard = expect_context::<DashboardState>();
+
+    let current = Memo::new(move |_| {
+        let key = chat.session_key.get()?;
+        dashboard
+            .pending_approvals
+            .get()
+            .into_iter()
+            // FIRST match, not `min_by_key(expires_at_ms)`. The deadline was a
+            // usable stand-in for age only while every card shared one timeout;
+            // now `0` is the no-expiry sentinel, so an unbounded card sorts
+            // ahead of every bounded one no matter which was raised first, and
+            // a set of unbounded cards ties at 0 with no order at all. The
+            // server already answers this question — `list_pending` sorts by
+            // `created_at_ms` with the id breaking ties — and `pending_approvals`
+            // preserves that order, so reading it is both correct and one
+            // derivation instead of two.
+            .find(|p| p.session_key == key)
+    });
+
+    view! {
+        <Show when=move || current.get().is_some()>
+            // `pointer-events-none` shell so the banner never blocks scrolling
+            // or text selection around it; the card opts back in. z below the
+            // notification-center popover (z-[54]) and the drag band (z-50).
+            <div class="absolute top-2 inset-x-0 z-40 flex justify-center pointer-events-none px-4">
+                <div class="pointer-events-auto w-[min(560px,100%)] animate-pop-in">
+                    {move || current.get().map(|a| view! {
+                        <crate::components::approval_card::ApprovalCard approval=a />
+                    })}
+                </div>
+            </div>
+        </Show>
+    }
 }

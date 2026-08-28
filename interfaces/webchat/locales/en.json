@@ -188,6 +188,7 @@
     "approval_header": "Operator authorization",
     "approval_requested_by": "Requested by",
     "approval_expires": "Expires in",
+    "approval_no_expiry": "Waiting for you · no timeout",
     "approval_allow_once": "Approve once",
     "approval_allow_session": "Approve for session",
     "approval_allow_always": "Always allow",

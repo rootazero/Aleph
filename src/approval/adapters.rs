@@ -36,7 +36,7 @@ use crate::sync_primitives::Arc;
 use crate::approval::operator_requester::OperatorApprovalRequester;
 use crate::approval::session_route::channel_route;
 use crate::exec::approval::channel_bridge::ChannelApprovalBridge;
-use crate::exec::manager::{ExecApprovalManager, DEFAULT_APPROVAL_TIMEOUT_MS};
+use crate::exec::manager::ExecApprovalManager;
 use crate::gateway::channel::{ChannelId, ConversationId};
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester, ApprovalResponse};
 use crate::sandbox::exec_approval::ApprovalAction;
@@ -50,11 +50,16 @@ use crate::sandbox::exec_approval::ApprovalAction;
 pub struct ChannelApprovalBridgeAdapter {
     bridge: Arc<ChannelApprovalBridge>,
     approval_manager: Arc<ExecApprovalManager>,
-    timeout_ms: u64,
 }
 
 impl ChannelApprovalBridgeAdapter {
-    /// Construct a new adapter. Uses the default 2-minute approval timeout.
+    /// Construct a new adapter.
+    ///
+    /// The approval timeout is chosen per request
+    /// ([`crate::approval::approval_timeout_for_current_turn`]): an attended
+    /// channel turn waits forever (notify + wait, ruled 2026-08-28), an
+    /// unattended one fails closed after the bounded default. It is not a
+    /// construction-time constant because the same adapter serves both.
     #[must_use]
     pub const fn new(
         bridge: Arc<ChannelApprovalBridge>,
@@ -63,7 +68,6 @@ impl ChannelApprovalBridgeAdapter {
         Self {
             bridge,
             approval_manager,
-            timeout_ms: DEFAULT_APPROVAL_TIMEOUT_MS,
         }
     }
 
@@ -122,8 +126,15 @@ impl ChannelApprovalBridgeAdapter {
 /// and there is no combinator, so this composite is the seam.
 ///
 /// Fail-closed, but NOT fail-fast: with no channel route the approval goes to
-/// the operator and parks until the approval timeout, whose `Timeout` outcome
-/// is not an approval. There is no cheap proof that an operator is watching —
+/// the operator and parks. How long depends on the turn
+/// ([`crate::approval::approval_timeout_for_current_turn`]): an unattended one
+/// parks until the bounded default, whose `Timeout` outcome is not an approval;
+/// an ATTENDED one parks with no deadline at all, and is released only by an
+/// answer, by cancelling the run, or by the run's own wall clock. That last
+/// case is the reason the operator leg re-raises its interrupt on a schedule
+/// (`OperatorApprovalRequester::remind_until_answered`) — an unbounded wait is
+/// an improvement over a silent expiry only if somebody is eventually fetched
+/// to it. There is no cheap proof that an operator is watching —
 /// the event bus only knows raw broadcast subscribers, and internal ones (the
 /// R5 router, the provider hot-reload watcher) always exist, so a subscriber
 /// count can only ever say "yes". A guard built on it would always pass, which
@@ -183,7 +194,7 @@ impl ApprovalRequester for ChannelApprovalBridgeAdapter {
                 &conversation_id,
                 &session_key,
                 originator.as_deref(),
-                self.timeout_ms,
+                crate::approval::approval_timeout_for_current_turn(),
             )
             .await
     }

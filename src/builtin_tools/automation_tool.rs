@@ -63,6 +63,7 @@ impl AutomationTool {
             timestamp: chrono::Utc::now(),
         };
         let decision = policy.check(&request).await;
+        let decision = crate::approval::lift_ask(decision, ActionType::DesktopAutomation);
         match decision {
             ApprovalDecision::Allow => {
                 policy.record(&request, &decision).await;

@@ -75,6 +75,12 @@ pub fn notification_for(frame: &GatewayEventFrame) -> Option<SurfaceNotification
 /// applied later, at the forward-filter (`event_visibility` +
 /// `audience_allows`), not here.
 ///
+/// [`GatewayEventFrame::ApprovalReminder`] maps through the SAME arm: a
+/// reminder for a still-parked card is the same interrupt, re-raised. The
+/// shell does not de-duplicate by `approval_id` and only fires while the Panel
+/// is unfocused (`desktop/shell/src/notify.rs`), so a repeat genuinely re-alerts
+/// a user who walked away and stays silent for one who is already looking.
+///
 /// `session_key` is carried through verbatim — including the empty string a
 /// cluster-node approval arrives with. It is the banner's only routing
 /// information: dropping it here is what used to force the frame to be
@@ -82,10 +88,18 @@ pub fn notification_for(frame: &GatewayEventFrame) -> Option<SurfaceNotification
 #[must_use]
 pub fn approval_for(frame: &GatewayEventFrame) -> Option<SurfaceApproval> {
     match frame {
+        // ONE arm for both: a reminder must raise the identical banner the
+        // request raised. Given its own arm it would be a second derivation of
+        // the same interrupt, free to drift from the first — and the drift
+        // would be invisible, because each arm renders correctly on its own.
         GatewayEventFrame::ApprovalRequested {
             approval_id,
             session_key,
             ..
+        }
+        | GatewayEventFrame::ApprovalReminder {
+            approval_id,
+            session_key,
         } => Some(SurfaceApproval {
             approval_id: approval_id.clone(),
             session_key: session_key.clone(),

@@ -45,7 +45,13 @@ pub struct MessageRecord {
 /// no conversation Aleph could have recorded falls in the ambiguous gap.
 /// Reading a millisecond value as seconds is what dated exported messages to
 /// the year 58536 and put "2026-03-02" beside a conversation from July.
-const SECONDS_MILLIS_BOUNDARY: i64 = 100_000_000_000;
+///
+/// `pub(crate)` so the startup repair pass
+/// ([`crate::gateway::session_store::migration::repair_session_metadata`])
+/// normalizes legacy ms-stamped `SessionMetadata::last_active_at` against the
+/// same boundary the readers use — a second literal here would be a second
+/// definition of the same rule.
+pub(crate) const SECONDS_MILLIS_BOUNDARY: i64 = 100_000_000_000;
 
 impl MessageRecord {
     /// The instant this message was recorded, resolving the store's mixed

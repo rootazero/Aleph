@@ -118,8 +118,14 @@ pub fn ApprovalCard(approval: PendingApprovalView) -> impl IntoView {
             })}
             <div class="text-xs text-text-tertiary mt-0.5">
                 {t!(i18n, notifications.approval_requested_by)} ": " {agent_id}
-                " · " {t!(i18n, notifications.approval_expires)} " "
-                <span class="tabular-nums">{move || remaining().to_string()}</span> "s"
+                // `expires_at == 0` is the no-expiry sentinel: an attended
+                // approval waits forever (ruled 2026-08-28), so there is no
+                // countdown to tick — say so instead.
+                " · " {move || if expires_at == 0 {
+                    t_string!(i18n, notifications.approval_no_expiry).to_string()
+                } else {
+                    format!("{} {}s", t_string!(i18n, notifications.approval_expires), remaining())
+                }}
             </div>
             <div class="flex gap-2 mt-2">
                 <button

@@ -48,8 +48,11 @@ pub struct TurnContext {
     /// channel). Mirrors the `UNATTENDED_KEY` run-metadata marker the
     /// execution engine already feeds `ScopedToolService::with_unattended`.
     /// Carried here so delegation tools (`session_send`) can propagate it to
-    /// wait-mode children too: without it a headless parent's child run hangs
-    /// on the 120 s approval timeout instead of failing closed instantly.
+    /// wait-mode children too. Losing it in propagation got more expensive on
+    /// 2026-08-28, not less: the child then reads as ATTENDED, and an attended
+    /// approval has no deadline, so instead of failing closed instantly it now
+    /// parks until the run's own wall clock — waiting on a human who is not
+    /// there, because the parent already knew there was none.
     pub unattended: bool,
     /// The plan → build handoff cell, when this turn resolved to
     /// [`ExecTier::Plan`](crate::config::types::policies::ExecTier::Plan) and is
@@ -113,6 +116,27 @@ impl TurnContext {
 task_local! {
     /// The routing context of the agent turn currently executing a tool.
     pub static TURN_CONTEXT: TurnContext;
+}
+
+tokio::task_local! {
+    /// The exec tier the running turn resolved to (`ask` / `auto` / `full`;
+    /// `plan` composes through the plan gate instead), scoped by
+    /// `ScopedToolService::execute` — the same chokepoint that scopes
+    /// [`TURN_CONTEXT`] — from `ScopedToolService::effective_exec_tier`.
+    ///
+    /// Sole consumer: [`crate::approval::lift_ask_under_full_tier`], which
+    /// lets a policy-level `Ask` resolve to `Allow` when the operator already
+    /// answered the question by picking the Full tier for this conversation.
+    /// Unset (cron, internal, tests, any non-gateway run) reads as `None`,
+    /// and `None` lifts nothing — the fail-closed default.
+    pub static TURN_EXEC_TIER: crate::config::types::policies::ExecTier;
+}
+
+/// The exec tier of the turn currently executing a tool, when the dispatch
+/// chokepoint published one. See [`TURN_EXEC_TIER`].
+#[must_use]
+pub fn current_exec_tier() -> Option<crate::config::types::policies::ExecTier> {
+    TURN_EXEC_TIER.try_with(|t| *t).ok()
 }
 
 tokio::task_local! {
