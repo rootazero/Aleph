@@ -11,6 +11,11 @@ pub struct Screen {
     saved: Option<Grid>,
     parser: vte::Parser,
     state: ScreenState,
+    /// Title as of the last `take_patch`, so an unchanged title is not
+    /// reshipped on every frame.
+    last_sent_title: Option<String>,
+    /// Alt-screen flag as of the last `take_patch`, same reasoning.
+    last_sent_alt: Option<bool>,
 }
 
 #[derive(Default)]
@@ -34,6 +39,8 @@ impl Screen {
             saved: None,
             parser: vte::Parser::new(),
             state: ScreenState::default(),
+            last_sent_title: None,
+            last_sent_alt: None,
         }
     }
 
@@ -90,6 +97,52 @@ impl Screen {
         self.grid.resize(rows, cols);
         if let Some(saved) = &mut self.saved {
             saved.resize(rows, cols);
+        }
+        // Belt and suspenders: `Grid::resize` already marks everything dirty
+        // when the dimensions actually change, but a resize call is also the
+        // moment a client's viewport genuinely changed, so force a full
+        // repaint even on the (same rows, same cols) no-op path.
+        self.grid.mark_all_dirty();
+    }
+
+    /// The diff since the last call, or `None` when nothing changed. `None`
+    /// is what makes a quiet terminal free: the flush task publishes
+    /// nothing.
+    pub fn take_patch(&mut self) -> Option<super::diff::ScreenPatch> {
+        let dirty = self.grid.take_dirty();
+        let title_changed = self.state.title != self.last_sent_title;
+        let alt = self.alt_screen();
+        let alt_changed = Some(alt) != self.last_sent_alt;
+        let bell = self.take_bell();
+
+        let patch = super::diff::ScreenPatch {
+            rows: super::diff::patch_rows(&self.grid, dirty),
+            cursor: Some(self.grid.cursor()),
+            alt_screen: alt_changed.then_some(alt),
+            title: title_changed.then(|| self.state.title.clone()).flatten(),
+            bell,
+        };
+        // Cursor is always present above, so emptiness is decided on the
+        // fields that actually carry news.
+        if patch.rows.is_empty() && !title_changed && !alt_changed && !bell {
+            return None;
+        }
+        self.last_sent_title.clone_from(&self.state.title);
+        self.last_sent_alt = Some(alt);
+        Some(patch)
+    }
+
+    /// Every row, for `pty.attach`. Does not consume the dirty set — an
+    /// attach must not swallow a diff a live client is still waiting for.
+    #[must_use]
+    pub fn full_patch(&self) -> super::diff::ScreenPatch {
+        let (rows, _) = self.grid.dims();
+        super::diff::ScreenPatch {
+            rows: super::diff::patch_rows(&self.grid, 0..rows),
+            cursor: Some(self.grid.cursor()),
+            alt_screen: Some(self.alt_screen()),
+            title: self.state.title.clone(),
+            bell: false,
         }
     }
 }

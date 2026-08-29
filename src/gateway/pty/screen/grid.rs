@@ -75,6 +75,10 @@ pub struct Grid {
     cursor_col: u16,
     scrollback: std::collections::VecDeque<Vec<Cell>>,
     scrollback_limit: usize,
+    /// Rows changed since the last [`Self::take_dirty`]. A row lands here on
+    /// every write that touches it, so a client that missed no frames can be
+    /// sent only what changed instead of the whole screen.
+    dirty: std::collections::BTreeSet<u16>,
 }
 
 impl Grid {
@@ -89,7 +93,26 @@ impl Grid {
             cursor_col: 0,
             scrollback: std::collections::VecDeque::new(),
             scrollback_limit: 1000,
+            // Starts empty, not full: a client that just attached gets a
+            // full sync from `Screen::full_patch`, which reads every row
+            // directly and does not consult this set at all. Seeding it
+            // with every row here would only cause `take_patch`'s very
+            // first call to resend rows nothing ever wrote to.
+            dirty: std::collections::BTreeSet::new(),
         }
+    }
+
+    /// Takes and clears the dirty set. The next call sees only rows changed
+    /// since this one.
+    pub(crate) fn take_dirty(&mut self) -> std::collections::BTreeSet<u16> {
+        std::mem::take(&mut self.dirty)
+    }
+
+    /// Marks every row dirty — used when the grid itself changed shape
+    /// (resize) or shifted wholesale (scroll), where a per-row diff would
+    /// be as expensive to compute as just resending everything.
+    pub(crate) fn mark_all_dirty(&mut self) {
+        self.dirty.extend(0..self.rows);
     }
 
     #[must_use]
@@ -145,6 +168,9 @@ impl Grid {
             let j = self.idx(self.cursor_row, self.cursor_col + 1);
             self.cells[j] = Cell { ch: Cell::SPACER, fg, bg, attrs };
         }
+        // repair_straddled_glyph above only ever touches cursor_row too, so
+        // one insert covers the whole write.
+        self.dirty.insert(self.cursor_row);
         self.cursor_col += w;
     }
 
@@ -239,6 +265,13 @@ impl Grid {
         if to < len && self.cells[to].is_spacer() {
             to += 1;
         }
+        // A single choke point for both erase_in_display and erase_in_line:
+        // the range can span multiple rows (e.g. "clear to end of screen"),
+        // so every row it touches — not just the cursor's — is dirty.
+        let cols = self.cols as usize;
+        let row_start = (from / cols) as u16;
+        let row_end = ((to - 1) / cols) as u16;
+        self.dirty.extend(row_start..=row_end);
         for cell in &mut self.cells[from..to] {
             *cell = Cell::default();
         }
@@ -279,6 +312,9 @@ impl Grid {
         self.cols = cols;
         self.cursor_row = self.cursor_row.min(rows - 1);
         self.cursor_col = self.cursor_col.min(cols - 1);
+        // Every coordinate on the wire changed meaning (new width, possibly
+        // new height), so a per-row diff would cost as much as a resend.
+        self.dirty.extend(0..self.rows);
     }
 
     /// Narrowing can cut a wide glyph's spacer off at the new right edge,
@@ -313,6 +349,8 @@ impl Grid {
         for cell in &mut self.cells[start..] {
             *cell = Cell::default();
         }
+        // Every row's content shifted up one line, so every row is dirty.
+        self.dirty.extend(0..self.rows);
     }
 }
 
