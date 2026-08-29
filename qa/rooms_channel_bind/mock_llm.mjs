@@ -7,11 +7,18 @@
 // reply the agent sends back into the group lands in OUTBOUND_LOG — which is
 // the only oracle for "what did the group actually see".
 //
-// It decides on the LAST LABELLED LINE of the last user message — `[Ada]: ...`,
-// the shape `nudges::speaker_prefixed` and `format_transcript` both produce —
-// falling back to the whole text. A room's transcript is cumulative, so keying
-// on "does the conversation mention this marker anywhere" would re-fire a
-// marker answered three turns ago.
+// It decides by scanning the USER SIDE of the request for every
+// `qa-<verb>:<marker>` and answering the LAST one this process has not
+// answered yet. A room's transcript is cumulative, so a marker is quoted back
+// on every later turn; the `answered` Set — not the position of the marker —
+// is what makes each one fire exactly once. A request carrying no tools is a
+// side channel and never consumes a marker.
+//
+// An earlier draft keyed on the last `[Ada]: ...` labelled line instead, and
+// `MARKER`'s docstring below records why that degraded silently as a session
+// grew. `currentLine` survives that change and is still live: it supplies the
+// speaker label for the final answer, which is the only thing proving a
+// channel turn reached the model prefixed with its speaker's name.
 //
 //   qa-note:<id>       -> tool_use note_manage(create, filename=<id>)
 //   qa-delegate:<id>   -> tool_use subagent(run, task="qa-child:<id> …")
