@@ -72,7 +72,10 @@ fn looks_like_transport_error(s: &str) -> bool {
     false
 }
 
-fn chrome_launch_args(profile_cfg: Option<&ProfileConfig>, profile_name: &str) -> Vec<String> {
+fn chrome_launch_args(
+    profile_cfg: Option<&ProfileConfig>,
+    profile_name: &str,
+) -> Result<Vec<String>, BrowserError> {
     let mut args = vec![
         "--remote-debugging-port=0".to_string(),
         "--no-first-run".to_string(),
@@ -86,7 +89,7 @@ fn chrome_launch_args(profile_cfg: Option<&ProfileConfig>, profile_name: &str) -
     // Default to a per-profile Aleph-private path under $ALEPH_DATA
     // (or $HOME/.aleph) so the bootstrap clone is isolated. The
     // override `cfg.user_data_dir` still wins when configured.
-    let default_user_data_dir = default_user_data_dir_for(profile_name);
+    let default_user_data_dir = default_user_data_dir_for(profile_name)?;
     if let Some(cfg) = profile_cfg {
         if let Some(proxy) = &cfg.proxy {
             args.push(format!("--proxy-server={proxy}"));
@@ -99,7 +102,7 @@ fn chrome_launch_args(profile_cfg: Option<&ProfileConfig>, profile_name: &str) -
     } else {
         args.push(format!("--user-data-dir={default_user_data_dir}"));
     }
-    args
+    Ok(args)
 }
 
 /// BROWSER-R4-05: the per-profile Aleph-private Chrome user-data-dir default,
@@ -119,11 +122,22 @@ fn chrome_launch_args(profile_cfg: Option<&ProfileConfig>, profile_name: &str) -
 ///
 /// Returns a `String` so the caller can hand it straight to Chrome's
 /// `--user-data-dir` flag.
-fn default_user_data_dir_for(profile_name: &str) -> String {
-    // No home directory at all: the same last-resort root the previous
-    // implementation used, kept so a container without HOME still launches.
-    let root = crate::utils::paths::get_config_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/.aleph"));
+fn default_user_data_dir_for(profile_name: &str) -> Result<String, BrowserError> {
+    // BROWSER-R4-17: no home directory at all used to fall back to
+    // `/tmp/.aleph`. `/tmp` is world-writable, so a local attacker can
+    // pre-create `/tmp/.aleph/browser/chrome-mcp/<profile>/user-data-dir`
+    // as a symlink to redirect Chrome's profile dir (TOCTOU). Refuse
+    // to launch instead: a Chrome without a resolvable home cannot
+    // honour the per-profile isolation this whole module exists to
+    // guarantee, and silently launching into `/tmp` is worse than a
+    // visible error the operator can route around.
+    let root = crate::utils::paths::get_config_dir().map_err(|e| {
+        BrowserError::LaunchFailed(format!(
+            "cannot resolve Aleph home for chrome user-data-dir: {e} \
+             (refusing to fall back to /tmp/.aleph — that path is world-writable \
+             and a local attacker could symlink-redirect Chrome's profile)"
+        ))
+    })?;
     // BROWSER-R4-05: profile_name reaches us from operator config; without
     // sanitization a name like `/tmp/x` would replace the root via
     // `PathBuf::join` (absolute segments discard everything before them),
@@ -131,12 +145,13 @@ fn default_user_data_dir_for(profile_name: &str) -> String {
     // per-profile isolation. Reuse the launch-config sanitizer that the
     // sibling `playwright-cli` path already enforces.
     let safe = super::playwright_launch::sanitize_session_key(profile_name);
-    root.join("browser")
+    Ok(root
+        .join("browser")
         .join("chrome-mcp")
         .join(safe)
         .join("user-data-dir")
         .to_string_lossy()
-        .into_owned()
+        .into_owned())
 }
 
 /// Manages Chrome `DevTools` MCP sessions with lazy creation and profile-keyed caching.
@@ -172,7 +187,28 @@ pub(crate) struct ChromeMcpDriver {
     /// daemon. Drop below kills each PID so a daemon stop cleans up.
     /// PIDs are recorded on launch and removed when the driver shuts
     /// the session down explicitly; the Drop covers everything else.
-    launched_pids: Mutex<Vec<u32>>,
+    ///
+    /// BROWSER-R4-18: a raw `u32` PID is not enough — PIDs are reused
+    /// after a process exits, so a daemon that takes a few seconds to
+    /// shut down after Chrome died could SIGKILL an unrelated later
+    /// process that landed on the same PID. The Linux entry also stores
+    /// the kernel-reported `starttime` (clock ticks since boot, taken
+    /// from `/proc/<pid>/stat` field 22); Drop compares it against the
+    /// live value and skips the kill on mismatch. Non-Linux platforms
+    /// retain the bare-PID behaviour, which is acceptable there because
+    /// PIDs are not recycled as aggressively.
+    launched_pids: Mutex<Vec<LaunchedPid>>,
+}
+
+/// One PID Aleph launched, plus enough provenance to tell a recycled PID
+/// apart from the original on Linux.
+#[derive(Debug, Clone, Copy)]
+struct LaunchedPid {
+    pid: u32,
+    /// Linux only: `starttime` from `/proc/<pid>/stat` field 22, in clock
+    /// ticks since boot. `None` on other platforms (the verification step
+    /// then falls back to a `kill(pid, 0)` liveness probe).
+    starttime: Option<u64>,
 }
 
 impl Drop for ChromeMcpDriver {
@@ -180,8 +216,9 @@ impl Drop for ChromeMcpDriver {
     /// async-friendly `tokio::process::Child::start_kill` requires a
     /// runtime handle we do not have in a sync Drop; send SIGKILL via
     /// `libc::kill` on Unix / `taskkill /F` on Windows instead. Failures
-    /// (already exited, owned by another user) are logged and ignored —
-    /// the reaper on process exit will pick up orphans.
+    /// (already exited, owned by another user, PID recycled to a
+    /// different process) are logged and ignored — the reaper on process
+    /// exit will pick up orphans.
     fn drop(&mut self) {
         let pids = self
             .launched_pids
@@ -191,32 +228,116 @@ impl Drop for ChromeMcpDriver {
         if pids.is_empty() {
             return;
         }
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
         {
-            for pid in pids {
-                // SAFETY: kill(2) with a stored pid is well-defined for
-                // any process the daemon's user can signal; ESRCH /
-                // EPERM are expected outcomes and logged, not propagated.
-                let rc = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
-                if rc != 0 {
-                    let err = std::io::Error::last_os_error();
-                    tracing::warn!(
-                        pid,
-                        error = %err,
-                        "ChromeMcpDriver::drop: failed to SIGKILL launched Chrome"
-                    );
+            for entry in pids {
+                // BROWSER-R4-18: skip the kill if the PID has been recycled
+                // to a process whose `/proc/<pid>/stat` starttime differs
+                // from what we recorded at launch. Reading `/proc` here is
+                // the right grain — it is the canonical Linux source of
+                // truth and the cost is one stat per recorded PID.
+                match read_proc_starttime(entry.pid) {
+                    Ok(now) if Some(now) == entry.starttime => {
+                        // SAFETY: kill(2) with a stored pid is well-defined
+                        // for any process the daemon's user can signal;
+                        // ESRCH / EPERM are expected outcomes and logged,
+                        // not propagated.
+                        let rc = unsafe { libc::kill(entry.pid as i32, libc::SIGKILL) };
+                        if rc != 0 {
+                            let err = std::io::Error::last_os_error();
+                            tracing::warn!(
+                                pid = entry.pid,
+                                error = %err,
+                                "ChromeMcpDriver::drop: failed to SIGKILL launched Chrome"
+                            );
+                        }
+                    }
+                    Ok(_) => {
+                        tracing::warn!(
+                            pid = entry.pid,
+                            "ChromeMcpDriver::drop: PID recycled to a different process; \
+                             skipping SIGKILL (would have killed an unrelated process)"
+                        );
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        // Process already exited. Nothing to do.
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            pid = entry.pid,
+                            error = %e,
+                            "ChromeMcpDriver::drop: failed to read /proc/<pid>/stat; \
+                             skipping the kill rather than risk a recycled PID"
+                        );
+                    }
+                }
+            }
+        }
+        #[cfg(all(unix, not(target_os = "linux")))]
+        {
+            // macOS / BSD: PIDs are recycled less aggressively, so the
+            // previous bare-PID behaviour is acceptable here. A `kill(pid, 0)`
+            // probe still catches already-exited entries.
+            for entry in pids {
+                // SAFETY: probe only — no signal sent on success.
+                let probe = unsafe { libc::kill(entry.pid as i32, 0) };
+                if probe == 0 {
+                    // SAFETY: see above.
+                    let rc = unsafe { libc::kill(entry.pid as i32, libc::SIGKILL) };
+                    if rc != 0 {
+                        let err = std::io::Error::last_os_error();
+                        tracing::warn!(
+                            pid = entry.pid,
+                            error = %err,
+                            "ChromeMcpDriver::drop: failed to SIGKILL launched Chrome"
+                        );
+                    }
                 }
             }
         }
         #[cfg(windows)]
         {
-            for pid in pids {
+            for entry in pids {
                 let _ = std::process::Command::new("taskkill")
-                    .args(["/F", "/PID", &pid.to_string()])
+                    .args(["/F", "/PID", &entry.pid.to_string()])
                     .output();
             }
         }
     }
+}
+
+/// Read `/proc/<pid>/stat` field 22 (process start time, in clock ticks
+/// since boot). Returns `NotFound` if the process is gone, other IO
+/// errors unchanged.
+#[cfg(target_os = "linux")]
+fn read_proc_starttime(pid: u32) -> std::io::Result<u64> {
+    let path = format!("/proc/{pid}/stat");
+    let stat = std::fs::read_to_string(&path)?;
+    // The comm field can contain spaces and parens; the kernel delimits it
+    // with `(...)`. Find the LAST `)` to skip past it, then split on
+    // whitespace and take field 22 (1-indexed) = index 21.
+    let Some(close) = stat.rfind(')') else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "malformed /proc stat line",
+        ));
+    };
+    let after = &stat[close + 1..];
+    let field = after
+        .split_whitespace()
+        .nth(20) // 0-indexed: field 22 -> index 21
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "starttime field missing from /proc stat",
+            )
+        })?;
+    field.parse::<u64>().map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("parse starttime: {e}"),
+        )
+    })
 }
 
 impl ChromeMcpDriver {
@@ -440,7 +561,7 @@ impl ChromeMcpDriver {
             chrome_path.display()
         );
 
-        let args = chrome_launch_args(profile_cfg, profile_name);
+        let args = chrome_launch_args(profile_cfg, profile_name)?;
 
         let mut cmd = Command::new(&chrome_path);
         for a in &args {
@@ -460,10 +581,17 @@ impl ChromeMcpDriver {
         // Chrome alive), so without this list the launched process
         // outlives the daemon.
         if let Some(pid) = child.id() {
+            // BROWSER-R4-18: also stash the kernel-reported starttime on
+            // Linux so Drop can refuse to SIGKILL a PID that has been
+            // recycled to a different process.
+            #[cfg(target_os = "linux")]
+            let starttime = read_proc_starttime(pid).ok();
+            #[cfg(not(target_os = "linux"))]
+            let starttime = None;
             self.launched_pids
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .push(pid);
+                .push(LaunchedPid { pid, starttime });
         }
 
         // Verify the process did not immediately exit instead of blind-sleeping.
@@ -493,26 +621,61 @@ impl ChromeMcpDriver {
     /// Check if a Chrome browser process is running on the system.
     async fn is_chrome_running() -> bool {
         tokio::task::spawn_blocking(|| {
+            // `pgrep -x` matches the WHOLE process name only. `chrome` is
+            // the published Chromium / Chrome binary, but the same role is
+            // filled on Linux by `chromium`, `chromium-browser`, `brave`,
+            // `brave-browser`, and `msedge` (the stable Edge stable channel
+            // ships an Electron-shaped binary called `msedge` — the Edge
+            // stable on Linux uses the same DevTools surface as Chrome, so
+            // an Aleph browser tool call should attach to it). Match the
+            // same discovery list `discovery::CHROMIUM_NAMES` uses for
+            // binary lookup so the two checks never disagree about what
+            // counts as 'a Chrome-class browser'.
+            #[cfg(target_os = "macos")]
+            const NAMES: &[&str] = &["Google Chrome", "Google Chrome Helper"];
+            #[cfg(all(unix, not(target_os = "macos")))]
+            const NAMES: &[&str] = &[
+                "chrome",
+                "chromium",
+                "chromium-browser",
+                "brave",
+                "brave-browser",
+                "msedge",
+            ];
             #[cfg(target_os = "macos")]
             {
-                std::process::Command::new("pgrep")
-                    .arg("-x")
-                    .arg("Google Chrome")
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .is_ok_and(|s| s.success())
+                // macOS uses the full display name. Walk the list — one pgrep
+                // per candidate — and short-circuit on the first hit.
+                for name in NAMES {
+                    let hit = std::process::Command::new("pgrep")
+                        .arg("-x")
+                        .arg(name)
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status()
+                        .is_ok_and(|s| s.success());
+                    if hit {
+                        return true;
+                    }
+                }
+                false
             }
             #[cfg(all(unix, not(target_os = "macos")))]
             {
-                std::process::Command::new("pgrep")
-                    .arg("-x")
-                    .arg("chrome")
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false)
+                for name in NAMES {
+                    let hit = std::process::Command::new("pgrep")
+                        .arg("-x")
+                        .arg(name)
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false);
+                    if hit {
+                        return true;
+                    }
+                }
+                false
             }
             #[cfg(target_os = "windows")]
             {
@@ -674,8 +837,8 @@ mod tests {
     fn chrome_launch_args_default_profile_matches_baseline() {
         // A profile with no proxy/user-data/extra args must not change the argv.
         assert_eq!(
-            chrome_launch_args(Some(&ProfileConfig::default()), "default"),
-            chrome_launch_args(None, "default")
+            chrome_launch_args(Some(&ProfileConfig::default()), "default").unwrap(),
+            chrome_launch_args(None, "default").unwrap()
         );
     }
 

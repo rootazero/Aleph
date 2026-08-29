@@ -262,8 +262,13 @@ pub fn generate(
             .map_err(|e| ToolError::Execution(format!("Failed to create output directory: {e}")))?;
     }
 
-    // Write the PDF bytes to disk.
-    std::fs::write(output_path, &pdf_bytes)
+    // Write the PDF bytes atomically: `std::fs::write` is non-atomic — a crash
+    // mid-write leaves a truncated / zero-byte file at output_path and the
+    // caller cannot tell 'partial write' from 'no data'. `atomic_write_bytes`
+    // writes to a temp file and renames into place (and fsyncs), matching the
+    // canvas and bundled paths. `generate` is on `spawn_blocking` already, so
+    // the sync helper is the right shape here.
+    crate::utils::atomic_write::atomic_write_bytes(output_path, &pdf_bytes)
         .map_err(|e| ToolError::Execution(format!("Failed to write PDF file: {e}")))?;
 
     info!(
