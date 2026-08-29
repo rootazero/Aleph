@@ -118,7 +118,14 @@ Example:
 
         match self.pipeline.process(&input, &mt, language).await {
             Ok(output) => {
-                let data = serde_json::to_value(&output).unwrap_or_default();
+                // Same surface-as-error shape as `document_extract` — a
+                // silent null `data` looks like an empty transcription to
+                // the model, which is the wrong signal for a code bug.
+                let data = serde_json::to_value(&output).map_err(|e| {
+                    crate::builtin_tools::error::ToolError::Execution(format!(
+                        "audio_transcribe: failed to serialize provider output: {e}"
+                    ))
+                })?;
                 match &output {
                     MediaOutput::Text { text } => Ok(AudioTranscribeOutput::ok(text.clone())),
                     _ => Ok(AudioTranscribeOutput::ok_data(

@@ -84,6 +84,9 @@ impl AlephTool for TeamStatusTool {
     type Output = TeamStatusOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // BT-D-R4-23: gate before any read so a non-member cannot enumerate
+        // member ids / task subjects / result strings for a foreign team.
+        super::require_team_auth(&*self.store, &args.team_id, &self.actor()).await?;
         let team = self
             .store
             .get_team(&args.team_id)
