@@ -32,6 +32,11 @@ pub enum PanelMode {
     Agents,
     Teams,
     Projects,
+    /// Embedded terminal (`views/terminal/`). Operator-only on the server
+    /// side; the nav item is shown to everyone and the refusal is explained
+    /// by the view, because hiding it would make "not allowed" look like
+    /// "does not exist".
+    Terminal,
     Extensions,
     Settings,
     /// Phone-only ••• tab landing — a sections menu for the management modes
@@ -61,14 +66,63 @@ impl PanelMode {
             Self::More
         } else if path.starts_with("/settings") {
             Self::Settings
+        } else if path.starts_with("/terminal") {
+            Self::Terminal
         } else {
             Self::Chat
+        }
+    }
+
+    /// Every mode that exists, for exhaustive round-trip checks (the test
+    /// below) and as a base callers can filter for their own subset —
+    /// `nav_menu.rs`'s popup deliberately shows a smaller list, and does its
+    /// own filtering rather than reading this.
+    #[must_use]
+    pub const fn all() -> &'static [Self] {
+        &[
+            Self::Chat,
+            Self::Dashboard,
+            Self::Memory,
+            Self::Canvas,
+            Self::Agents,
+            Self::Teams,
+            Self::Projects,
+            Self::Terminal,
+            Self::Extensions,
+            Self::Settings,
+            Self::More,
+        ]
+    }
+
+    /// Default route a mode navigates to. Single source for both the
+    /// `nav_menu.rs` popup and the round-trip test below — it used to be a
+    /// second `match` duplicated in `nav_menu.rs` as `route_of`, which is
+    /// exactly the kind of family of isomorphic mappings that drifts.
+    #[must_use]
+    pub const fn path(self) -> &'static str {
+        match self {
+            Self::Chat => "/chat",
+            Self::Dashboard => "/dashboard",
+            Self::Memory => "/memory",
+            Self::Canvas => "/canvas",
+            Self::Agents => "/agents",
+            Self::Teams => "/teams",
+            Self::Projects => "/projects",
+            Self::Terminal => "/terminal",
+            Self::Extensions => "/extensions",
+            Self::More => "/more",
+            Self::Settings => "/settings",
         }
     }
 
     /// True for the sections reached through the phone More (•••) tab. The
     /// ••• tab stays highlighted while inside any of them (iOS "More"
     /// convention). Phone-only concept; desktop never routes to these via More.
+    ///
+    /// `Terminal` is not in this set: `platform/phone/more.rs`'s menu has no
+    /// row for it (out of scope for this task, see the view's doc comment),
+    /// so there is no phone path that reaches `/terminal` for the ••• tab to
+    /// stay highlighted through.
     #[must_use]
     pub const fn under_more(self) -> bool {
         matches!(
@@ -104,6 +158,9 @@ pub fn ModeSidebar() -> impl IntoView {
                     PanelMode::Canvas => view! { <crate::views::canvas::CanvasSidebar /> }.into_any(),
                     PanelMode::Teams => view! { <crate::views::teams::TeamsSidebar /> }.into_any(),
                     PanelMode::Projects => view! { <crate::components::sidebar::projects::ProjectsSidebar /> }.into_any(),
+                    // TerminalView is a single full-bleed surface with no
+                    // sub-navigation of its own — nothing to list here yet.
+                    PanelMode::Terminal => ().into_any(),
                     PanelMode::Extensions => view! { <crate::views::extensions::ExtensionsSidebar /> }.into_any(),
                     PanelMode::Settings => view! { <SettingsSidebar /> }.into_any(),
                     // /more is a phone-only route; desktop never reaches it.
@@ -226,9 +283,35 @@ mod tests {
             PanelMode::Memory,
             PanelMode::Agents,
             PanelMode::Projects,
+            PanelMode::Terminal,
             PanelMode::Settings,
         ] {
             assert!(!m.under_more(), "{m:?} should not be under More");
+        }
+    }
+
+    /// `from_path` is a string chain, so the compiler cannot find it when a
+    /// variant is added. This test is the thing that does.
+    #[test]
+    fn the_terminal_route_resolves_to_the_terminal_mode() {
+        assert_eq!(PanelMode::from_path("/terminal"), PanelMode::Terminal);
+        assert_eq!(PanelMode::from_path("/terminal/anything"), PanelMode::Terminal);
+    }
+
+    /// Every mode must round-trip through its own path, or a nav item leads
+    /// somewhere that highlights a different tab.
+    #[test]
+    fn every_mode_round_trips_through_its_path() {
+        for mode in PanelMode::all() {
+            if matches!(mode, PanelMode::More) {
+                continue; // phone-only landing, no desktop route
+            }
+            assert_eq!(
+                PanelMode::from_path(mode.path()),
+                *mode,
+                "{mode:?} must round-trip through {}",
+                mode.path()
+            );
         }
     }
 }

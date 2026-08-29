@@ -25,6 +25,7 @@ use crate::views::settings::{
 use crate::views::subagent_tree::SubagentTree;
 use crate::views::tasks::TasksView;
 use crate::views::teams::{TeamsTabState, TeamsView};
+use crate::views::terminal::TerminalView;
 use crate::views::usage::UsageView;
 // Layout components
 use crate::api::BehaviorConfigApi;
@@ -604,6 +605,16 @@ fn MainContent() -> impl IntoView {
                 ().into_any()
             } else {
                 view! { <crate::components::project_page::ProjectsView /> }.into_any()
+            }}
+        </div>
+        // Embedded terminal (Task 14) — desktop/wide only, same treatment as
+        // Projects above: no phone screen exists yet, so a narrow viewport
+        // resolves the route but renders nothing rather than the wide view.
+        <div style:display=move || if mode.get() == PanelMode::Terminal { "contents" } else { "none" }>
+            {move || if form_factor.form_factor.get() == FormFactor::Phone {
+                ().into_any()
+            } else {
+                view! { <TerminalView /> }.into_any()
             }}
         </div>
         <div style:display=move || if mode.get() == PanelMode::Extensions { "contents" } else { "none" }>

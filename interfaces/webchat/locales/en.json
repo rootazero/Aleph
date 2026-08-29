@@ -8,7 +8,8 @@
     "extensions": "Aleph Hub",
     "settings": "Settings",
     "canvas": "Canvas",
-    "projects": "Projects"
+    "projects": "Projects",
+    "terminal": "Terminal"
   },
   "session": {
     "healthy": "Healthy",
