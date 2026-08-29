@@ -5,7 +5,7 @@
 //! same pattern user-hooks admin uses) so no boot-time closure wiring is
 //! needed. The gateway event bus is attached to the manager once in
 //! `GatewayServer::build_router`; live output is streamed to subscribers on the
-//! `pty.output` / `pty.exit` topics (subscribe via `events.subscribe` with
+//! `pty.screen` / `pty.exit` topics (subscribe via `events.subscribe` with
 //! pattern `pty.*`).
 //!
 //! ## Operator-only, on BOTH faces

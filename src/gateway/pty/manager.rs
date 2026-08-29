@@ -60,7 +60,7 @@ pub fn manager() -> &'static PtyManager {
     &GLOBAL
 }
 
-/// Attach the gateway event bus so session output is broadcast on `pty.output`.
+/// Attach the gateway event bus so session output is broadcast on `pty.screen`.
 /// Called once from `GatewayServer::build_router`. Idempotent.
 pub fn attach_event_bus(bus: Arc<GatewayEventBus>) {
     manager().attach_event_bus(bus);

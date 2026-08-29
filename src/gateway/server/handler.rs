@@ -509,7 +509,7 @@ fn event_wire_form(
 /// when the connection registered no filter at all, and `event_admits` short-
 /// circuits on `SessionIdentity::Global` *before* it reads `caller_user`. A bare
 /// remote WebSocket that sent nothing therefore received every `Global` frame —
-/// including `pty.output`, whose RPC face has been in `ADMIN_PREFIXES` all along.
+/// including `pty.screen`, whose RPC face has been in `ADMIN_PREFIXES` all along.
 ///
 /// So: **an authorization predicate belongs on every direction a connection
 /// carries data, not on the one where the caller asks a question.** The event
@@ -2399,7 +2399,7 @@ mod tests {
         assert!(guard.can_receive("surface.approval", &scope));
         assert!(!guard.can_receive("config.changed", &scope));
         assert!(!guard.can_receive("pairing.requested", &scope));
-        assert!(!guard.can_receive("pty.output", &scope));
+        assert!(!guard.can_receive("pty.screen", &scope));
         // `approval.requested` deliberately passes THIS table since 2026-08-08
         // — a member must be able to answer the gate blocking their own run.
         // The per-session decision is made in `event_visibility`, pinned there.
@@ -2508,8 +2508,9 @@ mod tests {
         // `ConnectionState::new` stamps `caller_role: "guest"`.
         assert!(
             !wall_admits(Some("guest"), ""),
-            "an unauthorized socket must receive no event frame; `pty.output` \
-             is Global-classified and carries the operator's raw shell bytes"
+            "an unauthorized socket must receive no event frame; `pty.screen` \
+             is Global-classified and carries the operator's live terminal \
+             content"
         );
         // …and the same is true for a role word nobody stamps.
         assert!(!wall_admits(Some("bogus"), ""));

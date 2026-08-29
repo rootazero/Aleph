@@ -1266,7 +1266,7 @@ mod tests {
                  check is what demotes him, and it is asserted above"
             );
             assert!(
-                !guard.can_receive("pty.output", &s.permissions),
+                !guard.can_receive("pty.screen", &s.permissions),
                 "a demoted admin must no longer be delivered the operator's shell"
             );
             // The three `approval.*` FRAMES moved off this table on 2026-08-08
