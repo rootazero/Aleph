@@ -6,6 +6,7 @@
 //! snapshot, and what goes on the wire is a bounded per-frame diff instead of
 //! an unbounded byte stream.
 
+pub mod convert;
 pub mod diff;
 pub mod grid;
 pub mod perform;
