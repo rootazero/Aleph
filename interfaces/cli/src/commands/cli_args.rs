@@ -169,6 +169,12 @@ pub enum Commands {
         action: UsersAction,
     },
 
+    /// Project rooms — shared workspaces with their own roster and chat
+    Projects {
+        #[command(subcommand)]
+        action: ProjectsAction,
+    },
+
     /// Read the security audit trail (who changed what authority, and when)
     Audit {
         /// Only this event type, e.g. `authority_change`, `scoped_content_read`
@@ -1037,6 +1043,61 @@ pub enum UsersAction {
         /// `active` or `deactivated` — deactivating revokes every device they hold
         #[arg(long)]
         status: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ProjectsAction {
+    /// List the rooms you can see
+    List,
+    /// Manage which channel conversations a room lives in
+    Channel {
+        #[command(subcommand)]
+        action: ChannelAction,
+    },
+}
+
+/// Room ⟷ channel-conversation bindings.
+///
+/// Every new argument here is long-only. Clap validates its own argument
+/// definitions with `debug_assert`s that run inside `parse()`, so a duplicate
+/// short flag is a startup panic in debug builds and a silent letter
+/// reassignment in release — neither of which `cargo check` or a unit test
+/// sees. `aleph-tui` shipped exactly that. When a letter is contested it goes
+/// to the already-published parameter; taking none avoids the question.
+#[derive(Subcommand)]
+pub enum ChannelAction {
+    /// Show the conversations a room is bound to (any member may read)
+    List {
+        /// Room id, from `aleph projects list`
+        project_id: String,
+    },
+    /// Bind a channel group conversation to a room (operator only)
+    Bind {
+        /// Room id, from `aleph projects list`
+        project_id: String,
+        /// Channel id, e.g. `telegram`
+        channel_id: String,
+        /// The conversation's id in that channel
+        peer_id: String,
+        /// `group` (default) or `thread` — exactly as the wire spells them
+        #[arg(long, default_value = "group")]
+        peer_kind: String,
+        /// What to call this conversation in listings. Also the right place
+        /// for the operator's original spelling: the key components are
+        /// normalized before storage.
+        #[arg(long)]
+        label: Option<String>,
+    },
+    /// Release a conversation (operator only)
+    Unbind {
+        /// Channel id, e.g. `telegram`
+        channel_id: String,
+        /// The conversation's id in that channel
+        peer_id: String,
+        /// `group` (default) or `thread`
+        #[arg(long, default_value = "group")]
+        peer_kind: String,
     },
 }
 

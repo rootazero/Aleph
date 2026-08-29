@@ -29,9 +29,11 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use aleph_client::{CliConfig, CliResult};
 
 use commands::cli_args::{
-    CallsAction, ChannelsAction, ChatControlAction, Commands, ConfigAction, CronAction,
+    CallsAction, ChannelAction, ChannelsAction, ChatControlAction, Commands, ConfigAction,
+    CronAction,
     DaemonAction, GatewayAction, HeartbeatAction, HooksAction, IdentityAction, LogsAction,
-    MarketplaceAction, McpAction, MemoryAction, PluginAction, ProvidersAction, ProxyAction,
+    MarketplaceAction, McpAction, MemoryAction, PluginAction, ProjectsAction, ProvidersAction,
+    ProxyAction,
     SandboxAction, SecretAction, ServicesAction, SessionAction, SkillsAction, ToolsAction,
     TraceAction, UsersAction, WebhookAction, WorkspaceAction,
 };
@@ -215,6 +217,7 @@ async fn dispatch(
             dispatch_workspace(server_url, config, action, json).await
         }
         Commands::Users { action } => dispatch_users(server_url, config, action, json).await,
+        Commands::Projects { action } => dispatch_projects(server_url, config, action, json).await,
         Commands::Audit {
             event_type,
             actor,
@@ -1028,6 +1031,57 @@ async fn dispatch_users(
     }
 }
 
+async fn dispatch_projects(
+    server_url: &str,
+    config: &CliConfig,
+    action: ProjectsAction,
+    json: bool,
+) -> CliResult<()> {
+    use commands::projects_cmd;
+    match action {
+        ProjectsAction::List => projects_cmd::list(server_url, config, json).await,
+        ProjectsAction::Channel { action } => match action {
+            ChannelAction::List { project_id } => {
+                projects_cmd::channel_list(server_url, config, &project_id, json).await
+            }
+            ChannelAction::Bind {
+                project_id,
+                channel_id,
+                peer_id,
+                peer_kind,
+                label,
+            } => {
+                projects_cmd::channel_bind(
+                    server_url,
+                    config,
+                    &project_id,
+                    &channel_id,
+                    &peer_id,
+                    &peer_kind,
+                    label.as_deref(),
+                    json,
+                )
+                .await
+            }
+            ChannelAction::Unbind {
+                channel_id,
+                peer_id,
+                peer_kind,
+            } => {
+                projects_cmd::channel_unbind(
+                    server_url,
+                    config,
+                    &channel_id,
+                    &peer_id,
+                    &peer_kind,
+                    json,
+                )
+                .await
+            }
+        },
+    }
+}
+
 async fn dispatch_gateway(
     server_url: &str,
     config: &CliConfig,
@@ -1215,6 +1269,55 @@ mod tests {
     #[test]
     fn the_argument_definitions_pass_claps_own_validator() {
         Cli::command().debug_assert();
+    }
+
+    /// Clap's own validator proves the definitions are internally consistent;
+    /// it does not prove the subcommand is reachable or that its arguments are
+    /// where the dispatcher expects them. Registration is not dispatch — a
+    /// tool once shipped registered three ways and answered "Unknown tool" on
+    /// every call.
+    #[test]
+    fn parse_projects_channel_commands() {
+        for argv in [
+            vec!["aleph", "projects", "list"],
+            vec!["aleph", "projects", "channel", "list", "p-1"],
+            vec!["aleph", "projects", "channel", "bind", "p-1", "telegram", "C1"],
+            vec!["aleph", "projects", "channel", "unbind", "telegram", "C1"],
+        ] {
+            assert!(
+                Cli::try_parse_from(argv.clone()).is_ok(),
+                "{argv:?} must parse"
+            );
+        }
+    }
+
+    /// `--peer-kind` is optional and defaults to the wire's `group`.
+    ///
+    /// Asserted rather than assumed because the default is a string that is
+    /// later parsed by `aleph_protocol`'s `FromStr`: a default of `"Group"`
+    /// would make every invocation without the flag fail locally, and the
+    /// clap validator has nothing to say about a default's *value*.
+    #[test]
+    fn peer_kind_defaults_to_the_wire_spelling() {
+        let parsed = Cli::try_parse_from([
+            "aleph", "projects", "channel", "bind", "p-1", "telegram", "C1",
+        ])
+        .expect("parses");
+        let Some(crate::Commands::Projects {
+            action: crate::ProjectsAction::Channel { action },
+        }) = parsed.command
+        else {
+            panic!("expected a projects channel subcommand");
+        };
+        let crate::ChannelAction::Bind { peer_kind, .. } = action else {
+            panic!("expected bind");
+        };
+        assert_eq!(
+            peer_kind.parse::<aleph_protocol::projects::BindingPeerKind>(),
+            Ok(aleph_protocol::projects::BindingPeerKind::Group),
+            "the default must be a spelling the wire accepts, or every \
+             invocation without the flag fails before it connects"
+        );
     }
 
     #[test]
