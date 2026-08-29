@@ -835,7 +835,12 @@ async function main() {
     "an UNPAIRED sender's turn runs with no scope at all (bare `main`)",
     `note landed in ${s4.partition ?? "(no note within budget)"}`,
   );
-  if (control3) {
+  // `control3` carries the "readable AND non-empty" half — same partition,
+  // seconds earlier, and scenario 3 just asserted the count did not move. What
+  // it cannot carry is THIS read: `noteCount` returns null on an unreadable
+  // DB, and `null === null` is a pass. Scenario 3 states its own before-value
+  // is non-null through `control3`; state it here too rather than inherit it.
+  if (control3 && roomBefore4 !== null) {
     check(
       noteCount(ROOM_PART) === roomBefore4,
       "the room partition gained no row from the stranger either",
@@ -844,7 +849,9 @@ async function main() {
   } else {
     skip(
       "the room partition gained no row from the stranger either",
-      "scenario 3's positive control did not pass",
+      control3
+        ? `this scenario's own before-count was unreadable (${roomBefore4})`
+        : "scenario 3's positive control did not pass",
     );
   }
   const strangerReqs = requestsFor("m4-stranger", s4.before);
@@ -1143,11 +1150,24 @@ async function main() {
   );
   fact("member bind refusal, verbatim", JSON.stringify(aliceBind.error));
   // The refusal must survive as a refusal, not as a binding nobody asked for.
+  //
+  // Anchored, per the header's own rule: a bare `!out.includes(needle)` also
+  // passes when the CLI never ran — a refused connection, a parse error, a
+  // crash all produce output without the needle. The control is free, because
+  // the binding that SHOULD be listed is already there and line ~729 proved
+  // this command renders it: require `C1` present and the exit code clean, and
+  // the negative only reads as "not bound" when the list was genuinely read.
+  //
+  // Not an inert assertion before this change — a server that refused at the
+  // wire and wrote the row anyway would have tripped it, which is a real bug
+  // shape. Under-anchored, not inert.
   const afterAttempt = cli("projects", "channel", "list", PID);
   check(
-    !afterAttempt.out.includes("qa-c-alice-attempt"),
-    "and nothing was bound by the refused call",
-    afterAttempt.out.slice(0, 400),
+    afterAttempt.code === 0 &&
+      afterAttempt.out.includes(C1) &&
+      !afterAttempt.out.includes("qa-c-alice-attempt"),
+    "and nothing was bound by the refused call (list read cleanly, C1 still there)",
+    `exit=${afterAttempt.code}\n${afterAttempt.out.slice(0, 400)}`,
   );
 
   // ===== addendum C: the Unknown arm =====================================
