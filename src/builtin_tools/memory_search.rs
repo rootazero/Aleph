@@ -9,6 +9,24 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
+/// Closed-vocabulary search scope. Replaces the previous three-site
+/// `scope == "x"` string match — a new variant now lands in one place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    All,
+    CurrentSession,
+    Both,
+}
+
+impl Scope {
+    fn wants_session_facts(self) -> bool {
+        matches!(self, Self::CurrentSession | Self::Both)
+    }
+    fn wants_long_term(self) -> bool {
+        matches!(self, Self::All | Self::Both)
+    }
+}
+
 use super::error::ToolError;
 use crate::config::types::profile::SmartRecallConfig;
 use crate::error::Result;
@@ -208,7 +226,9 @@ impl MemorySearchTool {
 
     /// Create a new `MemorySearchTool` instance.
     ///
-    /// `similarity_threshold`: if `Some`, overrides the default (from config.toml).
+    /// `similarity_threshold`: currently a no-op (see `new_with_config`).
+    /// Preserved in the constructor signature for API stability with the
+    /// `[[memory]]` config block.
     pub fn new_with_embedder(
         database: MemoryBackend,
         embedder: Arc<dyn EmbeddingProvider>,
@@ -227,13 +247,19 @@ impl MemorySearchTool {
     pub fn new_with_config(
         database: MemoryBackend,
         embedder: Arc<dyn EmbeddingProvider>,
-        similarity_threshold: Option<f32>,
+        // `similarity_threshold` is accepted for API stability with the
+        // `[[memory]]` config block but is currently a no-op: `NoteFactRetrieval`
+        // does not yet accept a per-tool threshold, so the operator's config
+        // value would be silently ignored here. The parameter is preserved
+        // so the config side can wire it up without a signature break when
+        // the threshold gate lands upstream. Until then, it is documented as
+        // a no-op rather than `#[deprecated]`, since callers reading the
+        // current shape expect to set it.
+        _similarity_threshold: Option<f32>,
         rerank_config: Option<&crate::memory::rerank::RerankConfig>,
         scoring_config: Option<&crate::config::types::memory::RetrievalScoringConfig>,
         expansion_config: Option<&crate::config::types::memory::ExpansionConfig>,
     ) -> Self {
-        let _threshold = similarity_threshold.unwrap_or(Self::DEFAULT_SIMILARITY_THRESHOLD);
-
         // NoteFactRetrieval: used for the primary long-term recall path.
         let memory_dir = note_memory_dir();
         let note_indexer = Arc::new(NoteIndexer::new(memory_dir, database.clone()));
@@ -312,8 +338,22 @@ impl MemorySearchTool {
 
         use crate::gateway::agent_env::AgentEnvFilter;
 
-        // Resolve search scope: "all" (default), "current_session", or "both"
-        let scope = args.scope.as_deref().unwrap_or("all");
+        // Resolve search scope: "all" (default), "current_session", or "both".
+        // The previous shape silently treated any other string as "all" (both
+        // string-comparison branches evaluated false → empty result) — the
+        // closed-vocabulary string-match across three sites was drift-prone
+        // and a typo would land a query in a "looks like nothing matched"
+        // state instead of an actionable error.
+        let scope = match args.scope.as_deref().unwrap_or("all") {
+            "all" => Scope::All,
+            "current_session" => Scope::CurrentSession,
+            "both" => Scope::Both,
+            other => {
+                return Err(ToolError::InvalidArgs(format!(
+                    "memory_search: unknown scope '{other}'; expected one of: all, current_session, both"
+                )));
+            }
+        };
 
         // Resolve workspace filter with priority:
         // cross_workspace: true → All
@@ -466,7 +506,7 @@ impl MemorySearchTool {
         // records stored under the active session's path prefix.
         // This restores the search path that was gutted when the facts table
         // was removed (Task 24); session data now lives in raw_memories.
-        let session_facts: Vec<FactResult> = if scope == "current_session" || scope == "both" {
+        let session_facts: Vec<FactResult> = if scope.wants_session_facts() {
             // Per-run truth first: the shared handle is process-global and
             // rewritten at every run start, so a concurrent run of another
             // agent can overwrite it mid-turn and this search would read the
@@ -540,7 +580,7 @@ impl MemorySearchTool {
             cross_workspace_results,
             recall_triggered,
             tokens_saved,
-        ) = if scope == "all" || scope == "both" {
+        ) = if scope.wants_long_term() {
             // Determine if Smart Recall should be used:
             // Only for single-workspace queries where user didn't explicitly request cross-workspace.
             // Keyed by the running agent's id (default_ws, resolved above from
@@ -749,7 +789,7 @@ impl MemorySearchTool {
                 arbitrated.tokens_saved,
             )
         } else {
-            // scope == "current_session" — skip long-term retrieval entirely
+            // Scope::CurrentSession — skip long-term retrieval entirely
             (Vec::new(), Vec::new(), Vec::new(), false, 0)
         };
 
