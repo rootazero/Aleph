@@ -353,6 +353,28 @@ mod tests {
         assert_eq!(cells[3].ch, 'x');
     }
 
+    /// The same scenario as above, this time reached through the public API
+    /// the test just above could only simulate: Task 4's `goto` can land
+    /// the cursor directly on a spacer, exactly the state a real program
+    /// reaches by repositioning mid-glyph (e.g. `CSI 1;4H` over the second
+    /// half of a CJK character). The private-field test documents the
+    /// invariant directly; this one proves the repair is reachable the way
+    /// real terminal output reaches it.
+    #[test]
+    fn goto_onto_a_spacer_then_put_repairs_the_owner() {
+        let mut g = Grid::new(2, 10);
+        g.put('中', PLAIN); // columns 0-1
+        g.put('中', PLAIN); // columns 2-3
+        g.goto(0, 3); // the second glyph's spacer; its owner is column 2
+        g.put('x', PLAIN);
+
+        let cells = g.row_cells(0);
+        assert_eq!(cells[0].ch, '中', "the first glyph is untouched");
+        assert!(cells[1].is_spacer(), "the first glyph keeps its own spacer");
+        assert_eq!(cells[2].ch, ' ', "the orphaned owner must be blanked, not left wide with no spacer");
+        assert_eq!(cells[3].ch, 'x');
+    }
+
     /// `scroll_up` — ring eviction, `rotate_left`, and clearing the new
     /// last row — is the only nontrivial method in this file, and none of
     /// the tests above ever fill the last row, so it never runs. Fill past
