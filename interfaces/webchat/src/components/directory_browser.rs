@@ -58,7 +58,9 @@ pub fn DirectoryBrowser(
     auto_create: Signal<bool>,
 ) -> impl IntoView {
     let i18n = use_i18n();
-    let dashboard = expect_context::<DashboardState>();
+    let Some(dashboard) = use_context::<DashboardState>() else {
+        return ().into_any();
+    };
 
     // `current_path = None` means "show the list of configured roots."
     // Switching to `Some(path)` triggers a `fs.list_dir` against it.

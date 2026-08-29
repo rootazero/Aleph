@@ -49,7 +49,15 @@ use leptos::task::spawn_local;
 /// `accepted && !is_finished()` is neither: the answer landed and there is more
 /// to ask. The card stays, and the `stream.ask_user` frame core publishes on
 /// advance re-renders it at the new cursor.
-fn answer(dashboard: DashboardState, session_key: String, answers: Vec<String>) {
+fn answer(
+    dashboard: DashboardState,
+    session_key: String,
+    answers: Vec<String>,
+    submitting: RwSignal<bool>,
+    error: RwSignal<Option<String>>,
+) {
+    submitting.set(true);
+    error.set(None);
     spawn_local(async move {
         let outcome = if answers.len() == 1 {
             ClarificationApi::resolve(&dashboard, &session_key, &answers[0]).await
@@ -62,6 +70,9 @@ fn answer(dashboard: DashboardState, session_key: String, answers: Vec<String>) 
                     web_sys::console::warn_1(
                         &"Question was no longer pending — answer discarded".into(),
                     );
+                    error.set(Some(
+                        "Question was no longer pending — answer discarded".to_string(),
+                    ));
                 }
                 if !outcome.accepted || outcome.is_finished() {
                     dashboard
@@ -70,9 +81,12 @@ fn answer(dashboard: DashboardState, session_key: String, answers: Vec<String>) 
                 }
             }
             Err(e) => {
-                web_sys::console::warn_1(&format!("Failed to answer question: {e:?}").into());
+                let msg = format!("Failed to answer question: {e:?}");
+                web_sys::console::warn_1(&msg.clone().into());
+                error.set(Some(msg));
             }
         }
+        submitting.set(false);
     });
 }
 
@@ -152,6 +166,8 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
     let instant = questions.len() == 1 && !questions[0].multi_select;
     let session_key = StoredValue::new(ask.session_key.clone());
     let drafts_store = StoredValue::new(drafts.clone());
+    let answering = RwSignal::new(false);
+    let answer_error = RwSignal::new(Option::<String>::None);
 
     let submit_all = move || {
         let answers: Vec<String> = drafts_store
@@ -162,7 +178,7 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
         if answers.iter().any(String::is_empty) {
             return;
         }
-        answer(dashboard, session_key.get_value(), answers);
+        answer(dashboard, session_key.get_value(), answers, answering, answer_error);
     };
     let all_answered = {
         let drafts_store = drafts_store;
@@ -209,7 +225,7 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
                         return;
                     }
                     draft.set(String::new());
-                    answer(dashboard, session_key_q.get_value(), vec![reply]);
+                    answer(dashboard, session_key_q.get_value(), vec![reply], answering, answer_error);
                 };
                 view! {
                     <div class=move || if qi == 0 { "mt-1" } else { "mt-3 pt-3 border-t border-border/60" }>
@@ -253,7 +269,7 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
                                                 }
                                                 on:click=move |_| {
                                                     if instant {
-                                                        answer(dashboard, session_key_o.clone(), vec![reply.clone()]);
+                                                        answer(dashboard, session_key_o.clone(), vec![reply.clone()], answering, answer_error);
                                                     } else if multi {
                                                         draft.update(|d| *d = toggle_index(d, idx));
                                                     } else {
@@ -296,16 +312,19 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
                                 on:keydown=move |ev: web_sys::KeyboardEvent| {
                                     if ev.key() == "Enter" {
                                         ev.prevent_default();
-                                        submit_text();
+                                        if !answering.get_untracked() {
+                                            submit_text();
+                                        }
                                     }
                                 }
+                                disabled=move || answering.get()
                             />
                             {instant.then(|| view! {
                                 <button
                                     type="button"
                                     class="px-3 py-1.5 rounded bg-primary hover:bg-primary-hover text-white text-xs
                                            font-semibold disabled:opacity-35 disabled:cursor-not-allowed transition-colors"
-                                    disabled=move || draft.get().trim().is_empty()
+                                    disabled=move || answering.get() || draft.get().trim().is_empty()
                                     on:click=move |_| submit_text()
                                 >
                                     {t!(i18n, chat.ask_user_answer)}
@@ -315,6 +334,9 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
                     </div>
                 }
             }).collect::<Vec<_>>()}
+            {move || answer_error.get().map(|e| view! {
+                <div class="mt-2 text-xs text-danger break-words">{e}</div>
+            })}
             // One submit for the whole set. Present exactly when a single
             // click cannot finish the request — a multi-select question needs
             // its picks confirmed, and several questions need every one filled.
@@ -323,7 +345,7 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
                     type="button"
                     class="mt-3 px-3 py-1.5 rounded bg-primary hover:bg-primary-hover text-white text-xs
                            font-semibold disabled:opacity-35 disabled:cursor-not-allowed transition-colors"
-                    disabled=move || !all_answered()
+                    disabled=move || answering.get() || !all_answered()
                     on:click=move |_| submit_all()
                 >
                     {move || if total > 1 {

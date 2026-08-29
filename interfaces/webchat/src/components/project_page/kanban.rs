@@ -200,6 +200,7 @@ fn RoomTeamCard(team: TeamSummary) -> impl IntoView {
     let chat = expect_context::<ChatState>();
 
     let tasks: RwSignal<Vec<CoordTaskDto>> = RwSignal::new(Vec::new());
+    let task_error: RwSignal<Option<String>> = RwSignal::new(None);
     let team_id = StoredValue::new(team.id.clone());
 
     Effect::new(move |_| {
@@ -207,9 +208,20 @@ fn RoomTeamCard(team: TeamSummary) -> impl IntoView {
             return;
         }
         let id = team_id.get_value();
+        let i18n = i18n;
         spawn_local(async move {
-            if let Ok(list) = TeamsApi::list_tasks(&dash, &id, TaskFilter::default()).await {
-                tasks.set(list);
+            match TeamsApi::list_tasks(&dash, &id, TaskFilter::default()).await {
+                Ok(list) => {
+                    tasks.set(list);
+                    task_error.set(None);
+                }
+                Err(e) => {
+                    task_error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e,
+                        |e| e.to_string(),
+                    )));
+                }
             }
         });
     });
@@ -256,6 +268,11 @@ fn RoomTeamCard(team: TeamSummary) -> impl IntoView {
                     }
                 }).collect_view()}
             </div>
+            <Show when=move || task_error.get().is_some()>
+                <div class="mt-2 text-xs text-danger break-words">
+                    {move || task_error.get().unwrap_or_default()}
+                </div>
+            </Show>
         </div>
     }
 }
