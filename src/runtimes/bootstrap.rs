@@ -412,6 +412,7 @@ async fn run_via_parent(parent: &str, subcommand: &[&str]) -> Result<CmdOutcome,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sync_primitives::MutexGuard;
 
     #[test]
     fn test_has_spec_known() {
