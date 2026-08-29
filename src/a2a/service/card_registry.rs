@@ -89,10 +89,11 @@ impl CardRegistry {
 
     /// Insert or replace a fully-formed remote agent entry.
     ///
-    /// Unlike [`AgentResolver::register`], this preserves the agent's
-    /// `auth_token` (the trait method cannot carry one). Existing entries with
-    /// the same card id *or* base URL are removed first, so re-adding a
-    /// config-declared agent by URL cleanly replaces its placeholder card.
+    /// Differs from [`AgentResolver::register_with_token`] in what counts as
+    /// "the same agent": that one evicts by card id, this one by card id *or*
+    /// base URL. So re-adding a config-declared agent replaces the
+    /// placeholder card that was registered against its URL, rather than
+    /// leaving two entries pointed at one endpoint.
     pub async fn upsert(&self, agent: RegisteredAgent) {
         let mut agents = self.agents.write().await;
         agents.retain(|a| a.card.id != agent.card.id && a.base_url != agent.base_url);
@@ -128,19 +129,6 @@ fn slug_from_name(name: &str) -> String {
 
 #[async_trait::async_trait]
 impl AgentResolver for CardRegistry {
-    #[allow(deprecated)]
-    async fn register(
-        &self,
-        card: AgentCard,
-        base_url: &str,
-        trust_level: TrustLevel,
-    ) -> A2AResult<()> {
-        // Deprecated: always passes `None` for the auth token. New callers
-        // should use `register_with_token` so an authenticated agent does not
-        // silently downgrade to anonymous outbound RPC.
-        self.register_with_token(card, base_url, trust_level, None).await
-    }
-
     async fn register_with_token(
         &self,
         card: AgentCard,
@@ -212,7 +200,7 @@ mod tests {
         let card = sample_card("agent-1", "Agent One");
 
         registry
-            .register(card, "http://localhost:9000", TrustLevel::Local)
+            .register_with_token(card, "http://localhost:9000", TrustLevel::Local, None)
             .await
             .unwrap();
 
@@ -229,13 +217,13 @@ mod tests {
 
         let card_v1 = sample_card("agent-1", "Agent v1");
         registry
-            .register(card_v1, "http://localhost:9000", TrustLevel::Local)
+            .register_with_token(card_v1, "http://localhost:9000", TrustLevel::Local, None)
             .await
             .unwrap();
 
         let card_v2 = sample_card("agent-1", "Agent v2");
         registry
-            .register(card_v2, "http://localhost:9001", TrustLevel::Trusted)
+            .register_with_token(card_v2, "http://localhost:9001", TrustLevel::Trusted, None)
             .await
             .unwrap();
 
@@ -251,7 +239,7 @@ mod tests {
         let registry = CardRegistry::new();
         let card = sample_card("agent-1", "Agent One");
         registry
-            .register(card, "http://localhost:9000", TrustLevel::Local)
+            .register_with_token(card, "http://localhost:9000", TrustLevel::Local, None)
             .await
             .unwrap();
 
@@ -273,7 +261,7 @@ mod tests {
         let registry = CardRegistry::new();
         let card = sample_card("agent-1", "Agent One");
         registry
-            .register(card, "http://localhost:9000", TrustLevel::Local)
+            .register_with_token(card, "http://localhost:9000", TrustLevel::Local, None)
             .await
             .unwrap();
 

@@ -10,8 +10,8 @@
 //! two spellings is how a caller learns to skim past it.
 //!
 //! So the wording is here, once, and the two tools compose the clauses they
-//! have facts for. What legitimately differs — which argument narrows *this*
-//! tool's walk — is a parameter, not a second copy of the sentence.
+//! have facts for. What legitimately differs between two callers of the same
+//! clause is a parameter, not a second copy of the sentence.
 
 use super::walk::{WalkReport, MAX_WALK_FILES};
 
@@ -35,12 +35,19 @@ pub(super) fn paging(next_offset: usize, limit: usize) -> String {
 /// trees before the filter runs, so a zero there is not evidence that nothing
 /// was excluded, and a message conditioned on it would stay silent in exactly
 /// the case the caller most needs told.
+///
+/// The same argument binds the **call site**, and that is where it was first
+/// broken: both tools appended this only on the "found nothing" branch, so a
+/// caller who got sixty matches was never told there might be more in the
+/// trees the repository ignores — which is the case they are about to act on.
+/// It belongs beside [`withheld`], after whatever the result did report, since
+/// the two answer the same question about the same walk.
 pub(super) fn ignored(report: &WalkReport, respected_ignore: bool) -> Option<String> {
     if !respected_ignore {
         return None;
     }
     let mut note = String::from(
-        " — ignored and generated files were excluded; pass no_ignore=true to search them",
+        ". Ignored and generated files were excluded; pass no_ignore=true to search them",
     );
     if report.floor_skipped_dirs > 0 {
         note.push_str(&format!(
@@ -57,13 +64,24 @@ pub(super) fn withheld(denied: usize) -> Option<String> {
     (denied > 0).then(|| format!(". {denied} path(s) withheld by the protected-location floor"))
 }
 
-/// "The tree is bigger than one call can walk." `narrow` names the argument
-/// that bounds *this* tool — `glob` for `grep`, `pattern` for `find`.
-pub(super) fn walk_capped(report: &WalkReport, narrow: &str) -> Option<String> {
+/// "The tree is bigger than one call can walk."
+///
+/// Names `path` and only `path`. The obvious other lever is the glob, and it
+/// is the wrong advice: the glob filters the walk's *output*, so narrowing it
+/// leaves the traversal exactly as long and the caller retries forever against
+/// an unchanged bound. `no_ignore` is worth naming in the other direction —
+/// when it is on, the generated trees are usually most of what was walked.
+pub(super) fn walk_capped(report: &WalkReport, respected_ignore: bool) -> Option<String> {
     report.walk_capped.then(|| {
+        let widened = if respected_ignore {
+            ""
+        } else {
+            "; no_ignore=true is walking the ignored and generated trees too, which are \
+             usually the bulk of them"
+        };
         format!(
-            ". Walk stopped at {MAX_WALK_FILES} files — narrow `path` or `{narrow}`, the tree is \
-             larger than this"
+            ". Walk stopped after visiting {MAX_WALK_FILES} files — narrow `path`{widened}. \
+             A narrower glob does not help: it filters the result, not the walk"
         )
     })
 }
@@ -108,14 +126,18 @@ mod tests {
         assert!(withheld(2).unwrap().contains("2 path(s) withheld"));
     }
 
+    /// The lever named is `path`, and the one deliberately NOT named is the
+    /// glob — narrowing it cannot lift this bound, so advising it would send
+    /// the caller round a loop that never terminates.
     #[test]
-    fn the_walk_cap_names_the_argument_that_bounds_this_tool() {
-        assert!(walk_capped(&report(0, false), "glob").is_none());
-        assert!(walk_capped(&report(0, true), "glob")
-            .unwrap()
-            .contains("`glob`"));
-        assert!(walk_capped(&report(0, true), "pattern")
-            .unwrap()
-            .contains("`pattern`"));
+    fn the_walk_cap_names_the_only_lever_that_can_lift_it() {
+        assert!(walk_capped(&report(0, false), true).is_none());
+
+        let note = walk_capped(&report(0, true), true).unwrap();
+        assert!(note.contains("`path`"), "{note}");
+        assert!(!note.contains("no_ignore"), "{note}");
+
+        let widened = walk_capped(&report(0, true), false).unwrap();
+        assert!(widened.contains("no_ignore=true"), "{widened}");
     }
 }

@@ -145,17 +145,19 @@ impl FindTool {
 
         let respected_ignore = !args.no_ignore.unwrap_or(false);
         let mut message = if total == 0 {
-            let mut msg = String::from("No files matched");
-            msg.push_str(&notes::ignored(&report, respected_ignore).unwrap_or_default());
-            msg
+            String::from("No files matched")
         } else {
             let mut msg = format!("{returned} of {total} file(s)");
             if let Some(next) = next_offset {
                 msg.push_str(&notes::paging(next, limit));
             }
-            msg.push_str(&notes::walk_capped(&report, "pattern").unwrap_or_default());
+            msg.push_str(&notes::walk_capped(&report, respected_ignore).unwrap_or_default());
             msg
         };
+        // Outside the branch on purpose — see `notes::ignored`. Named only on
+        // the empty branch, the lever went unmentioned in exactly the results
+        // a caller acts on.
+        message.push_str(&notes::ignored(&report, respected_ignore).unwrap_or_default());
         message.push_str(&notes::withheld(report.denied).unwrap_or_default());
         message.push('.');
 
@@ -238,6 +240,17 @@ mod tests {
         let out = FindTool::new().run(args(&dir, "*.rs")).await.unwrap();
         assert_eq!(out.total, 2, "{}", out.paths);
         assert!(!out.paths.contains("target/"), "{}", out.paths);
+    }
+
+    /// The `grep` twin of this test explains it: a clause that is only
+    /// appended when nothing was found is silent in the one case the caller
+    /// acts on.
+    #[tokio::test]
+    async fn a_non_empty_listing_still_names_the_ignore_lever() {
+        let dir = fixture();
+        let out = FindTool::new().run(args(&dir, "*.rs")).await.unwrap();
+        assert!(out.total > 0, "{}", out.message);
+        assert!(out.message.contains("no_ignore=true"), "{}", out.message);
     }
 
     #[tokio::test]

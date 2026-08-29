@@ -26,6 +26,16 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/browser_managed/run.sh existing # the OTHER driver (Chrome DevTools MCP)
 ./qa/browser_managed/run.sh exec-offload # browser_exec's spill, inside a real turn
 
+./qa/file_search/run.sh floor   # deny_read_globs from a CONFIG FILE binds grep/find,
+                                # and no_ignore=true does not lift it
+./qa/file_search/run.sh page    # the window reports the whole; pages are disjoint
+./qa/file_search/run.sh reach   # a real turn's grep output reaches the model
+./qa/file_search/run.sh steer   # shell `grep -r` is steered to the builtin; a
+                                # bounded `grep` and `rg` are not. Every arm
+                                # proves it searched before it claims it was
+                                # not steered — `rg` is absent on some machines
+                                # and the driver reports SKIP, not PASS.
+
 ./qa/announce/run.sh outlive     # a background bash job outlives its run -> a fresh run is driven
 ./qa/announce/run.sh collected   # the model collected it itself -> no turn is spent
 ./qa/announce/run.sh midrun      # the run is still alive -> absorbed as steering, ONE run

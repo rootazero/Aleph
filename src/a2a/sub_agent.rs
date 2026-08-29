@@ -394,11 +394,12 @@ mod tests {
 
     #[async_trait]
     impl AgentResolver for MockResolver {
-        async fn register(
+        async fn register_with_token(
             &self,
             _card: AgentCard,
             _base_url: &str,
             _trust_level: TrustLevel,
+            _auth_token: Option<String>,
         ) -> A2AResult<()> {
             Ok(())
         }

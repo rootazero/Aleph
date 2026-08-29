@@ -334,8 +334,10 @@ impl AlephTool for A2AAgentsTool {
                 })?;
 
                 let trust = TrustLevel::infer_from_url(&url);
-                // `upsert` (not the `AgentResolver::register` trait method) so
-                // the auth token is preserved — outbound calls need it.
+                // `upsert`, not `register_with_token`: both carry the
+                // token, but only `upsert` also evicts by base URL, so
+                // re-adding an agent replaces the placeholder card held
+                // against that URL instead of leaving two for one endpoint.
                 registry
                     .upsert(RegisteredAgent::new(
                         card.clone(),

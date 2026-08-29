@@ -45,12 +45,19 @@ const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_CONCURRENT_READS: usize = 16;
 /// Ceiling on `context`.
 ///
-/// Not tidiness — memory. A block is `2 * context + 1` lines and is built in
-/// full *before* the byte cap trims anything, so an unbounded `context` would
-/// let one call hold twenty near-complete copies of every matching file. The
-/// clamp is reported when it binds; silently returning ten lines to a caller
-/// who asked for fifty is the kind of quiet substitution this module's
-/// messages exist to prevent.
+/// Not tidiness — memory. A block is `2 * context + 1` lines and is rendered in
+/// full *before* [`MAX_OUTPUT_BYTES`] trims anything, so an unbounded `context`
+/// would let a single file's twenty kept blocks hold twenty near-complete
+/// copies of it — times the [`MAX_CONCURRENT_READS`] files in flight, and
+/// again for whatever the page has retained. The clamp is reported when it
+/// binds; silently returning ten lines to a caller who asked for fifty is the
+/// kind of quiet substitution this module's messages exist to prevent.
+///
+/// Deliberately not configurable, and neither is `MAX_WALK_FILES`. Both are
+/// bounds on what one call may spend, both are reported in `message` when they
+/// bind, and both name a lever the caller already has — `path` for the walk,
+/// the clamp notice for this. A setting would be a second answer to "how big
+/// may one call get" with nobody asking the question.
 const MAX_CONTEXT: usize = 10;
 
 /// Arguments for the `grep` tool.
@@ -195,7 +202,10 @@ impl GrepTool {
 
         // Rendering budget: enough to serve this page and prove whether another
         // exists, never the whole tree. Totals below are still exact — the
-        // budget bounds memory, not the count.
+        // budget bounds what is *retained*, not what is counted. It only does
+        // so because the fold below consumes the scan as it yields; a
+        // `.collect()` in front of it would leave this number bounding
+        // nothing, which is what it used to do.
         let render_budget = offset.saturating_add(limit).saturating_add(1);
         let requested_context = args.context.unwrap_or(0) as usize;
         let context = requested_context.min(MAX_CONTEXT);
@@ -206,7 +216,7 @@ impl GrepTool {
 
         let root_for_scan = root.clone();
         let files = std::mem::take(&mut report.files);
-        let outcomes: Vec<FileOutcome> = stream::iter(files)
+        let scans = stream::iter(files)
             .map(|file| {
                 let re = re.clone();
                 let root = root_for_scan.clone();
@@ -229,9 +239,8 @@ impl GrepTool {
             // `offset` lands on is the same page on every call. `buffer_unordered`
             // would make paging non-deterministic for a free speedup nobody asked
             // for.
-            .buffered(MAX_CONCURRENT_READS)
-            .collect()
-            .await;
+            .buffered(MAX_CONCURRENT_READS);
+        let mut scans = std::pin::pin!(scans);
 
         let mut total_matches = 0usize;
         let mut files_with_matches = 0usize;
@@ -241,7 +250,16 @@ impl GrepTool {
         let mut file_paths: Vec<String> = Vec::new();
         let mut per_file_capped = false;
 
-        for outcome in outcomes {
+        // Folded as the stream yields, never collected first. The distinction
+        // is invisible in the result — the page is byte-identical either way —
+        // and it is the difference between holding one file's blocks and
+        // holding the whole tree's. `context: 10` renders a twenty-one-line
+        // block per match and keeps twenty per file, so on a repository where
+        // a few thousand files match, collecting first peaked at 123 MiB for a
+        // page that ends up 24 KiB (benches/file_search_scan.rs). Near the
+        // walk cap that is gigabytes, and neither the byte cap applied to the
+        // page below nor the walk cap itself bounds it.
+        while let Some(outcome) = scans.next().await {
             if outcome.skipped {
                 skipped_files += 1;
                 continue;
@@ -291,9 +309,7 @@ impl GrepTool {
         // omission cannot be spelled one way here and another way there.
         let respected_ignore = !args.no_ignore.unwrap_or(false);
         let mut message = if universe == 0 {
-            let mut msg = format!("No matches in {files_scanned} file(s) searched");
-            msg.push_str(&notes::ignored(&report, respected_ignore).unwrap_or_default());
-            msg
+            format!("No matches in {files_scanned} file(s) searched")
         } else {
             let unit = if files_only { "file" } else { "match" };
             let mut msg = format!(
@@ -317,7 +333,7 @@ impl GrepTool {
                     ". context was clamped from {requested_context} to {MAX_CONTEXT} lines"
                 ));
             }
-            msg.push_str(&notes::walk_capped(&report, "glob").unwrap_or_default());
+            msg.push_str(&notes::walk_capped(&report, respected_ignore).unwrap_or_default());
             msg
         };
         if skipped_files > 0 {
@@ -325,6 +341,10 @@ impl GrepTool {
                 ". {skipped_files} binary or oversized file(s) not searched"
             ));
         }
+        // Outside the branch, with the other "this is not everything" clauses.
+        // Inside it, the lever was named only when nothing matched — silent in
+        // the one case where the caller is about to act on the result.
+        message.push_str(&notes::ignored(&report, respected_ignore).unwrap_or_default());
         message.push_str(&notes::withheld(report.denied).unwrap_or_default());
         message.push('.');
 
@@ -502,6 +522,34 @@ mod tests {
             out.matches.contains("src/a.rs:2: let needle = 1;"),
             "{}",
             out.matches
+        );
+    }
+
+    /// The lever is named on a result that FOUND something, which is the only
+    /// case where it changes what the caller does next.
+    ///
+    /// `notes::ignored` refuses to condition itself on evidence, and its own
+    /// test pins that. This one pins the other half: for a while both tools
+    /// appended it only on the "found nothing" branch, so a caller holding
+    /// sixty matches was never told there might be more in the ignored trees.
+    /// A test that asserts a clause is *produced* says nothing about whether it
+    /// *arrives*.
+    #[tokio::test]
+    async fn a_non_empty_result_still_names_the_ignore_lever() {
+        let dir = fixture();
+        let out = GrepTool::new().run(args(&dir, "needle")).await.unwrap();
+        assert!(out.total_matches > 0, "{}", out.message);
+        assert!(out.message.contains("no_ignore=true"), "{}", out.message);
+
+        // And it stays quiet when the lever is already pulled — otherwise it
+        // would be advising a call the caller just made.
+        let mut a = args(&dir, "needle");
+        a.no_ignore = Some(true);
+        let widened = GrepTool::new().run(a).await.unwrap();
+        assert!(
+            !widened.message.contains("no_ignore=true"),
+            "{}",
+            widened.message
         );
     }
 

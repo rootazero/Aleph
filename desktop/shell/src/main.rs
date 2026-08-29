@@ -742,8 +742,11 @@ pub(crate) fn focus_window(handle: &tauri::AppHandle) {
     #[cfg(target_os = "macos")]
     {
         let handle = handle.clone();
+        // Two clones, not one: `run_on_main_thread` borrows the receiver for
+        // the duration of the call, so the closure cannot also move it.
+        let for_main_thread = handle.clone();
         if let Err(e) = handle.run_on_main_thread(move || {
-            focus_window_inner(&handle);
+            focus_window_inner(&for_main_thread);
         }) {
             tracing::warn!("could not dispatch focus_window to main thread: {e}");
         }
@@ -870,8 +873,11 @@ fn show_daemon_error(handle: &tauri::AppHandle, message: &str) {
     let handle = handle.clone();
     #[cfg(target_os = "macos")]
     {
+        // See `focus_window`: the receiver stays borrowed across the call, so
+        // the closure needs its own handle.
+        let for_main_thread = handle.clone();
         if let Err(e) = handle.run_on_main_thread(move || {
-            show_daemon_error_inner(&handle, &script);
+            show_daemon_error_inner(&for_main_thread, &script);
         }) {
             tracing::warn!("could not dispatch show_daemon_error to main thread: {e}");
         }

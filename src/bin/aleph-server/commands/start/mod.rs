@@ -1782,8 +1782,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // rotated-out token remained valid indefinitely). The `openai_api_token`
     // field on `GatewayServer` is kept around only as a debug-time sanity
     // check; the auth path does not read it.
-    debug!(
-        current_token_present = auth_bundle.auth_ctx.shared_token_mgr.get_current_token().is_some(),
+    tracing::debug!(
+        current_token_present = auth_bundle
+            .auth_ctx
+            .shared_token_mgr
+            .get_current_token()
+            .is_some(),
         "OpenAI compat routes now read bearer from SharedTokenManager closure"
     );
 

@@ -37,7 +37,10 @@ Two optional trailing arguments let a scenario say WHAT the turn calls and
 capture WHAT THE MODEL SAW coming back:
 
   tool_spec   path to `{"name": ..., "input": {...}}` — the tool call every
-              `tool` turn emits, instead of the default `file_read` probe.
+              `tool` turn emits, instead of the default `file_read` probe. A
+              JSON *list* of those is also accepted: turn N emits entry N,
+              cycling, for claims that need two different calls in one
+              conversation.
   request_log path to append each incoming request body to, one JSON object
               per line. Turn N+1's `messages` carry turn N's `tool_result`
               verbatim, so this file is the only oracle for what a tool
@@ -61,10 +64,24 @@ REQUEST_LOG = sys.argv[5] if len(sys.argv) > 5 else ""
 
 # The tool every `tool` turn calls. Default keeps the historical probe so the
 # busy-input scenarios are byte-for-byte unaffected.
-TOOL_SPEC = {"name": "file_read", "input": {"path": PROBE}}
+#
+# A spec file may hold either one object (every `tool` turn calls the same
+# thing — what every scenario before 2026-08-29 wanted) or a LIST of them, in
+# which case turn N calls entry N, cycling. The list form exists because some
+# claims are about what the *previous* turn's tool_result carried, and a
+# control arm for those has to be a different call in the same conversation:
+# `qa/file_search` asserts that a shell `grep -r` comes back with a steer and
+# that an `rg` does not, which is one assertion about two adjacent turns.
+_spec = {"name": "file_read", "input": {"path": PROBE}}
 if TOOL_SPEC_PATH:
     with open(TOOL_SPEC_PATH) as _fh:
-        TOOL_SPEC = json.load(_fh)
+        _spec = json.load(_fh)
+TOOL_SPECS = _spec if isinstance(_spec, list) else [_spec]
+
+
+def spec_for(turn):
+    """The tool call turn `turn` (1-based) emits."""
+    return TOOL_SPECS[(turn - 1) % len(TOOL_SPECS)]
 
 PLANS = {
     "burst-drain": [(3, "tool"), (30, "tool"), (45, "tool"), (45, "tool"), (0, "end")],
@@ -81,6 +98,13 @@ PLANS = {
     # every one of them must answer "end" for the guarantee to hold across a
     # whole fixture run, not just the first call.
     "single-shot": [(0, "end")] * 200,
+    # Several fast tool turns and then an ending. For scenarios whose claim is
+    # about a tool RESULT rather than about timing: a run makes side-channel
+    # provider calls (strategy planning, titling, compaction) that carry no
+    # tool surface, and this counter advances for those too — so a scenario
+    # cannot assume "turn 2 holds turn 1's result" and needs slack plus a
+    # content-based oracle. See `qa/file_search/drive_turn.py`.
+    "tool-chain": [(1, "tool")] * 9 + [(0, "end")],
 }
 PLAN = PLANS.get(PLAN_NAME, PLANS["burst-drain"])
 
@@ -162,8 +186,8 @@ class H(BaseHTTPRequestHandler):
                     {
                         "type": "tool_use",
                         "id": f"toolu_{turn}",
-                        "name": TOOL_SPEC["name"],
-                        "input": TOOL_SPEC["input"],
+                        "name": spec_for(turn)["name"],
+                        "input": spec_for(turn)["input"],
                     }
                 )
             payload = {
@@ -242,7 +266,7 @@ class H(BaseHTTPRequestHandler):
                         "content_block": {
                             "type": "tool_use",
                             "id": f"toolu_{turn}",
-                            "name": TOOL_SPEC["name"],
+                            "name": spec_for(turn)["name"],
                             "input": {},
                         },
                     }
@@ -255,7 +279,7 @@ class H(BaseHTTPRequestHandler):
                         "index": 1,
                         "delta": {
                             "type": "input_json_delta",
-                            "partial_json": json.dumps(TOOL_SPEC["input"]),
+                            "partial_json": json.dumps(spec_for(turn)["input"]),
                         },
                     }
                 )

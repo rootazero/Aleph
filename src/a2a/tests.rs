@@ -429,7 +429,7 @@ async fn test_smart_router_exact_match() {
 
     use crate::a2a::port::AgentResolver;
     registry
-        .register(card, "http://localhost:9000", TrustLevel::Trusted)
+        .register_with_token(card, "http://localhost:9000", TrustLevel::Trusted, None)
         .await
         .unwrap();
 
@@ -738,11 +738,12 @@ impl MockAgentResolver {
 
 #[async_trait::async_trait]
 impl AgentResolver for MockAgentResolver {
-    async fn register(
+    async fn register_with_token(
         &self,
         _card: crate::a2a::domain::AgentCard,
         _base_url: &str,
         _trust_level: TrustLevel,
+        _auth_token: Option<String>,
     ) -> crate::a2a::port::task_manager::A2AResult<()> {
         Ok(())
     }

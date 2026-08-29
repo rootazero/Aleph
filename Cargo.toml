@@ -357,6 +357,14 @@ harness = false
 name = "recall_path_concurrency"
 harness = false
 
+# Own `main`, not criterion: the interesting half of this one is peak heap, and
+# that needs a `#[global_allocator]` for the whole binary plus a single
+# unrepeated call per row — criterion's repetition would measure a warm page
+# cache and its harness cannot report allocation at all.
+[[bench]]
+name = "file_search_scan"
+harness = false
+
 # Undeclared, this one was auto-discovered with the default `harness = true`,
 # so cargo built it with `--test`: libtest supplied the `main`, the one
 # `criterion_main!` generates was compiled out as dead code, and the binary

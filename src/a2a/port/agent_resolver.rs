@@ -84,26 +84,18 @@ impl RegisteredAgent {
 /// is handled by `service::SmartRouter`.
 #[async_trait::async_trait]
 pub trait AgentResolver: Send + Sync {
-    /// Register a remote agent with a trust level.
-    ///
-    /// **Deprecated**: prefer [`register_with_token`] when the caller has an
-    /// outbound bearer token. This method always stores `None` for the token,
-    /// which silently downgrades authenticated agents to anonymous — the
-    /// caller sees `Ok(())` and may not realise the next outbound RPC will
-    /// be rejected with 401.
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use register_with_token so the outbound bearer token is preserved"
-    )]
-    async fn register(
-        &self,
-        card: AgentCard,
-        base_url: &str,
-        trust_level: TrustLevel,
-    ) -> A2AResult<()>;
-
     /// Register a remote agent, optionally attaching an outbound bearer
     /// token that subsequent RPCs to this agent will use.
+    ///
+    /// `auth_token` is a required parameter rather than a convenience, and
+    /// that is deliberate: a tokenless twin (`register`) used to sit beside
+    /// this one. It stored `None` unconditionally, so a caller who had a
+    /// token and reached for the shorter name got `Ok(())` and learned only
+    /// from a 401 on the next outbound RPC that the agent had been
+    /// downgraded to anonymous. Deprecating it did not stop that — the
+    /// warning is the same colour as every other warning — so it was
+    /// removed. Pass `None` when there genuinely is no token, and the choice
+    /// is then written down at the call site where it can be reviewed.
     async fn register_with_token(
         &self,
         card: AgentCard,
