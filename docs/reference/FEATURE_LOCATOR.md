@@ -3022,6 +3022,97 @@
   - **验证（每个数字带着它自己的谓词）**：`cargo test -p alephcore --lib` 在**轮次基线** `a95475edd`（main 干净检出）是 **17000 passed / 0 failed / 17 ignored**，在**代码末端** `7dba911d6` 是 **17116 passed / 0 failed / 17 ignored**（⚠️ **「代码末端」是一个谓词不是一个 SHA**：指本实现轮**最后一笔改 `src/` 的提交**。此后到 `c4dea9df0` 的 32 笔里，31 笔只动 `docs/` 与 `CLAUDE.md`，第 32 笔只改 `src/utils/source_scan.rs` 的注释行〔`git diff … | grep -vE '^[+-]\s*//'` 为空〕，所以这些数字在 `c4dea9df0` 上原样成立。**下一笔改 `src/` 的提交会让这个标签移动——届时连数字一起重测，不要只改 SHA**；全支评审之后的最终修复轮就是这样一笔，它的数字记在它自己的报告里）；其中 Task P5 自己那一段（`86cb58e32` → `7dba911d6`）是 17093 → 17116（+23）。`--features test-helpers --test '*' --no-run` 与 `-p aleph-panel --lib --no-run` 构建通过；`-p aleph-tui -p aleph-cli` 绿；三个 desktop 限肢 crate `cargo check` 干净；`cargo clippy --workspace --all-targets` 0 warning（⚠️ **这一行此前写的是 `--all-targets`，即本轮自己在 `ec12a46f1` 里刚拓宽掉的那条弱命令**——验证记录为一条比现行闸更弱的命令背书，是本轮反复记的「同一事实的两份表述只改一份」，而这次两份拷贝正好是同一道闸的拓宽前后）。⚠️ **`.superpowers/` 里那两个 `baseline-*.txt` 快照头上自己写着 SUPERSEDED**——它们对"某个任务之后的基线"确实已作废（基线随每个加测试的任务移动），只有 `baseline-true.txt` 正文那行 `TRUE BASELINE: main checkout @ a95475edd` 还是本轮**整段**跨度的合法起点。**一个以「真」「最终」命名的快照是一个未来的错误答案**，这里两件事都发生了：它既被超越，又仍然是某一个问题的正确答案——所以引用它必须连着说出**是哪一个问题**。
 - **打磨话术**：「**加一个进程级句柄之前先问它丢了会怎样**：得到一个合法但错的答案 ⇒ 它是能力句柄，用 `CapabilitySlot` 而不是裸 `OnceLock`；`MissingSemantics` 从**消费者**那边推——写 `reads_as` 之前去读那个回落分支，**别抄配置默认值**。**装它的地方只有 boot**，条件安装的 `else` 臂调 `decline("缺了什么")` 而不是静默跳过。**新 slot 必须同批加 accessor 并进 `ALL_SLOTS`**（守卫 C 会按名字红）。**别改 `census.rs` 里那个 46**——它漂了要么是普查的识别器退化了、要么是句柄真的离开了仓库，两者都要先查再改数字。**懒缓存不是能力句柄**，别给它套 slot（那会要求 boot"安装"一个正则，或者让诊断永远报"从未安装"）。**要问『这台机器装上了没』**走 `aleph doctor`（在线，经 `with_capability_wiring_check`），不是 `aleph-server doctor`（离线，结构上答不了 —— 见 §5.9）。**写任何源码级守卫都先过 `utils::source_scan::production_prefix`**，别再手搓 `split("#[cfg(test)]")`。」
 
+### 5.26 Gateway 深度加固轮：40 条已验证缺陷 (Gateway Hardening · openclaw 对照 · 2026-08-29)
+
+- **口语关键词**：网关全面体检 / openclaw 对照 / 反代之后每个人都是 operator / fs.read_file 读得到 ~/.ssh / connect 握手被幂等键拒 / Slack 限频不重试 / Discord 消息发不出去 / `/undo` 没反应 / `aleph cron list` 永远说没有 / `aleph tools list` 报错 / trace list 打不出来 / 修好一处又冒出一处
+- **代码锚点**：`src/gateway/{trusted_proxy,lane,method_authz,method_census}.rs` · `src/gateway/handlers/{fs,chat,clarification,gateway_metrics,general_config,execution_config,trace_replay,cron/real,commands}.rs` · `src/gateway/server/{handler,mod,metrics_endpoint}.rs` · `src/gateway/{event_visibility,delivery_queue,channel_registry,channel}.rs` · `src/gateway/reply_emitter/**` · `src/gateway/interfaces/slack/errors.rs`（新）· `src/gateway/execution_engine/{unattended_redacting_sink,steering,gate,slash_command,helpers}.rs` · `src/gateway/event_emitter/redacting.rs` · `src/gateway/session_store/**` · `src/gateway/session_manager/**` · `src/routing/session_key.rs::rolls_to_new_epoch` · `shared/protocol/src/{trace_replay,cron,commands}.rs`（新）· `src/config/tests/save_incremental.rs`
+- **规模**：13 个只读审计面（9 个 Aleph 子域 + 4 个 openclaw 差距映射）→ 每面一个**对抗验证器**（默认 REFUTED，必须自己打开文件、自己引 file:line）→ 44 条存活 → 5 个**文件互斥**的实施集群，每条修复自带一条**被变异证伪过**的守卫 → 每个集群一个**独立复审**读真 diff 而不是读报告。**33 条修复 + 7 条 DEFER + 主会话 3 条 + 复审 blocking 4 条**。
+- **状态**：✅ 已实现（worktree `gateway-round-openclaw`）。最小验证集全绿：`alephcore --lib` **17422 / 0**、`--bins` 94/0、集成 target 构建通过、`aleph-panel --lib` 1135/0、`aleph-protocol` 266/0、`aleph-cli --bins` 212/0、`aleph-tui` 284/0、`clippy --workspace --all-targets` **0 error**（12 条既存 doc-format warning，本轮零改动、未顺手清）。
+
+#### openclaw 对照：可移植的是两条不变量，不是模块
+
+openclaw 的 `src/gateway/` 是 283k 行 / 1087 文件（578 非测试），Aleph 是 242k 行 / 594 文件。**逐模块比较没有产出**——`worker-environments/`（分布式 worker 放置）、`session-observer-*`（第二个 agent 旁观记笔记）、`github-publication-*` 都是 Aleph 没有的产品面，整套移植违 R3/R10。**真正可移植的是它写进 `gateway/CLAUDE.md` 的两条不变量**，本轮把它们当审计透镜用：
+
+1. **「活体权威必须在使用时刻校验；HMAC 相符、TTL 未过、id 匹配都不构成活体权威」** —— 在 Aleph 上命中的是 `ConnectionState::new` 那条：一个连接的 `caller_role` 在**握手之前**从地址推出来，此后没有任何东西再问一次。
+2. **「身份行只记出处，裁决必须走 parent 与当前权威」** —— 命中的是 `visible_owner_filter()` 那一族：三个 RPC 面拿**归属**回答**特权**问题。
+
+Aleph 领先的地方也记下来，免得下一轮重做对照：`delivery_queue`（durable + 每会话保序 + 死信分类 + 崩溃对账）比 openclaw 的 `server-broadcast` 完整一档；`reload_impact::LIVE_SECTIONS` 的**声明式**热更比 `config-reload-*` 九个模块更收敛。openclaw 有而 Aleph 确实没有、且**值得单独立项**的只有两件：**停机前的在飞会话 drain**（Aleph 只有 axum 的 3 s `graceful_shutdown` + 开机后的 `orphan_notice`，即「事后补」），和**已应用配置的版本回执**（`config-revision-token`；Aleph 的 `state_version.rs` 有 `config` 计数器但**没有任何客户端读它**——见下方遗留清单）。
+
+#### 一条判据反复命中：一个假前提被三处引用，其中一处是发给模型的，一处是测试的断言消息
+
+本轮最贵的一族全部同形。`handlers::connect::resolve_connection_identity` 对**每一个**已授权连接——loopback 也包括——都盖 `CALLER_USER = Some(OWNER_USER_ID)`，所以 `visibility::visible_owner_filter()` 对 operator **永远是 `Some`**、永远不是 `None`。而仓里有三处代码把「operator 的 filter 是 `None`」当成事实写了下来：
+
+- `event_visibility.rs::session_identity_of` 的澄清帧臂，把 `stream.ask_user` 从 `BySessionKey` **拓宽**成 `BySessionKeyOrAdmin`，论证逐字是「`clarification.pending` 已经把它列给两边了」；
+- `every_frame_variant_is_classified` 的 `expected()` 里同一句话的第二份；
+- 钉住它的那条测试**自己的断言消息**里的第三份。
+
+三份都是假的，代价是 operator **收得到**一个成员的提问卡、然后从 `clarification.pending` 和 `clarification.resolve` 两个面各拿一句 `session not found`。修法不是补第四份表述：那条钉子改成**从 RPC 谓词派生**（同一对 `(meta, caller)` 喂给 `event_admits_for` 与 `visibility::session_visible_to`，要求两个布尔相等），于是策略无论朝哪边动都只能两面一起动。
+
+同族第二个：`gateway.metrics.run_concurrency` 的 `per_agent` 被 `visible_owner_filter().is_some()` 挡掉，而它上方的 doc 逐字写着「An unrestricted caller (internal / operator …) still gets the whole snapshot」。**这个字段在每一个部署上、对每一个客户端都被丢掉了，出厂单机桌面也不例外**——一个有生产者、有 wire 槽、没有任何可达读者的字段，和一个没人接线的字段长得一模一样。而钉它的测试**夹具结构上到不了那一格**：它的「unrestricted」臂**一个 caller 都没 scope**，那是内部调用者（cron / A2A / 进程内测试），永远不是一条连接。现按特权谓词 `caller_identity::caller_is_member` 判，三条臂（内部 / operator / member）各自命名它模拟的是哪种连接携带的 task-local。
+
+⚠️ **两个方向不一样，别一刀切**：`per_agent` 是 agent persona ＝ 服务端全局配置 ⇒ 问**特权**；`running_sessions` / `busy_queue.per_session` 命名会话 ＝ 每用户的行 ⇒ 按 P2 的产品边界仍问**归属**，且与事件面 `EventVisibilityIndex::project_for` 钉在一起。**一个响应可以同时回答两个问题，一个字段一个。**
+
+#### 信任边界（4 条 P1）
+
+- **`fs.read_file` / `fs.list_dir` / `fs.create_dir` 是第三张读文件的脸，凭据白名单一条都没绑，而且对 member 开放**。`validate_in_scope` 只对 `[projects] allowed_roots` 判包含，默认是 `["~"]`；`get_denied_paths()`（`~/.ssh`、`~/.aws`、`~/.gnupg`、`secrets.vault`、`<config_dir>/data` …）与 operator 的 `[sandbox] deny_read_globs` 一处都没查。同样的字节：模型的 `file_read` 按名字拒、`bash` 被内核挡。**而 `method_admin.rs` 里论证「fs.* 对 member 开放是安全的」那句话——"the RPC-surface equivalent of member tool execution, which the trust model already concedes"——正是假的那一句**：member 的工具执行**确实**过白名单。现在闸下沉进 `validate_in_scope` 这个三个 handler 本来就共用的咽喉，守卫**遍历 `get_denied_paths()` 自己生成用例**并自断言 `checked > 0`。
+- **`trusted_proxy::resolve_client` 在没有 `X-Forwarded-For` 时回落到代理自己的 peer 地址**。文档化的部署形态（Aleph 绑 `127.0.0.1`、同机反代、`trusted_ips` 默认 `["127.0.0.1","::1"]`）里那个地址就是 loopback，而网关里每一个 loopback 特权都读 `client_ip.is_loopback()`。一个不加 `proxy_set_header X-Forwarded-For` 的 nginx 配置，就让**公网上每一个不带任何凭据的客户端**拿到零配置 operator：跳过 per-IP 上限、跳过限流、`resolve_connect_auth` 直接 `Authorized`、`scope_for_role` 发 `"*"`。现在 `ResolvedClient.local`（`peer.is_loopback() && !经过可信代理跳`）是**权威位**，`ip` 保留为**分桶/审计身份**，十个特权读取点全部改读 `local`。⚠️ **第一遍只改了九个**：`ConnectionState::new` 仍在 `client_ip.is_loopback()` 上推 `caller_role`，独立复审判 REWORK 才抓到。现在那个位是**参数**不是推导——「忘记」于是成了编译错误。
+- **`connect` 落 Mutate 车道** ⇒ `require_idempotency_key = true` 拒掉**每一次握手**，包括 loopback Panel。`Lane::override_for` 只列了无点号的只读方法，`connect` 不在其中，而它没有 `.` 所以后缀启发式整段跳过。⚠️ **修好之后那个旋钮仍然不可用**：`grep -rn idempotency interfaces/ shared/` 零生产者，开着它每一个非 Query 方法照样被拒——**这是一条 DEFER，不是一条修好**（见下方清单）。
+- **`plugin_manage` 不在 `OPERATOR_TOOLS` 里**，而每一个 `plugin.*` / `plugins.*` RPC 都是 admin-gated ⇒ chat 档的频道能关掉插件信任强制。守卫改成**成对派生**：对每组 (工具, RPC 家族成员) 先断言那个 RPC 真的还是 admin-gated（一个家族不再被闸住时要**响亮地**变成一次重新裁决，而不是无声地让这一行变成空转），再断言工具面 operator-gated。
+
+#### 投递（2 条 P1）
+
+- **Slack 把限频折进 `SendFailed`** ⇒ 一条被限频的回复**既不重试、也不入队、也不进死信**。`ChannelError::RateLimited` 是 `channel_registry::send` 唯一会重试、`delivery_queue::should_enqueue` 唯一会重新入队的变体。这是 §5.6 那条 Lark 判据（附录 D.4.10）在第二个通道上的复现，而这次**四张脸各写了一份分类**（消息 / 目录 / 上传两步）。现单一源 `slack/errors.rs`，读**两条载体**（429 与 body 的 `error` 串）并取服务器自己的 `Retry-After`。⚠️ **一个已经落地的分块之后再被限频，要降级回 `SendFailed`**——两条恢复路径都重放整条消息。
+- **分块器按硬编码 4000 切，而通道声明的 `max_message_length` 无人读** ⇒ Discord（2000）整条拒收。第二个半边更隐蔽：`apply_channel_capabilities` 里那次赋值**写在 `EditBased` 臂里面**（附录 D.0.22 那条「只朝一个方向拨的覆写」），于是每一个 `StreamProtocol::None` 的通道（slack 3000 / mattermost 16383 / irc 400）拿到的上限是 **0**。⚠️ **单位分裂写下来而不是转换**：能力位是**字符**，切分器数**字节**，按字节切一个字符上限只会切得更早——保守方向，三处 doc 各说一遍。
+
+#### 会话存储：修一条时撞出两条既存的 P0/P1
+
+- **`SessionManager::truncate_messages` 开了两次 `unchecked_transaction()`**。`let tx = …` 写两遍是**遮蔽不是替换**，第一个事务仍活着 ⇒ SQLite 对**每一次**调用答 "cannot start a transaction within a transaction"。TUI `/undo`、`/retry`、`aleph session truncate` 三个面**从来没有成功过一次**。
+- **`map_message_row` 把 SQL rowid 当作 `MessageRecord.id` 返回**，而 `add_message_full` 刚把投影器的 `row_id(key, seq)` 解析进了 `source_seq` 列 ⇒ `parse_source_seq` 对**每一行** SQLite 记录返回 `None`。看得见的受害者是 `/undo`，看不见的是 `ProjectionReconciler`。
+- **`/undo` / `/retry` 只截断 `messages` 投影**，模型仍然看得见被撤销的那一轮，而 `/retry` 把它再发一遍 ⇒ 事件日志变成 `[U, A, U]`，正是它的注释声称自己在防的那件事。四个兄弟动词（reset / delete / chat.clear / chat.rewind）都先退休事件日志，而**判据就逐字写在同一个文件上方 400 行**。
+- **TUI `/undo` 的 `keep_count` 算在另一个索引空间里**：它数 `state.messages` 里的非 System 项，而那个列表**丢掉了每一条 `tool` 行**；`keep_count` 是**存储行**上的序数 ⇒ 两轮各带两次工具调用 ＝ 8 个存储行 / 4 个渲染行，`/undo` 传 2、**不可逆地删掉 6 行**并报告"已撤销上一轮"。
+- **`transcript.jsonl` 有四处裸 `tokio::fs::write` 重写**（附录 D.0.55 那条「一次 write 不是一次事件」在**用户的对话文件**上）。⚠️ **而修好 `stamp_last_assistant_metadata` 反而把这条罕见竞态变成了每回合一次**——它是唯一在默认后端**每个 run 结尾**都跑的整文件读-改-写。现在两个热写者（它与 `append_message`）都跨读-改-写持会话写锁；其余四个管理性重写**明确记为有界 gap 而不是声称已关闭**。
+
+#### 跨 crate wire 契约：这一族的第五、六、七次复发
+
+`trace.list` / `cron.list` / `commands.list` 各自答了一个**没有任何客户端解析得出来**的形状：
+
+| RPC | 服务端发 | 客户端要 | 症状 |
+|---|---|---|---|
+| `trace.list` | `{traces:[{task_id,event_count,last_timestamp}], next_cursor}` | CLI: `Vec<AgentTraceReplayListItem>`（要 `status`）· TUI: `Vec<AgentTraceTaskSummary>`（要 11 个字段）· Panel: 同 CLI 但**零调用点** | `aleph trace list` 每次 `invalid type: map, expected a sequence`；TUI `/replay list` 从未渲染过一行 |
+| `cron.list` | `{id,name,enabled,schedule_kind,…}` | `CronJob` 要 `schedule` | 永远打印 "No cron jobs configured"（`.unwrap_or_default()` 把解析失败折成空） |
+| `commands.list` | `{name,is_namespace,hint,…}` | 读 `key` / `description` | `aleph tools list` 报错；`describe` 永远 "not found"，且**即使键对了也找不到**——`session_new` 是 `session` 节点的子节点 `new`，查找不下钻 |
+
+**三条一起修，方向都是同一个**：契约类型进 `aleph_protocol`，服务端从契约类型**构造**响应而不是拿它**解析**。解析只能证明响应是契约的**超集**（serde 忽略未知键），对**超发**结构性失明——`workspace.get` 就是这么发出四个既无写者也无读者的字段的。守卫断**键集相等**且期望**从契约类型自身派生**。
+
+⚠️ **我自己写的那条守卫也是假的，由 E 集群抓到**：`the_trace_list_page_round_trips_and_every_row_field_is_required` 逐字段删键、要求每次都解析失败——但 **serde 给每个 `Option<T>` 字段隐式默认值**，`started_at` 缺席时静默变成 `None`。那条守卫从写下之日起就是红的（而我当时只跑了它所在 crate 之外的测试）。**「每个字段都必填」这句话对 `Option` 字段永远不成立，且不需要任何属性就不成立。**
+
+#### 熵减
+
+CUT：`StateDatabase::list_trace_tasks`（零调用者）· Panel `TraceApi::list`（零调用点，且携带同一个解析 bug）· `SessionMetadata.runtime_ms`（零写者、两个渲染者）· `ReplyEmitter::MAX_MESSAGE_LENGTH`（"一条消息能多长"的第二个答案）· `DeadLetterReason::replay_safe_tokens`· 五份手抄的 sessions SELECT 列清单 → 一个 `SESSION_COLUMNS` 常量 · `map_session_metadata` 的第二份逐字节副本 · CLI 三个猜出来的私有 DTO · `new_tool.rs` 本地的字符串比较式 rollover 谓词（**替换**而非并存）。
+
+两条守卫自己的缺陷：
+
+- **`save_incremental` 的普查自称 `production_sources` 却读遍 `src/` 下每一个测试模块** ⇒ 它把**另一条守卫用来搜索这些调用点的 `format!` 模板**（`live_apply.rs` 的 `format!("save_incremental(&[\"{section}\"])")`）当成了一个真实调用点，报「这个 section 写不进去」。现在经 `source_scan::production_prefix` 裁到 `#[cfg(test)]` 边界。**一个读测试代码的源码级普查，会把别的测试断言里的字符串字面量当成调用点。**
+- **`DeadLetterReason::redrivable` 定义成 `replay_safe() && !PayloadTooLarge`** ⇒ 那条声称检查「`redrivable ⇒ replay_safe` 对每个变体成立，包括未来的变体」的守卫**按构造恒真**，任何输入都红不了。现在两个谓词各自独立 `matches!`，那条蕴含才重新变成一条可被违反的不变量。
+
+#### 遗留（DEFER，各自记了为什么）
+
+| 项 | 为什么没做 |
+|---|---|
+| `orphan_notice` 与 `ResumeCoordinator` 抢同一批会话 | 机制已确证；正解是把通知从 `ResumeReport` 自己的分类派生，需要动 boot 的两个文件（`agent_init/mod.rs` 删调用、`start/mod.rs` 在有序 detached task 里重加）。在集群边界外，且**在 `orphan_notice` 里重读一遍标记日志会是「这个 run 会不会被重跑」的第二个答案** |
+| `AgentRouter::route` 是第四个 epoch bump 点 | 事实确证，**但提议的修法是错的**：在那里调 `terminate_session_continuations` 会因为用户"开了个新对话"而停掉他还开着的那个 `/loop`——`route(None, ..)` **铸造后继、不退休任何东西**。裁决写在 `router.rs:184`，需要人来定 |
+| `sessions.compaction.{list,restore,branch}` CUT | 跨五个文件（注册 + banner + census + visibility + 两个 mock impl），**半个 CUT 比现状更糟** |
+| `require_idempotency_key` 无客户端 | 修好 `connect` 让它不再自杀，但**没有一个第一方客户端发幂等键** ⇒ 开着它仍然把 Panel/TUI/CLI 变成只读。要么客户端长出 per-attempt key，要么 `config.rs` 的 doc 要**说出口**这个旋钮会禁用第一方客户端 |
+| `openai_api_token` 是 boot 快照 | `gateway.token.rotate` 撤销不了 `/v1/*`。修法要把 `OpenAiApiState.api_token: Option<String>` 换成 `Arc<SharedTokenManager>`（照 `admin_api` 的样子），两个文件在集群外 |
+| `node.disconnected` 的守卫按构造为假 | `NodeRegistry::forget` 在 `close_connection()` **之前**就把两张表都清了，于是清理路径读不到身份。要在 `cluster::deregister_node` 里发帧，跨三个文件 |
+| 三个 cluster 工具不听 steer 信号 | `SteerWatch::race` 要包在 `builtin_tools/node_*.rs` 里（集群外）。**在 `ReverseRpcChannel::call` 里一刀切地 race 是错的**——`node.approval.request` 走同一个方法，而审批门是 `steer_signal` 自己 doc 里记着的刻意排除项 |
+| pair-loop guard 整个配置面断线 | `with_bot_loop_protection` 与 `resolve_pair_loop_settings` 的唯一调用者都在 `#[cfg(test)]` 里 ⇒ 线上是写死的 20/60 s 静默丢弃、没有门把手。接线要 `inbound_router/mod.rs` 长出 per-channel 配置表 |
+| `behavior_config` 的 `typing_speed` | 已确证的断线：Panel DTO 声明 `pub typing_speed: u32` 且**无 `#[serde(default)]`**，而服务端 `BehaviorConfigDto` 只发 `output_mode` ⇒ 整份响应解不出来。需要产品裁决（服务端旋钮 vs Panel 本地偏好），不是接线 |
+| `state_version.config` 无客户端 | 本轮顺带发现：`TopicEvent.state_version` 在 wire 上，全仓**零个客户端读它**。它是 openclaw `config-revision-token` 的 Aleph 对应物，但只有一半 |
+| `subagent.rs::handle_tree` 的 owner-vs-role | 同一族的第四处，**取决于一条尚未做出的「operator 是不是超级用户」的裁定**；本轮修的两处都有各自独立的理由（一个是特权、一个是分歧），这一处两者都不是 |
+
+- **打磨话术**：「**改任何一个 `visible_owner_filter()` 之前先说出你答的是哪一问**——`caller_is_member` 答特权、`session_visible_to` 答归属，而 operator 的 `CALLER_USER` 是 `OWNER_USER_ID` 不是 `None`，所以后者对 operator 照样生效。**一条钉住"两个面一致"的守卫要从其中一个面的谓词派生，别复述它**。**一个源码级普查在扫之前先过 `source_scan::production_prefix`**，否则它会把别的守卫的搜索串当成命中。**`Option<T>` 字段不需要 `#[serde(default)]` 就有默认值**，所以"每个字段缺席都会响亮失败"的守卫对它恒绿。**一个谓词如果是另一个谓词派生出来的，检查两者关系的守卫恒真**。**权威位要当参数传，不要在每个消费点重新推导**——第九个消费点是复审抓到的。**棘轮红了要缩内容不要抬闸。**」
+
 ## 6. UI / Panel
 
 
@@ -4065,6 +4156,12 @@ round-2 结尾留了三条，本轮全部收掉。共同形状：**三条都不�
 **附录 D.0.131** · **两层背靠背作用在同一份数据上时，前一层的「我特意保住了这个」对后一层不是约束** —— 预检层明写策略（最新截图是 live 上下文、更旧的是历史）并特意让最新那张完好；紧接着在**同一个向量**上跑的压缩窗口头锚定，那张图一落进 `cut_end` 之前就被抽干，而三条带出通道各自都正当地不带它（保真重建只带文本、transcript 序列化跳过图、carrier 当时只有两个）。**一层声明策略，下一层静默违反它**，而前一层自己的测试全绿——它只测得到自己那一层。复合伤害是图恰恰是越过压缩阈值的**主要原因**：因截图而压缩，然后删光截图。判据两句：① 写下「我特意保留了 X」时去问**下一层会不会重新处置 X**，答案是「会」就要有一条把 X 带过去的线，而不是指望它读到你的注释；② 那条线要**恰好一份、且是同一条策略选中的那一份**，否则它变成另一族缺陷（每轮重新附上全部附件，代价随轮次增长）。
 
 
+**附录 D.0.132** · **一个 `Option<T>` 字段不需要任何属性就有默认值，所以「每个必填字段缺席都会响亮失败」这条守卫对它恒绿** —— 「守卫自己是假的」这一族里最难看见的一种：守卫的**规则**是对的，守卫的**覆盖面**却按语言规则被挖掉一块，而挖掉的那块正好是最需要它的那块。为 `trace.list` 的新契约写的 `the_trace_list_page_round_trips_and_every_row_field_is_required` 逐个删掉行的键、要求每次 `from_value` 都 `is_err()`；`task_id` / `status` / `event_count` 三个必填字段确实红，而 `started_at: Option<i64>` **静默变成 `None`** —— serde 对 `Option<T>` 隐式 `#[serde(default)]`，不写属性也一样。于是那条守卫**从写下之日起每次都失败**（我当时只跑了它所在 crate 之外的测试，是下一轮的另一个 agent 抓到的），而它想守的性质——「服务端改名必须让客户端响亮失败，而不是渲染一列破折号」——对可选字段**本来就不成立**。三句：① 写「每个字段都必填」之前先数一遍**有几个是 `Option`**，那些字段的正确断言是「它可以缺席」而不是「它必须在」；② 一条新守卫必须在**它自己那个 crate** 里跑过一次（`cargo test -p aleph-protocol` 与 `-p alephcore` 是两条命令）；③ 这不是「加个属性就能修」的问题——`Option` 的默认是**语言的**，唯一的修法是把断言分成两组 → §5.26
+
+**附录 D.0.133** · **一个用另一个谓词派生出来的谓词，会让检查两者关系的守卫按构造恒真** —— 「恒真的谓词」的**元**形态：这次恒真的不是被守的那个闸，是**守卫自己断言的那条不变量**。`DeadLetterReason::redrivable` 写成 `self.replay_safe() && !matches!(self, Self::PayloadTooLarge)`，读起来完全正当（"严格更窄"），而 `every_dead_letter_reason_answers_both_questions_consistently` 的循环断言的正是 `redrivable(r) ⇒ replay_safe(r)`——它对每个变体、包括它 doc 里声称覆盖的**未来变体**，都是定义展开后的重言式，没有任何输入能让它红。判据：**看到一条守卫在断言两个谓词之间的关系时，先去读那两个谓词是不是同一个作者写的同一段代码**；是就把被派生的那个改写成独立的穷尽 `matches!`，那条蕴含才重新变成一件可以被违反的事。⚠️ 代价要认：两份独立的列举**会漂**——所以它们必须住在同一个 `impl` 里、紧挨着，且那条守卫就是防漂的东西。这比一个恒真的守卫强，因为**漂了会红，恒真不会** → §5.26
+
+**附录 D.0.134** · **一个权威位如果在每个消费点重新推导，那么"漏掉一个消费点"就不是编译错误——而漏掉的那个通常是最早跑的那个** —— `trusted_proxy` 的修复把「这个连接是不是本机」从 `client_ip.is_loopback()` 换成一个派生位 `ResolvedClient.local`，并把**九个**特权读取点改读它。第十个 `ConnectionState::new` 没改，因为它不在 `handler.rs` 的那一串 `if ctx.client_is_local` 里——它拿 `client_ip` 做**参数**，在函数体里自己推。它也恰恰是**最早**跑的那个：连接一建立就盖 `caller_role`，在任何握手之前。判据两句：① **数消费点要数「这个事实有几个推导者」，不是「这个变量有几个读者」**——重新推导的那个不会出现在你 grep 的那个名字上；② 修法是把那个位做成**参数**（`fn new(client_ip, client_is_local)`）而不是让每个构造点自己推——「忘记」于是从一次静默的错答案变成一次编译错误，而这正是它能被复审抓到、却抓不住第十一个的原因。⚠️ 同批要把**分桶身份**与**权威身份**在 doc 里显式分开命名（`client_ip` 答"归哪个桶"，`client_is_local` 答"能不能"），否则下一个人会正当地拿手边那个 `IpAddr` 再推一次 → §5.26
+
 ### 附录 D.1 · Prompt · 前缀缓存 · 上下文
 
 **附录 D.1.10** · **提示词散文里点名的工具，是那个工具名的第二份拷贝，而且是模型真正照做的那一份** —— 它没有编译器也没有调用点，所以工具改名 / 从来就没有过这个名字，两种都不会红：`agent_catalog` 的引导句让**每一个** Full 模式提示词去调 `delegate`（那是 `groups.rs` 的一个工具**分类 id**，真名 `subagent`），住在 Stable 块里，代价是模型每次照做都换来一次 tool-not-found。守卫要**解析句中每一个反引号名字逐个对真工具表求解**，不是断言"句子里含 subagent"——后者是列举法，加第二个工具引用当天就失明 → §4.11 round-12
@@ -4251,3 +4348,5 @@ round-2 结尾留了三条，本轮全部收掉。共同形状：**三条都不�
 **附录 D.10.22** · **`cargo fmt -p <crate> -- <file>` 不会只格式化那个文件** —— `cargo fmt --help` 第一行逐字写着它格式化「当前 crate 的**全部** bin 与 lib 文件」，而 `--` 之后的东西是**传给 rustfmt 的选项**，不是文件过滤器。**而这条判据自己给的替代方案也是错的（2026-08-28 第三次栽）**：`rustfmt <file>` 同样不是单文件——**它顺着 `mod` 声明递归进子模块**，所以 `rustfmt session_store/mod.rs` 会一并重排 `file_backend/mod.rs`，把树里既有的漂移卷进你的改动（本轮 A/B 实测：不带该开关必递归，带上不递归）。单文件的两条真解法：**`rustfmt --config skip_children=true <file>`**（本机 rustfmt 1.9.0-stable 可用），或者**格式化之后比对 `git diff --name-only` 的前后差集、把你没打算碰的文件 `git checkout --` 回去**——后者不依赖任何开关，且是唯一能抓住「我以为我限定了范围」这一类的做法。共享 worktree 里这条尤其贵——它会把树里既有的漂移一并卷进你的改动，而别人看到的是"有第三方在实时编辑这棵树"。**本仓已经栽过两次**（一次 66 个、一次 5 个无关文件），而第一次记录下来的是**症状**（"别跑 `cargo fmt -p alephcore`"）：**记录症状阻止不了复发**——第二次那个人相信自己已经限定了范围，并且手里有一句看起来能证明这一点的咒语 → 附录 C.6
 
 **附录 D.10.23** · **一条断言如果落在你的实现碰巧产出的那个单位上，而不是消费者观察得到的那个单位上，一次刻意的重构就会让它红，而线上字节完全正确** —— SSE 的线是按 `\n\n` 分帧的字节流，「finish 块和 `[DONE]` 是一个 `String` 还是两个」对任何客户端都不可见；五条测试却断言 `frames.len()`，于是一次有意的状态机拆分（让停止帧之后到达的 `Usage` 能先冲出去）把它们全变红，而它们描述的性质一秒都没被破坏。判据两句：① 断言前先说出**对面读的是什么单位**（字节 / 事件 / 行 / 记录），把断言写在那个单位上；② 反过来，一次**故意**的行为变更若没有同批改测试，那些测试会以「断言旧粒度」的形式红着，而红的样子和真回归**一模一样**——看到一批同族测试同时红，先 `git log -S` 找那次有意的变更，别先假设是回归。
+
+**附录 D.10.24** · **一个源码级普查如果不裁掉 `#[cfg(test)]`，它会把另一条守卫用来搜索这些调用点的字符串当成一个调用点** —— 附录 C.3「一次扫描只为它枚举过的形状背书」的**输入端**形态，而它有一个新的触发源：**两条源码级守卫互读对方的源码**。`save_incremental` 的普查函数名叫 `production_sources()`，实现却是 `walk(src/)` + 只剥 `//` 注释行——测试模块整个留着。于是 `live_apply.rs` 自己的普查里那句 `format!("save_incremental(&[\"{section}\"])")`（它构造出来是为了去搜索这些调用点）被读成了一个真实调用点，报出一个叫 `{section}` 的配置 section「写不进去」。三句：① **一个扫描器的名字里有 production，就得真的只读 production**——仓里已有单一源 `utils::source_scan::production_prefix`，手搓 `split("#[cfg(test)]")` 或干脆不裁都是第二个答案；② **修法要落在值的性质还是作用域上，取决于哪个不会腐烂**——我第一版是「跳过含大括号的捕获」，那修的是症状，而且它自己的证明性断言里又写了一遍那个字面量、立刻自命中；裁掉测试模块修的是**真正的作用域错误**，顺带同时关掉这两个假阳性；③ 这一类的第三个受害者是**扫描器自己的文件**——一条断言消息里写下的模式会被同一条守卫下一次扫到 → §5.26

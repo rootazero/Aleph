@@ -494,9 +494,34 @@ is logged, not silently accepted.
 `redrive_dead_letters` used to rest on "every dead letter is duplicate-safe by
 construction", which was true only while exhausted transient retries were the
 sole producer. With terminal failures and interrupted attempts also landing
-there, safety is per record: `DeadLetterReason::replay_safe` (single source in
-Rust, projected into SQL by `replay_safe_tokens`). Redrive moves `Exhausted` /
-`Permanent` and reports the rest as `skipped_unsafe`.
+there, safety is per record — and it is **two questions, not one**:
+
+- `DeadLetterReason::replay_safe` — "can replaying this double-send?" It is the
+  operator-facing duplication flag, and `PayloadTooLarge` is **safe** by it: the
+  row is written by `DeliveryStore::enqueue` *before* any transport call, so
+  nothing was ever attempted.
+- `DeadLetterReason::redrivable` — "will redrive actually move it?" Strictly
+  narrower, and projected into SQL by `redrivable_tokens()`. `PayloadTooLarge`
+  is **not** redrivable: a redrive re-inserts the row without re-running the cap
+  check, so it would land a record the limit rejects.
+
+The two were one boolean until 2026-08-29, and the cost was a message that
+provably never left the process being reported to the user as "the outcome of
+the last attempt is unknown" — the one refusal whose remedy (raise
+`max_payload_bytes`) has nothing to do with duplicates.
+
+⚠️ `redrivable` is spelled as its **own** exhaustive `matches!`, not as
+`replay_safe() && !PayloadTooLarge`. The derived form made
+`every_dead_letter_reason_answers_both_questions_consistently` — whose stated job
+is to check `redrivable ⇒ replay_safe` for every variant including future ones —
+true by construction, so it could not go red for any input.
+
+Redrive therefore reports **three** counters, because the operator's next action
+differs for each: `moved`, `skipped_capacity` (live queue full — retry later),
+`skipped_unsafe` (may already have been delivered — ask the user), and
+`skipped_over_cap` (raise the cap). The `channel_outbox` tool renders all of
+them; when it read only `skipped_unsafe`, `moved + skipped_capacity +
+skipped_unsafe` silently stopped adding up to the number of dead letters.
 
 Redrive also respects the live-queue bound by **moving fewer records**, never
 by evicting live ones. The previous implementation moved everything then
@@ -955,6 +980,30 @@ a loopback peer must not be allowed to satisfy it — a malicious client on
 the loopback interface would otherwise be indistinguishable from the
 operator. When `enabled = false` (the default) the resolver is a no-op and
 every per-IP check sees the raw peer.
+
+**Two identities, and they answer different questions.** `ResolvedClient`
+carries `ip` *and* `local`:
+
+- `ip` is the **bucketing / audit** identity: which per-IP bucket a connection
+  belongs to for the connection cap, the rate limiter and the security audit
+  log.
+- `local` is the **authority** bit — `peer.is_loopback() && !via a trusted proxy
+  hop` — and it is what every privilege decision reads: the insecure-transport
+  gate, the per-IP exemption, `ChannelClass`, `SurfaceKind`, the three
+  connect-auth call sites, the rotation kick, and `ConnectionState::new`'s
+  initial `caller_role`.
+
+⚠️ Until 2026-08-29 there was only `ip`, and `resolve_client` fell back to the
+peer address when `X-Forwarded-For` was **absent**. In the deployment this
+section documents — Aleph on `127.0.0.1`, a same-host proxy, `trusted_ips`
+defaulting to loopback — that fallback address *is* loopback. A reverse-proxy
+config that simply omits `proxy_set_header X-Forwarded-For` (nginx does not add
+it unless told to) therefore handed **every internet client, presenting no
+credential at all**, the zero-config operator grant. `local` is a parameter
+everywhere it is consumed rather than a predicate each site re-derives, so a
+consumer that forgets it is a compile error; the tenth consumer,
+`ConnectionState::new`, was missed by the first pass precisely because it
+re-derived instead of reading.
 
 The trade-off: when the gateway is fronted by a reverse proxy, every client
 collapses to the proxy's socket address, so the per-IP protections bound the
