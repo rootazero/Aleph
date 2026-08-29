@@ -159,51 +159,59 @@ impl AcpSession {
             )
         })?;
 
-        let stdin = child.stdin.take().ok_or_else(|| {
-            // Synchronously signal the child and wait for it to exit
-            // before returning, otherwise the harness process becomes a
-            // zombie until the parent drops the `Child` (which would only
-            // be the next `Drop` of the binding below — if the caller
-            // short-circuits, the zombie sticks around).
+        // Synchronously signal + wait for the child to exit when stdin
+        // capture fails. Without this, the harness process becomes a
+        // zombie until the next `Drop` of the binding below — if the
+        // caller short-circuits, the zombie sticks around. The previous
+        // version used `let _ = child.start_kill()` and relied on Drop,
+        // which only fires when the surrounding scope exits.
+        async fn reap_zombie_child(
+            mut child: tokio::process::Child,
+            harness_id: &str,
+            stage: &'static str,
+        ) {
             if let Err(e) = child.start_kill() {
                 tracing::warn!(
                     harness_id,
+                    stage,
                     error = %e,
-                    "ACP spawn: failed to capture stdin AND failed to kill child; \
+                    "ACP spawn: failed to kill child after pipe capture failure; \
                      zombie risk"
                 );
-            } else if let Err(e) = child.wait().await {
+                return;
+            }
+            if let Err(e) = child.wait().await {
                 tracing::warn!(
                     harness_id,
+                    stage,
                     error = %e,
                     "ACP spawn: failed to wait on killed child"
                 );
             }
-            crate::acp::protocol::AcpOperationError::new(
-                crate::acp::protocol::AcpErrorCode::SpawnFailed,
-                format!("ACP harness '{harness_id}': failed to capture stdin"),
-            )
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            if let Err(e) = child.start_kill() {
-                tracing::warn!(
-                    harness_id,
-                    error = %e,
-                    "ACP spawn: failed to capture stdout AND failed to kill child; \
-                     zombie risk"
-                );
-            } else if let Err(e) = child.wait().await {
-                tracing::warn!(
-                    harness_id,
-                    error = %e,
-                    "ACP spawn: failed to wait on killed child"
-                );
+        }
+
+        let stdin = match child.stdin.take() {
+            Some(s) => s,
+            None => {
+                reap_zombie_child(child, harness_id, "stdin").await;
+                return Err(crate::acp::protocol::AcpOperationError::new(
+                    crate::acp::protocol::AcpErrorCode::SpawnFailed,
+                    format!("ACP harness '{harness_id}': failed to capture stdin"),
+                )
+                .into());
             }
-            crate::acp::protocol::AcpOperationError::new(
-                crate::acp::protocol::AcpErrorCode::SpawnFailed,
-                format!("ACP harness '{harness_id}': failed to capture stdout"),
-            )
-        })?;
+        };
+        let stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => {
+                reap_zombie_child(child, harness_id, "stdout").await;
+                return Err(crate::acp::protocol::AcpOperationError::new(
+                    crate::acp::protocol::AcpErrorCode::SpawnFailed,
+                    format!("ACP harness '{harness_id}': failed to capture stdout"),
+                )
+                .into());
+            }
+        };
         let stderr = child.stderr.take();
 
         // Wire the agent→client request handler so `fs/*` and

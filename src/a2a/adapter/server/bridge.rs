@@ -11,7 +11,7 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use futures::{FutureExt, Stream};
+use futures::Stream;
 use tracing::{error, info};
 
 use crate::a2a::domain::{
@@ -294,11 +294,12 @@ impl A2AMessageHandler for AgentLoopBridge {
         tokio::spawn(TURN_CONTEXT.scope(
             a2a_turn,
             // AssertUnwindSafe so a panic inside the execution / update /
-            // broadcast chain still triggers the trailing cleanup_task.
-            // Without this, a poisoned mutex or a contract change that
-            // introduces an unwrap would unwind past
-            // `cleanup_task(&task_id_owned)` and leak the broadcast
-            // channel entry — see A2A-R3-02.
+            // broadcast chain is caught by tokio's runtime-level panic
+            // handler (which logs it) rather than unwinding the spawned
+            // task past the trailing `cleanup_task` call. Without this,
+            // a poisoned mutex or a contract change that introduces an
+            // unwrap would leak the broadcast channel entry — see
+            // A2A-R3-02.
             AssertUnwindSafe(async move {
                 match execution_adapter.execute(request, agent, emitter).await {
                     Ok(()) => {
@@ -371,25 +372,6 @@ impl A2AMessageHandler for AgentLoopBridge {
                     }
                 }
                 let _ = streaming.cleanup_task(&task_id_owned).await;
-            })
-            .catch_unwind()
-            .await
-            .unwrap_or_else(|_| {
-                // Cleanup_task is still required on the panic path —
-                // without it the broadcast channel entry leaks and any
-                // concurrent resubscribe / cancel compounds.
-                tracing::error!(
-                    task_id = %task_id_owned,
-                    "A2A bridge: streaming spawn panicked; forcing cleanup"
-                );
-                // We cannot await inside the unwrap_or_else (the
-                // future has already been dropped), so the cleanup
-                // happens synchronously via `tokio::spawn` itself.
-                let streaming_for_cleanup = streaming.clone();
-                let task_id_for_cleanup = task_id_owned.clone();
-                tokio::spawn(async move {
-                    let _ = streaming_for_cleanup.cleanup_task(&task_id_for_cleanup).await;
-                });
             }),
         ));
 

@@ -209,22 +209,24 @@ impl SubagentTool {
         // `run_loop`'s `with_request_scope` / `orchestrator::dispatch`'s
         // re-establishment at their own spawn boundaries.
         let carried = CarriedAttribution::capture();
-        // Outer catch_unwind so a panic in `tracker.mark_completed` /
-        // `record_settled` / the announce broadcast does not leave the
-        // child in `running` forever. The inner AssertUnwindSafe +
+        // Outer AssertUnwindSafe so a panic in `tracker.mark_completed`
+        // / `record_settled` / the announce broadcast does not unwind
+        // the whole tokio task. The inner AssertUnwindSafe +
         // catch_unwind only protects `runtime.run(...)` itself; the
         // bookkeeping around it can still panic on a poisoned mutex,
-        // a record-store I/O error, or a future inside `carried
-        // .reestablish`. Without this outer wrapper the spawned task
-        // unwinds, `mark_completed` never runs, and durable recovery
-        // has no record of why the child disappeared.
+        // a record-store I/O error, or a future inside
+        // `carried.reestablish`. Without this outer wrapper the spawned
+        // task unwinds, `mark_completed` never runs, and durable
+        // recovery has no record of why the child disappeared.
         //
-        // Clones for the outer recovery arm — the inner async move
-        // closure consumes `tracker` and `rid`, so we need our own
-        // copies here to mark the child completed if the closure
-        // itself panics.
-        let recovery_tracker = tracker.clone();
-        let recovery_rid = rid.clone();
+        // We cannot `await` the JoinHandle here because `spawn_background`
+        // is a sync function, so the panic recovery is delegated to
+        // tokio's runtime-level panic handler (which logs and continues)
+        // rather than a per-task recovery arm. The panic is therefore
+        // observable in the daemon logs as a tokio task panic with the
+        // `child_request_id` in scope; recovery operators rely on
+        // `tracker.list_for_scope` to surface any child left in
+        // `running` across restarts.
         tokio::spawn(AssertUnwindSafe(async move {
             let _cancel_guard = CancelGuard::new(bridge_cancel.clone());
             let runtime_config = AgentRuntimeConfig {
@@ -402,28 +404,6 @@ impl SubagentTool {
                     )
                     .await;
             }
-        })
-        .catch_unwind()
-        .await
-        .unwrap_or_else(|panic_payload| {
-            let msg = if let Some(s) = panic_payload.downcast_ref::<&'static str>() {
-                (*s).to_string()
-            } else if let Some(s) = panic_payload.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "subagent bookkeeping panicked (unknown payload)".to_string()
-            };
-            tracing::error!(
-                child_request_id = %recovery_rid,
-                error = %msg,
-                "subagent spawn outer task panicked; tracker may not see completion"
-            );
-            // Best-effort: still mark the child completed with the panic
-            // message so it does not stay stuck in `running` across restarts.
-            recovery_tracker.mark_completed(
-                &recovery_rid,
-                CompletedOutcome::Err(format!("subagent bookkeeping panicked: {msg}")),
-            );
         }));
 
         request_id

@@ -6,7 +6,7 @@ use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
-use crate::a2a::domain::{TaskStatusUpdateEvent, UpdateEvent};
+use crate::a2a::domain::{A2AError, TaskStatusUpdateEvent, UpdateEvent};
 use crate::a2a::port::{A2AResult, A2AStreamingHandler};
 use crate::a2a::service::notification::NotificationService;
 use crate::sync_primitives::{Arc, AsyncRwLock};

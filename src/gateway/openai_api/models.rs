@@ -22,7 +22,7 @@ fn check_auth(state: &OpenAiApiState, headers: &HeaderMap) -> Result<(), ApiErro
         .unwrap_or("");
     let token = extract_bearer_token(auth_header)
         .ok_or_else(|| ApiError::Unauthorized("Missing or invalid Authorization header".into()))?;
-    if let Some(ref expected) = state.api_token {
+    if let Some(expected) = (state.api_token)() {
         if !crate::security::secret_equal(Some(token), Some(expected.as_str())) {
             return Err(ApiError::Unauthorized("Invalid API key".into()));
         }

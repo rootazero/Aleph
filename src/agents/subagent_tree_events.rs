@@ -42,16 +42,16 @@ pub fn emit_tree_event(agent_id: String, session_id: String, ev: SubagentTreeEve
         return;
     }
     tokio::spawn(async move {
-        if let Err(e) = GlobalBus::global()
+        // GlobalBus::broadcast returns (); failures inside the bus are
+        // logged there. We still log here so a no-op in production is
+        // traceable in development.
+        tracing::trace!(
+            agent_id = %agent_id,
+            session_id = %session_id,
+            "emit_tree_event: broadcast fired"
+        );
+        GlobalBus::global()
             .broadcast(&agent_id, &session_id, AlephEvent::SubAgentTreeUpdate(ev))
-            .await
-        {
-            tracing::debug!(
-                agent_id = %agent_id,
-                session_id = %session_id,
-                error = %e,
-                "emit_tree_event: GlobalBus broadcast returned error"
-            );
-        }
+            .await;
     });
 }

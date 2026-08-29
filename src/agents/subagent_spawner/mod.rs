@@ -765,8 +765,8 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                         &parent_id,
                         SessionEvent::SubagentSpawned {
                             turn_id: turn,
-                            child_id: child_key,
-                            flow: flow_name,
+                            child_id: child_key.clone(),
+                            flow: flow_name.clone(),
                             at: now_ms(),
                         },
                     )
