@@ -580,3 +580,52 @@ before/after 差集**永远**不满足这一点——它测的是整个进程。
 判据：**每一次「我应用了变异」之后，先证明变异真的在文件里，再去读测试结果。** 最便宜的做法是
 让补丁脚本自己断言锚点数并在不匹配时**退出非零**，而不是打印一行警告——警告会和成功的输出混在
 一起，而下一行恰好是一个看起来很有说服力的测试结果。
+
+
+### G.20 一个测试为了证明"真接线"去动进程全局单例——它证明的和它破坏的是两件事，而破坏只在窄命令下可见
+
+Task 12 的 `disabling_the_terminal_live_kills_sessions_through_apply_live_sections` 刻意用
+**进程全局**的 `pty::manager()` 而不是新建一个 `PtyManager`，它的 doc 把理由写得完全正确：被测的那
+条 arm 里硬编码着 `crate::gateway::pty::manager()`，**局部实例证明不了那条线**。
+
+那句论证对**它证明了什么**是对的，对**它破坏了什么**一个字都没有。`close_all()` 杀掉进程里的
+**每一个**会话，而 `gateway::handlers::pty::tests` 的十二条测试全都在同一个单例上 spawn 真实会话
+再对它们作断言，libtest 又是并行跑的。
+
+实测（不是推演）：
+
+```
+pty handler 模块单跑，6 次              ->  6/6 绿
+pty handlers + config::live_apply，6 次 ->  5 次红，每次红的是不同的子集（1,1,3,1,3,0）
+同一棵树的全量 --lib，8 次              ->  8/8 干净
+```
+
+**全量绿是运气不是安全**：17k 条测试里这一对很少撞上。而 5/6 红的那条命令
+（`cargo test -p alephcore --lib -- gateway::handlers::pty config::live_apply`）恰恰是**人在这
+个子系统里干活时真会敲的那一条**。
+
+三句：
+
+1. **写一个动进程全局资源的测试时，先问"这个资源上还有谁"**——不是"我会不会污染别人的状态"，
+   而是"**别人此刻正握着的东西，我这一下会不会把它拿走**"。
+2. **修法不能是点名受害者。** 忘记打标签的失效模式是**别人的**测试变 flaky，不是新写的这条；所以
+   要求要**从源码派生**（本轮：`serial_test` 的 `serial`/`parallel` 键 + 一条扫描本模块每个
+   test attribute 的 census，自带 `checked >= 12` 自保断言、先剥 `//` 行）。
+3. **两半都要单独证伪**：摘掉一个 `parallel` 标签 ⇒ census 按名字红；摘掉 `serial` 键 ⇒ 竞态回来
+   （6 次 4 红）。只验其中一半的话，另一半可能从一开始就没在工作。
+
+### G.21 一个 edition 不能从编译器的通用帮助文本里读
+
+`rustfmt --check <file>` 默认 edition 2015，于是对任何 `async fn` 报 E0670，帮助行逐字写着
+`pass --edition 2024 to rustc`。我照做了——**那句话是 rustc 在推荐最新 edition，不是在报告这棵树
+的 edition**。这棵树是 2021，而 2024 的 import 排序规则不同 ⇒ 量具当场造出满屏假差异，读起来正
+像"task12 提交了一堆没格式化的代码"。
+
+判据：**edition 去 `Cargo.toml` 读，别从错误信息里抄。** 同族一句：一个量具在被错误配置时，
+输出的不是"错误"，是**一份看起来很具体的、错误的测量**。
+
+顺带记一次**第三次**复发：`cargo fmt -p alephcore -- --check` 报了一个本分支从未碰过的文件
+（`src/approval/mod.rs`）。`--` 之后是**传给 rustfmt 的选项**，不是文件过滤器；`-p` 限定的是
+crate 不是文件。单文件的唯一安全形式是
+`rustfmt --edition <n> --config skip_children=true <file>`，而且格式化之后要**比对
+`git status --short` 的前后差集**确认它没碰别的文件——本轮这么做了，差集为空。

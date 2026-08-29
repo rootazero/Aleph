@@ -3142,7 +3142,13 @@ is already open still open."
 - Consumes: `ExecTier::floor_asks_for_arguments` → `ScopedToolService::gate_removal_floor` →
   `confirmation_rule` 第 2 位 `GateRule::GateRemoval`（既有链，**不是** `DestructiveArguments`——
   见下方裁定）、`crate::gateway::visibility::ambient_actor()`（既有，`visibility.rs:143`）、
-  Task 12 产出的 `PtyManager::{spawn_with_scrollback, set_scrollback_limit, scrollback_limit_of}`
+  Task 12 已落地的 `PtyManager::{spawn_with_scrollback, scrollback_limit_of, close_all}`
+  ⚠️ **controller 对树核实（2026-08-30）**：本行原来还列着 `PtyManager::set_scrollback_limit`，
+  **那个方法不在 `PtyManager` 上**，它在 `PtySession`（`src/gateway/pty/session.rs:218`），
+  下面还有 `Screen::set_scrollback_limit` 与 `Grid::set_scrollback_limit`。经 manager 走的路是
+  `spawn_with_scrollback(&opts, lines)`（内部替你调 session 那个），读回来用
+  `scrollback_limit_of(&session_id) -> Option<usize>`。**别按错的类型名去 grep**——本仓已经有两次
+  半小时花在一个「名字对、住在别的模块里」的符号上
 - Produces: `SessionInfo` 增 `created_by: Option<String>`
 
 - [ ] **Step 1: 写失败的测试**
