@@ -118,28 +118,57 @@ async fn rescope_existing_transcript(
         bound.peer_id.as_str(),
     );
 
-    // ⚠️ `owner_visible_to` is deliberately `None`, and that is a FUNCTIONAL
-    // REQUIREMENT rather than a missing gate.
+    // Every field written out, and deliberately NOT `..Default::default()`.
     //
-    // The rows being searched for may belong to ANYBODY: `personal:<first
-    // speaker>` is precisely the class this verb exists to move. Adding
-    // `visible_owner_filter()` here — the reflex, and correct almost
-    // everywhere else in this crate — would silently drop exactly the rows the
-    // bind is supposed to relocate, and the receipt would still say it
-    // succeeded.
-    //
-    // The admission decision was already made upstream: `bind` is admin-gated
-    // in `method_admin::ADMIN_METHODS`, and `gate_project` has already refused
-    // a room the caller cannot see. An operator entitled to bind the room is
-    // entitled to move its conversation's rows.
-    //
-    // This is the mirror image of the repo's `..Default::default()` criterion,
-    // where leaving this same field `None` was the DEFECT (`session_list`
-    // showing every owner's rows). Same field, opposite direction: there the
-    // filter was the point, here the filter would be the bug. Stated at length
-    // so the next reader can see it was considered rather than forgotten.
+    // Each of the four is a way to silently miss rows, and a missed row is not
+    // a visible failure — it is a `NothingToMove` receipt about a conversation
+    // that has a transcript. Spelling them all out also means a future field on
+    // `SessionFilter` is a COMPILE ERROR here, which forces that author to
+    // answer "is this a fifth way to miss rows?" instead of inheriting a
+    // default that quietly says no.
+    let filter = SessionFilter {
+        // The axis the previous implementation guessed. A binding carries no
+        // agent id, so constraining this to any single one reintroduces exactly
+        // the defect Ruling AM removed.
+        agent_id: None,
+        // No truncation. A truncated scan that then reports `NothingToMove` is
+        // a no-op reporting success.
+        //
+        // Verified rather than assumed, in both shipped backends: the file
+        // backend's `list_sessions` is an unbounded `read_dir` loop with no
+        // cap, and the sqlite backend's SQL is `SELECT ... ORDER BY
+        // last_active_at DESC` with no `LIMIT` clause, truncating in memory
+        // only `if let Some(limit)`. `None` really is unbounded on both.
+        limit: None,
+        // A group nobody has spoken in for months is not less bound — it is the
+        // case most in need of moving, because its transcript is the one people
+        // have forgotten is stranded under a personal scope.
+        active_minutes: None,
+        // ⚠️ This `None` is a FUNCTIONAL REQUIREMENT, not a missing gate.
+        //
+        // The rows being searched for may belong to ANYBODY: `personal:<first
+        // speaker>` is precisely the class this verb exists to move, and the
+        // first speaker is usually not the operator running the bind. Adding
+        // `visible_owner_filter()` here — the reflex, and correct almost
+        // everywhere else in this crate — would silently drop exactly the rows
+        // the bind is supposed to relocate, while the receipt still said it
+        // succeeded.
+        //
+        // The admission decision was already made upstream: `bind` is
+        // admin-gated in `method_admin::ADMIN_METHODS`, and `gate_project` has
+        // already refused a room the caller cannot see. An operator entitled to
+        // bind the room is entitled to move its conversation's rows.
+        //
+        // This is the mirror image of the repo's `..Default::default()`
+        // criterion, where leaving this same field `None` was the DEFECT
+        // (`session_list` showing every owner's rows). Same field, opposite
+        // direction: there the filter was the point, here the filter would be
+        // the bug. `a_row_owned_by_another_user_is_still_moved` reddens if
+        // anyone adds it.
+        owner_visible_to: None,
+    };
     let scan_started = std::time::Instant::now();
-    let rows = match sessions.list_sessions(SessionFilter::default()).await {
+    let rows = match sessions.list_sessions(filter).await {
         Ok(rows) => rows,
         Err(e) => return classify_rescope(Err(e), bound),
     };
@@ -1235,6 +1264,169 @@ mod tests {
             Some("personal:u-alice"),
             "and nothing else did — a scan that matched loosely would sweep the \
              whole channel into the room"
+        );
+    }
+
+    /// Ruling AM 1b: both sides of the comparison must be normalized, and this
+    /// is the test that says so.
+    ///
+    /// `binding::conversation_of` reports the components of a live
+    /// `SessionKey`, which `SessionKey::group` already ran through
+    /// `sanitize_component` — so they are lowercased and punctuation-folded.
+    /// The operator's `params.channel_id` / `params.peer_id` are raw. Comparing
+    /// those two directly is the original defect resurrected on a different
+    /// axis: one letter of case and nothing matches, and the receipt says
+    /// `NothingToMove` about a conversation with a full transcript.
+    ///
+    /// The handler avoids it by comparing against the STORED `ChannelBinding`,
+    /// whose components `bind_conversation` normalized through
+    /// `binding::normalize_component` — the same function, so the two sides
+    /// cannot drift. This test is what keeps that true: the operator types
+    /// `Telegram` / `C1`, the live key is `telegram` / `c1`, and the row must
+    /// still move.
+    #[tokio::test]
+    async fn an_operator_spelling_that_differs_only_in_case_still_finds_the_conversation() {
+        let (store, project, _guard) = room();
+        let (sessions, _dir) = sessions();
+
+        // The live key, as an inbound message would mint it: normalized.
+        let key = SessionKey::group("main", "telegram", PeerKind::Group, "c1");
+        with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            sessions.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+
+        // The operator's spelling, as typed: capitalised, and not what any
+        // session key or binding row contains.
+        let resp = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_bind(
+                    rpc(
+                        "projects.channel.bind",
+                        json!({
+                            "project_id": project.id,
+                            "channel_id": "TeLeGrAm",
+                            "peer_kind": "group",
+                            "peer_id": "C1",
+                        }),
+                    ),
+                    store.clone(),
+                    sessions.clone(),
+                    bus(),
+                ),
+            )
+            .await;
+
+        let result: ChannelBindResult =
+            serde_json::from_value(resp.result.expect("bind succeeds")).expect("bind result");
+        assert_eq!(
+            result.rescoped_session,
+            RescopeOutcome::Moved,
+            "the operator's raw spelling must be normalized before it is compared \
+             against what `conversation_of` reports, or one letter of case means \
+             zero rows match and the receipt reports NothingToMove about a \
+             conversation that has a transcript"
+        );
+        assert_eq!(
+            sessions
+                .get_metadata(&key)
+                .await
+                .unwrap()
+                .unwrap()
+                .scope_id
+                .as_deref(),
+            Some(format!("project:{}", project.id).as_str())
+        );
+    }
+
+    /// The `bind` / `unbind` visibility asymmetry is a RULING, not an oversight
+    /// — and this test exists because a ruling that lives only in prose does not
+    /// stop the next sincere fixer.
+    ///
+    /// `handle_bind` runs `gate_project`; `handle_unbind` does not, and cannot:
+    /// it is addressed by CONVERSATION (`channel_id`, `peer_kind`, `peer_id`)
+    /// and carries no project id for a gate to gate on. Read cold that looks
+    /// like a hole, and closing it is a one-line change that would pass review.
+    ///
+    /// Three reasons it stays open, all of which have to fail together before
+    /// this should be revisited:
+    ///
+    /// 1. The asymmetry runs in the SAFE direction. `bind` creates an outward
+    ///    exposure; `unbind` removes one. "Anyone who may call this can always
+    ///    stop it" is the failure mode you want.
+    /// 2. Closing it would make a stale binding for a room the caller cannot see
+    ///    permanently undetachable — **a door with no handle is not a gate, it
+    ///    is a wall** — and would turn the refusal into an existence oracle in
+    ///    the other direction.
+    /// 3. The authority exercised is over the CHANNEL CONVERSATION, not the
+    ///    room: "this Telegram group stops being a room conversation" is a
+    ///    channel-level decision, and it is audit-logged with the room it was
+    ///    taken from.
+    ///
+    /// Access control for this verb is the admin gate in
+    /// `method_admin::ADMIN_METHODS`, pinned separately by
+    /// `the_admin_gated_channel_binding_verbs_are_deliberately_absent`. This
+    /// test is the other half: it pins that unbind does NOT additionally gate on
+    /// room visibility, so re-adding that gate fails here by name.
+    ///
+    /// 解绑刻意不做房间可见性检查：这是裁决不是疏漏，三条理由见上。
+    #[tokio::test]
+    async fn unbind_deliberately_succeeds_for_a_room_the_caller_cannot_see() {
+        let (store, project, _guard) = room();
+        store
+            .bind_conversation(
+                &project.id,
+                "telegram",
+                BindingPeerKind::Group,
+                "C1",
+                Some("u-alice"),
+                None,
+            )
+            .unwrap();
+
+        // u-mallory is on no roster: `gate_project` refuses them this room, as
+        // `a_non_member_cannot_list_a_rooms_bindings` proves for the sibling
+        // verb. Unbind still succeeds, on purpose.
+        let resp = CALLER_USER
+            .scope(
+                Some("u-mallory".to_string()),
+                handle_unbind(
+                    rpc(
+                        "projects.channel.unbind",
+                        json!({
+                            "channel_id": "telegram",
+                            "peer_kind": "group",
+                            "peer_id": "C1",
+                        }),
+                    ),
+                    store.clone(),
+                    bus(),
+                ),
+            )
+            .await;
+
+        let result: ChannelUnbindResult = serde_json::from_value(
+            resp.result
+                .expect("unbind is not gated on room visibility — see this test's doc"),
+        )
+        .expect("unbind result");
+        assert!(
+            result.unbound,
+            "unbind is deliberately NOT gated on room visibility. If this fails \
+             because somebody added `gate_project` to `handle_unbind`, that is a \
+             product ruling to re-open with a human, not a test to update: a \
+             stale binding for a room nobody can see would become permanently \
+             undetachable."
+        );
+        assert_eq!(
+            store
+                .project_for_conversation("telegram", BindingPeerKind::Group, "C1")
+                .unwrap(),
+            None,
+            "and it really released the conversation"
         );
     }
 }
