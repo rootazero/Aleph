@@ -325,7 +325,7 @@ impl AlephClient {
         // dropping their senders tells them so now.
         read_pending.write().await.clear();
 
-        tokio::spawn(Self::read_loop(
+        let read_handle = tokio::spawn(Self::read_loop(
             read,
             read_pending,
             self.event_tx.clone(),
@@ -335,11 +335,28 @@ impl AlephClient {
             my_generation,
         ));
 
-        self.set_role(self.handshake(config).await?);
-        self.connected
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        info!("Reconnected to {}", self.url);
-        Ok(())
+        match self.handshake(config).await {
+            Ok(role) => {
+                self.set_role(role);
+                self.connected
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                info!("Reconnected to {}", self.url);
+                Ok(())
+            }
+            Err(e) => {
+                // The handshake failed (auth refused, timeout, malformed
+                // response). The socket is not usable and `connected` stays
+                // false, but the read loop we spawned is still parked on the
+                // read half. Without aborting it, every failed reconnect leaves
+                // a task behind that may outlive the client and accumulate
+                // under repeated attempts. Send a close frame as a courtesy so
+                // the gateway can tear its side down promptly.
+                read_handle.abort();
+                let mut write = self.write.lock().await;
+                let _ = write.send(Message::Close(None)).await;
+                Err(e)
+            }
+        }
     }
 
     /// Open the socket and spawn the read loop, without handshaking.

@@ -147,4 +147,24 @@ impl Visit for StringVisitor {
             let _ = write!(&mut self.message, "{}={:?}", field.name(), value);
         }
     }
+
+    fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+        self.record_debug(field, &value);
+    }
+
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        self.record_debug(field, &value);
+    }
+
+    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+        self.record_debug(field, &value);
+    }
+
+    fn record_error(
+        &mut self,
+        field: &tracing::field::Field,
+        value: &(dyn std::error::Error + 'static),
+    ) {
+        self.record_debug(field, &value);
+    }
 }
