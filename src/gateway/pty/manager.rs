@@ -190,10 +190,27 @@ impl PtyManager {
             .collect()
     }
 
-    /// Record a client's viewport and re-apply the smallest one.
-    pub fn note_viewport(&self, session_id: &str, conn_id: &str, rows: u16, cols: u16) {
+    /// Record a client's viewport and re-apply the smallest one. The
+    /// existence check and the insert happen under the SAME lock
+    /// acquisition — checking via a separate `list()` call first (as the
+    /// caller used to) leaves a TOCTOU window where a `close()`/`remove()`
+    /// landing between the check and the record creates an orphaned
+    /// `viewports` entry for a dead `session_id`, invisible to `list()`
+    /// (`attached_count` only iterates sessions still in `inner.sessions`)
+    /// and reclaimed only when the connection eventually disconnects via
+    /// `release_conn`.
+    pub fn note_viewport(
+        &self,
+        session_id: &str,
+        conn_id: &str,
+        rows: u16,
+        cols: u16,
+    ) -> Result<(), String> {
         {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            if !inner.sessions.contains_key(session_id) {
+                return Err(format!("no such session: {session_id}"));
+            }
             inner
                 .viewports
                 .entry(session_id.to_string())
@@ -201,6 +218,7 @@ impl PtyManager {
                 .insert(conn_id.to_string(), (rows.max(1), cols.max(1)));
         }
         self.apply_effective_size(session_id);
+        Ok(())
     }
 
     /// Drop every viewport constraint held by a departing connection.
@@ -355,8 +373,8 @@ mod tests {
             .expect("spawn");
         let sid = res.session_id;
 
-        mgr.note_viewport(&sid, "conn-a", 40, 120);
-        mgr.note_viewport(&sid, "conn-b", 24, 80);
+        mgr.note_viewport(&sid, "conn-a", 40, 120).expect("note ok");
+        mgr.note_viewport(&sid, "conn-b", 24, 80).expect("note ok");
         assert_eq!(mgr.effective_size(&sid), Some((24, 80)));
 
         // The constraint must be released when its client goes away —
@@ -374,9 +392,22 @@ mod tests {
             .spawn(&SpawnOptions::default())
             .expect("spawn")
             .session_id;
-        mgr.note_viewport(&sid, "conn-a", 24, 80);
-        mgr.note_viewport(&sid, "conn-b", 24, 80);
+        mgr.note_viewport(&sid, "conn-a", 24, 80).expect("note ok");
+        mgr.note_viewport(&sid, "conn-b", 24, 80).expect("note ok");
         assert_eq!(mgr.list()[0].attached_count, 2);
         mgr.close(&sid).expect("close");
+    }
+
+    /// `note_viewport` must reject an unknown session under the SAME lock
+    /// acquisition it uses to record the viewport — not via a separate
+    /// `list()` call from the caller, which would leave a TOCTOU window
+    /// where a `close()`/`remove()` landing between the check and the
+    /// record creates an orphaned `viewports` entry for a dead session_id.
+    #[test]
+    fn note_viewport_on_unknown_session_is_an_error() {
+        let mgr = PtyManager::new();
+        assert!(mgr.note_viewport("ghost", "conn-a", 24, 80).is_err());
+        // And it must not have recorded anything under that dead id.
+        assert_eq!(mgr.effective_size("ghost"), None);
     }
 }

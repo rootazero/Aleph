@@ -200,24 +200,15 @@ pub async fn handle_resize(request: JsonRpcRequest) -> JsonRpcResponse {
         );
     };
 
-    // note_viewport itself has no notion of "unknown session" (it just
-    // records into a table keyed by session_id), so unknown-session-is-an-
-    // error — the contract every other pty.* handler holds — has to be
-    // checked here, before recording anything.
-    if !pty::manager()
-        .list()
-        .iter()
-        .any(|s| s.session_id == params.session_id)
-    {
-        return JsonRpcResponse::error(
-            id,
-            INVALID_PARAMS,
-            format!("no such session: {}", params.session_id),
-        );
+    // `note_viewport` itself checks for an unknown session under the same
+    // lock it uses to record the viewport — no separate `list()` round trip
+    // here, which would both TOCTOU-race a concurrent close/remove and
+    // full-clone every live session's SessionInfo on every resize (a resize
+    // can fire on every frame of a window drag).
+    match pty::manager().note_viewport(&params.session_id, &conn_id, params.rows, params.cols) {
+        Ok(()) => JsonRpcResponse::success(id, json!({ "ok": true })),
+        Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, e),
     }
-
-    pty::manager().note_viewport(&params.session_id, &conn_id, params.rows, params.cols);
-    JsonRpcResponse::success(id, json!({ "ok": true }))
 }
 
 /// `pty.close` — terminate a session.
