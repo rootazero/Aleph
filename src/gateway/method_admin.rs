@@ -453,7 +453,35 @@ const MEMBER_CARVE_OUTS: &[&str] = &[
 /// default: a name here cannot be re-opened by adding it to the carve-out list
 /// on the other side of the file. The two tables naming the same method is a
 /// contradiction, and `no_admin_method_is_also_a_carve_out` fails on it.
-const ADMIN_METHODS: &[&str] = &["memory.compress", "memory.reembed", "memory.reembed.cancel"];
+const ADMIN_METHODS: &[&str] = &[
+    "memory.compress",
+    "memory.reembed",
+    "memory.reembed.cancel",
+    // The `projects.*` family is otherwise open and narrowed per-caller by
+    // `gate_project` (the roster IS the visibility predicate). These two are
+    // the exception because their exposure runs OUTWARD, which no per-caller
+    // filter can express: after binding, a roster member speaking in the group
+    // makes the agent answer from the room's shared memory, notes and
+    // workspace — and that answer is delivered to the whole conversation,
+    // including people the roster does not control. That is the feature, and
+    // it is why the decision belongs to an operator rather than to a room
+    // owner who may be an ordinary member.
+    //
+    // Second reason, load-bearing on its own: `bind_conversation`'s
+    // already-bound conflict arm names the OWNING project id, because the
+    // binding table is `PRIMARY KEY (channel_id, peer_kind, peer_id)` and a
+    // conversation cannot belong to two rooms. That message is an
+    // existence-and-identity oracle, acceptable only because the sole caller
+    // who reaches it is an operator, who is entitled to know every project.
+    // Widening who may call `bind` reopens that leak — the uniqueness
+    // constraint and this gate are one design, not two.
+    //
+    // `projects.channel.list` stays open: a member may see where their own
+    // room lives (it is narrowed to the roster by `gate_project`) without
+    // being able to move it.
+    "projects.channel.bind",
+    "projects.channel.unbind",
+];
 
 /// The three classification tables with their names, for the ghost-entry
 /// census in [`crate::gateway::method_census`]: an entry that matches no

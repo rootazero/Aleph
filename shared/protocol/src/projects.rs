@@ -63,16 +63,68 @@ pub struct ChannelBindingRow {
     pub label: Option<String>,
 }
 
+/// What happened to the conversation's existing transcript when it was bound.
+///
+/// Three-valued, and deliberately **not** `Option<bool>`: an `Option` invites
+/// `.unwrap_or(false)`, which silently reproduces the very collapse this type
+/// exists to prevent, once per call site. A named enum with no natural default
+/// makes every client say out loud what it does with [`Self::Unknown`].
+///
+/// 一个绑定操作对"旧记录去哪了"有三个答案，不是两个。用具名枚举而非
+/// `Option<bool>`：后者会诱使调用方写 `.unwrap_or(false)`，那正是本类型要
+/// 消除的塌缩，而且会在每个调用点各塌缩一次。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RescopeOutcome {
+    /// An existing transcript was moved into the room scope.
+    Moved,
+    /// There was no such row: nobody has spoken in that conversation yet.
+    ///
+    /// A distinct answer from [`Self::Moved`], because a receipt that claims a
+    /// migration happened when it did not is a client asserting a result it
+    /// never saw.
+    NothingToMove,
+    /// The session store could not say. The binding itself committed — this
+    /// arm reports only that the transcript's fate is **unobserved**.
+    ///
+    /// Its own variant rather than being folded into [`Self::NothingToMove`]:
+    /// a store that errored has not "found nothing to move", and a client that
+    /// renders the two identically ends up printing a confident factual claim
+    /// about a conversation whose store just failed.
+    Unknown,
+}
+
+impl RescopeOutcome {
+    /// The wire spelling, for logs and audit records that interpolate it.
+    ///
+    /// Derived from the same variant the wire carries rather than re-spelled at
+    /// each formatting site, so an audit line cannot describe a different
+    /// outcome than the receipt did.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Moved => "moved",
+            Self::NothingToMove => "nothing_to_move",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl core::fmt::Display for RescopeOutcome {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// `projects.channel.bind` result.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChannelBindResult {
     pub binding: ChannelBindingRow,
-    /// Whether an existing session row was moved into the room scope.
+    /// What happened to any transcript the conversation already had.
     ///
-    /// `false` means nobody had spoken in that conversation yet — a distinct
-    /// answer from "I moved it", because a receipt that claims a migration
-    /// happened when it did not is a client asserting a result it never saw.
-    pub rescoped_session: bool,
+    /// See [`RescopeOutcome`] for why this is a three-state enum rather than
+    /// the `bool` it started as.
+    pub rescoped_session: RescopeOutcome,
 }
 
 /// `projects.channel.unbind` result.
@@ -116,6 +168,62 @@ mod tests {
             !v.as_object().unwrap().contains_key("label"),
             "an omitted optional must be omitted, not sent as null"
         );
+    }
+
+    /// The three outcomes must be three distinct wire values. If any two
+    /// coincide, every client that renders them renders a claim it did not
+    /// receive — which is the exact collapse `RescopeOutcome` replaced
+    /// (`matches!(.., Ok(true))` folding a store error into "nothing to
+    /// move"). Written as an exhaustive match so a fourth variant is a
+    /// compile error here rather than a silently unasserted one.
+    #[test]
+    fn the_three_rescope_outcomes_are_three_distinct_wire_values() {
+        let mut seen = std::collections::BTreeSet::new();
+        for o in [
+            RescopeOutcome::Moved,
+            RescopeOutcome::NothingToMove,
+            RescopeOutcome::Unknown,
+        ] {
+            let wire = serde_json::to_value(o).unwrap();
+            let s = wire
+                .as_str()
+                .expect("a unit variant is a JSON string")
+                .to_string();
+            assert_eq!(
+                s,
+                o.as_str(),
+                "Display/as_str and the serde spelling must be the same word, or an \
+                 audit line will describe a different outcome than the receipt did"
+            );
+            assert!(seen.insert(s), "two outcomes share a wire value: {o:?}");
+            assert_eq!(
+                serde_json::from_value::<RescopeOutcome>(wire).unwrap(),
+                o,
+                "round trip"
+            );
+        }
+        assert_eq!(seen.len(), 3);
+    }
+
+    /// `Unknown` must be a value on the wire, not an omission. An absent field
+    /// is what a client reads as `false`/default, and reintroducing a default
+    /// is how the collapse comes back one call site at a time.
+    #[test]
+    fn an_unknown_rescope_outcome_is_sent_not_omitted() {
+        let v = serde_json::to_value(ChannelBindResult {
+            binding: ChannelBindingRow {
+                project_id: "p-1".into(),
+                channel_id: "telegram".into(),
+                peer_kind: BindingPeerKind::Group,
+                peer_id: "c1".into(),
+                bound_by: None,
+                bound_at: 0,
+                label: None,
+            },
+            rescoped_session: RescopeOutcome::Unknown,
+        })
+        .unwrap();
+        assert_eq!(v["rescoped_session"], serde_json::json!("unknown"));
     }
 
     /// The single assertion that makes `BindingPeerKind` worth adding: a typo

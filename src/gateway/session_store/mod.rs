@@ -933,10 +933,16 @@ mod caller_census {
     use crate::utils::source_scan::{code_text, production_prefix, rust_sources_under};
 
     /// (verb, the one file allowed to call it).
-    const SOLE_CALLERS: &[(&str, &str)] = &[(
-        "backfill_attribution",
-        "src/projects/attribution_backfill.rs",
-    )];
+    const SOLE_CALLERS: &[(&str, &str)] = &[
+        (
+            "backfill_attribution",
+            "src/projects/attribution_backfill.rs",
+        ),
+        (
+            "rescope_attribution",
+            "src/gateway/handlers/projects_channel.rs",
+        ),
+    ];
 
     /// Every production `.rs` under `src/`, reduced to the code a compiler
     /// would see: comments AND string-literal payloads removed.

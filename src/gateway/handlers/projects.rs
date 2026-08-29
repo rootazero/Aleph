@@ -146,7 +146,7 @@ impl ProjectView {
 /// the one `projects.get` already returned for a missing id before P2, so a
 /// single-user deployment sees byte-identical output to before.
 #[must_use]
-fn project_not_found(id: Option<Value>, project_id: &str) -> JsonRpcResponse {
+pub(super) fn project_not_found(id: Option<Value>, project_id: &str) -> JsonRpcResponse {
     JsonRpcResponse::error(
         id,
         RESOURCE_NOT_FOUND,
@@ -161,7 +161,7 @@ fn project_not_found(id: Option<Value>, project_id: &str) -> JsonRpcResponse {
 /// supplies its own. Fails closed on a store error, and answers a refusal
 /// with the same not-found shape absence produces — see that module's doc.
 #[allow(clippy::result_large_err)] // house shape for Result<_, JsonRpcResponse> gates
-fn gate_project(
+pub(super) fn gate_project(
     store: &ProjectStore,
     id: Option<Value>,
     project_id: &str,
@@ -869,7 +869,10 @@ fn member_list_response(
     }
 }
 
-fn project_error_response(id: Option<serde_json::Value>, err: ProjectError) -> JsonRpcResponse {
+pub(super) fn project_error_response(
+    id: Option<serde_json::Value>,
+    err: ProjectError,
+) -> JsonRpcResponse {
     let (code, msg) = match &err {
         ProjectError::NotFound(_) => (RESOURCE_NOT_FOUND, err.to_string()),
         ProjectError::NotAbsolute(_)

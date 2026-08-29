@@ -80,6 +80,32 @@ pub const fn to_wire(kind: PeerKind) -> BindingPeerKind {
     }
 }
 
+/// Convert a wire [`BindingPeerKind`] back to a routing [`PeerKind`].
+///
+/// The inverse of [`to_wire`], and the only `BindingPeerKind -> PeerKind`
+/// conversion in the tree. It lives next to `to_wire` so the pair stays
+/// readable as a pair: the alternative — an `if params.peer_kind == Thread`
+/// at the one call site that needs a routing key — would be a second author
+/// for the correspondence, and is the shape that silently picks `Group` the
+/// day a third variant is added.
+///
+/// Its caller is `handlers::projects_channel::handle_bind`, which needs a
+/// routing key to address the conversation's existing session row. Note the
+/// asymmetry that makes this function easy to over-apply: `ProjectStore`'s
+/// binding methods take the WIRE enum directly, so nothing on that path
+/// converts at all — only [`SessionKey::group`] needs the routing one.
+///
+/// 与 [`to_wire`] 互为逆函数，且是全仓唯一的 `BindingPeerKind -> PeerKind`
+/// 转换。注意不对称：`ProjectStore` 的绑定方法直接吃 wire 枚举，**不**需要
+/// 转换；只有 [`SessionKey::group`] 吃 routing 枚举才需要这一个。
+#[must_use]
+pub const fn from_wire(kind: BindingPeerKind) -> PeerKind {
+    match kind {
+        BindingPeerKind::Group => PeerKind::Group,
+        BindingPeerKind::Thread => PeerKind::Thread,
+    }
+}
+
 /// Stable storage spelling for a peer kind.
 ///
 /// The only `BindingPeerKind -> &str` conversion in the tree: everything that
@@ -230,6 +256,53 @@ mod tests {
                 PeerKind::Thread => Wire::Thread,
             };
             assert_eq!(peer_kind_str(k), wire_str(wire));
+        }
+    }
+
+    /// `from_wire` is the inverse of `to_wire` and nothing else. A conversion
+    /// pair that is not actually a bijection would let a `thread` binding
+    /// address a `group` session row — the row would not be found, and
+    /// `handle_bind` would report "nobody has spoken in that conversation
+    /// yet" about a conversation with a full transcript.
+    ///
+    /// Both loops are written as exhaustive matches over their own enum, so
+    /// adding a variant to either side is a compile error rather than a
+    /// silently half-covered test.
+    #[test]
+    fn the_wire_and_routing_peer_kinds_round_trip_both_ways() {
+        for k in [PeerKind::Group, PeerKind::Thread] {
+            match k {
+                PeerKind::Group | PeerKind::Thread => {}
+            }
+            assert_eq!(from_wire(to_wire(k)), k);
+        }
+        for w in [BindingPeerKind::Group, BindingPeerKind::Thread] {
+            match w {
+                BindingPeerKind::Group | BindingPeerKind::Thread => {}
+            }
+            assert_eq!(to_wire(from_wire(w)), w);
+        }
+    }
+
+    /// The property `from_wire` exists to keep: a key built from a binding's
+    /// stored `peer_kind` must be the same key a live conversation of that
+    /// kind produces. This is what `handle_bind` relies on to find the row.
+    #[test]
+    fn a_key_rebuilt_from_a_binding_matches_the_live_conversation_key() {
+        for (routing, wire) in [
+            (PeerKind::Group, BindingPeerKind::Group),
+            (PeerKind::Thread, BindingPeerKind::Thread),
+        ] {
+            let live = SessionKey::group("main", "telegram", routing, "C0A1");
+            let (channel, kind, peer) = conversation_of(&live).expect("a conversation");
+            assert_eq!(kind, wire);
+            let rebuilt = SessionKey::group("main", &channel, from_wire(kind), &peer);
+            assert_eq!(
+                rebuilt, live,
+                "rebuilding a session key from what `conversation_of` reported \
+                 must land on the same key, or the rescope in \
+                 `handle_bind` addresses a row that does not exist"
+            );
         }
     }
 }

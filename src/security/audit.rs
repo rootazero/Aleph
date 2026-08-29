@@ -388,6 +388,10 @@ mod tests {
             "room roster add / remove",
         ),
         (
+            "src/gateway/handlers/projects_channel.rs",
+            "room bound to / released from a channel conversation",
+        ),
+        (
             "src/gateway/handlers/pairing.rs",
             "channel sender approve / revoke",
         ),
