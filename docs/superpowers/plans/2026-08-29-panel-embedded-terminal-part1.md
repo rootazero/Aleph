@@ -2569,7 +2569,22 @@ answers a different question is a lie rather than a default."
 ## Task 12: 会话开关 `[policies.terminal]`
 
 **Files:**
-- Modify: `src/config/types/policies/mod.rs`（+ 新建 `src/config/types/policies/terminal.rs`）、`src/config/reload_impact.rs`、`src/config/live_apply.rs`、`src/gateway/handlers/pty.rs`、`src/gateway/pty/manager.rs`、`src/gateway/handlers/mod.rs`（摘掉 `pty.spawn` 那一行）、`src/bin/aleph-server/commands/start/builder/handlers/`（改用 `register_handler!` 注入 config）
+- Modify: `src/config/types/policies/mod.rs`（+ 新建 `src/config/types/policies/terminal.rs`）、
+  `src/config/reload_impact.rs`、`src/config/live_apply.rs`、`src/gateway/handlers/pty.rs`、
+  `src/gateway/pty/manager.rs`、`src/gateway/handlers/mod.rs`（摘掉 `pty.spawn` 那一行）、
+  `src/bin/aleph-server/commands/start/builder/handlers/system.rs`（新增 `register_pty_handlers`）、
+  `src/bin/aleph-server/commands/start/mod.rs`（**调用点**，约 1919 行）、
+  `src/gateway/pty/screen/grid.rs`（`Grid::set_scrollback_limit` / `scrollback_limit`）、
+  `src/gateway/pty/screen/mod.rs`（`Screen::set_scrollback_limit`，转发给 grid 与已保存的备用屏）、
+  `src/gateway/pty/session.rs`（`PtySession::set_scrollback_limit`）
+
+⚠️ **后四条是 controller 2026-08-30 补上的，因为它们此前只出现在 Step 3 的代码块里、不在这张表上。**
+真机后果不是"少写了一行文档"：**Step 5 的 `git add` 是照这张表写的**，于是那次提交会缺三个
+被 `manager.rs` 调用的方法定义 ⇒ **提交出来编译不过**，而缺的是 `start/mod.rs` 时更隐蔽——
+注册函数定义了却没人调，`method_census` 在**提交之后**才红。
+判据（本计划已第五次撞上同一形状）：**Files 块和代码块是同一份事实的两份表述，而实施者按代码块
+干活、按 Files 块暂存。** 所以**暂存清单要从 `git status` 推导，逐个文件问「这一轮是不是我的」，
+不要从 Files 块抄。**
 
 **Interfaces:**
 - Consumes: 既有 `Config`
@@ -3097,7 +3112,13 @@ Expected: 全 passed。
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/config/types/policies/mod.rs src/config/types/policies/terminal.rs src/config/reload_impact.rs src/config/live_apply.rs src/gateway/handlers/pty.rs src/gateway/pty/manager.rs src/gateway/handlers/mod.rs src/bin/aleph-server/commands/start/builder/handlers/
+git add src/config/types/policies/mod.rs src/config/types/policies/terminal.rs \
+        src/config/reload_impact.rs src/config/live_apply.rs \
+        src/gateway/handlers/pty.rs src/gateway/handlers/mod.rs \
+        src/gateway/pty/manager.rs src/gateway/pty/session.rs \
+        src/gateway/pty/screen/grid.rs src/gateway/pty/screen/mod.rs \
+        src/bin/aleph-server/commands/start/builder/handlers/system.rs \
+        src/bin/aleph-server/commands/start/mod.rs
 git commit -m "gateway: add the [policies.terminal] session gate, live and default-on
 
 Declared in LIVE_SUBSECTIONS with a real handle behind it: a security switch
