@@ -91,12 +91,27 @@ use crate::sync_primitives::Arc;
 
 /// Serializable view of a project room.
 ///
+/// The shape itself lives in `aleph_protocol` (as
+/// [`aleph_protocol::projects::ProjectRow`]) rather than here, for the reason
+/// `projects.channel.*` already put its shapes there: `aleph-cli` must not
+/// depend on `alephcore`, so `aleph projects list` had no way to name this row
+/// and would have hand-written a third copy of it. The Panel's
+/// `api::projects::ProjectInfo` is already a second one, and a hand-copied
+/// client row is how `aleph providers list` came to render two columns
+/// (`type`, `default`) the server had never sent.
+///
+/// The alias is deliberately kept: this name is what the seven construction
+/// sites below and `builtin_tools::project_manage` already read, and the
+/// direction that matters is that the response is **built from** the contract
+/// type. A test that only parses a response proves the client's fields are a
+/// subset of what was sent, never that the two are the same set.
+///
 /// `workspace_path` is `null` for a room that is not bound to a folder — the
 /// ordinary shape for a room created through `projects.create`, and the reason
-/// this is an `Option` rather than the pre-P2 `path: String` that spelled
+/// it is an `Option` rather than the pre-P2 `path: String` that spelled
 /// "unbound" as `""`.
 ///
-/// When it is set, it is rendered through
+/// When it is set, [`render_project`] runs it through
 /// [`crate::utils::paths::display_string`]. The stored value comes out of
 /// `std::fs::canonicalize`, so on Windows it carries the `\\?\`
 /// extended-length prefix — which is right for the filesystem layer and wrong
@@ -104,34 +119,26 @@ use crate::sync_primitives::Arc;
 /// echoes a path back. The row keeps the canonical bytes; only this projection
 /// is simplified, and the round trip is safe because every path the client
 /// sends back is re-canonicalised by `ProjectStore::canonical_dir`.
-#[derive(Debug, Clone, Serialize)]
-pub struct ProjectView {
-    pub id: String,
-    pub name: String,
-    pub owner_user_id: Option<String>,
-    pub workspace_path: Option<String>,
-    pub status: String,
-    pub member_ids: Vec<String>,
-    pub created_at: i64,
-    pub updated_at: i64,
-    pub last_used_at: i64,
-}
+pub type ProjectView = aleph_protocol::projects::ProjectRow;
 
-impl ProjectView {
-    pub(crate) fn render(p: Project, member_ids: Vec<String>) -> Self {
-        Self {
-            id: p.id,
-            name: p.name,
-            owner_user_id: p.owner_user_id,
-            workspace_path: p
-                .workspace_path
-                .map(|w| crate::utils::paths::display_string(&w)),
-            status: p.status.as_str().to_string(),
-            member_ids,
-            created_at: p.created_at,
-            updated_at: p.updated_at,
-            last_used_at: p.last_used_at,
-        }
+/// Project a stored room plus its roster into the wire row.
+///
+/// A free function rather than `ProjectView::render`, because Rust does not
+/// allow an inherent impl on a type from another crate. Same body, same
+/// callers.
+pub(crate) fn render_project(p: Project, member_ids: Vec<String>) -> ProjectView {
+    ProjectView {
+        id: p.id,
+        name: p.name,
+        owner_user_id: p.owner_user_id,
+        workspace_path: p
+            .workspace_path
+            .map(|w| crate::utils::paths::display_string(&w)),
+        status: p.status.as_str().to_string(),
+        member_ids,
+        created_at: p.created_at,
+        updated_at: p.updated_at,
+        last_used_at: p.last_used_at,
     }
 }
 
@@ -300,10 +307,18 @@ pub async fn handle_list(request: JsonRpcRequest, store: Arc<ProjectStore>) -> J
         .filter(|p| visibility::project_visible(&p.id))
         .map(|p| {
             let members = rosters.remove(&p.id).unwrap_or_default();
-            ProjectView::render(p, members)
+            render_project(p, members)
         })
         .collect();
-    JsonRpcResponse::success(request.id, json!({ "projects": view }))
+    // The envelope is a wire key too, and it is usually the last hand-copied
+    // part: the rows got a contract type while `{"projects": …}` stayed a
+    // literal in the handler and again in every client. Constructing
+    // `ProjectListResult` is how `aleph projects list` learns the key rather
+    // than guessing it.
+    JsonRpcResponse::success(
+        request.id,
+        json!(aleph_protocol::projects::ProjectListResult { projects: view }),
+    )
 }
 
 // ============================================================================
@@ -335,7 +350,7 @@ pub async fn handle_create(
             projects::events::publish_changed(&event_bus, &project.id, ChangeKind::Created, None);
             JsonRpcResponse::success(
                 request.id,
-                json!({ "project": ProjectView::render(project, members) }),
+                json!({ "project": render_project(project, members) }),
             )
         }
         Err(e) => project_error_response(request.id, e),
@@ -383,7 +398,7 @@ pub async fn handle_add(
             projects::events::publish_changed(&event_bus, &project.id, ChangeKind::Updated, None);
             JsonRpcResponse::success(
                 request.id,
-                json!({ "project": ProjectView::render(project, members) }),
+                json!({ "project": render_project(project, members) }),
             )
         }
         Err(e) => project_error_response(request.id, e),
@@ -421,7 +436,7 @@ pub async fn handle_create_blank(
             projects::events::publish_changed(&event_bus, &project.id, ChangeKind::Created, None);
             JsonRpcResponse::success(
                 request.id,
-                json!({ "project": ProjectView::render(project, members) }),
+                json!({ "project": render_project(project, members) }),
             )
         }
         Err(e) => project_error_response(request.id, e),
@@ -452,7 +467,7 @@ pub async fn handle_get(request: JsonRpcRequest, store: Arc<ProjectStore>) -> Js
     };
     JsonRpcResponse::success(
         request.id,
-        json!({ "project": ProjectView::render(project, members) }),
+        json!({ "project": render_project(project, members) }),
     )
 }
 
@@ -489,7 +504,7 @@ pub async fn handle_rename(
             projects::events::publish_changed(&event_bus, &renamed.id, ChangeKind::Updated, None);
             JsonRpcResponse::success(
                 request.id,
-                json!({ "project": ProjectView::render(renamed, members) }),
+                json!({ "project": render_project(renamed, members) }),
             )
         }
         Err(e) => project_error_response(request.id, e),
@@ -604,7 +619,7 @@ pub async fn handle_bind_workspace(
             projects::events::publish_changed(&event_bus, &bound.id, ChangeKind::Updated, None);
             JsonRpcResponse::success(
                 request.id,
-                json!({ "project": ProjectView::render(bound, members) }),
+                json!({ "project": render_project(bound, members) }),
             )
         }
         Err(e) => project_error_response(request.id, e),

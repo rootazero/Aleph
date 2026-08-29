@@ -28,6 +28,6 @@ mod run_context;
 mod store;
 
 pub use attribution_backfill::{backfill_legacy_room_attribution, BackfillReport};
-pub use binding::{peer_kind_str, ChannelBinding};
+pub use binding::ChannelBinding;
 pub use run_context::{current as current_project_root, with_project_root};
 pub use store::{Project, ProjectError, ProjectStatus, ProjectStore};

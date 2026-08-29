@@ -26,6 +26,130 @@ pub enum BindingPeerKind {
     Thread,
 }
 
+impl BindingPeerKind {
+    /// Every variant.
+    ///
+    /// A variant added to the enum must be added here too. The exhaustiveness
+    /// tripwire in `every_peer_kind_spells_one_word_everywhere` is what makes
+    /// that a compile error in this file rather than a silently unasserted
+    /// variant — Rust cannot enumerate variants on its own, so the alternative
+    /// to this pair is a list that rots without saying so.
+    pub const ALL: [Self; 2] = [Self::Group, Self::Thread];
+
+    /// The wire spelling.
+    ///
+    /// **The only place in the tree these two words are typed** for this
+    /// field. Before 2026-08-29 there were three authors of them — serde's
+    /// `rename_all` here (the authoritative one, since it is what actually
+    /// goes on the wire), plus a hand-written `match` in each direction in
+    /// `alephcore`'s `projects::binding`. Those two agreed with serde by
+    /// coincidence of review rather than by construction, and `aleph-cli`
+    /// could reach neither of them: it must not depend on `alephcore`, so a
+    /// fourth copy was about to be written in the CLI, where a mismatch shows
+    /// up as `INVALID_PARAMS` on a command that has never once worked.
+    ///
+    /// Pinned against serde — the genuinely independent author, since it
+    /// derives the spelling from the variant identifier — by
+    /// `every_peer_kind_spells_one_word_everywhere`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Group => "group",
+            Self::Thread => "thread",
+        }
+    }
+}
+
+impl core::fmt::Display for BindingPeerKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A `peer_kind` spelling no variant answers to.
+///
+/// Carries the offending text so a CLI can quote it back, and derives the
+/// accepted list from [`BindingPeerKind::ALL`] rather than restating it — the
+/// error message is the fourth place that list would otherwise be written, and
+/// an error message that lists the wrong options is worse than none.
+///
+/// 一个不属于任何变体的 `peer_kind` 拼法。可接受拼法从 [`BindingPeerKind::ALL`]
+/// 派生，而不是在错误信息里再抄一份。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownPeerKind(pub String);
+
+impl core::fmt::Display for UnknownPeerKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "unknown peer kind {:?}; expected one of: ", self.0)?;
+        for (i, kind) in BindingPeerKind::ALL.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            f.write_str(kind.as_str())?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for UnknownPeerKind {}
+
+impl core::str::FromStr for BindingPeerKind {
+    type Err = UnknownPeerKind;
+
+    /// Exactly the spellings the wire accepts, and no others.
+    ///
+    /// Case-sensitive on purpose: `"Group"` is rejected here for the same
+    /// reason serde rejects it (see
+    /// `an_uppercase_peer_kind_is_rejected_at_the_parse_boundary`). A
+    /// case-insensitive parse in a client would let `--peer-kind Group`
+    /// through the client and mint a second, never-matched primary key on the
+    /// server — the exact failure the typed field exists to make impossible.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|kind| kind.as_str() == s)
+            .ok_or_else(|| UnknownPeerKind(s.to_string()))
+    }
+}
+
+/// One project room, as `projects.list` / `projects.get` send it.
+///
+/// Here rather than in `alephcore` because `aleph projects list` needs it and
+/// `aleph-cli` must not depend on `alephcore` — the same reason the
+/// `projects.channel.*` shapes are here. The server **constructs** this type
+/// (`gateway::handlers::projects::render_project`) rather than parsing into
+/// it, which is what makes the CLI's column reconciliation mean something: a
+/// test that only parses a response proves the client's fields are a SUBSET of
+/// what was sent, never that they are the same set.
+///
+/// `workspace_path` is `None` for a room bound to no folder, and when set it
+/// has already been through `utils::paths::display_string` — the stored value
+/// comes out of `canonicalize`, which on Windows carries the `\\?\`
+/// extended-length prefix. That is right for the filesystem layer and wrong in
+/// anything a person reads.
+///
+/// 一个项目房间的线上形态。放在协议 crate 而不是 `alephcore`：CLI 不允许依赖
+/// `alephcore`，而服务端**构造**这个类型（不是解析成它），这样客户端的列对账
+/// 才证明得了"两边字段相等"而不只是"客户端是子集"。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectRow {
+    pub id: String,
+    pub name: String,
+    pub owner_user_id: Option<String>,
+    pub workspace_path: Option<String>,
+    pub status: String,
+    pub member_ids: Vec<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub last_used_at: i64,
+}
+
+/// `projects.list` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectListResult {
+    pub projects: Vec<ProjectRow>,
+}
+
 /// `projects.channel.bind`
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChannelBindParams {
@@ -272,6 +396,101 @@ mod tests {
         })
         .unwrap();
         assert_eq!(v["rescoped_session"], serde_json::json!("unknown"));
+    }
+
+    /// Serde, `Display`/`as_str` and `FromStr` must spell every variant the
+    /// same single word.
+    ///
+    /// This is the assertion that ties author #1 (serde's `rename_all`) to
+    /// author #2 ([`BindingPeerKind::as_str`], the one hand-written `match`
+    /// left). Before this existed there were three authors across two crates
+    /// and no test compared any two of them; they agreed because a reviewer
+    /// looked, which is not a mechanism.
+    ///
+    /// **Serde is the oracle here, and that choice is the whole reason this
+    /// test is worth its lines.** `rename_all` derives each spelling from the
+    /// variant *identifier*, so it is a genuinely different author from the
+    /// thing under test — nothing hand-typed feeds it. A round-trip test whose
+    /// oracle shares an author with its subject proves only that one function
+    /// is self-consistent, which is true of every function and worth nothing.
+    /// If someone later "simplifies" this by comparing `as_str` against a
+    /// literal, or by having `as_str` delegate to serde, the assertion becomes
+    /// exactly that kind of tautology and this file goes back to having no
+    /// mechanism holding its two authors together.
+    ///
+    /// Written to enumerate variants rather than to compare two literals. A
+    /// two-literal test passes forever on the day somebody adds a third
+    /// variant — which is the only day it would have mattered.
+    #[test]
+    fn every_peer_kind_spells_one_word_everywhere() {
+        use std::str::FromStr as _;
+
+        let mut seen = std::collections::BTreeSet::new();
+        for kind in BindingPeerKind::ALL {
+            // Exhaustiveness tripwire. A new variant makes this match
+            // non-exhaustive, and the compile error lands in the same file as
+            // `ALL` — which is what stops a variant being added to the enum
+            // and not to the list this test iterates.
+            match kind {
+                BindingPeerKind::Group | BindingPeerKind::Thread => {}
+            }
+
+            let wire = serde_json::to_value(kind).unwrap();
+            let spelled = wire
+                .as_str()
+                .expect("a unit variant is a JSON string")
+                .to_string();
+            let spelled = spelled.as_str();
+
+            assert_eq!(
+                spelled,
+                kind.as_str(),
+                "serde sends {spelled:?} for {kind:?} while as_str/Display say {:?} — a \
+                 client that formats one and sends the other addresses a row that does \
+                 not exist",
+                kind.as_str()
+            );
+            assert_eq!(spelled, kind.to_string(), "Display must be as_str");
+            assert_eq!(
+                BindingPeerKind::from_str(spelled).expect("FromStr accepts the wire spelling"),
+                kind,
+                "FromStr must accept exactly what serde emits, or a CLI argument that \
+                 parses locally still fails at the server's parse boundary"
+            );
+            assert_eq!(
+                serde_json::from_value::<BindingPeerKind>(wire).unwrap(),
+                kind,
+                "round trip"
+            );
+            assert!(
+                seen.insert(spelled.to_string()),
+                "two variants share the wire spelling {spelled:?}"
+            );
+        }
+        assert_eq!(seen.len(), BindingPeerKind::ALL.len());
+    }
+
+    /// `FromStr` must be no wider than the wire, and must say what it wants.
+    ///
+    /// The width half is the point: a client that accepted `"Group"` would
+    /// convert it to a `BindingPeerKind` and send the lowercase form, which
+    /// looks like it works — until somebody wonders why the CLI accepts a
+    /// spelling the JSON API rejects and "fixes" one of them.
+    #[test]
+    fn from_str_refuses_what_the_wire_refuses_and_names_the_alternatives() {
+        use std::str::FromStr as _;
+
+        let err = BindingPeerKind::from_str("Group").expect_err("case must match the wire");
+        let text = err.to_string();
+        assert!(text.contains("Group"), "quote what was typed: {text}");
+        for kind in BindingPeerKind::ALL {
+            assert!(
+                text.contains(kind.as_str()),
+                "the error must list {:?} as an option: {text}",
+                kind.as_str()
+            );
+        }
+        assert!(BindingPeerKind::from_str("").is_err(), "empty is not a kind");
     }
 
     /// The single assertion that makes `BindingPeerKind` worth adding: a typo

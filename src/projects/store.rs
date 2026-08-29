@@ -773,7 +773,7 @@ impl ProjectStore {
         label: Option<&str>,
     ) -> Result<ChannelBinding, ProjectError> {
         let now = now_secs();
-        let peer_kind_col = binding::wire_str(peer_kind);
+        let peer_kind_col = peer_kind.as_str();
         // Normalized forms, bound to their own names rather than shadowing
         // `channel_id`/`peer_id`: the conflict error below must be able to
         // quote the operator's own spelling back at them, not the key we
@@ -848,7 +848,7 @@ impl ProjectStore {
         peer_kind: BindingPeerKind,
         peer_id: &str,
     ) -> Result<bool, ProjectError> {
-        let peer_kind_col = binding::wire_str(peer_kind);
+        let peer_kind_col = peer_kind.as_str();
         let channel_id = binding::normalize_component(channel_id);
         let peer_id = binding::normalize_component(peer_id);
         self.with_conn(|conn| {
@@ -880,7 +880,7 @@ impl ProjectStore {
         peer_kind: BindingPeerKind,
         peer_id: &str,
     ) -> Result<Option<String>, ProjectError> {
-        let peer_kind_col = binding::wire_str(peer_kind);
+        let peer_kind_col = peer_kind.as_str();
         let channel_id = binding::normalize_component(channel_id);
         let peer_id = binding::normalize_component(peer_id);
         self.with_conn(|conn| {
@@ -1005,13 +1005,13 @@ impl ProjectStore {
 
     /// Every conversation a room is bound to, oldest first.
     ///
-    /// A row whose stored `peer_kind` does not parse back via
-    /// [`binding::parse_wire`] is skipped with a `warn!` naming the row's
-    /// primary key, rather than silently dropped: the only writer of that
-    /// column is [`binding::wire_str`], so a value it cannot parse means the
-    /// row came from elsewhere (or was corrupted), and a bindings table that
-    /// silently omits a row is indistinguishable from an empty one on the
-    /// `list` surface.
+    /// A row whose stored `peer_kind` does not parse back as a
+    /// [`BindingPeerKind`] is skipped with a `warn!` naming the row's primary
+    /// key, rather than silently dropped: every writer of that column goes
+    /// through [`BindingPeerKind::as_str`], so a value its `FromStr` cannot
+    /// take means the row came from elsewhere (or was corrupted), and a
+    /// bindings table that silently omits a row is indistinguishable from an
+    /// empty one on the `list` surface.
     ///
     /// `channel_id`/`peer_id` on the returned rows are read back exactly as
     /// [`Self::bind_conversation`] stored them — already normalized (Ruling
@@ -1042,7 +1042,7 @@ impl ProjectStore {
             for row in rows {
                 let (channel_id, peer_kind_raw, peer_id, bound_by, bound_at, label) =
                     row.map_err(db_err)?;
-                let Some(peer_kind) = binding::parse_wire(&peer_kind_raw) else {
+                let Ok(peer_kind) = peer_kind_raw.parse::<BindingPeerKind>() else {
                     tracing::warn!(
                         project_id = %project_id,
                         channel_id = %channel_id,

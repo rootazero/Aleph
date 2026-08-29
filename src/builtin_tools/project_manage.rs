@@ -187,7 +187,9 @@ impl ProjectManageTool {
             .store
             .members(&project.id)
             .map_err(|e| AlephError::tool(format!("failed to read roster: {e}")))?;
-        Ok(ProjectRow::render(project, members))
+        Ok(crate::gateway::handlers::projects::render_project(
+            project, members,
+        ))
     }
 
     fn need<'a>(value: Option<&'a String>, field: &str, action: ProjectAction) -> Result<&'a str> {

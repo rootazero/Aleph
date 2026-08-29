@@ -12,11 +12,23 @@
 //! `peer_kind` is typed as [`BindingPeerKind`] on the wire and in
 //! [`ChannelBinding`] (Ruling V) rather than a bare `String`: it is part of the
 //! table's PRIMARY KEY, so `"Group"` and `"group"` would be two different rows
-//! and a typo would never collide with the already-bound conflict guard. There
-//! is exactly one conversion in each direction between the routing
-//! [`PeerKind`] / the wire `BindingPeerKind` and the column's stored spelling —
-//! [`to_wire`] / [`wire_str`] / [`parse_wire`] — so no third place ever writes
-//! its own `match` on the string.
+//! and a typo would never collide with the already-bound conflict guard.
+//!
+//! **The column's stored spelling is not decided here.** It is
+//! [`BindingPeerKind::as_str`] and its `FromStr`, in `aleph-protocol` — the
+//! same crate serde emits the wire value from, and the only one `aleph-cli`
+//! can reach (it must not depend on `alephcore`). Until 2026-08-29 this module
+//! owned a hand-written `match` in each direction, `wire_str` and
+//! `parse_wire`, each documented as "the only conversion in the tree". That
+//! was true *inside* `alephcore` and overclaimed outside it: serde's
+//! `rename_all` was a third author and the authoritative one, and the three
+//! agreed by coincidence of review rather than by construction. Writing the
+//! CLI is what forced it open, because a fourth copy there would have failed
+//! as `INVALID_PARAMS` on a command that had never once worked (Ruling AF).
+//!
+//! What remains here is [`to_wire`]: the ROUTING [`PeerKind`] to the wire
+//! kind. That one is genuinely local — the protocol crate has never heard of
+//! `SessionKey` and cannot answer it.
 //!
 //! `channel_id` and `peer_id` are normalized through [`normalize_component`]
 //! before they ever reach the table (Ruling AD). A live `SessionKey` always
@@ -70,8 +82,9 @@ pub fn normalize_component(s: &str) -> String {
 /// Convert a routing [`PeerKind`] to the wire [`BindingPeerKind`].
 ///
 /// The only `PeerKind -> BindingPeerKind` conversion in the tree —
-/// [`peer_kind_str`] and [`conversation_of`] both go through this rather than
-/// each writing their own `match`.
+/// [`conversation_of`] goes through this rather than writing its own `match`,
+/// and the match being exhaustive is what makes a variant added to one enum
+/// and not the other a compile error rather than a silently unmatched row.
 #[must_use]
 pub const fn to_wire(kind: PeerKind) -> BindingPeerKind {
     match kind {
@@ -96,43 +109,46 @@ pub const fn to_wire(kind: PeerKind) -> BindingPeerKind {
 // it without needing the inverse. If a future caller genuinely needs a routing
 // kind from a wire one, write it back; do not resurrect it speculatively.
 
-/// Stable storage spelling for a peer kind.
-///
-/// The only `BindingPeerKind -> &str` conversion in the tree: everything that
-/// stores a binding row goes through this rather than writing its own `match`.
-#[must_use]
-pub const fn wire_str(kind: BindingPeerKind) -> &'static str {
-    match kind {
-        BindingPeerKind::Group => "group",
-        BindingPeerKind::Thread => "thread",
-    }
-}
+// `wire_str` and `parse_wire` lived here until 2026-08-29. They were a
+// hand-written `match` in each direction between `BindingPeerKind` and the
+// column's stored spelling, and each one's doc claimed to be "the only
+// conversion in the tree" — a claim that was true within this crate and false
+// across the workspace, because serde's `rename_all` on the enum is a third
+// author and the one the wire actually obeys.
+//
+// They are gone rather than kept as delegating one-liners: a wrapper whose
+// entire documented reason for existing is "I am the sole author" becomes a
+// stale doc the moment it is not, and a stale doc that reads load-bearing is
+// what makes the next reader believe the wrapper is doing something.
+//
+// Replacements, in `aleph-protocol` beside the enum, where `aleph-cli` can
+// reach them too: `BindingPeerKind::as_str()` and `<BindingPeerKind as
+// FromStr>::from_str`, pinned to serde's spelling by
+// `every_peer_kind_spells_one_word_everywhere`.
 
-/// Parse a stored column value back into a [`BindingPeerKind`].
-///
-/// `None` for anything that is not exactly `"group"` or `"thread"` — the only
-/// `&str -> BindingPeerKind` conversion in the tree. The only writer of this
-/// column is [`wire_str`] above, so a `None` here means the row was written by
-/// something else (or corrupted); the caller must say so out loud rather than
-/// silently dropping the row — see `ProjectStore::bindings_for`.
-#[must_use]
-pub fn parse_wire(s: &str) -> Option<BindingPeerKind> {
-    match s {
-        "group" => Some(BindingPeerKind::Group),
-        "thread" => Some(BindingPeerKind::Thread),
-        _ => None,
-    }
-}
-
-/// Stable storage spelling for a routing peer kind.
-///
-/// Derived from [`wire_str`] via [`to_wire`] rather than writing a second,
-/// parallel `match` — so the column's contents cannot drift independently of
-/// the wire type's own spelling.
-#[must_use]
-pub const fn peer_kind_str(kind: PeerKind) -> &'static str {
-    wire_str(to_wire(kind))
-}
+// `peer_kind_str` (routing `PeerKind` -> the stored `&str`) went with them, on
+// 2026-08-29, and it is worth saying why rather than letting it vanish in a
+// diff. It was `pub`, re-exported from `projects::mod`, and had **zero**
+// production consumers anywhere in `src/`, `shared/`, `interfaces/` or
+// `desktop/` — its only caller was its own test. Once `wire_str` was gone it
+// was also a one-liner, `to_wire(kind).as_str()`: a third name for a
+// conversion that already has one.
+//
+// Its test went with it, and that deletion is the load-bearing half.
+// `the_routing_and_wire_peer_kinds_agree` asserted `peer_kind_str(k) ==
+// wire_str(to_wire(k))` — but `peer_kind_str` was *defined* as
+// `wire_str(to_wire(k))`, so the two sides were the same expression and the
+// assertion could not fail for any input, in any future, under any bug. A
+// guard that cannot go red is not a guard; it is a line that makes the next
+// reader believe this property is covered.
+//
+// The property it claimed is real and is still held, by two things that CAN
+// fail: `to_wire`'s match is exhaustive, so a variant added to either enum
+// alone is a compile error; and
+// `what_conversation_of_reports_is_what_the_store_normalizes` below asserts
+// the pairing against a hand-written `[(PeerKind, BindingPeerKind)]` table —
+// an oracle written independently of `to_wire`, which is exactly what the
+// deleted test lacked.
 
 /// Which of the two ways a room can claim a conversation produced an answer.
 ///
@@ -232,22 +248,9 @@ mod tests {
         );
     }
 
-    /// The routing enum and the wire enum must stay in step: a variant added to
-    /// one without the other would mint conversations that can be bound and
-    /// never matched (or matched and never bound). Written as an exhaustive
-    /// match on the ROUTING enum so adding a variant there is a compile error,
-    /// not a silently-passing test.
-    #[test]
-    fn the_routing_and_wire_peer_kinds_agree() {
-        use aleph_protocol::projects::BindingPeerKind as Wire;
-        for k in [PeerKind::Group, PeerKind::Thread] {
-            let wire: Wire = match k {
-                PeerKind::Group => Wire::Group,
-                PeerKind::Thread => Wire::Thread,
-            };
-            assert_eq!(peer_kind_str(k), wire_str(wire));
-        }
-    }
+    // `the_routing_and_wire_peer_kinds_agree` was deleted here on 2026-08-29
+    // together with `peer_kind_str` — the tombstone beside [`to_wire`] says why
+    // it could not fail, and where the property it named is actually held.
 
     /// The property the room-binding scan actually rests on, stated without
     /// the `from_wire` inverse that used to express it.
