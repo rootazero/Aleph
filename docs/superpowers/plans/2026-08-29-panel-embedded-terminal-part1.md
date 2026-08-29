@@ -4014,7 +4014,7 @@ pub fn TerminalView() -> impl IntoView {
                 // observed. Setting the id BEFORE the RPC matters: the frame
                 // handler DROPS frames whose session it cannot name, and a
                 // dropped frame is not a buffered one.
-                screen.set_value(Some(ClientScreen::new(24, 80, 0)));
+                screen.set_value(Some(ClientScreen::new(24, 80, 0, sid.clone())));
                 session_id.set_value(Some(sid.clone()));
                 resync(sid);
                 return;
@@ -4028,7 +4028,12 @@ pub fn TerminalView() -> impl IntoView {
             {
                 Ok(v) => match serde_json::from_value::<PtySpawnResponse>(v) {
                     Ok(resp) => {
-                        screen.set_value(Some(ClientScreen::new(resp.rows, resp.cols, resp.seq)));
+                        screen.set_value(Some(ClientScreen::new(
+                            resp.rows,
+                            resp.cols,
+                            resp.seq,
+                            resp.session_id.clone(),
+                        )));
                         session_id.set_value(Some(resp.session_id.clone()));
                         resync(resp.session_id);
                     }
@@ -4051,16 +4056,24 @@ pub fn TerminalView() -> impl IntoView {
             let Ok(frame) = serde_json::from_value::<PtyScreenFrame>(ev.data) else {
                 return;
             };
-            let Some(mine) = session_id.get_value() else { return };
-            if frame.session_id != mine {
-                return;
-            }
+            // NOT a `frame.session_id != mine` test here. `ClientScreen`
+            // knows its own id and `apply` answers `WrongSession`; a second
+            // copy of that comparison is a second answer to one question, and
+            // the copy that drifts is always the one without the tests.
             let outcome = screen.try_update_value(|s| {
                 s.as_mut().map_or(ApplyOutcome::Buffered, |s| s.apply(frame))
             });
             match outcome {
                 Some(ApplyOutcome::Applied) => repaint_tick.update(|n| *n = n.wrapping_add(1)),
-                Some(ApplyOutcome::Gap { .. }) => resync(mine),
+                Some(ApplyOutcome::Gap { .. }) => {
+                    if let Some(mine) = session_id.get_value() {
+                        resync(mine);
+                    }
+                }
+                // Buffered / Discarded / WrongSession: nothing to draw and
+                // nothing to recover. `Discarded` especially must NOT resync --
+                // it means a frame we already hold arrived a second time, and
+                // re-attaching on it turns a duplicate into a round trip.
                 _ => {}
             }
         });
@@ -4116,6 +4129,20 @@ Task 10 的 smallest-wins 视口表所设想的形态，不是它的例外。
 3. **keydown**：`encode_key` 返回 `Some(bytes)` 才 `prevent_default()` 并发 `rpc_call("pty.input", {session_id, data: BASE64(bytes), base64: true})`；返回 `None` 一律不拦（否则浏览器快捷键全被吞掉）。
 
 **注意 `error` 的展示用 `{move || error.get().map(..)}` 而不是 `<Show>`** —— `<Show when=…>` 的守卫与 body 是两个独立的反应式作用域，body 在信号刚被清空时可以先跑一次新值，把 `expect("visible implies Some")` 变成整页崩溃。单次读 + `Option` 视图没有这个裂缝。
+
+⚠️ **Task 15 落地后的真实签名（controller 2026-08-29 从磁盘核实，与本计划早先的草图不同）：**
+
+- `ClientScreen::new(rows: u16, cols: u16, seq: u64, session_id: impl Into<String>)` —— **四个参数**。
+  草图里的三参数版本编译不过。上面两处构造点都已按真实签名改写。
+- `ApplyOutcome` 是**五**个变体：`Applied` / `Gap { expected, got }` / `Buffered` /
+  `Discarded { seq }` / `WrongSession`。草图里 `Gap` 一个变体同时表示「漏了一帧」和「这帧我已经有了」——
+  Task 15 把它拆开了，**这个拆分是承重的**：对 `Discarded` 触发 resync 会把一次重复帧变成一次
+  往返，而重复帧在 `finish_attach` 重放缓冲之后是**正常**的。
+- `ClientScreen` 自己持有 `session_id` 并在 `apply()` 里比对，所以帧回调里**不要**再写一遍
+  `frame.session_id != mine`。
+- 访问器：`row_runs(row) -> &[PtyStyleRun]` · `dims() -> (u16, u16)` · `cursor() -> (u16, u16)` ·
+  `seq()` · `title() -> Option<&str>` · `alt_screen() -> bool`。Task 16 的 `paint` 用到的那几个
+  逐个核对过，签名一致。
 
 **实现时必须遵守的三条**（都是仓库已经踩过的坑）：
 1. **`request_animation_frame` 回调里不许 `NodeRef::get_untracked()`** —— 回调晚一帧执行，那一帧足够组件卸载，`get_untracked` 会 unwrap 成整页崩溃。把测量与取 canvas 收进**一个**私有函数，只有一种拼法。
