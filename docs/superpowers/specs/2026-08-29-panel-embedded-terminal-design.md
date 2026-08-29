@@ -395,4 +395,104 @@ park/reveal 保活调度 · OSC 52 剪贴板 · kitty 键盘协议 · agent 感�
 
 ## 12. Phase 0 结果
 
-*待填 —— Phase 0 跑完后回写。此节为空即表示探针尚未执行，不得进入 Phase 1。*
+**VERDICT: WORKS — 零客户端是"没人需要"（真实命令输出经 `pty.output` 送达，字节符合预期）**
+
+`pty.*` 子系统本身没有缺陷：`connect` → `events.subscribe{topics:["pty.*"]}` →
+`pty.spawn` → `pty.input` → `pty.output` 事件回传 → `pty.close` 全链路一次真实
+调用全部走通，字节内容是真实 shell 的输出而非空响应或错误。零客户端的成因是
+"没人接线"，不是"接不上线"——Task 1 之后的阶段划分**不需要重排**，可以按计划
+把持屏/多路复用这类"锦上添花"留在后面阶段，先把 Panel 端 UI 接上这条已经工作的
+后端线路。
+
+### 探针环境（隔离，未碰操作者真实 `~/.aleph`）
+
+按 `qa/lib/scratch_home.sh::qa_redirect_home` 的纪律，在
+`/private/tmp/claude-502/.../scratchpad/pty-probe-qa` 下起了一个全新 `HOME`/
+`ALEPH_HOME`（`cargo` 仍用真实 `HOME` 编译，避免 rustup 在 scratch 里重装一整套
+工具链）。基线 commit `9b7feda4e`（`cargo build --bin aleph-server` 编译通过，
+`Finished dev profile ... in 2m 50s`）。服务端绑定 `127.0.0.1:18790`（默认
+host/port，未改配置）。探针脚本为一次性文件
+（`pty_probe.py` + `pty_probe_run.sh`），未入库，符合 Task 0 交付物要求。
+
+探针实现上有一处自我修正：brief 里给的示例脚本按"发一个请求、`recv()` 一次"的
+顺序读取，而实测中 `connect` 之后网关会在同一个 socket 上插播一条不带 `id` 的
+`presence.joined` 事件通知，把后续的顺序读位错位一格（把 `events.subscribe`
+的响应错认成 `pty.spawn` 的响应，导致误判"`pty.spawn` 失败"）。最终版按
+`id` 匹配响应、把没有匹配 `id` 的帧当通知单独处理，问题消失——这是探针本身的
+bug，不是网关的 bug（记录在此，供 Task 1+ 的 Panel 端 WS 客户端代码参考：
+读循环必须按 `id` 分发，不能假设响应严格按请求顺序单一到达）。
+
+第一版探针在 spawn 后立刻写入，命中一次 zsh 提示符主题初始化与我们键入字节
+之间的时序竞争（用户态 shell 还没跑完自己的启动重绘），产生的字节流可读但
+不易人工确认"命令真的执行了"还是"只是键入回显"。加了 1.5s 结算延迟、并把
+捕获窗口从"看到一次命中就停"改成"固定 6 秒窗口，去重复统计字符串出现次数
++ 用 `(?<!echo )ALEPH_PROBE_OK\r?\n` 排除掉键入回显那一次"之后，转录清晰、
+可人工验证。
+
+### 四问逐一回答（均为**直接观察**，非推断）
+
+**1. `pty.spawn` 返回 session_id 了吗？**
+
+是。原始响应（`connect`/`subscribe`/`spawn`/`input`/`close` 均按 JSON-RPC id
+配对读取，非位置猜测）：
+
+```
+spawn -> {'id': 3, 'jsonrpc': '2.0', 'result': {'session_id': 'b6b03597-8b4b-41c1-8f52-8cc5ec4d073d', 'shell': '/bin/zsh'}, 'traceparent': '00-20a50e97456f4d5aa6a42de65ae82692-b19bc0b8506d4185-01'}
+```
+
+**2. `pty.output` 帧到达了吗？base64 解出来是不是预期字节？**
+
+是，且内容是真实 shell 交互，不是空字节或垃圾。累计收到 662 字节
+（多帧 `pty.output`，`topic` 与 `session_id` 逐帧核对匹配），完整解码后
+（原始 repr，含控制字符）：
+
+```
+'\x1b[1m\x1b[7m%\x1b[27m\x1b[1m\x1b[0m                                                                               \r \r\x1b]7;file://Mac-Mini-M4.local/private/tmp/claude-502/-Volumes-TBU4-Workspace-Aleph/74e2ecf9-7762-4147-9495-822b693479f1/scratchpad/pty-probe-qa/home\x07\r\x1b[0m\x1b[27m\x1b[24m\x1b[Jzouguojun@Mac-Mini-M4 ~ % \x1b[K\x1b[?2004he\x08echo ALEPH_PROBE_OK\x1b[?2004l\r\r\nALEPH_PROBE_OK\r\n\x1b[1m\x1b[7m%\x1b[27m\x1b[1m\x1b[0m                                                                               \r \r\x1b]7;file://Mac-Mini-M4.local/private/tmp/claude-502/-Volumes-TBU4-Workspace-Aleph/74e2ecf9-7762-4147-9495-822b693479f1/scratchpad/pty-probe-qa/home\x07\r\x1b[0m\x1b[27m\x1b[24m\x1b[Jzouguojun@Mac-Mini-M4 ~ % \x1b[K\x1b[?2004h'
+```
+
+ANSI/OSC 转义剥离后的人读视图：
+
+```
+%                                                                                zouguojun@Mac-Mini-M4 ~ % eecho ALEPH_PROBE_OK
+ALEPH_PROBE_OK
+%                                                                                zouguojun@Mac-Mini-M4 ~ % 
+```
+
+这里 `ALEPH_PROBE_OK` 出现两次：第一次是键入回显（跟在 zsh 提示符与
+`echo ` 之后，属于终端本地回显），第二次是**独立成行、不跟在 `echo ` 后面**
+的一行——即 `echo` 命令真正执行后的 stdout，随后跟着一个全新的 zsh 提示符
+`zouguojun@Mac-Mini-M4 ~ % `。这证明字节确实往返穿过了一个真实的子进程
+（shell 执行了命令、打印了输出、打印了新提示符），而不是某种 loopback 或
+echo-only 的假象。`\x1b]7;...file://.../pty-probe-qa/home\x07`（OSC 7 上报
+cwd）也确认了这个 shell 的工作目录正是探针起的 scratch home，与
+`SpawnOptions.cwd` 未指定时的默认行为一致。
+
+**3. `attach_event_bus` 真被调到了吗？**
+
+是——静态确认 + 动态确认双重印证。静态：`src/gateway/server/mod.rs:753` 在
+`build_router()` 里无条件调用
+`crate::gateway::pty::attach_event_bus(self.event_bus.clone())`，没有
+feature flag 或配置开关包裹。动态：如果这条线没接上，`events.subscribe`
+成功之后 `pty.output` 事件就不会经这个 event bus 广播到订阅连接——而探针
+确实收到了帧（见问题 2），所以这条线在运行时真的通了，不只是"代码里写了
+调用"。
+
+**4. loopback 连接过得了 `"pty."` 的 admin 闸吗？**
+
+是。`connect` 响应里 `role` 直接是 `"operator"`（loopback 免 token 自动
+operator，符合 `src/gateway/CLAUDE.md` 记录的信任模型），随后
+`pty.spawn`/`pty.input`/`pty.close` 三次调用全部返回 `result`（无
+`INVALID_PARAMS`/权限错误），`events.subscribe{topics:["pty.*"]}` 也成功
+订阅并收到了 `pty.` 前缀的事件——两个面（`method_admin::ADMIN_PREFIXES` 的
+RPC 闸、`event_scope::EventScopeGuard::default_rules` 的事件闸）在 loopback
+operator 身份下都放行了，与 `src/gateway/handlers/pty.rs` 模块 doc 描述的
+"operator-only, on both faces"一致（loopback 连接本身就是 operator，所以
+两道闸都天然通过，未额外测试"非 operator 连接被两道闸拒绝"这一负面路径——
+该负面路径的正确性由既有单测覆盖，Phase 0 的目标只是确认正面路径可达）。
+
+### 探针产物（未入库）
+
+- `/private/tmp/claude-502/-Volumes-TBU4-Workspace-Aleph/74e2ecf9-7762-4147-9495-822b693479f1/scratchpad/pty_probe.py`
+- `/private/tmp/claude-502/-Volumes-TBU4-Workspace-Aleph/74e2ecf9-7762-4147-9495-822b693479f1/scratchpad/pty_probe_run.sh`
+- 服务端与探针完整日志：同目录 `pty-probe-qa/`（scratch `ALEPH_HOME`，含
+  `server.log`）与 `final_run.log`
