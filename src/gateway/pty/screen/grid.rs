@@ -497,13 +497,19 @@ mod tests {
         assert_eq!(cells[3].ch, 'x');
     }
 
-    /// The same scenario as above, this time reached through the public API
-    /// the test just above could only simulate: Task 4's `goto` can land
-    /// the cursor directly on a spacer, exactly the state a real program
-    /// reaches by repositioning mid-glyph (e.g. `CSI 1;4H` over the second
-    /// half of a CJK character). The private-field test documents the
-    /// invariant directly; this one proves the repair is reachable the way
-    /// real terminal output reaches it.
+    /// The same scenario as above, reached through `Grid`'s public API instead
+    /// of by writing the private fields: `goto` can land the cursor directly
+    /// on a spacer, and a `put` there must repair the orphaned owner.
+    ///
+    /// Scope, stated because the earlier wording overclaimed it: this test
+    /// starts at `Grid`, one layer BELOW the parser. It does not prove that a
+    /// real `CSI 1;4H` reaches `goto` — real terminal output travels
+    /// vte → `Perform` → `Grid`, and this begins at the last of those. That
+    /// half is proved separately by
+    /// `super::super::perform::tests::goto_onto_a_spacer_then_printing_repairs_the_owner`,
+    /// which feeds the actual escape sequence over real CJK input. The three
+    /// tests are one ladder — invariant, `Grid` API, parser — and each rung is
+    /// worth having only as long as nobody reads one as covering another.
     #[test]
     fn goto_onto_a_spacer_then_put_repairs_the_owner() {
         let mut g = Grid::new(2, 10);
