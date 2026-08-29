@@ -483,4 +483,179 @@ mod tests {
         let sid = value["session_id"].as_str().expect("id").to_string();
         let _ = handle_close(req("pty.close", json!({ "session_id": sid }))).await;
     }
+
+    /// A response-only assertion (`resp.error.is_some()`) would still pass
+    /// if the handler returned the jail's error *and also* called
+    /// `manager().spawn()` before, or without, honoring it — e.g. a future
+    /// refactor that moves the spawn call ahead of the jail check but
+    /// leaves the error response construction intact. This asserts the
+    /// effect, not just the reply: the session table must not gain an
+    /// entry as a result of the call. (Review round 1, Major finding.)
+    ///
+    /// Session ids are compared as a set difference, not a bare count,
+    /// because `pty::manager()` is a process-global singleton shared with
+    /// every other test in this binary — a length-only comparison would be
+    /// racy against a concurrently-running test's own spawn/close. A set
+    /// difference isolates a genuinely *new* id (this call's, if the jail
+    /// were bypassed) from churn happening elsewhere: every other test in
+    /// this file spawns and closes within its own body, so no id it
+    /// creates should still be missing from `before` and present in
+    /// `after` unless this call itself produced it.
+    #[tokio::test]
+    async fn spawn_with_a_cwd_outside_every_root_creates_no_session() {
+        let before: std::collections::HashSet<String> = pty::manager()
+            .list()
+            .into_iter()
+            .map(|s| s.session_id)
+            .collect();
+
+        // "/" is outside every registered workspace root on every platform
+        // this repo supports: `resolve_spawn_cwd` rejects any `asked` that
+        // is an *ancestor* of a root (jail.rs's module doc, "One direction,
+        // not two"), and no configured or defaulted workspace root is the
+        // filesystem root itself.
+        let resp = handle_spawn(req(
+            "pty.spawn",
+            json!({ "cwd": "/", "rows": 24, "cols": 80 }),
+        ))
+        .await;
+
+        assert!(
+            resp.result.is_none(),
+            "a refused spawn must not report success"
+        );
+        let err = resp
+            .error
+            .expect("a cwd outside every root must be refused");
+        assert_eq!(err.code, INVALID_PARAMS);
+
+        let after: std::collections::HashSet<String> = pty::manager()
+            .list()
+            .into_iter()
+            .map(|s| s.session_id)
+            .collect();
+        let leaked: Vec<&String> = after.difference(&before).collect();
+        assert!(
+            leaked.is_empty(),
+            "a refused spawn must not have created a session, but found new id(s): {leaked:?}"
+        );
+    }
+
+    /// The security-relevant claim is not "the handler returns a session
+    /// id" — it is "the process the OS actually execs inherits the
+    /// *jailed* cwd, not whatever the client asked for verbatim". A
+    /// response-only assertion would pass unchanged if `handle_spawn`
+    /// resolved the jail and then spawned with `params.cwd` anyway. So
+    /// this asks the real child process what its own cwd is, over the real
+    /// PTY screen — the same idiom
+    /// `session::tests::a_child_write_reaches_the_server_held_screen`
+    /// already uses to verify real output, not a handler's return value.
+    /// (Review round 1, Major finding.)
+    ///
+    /// This exercises the omitted-`cwd` arm rather than an explicit
+    /// in-root path: on a machine with no symlinks anywhere under the
+    /// workspace root (true here — confirmed `~/.aleph` is a real
+    /// directory, not a link), an explicit request's literal string and
+    /// its canonicalised form are byte-identical, so a handler that skips
+    /// `resolve_spawn_cwd` and passes `params.cwd` straight through would
+    /// land the child in exactly the same place as the correctly-jailed
+    /// one — `chdir` + the shell's own `getcwd`-backed `pwd` always reports
+    /// the canonical location regardless of which spelling was used to get
+    /// there, so that shape cannot discriminate "resolved" from "passed
+    /// through" here. The omitted-`cwd` arm can: `session.rs`'s spawn only
+    /// calls `CommandBuilder::cwd()` `if let Some(cwd) = &opts.cwd`, so a
+    /// handler that lets `params.cwd` (`None`) through unresolved never
+    /// calls it at all, and the child inherits the *daemon's own* process
+    /// cwd instead of the resolved workspace root — reliably a different,
+    /// observable place, with no dependency on this machine's filesystem
+    /// happening to contain a symlink.
+    ///
+    /// There is no config-injection point for `handle_spawn` (see the
+    /// report's answer on `Config::load()`), so the only workspace root a
+    /// hermetic test can rely on is whatever `workspace_roots()` resolves
+    /// against the real on-disk config — the exact function, and the
+    /// exact config, `handle_spawn` itself resolves against, derived here
+    /// rather than hardcoded.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn spawn_with_no_cwd_actually_chdirs_the_child_into_the_first_root() {
+        let defaults = crate::config::Config::load()
+            .unwrap_or_default()
+            .agents
+            .defaults;
+        let roots = pty::workspace_roots(&defaults);
+        let root = roots
+            .first()
+            .cloned()
+            .expect("workspace_roots always returns one root");
+
+        // The child must OUTLIVE the assertion, which is why it sleeps rather
+        // than just printing. `spawn_reader` calls `manager().remove(&id)` the
+        // moment the child hits EOF (session.rs, end of the reader thread), so
+        // a one-shot `pwd` races its own reaper: the first `attach_snapshot`
+        // can land before the reader has fed the screen, and every later one
+        // returns `Err` because the session is already gone from the map. The
+        // symptom is a blank screen and a five-second timeout, which reads
+        // exactly like "the cwd was wrong". It is not: the session was reaped.
+        let (command, args) = if cfg!(windows) {
+            ("cmd.exe", vec!["/K".to_string(), "cd".to_string()])
+        } else {
+            ("sh", vec!["-c".to_string(), "pwd; sleep 30".to_string()])
+        };
+        // Deliberately no `cwd` field at all — the omitted-cwd request the
+        // jail must resolve to the first registered root.
+        let spawn = handle_spawn(req(
+            "pty.spawn",
+            json!({ "command": command, "args": args, "rows": 24, "cols": 240 }),
+        ))
+        .await;
+        let sid = spawn
+            .result
+            .as_ref()
+            .expect("spawn with an omitted cwd must succeed")["session_id"]
+            .as_str()
+            .expect("session_id")
+            .to_string();
+
+        // What the handler should have handed the child: the canonical,
+        // display-boundary-converted form of the root — computed
+        // independently here (not by calling `resolve_spawn_cwd` and
+        // trusting its own answer), so this cannot pass by construction.
+        let expected =
+            crate::utils::paths::display_string(&std::fs::canonicalize(&root).expect("canonical"));
+
+        let mut found = false;
+        let mut last_seen = String::from("<no snapshot ever returned Ok>");
+        for _ in 0..100 {
+            if let Ok(snap) = pty::manager().attach_snapshot(&sid) {
+                // Concatenate the whole screen, not just one row's runs: a
+                // long path can hard-wrap across a row boundary, and a
+                // per-row `contains` check would miss it there regardless
+                // of how wide the grid is.
+                let screen_text: String = snap
+                    .patch
+                    .rows
+                    .iter()
+                    .map(|r| {
+                        r.runs
+                            .iter()
+                            .map(|run| run.text.as_str())
+                            .collect::<String>()
+                    })
+                    .collect();
+                last_seen = screen_text.clone();
+                if screen_text.contains(expected.as_str()) {
+                    found = true;
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        pty::manager().close(&sid).ok();
+        assert!(
+            found,
+            "an omitted cwd must chdir the child into the resolved first workspace root \
+             {expected}, not the daemon's own process cwd; screen held: {last_seen:?}"
+        );
+    }
 }

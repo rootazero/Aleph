@@ -29,8 +29,11 @@
 //! * a root that cannot be canonicalised (missing, unreadable, a dangling
 //!   symlink) is dropped from the allowed set rather than erroring the whole
 //!   call — a root going away must narrow what is allowed, never widen it;
-//! * an empty roots list refuses loudly, naming the remedy, rather than
-//!   picking a directory on the caller's behalf;
+//! * an empty roots list refuses loudly, naming the actual failure, rather
+//!   than picking a directory on the caller's behalf — and never sending the
+//!   caller toward a "register a workspace" step that does not exist here
+//!   (there is no registration; the root is a derived config value that
+//!   [`super::workspace_roots`] already tries to create);
 //! * a requested path that cannot be canonicalised (does not exist) is an
 //!   error, never a fallback to some default — a PTY's starting directory
 //!   must already exist, the same rule a plain `cd` follows;
@@ -61,9 +64,19 @@ fn canonical(p: &Path) -> Result<PathBuf, String> {
 pub fn resolve_spawn_cwd(requested: Option<&str>, roots: &[PathBuf]) -> Result<PathBuf, String> {
     let canonical_roots: Vec<PathBuf> = roots.iter().filter_map(|r| canonical(r).ok()).collect();
     if canonical_roots.is_empty() {
+        // Not "register a workspace": there is no registration step here —
+        // `workspace_roots()` already resolves the configured
+        // `[agents.defaults] workspace_root` (or its default) and tries to
+        // create it. This branch fires only when that resolution or creation
+        // genuinely failed (or, for a caller that passes an empty `roots`
+        // outright, was never attempted) — a real filesystem problem, not a
+        // missing setup step. Sending the caller toward a nonexistent
+        // remedy is worse than naming none (review round 1, Minor 2).
         return Err(
-            "no workspace is registered, so there is no directory a terminal may start in — \
-             register one first (Panel → Settings → Workspaces, or `aleph workspace create`)"
+            "no workspace directory is available for a terminal to start in — the configured \
+             workspace root (see `[agents.defaults] workspace_root` in config.toml, if set) \
+             could not be resolved or created; check that the path is valid and that the \
+             daemon has permission to create it"
                 .to_string(),
         );
     }
@@ -79,9 +92,15 @@ pub fn resolve_spawn_cwd(requested: Option<&str>, roots: &[PathBuf]) -> Result<P
     if canonical_roots.iter().any(|root| asked.starts_with(root)) {
         Ok(asked)
     } else {
+        // `display_string`, not `.display()`: `asked` is already canonical,
+        // and this message is about to leave our own comparison logic and
+        // travel to the RPC caller — exactly the boundary `display_string`
+        // exists for (`canonical`'s doc, above). `.display()` here would put
+        // Windows's `\\?\C:\` extended-length prefix into a caller-facing
+        // error message.
         Err(format!(
             "cwd {} is outside every registered workspace",
-            asked.display()
+            crate::utils::paths::display_string(&asked)
         ))
     }
 }
@@ -145,14 +164,21 @@ mod tests {
         );
     }
 
-    /// With nothing registered the refusal must name the remedy, not pick a
-    /// directory on the user's behalf.
+    /// With nothing usable, the refusal must describe what actually
+    /// happened, not send the caller toward a "register a workspace" step
+    /// that does not exist — there is no registration concept in this jail;
+    /// the root is a derived config value `workspace_roots()` already tries
+    /// to create (review round 1, Minor 2).
     #[test]
-    fn no_registered_roots_refuses_loudly_and_names_the_remedy() {
+    fn no_usable_roots_refuses_loudly_and_names_the_real_cause() {
         let err = resolve_spawn_cwd(None, &[]).expect_err("must refuse");
         assert!(
-            err.contains("workspace"),
-            "the refusal must name what to do: {err}"
+            err.contains("could not be resolved or created"),
+            "the refusal must describe the actual failure: {err}"
+        );
+        assert!(
+            !err.to_lowercase().contains("register"),
+            "there is no registration step to send the caller to: {err}"
         );
     }
 }
