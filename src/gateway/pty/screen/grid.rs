@@ -125,6 +125,14 @@ impl Grid {
         (self.cursor_row, self.cursor_col)
     }
 
+    /// Rows evicted into scrollback so far. Reported in `pty.attach` so a
+    /// client knows how far back it can scroll before the server has
+    /// nothing left to give it.
+    #[must_use]
+    pub fn scrollback_len(&self) -> u32 {
+        self.scrollback.len() as u32
+    }
+
     fn idx(&self, row: u16, col: u16) -> usize {
         row as usize * self.cols as usize + col as usize
     }
