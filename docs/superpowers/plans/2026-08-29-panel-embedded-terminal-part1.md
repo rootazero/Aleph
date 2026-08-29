@@ -5207,7 +5207,9 @@ git commit -m "docs: record Part 1 implementation deltas against the terminal sp
 - **中文 / 日文 / 韩文输入**（IME 归 Part 2）—— 交付时要向用户明说这一条，否则它读起来像 bug。
 - **ESC 族转义序列**（`ESC 7`/`ESC 8` DECSC/DECRC、`ESC M` RI 归 Part 2；落回 vte 默认 no-op）—— `less` / `vim` 等全屏程序下可能出现光标位置错位，交付时要向用户明说这一条，否则它读起来像 bug。
 - 向上滚动看历史（`pty.scrollback` 归 Part 2；服务端**已经在存**）。
-- **会话退出的任何提示**（归 Part 2）—— 服务端发 `pty.exit`，Part 1 的 Panel 不订阅它。用户 `exit` 之后终端只是停止更新，不报错也不变灰。交付时要向用户明说这一条：它比另外两条更像 bug，因为一块不再响应的矩形和一块坏掉的矩形在屏幕上是同一个东西。**不过 Task 17 的 list-then-spawn 顺带给了它一条出路**——退出的会话 `closed: true`，复用扫描会跳过它，所以**刷新一次就换来一个新 shell**。缺口的严重度因此从「永久死掉的矩形」降到「刷新之前死掉的矩形」，交付措辞按后者写。⚠️ 这不是把它修好了：用户仍然不知道**为什么**要刷新，而「刷新一下试试」正是一句会掩盖真缺陷的话。
+- **会话退出的任何提示**（归 Part 2）—— 服务端发 `pty.exit`，Part 1 的 Panel 不订阅它。用户 `exit` 之后终端只是停止更新，不报错也不变灰。交付时要向用户明说这一条：它比另外两条更像 bug，因为一块不再响应的矩形和一块坏掉的矩形在屏幕上是同一个东西。**不过 Task 17 的 list-then-spawn 顺带给了它一条出路**——刷新一次就换来一个新 shell。⚠️ **但机制不是这里原来写的那个。** 原文说「退出的会话 `closed: true`，复用扫描会跳过它」，controller 2026-08-29 在 Task 11 修复轮里查实**不是**：`session.rs::spawn_reader` 的读线程在 EOF 时先 `closed.store(true)`、紧接着调 `manager().remove(&id)`，而 `remove` 是**从 map 里删掉整条**（`manager.rs:169-174`）。所以退出的会话不是「在列表里且 closed」，是**根本不在列表里**——`list()` 只映射还在 map 里的条目。结论（刷新换来新 shell）成立，路径不同。
+
+  这一条要写进 spec 的「Part 1 实施偏差」，因为它影响两处读者：Task 17 的复用扫描过滤 `closed == Some(false)`，那个谓词在**子进程自己退出**这条路上永远不做事（该会话已被删）；它真正起作用的窗口只有一个——`close_all()` 杀掉会话之后、各读线程还没轮到 EOF 之前，那一瞬列表里确实有 `closed: true` 的条目。**保留那个过滤是对的**（它守的是那个窗口），但别把它读成「退出的会话会以 closed 出现在列表里」。缺口的严重度因此从「永久死掉的矩形」降到「刷新之前死掉的矩形」，交付措辞按后者写。⚠️ 这不是把它修好了：用户仍然不知道**为什么**要刷新，而「刷新一下试试」正是一句会掩盖真缺陷的话。
 - Tab 条 / 分屏 / 选区 / 搜索（B 档结构，归 Part 2）。
 
 达成后立刻写 Part 2（Phase 5–8：Tab 条 / 分屏树 / `pty.scrollback` + 滚动 / IME / 选区 / 搜索 / `qa/terminal/run.sh` / FEATURE_LOCATOR 与判据清单补充），引用「Part 1 实施偏差」里记录的真实签名。
