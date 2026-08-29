@@ -20,8 +20,6 @@
 //! (`type` / `default`) the server had never sent, so every row printed a dash
 //! from the day it was written. A dash reads as "no value yet", not as a bug.
 
-use std::collections::BTreeSet;
-
 use aleph_protocol::projects::{
     BindingPeerKind, ChannelBindParams, ChannelBindResult, ChannelBindingRow, ChannelListParams,
     ChannelListResult, ChannelUnbindParams, ChannelUnbindResult, ProjectListResult, ProjectRow,
@@ -57,6 +55,7 @@ const ROOM_COLUMNS: &[(&str, &str)] = &[
 /// These three are timestamps. A room list is read to find an id to act on,
 /// and three date columns would push the id and name off the left of a narrow
 /// terminal to answer a question nobody asked it.
+#[cfg(test)]
 const ROOM_FIELDS_NOT_RENDERED: &[&str] = &["created_at", "updated_at", "last_used_at"];
 
 /// (display header, wire field name) for every column `channel list` renders.
@@ -74,6 +73,7 @@ const BINDING_COLUMNS: &[(&str, &str)] = &[
 /// One entry, and it is the command's own argument: every row in this table
 /// belongs to the room the user just named, so a column repeating it would be
 /// the same string on every line.
+#[cfg(test)]
 const BINDING_FIELDS_NOT_RENDERED: &[&str] = &["project_id"];
 
 /// A cell for an absent optional. One spelling, so "the server sent null" and
@@ -191,17 +191,36 @@ pub async fn channel_list(
     Ok(())
 }
 
+/// The conversation `channel bind` is about to name.
+///
+/// Five borrowed strings behind one parameter rather than five: the command
+/// already took eight arguments, and these five are exactly the fields
+/// `ChannelBindParams` carries. Destructured on the first line, so the body
+/// reads as it did before.
+pub struct BindSpec<'a> {
+    pub project_id: &'a str,
+    pub channel_id: &'a str,
+    pub peer_id: &'a str,
+    /// Still a `&str` here, because this is argv. It becomes a
+    /// [`BindingPeerKind`] in [`parse_peer_kind`], before anything connects.
+    pub peer_kind: &'a str,
+    pub label: Option<&'a str>,
+}
+
 /// `aleph projects channel bind …` (operator only)
 pub async fn channel_bind(
     server_url: &str,
     config: &CliConfig,
-    project_id: &str,
-    channel_id: &str,
-    peer_id: &str,
-    peer_kind: &str,
-    label: Option<&str>,
+    spec: &BindSpec<'_>,
     json: bool,
 ) -> CliResult<()> {
+    let BindSpec {
+        project_id,
+        channel_id,
+        peer_id,
+        peer_kind,
+        label,
+    } = *spec;
     // Before connecting: a rejected spelling should cost a sentence, not a
     // round trip that returns a bare protocol error.
     let params = ChannelBindParams {
@@ -339,6 +358,8 @@ fn print_lines(lines: &[String]) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     fn sample_room() -> ProjectRow {

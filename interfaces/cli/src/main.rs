@@ -1054,11 +1054,13 @@ async fn dispatch_projects(
                 projects_cmd::channel_bind(
                     server_url,
                     config,
-                    &project_id,
-                    &channel_id,
-                    &peer_id,
-                    &peer_kind,
-                    label.as_deref(),
+                    &projects_cmd::BindSpec {
+                        project_id: &project_id,
+                        channel_id: &channel_id,
+                        peer_id: &peer_id,
+                        peer_kind: &peer_kind,
+                        label: label.as_deref(),
+                    },
                     json,
                 )
                 .await
