@@ -17,12 +17,40 @@
 //! that used to stand here (claiming the surface was open to all connections)
 //! survived one face going admin-only while the other didn't.
 
+pub mod jail;
 pub mod manager;
 pub mod screen;
 pub mod session;
 
 pub use manager::{attach_event_bus, manager, PtyManager, SessionInfo, SpawnResult};
 pub use session::{PtySession, SpawnOptions};
+
+/// The workspace roots a PTY may be spawned under, read fresh on every
+/// spawn — a boot-time snapshot would let a workspace registered after
+/// start-up stay unusable until restart.
+///
+/// The root is `workspace_root_for(&defaults)`, NOT `default_workspace_root()`:
+/// the latter answers "where does this live when nothing is configured",
+/// which is a different question and is wrong on every install that sets
+/// `[agents.defaults] workspace_root`.
+///
+/// The directory is created if missing. `agent_resolver::resolve_one`
+/// already provisions `<root>/<agent_id>` via `create_dir_all` for every
+/// configured agent, which creates this same root as a side effect the
+/// first time any agent is resolved — this makes that guarantee explicit
+/// here too, so a fresh install's default-cwd `pty.spawn` does not depend on
+/// some other subsystem having run first. A failed create is not fatal: it
+/// just leaves the root unresolvable, which [`jail::resolve_spawn_cwd`]
+/// already treats as "not registered" and refuses — never as "allow
+/// anywhere".
+#[must_use]
+pub fn workspace_roots(
+    defaults: &crate::config::types::AgentDefaults,
+) -> Vec<std::path::PathBuf> {
+    let root = crate::config::agent_resolver::workspace_root_for(defaults);
+    let _ = std::fs::create_dir_all(&root);
+    vec![root]
+}
 
 #[cfg(test)]
 mod tests {

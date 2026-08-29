@@ -90,10 +90,29 @@ pub async fn handle_spawn(request: JsonRpcRequest) -> JsonRpcResponse {
         None => SpawnParams::default(),
     };
 
+    // The client's cwd is a request, not an authorisation: resolve it
+    // against the operator-registered workspace roots before it ever reaches
+    // the child process. Config is read fresh on every spawn (not cached at
+    // boot) so a workspace registered after start-up is usable immediately —
+    // see `pty::workspace_roots`'s doc for why.
+    let defaults = crate::config::Config::load().unwrap_or_default().agents.defaults;
+    let roots = pty::workspace_roots(&defaults);
+    let cwd = match pty::jail::resolve_spawn_cwd(params.cwd.as_deref(), &roots) {
+        Ok(p) => p,
+        Err(e) => return JsonRpcResponse::error(id, INVALID_PARAMS, e),
+    };
+
     let opts = SpawnOptions {
         command: params.command,
         args: params.args,
-        cwd: params.cwd,
+        // Converted only now, at the boundary where the canonical path
+        // leaves our own comparison logic and is handed to `portable_pty`'s
+        // `CommandBuilder` for the OS to consume directly — never inside the
+        // jail's `starts_with` check itself (`jail::canonical`'s doc). On
+        // Windows this strips the `\\?\` extended-length prefix that
+        // `std::fs::canonicalize` returns, which legacy shells (`cmd.exe`)
+        // are known to mishandle as a working directory.
+        cwd: Some(crate::utils::paths::display_string(&cwd)),
         env: params.env.into_iter().collect(),
         rows: params.rows,
         cols: params.cols,
