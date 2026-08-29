@@ -217,18 +217,42 @@ impl Performer<'_> {
     /// onto the PRIMARY grid before the deferred swap ever ran, and the
     /// swap would then stash that now-polluted primary into `saved`.
     fn toggle_alt_screen(&mut self, enter: bool) {
-        if enter {
+        let swapped = if enter {
             // A nested `?1049h` while already on the alt screen is a
             // no-op: clobbering `saved` here would replace the real
             // primary with the alt screen's own content, losing the
             // user's shell scrollback for good the next time they exit.
+            // No grid becomes current here, so nothing needs marking dirty.
             if self.screen.saved.is_none() {
                 let (rows, cols) = self.screen.grid.dims();
                 let primary = std::mem::replace(&mut self.screen.grid, Grid::new(rows, cols));
                 self.screen.saved = Some(primary);
+                true
+            } else {
+                false
             }
         } else if let Some(primary) = self.screen.saved.take() {
             self.screen.grid = primary;
+            true
+        } else {
+            false
+        };
+        if swapped {
+            // Whichever grid just became current is entirely new to an
+            // already-attached client. The fresh alt grid starts with an
+            // EMPTY dirty set by design (`Grid::new`'s doc comment: a
+            // client that just attached gets a full sync from
+            // `full_patch`, which reads every row directly and ignores
+            // the dirty set) -- but a mid-session swap is the opposite
+            // case, a client that is already attached and only ever
+            // reads `take_patch`. And the restored primary's dirty set is
+            // whatever was stashed on it when it was last current, which
+            // is stale. Without this, `take_patch` reports nothing
+            // changed in both directions while the entire visible screen
+            // was just replaced: entering leaves the Panel rendering the
+            // shell screen while vim runs, exiting leaves it rendering
+            // vim's last frame after the user quits.
+            self.screen.grid.mark_all_dirty();
         }
     }
 }
@@ -541,5 +565,46 @@ mod tests {
             "primary",
             "the primary must not have been polluted by alt-screen content written in the same chunk"
         );
+    }
+
+    /// Entering the alt screen must mark it dirty even though `Grid::new`
+    /// starts with an EMPTY dirty set (by design, for the `full_patch` /
+    /// `pty.attach` path, which ignores the dirty set entirely). A swap
+    /// mid-session is the opposite case: an already-attached client only
+    /// ever reads `take_patch`, so without marking the fresh alt grid
+    /// dirty it reports nothing changed while the whole visible screen was
+    /// just replaced. Asserted through `take_patch`, not `full_patch` --
+    /// `full_patch` would pass with the bug fully present.
+    #[test]
+    fn entering_alt_screen_marks_it_dirty_through_take_patch() {
+        let mut s = Screen::new(3, 20);
+        s.feed(b"primary");
+        let _ = s.take_patch(); // drain the initial write's own patch
+
+        s.feed(b"\x1b[?1049h");
+
+        let p = s.take_patch().expect("entering the alt screen must produce a patch");
+        let rows: Vec<u16> = p.rows.iter().map(|r| r.row).collect();
+        assert_eq!(rows, vec![0, 1, 2], "every row of the (blank) alt screen must ship");
+        assert_eq!(p.alt_screen, Some(true));
+    }
+
+    /// The mirror direction: leaving restores `saved`, whose dirty set is
+    /// whatever was stashed on it when it was last current -- stale.
+    /// Without re-marking it, `take_patch` reports nothing changed while
+    /// vim's last frame is replaced by the shell screen underneath.
+    #[test]
+    fn exiting_alt_screen_marks_the_restored_primary_dirty_through_take_patch() {
+        let mut s = Screen::new(3, 20);
+        s.feed(b"primary");
+        s.feed(b"\x1b[?1049h");
+        let _ = s.take_patch(); // drain the enter's own patch
+
+        s.feed(b"\x1b[?1049l");
+
+        let p = s.take_patch().expect("exiting the alt screen must produce a patch");
+        let rows: Vec<u16> = p.rows.iter().map(|r| r.row).collect();
+        assert_eq!(rows, vec![0, 1, 2], "every row of the restored primary must ship");
+        assert_eq!(p.alt_screen, Some(false));
     }
 }

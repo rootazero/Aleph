@@ -31,17 +31,6 @@ pub struct ScreenPatch {
     pub bell: bool,
 }
 
-impl ScreenPatch {
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.rows.is_empty()
-            && self.cursor.is_none()
-            && self.alt_screen.is_none()
-            && self.title.is_none()
-            && !self.bell
-    }
-}
-
 /// Fold one row's cells into style runs. Spacer cells (the right half of a
 /// wide glyph) carry no character and are dropped: the client re-derives the
 /// width from the glyph itself.
@@ -127,5 +116,61 @@ mod tests {
         let full = s.full_patch();
         assert_eq!(full.rows.len(), 4);
         assert_eq!(full.cursor, Some(s.grid.cursor()));
+    }
+
+    /// A resize changes what every coordinate on the wire means (new width,
+    /// possibly new height). If `take_patch` after a resize did not cover
+    /// the new geometry, a client that resized larger would keep stale
+    /// blank cells past the old boundary with no way to self-heal.
+    #[test]
+    fn a_resize_marks_the_new_geometry_dirty() {
+        let mut s = Screen::new(2, 20);
+        s.feed(b"hi");
+        let _ = s.take_patch(); // drain the initial write's dirty state
+
+        s.resize(5, 20);
+
+        let p = s.take_patch().expect("a resize must always produce a patch");
+        let rows: Vec<u16> = p.rows.iter().map(|r| r.row).collect();
+        assert_eq!(rows, vec![0, 1, 2, 3, 4], "every row of the new, larger geometry must ship");
+    }
+
+    /// `Screen::resize` marks the current grid dirty unconditionally, even
+    /// when the requested dimensions match the current ones -- a case
+    /// where `Grid::resize` itself is a genuine no-op and marks nothing
+    /// (its early return). That is deliberate: a resize call is the moment
+    /// the CLIENT's viewport changed, a `Screen`/wire-level event distinct
+    /// from whether the `Grid`'s own dimensions moved. Asserted through
+    /// `take_patch`, not `full_patch`: `full_patch` ignores the dirty set
+    /// entirely and would pass even if this line were dropped as a
+    /// "simplification".
+    #[test]
+    fn a_same_dimensions_resize_still_forces_a_full_repaint() {
+        let mut s = Screen::new(3, 20);
+        s.feed(b"hi");
+        let _ = s.take_patch(); // drain the initial write's dirty state
+
+        s.resize(3, 20); // same dimensions: a no-op at the Grid level
+
+        let p = s.take_patch().expect("a same-dimensions resize must still repaint");
+        let rows: Vec<u16> = p.rows.iter().map(|r| r.row).collect();
+        assert_eq!(rows, vec![0, 1, 2], "every row must still be reported dirty");
+    }
+
+    /// A row dirtied by a write keeps its index in the dirty set. If a
+    /// resize then shrinks the grid, that index can be >= the new row
+    /// count -- `patch_rows` does not filter it, so an unfiltered stale
+    /// index would ship a `RowPatch` labelled with a row number the
+    /// client's now-smaller grid does not have.
+    #[test]
+    fn a_shrinking_resize_drops_dirty_rows_that_no_longer_exist() {
+        let mut s = Screen::new(5, 20);
+        s.feed(b"a\r\nb\r\nc\r\nd\r\ne"); // dirties rows 0..=4; left undrained on purpose
+
+        s.resize(3, 20); // shrink to 3 rows -- rows 3 and 4 no longer exist
+
+        let p = s.take_patch().expect("a resize must always produce a patch");
+        let rows: Vec<u16> = p.rows.iter().map(|r| r.row).collect();
+        assert_eq!(rows, vec![0, 1, 2], "no row index past the new geometry may ship");
     }
 }

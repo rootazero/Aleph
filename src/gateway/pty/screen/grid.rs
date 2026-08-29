@@ -321,7 +321,13 @@ impl Grid {
         self.cursor_row = self.cursor_row.min(rows - 1);
         self.cursor_col = self.cursor_col.min(cols - 1);
         // Every coordinate on the wire changed meaning (new width, possibly
-        // new height), so a per-row diff would cost as much as a resend.
+        // new height), so mark every surviving row dirty. A shrinking
+        // resize can otherwise leave stale row indices >= the new
+        // `self.rows` in the dirty set (rows dirtied by a write before the
+        // shrink) -- `patch_rows` does not filter those, so an unfiltered
+        // stale index would ship a `RowPatch` labelled with a row number
+        // the client's now-smaller grid does not have.
+        self.dirty.retain(|&r| r < self.rows);
         self.dirty.extend(0..self.rows);
     }
 
