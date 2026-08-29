@@ -13,6 +13,8 @@
 
 use leptos::prelude::*;
 
+pub mod session;
+
 #[component]
 pub fn TerminalView() -> impl IntoView {
     view! {
