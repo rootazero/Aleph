@@ -23,17 +23,74 @@
 //! through `scope_from_metadata`, which is where they are owned. A future
 //! reader that genuinely needs the raw keys inside `request_scope` has to
 //! come here and say so, which is the whole point.
+//!
+//! # What a rule about a SPELLING could not do, and how the layers divide
+//!
+//! The first version of this census searched for the two key IDENTIFIERS in
+//! [`crate::utils::source_scan::code_text`] output, and `code_text` deletes
+//! string-literal payloads by design. So `request.metadata.get("scope_id")` —
+//! the same read, spelled by the key's VALUE — was invisible to all three
+//! checks, and a review drove exactly that to a live `43 / 7 / 2` on the
+//! real-machine fixture from a build where this module reported clean. Adding
+//! the values to `FORBIDDEN` cannot fix it: the scanner deletes them before
+//! the search runs.
+//!
+//! Three layers now, each answering a different question, none subsuming
+//! another:
+//!
+//! 1. **The type.** [`crate::scope::FlowScope`] has private fields and one
+//!    non-empty constructor taking an already-resolved `ScopeAttribution`, so
+//!    the `FlowRequest` site — where the defect actually lived — cannot be
+//!    handed a pair of strings at all. That is not a spelling rule; it is a
+//!    compile error. It is also the only layer that reaches beyond this
+//!    module.
+//! 2. **The negative census**, now run over BOTH views of each file: key
+//!    identifiers in `code_text`, and the key values as exact quoted literals
+//!    in [`crate::utils::source_scan::code_keeping_literals`]. This is what
+//!    covers a raw read that never touches `FlowRequest` — one taken to decide
+//!    something, where no type stands in the way.
+//! 3. **The call counts**: `scope_from_metadata` exactly once (a second answer
+//!    to "what scope is this run under", under a new name, naming no raw key),
+//!    `FlowScope::resolved` exactly once, `FlowScope::unscoped` never.
+//!
+//! The bound, stated so nobody has to infer it: a raw read OUTSIDE this module
+//! is not covered by 2 or 3, and `BusyInputMode::for_shared_room`
+//! (`execution_engine/mod.rs`) is one — it runs on the admission path, before
+//! `request_scope` can have run, and answers a different question with a
+//! different predicate. See its doc.
 
 #[cfg(test)]
 mod tests {
     use crate::utils::source_scan::{
-        cfg_test_portion, code_text, production_code_lines, production_prefix, rust_sources_under,
+        cfg_test_portion, code_keeping_literals, code_text, production_code_lines,
+        production_prefix, rust_sources_under,
     };
 
     /// The keys this module may not name. Spelled here as the identifiers a
     /// reader would type; `code_text` deletes string-literal payloads, so
     /// these two literals cannot match themselves when this file is scanned.
     const FORBIDDEN: [&str; 2] = ["OWNER_META_KEY", "SCOPE_META_KEY"];
+
+    /// The same two keys as the LITERAL a reader types instead of the
+    /// constant, quotes included.
+    ///
+    /// Derived from the constants rather than typed out, for two reasons. The
+    /// bare text `scope_id` is also the `FlowRequest` field name on the line
+    /// being protected, so an unquoted needle would fire on the fixed code;
+    /// and a literal typed here would be a second copy of a value this module
+    /// does not own, free to drift from `src/scope/mod.rs`.
+    ///
+    /// Quotes are part of the needle, which makes this an EXACT payload match:
+    /// a message that mentions the key in prose (`"scope_id missing"`) is not
+    /// a hit, and neither is an escaped inner quote. That is what lets the
+    /// search run over text that still HAS its literals without becoming a
+    /// guard that cries wolf.
+    fn forbidden_literals() -> [String; 2] {
+        [
+            format!("\"{}\"", crate::scope::OWNER_META_KEY),
+            format!("\"{}\"", crate::scope::SCOPE_META_KEY),
+        ]
+    }
 
     fn module_dir() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -107,17 +164,42 @@ mod tests {
     /// constants are DEFINED, so it is the one file that cannot stop
     /// containing them, and running it through the same two functions shows
     /// the search string survives them.
+    ///
+    /// Both views are proved, because the census now searches both and a
+    /// half-proof would leave the newer half exactly as vacuous as the hole it
+    /// closes. `pub const SCOPE_META_KEY: &str = "scope_id";` is one line
+    /// carrying the identifier AND the quoted value, so the same anchor line
+    /// serves both directions.
     #[test]
     fn the_census_pipeline_can_still_see_the_keys_it_looks_for() {
         let owner = include_str!("../../../scope/mod.rs");
-        let scanned = code_text(&production_code_lines(owner));
+        let production = production_code_lines(owner);
+        let by_identifier = code_text(&production);
         for key in FORBIDDEN {
             assert!(
-                scanned.contains(key),
+                by_identifier.contains(key),
                 "src/scope/mod.rs defines {key} in production code, but this census's \
                  own scanning pipeline cannot find it there. The negative assertion in \
                  `no_run_loop_file_reads_the_scope_metadata_keys` is therefore vacuous: \
                  it would pass on a module that had gone back to the raw reads."
+            );
+        }
+        let by_value = code_keeping_literals(&production);
+        for needle in forbidden_literals() {
+            assert!(
+                by_value.contains(&needle),
+                "src/scope/mod.rs assigns {needle} in production code, but the \
+                 literal-value half of this census cannot find it there. That half \
+                 exists because `code_text` deletes literal payloads and a raw read \
+                 spelled `get({needle})` was therefore invisible; if the value view \
+                 stops carrying values, the hole is open again and silent."
+            );
+            assert!(
+                !by_identifier.contains(&needle),
+                "premise of the two-view split: {needle} must NOT survive \
+                 `code_text` — if it did, the identifier view would already have \
+                 covered the literal spelling and the review that found this hole \
+                 could not have reproduced the defect."
             );
         }
     }
@@ -167,24 +249,128 @@ mod tests {
              under', and the one that skips the correction is the one that ships the \
              producer's `personal:<speaker>` stamp."
         );
+        // Same shape, on the other end of the projection. `FlowScope`'s
+        // private fields stop a pair of raw strings from reaching the field,
+        // but they do not stop a SECOND mint from a differently-resolved
+        // attribution, and `unscoped()` mints the empty pair outright — which
+        // drops the room just as completely, and reads as deliberate.
+        let mut mints = 0usize;
+        let mut empties = 0usize;
+        for (_, text) in production_files() {
+            let code = code_text(&production_prefix(&text));
+            mints += code.matches("FlowScope::resolved(").count();
+            empties += code.matches("FlowScope::unscoped(").count();
+        }
+        assert_eq!(
+            mints, 1,
+            "`FlowScope::resolved` must be minted exactly once in run_loop — inside \
+             `request_scope_strings`, from `request_scope`'s answer. A second mint is \
+             a second answer to the same question that names no raw key and would \
+             pass every other check here."
+        );
+        assert_eq!(
+            empties, 0,
+            "nothing in run_loop may hand the harness a deliberately empty \
+             `FlowScope`. `request_scope` is already fail-closed — `resolved(None)` \
+             is how an unstamped turn projects to the empty pair — so an explicit \
+             `unscoped()` here can only be a scope being thrown away."
+        );
     }
 
-    /// No production line in this module names either key.
+    /// The layer the other two checks lean on: `FlowScope` must stay
+    /// unassemblable by hand.
+    ///
+    /// This is the one guard here that is about a TYPE rather than about text
+    /// in this module, and it is the reason the census's own claim can now be
+    /// narrower than the invariant without leaving a hole at the `FlowRequest`
+    /// site. Make the two fields `pub` and every check above stays green while
+    /// `owner_user_id: request.metadata.get(…)` compiles again — the exact
+    /// build a review took end to end.
+    ///
+    /// A source-level check because there is nothing to observe at runtime: a
+    /// public field and a private one behave identically once something has
+    /// been built out of them. `#[derive(Default)]` is refused for the same
+    /// reason `unscoped` is counted below — it would be a second, unnamed way
+    /// to mint the empty pair.
+    #[test]
+    fn the_flow_request_scope_type_stays_unassemblable_by_hand() {
+        let scope_mod = production_code_lines(include_str!("../../../scope/mod.rs"));
+        let (before, after) = scope_mod.split_once("struct FlowScope {").expect(
+            "`src/scope/mod.rs` must still declare `struct FlowScope` — it is what \
+             makes the raw-read spelling a compile error at the `FlowRequest` site",
+        );
+        let body = after
+            .split_once('}')
+            .expect("`struct FlowScope` must have a closing brace")
+            .0;
+        assert!(
+            body.contains("owner_user_id") && body.contains("scope_id"),
+            "premise: this is the struct carrying the two strings, got:\n{body}"
+        );
+        assert!(
+            !body.contains("pub"),
+            "`FlowScope`'s fields must stay private. Public fields put the raw \
+             `(Option<String>, Option<String>)` pair back within reach of the \
+             `FlowRequest` construction site, and NOTHING else in this module \
+             would notice — the census below only reads `run_loop`, and a raw \
+             read written there names no key at all. Got:\n{body}"
+        );
+        let derives = before
+            .rsplit_once("#[derive(")
+            .and_then(|(_, tail)| tail.split_once(")]"))
+            .map(|(list, _)| list)
+            .unwrap_or_default();
+        assert!(
+            derives.contains("Clone"),
+            "premise: the text just before the declaration is `FlowScope`'s own \
+             derive list, and `dispatch` needs it `Clone`. Got: {derives:?}"
+        );
+        assert!(
+            !derives.contains("Default"),
+            "`FlowScope` must not derive `Default`: `Default::default()` cannot be \
+             found by any text search, so it would be a mint of the empty pair that \
+             `FlowScope::unscoped` is counted precisely to keep out of `run_loop`. \
+             Got: {derives:?}"
+        );
+    }
+
+    /// No production line in this module names either key — by CONSTANT or by
+    /// VALUE.
+    ///
+    /// Two views of every file, because one view cannot answer both. Which
+    /// half a given offender trips is printed with it, so the red says which
+    /// spelling was used rather than leaving the reader to guess.
     #[test]
     fn no_run_loop_file_reads_the_scope_metadata_keys() {
         let mut scanned = 0usize;
         let mut offenders: Vec<String> = Vec::new();
+        let literals = forbidden_literals();
         for (rel, text) in production_files() {
             scanned += 1;
-            // Two stages, both required. `production_code_lines` blanks the
-            // `#[cfg(test)]` items and the comment lines while PRESERVING
+            // `production_code_lines` is common to both views: it blanks the
+            // `#[cfg(test)]` items and the comment-only lines while PRESERVING
             // line numbers, so an offender can be opened at the number this
-            // prints; `code_text` then removes string-literal payloads, so a
-            // guard message or a test fixture quoting a key is not a hit.
-            for (i, line) in code_text(&production_code_lines(&text)).lines().enumerate() {
+            // prints.
+            let production = production_code_lines(&text);
+            // View 1 — identifiers. `code_text` then removes string-literal
+            // payloads, so a guard message or a fixture quoting a key is not a
+            // hit. That is also why this view cannot see view 2's needles.
+            for (i, line) in code_text(&production).lines().enumerate() {
                 for key in FORBIDDEN {
                     if line.contains(key) {
-                        offenders.push(format!("{rel}:{}: {}", i + 1, line.trim()));
+                        offenders.push(format!("{rel}:{}: [constant] {}", i + 1, line.trim()));
+                    }
+                }
+            }
+            // View 2 — the values. `code_keeping_literals` keeps payloads and
+            // drops ALL comment text (including a comment trailing live code,
+            // which `production_code_lines` alone leaves standing), so prose
+            // cannot trip this and `get("scope_id")` cannot hide from it. The
+            // needles carry their quotes, so only an exact payload matches.
+            for (i, line) in code_keeping_literals(&production).lines().enumerate() {
+                for needle in &literals {
+                    if line.contains(needle.as_str()) {
+                        offenders.push(format!("{rel}:{}: [literal] {}", i + 1, line.trim()));
                     }
                 }
             }
@@ -195,7 +381,9 @@ mod tests {
              `request_scope`, never through the raw metadata keys — only \
              `request_scope` applies the room upgrade a bound channel \
              conversation earned, and a raw read silently ships the producer's \
-             own `personal:<speaker>` stamp past this point. Offenders:\n{}",
+             own `personal:<speaker>` stamp past this point. `[constant]` names \
+             the key by its identifier, `[literal]` by its value; both are the \
+             same read and the second one is the one that shipped. Offenders:\n{}",
             offenders.join("\n")
         );
         // A measured floor beside the walk. `rust_sources_under` drops files

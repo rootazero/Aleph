@@ -428,9 +428,9 @@ pub struct FlowRequest {
     /// Callers inside `process_request`'s task tree may inherit the ambient
     /// `crate::scope::current_scope()`; callers with no live task-local
     /// (cron, hook-less wakes) must pass it explicitly.
-    /// [`Default`](crate::scope::FlowScope::default) = unscoped (legacy owner
-    /// semantics) — see `Orchestrator::dispatch`, which re-derives a
-    /// `ScopeAttribution` from the pair via
+    /// [`FlowScope::unscoped`](crate::scope::FlowScope::unscoped) = unscoped
+    /// (legacy owner semantics) — see `Orchestrator::dispatch`, which
+    /// re-derives a `ScopeAttribution` from the pair via
     /// `crate::scope::scope_from_metadata` and re-seeds it inside the spawn.
     pub scope: crate::scope::FlowScope,
     pub parent_session: Option<String>,

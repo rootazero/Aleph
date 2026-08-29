@@ -326,15 +326,28 @@ pub fn stamp_metadata(meta: &mut HashMap<String, String>, attr: &ScopeAttributio
 /// `flow_scope_census`'s `scope_from_metadata` call count owns, which is why
 /// the two layers are kept side by side rather than one replacing the other.
 ///
-/// [`Default`] is the unscoped pair (`None`, `None`) — legacy owner semantics,
-/// what every non-gateway dispatcher and every test fixture passes.
-#[derive(Clone, Debug, Default)]
+/// [`FlowScope::unscoped`] is the empty pair (`None`, `None`) — legacy owner
+/// semantics, what every non-gateway dispatcher and every test fixture passes.
+/// Deliberately a named constructor and NOT a `Default` derive: two spellings
+/// of the same value would be two things the census has to know about, and the
+/// census is what pins `unscoped` to zero uses inside `run_loop` — handing the
+/// harness a deliberately empty pair there is the other way to drop the room.
+#[derive(Clone, Debug)]
 pub struct FlowScope {
     owner_user_id: Option<String>,
     scope_id: Option<String>,
 }
 
 impl FlowScope {
+    /// The unscoped pair: no owner, no scope, legacy owner semantics.
+    #[must_use]
+    pub fn unscoped() -> Self {
+        Self {
+            owner_user_id: None,
+            scope_id: None,
+        }
+    }
+
     /// Project an already-resolved attribution into the pair `FlowRequest`
     /// carries.
     ///
