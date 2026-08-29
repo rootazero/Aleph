@@ -429,7 +429,7 @@ bug，不是网关的 bug（记录在此，供 Task 1+ 的 Panel 端 WS 客户�
 + 用 `(?<!echo )ALEPH_PROBE_OK\r?\n` 排除掉键入回显那一次"之后，转录清晰、
 可人工验证。
 
-### 四问逐一回答（均为**直接观察**，非推断）
+### 四问逐一回答（均为直接观察或有明确标注的推断）
 
 **1. `pty.spawn` 返回 session_id 了吗？**
 
@@ -469,18 +469,26 @@ cwd）也确认了这个 shell 的工作目录正是探针起的 scratch home，
 
 **3. `attach_event_bus` 真被调到了吗？**
 
-是——静态确认 + 动态确认双重印证。静态：`src/gateway/server/mod.rs:753` 在
-`build_router()` 里无条件调用
+是——静态确认（直接观察）+ 动态确认（推断）双重印证。静态：
+`src/gateway/server/mod.rs:753` 在 `build_router()` 里无条件调用
 `crate::gateway::pty::attach_event_bus(self.event_bus.clone())`，没有
-feature flag 或配置开关包裹。动态：如果这条线没接上，`events.subscribe`
-成功之后 `pty.output` 事件就不会经这个 event bus 广播到订阅连接——而探针
-确实收到了帧（见问题 2），所以这条线在运行时真的通了，不只是"代码里写了
-调用"。
+feature flag 或配置开关包裹——这是读源码得到的直接事实。动态那半是
+**推断而非仪表化观察**：没有在 `attach_event_bus` 内部打点验证它真的执行
+到了；论证是"如果这条线没接上，`events.subscribe` 成功之后 `pty.output`
+事件就不会经这个 event bus 广播到订阅连接——而探针确实收到了帧（见问题
+2），所以这条线在运行时大概率是通的"——这是从结果反推原因（inference from
+consequence），不是断点/日志级别的直接证据。
 
 **4. loopback 连接过得了 `"pty."` 的 admin 闸吗？**
 
 是。`connect` 响应里 `role` 直接是 `"operator"`（loopback 免 token 自动
-operator，符合 `src/gateway/CLAUDE.md` 记录的信任模型），随后
+operator，符合 `src/gateway/CLAUDE.md` 记录的信任模型），原始响应：
+
+```
+connect -> {'jsonrpc': '2.0', 'result': {'authorized': True, 'keepalive': {'idle_timeout_secs': 90, 'ping_interval_secs': 30}, 'needs_token': False, 'role': 'operator', 'state_version': {'config': 0, 'health': 0, 'presence': 0}}, 'id': 1}
+```
+
+随后
 `pty.spawn`/`pty.input`/`pty.close` 三次调用全部返回 `result`（无
 `INVALID_PARAMS`/权限错误），`events.subscribe{topics:["pty.*"]}` 也成功
 订阅并收到了 `pty.` 前缀的事件——两个面（`method_admin::ADMIN_PREFIXES` 的
@@ -492,7 +500,14 @@ operator 身份下都放行了，与 `src/gateway/handlers/pty.rs` 模块 doc �
 
 ### 探针产物（未入库）
 
+⚠️ 以下路径落在本次执行环境的会话临时目录（`/private/tmp/claude-502/...`）下，
+**不是仓库路径，不持久**——会话结束后大概率被清理，不能当作可长期回溯的证据
+链接，只作为本次运行留下的记录：
+
 - `/private/tmp/claude-502/-Volumes-TBU4-Workspace-Aleph/74e2ecf9-7762-4147-9495-822b693479f1/scratchpad/pty_probe.py`
 - `/private/tmp/claude-502/-Volumes-TBU4-Workspace-Aleph/74e2ecf9-7762-4147-9495-822b693479f1/scratchpad/pty_probe_run.sh`
 - 服务端与探针完整日志：同目录 `pty-probe-qa/`（scratch `ALEPH_HOME`，含
   `server.log`）与 `final_run.log`
+
+本节（§12 正文）里逐字粘贴的原始响应与解码字节才是持久证据；上面的路径仅供
+"如果这次会话还活着，想看更多上下文"时参考。
