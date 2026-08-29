@@ -138,6 +138,7 @@ impl Grid {
             self.cursor_col = 0;
         }
         let (fg, bg, attrs) = style;
+        self.repair_straddled_glyph(w, fg, bg, attrs);
         let i = self.idx(self.cursor_row, self.cursor_col);
         self.cells[i] = Cell { ch: c, fg, bg, attrs };
         if w == 2 {
@@ -145,6 +146,33 @@ impl Grid {
             self.cells[j] = Cell { ch: Cell::SPACER, fg, bg, attrs };
         }
         self.cursor_col += w;
+    }
+
+    /// A write at the cursor can straddle an existing wide glyph on either
+    /// side: land on a spacer whose owner sits one cell to the left, or
+    /// overwrite an owner whose spacer sits just past the write. Left
+    /// unrepaired, either case orphans a spacer cell — one with no owning
+    /// wide glyph immediately to its left. [`Self::row_text`] filters
+    /// spacers and would hide the corruption; [`Self::row_cells`], which is
+    /// what the wire sends, would not.
+    fn repair_straddled_glyph(&mut self, w: u16, fg: Color, bg: Color, attrs: Attrs) {
+        let blank = Cell { ch: ' ', fg, bg, attrs };
+
+        if self.cursor_col > 0 {
+            let here = self.idx(self.cursor_row, self.cursor_col);
+            if self.cells[here].is_spacer() {
+                let owner = self.idx(self.cursor_row, self.cursor_col - 1);
+                self.cells[owner] = blank;
+            }
+        }
+
+        let after = self.cursor_col + w;
+        if after < self.cols {
+            let after_idx = self.idx(self.cursor_row, after);
+            if self.cells[after_idx].is_spacer() {
+                self.cells[after_idx] = blank;
+            }
+        }
     }
 
     /// Move to the next row, scrolling the top row into scrollback when the
@@ -163,7 +191,7 @@ impl Grid {
 
     fn scroll_up(&mut self) {
         let first: Vec<Cell> = self.row_cells(0).to_vec();
-        if self.scrollback.len() == self.scrollback_limit {
+        if self.scrollback.len() >= self.scrollback_limit {
             self.scrollback.pop_front();
         }
         self.scrollback.push_back(first);
@@ -212,5 +240,76 @@ mod tests {
         assert_eq!(g.row_text(0), "abc");
         assert_eq!(g.row_text(1), "d");
         assert_eq!(g.cursor(), (1, 1));
+    }
+
+    /// A wide glyph's owner and spacer are a pair; overwriting one without
+    /// the other orphans the survivor. This is the concrete repro from
+    /// review: print a wide glyph, return to column 0 without a newline (a
+    /// bare CR — what a progress bar or spinner does), then print a narrow
+    /// char there. That narrow write overwrites only the owner, so the old
+    /// spacer at column 1 must be repaired rather than left dangling.
+    /// Asserted through `row_cells`, not `row_text` — `row_text` filters
+    /// spacers and would pass against the unrepaired bug, which is why the
+    /// bug survived the original three tests.
+    #[test]
+    fn put_repairs_a_dangling_spacer_left_by_overwriting_its_owner() {
+        let mut g = Grid::new(2, 10);
+        g.put('中', PLAIN);
+        g.carriage_return();
+        g.put('a', PLAIN);
+
+        let cells = g.row_cells(0);
+        assert_eq!(cells[0].ch, 'a');
+        assert!(!cells[1].is_spacer(), "column 1 must not be left as a dangling spacer");
+    }
+
+    /// The mirror direction: the write lands directly on an existing
+    /// spacer, whose owner sits one cell to the left and must not survive
+    /// without it. Only reachable today by placing the cursor directly
+    /// (a future cursor-repositioning method, e.g. Task 4's `goto`, would
+    /// do this through the public API) — simulated here via the private
+    /// field, the same precondition that method's tests will exercise.
+    #[test]
+    fn put_repairs_a_dangling_owner_when_the_cursor_lands_on_its_spacer() {
+        let mut g = Grid::new(2, 10);
+        g.put('中', PLAIN); // columns 0-1
+        g.put('中', PLAIN); // columns 2-3
+        g.cursor_col = 3; // the second glyph's spacer; its owner is column 2
+        g.put('x', PLAIN);
+
+        let cells = g.row_cells(0);
+        assert_eq!(cells[0].ch, '中', "the first glyph is untouched");
+        assert!(cells[1].is_spacer(), "the first glyph keeps its own spacer");
+        assert_eq!(cells[2].ch, ' ', "the orphaned owner must be blanked, not left wide with no spacer");
+        assert_eq!(cells[3].ch, 'x');
+    }
+
+    /// `scroll_up` — ring eviction, `rotate_left`, and clearing the new
+    /// last row — is the only nontrivial method in this file, and none of
+    /// the tests above ever fill the last row, so it never runs. Fill past
+    /// the bottom and check both what's still visible and what landed in
+    /// scrollback.
+    #[test]
+    fn scrolling_past_the_last_row_evicts_the_top_row_into_scrollback() {
+        let mut g = Grid::new(2, 5);
+        for c in "row0!".chars() {
+            g.put(c, PLAIN);
+        }
+        g.newline();
+        g.carriage_return();
+        for c in "row1!".chars() {
+            g.put(c, PLAIN);
+        }
+        g.newline(); // cursor is already on the last row: this scrolls
+        g.carriage_return();
+        for c in "row2!".chars() {
+            g.put(c, PLAIN);
+        }
+
+        assert_eq!(g.row_text(0), "row1!", "row0 scrolled off the top, row1 moved up");
+        assert_eq!(g.row_text(1), "row2!");
+        assert_eq!(g.scrollback.len(), 1, "exactly one row was evicted");
+        let evicted: String = g.scrollback[0].iter().map(|c| c.ch).collect();
+        assert_eq!(evicted, "row0!", "the evicted row is what fell off the top");
     }
 }
