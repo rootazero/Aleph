@@ -3714,7 +3714,11 @@ pub fn paint(ctx: &CanvasRenderingContext2d, screen: &ClientScreen, m: CellMetri
 **要求**：
 1. `run_w` 与**背景矩形宽度**都用 `unicode_width::UnicodeWidthStr::width(run.text.as_str())`
    （两者共用 `run_w`，所以改一处即可——但要确认背景块也跟着对）。
-2. `interfaces/webchat/Cargo.toml` 加 `unicode-width = "0.2"`。**这不违反「不引入新第三方依赖」**：
+2. `interfaces/webchat/Cargo.toml` 加 `unicode-width = "0.2"`。⚠️ **版本号必须是 `"0.2"`**——
+   Cargo.lock 里**同时有 0.1.14 和 0.2.0 两份**（前者是某个三方包的传递依赖，根 `Cargo.toml`
+   第 245 行的注释已经在警告这件事并给出核验命令 `cargo tree -p alephcore -i unicode-width`）。
+   写 `"0.2"` 解析到**已经在的那一份**；写 `"0.1"` 会把 panel 钉到另一份上，那才是真的多一份拷贝。
+   **这不违反「不引入新第三方依赖」**：
    该 crate 已在 Cargo.lock 里、同一版本、同一份拷贝（根 `Cargo.toml` 的 `[dependencies]` 已有它，
    但**不是** `[workspace.dependencies]`，而 panel 的 Cargo.toml 也不用 `workspace = true` 写法，
    所以这里要直接写版本号）。它是纯查表 crate，wasm32 可用。
