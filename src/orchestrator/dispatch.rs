@@ -197,6 +197,25 @@ pub enum TerminateReason {
     ReactiveCompactExhausted,
     /// `CancellationToken` fired before the loop reached `Done`.
     Cancelled,
+    /// The run ended in a `HarnessError` and no site inside the loop had
+    /// recorded a cause of its own — a provider auth failure, a transport
+    /// error, a guardrail abort. Distinct from [`Completed`](Self::Completed),
+    /// which is this enum's `Default` and therefore what an unrecorded failure
+    /// reported on every terminal frame before this variant existed.
+    ///
+    /// Written by the orchestrator bridge (`AgentHarnessRunner::run`), not by
+    /// the loop. The loop's own `Err` arm deliberately writes nothing but
+    /// `Cancelled`, so that the causes it *did* record (`ReactiveCompactExhausted`,
+    /// `StopHookHalt`, the caps) survive the exit; the bridge fills this in
+    /// only when the reason is still the default, which is unambiguous because
+    /// nothing in the crate ever assigns `Completed` (pinned by
+    /// `harness_bridge::tests::no_site_records_a_completed_terminate_reason`).
+    ///
+    /// **Not a cap**: [`is_hit_limit`](Self::is_hit_limit) is `false`, next to
+    /// `Completed` and `Cancelled`. The failure text itself reaches the user on
+    /// the separate `RunError` frame — this variant exists only to stop the
+    /// terminal summary from claiming the run finished cleanly.
+    Failed,
     /// A budget cap (`HitMaxIterations` / `ContextBudgetExhausted` /
     /// `MaxOutputTokensExhausted`) fired AFTER the model already emitted
     /// useful partial text in this run. The harness preserves the
@@ -219,11 +238,17 @@ pub enum TerminateReason {
 
 impl TerminateReason {
     /// `true` for every cap-style exit. Equivalent to the legacy
-    /// `hit_limit: bool`; `Completed` and `Cancelled` return `false`. Use
-    /// to populate [`FlowOutcome::hit_limit`] so the two fields never drift.
+    /// `hit_limit: bool`; `Completed`, `Cancelled` and `Failed` return
+    /// `false`. Use to populate [`FlowOutcome::hit_limit`] so the two fields
+    /// never drift.
+    ///
+    /// `Failed` sits with the other two on purpose: a run that died on a
+    /// provider error did not *reach* a limit, and the surfaces that gate on
+    /// this flag say "you ran out of budget, raise it" — advice that is simply
+    /// wrong for a crash.
     #[must_use]
     pub const fn is_hit_limit(&self) -> bool {
-        !matches!(self, Self::Completed | Self::Cancelled)
+        !matches!(self, Self::Completed | Self::Cancelled | Self::Failed)
     }
 
     /// Short stable string for logging / metrics — never localized.
@@ -243,6 +268,7 @@ impl TerminateReason {
             Self::DiminishingReturns => "diminishing_returns",
             Self::ReactiveCompactExhausted => "reactive_compact_exhausted",
             Self::Cancelled => "cancelled",
+            Self::Failed => "failed",
             Self::BudgetExhaustedPartialResult { .. } => "budget_exhausted_partial_result",
         }
     }
@@ -1191,6 +1217,84 @@ mod outcome_tests {
              the channel button-callback gate (only the human who asked may \
              press the button) and the room narrowing in \
              `approval_addressable_by_caller`."
+        );
+    }
+
+    /// Every terminate token this enum can produce has words on the terminal
+    /// surfaces — and the shared table has no row for a token that cannot.
+    ///
+    /// The set is **derived from `as_static_str`'s own arms**, not restated
+    /// here. That matters more than it looks: `as_static_str` is an exhaustive
+    /// `match`, so a sixteenth variant cannot be added without adding a line
+    /// there, which means the scan below cannot miss one. A hand-written list
+    /// in this test could — and the class it would miss is precisely the one
+    /// that already happened: `diminishing_returns` had a label on **zero** of
+    /// the five surfaces that render this field, and nothing said so.
+    ///
+    /// The equality runs in both directions on purpose. Left-only is a token
+    /// that renders on screen as a raw wire string (`hit_max_iterations` at a
+    /// person, which `aleph watch` really did print). Right-only is words for a
+    /// token that no longer exists — dead weight that also has to be carried
+    /// through `interfaces/webchat`'s locale files, since the panel's guard
+    /// walks the same table.
+    ///
+    /// Not in scope, said plainly: this checks that a token is *labelled*, not
+    /// that any particular surface renders it. `gateway::i18n::render_loop_halt`
+    /// (full prose with advice, server-side locale) and
+    /// `reply_emitter::cap_notice_for` (the channel one-liner) both keep private
+    /// tables and are not measured here.
+    #[test]
+    fn every_terminate_token_has_words_on_the_terminal_surfaces() {
+        let src = include_str!("dispatch.rs").replace('\r', "");
+        let src = crate::utils::source_scan::production_prefix(&src);
+        let at = src
+            .find("pub const fn as_static_str")
+            .expect("as_static_str is the fact this guard derives from");
+
+        // The window ends at the function's own closing brace, not after N
+        // lines: a fixed window is a boundary someone else's edit can move,
+        // and the failure is silent in the direction that under-scans.
+        let body = {
+            let mut depth = 0usize;
+            let mut end = None;
+            for (i, c) in src[at..].char_indices() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(i);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            &src[at..at + end.expect("as_static_str's body never closes")]
+        };
+
+        let mut produced: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for (i, _) in body.match_indices("=> \"") {
+            let rest = &body[i + 4..];
+            let end = rest.find('"').expect("an unterminated token literal");
+            produced.insert(&rest[..end]);
+        }
+        assert!(
+            produced.len() >= 10 && produced.contains("completed"),
+            "the scan found {} tokens, which means it stopped matching the \
+             shape of `as_static_str` rather than that the enum shrank",
+            produced.len(),
+        );
+
+        let labelled: std::collections::BTreeSet<&str> =
+            aleph_protocol::terminate::labelled_tokens().collect();
+        assert_eq!(
+            produced, labelled,
+            "left = tokens `TerminateReason::as_static_str` can produce, \
+             right = tokens `aleph_protocol::terminate` has words for. A \
+             left-only token renders on screen as its raw wire string; a \
+             right-only one is dead words in this crate AND in \
+             interfaces/webchat/locales/{{en,zh}}.json.",
         );
     }
 

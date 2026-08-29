@@ -5,7 +5,7 @@
 // and two copies of a delivery predicate is two answers — the wrong one
 // renders a user their own message twice.
 use super::state::{
-    ChatState, ContextUsage, ModelInfo, ProviderRetryNotice, RunCost, ToolSettlement,
+    ChatState, ContextUsage, ModelInfo, ProviderRetryNotice, RunCost, RunHalt, ToolSettlement,
 };
 use crate::context::{DashboardState, GatewayEvent};
 use crate::i18n::{td_string, I18nCtx, Locale};
@@ -551,6 +551,31 @@ fn apply_run_cost(chat: ChatState, run_id: &str, summary: &serde_json::Value) {
             cache_creation_tokens: field("cache_creation"),
         },
     );
+}
+
+/// Project `run_complete`'s `summary.terminate_reason` into the panel's halt
+/// shape. Pure, so the wire-shape contract is host-testable.
+///
+/// `None` for three distinct inputs that all mean "say nothing": a clean
+/// `"completed"`, a core old enough not to send the field, and — the one worth
+/// naming — a run that failed *before* the loop started, whose synthesized
+/// summary clears the field on purpose rather than let
+/// `FlowOutcome::default()` claim it completed (see
+/// `execution_engine::helpers::pre_outcome_summary`). Rendering "unknown" for
+/// that last one would be the panel inventing an answer core declined to give.
+fn parse_run_halt(summary: &serde_json::Value) -> Option<RunHalt> {
+    let reason = summary.get("terminate_reason")?.as_str()?;
+    if reason.is_empty() || reason == "completed" {
+        return None;
+    }
+    Some(RunHalt {
+        reason: reason.to_string(),
+        detail: summary
+            .get("terminate_detail")
+            .and_then(|v| v.as_str())
+            .filter(|d| !d.is_empty())
+            .map(String::from),
+    })
 }
 
 /// Read `run_complete`'s authoritative `summary.plan`. `None` for a core that
@@ -1121,6 +1146,12 @@ pub fn subscribe_run_events(
                 // run-cumulative `total_tokens` rides along for the tooltip.
                 if let Some(summary) = data.get("summary") {
                     apply_context_gauge(chat, summary);
+                    // Why the run stopped, when it did not stop cleanly. The
+                    // other four surfaces have rendered this since the field
+                    // existed; the panel read neither it nor `hit_limit`, so a
+                    // run that hit the iteration cap — or died on a provider
+                    // error — looked exactly like a clean finish here.
+                    chat.set_run_halt(run_id, parse_run_halt(summary));
                     // Cost + token split for the bubble's meta line, and the
                     // right pane's `RunMetaInspector` breakdown behind it.
                     apply_run_cost(chat, run_id, summary);
@@ -1700,6 +1731,97 @@ mod projection_tests {
         // No summary / wrong shape degrades to empty rather than panicking.
         assert!(parse_tool_settlements(&json!({})).is_empty());
         assert!(parse_tool_settlements(&json!({ "tool_summaries": 3 })).is_empty());
+    }
+
+    /// The whole point of the field: a run that stopped for a reason gets one.
+    ///
+    /// The panel read neither `terminate_reason` nor `terminate_detail` for as
+    /// long as they have been on the wire, so an iteration-capped run — or one
+    /// that died on a provider error — rendered here identically to a clean
+    /// finish, while the TUI, `aleph exec`, `aleph watch` and every chat
+    /// channel all said so plainly.
+    #[test]
+    fn a_run_that_stopped_for_a_reason_carries_one() {
+        let halt = parse_run_halt(&json!({ "terminate_reason": "hit_max_iterations" }))
+            .expect("a cap is worth saying out loud");
+        assert_eq!(halt.reason, "hit_max_iterations");
+        assert_eq!(halt.label(Locale::en), "hit max iterations");
+
+        let failed = parse_run_halt(&json!({ "terminate_reason": "failed" }))
+            .expect("a crashed run is not a clean one");
+        assert_eq!(failed.label(Locale::en), "failed");
+        assert_eq!(failed.label(Locale::zh), "\u{8fd0}\u{884c}\u{5931}\u{8d25}");
+    }
+
+    /// Three inputs, one meaning: say nothing.
+    ///
+    /// The third is the one worth naming — `pre_outcome_summary` clears the
+    /// field on purpose for a run that died before producing any outcome,
+    /// precisely so no surface claims it completed. A panel that rendered
+    /// "unknown" there would be inventing an answer core declined to give.
+    #[test]
+    fn a_clean_or_uncharacterised_run_carries_no_halt() {
+        assert!(parse_run_halt(&json!({ "terminate_reason": "completed" })).is_none());
+        assert!(parse_run_halt(&json!({})).is_none());
+        assert!(parse_run_halt(&json!({ "terminate_reason": "" })).is_none());
+        assert!(parse_run_halt(&json!({ "terminate_reason": 7 })).is_none());
+    }
+
+    /// `terminate_detail` is the granular cap under the
+    /// `budget_exhausted_partial_result` umbrella. Same precedence the TUI
+    /// applies — the umbrella alone tells the user nothing actionable.
+    #[test]
+    fn the_granular_cap_outranks_the_umbrella() {
+        let halt = parse_run_halt(&json!({
+            "terminate_reason": "budget_exhausted_partial_result",
+            "terminate_detail": "max_output_tokens_exhausted",
+        }))
+        .expect("an umbrella is still a halt");
+        assert_eq!(halt.label(Locale::en), "max output tokens reached");
+
+        // An empty detail is not a detail.
+        let bare = parse_run_halt(&json!({
+            "terminate_reason": "budget_exhausted_partial_result",
+            "terminate_detail": "",
+        }))
+        .expect("halt");
+        assert_eq!(bare.label(Locale::en), "budget exhausted (partial result)");
+    }
+
+    /// A core newer than this panel must still be able to say something true.
+    /// `TerminateReason` is `#[non_exhaustive]` and has grown three variants
+    /// since it shipped; a label map that swallowed what it did not recognise
+    /// would turn every future one back into silence.
+    #[test]
+    fn an_unrecognised_reason_is_shown_verbatim() {
+        let halt = parse_run_halt(&json!({ "terminate_reason": "quota_exceeded_v9" }))
+            .expect("unknown is still not clean");
+        assert_eq!(
+            halt.label(Locale::en),
+            "quota_exceeded_v9",
+            "an unknown token is the server's own string — untranslatable by construction"
+        );
+        assert_eq!(halt.label(Locale::zh), "quota_exceeded_v9");
+    }
+
+    /// A projector nobody calls is the same gap with more code in it.
+    ///
+    /// Source-level because the dispatcher needs a live `DashboardState` +
+    /// `SessionMap` + reactive owner to run; the sibling projectors
+    /// (`parse_tool_settlements`, `parse_summary_plan`) have the same untested
+    /// seam. Comments are stripped first — this paragraph names the call.
+    #[test]
+    fn the_run_complete_arm_actually_projects_the_halt() {
+        let code: String = crate::i18n_census::production_lines(include_str!("events.rs"))
+            .into_iter()
+            .map(|(_, l)| l)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            code.contains("chat.set_run_halt(run_id, parse_run_halt(summary));"),
+            "the `run_complete` arm no longer projects the halt reason; \
+             `parse_run_halt` would be a pure function with no caller"
+        );
     }
 
     /// The headline repair: the tool's `tool_call_completed` mirror frame was

@@ -35,6 +35,14 @@ p.add_argument("path")
 p.add_argument("--gateway-port", required=True)
 p.add_argument("--mock-port", required=True)
 p.add_argument("--max-pending-steering", default="1")
+# Optional because only `qa/run_halt/run.sh cap` needs it. It goes through
+# `set_key` rather than being appended by the caller for the reason
+# `add_overrides.py`'s doc records about `[policies.tool_permissions.overrides]`:
+# a generated config ALREADY has an `[execution]` table, so a second header of
+# the same name is `duplicate key 'execution'` and the server refuses to boot —
+# after printing a banner with the DEFAULT port, so it reads like the scenario
+# started on the wrong port rather than like a config error.
+p.add_argument("--max-iterations", default=None)
 p.add_argument("--wake-fallback-secs", default="600")
 p.add_argument(
     "--channel-busy-mode",
@@ -88,7 +96,11 @@ def set_key(text, section, key, value):
     return text
 
 
-for section, key, value in [
+extra = (
+    [("execution", "max_iterations", args.max_iterations)] if args.max_iterations else []
+)
+
+for section, key, value in extra + [
     ("gateway", "host", '"127.0.0.1"'),
     ("gateway", "port", args.gateway_port),
     ("execution", "max_pending_steering", args.max_pending_steering),

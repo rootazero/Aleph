@@ -941,17 +941,44 @@ impl HarnessRunner for AgentHarnessRunner {
             tracing::warn!(error = %e, "failed to emit RunFinished marker");
         }
 
-        run_result.map_err(|e| match e {
-            crate::harness::trait_def::HarnessError::Cancelled => FlowError::Cancelled,
-            other => error::classify_harness_error(other, &provider_name),
-        })?;
-
         // Step 7: read final AssistantMessage text + count assistant turns.
-        let records = self
+        //
+        // Deliberately ABOVE the error return: everything from here down to
+        // `cb.on_complete_with_outcome` is this run's terminal settle, and a
+        // finished run owes that settle on BOTH arms. It used to sit below a
+        // `run_result.map_err(..)?`, so a run that failed *after* doing work
+        // never built a `FlowOutcome` at all — the gateway's failure arm
+        // synthesized `FlowOutcome::default()` instead
+        // (`execution_engine::helpers::emit_error_run_complete`), and the
+        // terminal `RunComplete` frame every client renders reported
+        // `terminate_reason: "completed"` with 0 tokens, 0 loops, no cost and
+        // no tool timeline for a run that had spent all four. The concrete
+        // casualty was `TerminateReason::ReactiveCompactExhausted`: both of
+        // its producers (`context::compact::rescue`) set the reason and
+        // immediately return `Err`, so the variant — and the localized "trim
+        // the history / start a new session" advice `i18n::render_loop_halt`
+        // carries for it — was structurally unreachable on every surface.
+        //
+        // On the failure arm a session-read error must NOT replace the run's
+        // own error (that would swap the real cause for "session read: .."),
+        // so the scan there falls back to an empty log: the harness-sourced
+        // fields still land and the log-sourced ones stay zero.
+        let records = match self
             .session_service
             .get_events(&session_id, None, None)
             .await
-            .map_err(|e| FlowError::Internal(format!("session read: {e}")))?;
+        {
+            Ok(records) => records,
+            Err(e) if run_result.is_err() => {
+                tracing::warn!(
+                    error = %e,
+                    "session read failed while settling a failed run; \
+                     reporting harness-sourced accounting only"
+                );
+                Vec::new()
+            }
+            Err(e) => return Err(FlowError::Internal(format!("session read: {e}"))),
+        };
 
         // Scope the per-run counters to THIS run: only count events emitted
         // after this run's own `RunStarted` marker. A reused session
@@ -1019,14 +1046,21 @@ impl HarnessRunner for AgentHarnessRunner {
         // IS the run-scoped assistant count — known only once the log has been
         // read, a read this path already performs, and only on the `Ok` branch
         // where the receipt can apply at all.
-        callback::record_input_block(
-            self.session_service.as_ref(),
-            &session_id,
-            &records,
-            cb.blocked_reason(),
-            iterations,
-        )
-        .await;
+        //
+        // That `Ok` restriction used to be implicit — the error `?` sat above
+        // this line. Now that the settle spans both arms it is an explicit
+        // condition. An input screen ends the run `Ok` by construction, so a
+        // failed run has no receipt to leave.
+        if run_result.is_ok() {
+            callback::record_input_block(
+                self.session_service.as_ref(),
+                &session_id,
+                &records,
+                cb.blocked_reason(),
+                iterations,
+            )
+            .await;
+        }
 
         // `total_tokens` and `hit_limit` are read straight off the harness
         // after the run: the harness retains the cumulative token counter
@@ -1049,7 +1083,27 @@ impl HarnessRunner for AgentHarnessRunner {
         // up where the run left off. Runs that capped without any
         // partial text keep the bare variant and observe no behaviour
         // change — see `escalate_partial_result` docs.
-        let raw_terminate_reason = harness.terminate_reason();
+        //
+        // A run that ended in `Err` without recording a cause of its own has
+        // no reason to report, and `Completed` is the *default* rather than
+        // the absence of one — so every failed run used to hand four live
+        // renderers the word "completed". Name it here rather than in the
+        // loop's `Err` arm: the fix belongs beside `escalate_partial_result`
+        // (the other post-hoc adjustment that needs both the loop's signal and
+        // the orchestrator's) and it keeps `src/harness/` at zero added lines.
+        //
+        // Conditional on purpose. An unconditional write here would be exactly
+        // the overwrite §3.1 round 9 removed: `ReactiveCompactExhausted`,
+        // `StopHookHalt` and the caps are all set at a site inside the loop and
+        // then returned as `Err`, and they must survive. `Completed` is a safe
+        // discriminator because no site anywhere in the crate assigns it —
+        // pinned by `tests::no_site_records_a_completed_terminate_reason`.
+        let raw_terminate_reason = match harness.terminate_reason() {
+            crate::orchestrator::dispatch::TerminateReason::Completed if run_result.is_err() => {
+                crate::orchestrator::dispatch::TerminateReason::Failed
+            }
+            recorded => recorded,
+        };
         let terminate_reason = crate::orchestrator::dispatch::escalate_partial_result(
             raw_terminate_reason,
             if final_text.is_empty() {
@@ -1108,11 +1162,27 @@ impl HarnessRunner for AgentHarnessRunner {
         // (see streaming.rs:run_complete_handled), but emitting twice is a
         // foot-gun — channels that don't de-dupe (telemetry, JSON dump)
         // would see the same outcome twice.
+        //
+        // Fired on BOTH arms, and above the error return on purpose: this is
+        // the frame the gateway drain turns into `StreamEvent::RunComplete`,
+        // and a failed run's clients need the real terminate reason / token
+        // breakdown / cost / tool timeline rather than the all-zeros
+        // placeholder the gateway used to synthesize. That fallback now only
+        // fires when the drain never saw this frame — i.e. for a genuine
+        // pre-outcome failure (unknown agent / flow, cancelled before the loop
+        // started), which is what its doc always claimed it was for.
         cb.on_complete_with_outcome(&outcome);
 
         // `events` is unused after this point — kept in scope so the broadcast
         // channel stays alive until BroadcastCallback drops at end of run.
         let _ = events;
+
+        if let Err(e) = run_result {
+            return Err(match e {
+                crate::harness::trait_def::HarnessError::Cancelled => FlowError::Cancelled,
+                other => error::classify_harness_error(other, &provider_name),
+            });
+        }
 
         Ok(outcome)
     }

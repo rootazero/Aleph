@@ -21,6 +21,7 @@
 //! and Unicode degrade through the shared [`theme`]/[`icon`] gates, so output
 //! stays clean when piped or on ASCII-only locales.
 
+use aleph_protocol::terminate::{self, TerminateSeverity, UiLocale};
 use aleph_protocol::{AgentTraceToolResult, RunSummary};
 use serde_json::Value;
 
@@ -456,13 +457,25 @@ pub fn render_tool_summary(summary: &str) -> Option<String> {
 /// One rule line + a stat line: status, tool/loop counts, tokens, duration,
 /// cost. Non-`completed` terminates render a warning with a human label, and
 /// any tool errors are listed beneath.
+///
+/// The one function in this module that is not pure: it resolves the terminal's
+/// language from the environment. Everything it then does lives in
+/// [`render_summary_footer_in`], which takes the locale as a value — `std::env`
+/// is process-global while libtest runs in parallel, so a footer test that had
+/// to set `LANG` could only be written behind a mutex, and the sibling tests
+/// that forgot it would pass or fail on whatever the developer's shell happened
+/// to export.
 pub fn render_summary_footer(summary: &RunSummary) -> String {
+    render_summary_footer_in(summary, UiLocale::from_env())
+}
+
+/// [`render_summary_footer`] with the language supplied. Pure.
+pub fn render_summary_footer_in(summary: &RunSummary, locale: UiLocale) -> String {
     let mut lines: Vec<String> = Vec::new();
     let rule: String = std::iter::repeat_n(super::box_draw::horizontal(), 40).collect();
     lines.push(paint(Style::Muted, &rule));
 
-    let reason = summary.terminate_reason.as_deref().unwrap_or("completed");
-    let (mark, label, style) = terminate_badge(reason);
+    let (mark, label, style) = terminate_badge(summary, locale);
     let mut stats = vec![paint(style, &format!("{mark} {label}"))];
     if summary.tool_calls > 0 {
         stats.push(format!("{} tools", summary.tool_calls));
@@ -519,21 +532,38 @@ pub fn resolve_final_text<'a>(streamed: &'a str, fallback: Option<&'a str>) -> &
     }
 }
 
-/// Map a `TerminateReason` static tag to (glyph, human label, style).
-fn terminate_badge(reason: &str) -> (&'static str, &'static str, Style) {
-    match reason {
-        "completed" => (mark_ok(), "完成", Style::Success),
-        "verifier_veto" => (mark_warn(), "目标未达成（已暂停等待指示）", Style::Warning),
-        "consecutive_failure_cap" => (mark_warn(), "任务受阻（连续失败熔断）", Style::Warning),
-        "hit_max_iterations" => (mark_warn(), "达到最大轮次", Style::Warning),
-        "context_budget_exhausted" | "max_output_tokens_exhausted" => {
-            (mark_warn(), "上下文预算耗尽", Style::Warning)
-        }
-        "stall_timeout" | "turn_timeout" => (mark_warn(), "执行超时", Style::Warning),
-        "cancelled" => (mark_warn(), "已取消", Style::Warning),
-        "budget_exhausted_partial_result" => (mark_warn(), "预算耗尽（部分结果）", Style::Warning),
-        _ => (mark_warn(), "已结束", Style::Warning),
-    }
+/// Map a run's terminate fields to (glyph, human label, style).
+///
+/// The words and the reason/detail precedence both come from
+/// [`aleph_protocol::terminate`], which is the one table `aleph watch` and the
+/// TUI read as well. What stays here is what is genuinely this surface's: the
+/// glyph set (Unicode vs ASCII, see [`super::icon`]) and the colour.
+///
+/// Three things this used to get wrong on its own, all of them invisible to a
+/// reader of only this file:
+///
+/// * it read `terminate_reason` and never `terminate_detail`, so an escalated
+///   budget exit rendered the umbrella "预算耗尽（部分结果）" while the TUI
+///   beside it named the cap that was actually hit;
+/// * its table was Chinese while every other surface was English, with no
+///   setting anywhere that moved either;
+/// * its fall-through answered "已结束" for a token it did not recognise, which
+///   is the one failure direction a reader cannot detect — a core newer than
+///   this binary reported every new halt reason as a neutral "ended".
+fn terminate_badge(summary: &RunSummary, locale: UiLocale) -> (&'static str, &str, Style) {
+    let token = terminate::effective_token(
+        summary.terminate_reason.as_deref(),
+        summary.terminate_detail.as_deref(),
+    );
+    let (mark, style) = match token.map_or(TerminateSeverity::Clean, terminate::severity) {
+        TerminateSeverity::Clean => (mark_ok(), Style::Success),
+        TerminateSeverity::Capped => (mark_warn(), Style::Warning),
+        // A run that died rather than capped. Its own glyph, because the
+        // receipt is the only line `aleph exec` prints about how the run ended.
+        TerminateSeverity::Failed => (mark_fail(), Style::Error),
+    };
+    let label = terminate::label(token.unwrap_or(terminate::CLEAN_TOKEN), locale);
+    (mark, label, style)
 }
 
 // ── small helpers ───────────────────────────────────────────────────────
@@ -802,10 +832,15 @@ mod tests {
         };
         s.duration_ms = Some(8100);
         s.terminate_reason = Some("completed".into());
-        let footer = render_summary_footer(&s);
+        let footer = render_summary_footer_in(&s, UiLocale::En);
         assert!(footer.contains("4 tools"));
         assert!(footer.contains("7 loops"));
         assert!(footer.contains("12.3k tokens"));
+        assert!(footer.contains("completed"), "{footer}");
+        assert!(
+            render_summary_footer_in(&s, UiLocale::Zh).contains("完成"),
+            "the clean status word is localised too",
+        );
     }
 
     #[test]
@@ -814,8 +849,66 @@ mod tests {
             terminate_reason: Some("verifier_veto".into()),
             ..Default::default()
         };
-        let footer = render_summary_footer(&s);
-        assert!(footer.contains("目标未达成"));
+        assert!(render_summary_footer_in(&s, UiLocale::Zh).contains("被验证器否决"));
+        assert!(render_summary_footer_in(&s, UiLocale::En).contains("verifier blocked"));
+    }
+
+    /// A crashed run gets its own badge rather than the fall-through's neutral
+    /// "已结束" — this receipt is the only line `aleph exec` prints about how
+    /// the run ended, and "ended" reads as "finished".
+    #[test]
+    fn footer_names_a_failed_run_as_failed() {
+        let s = RunSummary {
+            terminate_reason: Some("failed".into()),
+            ..Default::default()
+        };
+        for (locale, word, clean) in [
+            (UiLocale::Zh, "运行失败", "完成"),
+            (UiLocale::En, "failed", "completed"),
+        ] {
+            let footer = render_summary_footer_in(&s, locale);
+            assert!(footer.contains(word), "{footer}");
+            assert!(
+                !footer.contains(clean),
+                "a failed run must not carry the clean badge: {footer}"
+            );
+        }
+    }
+
+    /// The half of the halt contract this surface used to ignore.
+    ///
+    /// `terminate_reason` collapses every escalated budget exit into one
+    /// umbrella token; `terminate_detail` says which budget it actually was.
+    /// The TUI and the panel had read it for rounds while this footer, on the
+    /// same wire frame, printed "budget exhausted (partial result)".
+    #[test]
+    fn footer_names_the_cap_hiding_under_the_budget_umbrella() {
+        let s = RunSummary {
+            terminate_reason: Some("budget_exhausted_partial_result".into()),
+            terminate_detail: Some("hit_max_iterations".into()),
+            ..Default::default()
+        };
+        let footer = render_summary_footer_in(&s, UiLocale::En);
+        assert!(footer.contains("hit max iterations"), "{footer}");
+        assert!(
+            !footer.contains("partial result"),
+            "the umbrella hid the cap that was actually hit: {footer}"
+        );
+    }
+
+    /// The failure direction a reader cannot detect: a core newer than this
+    /// binary must not have its new halt reason rendered as a neutral word.
+    #[test]
+    fn footer_keeps_an_unrecognised_token_verbatim() {
+        let s = RunSummary {
+            terminate_reason: Some("quota_exceeded_v9".into()),
+            ..Default::default()
+        };
+        for locale in [UiLocale::En, UiLocale::Zh] {
+            let footer = render_summary_footer_in(&s, locale);
+            assert!(footer.contains("quota_exceeded_v9"), "{footer}");
+            assert!(!footer.contains("已结束"), "{footer}");
+        }
     }
 
     #[test]

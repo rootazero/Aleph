@@ -910,3 +910,310 @@ fn parked_countdown_is_rendered_relative_to_now() {
     assert_eq!(render_park_wait(600_000, 300_000), "parked, ~5m left");
     assert_eq!(render_park_wait(600_000, 600_001), "parked, wake due");
 }
+
+/// The terminal settle is owed on BOTH arms of a finished run.
+///
+/// `AgentHarnessRunner::run` used to return the harness error through a
+/// `run_result.map_err(..)?` placed *above* the settle, so a run that failed
+/// after doing work never built a `FlowOutcome`: the gateway synthesized
+/// `FlowOutcome::default()` and the terminal `RunComplete` frame claimed
+/// `terminate_reason: "completed"`, 0 tokens, 0 loops, no cost and no tool
+/// timeline. `TerminateReason::ReactiveCompactExhausted` — whose only two
+/// producers set it and immediately return `Err` — could therefore never
+/// reach any renderer at all.
+///
+/// Source-level because runtime cannot tell the two apart: "the failure arm
+/// settled" and "the failure arm never ran" produce the same *type*, and
+/// separating them needs a full orchestrator + failing-provider rig. The
+/// invariant is positional, so a positional check is the honest instrument.
+///
+/// Comments and `#[cfg(test)]` code are stripped first — the paragraph above
+/// names both markers, and a guard its own prose can satisfy is not a guard.
+#[test]
+fn the_terminal_settle_runs_on_both_arms_of_a_finished_run() {
+    let src = crate::utils::source_scan::production_code_lines(include_str!("runner_impl.rs"));
+
+    let settles: Vec<usize> = src
+        .match_indices("cb.on_complete_with_outcome(")
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        settles.len(),
+        1,
+        "the terminal frame must have exactly one derivation and one emit site; \
+         a second one means an arm grew its own copy (found {})",
+        settles.len()
+    );
+
+    let error_return = src.find("if let Err(e) = run_result").unwrap_or_else(|| {
+        panic!(
+            "runner_impl.rs no longer returns the harness error below the settle. \
+             If it went back to `run_result.map_err(..)?` above it, the failure \
+             arm stopped settling — see this test's doc."
+        )
+    });
+
+    assert!(
+        settles[0] < error_return,
+        "cb.on_complete_with_outcome must run BEFORE the harness error is \
+         returned, or a failed run emits no outcome at all (settle at byte {}, \
+         error return at byte {})",
+        settles[0],
+        error_return
+    );
+
+    // The receipt is the one settle duty that is genuinely Ok-only (an input
+    // screen ends the run `Ok` by construction). It used to be gated by the
+    // `?` that is now gone; if that gate disappeared too, every failed run
+    // would start writing a guardrail receipt it never earned.
+    assert!(
+        src.contains("if run_result.is_ok() {"),
+        "record_input_block lost its explicit Ok-only gate"
+    );
+}
+
+// -- the failure arm settles: end-to-end ---------------------------------
+
+/// Assemble a runner whose only provider fails on every call, so `run()`
+/// reaches its error arm having actually entered the loop — the shape the
+/// source-level guard above can only check positionally.
+///
+/// Every optional collaborator is `None`: this fixture exercises the run
+/// pipeline's terminal settle, not its context / memory / skill wiring.
+fn runner_with_failing_provider(
+    session_service: std::sync::Arc<dyn SessionService>,
+    agent_id: &str,
+) -> AgentHarnessRunner {
+    let registry = std::sync::Arc::new(AgentRegistry::new());
+    registry.register(crate::agents::AgentDef::new(
+        agent_id,
+        crate::agents::AgentMode::Primary,
+    ));
+    // Authentication, not a network blip: the failover / retry layers treat a
+    // bad key as terminal, so the loop gives up on the first call instead of
+    // spending the test's wall clock on backoff.
+    let provider: std::sync::Arc<dyn AiProvider> = std::sync::Arc::new(
+        crate::providers::MockProvider::new("never returned")
+            .with_name("settle-probe-provider")
+            .with_error(crate::providers::MockError::Authentication(
+                "invalid api key".into(),
+            )),
+    );
+    AgentHarnessRunner {
+        agent_registry: registry,
+        session_service,
+        tool_service: std::sync::Arc::new(crate::tools::NullToolService::new()),
+        default_provider: std::sync::Arc::new(
+            crate::providers::default_handle::StaticDefault::new(provider),
+        ),
+        named_providers: HashMap::new(),
+        verifier_chain: None,
+        context_budget_config: None,
+        context_budget_refiner: None,
+        skill_system: None,
+        guardrails: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        default_max_iterations: 2,
+        default_prompt_mode: crate::thinker::prompt_mode::PromptMode::Minimal,
+        power: None,
+        memory_context_provider: None,
+        memory_backend: None,
+        memory_project_scoped: false,
+        tool_catalog: None,
+        session_epoch_registrar: None,
+        cheap_provider: None,
+        mcp_handle: None,
+        prompt_extra_files: None,
+        parallel_tool_concurrency: None,
+        primary_context_window: None,
+        routing_store: None,
+        routing_recall: None,
+        estimate_overhead_cache: std::sync::Arc::new(
+            crate::orchestrator::harness_bridge::context_estimate::OverheadCache::default(),
+        ),
+        response_language: None,
+    }
+}
+
+fn probe_spec(agent_id: &str) -> std::sync::Arc<FlowSpec> {
+    std::sync::Arc::new(FlowSpec {
+        id: format!("{agent_id}-flow"),
+        description: "terminal settle probe".into(),
+        agent: agent_id.to_string(),
+        brain: crate::orchestrator::flow_spec::BrainRef::Default,
+        session_strategy: crate::orchestrator::flow_spec::SessionStrategy::Reuse,
+        overrides: crate::orchestrator::flow_spec::FlowOverrides::default(),
+    })
+}
+
+/// Drive a whole run against a provider that always fails and return both
+/// halves of the contract: what `run()` returned, and every event the flow's
+/// broadcast channel carried.
+async fn run_until_it_fails(
+    agent_id: &str,
+) -> (Result<FlowOutcome, FlowError>, Vec<FlowStreamEvent>) {
+    let service = fresh_service();
+    let runner = runner_with_failing_provider(service, agent_id);
+    let (tx, mut rx) = broadcast::channel::<FlowStreamEvent>(256);
+    let key = SessionKey::ephemeral(agent_id).to_key_string();
+
+    let result = runner
+        .run(
+            key,
+            probe_spec(agent_id),
+            FlowInput::Prompt("does not matter".into()),
+            std::sync::Arc::new(crate::sandbox::factory::NoopSandbox),
+            tx,
+            CancellationToken::new(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            crate::thinker::TurnEnvelope::default(),
+            None,
+        )
+        .await;
+
+    let mut events = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        events.push(ev);
+    }
+    (result, events)
+}
+
+/// The behavioural half of `the_terminal_settle_runs_on_both_arms_of_a_finished_run`.
+///
+/// A provider that fails on every call ends the run in `Err` *after* the loop
+/// has started, which is precisely the case that used to produce no
+/// `FlowOutcome` at all: the gateway synthesized `FlowOutcome::default()` and
+/// the terminal frame told four live renderers the run had `completed`.
+///
+/// This is the rig the earlier round said did not exist. It does now, and it
+/// pins the effect (a `Complete` frame reached the channel) rather than the
+/// call (`on_complete_with_outcome` was invoked).
+#[tokio::test]
+async fn a_run_that_fails_inside_the_loop_still_broadcasts_its_outcome() {
+    let (result, events) = run_until_it_fails("settle-probe-broadcast").await;
+
+    assert!(
+        result.is_err(),
+        "the fixture's only provider rejects every call; got {result:?}"
+    );
+
+    let outcomes: Vec<&FlowOutcome> = events
+        .iter()
+        .filter_map(|e| match e {
+            FlowStreamEvent::Complete(o) => Some(o),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        outcomes.len(),
+        1,
+        "a finished run owes exactly one terminal frame on either arm; got {}",
+        outcomes.len()
+    );
+}
+
+/// The reason a failed run reports must not be this enum's `Default`.
+///
+/// `FlowOutcome::terminate_reason` defaults to `Completed`, and until
+/// `TerminateReason::Failed` existed that default was also what an unrecorded
+/// failure reported — so `aleph exec`, `aleph watch`, the TUI footer and the
+/// channel cap-notice all read a crashed run as a clean finish.
+#[tokio::test]
+async fn a_failed_run_does_not_report_itself_completed() {
+    let (result, events) = run_until_it_fails("settle-probe-reason").await;
+    assert!(result.is_err(), "got {result:?}");
+
+    let outcome = events
+        .iter()
+        .find_map(|e| match e {
+            FlowStreamEvent::Complete(o) => Some(o),
+            _ => None,
+        })
+        .expect("the failure arm must settle; see the sibling test");
+
+    assert_eq!(
+        outcome.terminate_reason,
+        crate::orchestrator::dispatch::TerminateReason::Failed,
+        "a run that died without recording a cause of its own reports `Failed`"
+    );
+    assert_eq!(
+        outcome.terminate_reason.as_static_str(),
+        "failed",
+        "the wire token every client-side label map keys on"
+    );
+    assert!(
+        !outcome.hit_limit,
+        "a crash is not a cap — surfaces that gate on this flag advise raising \
+         a budget, which is wrong advice for a provider failure"
+    );
+}
+
+/// The bridge fills in `Failed` only when the loop recorded nothing, and
+/// `Completed` is what "recorded nothing" looks like. That reading is only
+/// sound while no site ever *assigns* `Completed` — the field is initialised
+/// to it in `AgentHarness::new` and then only ever moved off it.
+///
+/// If a cap site ever starts writing `Completed` deliberately, the bridge would
+/// silently relabel that run `Failed` whenever it also returned `Err`. Nothing
+/// else in the tree would notice.
+///
+/// Walks the whole crate rather than naming the files that record reasons
+/// today: `set_terminate_reason` is `pub(crate)`, so the next writer can land
+/// anywhere, and a guard that lists its own inputs is blind to exactly the
+/// member that was added after it was written.
+///
+/// The window per call site is the call's own balanced parentheses, not a line
+/// count — `think.rs` spells the argument fully-qualified across three lines,
+/// and a fixed window would either miss it or read into the next statement.
+#[test]
+fn no_site_records_a_completed_terminate_reason() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut sites = 0usize;
+    for (path, src) in crate::utils::source_scan::rust_sources_under(&root) {
+        let code = crate::utils::source_scan::production_code_lines(&src);
+        let bytes = code.as_bytes();
+        for (at, _) in code.match_indices("set_terminate_reason(") {
+            let open = at + "set_terminate_reason".len();
+            let mut depth = 0i32;
+            let mut end = open;
+            for (i, b) in bytes.iter().enumerate().skip(open) {
+                match b {
+                    b'(' => depth += 1,
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = i;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let arg = &code[open..=end];
+            sites += 1;
+            assert!(
+                !arg.contains("TerminateReason::Completed"),
+                "{path} assigns `Completed`. The orchestrator bridge reads a \
+                 still-default reason on the error arm as `Failed`; a deliberate \
+                 `Completed` write would be indistinguishable from that default. \
+                 Offending call: {arg}"
+            );
+        }
+    }
+    assert!(
+        sites >= 8,
+        "expected the harness loop's cap sites to still record reasons; found \
+         only {sites} `set_terminate_reason` calls, so this guard is watching \
+         an empty set"
+    );
+}

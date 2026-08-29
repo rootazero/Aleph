@@ -293,18 +293,38 @@ pub async fn run_dispatch_and_drain_classified(
     let outcome: FlowOutcome = match handle.completion.await {
         Ok(Ok(outcome)) => outcome,
         Ok(Err(e)) => {
-            // The run failed *before* the harness's broadcast callback could
-            // emit the terminal `Complete` frame (early failures like
-            // Cancelled/UnknownAgent happen before `BroadcastCallback` is
-            // constructed). The drain task therefore never sees a terminal
-            // event — it only exits when the broadcast channel closes. Wait
-            // for it, then emit the safety-net `RunComplete` so channel/Panel
-            // consumers still observe the run end instead of hanging.
-            let _ = drain.await;
+            // Two shapes reach here and only one of them needs a synthesized
+            // terminal frame.
+            //
+            // A run that failed *inside* the harness loop has already settled:
+            // `AgentHarnessRunner::run` reads the terminate reason / token
+            // breakdown / cost / tool timeline on both arms and broadcasts
+            // `FlowStreamEvent::Complete` before returning the error, so the
+            // drain forwarded a `RunComplete` carrying the real numbers.
+            // Synthesizing a second one here would overwrite that with zeros
+            // for every consumer that takes the first terminal frame it sees
+            // (`reply_emitter::streaming::run_complete_handled`).
+            //
+            // A run that failed *before* the loop started (unknown agent /
+            // flow, cancelled at admission) never constructed a
+            // `BroadcastCallback`, so the drain only exits when the channel
+            // closes and no terminal event ever arrived. That one still needs
+            // the safety net, or channel/Panel consumers hang on a run end
+            // that never comes. `complete_forwarded` is the discriminator —
+            // the drain reports whether it actually forwarded the frame.
+            let complete_forwarded = drain.await.unwrap_or(false);
             propagate.abort();
             emit_route_correction(&emitter, run_id, witness_session_for_fallback.as_deref()).await;
+            // Both halves of this line were fixed independently and both are
+            // load-bearing: the `complete_forwarded` guard stops a synthetic
+            // zeroed frame from overwriting the real one the drain already
+            // forwarded, and the receipt text stops the flattened internal
+            // chain from being pushed to a bound channel as the assistant's
+            // answer. Dropping either one restores a shipped defect.
             let failure = map_flow_error(e);
-            emit_error_run_complete(&emitter, run_id, &failure, locale).await;
+            if !complete_forwarded {
+                emit_error_run_complete(&emitter, run_id, &failure, locale).await;
+            }
             return Err(failure);
         }
         Err(e) => {
@@ -478,10 +498,14 @@ fn correction_for(
 }
 
 /// Emit a terminal `RunComplete` stream event for a run that failed before the
-/// harness produced a `FlowOutcome`. The drain-fallback path in step 4 needs a
-/// real `FlowOutcome`; on pre-outcome failures we synthesize a minimal one so
-/// channel/Panel consumers still observe the run end rather than hanging on a
-/// never-arriving terminal frame.
+/// harness produced a `FlowOutcome` — an unknown agent/flow, a session
+/// conflict, a cancel at admission. Those never reach the harness loop, so
+/// nothing settled and no terminal frame was broadcast; without this one,
+/// channel/Panel consumers hang on a run end that never comes.
+///
+/// A run that failed *inside* the loop does not come here: the bridge settles
+/// on both arms and the drain forwards the real frame (see the
+/// `complete_forwarded` discriminator at the `Ok(Err(..))` arm above).
 ///
 /// # Why the text comes from `user_receipt` and not from `{err}`
 ///
@@ -507,9 +531,7 @@ async fn emit_error_run_complete(
     failure: &DispatchFailure,
     locale: Locale,
 ) {
-    let outcome = crate::orchestrator::dispatch::FlowOutcome::default();
-    let mut summary = super::event_drain::build_run_summary(&outcome, None);
-    summary.final_response = Some(execution_error_for(failure).user_receipt(locale).1);
+    let summary = pre_outcome_summary(failure, locale);
     let seq = emitter.next_seq();
     if let Err(e) = emitter
         .emit(crate::gateway::event_emitter::StreamEvent::RunComplete {
@@ -526,6 +548,52 @@ async fn emit_error_run_complete(
             "failed to emit the error-path RunComplete stream event"
         );
     }
+}
+
+/// The summary a run that died before producing any outcome reports.
+///
+/// Split out of [`emit_error_run_complete`] so the one field that must not be
+/// guessed is testable without an emitter.
+///
+/// `terminate_reason` is deliberately cleared. `build_run_summary` derives it
+/// from the `FlowOutcome`, and `FlowOutcome::default()` carries
+/// `TerminateReason::Completed` — so the synthesized frame used to tell four
+/// live renderers (`reply_emitter::streaming::cap_notice_for`, the TUI run
+/// footer, `aleph exec`, `aleph watch`) that a run which never started had
+/// *completed*. All four treat a missing reason as "say nothing", which is the
+/// only honest answer here: this path knows the run failed and knows nothing
+/// about how it terminated.
+/// The summary a pre-outcome failure reports, and the two things it must not
+/// get wrong.
+///
+/// **`terminate_reason` must be `None`.** `build_run_summary` derives it from
+/// the `FlowOutcome`, and `FlowOutcome::default()` carries
+/// `TerminateReason::Completed` — so the synthesized frame used to tell four
+/// live renderers that a run which never started had *completed*, and all four
+/// read `"completed"` as "nothing worth saying".
+///
+/// **`final_response` must be the localized receipt, not `{err}`.** This field
+/// is not a log line: `OriginFanoutEmitter` reads it off this very event and
+/// pushes it to the bound channel as the run's ANSWER, with only a `<think>`
+/// stripper in the way. Formatting the error directly sent a channel-bound
+/// `goal`/`loop` continuation `"Run failed before completion: flow: internal
+/// dispatch error: …"` as the assistant's reply — the flattened internal chain
+/// [`ExecutionError::user_receipt`] calls itself the single source of truth for
+/// suppressing. `FlowError::Cancelled` resolves here, so every cancelled
+/// channel-bound run took that path, in hardcoded English on a path that
+/// already carries a `Locale`.
+///
+/// The two were fixed on separate branches within days of each other and the
+/// merge kept both; either one alone leaves a shipped defect.
+fn pre_outcome_summary(
+    failure: &DispatchFailure,
+    locale: Locale,
+) -> crate::gateway::event_emitter::RunSummary {
+    let outcome = crate::orchestrator::dispatch::FlowOutcome::default();
+    let mut summary = super::event_drain::build_run_summary(&outcome, None);
+    summary.terminate_reason = None;
+    summary.final_response = Some(execution_error_for(failure).user_receipt(locale).1);
+    summary
 }
 
 fn map_flow_error(err: FlowError) -> DispatchFailure {
@@ -682,5 +750,93 @@ mod pre_outcome_receipt_tests {
                 .1
         );
         assert!(!text.contains("dispatch"), "internal wording leaked: {text}");
+    }
+}
+
+/// main's half of the same function, kept verbatim in intent: the frame must
+/// not claim a `terminate_reason` it cannot know, and clearing it must not also
+/// silence the error. Rewritten only where the signature moved from
+/// `&FlowError` to `(&DispatchFailure, Locale)`.
+#[cfg(test)]
+mod pre_outcome_summary_tests {
+    use super::{execution_error_for, pre_outcome_summary, DispatchFailure};
+    use crate::gateway::i18n::Locale;
+
+    /// The one field this path must not guess.
+    ///
+    /// `build_run_summary` derives `terminate_reason` from the `FlowOutcome`,
+    /// and `FlowOutcome::default()` carries `TerminateReason::Completed` — so
+    /// the synthesized frame used to report a run that never started as having
+    /// *completed*, to four live renderers that all treat `"completed"` as
+    /// "nothing worth saying". Drop the `= None` line and this goes red here.
+    #[test]
+    fn a_run_that_never_started_claims_no_terminate_reason() {
+        let s = pre_outcome_summary(
+            &DispatchFailure::Fatal("flow: unknown agent: ghost".into()),
+            Locale::En,
+        );
+        assert!(
+            s.terminate_reason.is_none(),
+            "a pre-outcome failure knows the run failed and nothing about how \
+             it terminated; got {:?}",
+            s.terminate_reason
+        );
+        assert!(
+            s.terminate_detail.is_none(),
+            "the granular cap label has no meaning without a reason"
+        );
+    }
+
+    /// The other half: clearing the reason must not also silence the frame.
+    /// Without this, "make the frame honest" and "make the frame empty" look
+    /// identical in the suite.
+    ///
+    /// ⚠️ **This assertion was `text.contains("ghost")` on `main` and is
+    /// deliberately weaker now — the merge of two branches that each fixed a
+    /// different defect in this one function had to decide who
+    /// `final_response` is FOR, and it is not the operator.**
+    ///
+    /// `OriginFanoutEmitter` mirrors `RunComplete` and pushes this exact string
+    /// to the bound channel as the assistant's ANSWER, with only a `<think>`
+    /// stripper in the way. Naming the specific cause there means a Telegram
+    /// user reading `"Run failed before completion: flow: internal dispatch
+    /// error: …"` in the voice of the assistant — the flattened internal chain
+    /// `ExecutionError::user_receipt` exists to suppress. So the specific cause
+    /// leaves this field and the frame keeps a localized receipt.
+    ///
+    /// **The cause is not lost, it moved to the surfaces that are for it**: the
+    /// `Err(DispatchFailure::Fatal("flow: unknown agent: ghost"))` this function
+    /// runs alongside is what the caller returns, what `tracing` records and
+    /// what the trace store persists. What this test now pins is main's actual
+    /// concern — the frame is not EMPTY — plus the property that replaced the
+    /// stronger one: it is not the internal chain either.
+    #[test]
+    fn the_synthesized_frame_is_neither_empty_nor_the_internal_chain() {
+        let s = pre_outcome_summary(
+            &DispatchFailure::Fatal("flow: unknown agent: ghost".into()),
+            Locale::En,
+        );
+        let text = s
+            .final_response
+            .expect("the fallback frame must carry text — OriginFanoutEmitter \
+                     mirrors only this variant, so an empty one leaves the \
+                     channel silent");
+        assert!(
+            !text.trim().is_empty(),
+            "clearing terminate_reason must not also empty the frame"
+        );
+        assert!(
+            !text.contains("ghost") && !text.contains("flow:"),
+            "the internal chain reached a field that is rendered to the user as \
+             the assistant's reply: {text}"
+        );
+        assert_eq!(
+            text,
+            execution_error_for(&DispatchFailure::Fatal("flow: unknown agent: ghost".into()))
+                .user_receipt(Locale::En)
+                .1,
+            "the frame must carry the SAME receipt every other user-facing \
+             failure path renders, not a second wording of it"
+        );
     }
 }

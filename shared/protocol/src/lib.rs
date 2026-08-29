@@ -41,6 +41,7 @@ pub mod session_thread;
 pub mod spend;
 pub mod subagent_tree;
 pub mod team_topic;
+pub mod terminate;
 pub mod thinking;
 pub mod tool_permissions;
 pub mod trace_presentation;

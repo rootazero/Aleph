@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use aleph_protocol::terminate::{self, TerminateSeverity, UiLocale};
 use aleph_protocol::{AgentTraceEvent, RunSummary, StreamEvent};
 
 use crate::output::exec_echo;
@@ -213,7 +214,11 @@ impl Board {
                 ..
             } => {
                 self.settle(event.run_id(), true);
-                vec![render_settled_line(summary, *total_duration_ms)]
+                vec![render_settled_line(
+                    summary,
+                    *total_duration_ms,
+                    UiLocale::from_env(),
+                )]
             }
             StreamEvent::RunError { error, .. } => {
                 self.settle(event.run_id(), false);
@@ -262,14 +267,30 @@ impl Board {
 
 /// One-line run receipt for the feed: status badge + the same stats the
 /// `run_follow` footer shows, joined inline.
-fn render_settled_line(summary: &RunSummary, total_duration_ms: u64) -> String {
-    let reason = summary.terminate_reason.as_deref().unwrap_or("completed");
-    let (mark, style) = if reason == "completed" {
-        (glyph_ok(), Style::Success)
-    } else {
-        (glyph_warn(), Style::Warning)
+///
+/// This line used to print the raw wire token at a person — `hit_max_iterations`
+/// on the board, with nothing to say which of the two halts that even was — and
+/// painted a crashed run with the same warning glyph as a capped one. Both the
+/// words and the crash/cap split now come from [`aleph_protocol::terminate`],
+/// the table `aleph exec` and the TUI read; `locale` is a value rather than an
+/// environment read so this stays pure and its test stays independent of the
+/// developer's shell.
+fn render_settled_line(
+    summary: &RunSummary,
+    total_duration_ms: u64,
+    locale: UiLocale,
+) -> String {
+    let token = terminate::effective_token(
+        summary.terminate_reason.as_deref(),
+        summary.terminate_detail.as_deref(),
+    );
+    let (mark, style) = match token.map_or(TerminateSeverity::Clean, terminate::severity) {
+        TerminateSeverity::Clean => (glyph_ok(), Style::Success),
+        TerminateSeverity::Capped => (glyph_warn(), Style::Warning),
+        TerminateSeverity::Failed => (glyph_fail(), Style::Error),
     };
-    let mut stats = vec![paint(style, &format!("{mark} {reason}"))];
+    let label = terminate::label(token.unwrap_or(terminate::CLEAN_TOKEN), locale);
+    let mut stats = vec![paint(style, &format!("{mark} {label}"))];
     if summary.tool_calls > 0 {
         stats.push(format!("{} tools", summary.tool_calls));
     }
@@ -402,11 +423,42 @@ mod tests {
         else {
             unreachable!()
         };
-        let line = render_settled_line(&summary, total_duration_ms);
+        let line = render_settled_line(&summary, total_duration_ms, UiLocale::En);
         assert!(line.contains("completed"));
         assert!(line.contains("3 tools"));
         assert!(line.contains("4.5k tokens"));
         assert!(line.contains("12.3s"));
         assert!(!line.contains('\n'));
+    }
+
+    /// The board printed the wire token verbatim at a person, and gave a
+    /// crashed run the same warning glyph as a capped one.
+    #[test]
+    fn settled_line_uses_words_and_separates_a_crash_from_a_cap() {
+        let halted = |reason: &str, detail: Option<&str>| RunSummary {
+            terminate_reason: Some(reason.to_string()),
+            terminate_detail: detail.map(str::to_string),
+            ..Default::default()
+        };
+
+        let capped = render_settled_line(&halted("hit_max_iterations", None), 0, UiLocale::En);
+        assert!(capped.contains("hit max iterations"), "{capped}");
+        assert!(!capped.contains("hit_max_iterations"), "{capped}");
+        assert!(capped.contains(glyph_warn()), "{capped}");
+
+        let died = render_settled_line(&halted("failed", None), 0, UiLocale::En);
+        assert!(died.contains(glyph_fail()), "a crash is not a cap: {died}");
+
+        // Same precedence as every other surface: the detail names the cap
+        // hiding under the umbrella token.
+        let umbrella = render_settled_line(
+            &halted(
+                "budget_exhausted_partial_result",
+                Some("context_budget_exhausted"),
+            ),
+            0,
+            UiLocale::Zh,
+        );
+        assert!(umbrella.contains("上下文预算耗尽"), "{umbrella}");
     }
 }
