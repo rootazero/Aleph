@@ -6,6 +6,9 @@
 //! snapshot, and what goes on the wire is a bounded per-frame diff instead of
 //! an unbounded byte stream.
 
+pub mod grid;
+pub use grid::{Attrs, Cell, Color, Grid};
+
 #[cfg(test)]
 mod tests {
     /// Pins the `vte` API surface this module is built on. If `vte` changes
