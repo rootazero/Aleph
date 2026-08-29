@@ -3143,7 +3143,49 @@ Task 12 里那条 `the_configured_scrollback_reaches_the_session_grid` 测试同
     let actor = crate::gateway::visibility::ambient_actor();
 ```
 （函数路径以 `grep -rn 'pub fn ambient_actor' src/` 为准。）
-并改调 `pty::manager().spawn_as(&opts, actor.clone())`，随后落一条审计记录（用仓库既有的审计入口 —— `grep -rn 'fn record_audit\|audit::' src/gateway/ | head` 确认）。
+并改调 **`spawn_with_scrollback(&opts, terminal.scrollback_lines as usize, actor.clone())`**，
+随后落一条审计记录（用仓库既有的审计入口 —— `grep -rn 'fn record_audit\|audit::' src/gateway/ | head` 确认）。
+
+⚠️ **不要在这里调 `spawn_as`**，哪怕它读起来更直接。controller 在派单前查实
+（2026-08-29）：本任务原来写的就是 `spawn_as(&opts, actor.clone())`，那会**把 Task 12 刚接上的
+scrollback 丢掉**——配置里的 `scrollback_lines` 从此到不了任何一个真实会话，而终端历史退回内置默认值。
+
+**而它不会被任何测试抓到。** Task 12 的 `the_configured_scrollback_reaches_the_session_grid`
+直接调 `mgr.spawn_with_scrollback(..)`，**从不经过 `handle_spawn`** ⇒ 它守的是那个辅助函数，
+坏掉的是调用点，两者在测试报告里长得一模一样。这正是判据「守卫要断言**效果到达了**，
+不是**调用发生了**」。
+
+所以**这一步欠一条经过 handler 的测试**，而且它必须同时断言两件事——一次 spawn 之后，
+这个会话既记住了施动者、也拿到了配置的 scrollback：
+
+```rust
+    /// The handler is the only place both facts have to travel together, and
+    /// it is the one place neither task's own test looks: Task 12's asserts
+    /// `spawn_with_scrollback` works, this task's asserts `spawn_as` works,
+    /// and a handler that called either one alone passes both of them.
+    #[tokio::test]
+    async fn a_spawn_through_the_handler_carries_both_the_actor_and_the_scrollback() {
+        let cfg = /* Arc<RwLock<Config>> with policies.terminal.scrollback_lines = 7 */;
+        let resp = pty::handle_spawn(spawn_request(), cfg).await;
+        let sid = session_id_of(&resp);
+
+        let info = &pty::manager().list()[0];
+        assert_eq!(info.created_by.as_deref(), Some("u-alice"), "the actor must reach the session");
+        assert_eq!(
+            pty::manager().scrollback_limit_of(&sid),
+            Some(7),
+            "and so must the configured scrollback -- a handler that calls spawn_as \
+             instead of spawn_with_scrollback passes every other test in both tasks"
+        );
+        pty::manager().close(&sid).expect("close");
+    }
+```
+
+施动者怎么在测试里落到 `Some("u-alice")`，取决于 `ambient_actor()` 的取值方式——**先读它**
+（`grep -rn 'pub fn ambient_actor' src/`），它大概率是 task-local，那就用仓库既有的
+`CarriedAttribution` / scope 设置方式包一层，别自己造第二种设法。**若 `ambient_actor()` 在
+测试里无法设置**，就把断言拆成两条：这条只断 scrollback（它才是会被静默回滚的那一半），
+actor 那半留给 `a_spawn_records_who_asked_for_it`，并在报告里说明为什么。
 
 `docs/reference/SECURITY.md` 加一节，**必须包含这三句**：
 
