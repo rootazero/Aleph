@@ -3006,10 +3006,32 @@ value to return and it says nothing about whether boot got here"），只是那�
         return JsonRpcResponse::error(
             id,
             INVALID_PARAMS,
-            "the embedded terminal is disabled ([policies.terminal] enabled = false)".to_string(),
+            "the embedded terminal is disabled: set `[policies.terminal] enabled = true` \
+             in config.toml to turn it on"
+                .to_string(),
         );
     }
 ```
+
+⚠️ **拒绝语必须说出出路，而这一行原来只说了现状**（`"...is disabled ([policies.terminal]
+enabled = false)"`）。controller 2026-08-29 查实：**下游有两处断言它说得出出路**，两处都会红在
+这个计划自己规定的那个字符串上——
+
+- Task 17 Step 3 第 3 条：「`Err` 不许读作『空屏』…尤其 `[policies.terminal] enabled = false`
+  与 cwd jail 的拒绝，**两者都是有出路的，措辞要说出出路**」；
+- Task 17 Step 4 真机第 10 条：「新 spawn 被拒且**拒绝语说得出怎么打开**」。
+
+这是 Task 11 Minor 2 的**镜像**：那次拒绝语点名了一个**不存在**的补救（"register a workspace"，
+而根本没有注册这一步）；这次拒绝语**一个补救都没点名**，而下游两处都当它点了。两种错法方向
+相反，成因相同——**写拒绝语的那个人和检查拒绝语的那个人，看的不是同一段文字**。
+
+判据：**写下一条拒绝时，把「被拒的这个人接下来该干什么」写进去，并且去核实那件事真的做得到。**
+一条点名不适用补救的拒绝比什么都不说更糟；一条什么都不说的拒绝，则会让每一处断言"有出路"的
+下游检查静默失真。
+
+⚠️ 措辞刻意点名**配置文件**而不是 `self_config` 工具。这条错误回给 Panel（operator 面），
+而 operator 正是能改配置的那个人；把工具名写进去等于在一条拒绝里教一条绕闸路径，而那条写入
+按 Task 13 是要举卡的。
 ⚠️ **这一段刻意没有「如果没有句柄就补一个」的退路，而这是一次裁定不是省略。**
 上一段刚论证完为什么进程级句柄（`ArcSwap` / `CapabilitySlot`）在这里是 fail-**OPEN**：
 未安装的读数是 `TerminalConfig::default()`，而它的 `enabled` 是 `true`，与「operator 就是开着的」
