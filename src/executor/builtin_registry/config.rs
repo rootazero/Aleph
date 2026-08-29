@@ -37,6 +37,11 @@ pub struct BuiltinToolConfig {
     /// gateway's `canvas.*` handlers hold (only that instance carries the
     /// event bus, so only its writes publish `canvas.updated` to open Panels).
     pub canvas_store: Option<Arc<crate::canvas::CanvasStore>>,
+    /// SSRF policy for the pre-flight URL check in tools that fetch
+    /// external resources (`a2a_agents.add`, `media_send`,
+    /// `google_meet`). Sourced from the operator's `[ssrf]` config
+    /// block so allow/deny rules reach the tool face.
+    pub ssrf_policy: Option<crate::security::ssrf::SsrfPolicy>,
     /// Event bus for lifecycle event emission (agent switch/delete)
     pub event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     /// Agent manager for persistent agent definition storage (TOML config)

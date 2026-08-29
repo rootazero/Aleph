@@ -1031,6 +1031,9 @@ pub fn create_tool_boxed(
         "google_meet" => Some(Box::new(
             crate::builtin_tools::google_meet::GoogleMeetTool::new(
                 config.and_then(|c| c.google_meet_bridge.clone()),
+                config
+                    .and_then(|c| c.ssrf_policy.clone())
+                    .unwrap_or_default(),
             ),
         )),
         "file_ops" => Some(Box::new(FileOpsTool::new())),
@@ -1195,7 +1198,11 @@ pub fn create_tool_boxed(
                 )) as Box<dyn AlephToolDyn>
             }),
         "media_send" => Some(Box::new(
-            crate::builtin_tools::media_send::MediaSendTool::new(),
+            crate::builtin_tools::media_send::MediaSendTool::new(
+                config
+                    .and_then(|c| c.ssrf_policy.clone())
+                    .unwrap_or_default(),
+            ),
         )),
         "artifact_publish" => Some(Box::new(
             crate::builtin_tools::artifact_publish::ArtifactPublishTool::new(),

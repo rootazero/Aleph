@@ -380,6 +380,10 @@ impl BuiltinToolRegistry {
         // Google Meet tool — wraps the optional out-of-core transport bridge.
         let google_meet_tool = crate::builtin_tools::google_meet::GoogleMeetTool::new(
             config.google_meet_bridge.clone(),
+            config
+                .ssrf_policy
+                .clone()
+                .unwrap_or_default(),
         );
 
         let skill_system = crate::skill::shared_skill_system().clone();

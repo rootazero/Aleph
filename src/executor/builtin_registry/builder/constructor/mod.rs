@@ -829,7 +829,7 @@ impl BuiltinToolRegistry {
             use crate::tools::AlephTool;
             let gateway_route_meta =
                 crate::builtin_tools::gateway_route::GatewayRouteTool::default();
-            let google_meet_meta = crate::builtin_tools::google_meet::GoogleMeetTool::new(None);
+            let google_meet_meta = crate::builtin_tools::google_meet::GoogleMeetTool::new(None, crate::security::ssrf::SsrfPolicy::default());
             let select_model_meta = crate::builtin_tools::SelectModelTool;
             let doctor_meta = crate::builtin_tools::DoctorTool::default();
             let extra_defs = [
