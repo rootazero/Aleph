@@ -1394,6 +1394,14 @@ fn an_explicit_claim_upgrades_a_producer_whose_owner_is_not_on_the_roster() {
 /// skipped. Reading a refusal as "no project governs" instead would make row 3
 /// vacuous and would let row 4 — the actual regression — pass while broken.
 ///
+/// **Agreement is asserted alongside an absolute anchor, not on its own.** A
+/// pure agreement test is satisfied by a dead lookup — gut
+/// [`crate::projects::ProjectStore::room_claiming`] to `None` and both sides
+/// fall through to personal, so every row compares `None == None` and this test
+/// passes over a corpse. Three of the four rows therefore name the project that
+/// must govern them, and the anchor is checked first so that mutation reports
+/// the missing room rather than a contented equality.
+///
 /// The admission side is driven through the public
 /// `handlers::agent::build_run_request` rather than the private resolver: that
 /// is the funnel every Panel / TUI / CLI run really passes, and using it needs
@@ -1499,15 +1507,28 @@ async fn the_two_room_claim_twins_agree_on_which_project_governs() {
         .unwrap();
     let bound_key = SessionKey::group("main", "telegram", PeerKind::Group, "C-twins");
 
-    let rows: [(&str, &SessionKey, &str); 4] = [
+    // The third column is the ABSOLUTE expectation, and it is why this test
+    // cannot pass with the feature dead. Agreement alone is satisfied by a
+    // gutted `ProjectStore::room_claiming`: return `None` and both sides fall
+    // to personal, all four rows compare `None == None`, and a test whose doc
+    // calls itself "the point of the whole task" stays green over a corpse.
+    // Three of the four rows name a project outright, so that mutation now
+    // reddens THIS test by name and not only its neighbours.
+    //
+    // Row 3 carries an anchor too, which the shape makes easy to miss:
+    // admission refuses *in the room's name*, so its answer to "which project
+    // governs" is that room, not nothing.
+    let rows: [(&str, &SessionKey, Option<&str>, &str); 4] = [
         (
             "u-member",
             &claimed_key,
+            Some(claimed.id.as_str()),
             "a member on a room's own claimed key",
         ),
         (
             "u-member",
             &bound_key,
+            Some(bound.id.as_str()),
             "a member on a bound channel conversation",
         ),
         (
@@ -1517,6 +1538,7 @@ async fn the_two_room_claim_twins_agree_on_which_project_governs() {
             // is not what this test claims.
             "u-stranger",
             &claimed_key,
+            Some(claimed.id.as_str()),
             "a non-member on a room's own claimed key",
         ),
         (
@@ -1524,15 +1546,33 @@ async fn the_two_room_claim_twins_agree_on_which_project_governs() {
             // id while the loop said "personal": the same person, the same
             // conversation, two different governing projects depending on which
             // door they came through.
+            //
+            // The one row whose correct answer really is "no project governs".
+            // It is therefore the weakest of the four on its own, which is
+            // exactly why the other three carry absolute anchors.
             "u-stranger",
             &bound_key,
+            None,
             "a non-member on a bound channel conversation",
         ),
     ];
 
-    for (who, key, what) in rows {
+    for (who, key, expected, what) in rows {
+        let admission = admission_says(who, key).await;
+        // Anchor first: with the lookup dead, this is the assertion that fires,
+        // and it says so — where the agreement assertion below would report a
+        // contented `None == None`.
         assert_eq!(
-            admission_says(who, key).await,
+            admission.as_deref(),
+            expected,
+            "the admission path names the wrong governing project for {what}. \
+             This is the absolute half of the test: it holds the two sides to a \
+             named room rather than only to each other, so gutting \
+             `ProjectStore::room_claiming` cannot pass by making both sides \
+             equally empty."
+        );
+        assert_eq!(
+            admission,
             loop_says(who, key),
             "the two room-claim twins disagree about which project governs the \
              turn for {what}. They share the claim LOOKUP and split only on \

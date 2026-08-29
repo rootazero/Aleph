@@ -658,10 +658,38 @@ async fn resolve_attribution(
                 // the refusal.
                 //
                 // The permanent-mis-stamp hazard arm 1's refusal prevents is
-                // not prevented here by refusing: whatever this row ends up
-                // stamped, `request_scope` stamps it identically for the same
-                // principal arriving through the channel — the door that
-                // carries a bound conversation's real traffic.
+                // not prevented here by refusing — but that claim holds only
+                // FOR A PRINCIPAL WHO CAN REACH THE CHANNEL DOOR, and the
+                // scope of it is the point. For someone in the bound
+                // conversation, whatever this row ends up stamped
+                // `request_scope` stamps identically when they speak through
+                // the channel, so refusing here closes one of two doors and
+                // protects nothing.
+                //
+                // It does NOT hold for a principal authenticated to this
+                // deployment who is *not* in that conversation and merely
+                // knows its (channel, peer_kind, peer_id). They have no
+                // channel door. Before the two readers were converged they
+                // were refused here, so no run and no row; now they are
+                // admitted personally, the run reaches
+                // `ensure_session_under_request_scope` unconditionally, and
+                // the row IS created stamped `personal:<them>` — permanently,
+                // since `stamp_attribution` is create-only and
+                // `attribution_backfill` heals only NULL/NULL rows. The
+                // population that can win that race widens accordingly.
+                //
+                // That is a real consequence and it is deliberately not
+                // answered by refusing here: refusing would still leave the
+                // conversation's own members able to do the same thing, and
+                // would cost the existence oracle above. The fix belongs at
+                // `ensure_session_under_request_scope`, which uses one
+                // attribution to answer two different questions (routed to
+                // Task 13); this comment exists so the next reader inherits
+                // the premise at its real width rather than as a general law.
+                //
+                // The cross-file claim about `request_scope`'s roster gate is
+                // pinned by
+                // `run_loop::tests::the_two_room_claim_twins_agree_on_which_project_governs`.
                 Some((pid, ClaimSource::BoundConversation)) => {
                     crate::gateway::visibility::project_visible(&pid).then_some(pid)
                 }

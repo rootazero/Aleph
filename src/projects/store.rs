@@ -717,7 +717,19 @@ impl ProjectStore {
     /// `Ok(None)` for "no room claims this key" — the overwhelmingly common
     /// case, and the one that must stay a cheap indexed lookup rather than a
     /// scan.
-    pub fn project_for_session_key(
+    ///
+    /// `pub(in crate::projects)` because this is **arm 1's raw ingredient**,
+    /// and the composition it feeds ([`Self::room_claiming`]) must keep exactly
+    /// one author. Anything outside `projects` that could reach both this and
+    /// [`Self::project_for_bound_session`] could re-derive that composition,
+    /// and this repo has paid for that shape before — the two readers this task
+    /// converged were each re-deriving it. The visibility is what makes a third
+    /// derivation a **compile error** rather than a convention the next author
+    /// has to have read. Contrast [`Self::project_for_conversation`], which
+    /// stays `pub`: it is an independent query, not an ingredient of the
+    /// precedence rule, so narrowing it would block legitimate cross-module
+    /// callers without preventing any re-derivation.
+    pub(in crate::projects) fn project_for_session_key(
         &self,
         session_key: &str,
     ) -> Result<Option<String>, ProjectError> {
@@ -899,7 +911,12 @@ impl ProjectStore {
     /// duplicating its query. It stays a method of its own rather than being
     /// inlined there because the decomposition it performs is a property of
     /// the *key*, not of the claim precedence above it.
-    pub fn project_for_bound_session(
+    ///
+    /// `pub(in crate::projects)` for the same reason as
+    /// [`Self::project_for_session_key`] — see that method's doc. These two are
+    /// arm 1's and arm 2's ingredients; holding both is what would let someone
+    /// rebuild [`Self::room_claiming`]'s precedence somewhere else.
+    pub(in crate::projects) fn project_for_bound_session(
         &self,
         session_key: &crate::routing::session_key::SessionKey,
     ) -> Result<Option<String>, ProjectError> {
