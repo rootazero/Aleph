@@ -2405,6 +2405,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     handle.store(Some(Arc::new(alephcore::builtin_tools::A2AToolDeps {
                         sub_agent: a2a_sub_agent.clone(),
                         card_registry: card_registry.clone(),
+                        // Share the same SSRF policy the webhook target
+                        // is gated by so the operator's `[ssrf]` config
+                        // reaches the tool face (not a per-tool default).
+                        ssrf_policy: webhook_ssrf_policy.clone(),
                     })));
                     tracing::info!("A2A outbound tools wired (a2a_delegate, a2a_agents)");
                 } else {
