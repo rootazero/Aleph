@@ -134,6 +134,23 @@ impl vte::Perform for Performer<'_> {
             let effective: &[u16] = if flat.is_empty() { &[0] } else { &flat };
             self.sgr(effective);
         }
+
+        // A parameter of `0` means "use the default" for every arm handled
+        // here (never a literal zero), same as an omitted parameter.
+        let p = |n: usize, default: u16| -> u16 {
+            flat.get(n).copied().filter(|v| *v != 0).unwrap_or(default)
+        };
+        match action {
+            // CUP / HVP: 1-based on the wire, 0-based in the grid.
+            'H' | 'f' => self.grid.goto(p(0, 1) - 1, p(1, 1) - 1),
+            'A' => self.grid.move_cursor(-i32::from(p(0, 1)), 0),
+            'B' => self.grid.move_cursor(i32::from(p(0, 1)), 0),
+            'C' => self.grid.move_cursor(0, i32::from(p(0, 1))),
+            'D' => self.grid.move_cursor(0, -i32::from(p(0, 1))),
+            'J' => self.grid.erase_in_display(flat.first().copied().unwrap_or(0)),
+            'K' => self.grid.erase_in_line(flat.first().copied().unwrap_or(0)),
+            _ => {}
+        }
     }
 
     fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
@@ -228,5 +245,115 @@ mod tests {
         let row = s.grid.row_cells(0);
         assert_eq!(row[0].fg, Color::Indexed(1));
         assert!(row[0].attrs.contains(Attrs::BOLD));
+    }
+
+    #[test]
+    fn cup_moves_the_cursor_one_based() {
+        let mut s = Screen::new(5, 20);
+        s.feed(b"\x1b[3;7HX");
+        // CSI row;col H is 1-based; row 3 col 7 is grid (2, 6).
+        assert_eq!(s.grid.row_cells(2)[6].ch, 'X');
+    }
+
+    #[test]
+    fn cup_without_params_homes_the_cursor() {
+        let mut s = Screen::new(3, 10);
+        s.feed(b"abc\r\ndef\x1b[HZ");
+        assert_eq!(s.grid.row_text(0), "Zbc");
+    }
+
+    #[test]
+    fn erase_in_line_to_end_clears_the_tail_only() {
+        let mut s = Screen::new(2, 10);
+        s.feed(b"abcdef\x1b[1;4H\x1b[0K");
+        assert_eq!(s.grid.row_text(0), "abc");
+    }
+
+    #[test]
+    fn erase_in_display_two_clears_everything() {
+        let mut s = Screen::new(3, 10);
+        s.feed(b"aaa\r\nbbb\x1b[2J");
+        assert_eq!(s.grid.row_text(0), "");
+        assert_eq!(s.grid.row_text(1), "");
+    }
+
+    /// Cursor-up at the top row must clamp, not underflow. This is the
+    /// arithmetic that panics in debug and wraps in release if written with
+    /// unsigned subtraction.
+    #[test]
+    fn cursor_up_at_the_top_row_clamps() {
+        let mut s = Screen::new(3, 10);
+        s.feed(b"\x1b[10A\x1b[10DX");
+        assert_eq!(s.grid.cursor().0, 0);
+        assert_eq!(s.grid.row_cells(0)[0].ch, 'X');
+    }
+
+    /// `f` is CUP's alias (HVP) and must behave identically to `H`.
+    #[test]
+    fn cursor_position_alias_f_also_moves_the_cursor() {
+        let mut s = Screen::new(5, 20);
+        s.feed(b"\x1b[2;3fY");
+        assert_eq!(s.grid.row_cells(1)[2].ch, 'Y');
+    }
+
+    /// `CSI B` / `CSI C` move down/right and must clamp at the bottom-right
+    /// edge rather than walking off the grid. Asserted right after the
+    /// movement, before printing — `put` itself advances the cursor past
+    /// the last column once it writes there (existing Task 2 wrap-before-
+    /// write behaviour), so checking cursor position after the print would
+    /// conflate that with clamping.
+    #[test]
+    fn cursor_down_and_forward_clamp_at_the_bottom_right() {
+        let mut s = Screen::new(3, 5);
+        s.feed(b"\x1b[99B\x1b[99C");
+        assert_eq!(s.grid.cursor(), (2, 4), "movement clamps at the last row and column");
+        s.feed(b"X");
+        assert_eq!(s.grid.row_cells(2)[4].ch, 'X');
+    }
+
+    /// Erasing a range whose edge cuts through a wide glyph must clear both
+    /// the owner and its spacer — never strand one without the other. This
+    /// is asserted through `row_cells`, not `row_text`, because `row_text`
+    /// filters spacers and would hide the corruption (the same reason the
+    /// `put` spacer-repair bug survived its original tests).
+    #[test]
+    fn erase_in_line_to_end_does_not_strand_a_spacer_at_the_left_edge() {
+        let mut s = Screen::new(2, 10);
+        // "a" then a wide glyph at columns 1-2, so erasing from column 2
+        // onward starts exactly on the glyph's spacer.
+        s.feed("a中".as_bytes());
+        s.feed(b"\x1b[1;3H\x1b[0K");
+        let row = s.grid.row_cells(0);
+        assert_eq!(row[0].ch, 'a', "column before the erase is untouched");
+        assert_eq!(row[1].ch, ' ', "the wide glyph's owner must not survive without its spacer");
+        assert!(!row[2].is_spacer(), "no orphaned spacer may remain");
+    }
+
+    #[test]
+    fn erase_in_line_from_start_does_not_strand_a_spacer_at_the_right_edge() {
+        let mut s = Screen::new(2, 10);
+        // A wide glyph at columns 0-1, then "a" at column 2. Erasing
+        // start-to-cursor with the cursor on the glyph's owner (column 0)
+        // must also clear its spacer at column 1.
+        s.feed("中a".as_bytes());
+        s.feed(b"\x1b[1;1H\x1b[1K");
+        let row = s.grid.row_cells(0);
+        assert_eq!(row[0].ch, ' ');
+        assert!(!row[1].is_spacer(), "no orphaned spacer may remain");
+        assert_eq!(row[2].ch, 'a', "column after the erase is untouched");
+    }
+
+    /// `goto` can land the cursor directly on a spacer (previously only
+    /// reachable via internal wrapping). A subsequent `put` there must still
+    /// repair the orphaned owner rather than writing into a corrupted cell.
+    #[test]
+    fn goto_onto_a_spacer_then_printing_repairs_the_owner() {
+        let mut s = Screen::new(2, 10);
+        s.feed("中中".as_bytes()); // columns 0-1 and 2-3
+        s.feed(b"\x1b[1;4Hx"); // 1-based col 4 = 0-based col 3, the second glyph's spacer
+        let row = s.grid.row_cells(0);
+        assert_eq!(row[0].ch, '中', "the first glyph is untouched");
+        assert_eq!(row[2].ch, ' ', "the orphaned owner must be blanked");
+        assert_eq!(row[3].ch, 'x');
     }
 }

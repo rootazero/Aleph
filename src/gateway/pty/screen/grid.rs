@@ -175,6 +175,75 @@ impl Grid {
         }
     }
 
+    /// Absolute cursor move, clamped to the grid. Callers pass 0-based
+    /// coordinates; the 1-based CSI convention is converted by the caller.
+    pub fn goto(&mut self, row: u16, col: u16) {
+        self.cursor_row = row.min(self.rows - 1);
+        self.cursor_col = col.min(self.cols - 1);
+    }
+
+    /// Relative cursor move, clamped at every edge. Signed deltas because
+    /// unsigned subtraction here panics in debug and wraps in release —
+    /// the same byte behaving two ways in two profiles.
+    pub fn move_cursor(&mut self, d_row: i32, d_col: i32) {
+        let r = i64::from(self.cursor_row) + i64::from(d_row);
+        let c = i64::from(self.cursor_col) + i64::from(d_col);
+        self.cursor_row = r.clamp(0, i64::from(self.rows - 1)) as u16;
+        self.cursor_col = c.clamp(0, i64::from(self.cols - 1)) as u16;
+    }
+
+    /// CSI J. 0 = cursor to end, 1 = start to cursor, anything else = all.
+    pub fn erase_in_display(&mut self, mode: u16) {
+        let cur = self.idx(self.cursor_row, self.cursor_col);
+        let len = self.cells.len();
+        let (from, to) = match mode {
+            0 => (cur, len),
+            1 => (0, (cur + 1).min(len)),
+            _ => (0, len),
+        };
+        self.clear_range(from, to);
+    }
+
+    /// CSI K. 0 = cursor to end of line, 1 = start of line to cursor,
+    /// anything else = the whole line.
+    pub fn erase_in_line(&mut self, mode: u16) {
+        let start = self.idx(self.cursor_row, 0);
+        let end = start + self.cols as usize;
+        let cur = self.idx(self.cursor_row, self.cursor_col);
+        let (from, to) = match mode {
+            0 => (cur, end),
+            1 => (start, (cur + 1).min(end)),
+            _ => (start, end),
+        };
+        self.clear_range(from, to);
+    }
+
+    /// Blanks `[from, to)`, extending either edge by one cell when it falls
+    /// inside a wide glyph's owner/spacer pair. Left unextended, clearing
+    /// only a spacer strands its owner claiming a width-2 glyph with a
+    /// blank neighbour instead of a spacer, and clearing only an owner
+    /// orphans its spacer — the same corruption class `put`'s
+    /// `repair_straddled_glyph` guards against, here for a range instead of
+    /// a single cursor write. A spacer can never sit at column 0 (`put`
+    /// always wraps before it would split a wide glyph across rows), so
+    /// this extension never reaches across a row boundary.
+    fn clear_range(&mut self, mut from: usize, mut to: usize) {
+        let len = self.cells.len();
+        if from >= to || from >= len {
+            return;
+        }
+        to = to.min(len);
+        if from > 0 && self.cells[from].is_spacer() {
+            from -= 1;
+        }
+        if to < len && self.cells[to].is_spacer() {
+            to += 1;
+        }
+        for cell in &mut self.cells[from..to] {
+            *cell = Cell::default();
+        }
+    }
+
     /// Move to the next row, scrolling the top row into scrollback when the
     /// cursor is already on the last row.
     pub fn newline(&mut self) {
