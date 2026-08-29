@@ -140,7 +140,11 @@ struct Performer<'a> {
 
 impl Performer<'_> {
     fn style(&self) -> (Color, Color, Attrs) {
-        (self.screen.state.fg, self.screen.state.bg, self.screen.state.attrs)
+        (
+            self.screen.state.fg,
+            self.screen.state.bg,
+            self.screen.state.attrs,
+        )
     }
 
     /// SGR. Consumes the parameter list because 38/48 take trailing
@@ -293,8 +297,14 @@ impl vte::Perform for Performer<'_> {
             'B' => self.screen.grid.move_cursor(i32::from(p(0, 1)), 0),
             'C' => self.screen.grid.move_cursor(0, i32::from(p(0, 1))),
             'D' => self.screen.grid.move_cursor(0, -i32::from(p(0, 1))),
-            'J' => self.screen.grid.erase_in_display(flat.first().copied().unwrap_or(0)),
-            'K' => self.screen.grid.erase_in_line(flat.first().copied().unwrap_or(0)),
+            'J' => self
+                .screen
+                .grid
+                .erase_in_display(flat.first().copied().unwrap_or(0)),
+            'K' => self
+                .screen
+                .grid
+                .erase_in_line(flat.first().copied().unwrap_or(0)),
             // `\e[?1049h` / `\e[?1049l`: enter/exit the alternate screen.
             // `?` only ever arrives via `intermediates`, never `params` — a
             // guard on `action` alone would also swallow the private-mode-less
@@ -461,7 +471,11 @@ mod tests {
     fn cursor_down_and_forward_clamp_at_the_bottom_right() {
         let mut s = Screen::new(3, 5);
         s.feed(b"\x1b[99B\x1b[99C");
-        assert_eq!(s.grid.cursor(), (2, 4), "movement clamps at the last row and column");
+        assert_eq!(
+            s.grid.cursor(),
+            (2, 4),
+            "movement clamps at the last row and column"
+        );
         s.feed(b"X");
         assert_eq!(s.grid.row_cells(2)[4].ch, 'X');
     }
@@ -480,7 +494,10 @@ mod tests {
         s.feed(b"\x1b[1;3H\x1b[0K");
         let row = s.grid.row_cells(0);
         assert_eq!(row[0].ch, 'a', "column before the erase is untouched");
-        assert_eq!(row[1].ch, ' ', "the wide glyph's owner must not survive without its spacer");
+        assert_eq!(
+            row[1].ch, ' ',
+            "the wide glyph's owner must not survive without its spacer"
+        );
         assert!(!row[2].is_spacer(), "no orphaned spacer may remain");
     }
 
@@ -523,7 +540,11 @@ mod tests {
         assert_eq!(s.grid.row_text(0), "alt");
         s.feed(b"\x1b[?1049l");
         assert!(!s.alt_screen());
-        assert_eq!(s.grid.row_text(0), "primary", "the primary screen must survive");
+        assert_eq!(
+            s.grid.row_text(0),
+            "primary",
+            "the primary screen must survive"
+        );
     }
 
     #[test]
@@ -583,9 +604,15 @@ mod tests {
 
         s.feed(b"\x1b[?1049h");
 
-        let p = s.take_patch().expect("entering the alt screen must produce a patch");
+        let p = s
+            .take_patch()
+            .expect("entering the alt screen must produce a patch");
         let rows: Vec<u16> = p.rows.iter().map(|r| r.row).collect();
-        assert_eq!(rows, vec![0, 1, 2], "every row of the (blank) alt screen must ship");
+        assert_eq!(
+            rows,
+            vec![0, 1, 2],
+            "every row of the (blank) alt screen must ship"
+        );
         assert_eq!(p.alt_screen, Some(true));
     }
 
@@ -602,9 +629,15 @@ mod tests {
 
         s.feed(b"\x1b[?1049l");
 
-        let p = s.take_patch().expect("exiting the alt screen must produce a patch");
+        let p = s
+            .take_patch()
+            .expect("exiting the alt screen must produce a patch");
         let rows: Vec<u16> = p.rows.iter().map(|r| r.row).collect();
-        assert_eq!(rows, vec![0, 1, 2], "every row of the restored primary must ship");
+        assert_eq!(
+            rows,
+            vec![0, 1, 2],
+            "every row of the restored primary must ship"
+        );
         assert_eq!(p.alt_screen, Some(false));
     }
 }

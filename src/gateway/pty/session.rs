@@ -306,14 +306,19 @@ mod tests {
         for _ in 0..100 {
             let snap = session.attach_snapshot();
             if snap.patch.rows.iter().any(|r| {
-                r.runs.iter().any(|run| run.text.contains("ALEPH_SCREEN_OK"))
+                r.runs
+                    .iter()
+                    .any(|run| run.text.contains("ALEPH_SCREEN_OK"))
             }) {
                 found = true;
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
-        assert!(found, "the child's output must appear on the server-held screen");
+        assert!(
+            found,
+            "the child's output must appear on the server-held screen"
+        );
         session.kill();
     }
 
@@ -321,7 +326,11 @@ mod tests {
     /// client's gap detection fires on frames that were never sent.
     #[tokio::test(flavor = "multi_thread")]
     async fn seq_advances_only_when_a_frame_is_produced() {
-        let opts = SpawnOptions { rows: 5, cols: 20, ..Default::default() };
+        let opts = SpawnOptions {
+            rows: 5,
+            cols: 20,
+            ..Default::default()
+        };
         let session = PtySession::spawn("t-seq".into(), &opts, None).expect("spawn");
         // Drain whatever the shell printed at startup.
         for _ in 0..20 {
@@ -331,8 +340,15 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         let before = session.attach_snapshot().seq;
-        assert!(session.feed_and_take_frame().is_none(), "a quiet screen yields no frame");
-        assert_eq!(session.attach_snapshot().seq, before, "a no-op must not burn a seq");
+        assert!(
+            session.feed_and_take_frame().is_none(),
+            "a quiet screen yields no frame"
+        );
+        assert_eq!(
+            session.attach_snapshot().seq,
+            before,
+            "a no-op must not burn a seq"
+        );
         session.kill();
     }
 }

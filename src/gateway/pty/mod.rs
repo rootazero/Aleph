@@ -44,9 +44,7 @@ pub use session::{PtySession, SpawnOptions};
 /// already treats as "not registered" and refuses — never as "allow
 /// anywhere".
 #[must_use]
-pub fn workspace_roots(
-    defaults: &crate::config::types::AgentDefaults,
-) -> Vec<std::path::PathBuf> {
+pub fn workspace_roots(defaults: &crate::config::types::AgentDefaults) -> Vec<std::path::PathBuf> {
     let root = crate::config::agent_resolver::workspace_root_for(defaults);
     let _ = std::fs::create_dir_all(&root);
     vec![root]
@@ -78,7 +76,11 @@ mod tests {
         // shortcut into `PtyManager`'s internals.
         attach_event_bus(bus);
 
-        let opts = SpawnOptions { rows: 10, cols: 40, ..Default::default() };
+        let opts = SpawnOptions {
+            rows: 10,
+            cols: 40,
+            ..Default::default()
+        };
         let sid = manager().spawn(&opts).expect("spawn").session_id;
         let input: &[u8] = if cfg!(windows) {
             b"echo ALEPH_FLUSH_WIRE_OK\r\n"
@@ -108,7 +110,9 @@ mod tests {
                         };
                         if frame.session_id == sid
                             && frame.patch.rows.iter().any(|r| {
-                                r.runs.iter().any(|run| run.text.contains("ALEPH_FLUSH_WIRE_OK"))
+                                r.runs
+                                    .iter()
+                                    .any(|run| run.text.contains("ALEPH_FLUSH_WIRE_OK"))
                             })
                         {
                             found = true;

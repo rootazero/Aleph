@@ -3,9 +3,7 @@
 //! The conversion lives here rather than as `From` impls on the protocol
 //! types because the protocol crate must not depend on alephcore.
 
-use aleph_protocol::pty::{
-    PtyAttrs, PtyColor, PtyRowPatch, PtyScreenPatch, PtyStyleRun,
-};
+use aleph_protocol::pty::{PtyAttrs, PtyColor, PtyRowPatch, PtyScreenPatch, PtyStyleRun};
 
 use super::diff::{ScreenPatch, StyleRun};
 use super::grid::{Attrs, Color};
@@ -40,7 +38,10 @@ pub fn patch(p: &ScreenPatch) -> PtyScreenPatch {
         rows: p
             .rows
             .iter()
-            .map(|r| PtyRowPatch { row: r.row, runs: r.runs.iter().map(run).collect() })
+            .map(|r| PtyRowPatch {
+                row: r.row,
+                runs: r.runs.iter().map(run).collect(),
+            })
             .collect(),
         cursor: p.cursor,
         alt_screen: p.alt_screen,

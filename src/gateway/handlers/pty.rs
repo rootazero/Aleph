@@ -95,7 +95,10 @@ pub async fn handle_spawn(request: JsonRpcRequest) -> JsonRpcResponse {
     // the child process. Config is read fresh on every spawn (not cached at
     // boot) so a workspace registered after start-up is usable immediately —
     // see `pty::workspace_roots`'s doc for why.
-    let defaults = crate::config::Config::load().unwrap_or_default().agents.defaults;
+    let defaults = crate::config::Config::load()
+        .unwrap_or_default()
+        .agents
+        .defaults;
     let roots = pty::workspace_roots(&defaults);
     let cwd = match pty::jail::resolve_spawn_cwd(params.cwd.as_deref(), &roots) {
         Ok(p) => p,
@@ -328,8 +331,12 @@ mod tests {
 
         // The contract is the key set, not a subset: a parse-only assertion
         // is blind to over-sending because serde ignores unknown keys.
-        let keys: std::collections::BTreeSet<&str> =
-            value.as_object().expect("object").keys().map(String::as_str).collect();
+        let keys: std::collections::BTreeSet<&str> = value
+            .as_object()
+            .expect("object")
+            .keys()
+            .map(String::as_str)
+            .collect();
         assert_eq!(
             keys,
             ["cols", "patch", "rows", "scrollback_len", "seq"]
@@ -343,7 +350,10 @@ mod tests {
     #[tokio::test]
     async fn attach_on_an_unknown_session_is_an_error_not_an_empty_screen() {
         let resp = handle_attach(req("pty.attach", json!({ "session_id": "ghost" }))).await;
-        assert!(resp.result.is_none(), "an unknown session must not read as a blank screen");
+        assert!(
+            resp.result.is_none(),
+            "an unknown session must not read as a blank screen"
+        );
         assert!(resp.error.is_some());
     }
 
@@ -458,8 +468,12 @@ mod tests {
     async fn spawn_response_matches_the_contract_key_for_key() {
         let resp = handle_spawn(req("pty.spawn", json!({ "rows": 4, "cols": 12 }))).await;
         let value = resp.result.expect("spawned");
-        let keys: std::collections::BTreeSet<&str> =
-            value.as_object().expect("object").keys().map(String::as_str).collect();
+        let keys: std::collections::BTreeSet<&str> = value
+            .as_object()
+            .expect("object")
+            .keys()
+            .map(String::as_str)
+            .collect();
         assert_eq!(
             keys,
             ["cols", "rows", "seq", "session_id", "shell"]

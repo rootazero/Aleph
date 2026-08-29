@@ -108,8 +108,11 @@ mod tests {
     fn a_path_outside_every_root_is_refused() {
         let tmp = tempfile::tempdir().expect("tmp");
         let other = tempfile::tempdir().expect("tmp2");
-        let err = resolve_spawn_cwd(Some(other.path().to_str().expect("utf8")), &roots(tmp.path()))
-            .expect_err("outside every root must be refused");
+        let err = resolve_spawn_cwd(
+            Some(other.path().to_str().expect("utf8")),
+            &roots(tmp.path()),
+        )
+        .expect_err("outside every root must be refused");
         assert!(err.contains("outside"), "the refusal must say why: {err}");
     }
 
@@ -147,6 +150,9 @@ mod tests {
     #[test]
     fn no_registered_roots_refuses_loudly_and_names_the_remedy() {
         let err = resolve_spawn_cwd(None, &[]).expect_err("must refuse");
-        assert!(err.contains("workspace"), "the refusal must name what to do: {err}");
+        assert!(
+            err.contains("workspace"),
+            "the refusal must name what to do: {err}"
+        );
     }
 }

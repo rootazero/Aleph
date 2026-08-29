@@ -51,7 +51,12 @@ pub struct Cell {
 
 impl Default for Cell {
     fn default() -> Self {
-        Self { ch: ' ', fg: Color::Default, bg: Color::Default, attrs: Attrs::NONE }
+        Self {
+            ch: ' ',
+            fg: Color::Default,
+            bg: Color::Default,
+            attrs: Attrs::NONE,
+        }
     }
 }
 
@@ -177,10 +182,20 @@ impl Grid {
         let (fg, bg, attrs) = style;
         self.repair_straddled_glyph(w, fg, bg, attrs);
         let i = self.idx(self.cursor_row, self.cursor_col);
-        self.cells[i] = Cell { ch: c, fg, bg, attrs };
+        self.cells[i] = Cell {
+            ch: c,
+            fg,
+            bg,
+            attrs,
+        };
         if w == 2 {
             let j = self.idx(self.cursor_row, self.cursor_col + 1);
-            self.cells[j] = Cell { ch: Cell::SPACER, fg, bg, attrs };
+            self.cells[j] = Cell {
+                ch: Cell::SPACER,
+                fg,
+                bg,
+                attrs,
+            };
         }
         // repair_straddled_glyph above only ever touches cursor_row too, so
         // one insert covers the whole write.
@@ -196,7 +211,12 @@ impl Grid {
     /// spacers and would hide the corruption; [`Self::row_cells`], which is
     /// what the wire sends, would not.
     fn repair_straddled_glyph(&mut self, w: u16, fg: Color, bg: Color, attrs: Attrs) {
-        let blank = Cell { ch: ' ', fg, bg, attrs };
+        let blank = Cell {
+            ch: ' ',
+            fg,
+            bg,
+            attrs,
+        };
 
         if self.cursor_col > 0 {
             let here = self.idx(self.cursor_row, self.cursor_col);
@@ -404,8 +424,16 @@ mod tests {
     fn wide_chars_take_two_columns_and_leave_a_spacer() {
         let mut g = Grid::new(2, 10);
         g.put('中', PLAIN);
-        assert_eq!(g.cursor(), (0, 2), "a wide glyph advances the cursor by two");
-        assert_eq!(g.row_text(0), "中", "the spacer cell must not surface as a char");
+        assert_eq!(
+            g.cursor(),
+            (0, 2),
+            "a wide glyph advances the cursor by two"
+        );
+        assert_eq!(
+            g.row_text(0),
+            "中",
+            "the spacer cell must not surface as a char"
+        );
     }
 
     /// Writing past the last column wraps to the next row rather than
@@ -439,7 +467,10 @@ mod tests {
 
         let cells = g.row_cells(0);
         assert_eq!(cells[0].ch, 'a');
-        assert!(!cells[1].is_spacer(), "column 1 must not be left as a dangling spacer");
+        assert!(
+            !cells[1].is_spacer(),
+            "column 1 must not be left as a dangling spacer"
+        );
     }
 
     /// The mirror direction: the write lands directly on an existing
@@ -459,7 +490,10 @@ mod tests {
         let cells = g.row_cells(0);
         assert_eq!(cells[0].ch, '中', "the first glyph is untouched");
         assert!(cells[1].is_spacer(), "the first glyph keeps its own spacer");
-        assert_eq!(cells[2].ch, ' ', "the orphaned owner must be blanked, not left wide with no spacer");
+        assert_eq!(
+            cells[2].ch, ' ',
+            "the orphaned owner must be blanked, not left wide with no spacer"
+        );
         assert_eq!(cells[3].ch, 'x');
     }
 
@@ -481,7 +515,10 @@ mod tests {
         let cells = g.row_cells(0);
         assert_eq!(cells[0].ch, '中', "the first glyph is untouched");
         assert!(cells[1].is_spacer(), "the first glyph keeps its own spacer");
-        assert_eq!(cells[2].ch, ' ', "the orphaned owner must be blanked, not left wide with no spacer");
+        assert_eq!(
+            cells[2].ch, ' ',
+            "the orphaned owner must be blanked, not left wide with no spacer"
+        );
         assert_eq!(cells[3].ch, 'x');
     }
 
@@ -507,7 +544,11 @@ mod tests {
             g.put(c, PLAIN);
         }
 
-        assert_eq!(g.row_text(0), "row1!", "row0 scrolled off the top, row1 moved up");
+        assert_eq!(
+            g.row_text(0),
+            "row1!",
+            "row0 scrolled off the top, row1 moved up"
+        );
         assert_eq!(g.row_text(1), "row2!");
         assert_eq!(g.scrollback.len(), 1, "exactly one row was evicted");
         let evicted: String = g.scrollback[0].iter().map(|c| c.ch).collect();
@@ -555,7 +596,11 @@ mod tests {
         let mut g = Grid::new(5, 20);
         g.goto(4, 15);
         g.resize(2, 5);
-        assert_eq!(g.cursor(), (1, 4), "cursor is clamped into the smaller grid");
+        assert_eq!(
+            g.cursor(),
+            (1, 4),
+            "cursor is clamped into the smaller grid"
+        );
     }
 
     #[test]
@@ -563,6 +608,10 @@ mod tests {
         let mut g = Grid::new(3, 10);
         g.put('x', PLAIN);
         g.resize(3, 10);
-        assert_eq!(g.row_text(0), "x", "content is untouched by a same-size resize");
+        assert_eq!(
+            g.row_text(0),
+            "x",
+            "content is untouched by a same-size resize"
+        );
     }
 }

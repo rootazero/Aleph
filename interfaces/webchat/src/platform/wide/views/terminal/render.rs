@@ -97,7 +97,10 @@ pub fn measure(ctx: &CanvasRenderingContext2d, font: &str) -> CellMetrics {
         .split_whitespace()
         .find_map(|t| t.strip_suffix("px").and_then(|n| n.parse::<f64>().ok()))
         .unwrap_or(14.0);
-    CellMetrics { width, height: (px * 1.2).round() }
+    CellMetrics {
+        width,
+        height: (px * 1.2).round(),
+    }
 }
 
 /// Pixel width a run occupies on screen. NOT `text.chars().count()`: a wide
@@ -133,8 +136,16 @@ pub fn paint(ctx: &CanvasRenderingContext2d, screen: &ClientScreen, m: CellMetri
                 ctx.fill_rect(x, y, run_w, m.height);
             }
             ctx.set_fill_style_str(&theme.resolve_fg(run.fg));
-            let weight = if run.attrs.has(PtyAttrs::BOLD) { "bold " } else { "" };
-            let style = if run.attrs.has(PtyAttrs::ITALIC) { "italic " } else { "" };
+            let weight = if run.attrs.has(PtyAttrs::BOLD) {
+                "bold "
+            } else {
+                ""
+            };
+            let style = if run.attrs.has(PtyAttrs::ITALIC) {
+                "italic "
+            } else {
+                ""
+            };
             ctx.set_font(&format!("{style}{weight}14px 'JetBrains Mono', monospace"));
             let _ = ctx.fill_text(&run.text, x, y + m.height * 0.8);
             x += run_w;
@@ -145,7 +156,12 @@ pub fn paint(ctx: &CanvasRenderingContext2d, screen: &ClientScreen, m: CellMetri
     let (cr, cc) = screen.cursor();
     ctx.set_fill_style_str(theme.fg);
     ctx.set_global_alpha(0.6);
-    ctx.fill_rect(f64::from(cc) * m.width, f64::from(cr) * m.height, m.width, m.height);
+    ctx.fill_rect(
+        f64::from(cc) * m.width,
+        f64::from(cr) * m.height,
+        m.width,
+        m.height,
+    );
     ctx.set_global_alpha(1.0);
 }
 
@@ -158,19 +174,42 @@ mod tests {
     /// on every single session.
     #[test]
     fn viewport_cells_floors_and_never_returns_zero() {
-        let m = CellMetrics { width: 8.0, height: 17.0 };
+        let m = CellMetrics {
+            width: 8.0,
+            height: 17.0,
+        };
         assert_eq!(viewport_cells(800.0, 340.0, m), (20, 100));
-        assert_eq!(viewport_cells(7.0, 3.0, m), (1, 1), "a tiny pane still needs one cell");
-        assert_eq!(viewport_cells(0.0, 0.0, m), (1, 1), "a pane mid-layout must not divide by zero");
+        assert_eq!(
+            viewport_cells(7.0, 3.0, m),
+            (1, 1),
+            "a tiny pane still needs one cell"
+        );
+        assert_eq!(
+            viewport_cells(0.0, 0.0, m),
+            (1, 1),
+            "a pane mid-layout must not divide by zero"
+        );
     }
 
     /// A zero or NaN metric means the font has not loaded yet. Rendering with
     /// it produces a division by zero, so the caller must be able to tell.
     #[test]
     fn metrics_report_whether_they_are_usable() {
-        assert!(CellMetrics { width: 8.0, height: 17.0 }.is_usable());
-        assert!(!CellMetrics { width: 0.0, height: 17.0 }.is_usable());
-        assert!(!CellMetrics { width: f64::NAN, height: 17.0 }.is_usable());
+        assert!(CellMetrics {
+            width: 8.0,
+            height: 17.0
+        }
+        .is_usable());
+        assert!(!CellMetrics {
+            width: 0.0,
+            height: 17.0
+        }
+        .is_usable());
+        assert!(!CellMetrics {
+            width: f64::NAN,
+            height: 17.0
+        }
+        .is_usable());
     }
 
     #[test]
@@ -190,7 +229,10 @@ mod tests {
     /// `paint` advances `x` with, rather than re-deriving the arithmetic.
     #[test]
     fn wide_glyphs_advance_two_columns_not_one_char() {
-        let m = CellMetrics { width: 8.0, height: 17.0 };
+        let m = CellMetrics {
+            width: 8.0,
+            height: 17.0,
+        };
         // "你好" is 2 CJK chars — 1 unit each under `chars().count()` — but 2
         // display columns each, 4 columns total, not 2.
         let cjk = "你好";
@@ -209,7 +251,15 @@ mod tests {
         let second_run_x = x;
         x += run_extent("!", m.width);
 
-        assert_eq!(second_run_x, 4.0 * m.width, "a run after two wide glyphs must be offset by 4 columns, not 2");
-        assert_eq!(x, second_run_x + m.width, "an ASCII run after it must still advance by exactly 1 column");
+        assert_eq!(
+            second_run_x,
+            4.0 * m.width,
+            "a run after two wide glyphs must be offset by 4 columns, not 2"
+        );
+        assert_eq!(
+            x,
+            second_run_x + m.width,
+            "an ASCII run after it must still advance by exactly 1 column"
+        );
     }
 }

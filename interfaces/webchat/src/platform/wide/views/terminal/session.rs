@@ -28,14 +28,19 @@ pub enum ApplyOutcome {
     /// A frame was missed (`seq` skipped ahead of what was expected). The
     /// caller must call `pty.attach` and feed the result to
     /// [`ClientScreen::finish_attach`].
-    Gap { expected: u64, got: u64 },
+    Gap {
+        expected: u64,
+        got: u64,
+    },
     /// Held until the in-flight attach lands.
     Buffered,
     /// `frame.seq` is at or below the already-applied seq: a duplicate
     /// delivery, or a frame that predates the last attach's snapshot. Not an
     /// error and not a gap — there is nothing to resync, the frame's content
     /// is already reflected in this screen's state.
-    Discarded { seq: u64 },
+    Discarded {
+        seq: u64,
+    },
     /// `frame.session_id` does not match the session this screen tracks.
     /// Ignored, not counted against this screen's `seq`.
     WrongSession,
@@ -198,7 +203,10 @@ impl ClientScreen {
                 // attach was in flight. Stop here rather than skipping over
                 // it — `seq` stays at the last frame actually applied, so it
                 // never claims to be more current than it is.
-                return AttachOutcome::Gap { expected, got: frame.seq };
+                return AttachOutcome::Gap {
+                    expected,
+                    got: frame.seq,
+                };
             }
             self.seq = frame.seq;
             self.write_patch(&frame.patch);
@@ -235,7 +243,10 @@ impl ClientScreen {
             return ApplyOutcome::Discarded { seq: frame.seq };
         }
         if frame.seq > expected {
-            return ApplyOutcome::Gap { expected, got: frame.seq };
+            return ApplyOutcome::Gap {
+                expected,
+                got: frame.seq,
+            };
         }
         self.seq = frame.seq;
         self.write_patch(&frame.patch);
@@ -272,7 +283,9 @@ impl ClientScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aleph_protocol::pty::{PtyAttachResponse, PtyRowPatch, PtyScreenFrame, PtyScreenPatch, PtyStyleRun};
+    use aleph_protocol::pty::{
+        PtyAttachResponse, PtyRowPatch, PtyScreenFrame, PtyScreenPatch, PtyStyleRun,
+    };
 
     const SID: &str = "s";
 
@@ -294,7 +307,10 @@ mod tests {
             session_id: session_id.into(),
             seq,
             patch: PtyScreenPatch {
-                rows: vec![PtyRowPatch { row, runs: vec![run(text)] }],
+                rows: vec![PtyRowPatch {
+                    row,
+                    runs: vec![run(text)],
+                }],
                 ..Default::default()
             },
         }
@@ -352,8 +368,15 @@ mod tests {
         let mut s = ClientScreen::new(4, 20, 0, SID);
         assert!(matches!(s.apply(frame(1, 0, "a")), ApplyOutcome::Applied));
         let outcome = s.apply(frame_for("other-session", 2, 1, "intruder"));
-        assert!(matches!(outcome, ApplyOutcome::WrongSession), "got {outcome:?}");
-        assert_eq!(s.row_text(1), "", "another session's frame must not be painted");
+        assert!(
+            matches!(outcome, ApplyOutcome::WrongSession),
+            "got {outcome:?}"
+        );
+        assert_eq!(
+            s.row_text(1),
+            "",
+            "another session's frame must not be painted"
+        );
         assert_eq!(s.seq(), 1, "another session's frame must not advance seq");
     }
 
@@ -364,7 +387,10 @@ mod tests {
         let mut s = ClientScreen::new(4, 20, 0, SID);
         s.begin_attach();
         let outcome = s.apply(frame_for("other-session", 1, 0, "intruder"));
-        assert!(matches!(outcome, ApplyOutcome::WrongSession), "got {outcome:?}");
+        assert!(
+            matches!(outcome, ApplyOutcome::WrongSession),
+            "got {outcome:?}"
+        );
         let attach_outcome = s.finish_attach(PtyAttachResponse {
             seq: 0,
             rows: 4,
@@ -372,8 +398,15 @@ mod tests {
             patch: PtyScreenPatch::default(),
             scrollback_len: 0,
         });
-        assert!(matches!(attach_outcome, AttachOutcome::Resynced), "got {attach_outcome:?}");
-        assert_eq!(s.row_text(0), "", "a different session's frame must not be replayed");
+        assert!(
+            matches!(attach_outcome, AttachOutcome::Resynced),
+            "got {attach_outcome:?}"
+        );
+        assert_eq!(
+            s.row_text(0),
+            "",
+            "a different session's frame must not be replayed"
+        );
     }
 
     /// The snapshot is taken at seq N while frames N+1.. are already in
@@ -383,18 +416,27 @@ mod tests {
     fn frames_arriving_during_attach_are_replayed_after_the_snapshot() {
         let mut s = ClientScreen::new(4, 20, 0, SID);
         s.begin_attach();
-        assert!(matches!(s.apply(frame(6, 2, "late")), ApplyOutcome::Buffered));
+        assert!(matches!(
+            s.apply(frame(6, 2, "late")),
+            ApplyOutcome::Buffered
+        ));
         let outcome = s.finish_attach(PtyAttachResponse {
             seq: 5,
             rows: 4,
             cols: 20,
             patch: PtyScreenPatch {
-                rows: vec![PtyRowPatch { row: 0, runs: vec![run("snap")] }],
+                rows: vec![PtyRowPatch {
+                    row: 0,
+                    runs: vec![run("snap")],
+                }],
                 ..Default::default()
             },
             scrollback_len: 0,
         });
-        assert!(matches!(outcome, AttachOutcome::Resynced), "got {outcome:?}");
+        assert!(
+            matches!(outcome, AttachOutcome::Resynced),
+            "got {outcome:?}"
+        );
         assert_eq!(s.row_text(0), "snap");
         assert_eq!(s.row_text(2), "late", "in-flight frames must be replayed");
         assert_eq!(s.seq(), 6);
@@ -414,8 +456,15 @@ mod tests {
             patch: PtyScreenPatch::default(),
             scrollback_len: 0,
         });
-        assert!(matches!(outcome, AttachOutcome::Resynced), "got {outcome:?}");
-        assert_eq!(s.row_text(3), "", "a frame already in the snapshot must be dropped");
+        assert!(
+            matches!(outcome, AttachOutcome::Resynced),
+            "got {outcome:?}"
+        );
+        assert_eq!(
+            s.row_text(3),
+            "",
+            "a frame already in the snapshot must be dropped"
+        );
     }
 
     /// A hole *inside* the replay buffer — not between the snapshot and the
@@ -428,9 +477,15 @@ mod tests {
     fn a_hole_inside_the_replay_buffer_is_reported_and_does_not_advance_past_it() {
         let mut s = ClientScreen::new(4, 20, 0, SID);
         s.begin_attach();
-        assert!(matches!(s.apply(frame(101, 1, "a")), ApplyOutcome::Buffered));
+        assert!(matches!(
+            s.apply(frame(101, 1, "a")),
+            ApplyOutcome::Buffered
+        ));
         // seq 102 was dropped by the broadcast bus before it ever arrived.
-        assert!(matches!(s.apply(frame(103, 2, "c")), ApplyOutcome::Buffered));
+        assert!(matches!(
+            s.apply(frame(103, 2, "c")),
+            ApplyOutcome::Buffered
+        ));
         let outcome = s.finish_attach(PtyAttachResponse {
             seq: 100,
             rows: 4,
@@ -442,8 +497,16 @@ mod tests {
             AttachOutcome::Gap { expected, got } => assert_eq!((expected, got), (102, 103)),
             other => panic!("a hole in the replay buffer must be reported, got {other:?}"),
         }
-        assert_eq!(s.row_text(1), "a", "the frame before the hole must still apply");
-        assert_eq!(s.row_text(2), "", "the frame after the hole must not be applied");
+        assert_eq!(
+            s.row_text(1),
+            "a",
+            "the frame before the hole must still apply"
+        );
+        assert_eq!(
+            s.row_text(2),
+            "",
+            "the frame after the hole must not be applied"
+        );
         assert_eq!(s.seq(), 101, "seq must not advance past the hole");
     }
 
@@ -456,12 +519,18 @@ mod tests {
             rows: 10,
             cols: 60,
             patch: PtyScreenPatch {
-                rows: vec![PtyRowPatch { row: 9, runs: vec![run("bottom")] }],
+                rows: vec![PtyRowPatch {
+                    row: 9,
+                    runs: vec![run("bottom")],
+                }],
                 ..Default::default()
             },
             scrollback_len: 0,
         });
-        assert!(matches!(outcome, AttachOutcome::Resynced), "got {outcome:?}");
+        assert!(
+            matches!(outcome, AttachOutcome::Resynced),
+            "got {outcome:?}"
+        );
         assert_eq!(s.dims(), (10, 60));
         assert_eq!(
             s.row_text(9),
@@ -482,14 +551,28 @@ mod tests {
             rows: 4,
             cols: 20,
             patch: PtyScreenPatch {
-                rows: vec![PtyRowPatch { row: 0, runs: vec![run("old")] }],
+                rows: vec![PtyRowPatch {
+                    row: 0,
+                    runs: vec![run("old")],
+                }],
                 ..Default::default()
             },
             scrollback_len: 0,
         });
-        assert!(matches!(outcome, AttachOutcome::Resynced), "got {outcome:?}");
-        assert_eq!(s.seq(), 5, "seq must not regress to the stale snapshot's seq");
-        assert_eq!(s.row_text(0), "", "a stale snapshot's content must not overwrite current state");
+        assert!(
+            matches!(outcome, AttachOutcome::Resynced),
+            "got {outcome:?}"
+        );
+        assert_eq!(
+            s.seq(),
+            5,
+            "seq must not regress to the stale snapshot's seq"
+        );
+        assert_eq!(
+            s.row_text(0),
+            "",
+            "a stale snapshot's content must not overwrite current state"
+        );
     }
 
     /// `expected` must saturate rather than overflow when `seq` is already

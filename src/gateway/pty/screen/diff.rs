@@ -57,7 +57,10 @@ pub(crate) fn row_runs(cells: &[Cell]) -> Vec<StyleRun> {
 
 pub(crate) fn patch_rows(grid: &Grid, rows: impl IntoIterator<Item = u16>) -> Vec<RowPatch> {
     rows.into_iter()
-        .map(|row| RowPatch { row, runs: row_runs(grid.row_cells(row)) })
+        .map(|row| RowPatch {
+            row,
+            runs: row_runs(grid.row_cells(row)),
+        })
         .collect()
 }
 
@@ -81,7 +84,10 @@ mod tests {
         let mut s = Screen::new(4, 20);
         s.feed(b"a");
         let _ = s.take_patch();
-        assert!(s.take_patch().is_none(), "a quiet screen must produce no frame");
+        assert!(
+            s.take_patch().is_none(),
+            "a quiet screen must produce no frame"
+        );
     }
 
     #[test]
@@ -104,7 +110,11 @@ mod tests {
         s.feed(b"\x1b]0;t1\x07x");
         assert_eq!(s.take_patch().and_then(|p| p.title), Some("t1".to_string()));
         s.feed(b"y");
-        assert_eq!(s.take_patch().and_then(|p| p.title), None, "an unchanged title must not reship");
+        assert_eq!(
+            s.take_patch().and_then(|p| p.title),
+            None,
+            "an unchanged title must not reship"
+        );
     }
 
     /// A full snapshot is what `pty.attach` hands a fresh client, so it must
@@ -130,9 +140,15 @@ mod tests {
 
         s.resize(5, 20);
 
-        let p = s.take_patch().expect("a resize must always produce a patch");
+        let p = s
+            .take_patch()
+            .expect("a resize must always produce a patch");
         let rows: Vec<u16> = p.rows.iter().map(|r| r.row).collect();
-        assert_eq!(rows, vec![0, 1, 2, 3, 4], "every row of the new, larger geometry must ship");
+        assert_eq!(
+            rows,
+            vec![0, 1, 2, 3, 4],
+            "every row of the new, larger geometry must ship"
+        );
     }
 
     /// `Screen::resize` marks the current grid dirty unconditionally, even
@@ -152,9 +168,15 @@ mod tests {
 
         s.resize(3, 20); // same dimensions: a no-op at the Grid level
 
-        let p = s.take_patch().expect("a same-dimensions resize must still repaint");
+        let p = s
+            .take_patch()
+            .expect("a same-dimensions resize must still repaint");
         let rows: Vec<u16> = p.rows.iter().map(|r| r.row).collect();
-        assert_eq!(rows, vec![0, 1, 2], "every row must still be reported dirty");
+        assert_eq!(
+            rows,
+            vec![0, 1, 2],
+            "every row must still be reported dirty"
+        );
     }
 
     /// A row dirtied by a write keeps its index in the dirty set. If a
@@ -169,8 +191,14 @@ mod tests {
 
         s.resize(3, 20); // shrink to 3 rows -- rows 3 and 4 no longer exist
 
-        let p = s.take_patch().expect("a resize must always produce a patch");
+        let p = s
+            .take_patch()
+            .expect("a resize must always produce a patch");
         let rows: Vec<u16> = p.rows.iter().map(|r| r.row).collect();
-        assert_eq!(rows, vec![0, 1, 2], "no row index past the new geometry may ship");
+        assert_eq!(
+            rows,
+            vec![0, 1, 2],
+            "no row index past the new geometry may ship"
+        );
     }
 }
