@@ -2958,7 +2958,17 @@ value to return and it says nothing about whether boot got here"），只是那�
         );
     }
 ```
-（取当前配置的函数名以仓库既有写法为准 —— 先 `grep -rn 'fn current()' src/config/` 确认；若没有进程级句柄，用 `route`/`policies.spend` 同款 `ArcSwap` 模式补一个，并在 doc 里写明它就是 `LIVE_SUBSECTIONS` 声明的那个背书句柄。）
+⚠️ **这一段刻意没有「如果没有句柄就补一个」的退路，而这是一次裁定不是省略。**
+上一段刚论证完为什么进程级句柄（`ArcSwap` / `CapabilitySlot`）在这里是 fail-**OPEN**：
+未安装的读数是 `TerminalConfig::default()`，而它的 `enabled` 是 `true`，与「operator 就是开着的」
+**逐字节相同**。在同一份文件里先驳倒一个写法、两行后又指着它，是这一轮真实出现过的缺陷
+（controller 2026-08-29 修）。**不要去找 `config::current()`，它不存在**（也已裁定过一次）。
+
+**照现成先例做，端到端已经有一个：`src/gateway/handlers/generation_config.rs`。**
+它就是这个形状的每一段——`pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>)`、
+`let cfg = config.read().await;`、`use tokio::sync::RwLock;`（**是 tokio 的，不是 std 的**，
+所以 `.await` 是对的而不是笔误）、以及在 bin 里用 `register_handler!` 把 config 注进去。
+读它一遍比推演任何一种句柄都快。
 
 - [ ] **Step 4: 跑测试，确认通过**
 
