@@ -16,6 +16,7 @@
 //! so the PTY surface is open to all connections.
 
 pub mod manager;
+pub mod screen;
 pub mod session;
 
 pub use manager::{attach_event_bus, manager, PtyManager, SessionInfo, SpawnResult};
