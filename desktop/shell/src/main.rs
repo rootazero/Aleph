@@ -725,19 +725,40 @@ fn grant_remote_drag(app: &tauri::AppHandle, url: &url::Url) {
 
 /// Bring the main window forward: show it, un-minimise it, focus it. Shared
 /// by the tray, the single-instance handler, and the first Panel reveal.
+///
+/// On macOS the underlying AppKit window operations must run on the main
+/// thread; dispatch through `run_on_main_thread` there. The `RevealGate`
+/// latch is flipped synchronously so the single-instance cold-boot guard
+/// observes it immediately.
 pub(crate) fn focus_window(handle: &tauri::AppHandle) {
-    let Some(window) = handle.get_webview_window("main") else {
-        return;
-    };
-    // Latch "the window has been revealed at least once": a relaunch / tray /
-    // Reopen after this point is a legitimate bring-to-front, but any focus
-    // request *before* it (a re-click during cold boot) must be dropped so the
-    // window is never surfaced mid-bootstrap (the single-instance handler reads
-    // this). Every real show path funnels through here.
+    // Latch first — callers that immediately read the gate (e.g. the
+    // single-instance handler) must see it set, even if the UI half is
+    // queued on the main thread.
     handle
         .state::<RevealGate>()
         .done
         .store(true, Ordering::SeqCst);
+
+    #[cfg(target_os = "macos")]
+    {
+        let handle = handle.clone();
+        if let Err(e) = handle.run_on_main_thread(move || {
+            focus_window_inner(&handle);
+        }) {
+            tracing::warn!("could not dispatch focus_window to main thread: {e}");
+        }
+        return;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    focus_window_inner(handle);
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn focus_window_inner(handle: &tauri::AppHandle) {
+    let Some(window) = handle.get_webview_window("main") else {
+        return;
+    };
     let _ = window.show();
     let _ = window.unminimize();
     let _ = window.set_focus();
@@ -838,14 +859,36 @@ fn reveal_panel(handle: &tauri::AppHandle) {
 /// panel-only shell launches no daemon and has no startup failure to surface.
 #[cfg(feature = "embedded-core")]
 fn show_daemon_error(handle: &tauri::AppHandle, message: &str) {
+    // serde_json gives a fully-escaped, JS-safe double-quoted string literal,
+    // covering backslashes, quotes, newlines and control chars — the old
+    // hand-rolled replace() only handled `\` and `'`, so a daemon error
+    // containing a newline or other control character could break out of
+    // the single-quoted JS literal.
+    let safe = serde_json::to_string(message).unwrap_or_else(|_| "\"\"".to_string());
+    let script = format!("window.__alephError && window.__alephError({safe})");
+
+    let handle = handle.clone();
+    #[cfg(target_os = "macos")]
+    {
+        if let Err(e) = handle.run_on_main_thread(move || {
+            show_daemon_error_inner(&handle, &script);
+        }) {
+            tracing::warn!("could not dispatch show_daemon_error to main thread: {e}");
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        show_daemon_error_inner(&handle, &script);
+    }
+}
+
+#[cfg(feature = "embedded-core")]
+fn show_daemon_error_inner(handle: &tauri::AppHandle, script: &str) {
     let Some(window) = handle.get_webview_window("main") else {
         return;
     };
     let _ = window.show();
-    let safe = message.replace('\\', "\\\\").replace('\'', "\\'");
-    let _ = window.eval(format!(
-        "window.__alephError && window.__alephError('{safe}')"
-    ));
+    let _ = window.eval(script);
 }
 
 /// Whether the daemon is currently believed to be serving the Panel.
