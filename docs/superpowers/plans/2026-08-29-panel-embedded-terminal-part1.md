@@ -39,6 +39,7 @@
 | §4.3 | `pty.scrollback {from,to}` RPC | Part 2 | 它的唯一消费者是"往回滚"，而 Part 1 没有滚动条。先建 RPC 就是零客户端通道 —— 正是这个子系统刚犯过的错。服务端**已经存了** scrollback（Task 2/12），Part 2 只需加读取面。 |
 | §6.6 | IME（隐藏 `<textarea>` 承接 composition） | Part 2 | Task 17 只处理 `keydown`。**因此 Part 1 交付的终端不能输入中文/日文/韩文**，这写进下方完成判据。 |
 | §6.2 §6.3 §6.7 | Tab 条 / 分屏树 / 布局持久化 / 选区 / 搜索 | Part 2 | D1 的 B 档结构，Part 1 交付单窗格。 |
+| —（spec 未提及，本计划自身的缺口，Task 7 审查后由 controller 扫出） | Panel 不呈现会话退出 | Part 2 | 服务端一直发 `pty.exit`（Task 8 起改走 `PTY_EXIT_TOPIC`），但 Part 1 的 Panel 只订阅 `pty.screen`，没有任何一个 Task 接退出帧。**后果：用户 `exit` 或 shell 崩掉之后，终端不报错、不变灰、不说话，只是停止更新——一块死掉的矩形**，而「未知」被渲染成了「健康」。之所以划给 Part 2 而不是现在补：Task 15 的 brief 已定稿，为此扩容会在计划中途改掉一个已被扫描判定兼容的任务；而 Part 2 本来就要为 tab 条做会话生命周期。 |
 | —（spec 未提及，仅本计划 File Structure 表曾承诺 `esc`） | ESC 族转义序列（`ESC 7`/`ESC 8` DECSC/DECRC 光标保存/恢复、`ESC M` RI 反向换行） | Part 2 | 没有任何 Task 接 `vte::Perform::esc_dispatch`，Part 1 落回 vte 的默认 no-op。**后果：`less` / `vim` 等全屏程序下可能出现光标位置错位**，这写进下方完成判据。 |
 
 ---
@@ -4034,6 +4035,7 @@ git commit -m "docs: record Part 1 implementation deltas against the terminal sp
 - **中文 / 日文 / 韩文输入**（IME 归 Part 2）—— 交付时要向用户明说这一条，否则它读起来像 bug。
 - **ESC 族转义序列**（`ESC 7`/`ESC 8` DECSC/DECRC、`ESC M` RI 归 Part 2；落回 vte 默认 no-op）—— `less` / `vim` 等全屏程序下可能出现光标位置错位，交付时要向用户明说这一条，否则它读起来像 bug。
 - 向上滚动看历史（`pty.scrollback` 归 Part 2；服务端**已经在存**）。
+- **会话退出的任何提示**（归 Part 2）—— 服务端发 `pty.exit`，Part 1 的 Panel 不订阅它。用户 `exit` 之后终端只是停止更新，不报错也不变灰。交付时要向用户明说这一条：它比另外两条更像 bug，因为一块不再响应的矩形和一块坏掉的矩形在屏幕上是同一个东西。
 - Tab 条 / 分屏 / 选区 / 搜索（B 档结构，归 Part 2）。
 
 达成后立刻写 Part 2（Phase 5–8：Tab 条 / 分屏树 / `pty.scrollback` + 滚动 / IME / 选区 / 搜索 / `qa/terminal/run.sh` / FEATURE_LOCATOR 与判据清单补充），引用「Part 1 实施偏差」里记录的真实签名。
