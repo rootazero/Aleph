@@ -20,7 +20,7 @@
 //! tokens; a false "unchanged" would starve the model, so the bias is
 //! deliberate.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::SystemTime;
 
 use crate::sync_primitives::{Arc, Mutex};
@@ -58,7 +58,18 @@ pub(super) enum ReadCacheDecision {
 /// an `.await`.
 #[derive(Clone, Default)]
 pub(super) struct ReadCache {
-    inner: Arc<Mutex<HashMap<ReadKey, ReadFingerprint>>>,
+    // Pair the map with an `insertion_order` VecDeque so the cap
+    // eviction policy is FIFO (the oldest-inserted key is dropped
+    // when the cap is exceeded) rather than SipHash-permutation-
+    // dependent. The deque is kept in sync on every insert / remove
+    // so the cap test is deterministic across runs.
+    inner: Arc<Mutex<ReadCacheInner>>,
+}
+
+#[derive(Default)]
+struct ReadCacheInner {
+    map: HashMap<ReadKey, ReadFingerprint>,
+    insertion_order: VecDeque<ReadKey>,
 }
 
 /// BT-A-R4-01: cap on the number of distinct `(path, offset, limit)` windows
@@ -99,14 +110,14 @@ impl ReadCache {
         };
 
         // Poison-safe per P7: recover the guard rather than panicking.
-        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
 
         let Some((mtime, size)) = fingerprint else {
-            map.remove(&key);
+            inner.map.remove(&key);
             return ReadCacheDecision::Fresh;
         };
 
-        match map.get_mut(&key) {
+        match inner.map.get_mut(&key) {
             Some(fp) if fp.mtime == mtime && fp.size == size => {
                 fp.repeats = fp.repeats.saturating_add(1);
                 ReadCacheDecision::Unchanged {
@@ -114,7 +125,12 @@ impl ReadCache {
                 }
             }
             _ => {
-                map.insert(
+                // Refresh the FIFO position BEFORE moving `key` into
+                // the map, so the retain closure can borrow `key`
+                // without conflicting with the insertion.
+                inner.insertion_order.retain(|k| k != &key);
+                inner.insertion_order.push_back(key.clone());
+                inner.map.insert(
                     key,
                     ReadFingerprint {
                         mtime,
@@ -127,9 +143,14 @@ impl ReadCache {
                 // since the cap is a leak guard, not a correctness
                 // requirement) before inserting the new window. The dropped
                 // window simply re-renders in full on its next observe.
-                if map.len() > MAX_READ_CACHE_ENTRIES {
-                    if let Some(evicted) = map.keys().next().cloned() {
-                        map.remove(&evicted);
+                if inner.map.len() > MAX_READ_CACHE_ENTRIES {
+                    // FIFO eviction: drop the oldest-inserted key.
+                    // The previous `map.keys().next()` shape was
+                    // HashMap-iteration-order-dependent (SipHash
+                    // permutation), which would make the cap test
+                    // order-dependent across runs.
+                    if let Some(evicted) = inner.insertion_order.pop_front() {
+                        inner.map.remove(&evicted);
                     }
                 }
                 ReadCacheDecision::Fresh
