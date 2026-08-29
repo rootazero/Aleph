@@ -32,13 +32,14 @@
 
 ## Part 1 显式不做的（spec 里有，归 Part 2）
 
-自检对着 spec 逐节点名过，这三项**在 spec 里存在但 Part 1 没有任务**，写在这里而不是让它们静默消失：
+自检对着 spec 逐节点名过，前三项**在 spec 里存在但 Part 1 没有任务**；第四项不是 spec 里的条目，而是这份计划自己的 File Structure 表曾经承诺、却没有任何 Task 兑现的一句话（Task 1 fix round 发现）。四项都写在这里而不是让它们静默消失：
 
 | spec 位置 | 项 | 归属 | 理由 |
 |---|---|---|---|
 | §4.3 | `pty.scrollback {from,to}` RPC | Part 2 | 它的唯一消费者是"往回滚"，而 Part 1 没有滚动条。先建 RPC 就是零客户端通道 —— 正是这个子系统刚犯过的错。服务端**已经存了** scrollback（Task 2/12），Part 2 只需加读取面。 |
 | §6.6 | IME（隐藏 `<textarea>` 承接 composition） | Part 2 | Task 17 只处理 `keydown`。**因此 Part 1 交付的终端不能输入中文/日文/韩文**，这写进下方完成判据。 |
 | §6.2 §6.3 §6.7 | Tab 条 / 分屏树 / 布局持久化 / 选区 / 搜索 | Part 2 | D1 的 B 档结构，Part 1 交付单窗格。 |
+| —（spec 未提及，仅本计划 File Structure 表曾承诺 `esc`） | ESC 族转义序列（`ESC 7`/`ESC 8` DECSC/DECRC 光标保存/恢复、`ESC M` RI 反向换行） | Part 2 | 没有任何 Task 接 `vte::Perform::esc_dispatch`，Part 1 落回 vte 的默认 no-op。**后果：`less` / `vim` 等全屏程序下可能出现光标位置错位**，这写进下方完成判据。 |
 
 ---
 
@@ -48,7 +49,7 @@
 |---|---|---|
 | `src/gateway/pty/screen/mod.rs` | `PtyScreen` 门面：`feed` / `take_patch` / `snapshot` / `resize` / `seq` | 新建 |
 | `src/gateway/pty/screen/grid.rs` | `Cell` / `Row` / `Grid` / scrollback 环 | 新建 |
-| `src/gateway/pty/screen/perform.rs` | `impl vte::Perform`（print / execute / csi / osc / esc） | 新建 |
+| `src/gateway/pty/screen/perform.rs` | `impl vte::Perform`（print / execute / csi / osc） | 新建 |
 | `src/gateway/pty/screen/diff.rs` | 脏行跟踪 → `ScreenPatch`，同 SGR run 折叠 | 新建 |
 | `src/gateway/pty/session.rs` | reader 喂 screen；删 `pty.output` 编码段；加 flush task | 修改 |
 | `src/gateway/pty/manager.rs` | attach 表（`conn_id → 视口`）+ min-size resize + `created_by` | 修改 |
@@ -4031,6 +4032,7 @@ git commit -m "docs: record Part 1 implementation deltas against the terminal sp
 **Part 1 交付物明确不含**（不是缺陷，是划线，见上方「Part 1 显式不做的」）：
 
 - **中文 / 日文 / 韩文输入**（IME 归 Part 2）—— 交付时要向用户明说这一条，否则它读起来像 bug。
+- **ESC 族转义序列**（`ESC 7`/`ESC 8` DECSC/DECRC、`ESC M` RI 归 Part 2；落回 vte 默认 no-op）—— `less` / `vim` 等全屏程序下可能出现光标位置错位，交付时要向用户明说这一条，否则它读起来像 bug。
 - 向上滚动看历史（`pty.scrollback` 归 Part 2；服务端**已经在存**）。
 - Tab 条 / 分屏 / 选区 / 搜索（B 档结构，归 Part 2）。
 

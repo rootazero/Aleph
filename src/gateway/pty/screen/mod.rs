@@ -12,6 +12,14 @@ mod tests {
     /// `Perform`'s method signatures or how `advance` is called, this test
     /// fails first and names the change, instead of every emulator test
     /// failing at once with a confusing error.
+    ///
+    /// Mutation-verified (2026-08-29): temporarily changed `execute`'s `byte`
+    /// parameter from `u8` to `u32` (a plausible drifted signature) and
+    /// rebuilt. `rustc` refused to compile with `E0053: method `execute` has
+    /// an incompatible type for trait`, naming the exact method and the
+    /// expected-vs-found types (`expected u8, found u32`). Confirms this
+    /// guard catches a real signature drift, not just the crate being
+    /// undeclared. Reverted after confirming.
     #[test]
     fn vte_perform_api_is_the_shape_this_module_assumes() {
         #[derive(Default)]
