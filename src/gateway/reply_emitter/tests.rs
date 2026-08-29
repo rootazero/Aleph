@@ -180,12 +180,22 @@ mod tests {
     /// Narrowing only: a channel that *can* edit keeps exactly the behaviour it
     /// had before the floor existed — including `slack`/`mattermost`/`msteams`,
     /// which stream while declaring `StreamProtocol::None`.
+    ///
+    /// The cap is copied on **both** protocols. It used to be set only inside
+    /// the `EditBased` arm — this test previously asserted `0` for `None` with
+    /// the message "None does not set a cap", which encoded exactly the defect:
+    /// a length limit is a fact about the transport, not about streaming, so
+    /// every `StreamProtocol::None` channel (slack 3000, irc 400, …) left it at
+    /// 0 and both consumers of it were silently disabled.
     #[test]
     fn a_channel_that_can_edit_keeps_the_global_preference() {
         let mut typewriter = ReplyEmitterConfig::from_output_mode("typewriter");
         typewriter.apply_channel_capabilities(&caps_of(true, StreamProtocol::None));
         assert!(typewriter.stream_enabled);
-        assert_eq!(typewriter.max_message_length, 0, "None does not set a cap");
+        assert_eq!(
+            typewriter.max_message_length, 4096,
+            "the declared cap is a transport fact and reaches the chunker on every protocol"
+        );
 
         let mut instant = ReplyEmitterConfig::from_output_mode("instant");
         instant.apply_channel_capabilities(&caps_of(true, StreamProtocol::EditBased));
@@ -516,5 +526,386 @@ mod tests {
         let (reasoning, answer) = split_reasoning(input);
         assert_eq!(reasoning.as_deref(), Some("caps"));
         assert_eq!(answer, "Answer.");
+    }
+}
+
+/// Guards for the outbound text chokepoint: how long a chunk may be, and what
+/// happens to the rest of the answer when one chunk fails.
+#[cfg(test)]
+mod outbound_chunking_tests {
+    use super::*;
+    use crate::gateway::channel::{
+        Channel, ChannelCapabilities, ChannelError, ChannelInfo, ChannelResult, ChannelState,
+        ChannelStatus, MessageId, OutboundMessage, SendResult, StreamProtocol,
+    };
+    use crate::gateway::media::PendingMedia;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Records every attempt, and starts refusing once `attempts >= fail_from`.
+    /// Recording the ATTEMPT (not just the successes) is the point: the defect
+    /// guarded here is a chunk that was never offered to any transport at all.
+    struct FlakyChannel {
+        info: ChannelInfo,
+        state: ChannelState,
+        attempts: Arc<AtomicUsize>,
+        seen: Arc<tokio::sync::Mutex<Vec<String>>>,
+        fail_from: usize,
+        err_from: fn(String) -> ChannelError,
+    }
+
+    #[async_trait::async_trait]
+    impl Channel for FlakyChannel {
+        fn info(&self) -> &ChannelInfo {
+            &self.info
+        }
+        fn state(&self) -> &ChannelState {
+            &self.state
+        }
+        async fn start(&mut self) -> ChannelResult<()> {
+            Ok(())
+        }
+        async fn stop(&mut self) -> ChannelResult<()> {
+            Ok(())
+        }
+        async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+            let n = self.attempts.fetch_add(1, Ordering::SeqCst);
+            self.seen.lock().await.push(message.text.clone());
+            if n + 1 >= self.fail_from {
+                return Err((self.err_from)("stub".to_string()));
+            }
+            Ok(SendResult {
+                message_id: MessageId::new("ok"),
+                timestamp: chrono::Utc::now(),
+            })
+        }
+    }
+
+    struct Rig {
+        emitter: ReplyEmitter,
+        attempts: Arc<AtomicUsize>,
+        seen: Arc<tokio::sync::Mutex<Vec<String>>>,
+    }
+
+    async fn rig(cap: usize, fail_from: usize, err_from: fn(String) -> ChannelError) -> Rig {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let registry = ChannelRegistry::new();
+        registry
+            .register(Box::new(FlakyChannel {
+                info: ChannelInfo {
+                    id: ChannelId::new("rec"),
+                    name: "rec".to_string(),
+                    channel_type: "test".to_string(),
+                    status: ChannelStatus::Connected,
+                    capabilities: Default::default(),
+                },
+                state: ChannelState::new(8),
+                attempts: attempts.clone(),
+                seen: seen.clone(),
+                fail_from,
+                err_from,
+            }))
+            .await;
+
+        // The cap arrives the way production supplies it: through the channel's
+        // own declared capabilities, not as a literal on the emitter.
+        let mut config = ReplyEmitterConfig::default();
+        config.apply_channel_capabilities(&ChannelCapabilities {
+            editing: false,
+            stream_protocol: StreamProtocol::None,
+            max_message_length: cap,
+            ..ChannelCapabilities::default()
+        });
+
+        let emitter = ReplyEmitter::with_config(
+            Arc::new(registry),
+            ReplyRoute::new(ChannelId::new("rec"), ConversationId::new("conv-1")),
+            "run-chunk".to_string(),
+            config,
+            PendingMedia::default(),
+        );
+        Rig {
+            emitter,
+            attempts,
+            seen,
+        }
+    }
+
+    /// Discord declares 2000 and its own `Channel::send` does no splitting, so
+    /// a chunk over the cap is rejected outright and the whole answer is lost
+    /// (`SendFailed` is not queueable). The chunker used to hold a hardcoded
+    /// 4000 — a second, wrong answer to a question `ChannelCapabilities`
+    /// already answers.
+    #[tokio::test]
+    async fn the_chunker_honours_the_channels_declared_cap() {
+        let r = rig(2000, usize::MAX, ChannelError::SendFailed).await;
+        r.emitter
+            .send_to_channel_sanitized(&"a".repeat(3000), None)
+            .await;
+
+        let seen = r.seen.lock().await;
+        assert!(seen.len() >= 2, "3000 bytes must not ride in one 2000 cap");
+        for (i, text) in seen.iter().enumerate() {
+            assert!(
+                text.len() <= 2000,
+                "chunk {i} is {} bytes, over the channel's declared 2000 cap — the \
+                 transport rejects it and the whole answer is lost",
+                text.len()
+            );
+        }
+    }
+
+    /// A channel that declares no cap keeps the historical fallback rather than
+    /// handing one unbounded frame to the transport.
+    #[tokio::test]
+    async fn an_undeclared_cap_falls_back_instead_of_sending_one_huge_frame() {
+        let r = rig(0, usize::MAX, ChannelError::SendFailed).await;
+        r.emitter
+            .send_to_channel_sanitized(&"a".repeat(9000), None)
+            .await;
+        let seen = r.seen.lock().await;
+        for text in seen.iter() {
+            assert!(text.len() <= 4000, "{} bytes", text.len());
+        }
+    }
+
+    fn three_chunks() -> String {
+        format!(
+            "{}\n\n{}\n\n{}",
+            "a".repeat(90),
+            "b".repeat(90),
+            "c".repeat(90)
+        )
+    }
+
+    /// The tail used to be dropped on the floor: chunk `i` is persisted by
+    /// `maybe_enqueue`, but `i+1..N` were never handed to anything — not sent,
+    /// not queued, not dead-lettered, not even named in the log — so the
+    /// operator saw one queued row and a healthy queue while the conversation
+    /// ended mid-sentence forever.
+    #[tokio::test]
+    async fn a_transient_failure_midway_still_offers_every_remaining_chunk() {
+        let r = rig(100, 2, ChannelError::NotConnected).await;
+        r.emitter
+            .send_to_channel_sanitized(&three_chunks(), None)
+            .await;
+
+        assert_eq!(
+            r.attempts.load(Ordering::SeqCst),
+            3,
+            "every chunk must reach ChannelRegistry::send so the durable queue can \
+             persist it; stopping at the failure discards the rest of the answer"
+        );
+        let seen = r.seen.lock().await;
+        assert!(
+            seen[1].starts_with('b') && seen[2].starts_with('c'),
+            "{seen:?}"
+        );
+    }
+
+    /// The other arm: a terminal error is not queueable, so retrying the tail
+    /// against a transport that just refused permanently only adds noise. It
+    /// still stops — the fix is a split on the queue's own predicate, not an
+    /// unconditional `continue`.
+    #[tokio::test]
+    async fn a_terminal_failure_midway_still_stops() {
+        let r = rig(100, 2, ChannelError::SendFailed).await;
+        r.emitter
+            .send_to_channel_sanitized(&three_chunks(), None)
+            .await;
+
+        assert_eq!(
+            r.attempts.load(Ordering::SeqCst),
+            2,
+            "a permanent refusal must not be retried chunk by chunk"
+        );
+    }
+}
+
+/// Guard for the run-end media cleanup: it must not delete files a queued row
+/// still references by path.
+#[cfg(test)]
+mod media_cleanup_tests {
+    use super::*;
+    use crate::gateway::channel::{
+        Attachment, Channel, ChannelError, ChannelInfo, ChannelResult, ChannelState, ChannelStatus,
+        MessageId, OutboundMessage, SendResult,
+    };
+    use crate::media::cache::MediaCache;
+
+    struct StubChannel {
+        info: ChannelInfo,
+        state: ChannelState,
+        err: fn(String) -> ChannelError,
+        ok: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl Channel for StubChannel {
+        fn info(&self) -> &ChannelInfo {
+            &self.info
+        }
+        fn state(&self) -> &ChannelState {
+            &self.state
+        }
+        async fn start(&mut self) -> ChannelResult<()> {
+            Ok(())
+        }
+        async fn stop(&mut self) -> ChannelResult<()> {
+            Ok(())
+        }
+        async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
+            if self.ok {
+                return Ok(SendResult {
+                    message_id: MessageId::new("ok"),
+                    timestamp: chrono::Utc::now(),
+                });
+            }
+            Err((self.err)("stub".to_string()))
+        }
+    }
+
+    /// Cache one real file under this run's media session and hand the emitter
+    /// an attachment pointing at it, exactly as the harvest does.
+    async fn emitter_with_cached_file(
+        run_id: &str,
+        ok: bool,
+        err: fn(String) -> ChannelError,
+    ) -> (ReplyEmitter, std::path::PathBuf) {
+        let cached = MediaCache::new()
+            .resolve(
+                &Attachment {
+                    id: "guard".to_string(),
+                    mime_type: "image/png".to_string(),
+                    filename: Some("shot.png".to_string()),
+                    size: Some(5),
+                    url: None,
+                    path: None,
+                    data: Some(b"hello".to_vec()),
+                },
+                run_id,
+            )
+            .await
+            .expect("cache a file under this run's media session");
+        let path = cached.local_path.clone();
+        assert!(path.exists(), "fixture must actually create the file");
+
+        let registry = ChannelRegistry::new();
+        registry
+            .register(Box::new(StubChannel {
+                info: ChannelInfo {
+                    id: ChannelId::new("rec"),
+                    name: "rec".to_string(),
+                    channel_type: "test".to_string(),
+                    status: ChannelStatus::Connected,
+                    capabilities: Default::default(),
+                },
+                state: ChannelState::new(8),
+                err,
+                ok,
+            }))
+            .await;
+
+        // A path-backed attachment — the shape `take_media_custody` may refuse
+        // to inline, leaving the queued row referencing this very file.
+        let pending: crate::gateway::media::PendingMedia =
+            Arc::new(tokio::sync::Mutex::new(vec![Attachment {
+                id: "guard".to_string(),
+                mime_type: "image/png".to_string(),
+                filename: Some("shot.png".to_string()),
+                size: Some(5),
+                url: None,
+                path: Some(path.to_string_lossy().into_owned()),
+                data: None,
+            }]));
+
+        let emitter = ReplyEmitter::new(
+            Arc::new(registry),
+            ReplyRoute::new(ChannelId::new("rec"), ConversationId::new("conv-1")),
+            run_id.to_string(),
+            pending,
+        );
+        (emitter, path)
+    }
+
+    /// The defect: `deliver_run_media` deleted this run's whole media cache on
+    /// the statement after the send, so a row queued with a bare `path` pointed
+    /// at a file that was already gone — and it then dead-lettered as
+    /// `Ambiguous`, which redrive refuses. "A path that might still be there"
+    /// was false in-process, not merely across restarts.
+    #[tokio::test]
+    async fn a_queued_media_send_leaves_the_runs_media_cache_in_place() {
+        let (emitter, path) =
+            emitter_with_cached_file("run-media-queued", false, ChannelError::NotConnected).await;
+
+        emitter.deliver_run_media().await;
+
+        let survived = path.exists();
+        let _ = MediaCache::cleanup_session("run-media-queued");
+        assert!(
+            survived,
+            "the durable queue accepted this failure, so a queued row may reference {} \
+             by path; deleting it makes the retry unrecoverable",
+            path.display()
+        );
+    }
+
+    /// The control that keeps the fix from degenerating into "never clean up":
+    /// a delivered run still drops its temp files.
+    #[tokio::test]
+    async fn a_delivered_media_send_still_cleans_up() {
+        let (emitter, path) =
+            emitter_with_cached_file("run-media-delivered", true, ChannelError::NotConnected).await;
+
+        emitter.deliver_run_media().await;
+
+        assert!(
+            !path.exists(),
+            "nothing references {} any more; withholding the delete would leak",
+            path.display()
+        );
+    }
+
+    /// The cross-drain half. Media leaves this emitter from four sites and only
+    /// `deliver_run_media` is followed by the cleanup, so gating on *this*
+    /// call's own result protected only the last drain: a transient failure at
+    /// the streaming-settle / `AskUser` / reply-tail drains left an empty
+    /// buffer here, which "succeeded", and the files were deleted anyway.
+    #[tokio::test]
+    async fn a_queued_failure_at_an_earlier_drain_still_protects_the_cache() {
+        let (emitter, path) =
+            emitter_with_cached_file("run-media-earlier", false, ChannelError::NotConnected).await;
+
+        // Exactly what the other three drain sites do.
+        let attachments = emitter.drain_and_send_media().await;
+        assert_eq!(
+            attachments.len(),
+            1,
+            "fixture must actually hand this drain something to lose"
+        );
+        emitter.send_media_standalone(attachments).await;
+
+        // …and then the run ends with nothing left to drain.
+        emitter.deliver_run_media().await;
+
+        let survived = path.exists();
+        let _ = MediaCache::cleanup_session("run-media-earlier");
+        assert!(
+            survived,
+            "an earlier drain's failure was queued, so {} may still be referenced by \
+             a queued row; the empty final drain must not delete it",
+            path.display()
+        );
+    }
+
+    /// And a terminal failure is not queueable, so there is no row to protect.
+    #[tokio::test]
+    async fn a_terminally_failed_media_send_still_cleans_up() {
+        let (emitter, path) =
+            emitter_with_cached_file("run-media-terminal", false, ChannelError::SendFailed).await;
+
+        emitter.deliver_run_media().await;
+
+        assert!(!path.exists(), "{} should have been cleaned", path.display());
     }
 }

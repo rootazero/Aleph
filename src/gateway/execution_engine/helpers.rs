@@ -135,12 +135,22 @@ impl std::fmt::Display for DispatchFailure {
     }
 }
 
+/// The `ExecutionError` a dispatch failure presents as.
+///
+/// Split out from the `From` impl below because the pre-outcome receipt path
+/// (`emit_error_run_complete`) only holds a borrow, and a second `match` there
+/// would be a second answer to "which receipt does this failure earn" — free to
+/// drift from this one.
+fn execution_error_for(err: &DispatchFailure) -> ExecutionError {
+    match err {
+        DispatchFailure::Cancelled => ExecutionError::Cancelled,
+        other => ExecutionError::Orchestrator(other.to_string()),
+    }
+}
+
 impl From<DispatchFailure> for ExecutionError {
     fn from(err: DispatchFailure) -> Self {
-        match err {
-            DispatchFailure::Cancelled => Self::Cancelled,
-            other => Self::Orchestrator(other.to_string()),
-        }
+        execution_error_for(&err)
     }
 }
 
@@ -160,8 +170,11 @@ impl From<DispatchFailure> for ExecutionError {
 /// # Cancellation
 /// `cancel_token.cancel()` is forwarded to the orchestrator by the caller via
 /// the `FlowHandle.cancel` token the dispatch returns. When the cancel arrives
-/// the harness returns `FlowError::Cancelled` which surfaces here as
-/// `ExecutionError::Orchestrator("flow: flow dispatch cancelled")`.
+/// the harness returns `FlowError::Cancelled`, which `map_flow_error` turns
+/// into `DispatchFailure::Cancelled` and `execution_error_for` into
+/// `ExecutionError::Cancelled` — NOT the `Orchestrator(..)` string this line
+/// used to claim, which mattered because `Cancelled` is the one arm that earns
+/// its own receipt (`ReceiptKind::Cancelled`) rather than the generic one.
 pub async fn run_dispatch_and_drain(
     orchestrator: Arc<Orchestrator>,
     req: FlowRequest,
@@ -290,8 +303,9 @@ pub async fn run_dispatch_and_drain_classified(
             let _ = drain.await;
             propagate.abort();
             emit_route_correction(&emitter, run_id, witness_session_for_fallback.as_deref()).await;
-            emit_error_run_complete(&emitter, run_id, &e).await;
-            return Err(map_flow_error(e));
+            let failure = map_flow_error(e);
+            emit_error_run_complete(&emitter, run_id, &failure, locale).await;
+            return Err(failure);
         }
         Err(e) => {
             propagate.abort();
@@ -467,15 +481,35 @@ fn correction_for(
 /// harness produced a `FlowOutcome`. The drain-fallback path in step 4 needs a
 /// real `FlowOutcome`; on pre-outcome failures we synthesize a minimal one so
 /// channel/Panel consumers still observe the run end rather than hanging on a
-/// never-arriving terminal frame. The error is surfaced in the summary text.
+/// never-arriving terminal frame.
+///
+/// # Why the text comes from `user_receipt` and not from `{err}`
+///
+/// `summary.final_response` is not a log line — `OriginFanoutEmitter` reads it
+/// off this very event and pushes it to the bound channel as the run's answer,
+/// with only `sanitize_final_response` (a `<think>` stripper) in the way. This
+/// used to format the error directly, so a channel-bound `goal`/`loop`
+/// continuation that failed pre-outcome received
+/// `"Run failed before completion: flow: internal dispatch error: …"` as the
+/// assistant's reply — precisely the flattened internal chain
+/// [`ExecutionError::user_receipt`] calls itself the single source of truth for
+/// suppressing, and `mod.rs` claims never reaches a user surface. Reaching it
+/// is not exotic either: `FlowError::Cancelled` resolves here, so every
+/// cancelled channel-bound run took that path. It was also hardcoded English on
+/// a path that already carries a `Locale`.
+///
+/// The synthetic `RunComplete` itself stays: `OriginFanoutEmitter` mirrors only
+/// `RunComplete` (`_ => None` for everything else), so dropping the text would
+/// leave channel-bound runs silent instead of merely terse.
 async fn emit_error_run_complete(
     emitter: &Arc<dyn crate::gateway::event_emitter::EventEmitter>,
     run_id: &str,
-    err: &FlowError,
+    failure: &DispatchFailure,
+    locale: Locale,
 ) {
     let outcome = crate::orchestrator::dispatch::FlowOutcome::default();
     let mut summary = super::event_drain::build_run_summary(&outcome, None);
-    summary.final_response = Some(format!("Run failed before completion: {err}"));
+    summary.final_response = Some(execution_error_for(failure).user_receipt(locale).1);
     let seq = emitter.next_seq();
     if let Err(e) = emitter
         .emit(crate::gateway::event_emitter::StreamEvent::RunComplete {
@@ -579,5 +613,74 @@ mod route_correction_tests {
         let info = correction_for(&w).expect("a provider change is a deviation");
         assert_eq!(info.provider, "azure");
         assert_eq!(info.original_model.as_deref(), Some("gpt-4o"));
+    }
+}
+
+#[cfg(test)]
+mod pre_outcome_receipt_tests {
+    use super::{emit_error_run_complete, execution_error_for, DispatchFailure};
+    use crate::gateway::event_emitter::{CollectingEventEmitter, EventEmitter, StreamEvent};
+    use crate::gateway::i18n::Locale;
+    use std::sync::Arc;
+
+    async fn final_response_for(failure: &DispatchFailure, locale: Locale) -> String {
+        let inner = Arc::new(CollectingEventEmitter::new());
+        let emitter: Arc<dyn EventEmitter> = Arc::clone(&inner) as Arc<dyn EventEmitter>;
+        emit_error_run_complete(&emitter, "run-1", failure, locale).await;
+        let events = inner.events().await;
+        let StreamEvent::RunComplete { summary, .. } = &events[0] else {
+            panic!("expected a synthetic RunComplete, got {:?}", events[0]);
+        };
+        summary
+            .final_response
+            .clone()
+            .expect("the synthetic RunComplete must carry text — OriginFanoutEmitter \
+                     mirrors only this variant, so an empty one leaves the channel silent")
+    }
+
+    /// `summary.final_response` on this path is what a bound channel receives as
+    /// the assistant's answer, so it must be the localized receipt — not the
+    /// flattened internal chain.
+    ///
+    /// The expectation is DERIVED from `ExecutionError::user_receipt`, the
+    /// method whose own doc calls itself the single source of truth for
+    /// user-facing failure text, rather than restating a string here.
+    #[tokio::test]
+    async fn a_pre_outcome_failure_delivers_the_localized_receipt() {
+        let failure = DispatchFailure::Fatal(
+            "flow: internal dispatch error: harness: llm error: boom".to_string(),
+        );
+        for locale in [Locale::En, Locale::Zh] {
+            let text = final_response_for(&failure, locale).await;
+            assert_eq!(
+                text,
+                execution_error_for(&failure).user_receipt(locale).1,
+                "the pre-outcome RunComplete must carry the same receipt every other \
+                 failure surface renders"
+            );
+            assert!(
+                !text.contains("flow: "),
+                "the flattened internal chain reached a channel as the run's answer: {text}"
+            );
+            assert!(
+                !text.contains("Run failed before completion"),
+                "hardcoded English on a path that carries a Locale: {text}"
+            );
+        }
+    }
+
+    /// Cancellation is the cheap, common way onto this path — `FlowError::Cancelled`
+    /// resolves as `Ok(Err(..))` — so it gets its own assertion that the user is
+    /// told they cancelled rather than shown `"flow dispatch cancelled"`.
+    #[tokio::test]
+    async fn a_cancelled_dispatch_reads_as_cancelled_not_as_an_internal_string() {
+        let text = final_response_for(&DispatchFailure::Cancelled, Locale::En).await;
+        assert_eq!(
+            text,
+            execution_error_for(&DispatchFailure::Cancelled)
+                .user_receipt(Locale::En)
+                .1
+        );
+        assert!(!text.contains("dispatch"), "internal wording leaked: {text}");
     }
 }

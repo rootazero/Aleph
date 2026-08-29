@@ -604,6 +604,94 @@ async fn test_get_current_epoch() {
     assert_eq!(epoch, 0);
 }
 
+/// The two failures the previous `LIKE '<base>%' ORDER BY created_at DESC
+/// LIMIT 1` had, both of which the FILE backend already got right:
+///
+/// 1. no separator anchor, so a longer peer id was a string-prefix match and
+///    lent its epoch to the shorter one — routing that peer's every inbound
+///    message into a session it had never spoken in;
+/// 2. newest-CREATED, not highest-epoch.
+#[tokio::test]
+async fn get_current_epoch_is_max_and_never_borrows_a_prefix_sibling() {
+    use crate::routing::session_key::DmScope;
+    let temp = tempdir().unwrap();
+    let manager = SessionManager::new(test_config(temp.path().join("epoch.db"))).unwrap();
+
+    let short = SessionKey::dm("test", "telegram", "123", DmScope::PerPeer);
+    let long = SessionKey::dm("test", "telegram", "1234", DmScope::PerPeer);
+    // ONLY the sibling exists. Peer 123 has never spoken, so the honest answer
+    // is 0 — and this is the shape that pins the separator anchor
+    // deterministically: seeding peer 123's own row too would leave the old
+    // `ORDER BY created_at DESC LIMIT 1` picking between two rows that share a
+    // whole-second `created_at`, so the wrong implementation passed about half
+    // the time.
+    manager.get_or_create(&long.with_epoch(2)).await.unwrap();
+
+    assert_eq!(
+        manager
+            .get_current_epoch(&short.base_key_pattern())
+            .await
+            .unwrap(),
+        0,
+        "peer 123 borrowed peer 1234's epoch — every message it sends is \
+         routed into a blank session and its real conversation is unreachable"
+    );
+
+    // Highest wins regardless of insertion order.
+    let base = SessionKey::main("epochmax");
+    for e in [0u32, 3, 1] {
+        manager.get_or_create(&base.with_epoch(e)).await.unwrap();
+    }
+    assert_eq!(
+        manager
+            .get_current_epoch(&base.base_key_pattern())
+            .await
+            .unwrap(),
+        3,
+        "newest-created is not highest-epoch"
+    );
+}
+
+/// `last_message_preview` had a writer only in the FILE backend while two
+/// shipped readers (`sessions.preview`, the `sessions` tool row) surfaced it
+/// regardless of backend — so a `session_store_backend = "sqlite"` install
+/// showed a null preview for every conversation, forever.
+#[tokio::test]
+async fn sqlite_maintains_the_last_message_preview_the_file_backend_does() {
+    let temp = tempdir().unwrap();
+    let manager = SessionManager::new(test_config(temp.path().join("preview.db"))).unwrap();
+    let key = SessionKey::main("previewtest");
+    manager.get_or_create(&key).await.unwrap();
+    manager
+        .add_message(&key, "user", "  where is the deploy log?  ")
+        .await
+        .unwrap();
+
+    let meta = crate::gateway::session_store::SessionStore::get_metadata(&manager, &key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        meta.last_message_preview.as_deref(),
+        Some("where is the deploy log?"),
+        "the preview column has no writer on this backend"
+    );
+
+    manager
+        .add_message(&key, "assistant", "in ~/.aleph/logs")
+        .await
+        .unwrap();
+    let meta = crate::gateway::session_store::SessionStore::get_metadata(&manager, &key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        meta.last_message_preview.as_deref(),
+        Some("in ~/.aleph/logs"),
+        "the preview must follow the LAST message, not the first"
+    );
+}
+
 #[test]
 fn test_session_identity_meta_to_identity_context_owner() {
     let meta = SessionIdentityMeta::owner("cli");

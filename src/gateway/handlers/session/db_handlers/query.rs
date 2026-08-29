@@ -423,7 +423,6 @@ pub async fn handle_preview_db(
                     "compaction_count": m.compaction_count,
                     "derived_title": m.derived_title,
                     "last_message_preview": m.last_message_preview,
-                    "runtime_ms": m.runtime_ms,
                     "estimated_cost_usd": m.estimated_cost_usd,
                     "checkpoints": m.checkpoints.into_iter().map(|c| json!({
                         "checkpoint_id": c.checkpoint_id,

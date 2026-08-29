@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use rusqlite::{params, OptionalExtension};
 
 use crate::gateway::router::SessionKey;
-use crate::gateway::session_manager::ops::NewMessage;
+use crate::gateway::session_manager::ops::{map_session_metadata, NewMessage, SESSION_COLUMNS};
 use crate::gateway::session_manager::{SessionManager, SessionManagerConfig, SessionState};
 use crate::gateway::session_store::error::SessionStoreError;
 use crate::gateway::session_store::types::{
@@ -41,52 +41,11 @@ fn search_result_to_hit(r: crate::gateway::session_manager::SessionSearchResult)
     }
 }
 
-fn map_session_metadata(
-    row: &rusqlite::Row,
-) -> Result<crate::gateway::session_store::types::SessionMetadata, rusqlite::Error> {
-    let state_str: Option<String> = row.get(8)?;
-    let state = state_str
-        .and_then(|s| serde_json::from_str(&format!("\"{s}\"")).ok())
-        .unwrap_or_default();
-    let metadata_json: Option<String> = row.get(9)?;
-    let (topic, status, identity_meta) =
-        crate::gateway::session_store::types::SessionMetadata::parse_legacy_metadata_json(
-            metadata_json.as_deref(),
-        );
-    Ok(crate::gateway::session_store::types::SessionMetadata {
-        key: row.get(0)?,
-        agent_id: row.get(1)?,
-        session_type: row.get(2)?,
-        created_at: row.get(3)?,
-        last_active_at: row.get(4)?,
-        message_count: row.get(5)?,
-        total_tokens: row.get(6)?,
-        auto_reset_at: row.get(7)?,
-        state: Some(state),
-        topic,
-        status,
-        identity_meta,
-        label: row.get(10)?,
-        // Legacy rows: ALTER TABLE ADD COLUMN without DEFAULT leaves NULL for
-        // pre-migration data. Coerce to 0 so historical sessions load instead
-        // of panicking on `Invalid column type Null at index: 11`.
-        input_tokens: row.get::<_, Option<i64>>(11)?.unwrap_or(0),
-        output_tokens: row.get::<_, Option<i64>>(12)?.unwrap_or(0),
-        model: row.get(13)?,
-        model_provider: row.get(14)?,
-        parent_session_key: row.get(15)?,
-        compaction_count: row.get(16)?,
-        derived_title: row.get(17).ok(),
-        // Column added later; `.ok()` + default keeps a pre-migration row (or a
-        // NULL) reading as 0.0 rather than panicking.
-        estimated_cost_usd: row.get::<_, Option<f64>>(18).ok().flatten().unwrap_or(0.0),
-        // P1 columns; `.ok()` keeps a pre-migration row reading as `None`
-        // (legacy, adoption-by-absence) rather than panicking.
-        owner_user_id: row.get(19).ok(),
-        scope_id: row.get(20).ok(),
-        ..Default::default()
-    })
-}
+// `map_session_metadata` lived here as a byte-identical second copy of the one
+// in `session_manager::ops` — same positional decode, same column order, two
+// editors. It is imported from there now: a positional mapper and its
+// `SELECT` list are one contract (`SESSION_COLUMNS`), and two of each is two
+// places to forget a column.
 
 #[async_trait]
 impl SessionStore for SessionManager {
@@ -106,12 +65,7 @@ impl SessionStore for SessionManager {
 
         let meta = conn
             .query_row(
-                "SELECT key, agent_id, session_type, created_at, last_active_at,
-                        message_count, total_tokens, auto_reset_at, state, metadata,
-                        label, input_tokens, output_tokens, model, model_provider,
-                        parent_session_key, compaction_count, derived_title,
-                        estimated_cost_usd, owner_user_id, scope_id
-                 FROM sessions WHERE key = ?",
+                &format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE key = ?"),
                 params![&key_str],
                 map_session_metadata,
             )
@@ -293,9 +247,19 @@ impl SessionStore for SessionManager {
                 .unwrap_or(0),
         };
 
-        // Sync FTS index inside the same transaction as the source delete so a
-        // crash / FTS error rolls back the source rows (the FTS would
-        // otherwise over-count messages the source delete already removed).
+        // ONE transaction for the FTS delete, the source delete and the
+        // `message_count` UPDATE — which is what both comments here have always
+        // claimed ("inside the same transaction as the source delete", "wrapped
+        // in a single transaction").
+        //
+        // There were two `unchecked_transaction()` calls, and `let tx = ...`
+        // twice is SHADOWING, not replacement: the first transaction is still
+        // alive when the second is opened, so SQLite answered "cannot start a
+        // transaction within a transaction" and this method returned `Err` on
+        // EVERY call. `session.truncate` — the whole of TUI `/undo` and `/retry`
+        // and `aleph session truncate` — has never worked on the SQLite
+        // backend. Nothing caught it because the only tests that reach
+        // `truncate_messages` drive the file backend.
         let tx = conn
             .unchecked_transaction()
             .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
@@ -320,13 +284,9 @@ impl SessionStore for SessionManager {
             }
         }
 
-        // **Audit fix**: FTS delete + source delete + count update are wrapped in
-        // a single transaction so a failure in any step rolls back the others
-        // (see `delete_messages_from_seq` for the full rationale).
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
-
+        // Same `tx` as above — see its comment for why a second
+        // `unchecked_transaction()` here was not a second transaction but a
+        // hard error on every call.
         let deleted = match threshold_id {
             Some(threshold) => tx
                 .execute(

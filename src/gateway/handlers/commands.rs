@@ -43,44 +43,20 @@ fn channel_from_interface(interface: &str) -> Option<ChannelType> {
 // Tree node types for hierarchical command listing
 // ============================================================================
 
-/// A child command within a namespace
-#[derive(Debug, Clone, Serialize)]
-struct ChildCommandNode {
-    /// Subcommand name (e.g., "new", "list")
-    name: String,
-    /// Human-readable description
-    hint: String,
-    /// Parameter hint (e.g., "[topic]", "<query>")
-    #[serde(skip_serializing_if = "Option::is_none")]
-    param_hint: Option<String>,
-    /// Source type
-    source_type: String,
-    /// Tool internal ID
-    internal_id: String,
-}
-
-/// A top-level entry in the command tree
-#[derive(Debug, Clone, Serialize)]
-struct CommandTreeNode {
-    /// Command or namespace name
-    name: String,
-    /// Whether this is a namespace (has children)
-    is_namespace: bool,
-    /// Human-readable hint/description
-    hint: String,
-    /// Parameter hint (for standalone commands)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    param_hint: Option<String>,
-    /// Source type (for standalone commands)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    source_type: Option<String>,
-    /// Tool internal ID (for standalone commands)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    internal_id: Option<String>,
-    /// Children (for namespaces)
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    children: Vec<ChildCommandNode>,
-}
+/// The two tree node types live in `aleph_protocol::commands`, not here.
+///
+/// They used to be private `Serialize`-only structs, which made their field
+/// names a wire contract with no compiler behind it. The CLI declared its own
+/// `struct Command { key, description }` — two required fields, neither of
+/// which this handler has ever emitted (it sends `name` and `hint`) — so
+/// `aleph tools list` died on a serde error and `aleph tools describe <name>`
+/// matched `item["key"]`, a comparison that can never be true, and returned the
+/// fabricated `tool 'X' not found in commands.list`: a wrong answer that reads
+/// as a fact about the server. The TUI read `name` and was right all along.
+///
+/// Building the shared type makes a rename a compile error here and a loud
+/// parse error there.
+pub use aleph_protocol::commands::{ChildCommandNode, CommandTreeNode};
 
 /// Known tool namespaces for hierarchical grouping.
 const TOOL_NAMESPACES: &[&str] = &[
@@ -672,6 +648,62 @@ mod tests {
         // Find the standalone entry
         let search = commands.iter().find(|c| c["name"] == "search").unwrap();
         assert_eq!(search["is_namespace"], false);
+    }
+
+    /// The live `commands.list` response must be readable by the type every
+    /// thin client parses, and a namespaced tool must be reachable by its
+    /// canonical name.
+    ///
+    /// This is the reconciliation the CLI could not do for itself. Its own
+    /// tests only ever asserted on `json!` literals it had just written —
+    /// which tests `serde_json`, not the contract — so a `struct Command {
+    /// key, description }` that named two fields this handler has never
+    /// emitted stayed green while `aleph tools list` failed to deserialize on
+    /// every server and `aleph tools describe` reported every existing tool as
+    /// "not found".
+    #[tokio::test]
+    async fn the_live_response_parses_as_the_shared_contract() {
+        use crate::tool_metadata::ToolSource;
+
+        let registry = ToolCatalog::new();
+        for (id, name, desc, source) in [
+            (
+                "builtin:session_new",
+                "session_new",
+                "New session",
+                ToolSource::Builtin,
+            ),
+            (
+                "builtin:search",
+                "search",
+                "Web search",
+                ToolSource::Builtin,
+            ),
+        ] {
+            registry
+                .register_with_conflict_resolution(UnifiedTool::new(id, name, desc, source))
+                .await;
+        }
+
+        let request = JsonRpcRequest::with_id("commands.list", None, json!(1));
+        let response = handle_list_from_registry(request, &registry).await;
+        let result = response.result.expect("commands.list must succeed");
+
+        let parsed: aleph_protocol::commands::CommandListResponse =
+            serde_json::from_value(result).expect(
+                "commands.list must parse as aleph_protocol::commands::CommandListResponse; \
+                 a client that cannot read this response reports an empty catalogue",
+            );
+
+        // Derived, not restated: the lookup a client performs, run against the
+        // response the server actually produced.
+        let found = CommandTreeNode::find(&parsed.commands, "session_new")
+            .expect("`session_new` is a child of the `session` namespace and must resolve");
+        assert_eq!(found.internal_id(), Some("builtin:session_new"));
+        assert_eq!(found.hint(), "New session");
+
+        assert!(CommandTreeNode::find(&parsed.commands, "search").is_some());
+        assert!(CommandTreeNode::find(&parsed.commands, "no_such_tool").is_none());
     }
 
     #[tokio::test]

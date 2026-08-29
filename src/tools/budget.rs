@@ -38,6 +38,31 @@ const MCP_TIMEOUT_HEADROOM_MS: u64 = 30_000;
 /// `timeout_seconds` unset (`McpClient::start_remote_server`, 300s).
 const MCP_DEFAULT_TIMEOUT_MS: u64 = 300_000;
 
+/// The longest window a reverse-RPC call to a cluster node may ask for,
+/// whatever `timeout_ms` its caller passes.
+///
+/// Declared HERE, next to the budgets it must stay under, because the fact
+/// being expressed is a relationship between two numbers and a relationship
+/// split across two files is a relationship nobody re-reads. The transport
+/// (`cluster::reverse_rpc::ReverseRpcChannel::call`) imports it and clamps.
+///
+/// Why a ceiling exists at all: `node_invoke` / `node_invoke_many` /
+/// `node_file` take a model-supplied `timeout_ms` that was unbounded, while
+/// `node_invoke`'s own DESCRIPTION invites the model to raise it ("Set
+/// `timeout_ms` (default 120000) above the expected runtime for long
+/// commands"). A model that followed that advice with 600 000 was killed by
+/// the harness at the 300s default budget instead — the node kept executing
+/// (the frame was delivered, and there is no cluster analogue of
+/// `bash{background:true}` to reattach to), its result was dropped on the
+/// floor, and the model was told only that the call overran. Retrying re-ran
+/// the whole job.
+///
+/// The ordering rule is the one the `ask_user` / `task_wait` / `browser_exec`
+/// rows below state three times: the tool's own clock must be what fires, so
+/// the budget sits above this and this caps what a caller can ask for.
+/// `node_tool_budget_sits_above_the_reverse_rpc_ceiling` pins the pair.
+pub const REVERSE_RPC_MAX_TIMEOUT_MS: u64 = 240_000;
+
 /// Wall-clock budget per builtin tool. Tools omitted resolve to
 /// [`DEFAULT_TOOL_BUDGET_MS`] via [`resolve_tool_budget_ms`]. Values are
 /// milliseconds.
@@ -106,6 +131,22 @@ pub const BUILTIN_TOOL_BUDGETS_MS: &[(&str, u64)] = &[
     // budget could ever fire, discarding the partial results in favour of an
     // opaque overrun.
     ("browser_exec", 630_000),
+    // Reverse-RPC to a cluster node. Fourth instance of the rule the three
+    // rows above state: the budget must sit ABOVE the tool's own ceiling
+    // ([`REVERSE_RPC_MAX_TIMEOUT_MS`], 240s) so what fires
+    // is the tool's clock. These were absent, so they resolved to the 300s
+    // default while their `timeout_ms` argument was unbounded and
+    // `node_invoke`'s own DESCRIPTION invites the model to raise it above the
+    // default for long commands. A model that did so was killed by the harness
+    // at 300s while the node kept executing — there is no cluster analogue of
+    // `bash{background:true}` to reattach to, so its eventual result was
+    // dropped and the model was told only that the call overran. Retrying
+    // re-ran the whole job.
+    ("node_invoke", 270_000),
+    // `node_invoke_many` fans out and awaits every leg concurrently, so its
+    // wall clock is one leg's ceiling, not the sum.
+    ("node_invoke_many", 270_000),
+    ("node_file", 270_000),
 ];
 
 /// Returns the configured wall-clock budget for a builtin tool, or
@@ -149,6 +190,33 @@ pub fn mcp_tool_budget_ms(timeout_seconds: Option<u64>) -> u64 {
 mod tests {
     use super::*;
 
+    /// The node tools' budgets must sit ABOVE the reverse-RPC ceiling.
+    ///
+    /// Derived from both constants rather than restating either, so it stays
+    /// true when a value moves and goes red if either half is dropped: remove
+    /// a row and the budget falls to the 300s default (still above 240s, so
+    /// the second assertion below is what catches that); raise the clamp past
+    /// the budget and the harness preempts the tool's own clock again, which
+    /// is the failure this pair exists to prevent.
+    #[test]
+    fn node_tool_budget_sits_above_the_reverse_rpc_ceiling() {
+        for name in ["node_invoke", "node_invoke_many", "node_file"] {
+            let budget = resolve_tool_budget_ms(name, None);
+            assert!(
+                budget > REVERSE_RPC_MAX_TIMEOUT_MS,
+                "{name}: budget {budget}ms is not above the reverse-RPC ceiling \
+                 {REVERSE_RPC_MAX_TIMEOUT_MS}ms — the harness would kill the call \
+                 before the tool's own clock could fire, discarding whatever the \
+                 node had produced in favour of an opaque overrun"
+            );
+            assert!(
+                builtin_tool_budget_ms(name).is_some(),
+                "{name} lost its explicit row and fell back to the default; the \
+                 ordering above must be a decision, not a coincidence"
+            );
+        }
+    }
+
     #[test]
     fn returns_some_for_listed_read_only_tool() {
         assert_eq!(builtin_tool_budget_ms("memory_search"), Some(5_000));
@@ -171,13 +239,16 @@ mod tests {
 
     #[test]
     fn table_size_matches_expected_count() {
-        // Locked at 21 entries (12 fast + 3 slow + 2 exec + ask_user +
-        // subagent + task_wait + browser_exec; the 2026-07 phantom sweep
-        // removed the never-registered `list_tools` / `search_tools` rows and
-        // renamed stale `skill_reader` to `skill_read`). Bumping this requires
-        // updating the table AND adjusting this constant in the same commit —
-        // the assertion is a code-review signal, not a value check.
-        assert_eq!(BUILTIN_TOOL_BUDGETS_MS.len(), 21);
+        // Locked at 24 entries (12 fast + 3 slow + 2 exec + ask_user +
+        // subagent + task_wait + browser_exec + the three cluster node tools;
+        // the 2026-07 phantom sweep removed the never-registered `list_tools` /
+        // `search_tools` rows and renamed stale `skill_reader` to `skill_read`).
+        // Bumping this requires updating the table AND adjusting this constant
+        // in the same commit — the assertion is a code-review signal, not a
+        // value check. It did its job here: `node_invoke` / `node_invoke_many`
+        // / `node_file` were added because they had silently been resolving to
+        // the 300s default while their own `timeout_ms` was unbounded.
+        assert_eq!(BUILTIN_TOOL_BUDGETS_MS.len(), 24);
     }
 
     #[test]

@@ -1,6 +1,19 @@
 //! Behavior configuration RPC handlers
 //!
-//! Provides RPC methods for managing behavior configuration (output mode, typing speed).
+//! Provides RPC methods for managing behavior configuration — `output_mode`
+//! and nothing else. `typing_speed` was retired in the 2026-08-17 wire audit
+//! (config-003, see `config::types::general`), so this file stopped sending it;
+//! the sentence that used to name it here outlived the field.
+//!
+//! ⚠️ The Panel's DTO did NOT stop asking for it: `interfaces/webchat`'s
+//! `api::settings::BehaviorConfig` still declares a `typing_speed: u32` with no
+//! `#[serde(default)]`, so `behavior_config.get` fails to decode there on every
+//! call — the boot fetch that sets the typewriter speed silently never lands
+//! and the Behavior settings page always renders its load-error arm. Fixing it
+//! is a product decision (server-owned knob ⇒ restore the field and a
+//! `[behavior]` key; Panel-local preference ⇒ drop it from the client DTO), and
+//! adding `#[serde(default)]` is NOT the fix — that pins the slider to a
+//! default forever while still looking wired.
 
 use crate::config::{BehaviorConfig, Config};
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};

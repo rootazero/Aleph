@@ -265,6 +265,17 @@ pub struct RedriveOutcome {
     /// Records left behind because replaying them could double-send
     /// ([`DeadLetterReason::replay_safe`] is false). Never moved implicitly.
     pub skipped_unsafe: u64,
+    /// Records left behind because their payload is over
+    /// [`DeliveryQueueConfig::max_payload_bytes`] — provably never sent, but a
+    /// verbatim replay would land a row the cap rejects. Counted apart from
+    /// `skipped_unsafe` because the operator's next action is different: raise
+    /// the cap, not "decide whether a duplicate is acceptable".
+    ///
+    /// `#[serde(default)]` only because this field is additive on an existing
+    /// response shape — a payload from a server that predates it means "not
+    /// reported", which is what 0 says.
+    #[serde(default)]
+    pub skipped_over_cap: u64,
 }
 
 /// Field bundle for [`DeliveryStore::insert_dead_letter`] — a struct rather
@@ -304,7 +315,8 @@ pub struct DeliveryQueueStats {
     /// (forensic trail; parity-plus over openclaw).
     pub dead_lettered: i64,
     /// Subset of `dead_lettered` a redrive would actually replay
-    /// ([`DeadLetterReason::replay_safe`]). Reported separately because the
+    /// ([`DeadLetterReason::redrivable`] — not `replay_safe`, which is the
+    /// broader "cannot double-send" question). Reported separately because the
     /// gap between the two numbers *is* the answer to "why did redrive move
     /// fewer than I can see?" — without it, an operator staring at 12 dead
     /// letters and a redrive that moved 3 has no way to tell a bug from the
@@ -314,9 +326,12 @@ pub struct DeliveryQueueStats {
 
 /// Why a delivery stopped being retried.
 ///
-/// The distinction that matters is **not** severity but *replay safety*: it is
-/// the single input to [`DeliveryStore::redrive_dead_letters`], which used to
-/// rest on the blanket claim "every dead letter is duplicate-safe by
+/// The distinction that matters is **not** severity but *replay safety* — and
+/// it is two questions, not one: [`replay_safe`](DeadLetterReason::replay_safe)
+/// ("can a replay duplicate a delivery?", the operator-facing flag) and
+/// [`redrivable`](DeadLetterReason::redrivable) ("will redrive actually move
+/// it?", the input to [`DeliveryStore::redrive_dead_letters`]). They used to be
+/// one boolean, which rested on the blanket claim "every dead letter is duplicate-safe by
 /// construction". That claim held only while the sole producer was an exhausted
 /// [`should_enqueue`] retry budget. Once terminal failures and interrupted
 /// attempts also land here — which is the whole point of a forensic trail — the
@@ -339,14 +354,20 @@ pub enum DeadLetterReason {
     /// docs' *crash window* section.
     UnknownOutcome,
     /// The serialized payload exceeded [`DeliveryQueueConfig::max_payload_bytes`]
-    /// and was never admitted to the live queue. Never delivered, but replaying
-    /// it verbatim would hit the same cap, so it is not offered for redrive.
+    /// and was never admitted to the live queue.
+    ///
+    /// Never delivered — so it *is* [`replay_safe`](Self::replay_safe), and the
+    /// operator-facing flag must say so. It is nonetheless not
+    /// [`redrivable`](Self::redrivable), because a verbatim re-insert bypasses
+    /// [`DeliveryStore::enqueue`]'s cap check. Two different questions; the
+    /// remedy for this one is "raise the cap", not "decide whether a duplicate
+    /// is acceptable".
     PayloadTooLarge,
 }
 
 impl DeadLetterReason {
     /// Every variant, in declaration order. Single source for the callers that
-    /// need to enumerate reasons (the replay-safe projection in
+    /// need to enumerate reasons (the `redrivable` projection in
     /// [`DeliveryStore::stats`] / [`DeliveryStore::redrive_dead_letters`]); a
     /// `#[cfg(test)]` exhaustive match keeps it honest when a variant is added.
     pub const ALL: &'static [Self] = &[
@@ -359,17 +380,50 @@ impl DeadLetterReason {
 
     /// The database tokens a redrive is willing to move.
     #[must_use]
-    pub fn replay_safe_tokens() -> Vec<&'static str> {
+    pub fn redrivable_tokens() -> Vec<&'static str> {
         Self::ALL
             .iter()
-            .filter(|r| r.replay_safe())
+            .filter(|r| r.redrivable())
             .map(|r| r.as_str())
             .collect()
     }
 
     /// Whether redriving this record can *not* produce a duplicate delivery.
+    ///
+    /// This is the question the operator-facing `replay_safe` flag reports, and
+    /// it is **only** about duplication. [`PayloadTooLarge`](Self::PayloadTooLarge)
+    /// belongs here: it is written by [`DeliveryStore::enqueue`] *before* any
+    /// transport call, so nothing was ever attempted. It used to be excluded —
+    /// but for the unrelated reason that a redrive would re-hit the cap, which
+    /// made one boolean carry two questions and told the user "the outcome of
+    /// the last attempt is unknown" about a message that never left the
+    /// process. That second question is [`redrivable`](Self::redrivable).
     #[must_use]
     pub const fn replay_safe(self) -> bool {
+        matches!(
+            self,
+            Self::Exhausted | Self::Permanent | Self::PayloadTooLarge
+        )
+    }
+
+    /// Whether [`DeliveryStore::redrive_dead_letters`] will actually move this
+    /// record back into the live queue.
+    ///
+    /// Strictly narrower than [`replay_safe`](Self::replay_safe): a redrive
+    /// re-inserts the row without re-running `enqueue`'s cap check, so an
+    /// over-cap payload would land in the live queue as a record that can never
+    /// be serialized within the limit that rejected it. Refusing it is a
+    /// property of the *payload*, not of the delivery outcome.
+    /// ⚠️ Spelled as its own exhaustive-by-listing `matches!` rather than as
+    /// `replay_safe() && !PayloadTooLarge`. That derived form made the guard
+    /// `every_dead_letter_reason_answers_both_questions_consistently` — whose
+    /// stated job is to check `redrivable ⇒ replay_safe` for every variant,
+    /// including future ones — TRUE BY CONSTRUCTION. It could not go red for
+    /// any input, which is the definition of not being a guard. Stating the two
+    /// answers independently is what turns that implication back into an
+    /// invariant something can violate.
+    #[must_use]
+    pub const fn redrivable(self) -> bool {
         matches!(self, Self::Exhausted | Self::Permanent)
     }
 
@@ -687,6 +741,26 @@ impl DeliveryStore {
             )?;
         }
 
+        // Never become due before this conversation's own backlog. The caller
+        // schedules a fresh failure at `now + initial_backoff` (5s), but a head
+        // that the drain has already backed off can sit at `max_backoff` (300s)
+        // — and `claim_due` claims by `next_attempt_at`, not by id. Without
+        // this clamp the newer reply is delivered first and the conversation is
+        // permanently reordered: exactly what `defer_conversation` exists to
+        // prevent, in the one direction it cannot see (it only ever touches
+        // rows that are already in the table).
+        //
+        // Enforced here, at the single admission point, rather than at the
+        // caller: `channel_registry::maybe_enqueue` should stay ignorant of
+        // other rows, and a second caller would otherwise have to remember.
+        let conversation_floor: Option<i64> = conn.query_row(
+            "SELECT MAX(next_attempt_at) FROM outbound_deliveries
+             WHERE channel_id = ?1 AND conversation_id = ?2",
+            params![channel_id, message.conversation_id.as_str()],
+            |r| r.get(0),
+        )?;
+        let next_attempt_at = conversation_floor.map_or(next_attempt_at, |f| next_attempt_at.max(f));
+
         conn.execute(
             "INSERT INTO outbound_deliveries
                 (channel_id, conversation_id, payload, attempts, next_attempt_at, created_at, last_error)
@@ -814,7 +888,14 @@ impl DeliveryStore {
                 "SELECT id, channel_id, payload, attempts
                  FROM outbound_deliveries
                  WHERE next_attempt_at <= ?1
-                 ORDER BY next_attempt_at ASC
+                 -- `id ASC` is load-bearing, not cosmetic: `enqueue` clamps a
+                 -- new row to its conversation's existing head, so equal
+                 -- schedules are now the NORMAL case inside a conversation.
+                 -- Without a deterministic tiebreak the clamp would only stop
+                 -- the newer reply from being claimed *early*, not from being
+                 -- claimed *first*, and the reordering it exists to prevent
+                 -- would come back on the tie.
+                 ORDER BY next_attempt_at ASC, id ASC
                  LIMIT ?2",
             )?;
             let mapped = stmt.query_map(params![now, limit as i64], |row| {
@@ -1130,16 +1211,19 @@ impl DeliveryStore {
         let dead_lettered: i64 =
             conn.query_row("SELECT COUNT(*) FROM dead_letters", [], |r| r.get(0))?;
         // Counted with the same predicate redrive uses, expressed once in Rust
-        // (`DeadLetterReason::replay_safe`) and projected into SQL here, so the
+        // (`DeadLetterReason::redrivable`) and projected into SQL here, so the
         // reported figure cannot drift from what a redrive would actually move.
-        let replay_safe_tokens = DeadLetterReason::replay_safe_tokens();
-        let dead_lettered_replayable: i64 = if replay_safe_tokens.is_empty() {
+        // Deliberately `redrivable`, not `replay_safe`: this field's name is
+        // "what a redrive would replay", and over-cap rows are the pair that
+        // pulls those two apart.
+        let redrivable_tokens = DeadLetterReason::redrivable_tokens();
+        let dead_lettered_replayable: i64 = if redrivable_tokens.is_empty() {
             0
         } else {
-            let placeholders = vec!["?"; replay_safe_tokens.len()].join(",");
+            let placeholders = vec!["?"; redrivable_tokens.len()].join(",");
             conn.query_row(
                 &format!("SELECT COUNT(*) FROM dead_letters WHERE reason IN ({placeholders})"),
-                rusqlite::params_from_iter(replay_safe_tokens.iter()),
+                rusqlite::params_from_iter(redrivable_tokens.iter()),
                 |r| r.get(0),
             )?
         };
@@ -1214,7 +1298,7 @@ impl DeliveryStore {
     /// every dead letter. Returns the number of records moved.
     ///
     /// **Safety is per record, not per table.** Only reasons whose
-    /// [`replay_safe`](DeadLetterReason::replay_safe) is true are moved —
+    /// [`redrivable`](DeadLetterReason::redrivable) is true are moved —
     /// [`Exhausted`](DeadLetterReason::Exhausted) (a duplicate-safe transient
     /// error that ran out of attempts) and
     /// [`Permanent`](DeadLetterReason::Permanent). Records whose outcome is
@@ -1224,6 +1308,13 @@ impl DeliveryStore {
     /// replaces the old blanket "every dead letter is duplicate-safe by
     /// construction" claim, which stopped being true the moment terminal
     /// failures and interrupted attempts also started landing in this table.
+    ///
+    /// [`PayloadTooLarge`](DeadLetterReason::PayloadTooLarge) is refused for a
+    /// *different* reason and is therefore reported separately, as
+    /// `skipped_over_cap`: it is provably never-sent (so `replay_safe`), but a
+    /// verbatim re-insert bypasses `enqueue`'s cap check. Folding the two into
+    /// one counter told the operator "resending could duplicate" about a
+    /// message that never reached a transport.
     ///
     /// Each moved record is reset to a fresh budget (`attempts = 0`) and made
     /// immediately due (`next_attempt_at = created_at = now`), preserving its
@@ -1247,7 +1338,8 @@ impl DeliveryStore {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
         }
 
-        let safe = DeadLetterReason::replay_safe_tokens();
+        let safe = DeadLetterReason::redrivable_tokens();
+        let over_cap_token = DeadLetterReason::PayloadTooLarge.as_str();
         let mut conn = self.guard();
         let tx = conn.transaction()?;
 
@@ -1308,6 +1400,24 @@ impl DeliveryStore {
             }
         };
 
+        // Split the refusals: `unsafe_total` above is "everything not
+        // redrivable", which lumps the never-attempted over-cap rows in with
+        // the genuinely-ambiguous ones. They need different words, so they need
+        // different counters.
+        let over_cap_total: i64 = match channel {
+            Some(ch) => tx.query_row(
+                "SELECT COUNT(*) FROM dead_letters WHERE channel_id = ?1 AND reason = ?2",
+                params![ch, over_cap_token],
+                |r| r.get(0),
+            )?,
+            None => tx.query_row(
+                "SELECT COUNT(*) FROM dead_letters WHERE reason = ?1",
+                params![over_cap_token],
+                |r| r.get(0),
+            )?,
+        };
+        let skipped_unsafe = (unsafe_total - over_cap_total).max(0) as u64;
+
         let admitted = rows.len().min(capacity.max(0) as usize);
         let skipped_capacity = (rows.len() - admitted) as u64;
         let mut moved = 0u64;
@@ -1327,7 +1437,8 @@ impl DeliveryStore {
         Ok(RedriveOutcome {
             moved,
             skipped_capacity,
-            skipped_unsafe: unsafe_total.max(0) as u64,
+            skipped_unsafe,
+            skipped_over_cap: over_cap_total.max(0) as u64,
         })
     }
 }
@@ -1450,8 +1561,12 @@ async fn deliver_one(
         }
         // Transient, and the record's schedule is not this attempt's to spend:
         // put it back exactly as it was found. The live send this flush runs
-        // ahead of is about to hit the same failure and be enqueued *behind*
-        // this record, so the conversation's order survives either way.
+        // ahead of is about to hit the same failure and be enqueued behind this
+        // record — but that ordering is *enforced* by `enqueue`'s
+        // conversation floor, not inferred from row id. It used to be asserted
+        // here as if id order were the claim order; `claim_due` orders by
+        // `next_attempt_at`, so a head parked at `max_backoff` was overtaken by
+        // the very message this arm leaves behind it.
         Err(e) if should_enqueue(&e) && mode == AttemptMode::Inline => {
             if let Err(clear_err) = store.clear_inflight(rec.id) {
                 warn!(id = rec.id, error = %clear_err, "delivery queue: could not clear the inline probe's in-flight stamp");
@@ -1641,8 +1756,17 @@ pub(super) async fn flush_conversation(
 ///
 /// - the file cannot be read (already gone, permissions) — nothing to inline;
 /// - inlining would push the payload over `max_payload_bytes` — a large video
-///   is better queued as a path that *might* still be there than dead-lettered
-///   on the spot.
+///   is queued as a path rather than dead-lettered on the spot.
+///
+/// The second case rested on "a path that *might* still be there", which was
+/// false in-process, not merely across restarts: `ReplyEmitter::deliver_run_media`
+/// deleted this run's whole media cache on the statement after the send. That
+/// is now conditional — the emitter withholds the delete whenever the send
+/// failed in a way this queue accepts ([`should_enqueue`]) — so the path a
+/// refused custody leaves behind still resolves when the drain replays it.
+/// **Whoever changes that gate owns this refusal**: without it, the honest
+/// answer here is a [`DeadLetterReason::PayloadTooLarge`] dead letter, not a
+/// queued row pointing at a file that is about to be removed.
 ///
 /// Both are logged, because "this row's media will not survive a restart" is
 /// exactly the kind of thing that is otherwise only discovered by a user who
@@ -1700,8 +1824,8 @@ pub async fn take_media_custody(
         warn!(
             max_payload_bytes,
             "delivery queue: attachment bytes exceed the payload cap; queueing the \
-             original local path instead of dead-lettering, but its media may not \
-             survive a restart"
+             original local path instead of dead-lettering — the run's media cleanup \
+             is withheld for queued sends, but the path will not survive a restart"
         );
         return None;
     }
@@ -2363,8 +2487,17 @@ mod tests {
         let dl = s.recent_dead_letters(10).unwrap();
         assert_eq!(dl.len(), 1, "but still visible to the operator");
         assert_eq!(dl[0].reason, DeadLetterReason::PayloadTooLarge);
+        // Two questions, two answers. The old single assertion said
+        // `!replay_safe()` with the message "redriving it would re-hit the cap"
+        // — a true sentence attached to the wrong predicate, which is how the
+        // operator-facing flag ended up reporting "outcome unknown" for a
+        // message that never reached a transport.
         assert!(
-            !dl[0].reason.replay_safe(),
+            dl[0].reason.replay_safe(),
+            "dead-lettered before any transport call, so a replay cannot duplicate"
+        );
+        assert!(
+            !dl[0].reason.redrivable(),
             "redriving it would re-hit the cap"
         );
 
@@ -2950,5 +3083,130 @@ mod tests {
             assert_eq!(DeadLetterReason::from_str_lossy(r.as_str()), *r);
         }
         assert_eq!(DeadLetterReason::ALL.len(), 5);
+    }
+
+    /// The two questions must not collapse back into one boolean. Derived from
+    /// the enum itself rather than restating a list, so a sixth variant is
+    /// covered the day it is declared.
+    #[test]
+    fn every_dead_letter_reason_answers_both_questions_consistently() {
+        for r in DeadLetterReason::ALL {
+            if r.redrivable() {
+                assert!(
+                    r.replay_safe(),
+                    "{r:?}: a redrive would move it, so it must also be duplicate-safe — \
+                     `redrivable` is the strictly narrower question"
+                );
+            }
+        }
+        // The pair that pulls them apart: never attempted (so no duplicate is
+        // possible) yet refused by redrive (a verbatim replay re-hits the cap).
+        assert!(DeadLetterReason::PayloadTooLarge.replay_safe());
+        assert!(!DeadLetterReason::PayloadTooLarge.redrivable());
+        assert!(
+            !DeadLetterReason::redrivable_tokens()
+                .contains(&DeadLetterReason::PayloadTooLarge.as_str()),
+            "the SQL projection must follow `redrivable`, not `replay_safe`, or a redrive \
+             would re-admit a row the cap rejected"
+        );
+    }
+
+    /// An over-cap row is dead-lettered by `enqueue` *before* any transport
+    /// call, so "the outcome of the last attempt is unknown" is a lie about it.
+    /// It must be counted apart from the genuinely-ambiguous refusals.
+    #[test]
+    fn an_over_cap_row_is_reported_as_never_sent_not_as_unknown() {
+        let mut c = cfg();
+        c.max_payload_bytes = 256;
+        let s = DeliveryStore::open_in_memory(c).unwrap();
+        let now = now_secs();
+
+        // One never-attempted over-cap row, one genuinely ambiguous row.
+        let over = OutboundMessage::text("conv-1", "x".repeat(2000));
+        assert!(matches!(
+            s.enqueue("ch", &over, "NotConnected", now).unwrap(),
+            EnqueueOutcome::TooLarge { .. }
+        ));
+        let risky = s.enqueue_id("ch", &msg("maybe-sent"), "x", now).unwrap();
+        s.record_dead_letter(risky, 1, "SendFailed", DeadLetterReason::Ambiguous)
+            .unwrap();
+
+        let outcome = s.redrive_dead_letters(now, None).unwrap();
+        assert_eq!(outcome.moved, 0);
+        assert_eq!(
+            outcome.skipped_unsafe, 1,
+            "only the ambiguous one may be described as 'resending could duplicate'"
+        );
+        assert_eq!(
+            outcome.skipped_over_cap, 1,
+            "the over-cap row is a different refusal with a different remedy (raise the cap)"
+        );
+
+        let dl = s.recent_dead_letters(10).unwrap();
+        let over_row = dl
+            .iter()
+            .find(|d| d.reason == DeadLetterReason::PayloadTooLarge)
+            .expect("over-cap row retained");
+        assert!(
+            over_row.reason.replay_safe(),
+            "nothing was ever attempted, so the operator-facing flag must not claim \
+             the outcome is unknown"
+        );
+    }
+
+    /// A fresh failure must not become due ahead of its own conversation's
+    /// backed-off head. `claim_due` orders by `next_attempt_at`, not by id, so
+    /// a head parked at `max_backoff` used to be overtaken by the reply to the
+    /// user's *next* question — permanently reordering the conversation, which
+    /// is the exact failure `defer_conversation` exists to prevent in the other
+    /// direction.
+    #[test]
+    fn a_new_row_never_becomes_due_before_its_conversations_backed_off_head() {
+        let s = store();
+        let now = now_secs();
+
+        // Head has been retried into the future (the drain's backoff curve).
+        s.enqueue_id("ch", &conv_msg("A", "first"), "NotConnected", now + 300)
+            .unwrap();
+        // The caller's naive schedule for a brand-new failure: now + 5.
+        s.enqueue_id("ch", &conv_msg("A", "second"), "NotConnected", now + 5)
+            .unwrap();
+
+        assert!(
+            s.claim_due(now + 10, 10).unwrap().is_empty(),
+            "the newer reply must not be claimable while the older one is still backed off"
+        );
+
+        let due: Vec<String> = s
+            .claim_due(now + 301, 10)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.message.text)
+            .collect();
+        assert_eq!(
+            due,
+            vec!["first".to_string(), "second".to_string()],
+            "and when they are due, the conversation is still in its original order"
+        );
+    }
+
+    /// The clamp is per conversation: an unrelated chat on the same channel
+    /// must not inherit another conversation's backoff.
+    #[test]
+    fn the_conversation_floor_does_not_leak_across_conversations() {
+        let s = store();
+        let now = now_secs();
+        s.enqueue_id("ch", &conv_msg("A", "wedged"), "NotConnected", now + 300)
+            .unwrap();
+        s.enqueue_id("ch", &conv_msg("B", "unrelated"), "NotConnected", now + 5)
+            .unwrap();
+
+        let due: Vec<String> = s
+            .claim_due(now + 10, 10)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.message.text)
+            .collect();
+        assert_eq!(due, vec!["unrelated".to_string()]);
     }
 }

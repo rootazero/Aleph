@@ -81,6 +81,15 @@ impl SlackMessageOps {
         Self::send_message_with_base(client, bot_token, channel, text, thread_ts, None).await
     }
 
+    /// # Rate limits and the at-most-once boundary
+    ///
+    /// A tier-limit rejection is returned as
+    /// [`ChannelError::RateLimited`] — the only send error
+    /// `ChannelRegistry::send_attempt` retries and `delivery_queue::should_enqueue`
+    /// persists — but **only while nothing has landed yet**. Once a chunk is on
+    /// the wire, both of those recoveries replay the *whole* message, so the
+    /// reader would get chunk 1 twice. From that point the honest answer is
+    /// `SendFailed`: definitely partial, not safely replayable.
     pub async fn send_message_with_base(
         client: &reqwest::Client,
         bot_token: &str,
@@ -89,13 +98,15 @@ impl SlackMessageOps {
         thread_ts: Option<&str>,
         api_base: Option<&str>,
     ) -> Result<SendResult, ChannelError> {
+        use super::super::errors::{classify_slack_error, retry_after_secs, SlackFallback};
+
         let base = api_base.unwrap_or(SLACK_API_BASE);
         let formatted = MessageFormatter::format(text, MarkupFormat::SlackMrkdwn);
         let chunks = MessageFormatter::split(&formatted, SLACK_MSG_LIMIT);
 
         let mut last_result = None;
 
-        for chunk in &chunks {
+        for (posted, chunk) in chunks.iter().enumerate() {
             let mut body = serde_json::json!({
                 "channel": channel,
                 "text": chunk,
@@ -105,24 +116,44 @@ impl SlackMessageOps {
                 body["thread_ts"] = serde_json::Value::String(ts.to_string());
             }
 
-            let resp: serde_json::Value = client
+            // Bind the response before consuming it: the status line and the
+            // `Retry-After` header are the other half of "is this a rate
+            // limit?", and `.json()` moves the response away from both.
+            let raw = client
                 .post(format!("{base}/chat.postMessage"))
                 .header("Authorization", format!("Bearer {bot_token}"))
                 .json(&body)
                 .send()
                 .await
-                .map_err(|e| ChannelError::SendFailed(format!("chat.postMessage failed: {e}")))?
-                .json()
-                .await
-                .map_err(|e| {
-                    ChannelError::SendFailed(format!("chat.postMessage response parse failed: {e}"))
-                })?;
+                .map_err(|e| ChannelError::SendFailed(format!("chat.postMessage failed: {e}")))?;
+            let status = raw.status();
+            let retry_after = retry_after_secs(raw.headers());
+            let resp: serde_json::Value = raw.json().await.map_err(|e| {
+                ChannelError::SendFailed(format!("chat.postMessage response parse failed: {e}"))
+            })?;
 
             if resp["ok"].as_bool() != Some(true) {
                 let err = resp["error"].as_str().unwrap_or("unknown");
-                return Err(ChannelError::SendFailed(format!(
-                    "Slack chat.postMessage failed: {err}"
-                )));
+                let classified = classify_slack_error(
+                    "chat.postMessage",
+                    Some(status),
+                    err,
+                    retry_after,
+                    SlackFallback::Send,
+                );
+                // See the at-most-once note on this function: a retryable
+                // classification is only true of a message that is entirely
+                // un-sent.
+                if posted > 0 {
+                    if let ChannelError::RateLimited { retry_after_secs } = classified {
+                        return Err(ChannelError::SendFailed(format!(
+                            "Slack chat.postMessage rate-limited after {posted} chunk(s) already \
+                             posted (retry_after {retry_after_secs}s); not replayable without \
+                             duplicating the delivered chunks"
+                        )));
+                    }
+                }
+                return Err(classified);
             }
 
             let msg_ts = resp["ts"].as_str().unwrap_or("0").to_string();
@@ -224,7 +255,12 @@ impl SlackMessageOps {
         let base = api_base.unwrap_or(SLACK_API_BASE);
 
         // Step 1: Get presigned upload URL
-        let url_resp: serde_json::Value = client
+        // Bind the response before `.json()` — the status and `Retry-After`
+        // are on the raw response and are gone once it is consumed. Slack
+        // carries rate limiting on BOTH the 429 and the body's `error` string,
+        // and reading only one of them is what folded a retryable refusal into
+        // a terminal `SendFailed` on the message path.
+        let url_raw = client
             .post(format!("{base}/files.getUploadURLExternal"))
             .header("Authorization", format!("Bearer {bot_token}"))
             .json(&serde_json::json!({
@@ -235,20 +271,27 @@ impl SlackMessageOps {
             .await
             .map_err(|e| {
                 ChannelError::SendFailed(format!("files.getUploadURLExternal failed: {e}"))
-            })?
-            .json()
-            .await
-            .map_err(|e| {
-                ChannelError::SendFailed(format!(
-                    "files.getUploadURLExternal response parse failed: {e}"
-                ))
             })?;
+        let url_status = url_raw.status();
+        let url_retry_after = super::super::errors::retry_after_secs(url_raw.headers());
+        let url_resp: serde_json::Value = url_raw.json().await.map_err(|e| {
+            ChannelError::SendFailed(format!(
+                "files.getUploadURLExternal response parse failed: {e}"
+            ))
+        })?;
 
         if url_resp["ok"].as_bool() != Some(true) {
-            return Err(ChannelError::SendFailed(format!(
-                "files.getUploadURLExternal failed: {}",
-                url_resp["error"].as_str().unwrap_or("unknown")
-            )));
+            // The SAME classifier the message path and the directory path use.
+            // A media send is a send: if it is refused for rate limiting it must
+            // be retried and queued like any other, or an attachment silently
+            // becomes the one kind of reply the durable queue never protects.
+            return Err(super::super::errors::classify_slack_error(
+                "files.getUploadURLExternal",
+                Some(url_status),
+                url_resp["error"].as_str().unwrap_or("unknown"),
+                url_retry_after,
+                super::super::errors::SlackFallback::Send,
+            ));
         }
 
         let upload_url = url_resp["upload_url"].as_str().ok_or_else(|| {
@@ -293,7 +336,7 @@ impl SlackMessageOps {
             complete_body["initial_comment"] = serde_json::Value::String(cap.to_string());
         }
 
-        let complete_resp: serde_json::Value = client
+        let complete_raw = client
             .post(format!("{base}/files.completeUploadExternal"))
             .header("Authorization", format!("Bearer {bot_token}"))
             .json(&complete_body)
@@ -301,20 +344,23 @@ impl SlackMessageOps {
             .await
             .map_err(|e| {
                 ChannelError::SendFailed(format!("files.completeUploadExternal failed: {e}"))
-            })?
-            .json()
-            .await
-            .map_err(|e| {
-                ChannelError::SendFailed(format!(
-                    "files.completeUploadExternal response parse failed: {e}"
-                ))
             })?;
+        let complete_status = complete_raw.status();
+        let complete_retry_after = super::super::errors::retry_after_secs(complete_raw.headers());
+        let complete_resp: serde_json::Value = complete_raw.json().await.map_err(|e| {
+            ChannelError::SendFailed(format!(
+                "files.completeUploadExternal response parse failed: {e}"
+            ))
+        })?;
 
         if complete_resp["ok"].as_bool() != Some(true) {
-            return Err(ChannelError::SendFailed(format!(
-                "files.completeUploadExternal failed: {}",
-                complete_resp["error"].as_str().unwrap_or("unknown")
-            )));
+            return Err(super::super::errors::classify_slack_error(
+                "files.completeUploadExternal",
+                Some(complete_status),
+                complete_resp["error"].as_str().unwrap_or("unknown"),
+                complete_retry_after,
+                super::super::errors::SlackFallback::Send,
+            ));
         }
 
         tracing::debug!("Slack file upload completed: {file_id}");
@@ -565,5 +611,109 @@ impl SlackMessageOps {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod send_classification_tests {
+    use super::*;
+    use crate::gateway::delivery_queue::should_enqueue;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// The live send path's own regression: a `429 {"ok":false,
+    /// "error":"ratelimited"}` used to come back as `SendFailed`, which
+    /// `ChannelRegistry::send_attempt` will not retry and
+    /// `delivery_queue::should_enqueue` will not persist — the reply was lost
+    /// outright. Asserting the queue predicate too, because the variant alone
+    /// is not the property that matters.
+    #[tokio::test]
+    async fn a_rate_limited_first_chunk_is_retryable_and_queueable() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat.postMessage"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("retry-after", "11")
+                    .set_body_json(serde_json::json!({"ok": false, "error": "ratelimited"})),
+            )
+            .mount(&server)
+            .await;
+
+        let err = SlackMessageOps::send_message_with_base(
+            &reqwest::Client::new(),
+            "xoxb-test",
+            "C1",
+            "hello",
+            None,
+            Some(&server.uri()),
+        )
+        .await
+        .expect_err("a 429 must not be reported as a successful send");
+
+        assert!(
+            matches!(
+                err,
+                ChannelError::RateLimited {
+                    retry_after_secs: 11
+                }
+            ),
+            "a rate-limited first chunk must be RateLimited with the server's own \
+             Retry-After, got {err:?}"
+        );
+        assert!(
+            should_enqueue(&err),
+            "the durable queue must accept it; folding it into SendFailed is how the \
+             reply used to disappear"
+        );
+    }
+
+    /// The at-most-once boundary. Once a chunk is on the wire, both recoveries
+    /// (`send_attempt`'s retry loop and the durable queue) replay the WHOLE
+    /// message, so a retryable classification would duplicate the delivered
+    /// chunks. Two chunks over `SLACK_MSG_LIMIT`, first accepted, second
+    /// rate-limited.
+    #[tokio::test]
+    async fn a_rate_limit_after_a_chunk_landed_is_not_offered_for_replay() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat.postMessage"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"ok": true, "ts": "1.0"})),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/chat.postMessage"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .set_body_json(serde_json::json!({"ok": false, "error": "ratelimited"})),
+            )
+            .mount(&server)
+            .await;
+
+        // Two chunks: paragraph-separated so the splitter cuts cleanly.
+        let long = format!("{}\n\n{}", "a".repeat(SLACK_MSG_LIMIT - 1), "b".repeat(64));
+        let err = SlackMessageOps::send_message_with_base(
+            &reqwest::Client::new(),
+            "xoxb-test",
+            "C1",
+            &long,
+            None,
+            Some(&server.uri()),
+        )
+        .await
+        .expect_err("the second chunk was rejected");
+
+        assert!(
+            matches!(err, ChannelError::SendFailed(_)),
+            "a partially-delivered message must not be classified replayable, got {err:?}"
+        );
+        assert!(
+            !should_enqueue(&err),
+            "queueing it would re-post the chunk the reader already has"
+        );
     }
 }

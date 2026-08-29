@@ -84,19 +84,25 @@ impl AlephTool for SessionNewTool {
             ))
         })?;
 
-        // Compute the next-epoch key first. `with_next_epoch` only advances the
-        // epoch for Main and DirectMessage sessions; for Group / Task / Subagent
-        // / Ephemeral sessions it returns an identical key. Closing then
-        // re-opening the same key would be a destructive no-op reported as a
-        // fresh conversation, so detect that and bail out honestly instead.
+        // Refuse BEFORE the destructive half. `with_next_epoch` only advances
+        // the epoch for Main and DirectMessage sessions; for Group / Task /
+        // Subagent / Ephemeral it returns an identical key, so closing and
+        // re-opening it is a destructive no-op reported as a fresh
+        // conversation.
+        //
+        // Asked of the key type rather than by comparing the two strings: this
+        // is the ONE predicate all three faces of the verb share (the channel
+        // `/new` command and the `sessions.new` RPC shipped without any check
+        // at all), and a string comparison here would have been a second
+        // answer that only this face could consult.
+        if !routing_key.rolls_to_new_epoch() {
+            return Err(crate::error::AlephError::tool(format!(
+                "session_new: {}",
+                RoutingSessionKey::NEW_SESSION_UNSUPPORTED
+            )));
+        }
         let new_routing_key = routing_key.with_next_epoch();
         let new_key_str = new_routing_key.to_key_string();
-        if new_key_str == *session_key_str {
-            return Err(crate::error::AlephError::tool(
-                "session_new: starting a new conversation is not supported for this session \
-                 type (only direct/main sessions can be rolled over).",
-            ));
-        }
 
         // Retire the closing session's autonomous continuations and its `/btw`
         // side session BEFORE the bump — this tool rolls a conversation to the

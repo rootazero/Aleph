@@ -197,8 +197,12 @@ async fn serve_canvas_asset(
     let client_ip = resolved.ip;
     let secure = state.tls_enabled || resolved.secure;
 
-    // 1. Plaintext-remote refusal, identical to the `/ws` upgrade.
-    if refuse_insecure_remote(client_ip, secure, state.allow_insecure_remote) {
+    // 1. Plaintext-remote refusal, identical to the `/ws` upgrade — including
+    //    that it reads `resolved.local`, not `client_ip.is_loopback()`. This
+    //    route calls the same `resolve_client`, so it inherited the same
+    //    overload: a proxy hop with no `X-Forwarded-For` resolves `ip` back to
+    //    the proxy's loopback address.
+    if refuse_insecure_remote(resolved.local, secure, state.allow_insecure_remote) {
         warn!(
             client = %client_ip,
             "refused canvas asset read: insecure transport to a remote client"

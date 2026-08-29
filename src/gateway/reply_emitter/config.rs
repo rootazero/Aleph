@@ -27,8 +27,22 @@ pub struct ReplyEmitterConfig {
     /// Default: 30.
     pub min_initial_chars: usize,
 
-    /// Maximum message length for the target channel (0 = unlimited).
-    /// Used for overflow detection during streaming.
+    /// Maximum message length the target channel will accept (0 = unknown /
+    /// unlimited), copied verbatim from
+    /// [`ChannelCapabilities::max_message_length`].
+    ///
+    /// **Two consumers, and it is not only a streaming concern**: the
+    /// streaming overflow threshold
+    /// ([`ReplyEmitter::overflow_threshold`](crate::gateway::reply_emitter::ReplyEmitter))
+    /// *and* the non-streamed outbound chunker
+    /// (`ReplyEmitter::outbound_chunk_len`). The chunker used to hold a second,
+    /// wrong answer — a hardcoded 4000 — which every channel with a smaller cap
+    /// (Discord's 2000, and Discord's `Channel::send` does not split) rejected
+    /// outright, losing the whole answer.
+    ///
+    /// Declared in **characters** (that is the unit every adapter populates the
+    /// capability with); the splitter counts **bytes**, which is the
+    /// conservative direction — see `outbound_chunk_len`.
     pub max_message_length: usize,
 
     /// Optional runtime-metadata footer appended to the final reply.
@@ -105,10 +119,18 @@ impl ReplyEmitterConfig {
     /// `UnsupportedFeature` (they were forced *into* the broken path by the
     /// widening arm — a floor that only ran in the `else` would not have
     /// reached them).
+    /// `max_message_length` is copied **unconditionally**, deliberately: it is
+    /// a fact about the transport, not about streaming. It used to live inside
+    /// the `EditBased` arm, which is the "one-directional override" shape —
+    /// the widening arm carried a fact that has nothing to do with widening.
+    /// The cost was that every `StreamProtocol::None` channel (slack 3000,
+    /// mattermost 16383, irc 400, …) left it at 0, disabling both the
+    /// streaming overflow guard *and* — once the chunker started reading it —
+    /// the outbound length cap, on exactly the channels whose cap is known.
     pub fn apply_channel_capabilities(&mut self, caps: &ChannelCapabilities) {
+        self.max_message_length = caps.max_message_length;
         if caps.stream_protocol == StreamProtocol::EditBased {
             self.stream_enabled = true;
-            self.max_message_length = caps.max_message_length;
         }
         self.stream_enabled &= caps.editing;
     }

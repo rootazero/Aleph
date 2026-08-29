@@ -55,10 +55,14 @@ pub(crate) fn sanitize_key_for_dir(key: &str) -> String {
 /// `:s1` and merged it into the existing conversation. Requiring the leading
 /// separator also stops a sibling like `agent_main_mains5` from being misread
 /// as epoch 5.
+/// The parse itself lives on [`SessionKey::epoch_after_base`] so the SQLite
+/// backend answers `get_current_epoch` with the SAME rule — it used to have its
+/// own, unanchored, newest-created-wins version, and the two disagreed about
+/// the same data.
 fn epoch_from_dir_name(pattern: &str, name: &str) -> Option<u32> {
-    let rest = name.strip_prefix(pattern)?;
-    let epoch_seg = rest.strip_prefix(':').or_else(|| rest.strip_prefix('_'))?;
-    epoch_seg.strip_prefix('s')?.parse::<u32>().ok()
+    // Both separators: a directory name has been through `sanitize_key_for_dir`,
+    // which maps `:`→`_` on Windows.
+    SessionKey::epoch_after_base(pattern, name, &[':', '_'])
 }
 
 #[derive(Debug, Clone)]
@@ -156,7 +160,9 @@ impl FileSessionStore {
             let Ok(date) = chrono::NaiveDate::parse_from_str(&date_name, "%Y-%m-%d") else {
                 continue;
             };
-            let Some(date_dt) = date.and_hms_opt(0, 0, 0) else { continue };
+            let Some(date_dt) = date.and_hms_opt(0, 0, 0) else {
+                continue;
+            };
             if chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(date_dt, chrono::Utc)
                 < cutoff
             {
@@ -224,6 +230,26 @@ impl FileSessionStore {
                 serde_json::to_value(&event).unwrap_or(serde_json::Value::Null),
             );
             let _ = bus.publish_json(&topic_event);
+
+            // The frame the clients actually listen for.
+            //
+            // `sessions.changed` is a raw string topic, so it gets no
+            // `stream.*` method and never reaches the Panel's `run.*` handler;
+            // repo-wide it has no subscriber at all. The SQLite twin publishes
+            // `SessionUpdated` instead (`session_manager::ops::emit`), and that
+            // is the one the sidebar handles — so on the DEFAULT (file) backend
+            // a delete / reset / patch / close simply never reached a second
+            // tab, a second device, or the composer pills, until a full reload.
+            //
+            // Same payload semantics as the SQLite twin, stated there: a
+            // store-level change has no triggering channel and no triggering
+            // run, and a client reads that pair as "nobody ran anything" and
+            // leaves its transcript alone.
+            let _ = bus.publish_frame(&crate::gateway::events::GatewayEventFrame::SessionUpdated {
+                session_key: key.to_string(),
+                origin_channel: None,
+                origin_run_id: None,
+            });
         }
     }
 
@@ -235,6 +261,33 @@ impl FileSessionStore {
         self.session_dir(key).join("metadata.json")
     }
 
+    /// `transcript.jsonl`.
+    ///
+    /// Every whole-file rewrite of it goes through
+    /// [`crate::utils::atomic_write::atomic_write_file`], never `fs::write`.
+    /// `fs::write` is create+truncate+write_all, and the truncate and the write
+    /// are separately observable: a concurrent `append_message` landing between
+    /// them leaves a transcript that is one document's tail welded onto
+    /// another's head. That is the defect `metadata.json` was fixed for
+    /// (`meta.rs`), one file over, on the file that IS the user's conversation.
+    /// Atomicity guarantees the survivor is a COMPLETE document — not that no
+    /// update is lost. Losing an update needs a lock held across the read AND
+    /// the write, and the scope of that here is deliberately partial:
+    ///
+    /// - `append_message` and `stamp_last_assistant_metadata` DO hold the
+    ///   session's [`Self::lock_metadata`] guard across their whole operation.
+    ///   Those two are the pair that runs on every turn of every run on the
+    ///   default backend, so their race is a routine event rather than a rare
+    ///   one, and it costs the user's newest message.
+    /// - `truncate_messages`, `retire_from`, `restore_checkpoint` and
+    ///   `branch_from_checkpoint` do NOT. They are operator-initiated,
+    ///   one-at-a-time administrative rewrites; the honest statement is that
+    ///   this is a bounded gap, not that it is closed. Extending the guard to
+    ///   them is cheap and is the obvious next step — the reason it is not done
+    ///   here is scope, not a ruling.
+    ///
+    /// The lock is named for `metadata.json` because that is what it was built
+    /// for, but it is the SESSION's write lock: one key, both files.
     fn transcript_path(&self, key: &str) -> PathBuf {
         self.session_dir(key).join("transcript.jsonl")
     }
@@ -566,8 +619,14 @@ impl SessionStore for FileSessionStore {
         msg: MessageRecord,
     ) -> Result<(), SessionStoreError> {
         let key_str = key.to_key_string();
-        self.append_transcript(&key_str, &msg).await?;
+        // Lock FIRST, then append. The append used to sit outside the critical
+        // section, which was harmless while nothing else rewrote the transcript
+        // — it is not harmless now that `stamp_last_assistant_metadata` does a
+        // read-modify-write of the same file at the end of every run. Taking
+        // the same lock is what makes the two mutually exclusive; the append
+        // itself is still O(one line) so the section stays short.
         let mut guard = self.lock_metadata(&key_str).await?;
+        self.append_transcript(&key_str, &msg).await?;
         if let Some(meta) = guard.existing_mut() {
             meta.message_count += 1;
             // SECONDS, via the boundary — never `msg.timestamp` raw. This field
@@ -684,9 +743,11 @@ impl SessionStore for FileSessionStore {
             contents.push_str(&line);
             contents.push('\n');
         }
-        tokio::fs::write(&path, contents).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
-        })?;
+        crate::utils::atomic_write::atomic_write_file(&path, &contents)
+            .await
+            .map_err(|e| {
+                SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
+            })?;
 
         let mut guard = self.lock_metadata(&key_str).await?;
         if let Some(meta) = guard.existing_mut() {
@@ -729,9 +790,11 @@ impl SessionStore for FileSessionStore {
             contents.push_str(&line);
             contents.push('\n');
         }
-        tokio::fs::write(&path, contents).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
-        })?;
+        crate::utils::atomic_write::atomic_write_file(&path, &contents)
+            .await
+            .map_err(|e| {
+                SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
+            })?;
 
         let mut guard = self.lock_metadata(&key_str).await?;
         if let Some(meta) = guard.existing_mut() {
@@ -809,9 +872,11 @@ impl SessionStore for FileSessionStore {
         tokio::fs::create_dir_all(self.session_dir(&new_key_str))
             .await
             .map_err(|e| SessionStoreError::DatabaseError(format!("Create dir failed: {e}")))?;
-        tokio::fs::write(&path, contents).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
-        })?;
+        crate::utils::atomic_write::atomic_write_file(&path, &contents)
+            .await
+            .map_err(|e| {
+                SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
+            })?;
         // P1 data isolation: this is a freshly-created session (new_key), so
         // it gets the same owner/scope stamp `get_or_create`'s CREATE branch
         // gives every other new session — no-op outside any `scope::
@@ -846,9 +911,11 @@ impl SessionStore for FileSessionStore {
             contents.push_str(&line);
             contents.push('\n');
         }
-        tokio::fs::write(&path, contents).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
-        })?;
+        crate::utils::atomic_write::atomic_write_file(&path, &contents)
+            .await
+            .map_err(|e| {
+                SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
+            })?;
         let mut guard = self.lock_metadata(&key_str).await?;
         let meta = guard
             .existing_mut()
@@ -1249,6 +1316,63 @@ impl SessionStore for FileSessionStore {
     async fn set_idle(&self, key: &SessionKey) -> Result<(), SessionStoreError> {
         self.set_state(key, SessionState::Idle).await
     }
+
+    /// Stamp the run's `run_id` + context-window occupancy onto the newest
+    /// assistant line of `transcript.jsonl`.
+    ///
+    /// The trait's `Ok(())` default reads as a deliberate opt-out ("only the
+    /// SQLite store overrides this"), but the projector is the ONE producer of
+    /// per-message run metadata and this is the DEFAULT backend — so on a stock
+    /// install every assistant row came back with a null `run_id` and null
+    /// occupancy, and the Panel's context gauge (`occupancy_from_history`)
+    /// stayed hidden after every reload. The same install under
+    /// `session_store_backend = "sqlite"` showed it. That is not an opt-out,
+    /// it is the feature being off for most users.
+    ///
+    /// Written through `atomic_write_file` rather than `fs::write`: a rewrite
+    /// of the whole transcript is a truncate-then-write, and the projector can
+    /// append between the two halves — the same tear that cost this store its
+    /// `metadata.json` (see `utils::atomic_write`).
+    async fn stamp_last_assistant_metadata(
+        &self,
+        key: &SessionKey,
+        metadata: &serde_json::Value,
+    ) -> Result<(), SessionStoreError> {
+        let key_str = key.to_key_string();
+        // The session's write lock, held across the whole read-modify-write.
+        //
+        // `atomic_write_file` guarantees the SURVIVOR is a complete document.
+        // It does not guarantee no update is lost, and this method is the one
+        // whole-file rewriter that runs on the DEFAULT backend at the end of
+        // EVERY run — so without the lock it races the hottest writer there is
+        // (`append_message`) on a routine schedule rather than a rare one, and
+        // the loser is the user's most recent message, silently.
+        //
+        // The guard is deliberately dropped WITHOUT `commit()`: this method
+        // does not change `metadata.json`. What it needs is the mutual
+        // exclusion, and `MetaGuard` is the only thing in this module that can
+        // hold it — which is the point (see `lock_metadata`'s doc: the
+        // discipline is a module boundary, not a convention to remember).
+        let _write_lock = self.lock_metadata(&key_str).await?;
+        let mut messages = self.read_transcript(&key_str, None).await?;
+        let Some(last) = messages.iter_mut().rfind(|m| m.role == "assistant") else {
+            // No assistant row yet (the run failed before it produced one).
+            // Not an error: the SQLite twin's UPDATE matches zero rows here.
+            return Ok(());
+        };
+        last.metadata = Some(metadata.clone());
+
+        let mut contents = String::new();
+        for msg in &messages {
+            let line = serde_json::to_string(msg)
+                .map_err(|e| SessionStoreError::DatabaseError(format!("Serialize failed: {e}")))?;
+            contents.push_str(&line);
+            contents.push('\n');
+        }
+        crate::utils::atomic_write::atomic_write_file(&self.transcript_path(&key_str), &contents)
+            .await
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Write transcript failed: {e}")))
+    }
 }
 
 use tokio::io::AsyncWriteExt;
@@ -1319,6 +1443,240 @@ mod epoch_tests {
             current, 10,
             "epoch detection must see the highest sN directory on all platforms"
         );
+    }
+
+    /// A peer whose id is a string PREFIX of another peer's must not inherit
+    /// that peer's epoch. This backend already required the separator; the
+    /// assertion lives here as the conformance half of the SQLite fix (both
+    /// backends now share `SessionKey::epoch_after_base`), so a future
+    /// divergence reddens on whichever side moves.
+    #[tokio::test]
+    async fn a_prefix_sibling_peer_does_not_lend_its_epoch() {
+        let (store, _dir) = temp_store();
+        let short = SessionKey::dm(
+            "main",
+            "telegram",
+            "123",
+            crate::routing::session_key::DmScope::PerPeer,
+        );
+        let long = SessionKey::dm(
+            "main",
+            "telegram",
+            "1234",
+            crate::routing::session_key::DmScope::PerPeer,
+        );
+        store.get_or_create(&short).await.unwrap();
+        store.get_or_create(&long.with_epoch(2)).await.unwrap();
+
+        assert_eq!(
+            store
+                .get_current_epoch(&short.base_key_pattern())
+                .await
+                .unwrap(),
+            0,
+            "peer 123 must not be routed into peer 1234's epoch"
+        );
+    }
+}
+
+#[cfg(test)]
+mod default_backend_parity_guards {
+    use super::*;
+
+    fn temp_store() -> (FileSessionStore, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = FileSessionStoreConfig {
+            base_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        (FileSessionStore::new(config).expect("store"), dir)
+    }
+
+    fn msg(role: &str, content: &str) -> MessageRecord {
+        MessageRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            role: role.into(),
+            content: content.into(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            metadata: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            tool_call_id: None,
+            tool_name: None,
+        }
+    }
+
+    /// The two hot transcript writers must both take the session's write lock.
+    ///
+    /// Asserted by BLOCKING, not by racing. A test that spawns two writers and
+    /// checks whether an update survived is a coin flip that passes most of the
+    /// time — the worst shape of guard, because a green run proves nothing and
+    /// a red one gets rerun. Here the test holds the lock itself and requires
+    /// each writer to time out: if the function does not take the lock it
+    /// returns immediately and the `timeout` resolves `Ok`, which fails.
+    ///
+    /// ⚠️ The guard must NOT hold the lock across a `join`/`await` of the thing
+    /// it is testing (CLAUDE.md 附录 D.10.10: a test whose PASS path is also its
+    /// deadlock path stalls the whole suite with zero output). `timeout` is what
+    /// makes this safe — the await always ends, lock or no lock.
+    #[tokio::test]
+    async fn the_two_hot_transcript_writers_take_the_session_write_lock() {
+        use std::time::Duration;
+
+        let (store, _dir) = temp_store();
+        let key = SessionKey::from_key_string("agent:locked:main").unwrap();
+        store.get_or_create(&key).await.unwrap();
+        store
+            .append_message(&key, msg("assistant", "prior"))
+            .await
+            .unwrap();
+
+        let held = store.lock_metadata(&key.to_key_string()).await.unwrap();
+
+        let stamp = tokio::time::timeout(
+            Duration::from_millis(150),
+            store.stamp_last_assistant_metadata(&key, &serde_json::json!({"run_id": "r1"})),
+        )
+        .await;
+        assert!(
+            stamp.is_err(),
+            "stamp_last_assistant_metadata completed while the session write \
+             lock was held — it is doing an UNLOCKED read-modify-write of \
+             transcript.jsonl at the end of every run on the default backend, \
+             and the update it loses is the user's newest message"
+        );
+
+        let append = tokio::time::timeout(
+            Duration::from_millis(150),
+            store.append_message(&key, msg("user", "raced")),
+        )
+        .await;
+        assert!(
+            append.is_err(),
+            "append_message completed while the session write lock was held — \
+             its transcript append is outside the critical section, so it can \
+             land between the other writer's read and its write"
+        );
+
+        // The discriminator. The two timeouts above prove each CALL blocks, but
+        // they cannot see a writer that does part of its work before reaching
+        // the lock — `append_message` used to append the transcript line first
+        // and take the lock afterwards, so it still timed out while having
+        // already mutated the file. Read the transcript with the lock still
+        // held: nothing may have landed.
+        let mid = store
+            .read_transcript(&key.to_key_string(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            mid.len(),
+            1,
+            "a writer mutated transcript.jsonl while the session write lock was \
+             held by someone else — it did work BEFORE taking the lock, so the \
+             lock does not cover the read-modify-write it is supposed to"
+        );
+
+        // Releasing it must let both through: without this the assertions above
+        // are also satisfied by a function that simply never returns.
+        drop(held);
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            store.stamp_last_assistant_metadata(&key, &serde_json::json!({"run_id": "r1"})),
+        )
+        .await
+        .expect("stamp must proceed once the lock is free")
+        .expect("stamp must succeed");
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            store.append_message(&key, msg("user", "raced")),
+        )
+        .await
+        .expect("append must proceed once the lock is free")
+        .expect("append must succeed");
+
+        let rows = store.get_history(&key, None).await.unwrap();
+        assert_eq!(
+            rows.len(),
+            2,
+            "both writers' effects must survive: the prior assistant row (which \
+             the stamp REWRITES rather than adds to) plus the appended one"
+        );
+        assert!(
+            rows.iter().any(|m| m.content == "raced"),
+            "the appended message must not be lost to the rewrite"
+        );
+    }
+
+    /// The default backend must publish the frame clients actually listen for.
+    ///
+    /// `sessions.changed` is a raw string topic with no subscriber anywhere in
+    /// the tree; the Panel sidebar handles `run.session_updated`, whose only
+    /// producer was the SQLite twin. Asserted through `client_method()` rather
+    /// than a literal, so renaming the frame moves both halves together.
+    #[tokio::test]
+    async fn a_store_change_publishes_the_frame_clients_subscribe_to() {
+        let (store, _dir) = temp_store();
+        let bus = Arc::new(GatewayEventBus::new());
+        let mut rx = bus.subscribe_typed();
+        let store = store.with_event_bus(bus);
+
+        let key = SessionKey::from_key_string("agent:framecheck:main").unwrap();
+        store.get_or_create(&key).await.unwrap();
+
+        let mut saw = None;
+        while let Ok(frame) = rx.try_recv() {
+            if let crate::gateway::events::GatewayEventFrame::SessionUpdated {
+                session_key, ..
+            } = &frame
+            {
+                assert_eq!(session_key, &key.to_key_string());
+                saw = frame.stream_method();
+            }
+        }
+        // Derived, not restated: what makes this frame reachable by a client is
+        // that it HAS a `stream.*` method at all — the raw `sessions.changed`
+        // topic this store also publishes has none, which is exactly why no
+        // client has ever handled it.
+        assert!(
+            saw.is_some(),
+            "the default (file) backend published nothing on the stream plane — \
+             a delete/reset/patch/close never reaches a second tab until reload"
+        );
+    }
+
+    /// `stamp_last_assistant_metadata`'s trait default is `Ok(())`, documented
+    /// as "only the SQLite store overrides this". On the DEFAULT backend that
+    /// silently dropped the projector's only per-message run metadata, so
+    /// `chat.history` returned null `run_id`/occupancy for every assistant row
+    /// and the Panel's context gauge stayed hidden after every reload.
+    #[tokio::test]
+    async fn the_default_backend_stamps_run_metadata_onto_the_last_assistant_row() {
+        let (store, _dir) = temp_store();
+        let key = SessionKey::from_key_string("agent:stampcheck:main").unwrap();
+        store.get_or_create(&key).await.unwrap();
+        store.append_message(&key, msg("user", "hi")).await.unwrap();
+        store
+            .append_message(&key, msg("assistant", "hello"))
+            .await
+            .unwrap();
+
+        let meta = serde_json::json!({ "run_id": "run-7", "context_tokens": 1234 });
+        store
+            .stamp_last_assistant_metadata(&key, &meta)
+            .await
+            .unwrap();
+
+        let history = store.get_history(&key, None).await.unwrap();
+        let last = history.last().expect("assistant row");
+        assert_eq!(last.role, "assistant");
+        assert_eq!(
+            last.metadata.as_ref().and_then(|m| m.get("run_id")),
+            Some(&serde_json::json!("run-7")),
+            "the run metadata the projector produced never reached the transcript"
+        );
+        // The rest of the transcript must survive the rewrite.
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].content, "hi");
     }
 }
 

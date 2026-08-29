@@ -84,6 +84,40 @@ impl Lane {
             // Read-only ops with no dot-suffix (or whose suffix doesn't
             // match the Query rule).
             "health" | "echo" | "version" | "system.info" | "request.state" => Some(Self::Query),
+            // The handshake. It has no `.`, so the suffix heuristic never ran
+            // and it fell through to Mutate — which `needs_idempotency()`.
+            // With `require_idempotency_key = true` the server therefore
+            // answered IDEMPOTENCY_KEY_REQUIRED to every `connect`, before
+            // `resolve_connect_auth` ever ran, and no first-party client sends
+            // such a key: the daemon stayed up and healthy while nothing —
+            // desktop Panel on loopback included — could complete a handshake.
+            //
+            // Query-lane exemption cannot grant anything here: a handshake is
+            // idempotent by construction, and `resolve_connect_auth`
+            // recomputes authorization from THIS request's params, so there is
+            // no cached effect an idempotency key could have deduplicated.
+            "connect" => Some(Self::Query),
+            // Four reads whose names match no Query suffix token, each verified
+            // to mutate nothing. They are here for the same reason
+            // `fs.read_file` below is — under `require_idempotency_key = true`
+            // they were unreachable — and, flag or not, they burned Mutate-pool
+            // permits (desktop 8 / shared 4) that writes need:
+            //   `fs.list_dir`            the listing that must precede the
+            //                            `fs.read_file` already exempted here;
+            //   `exec.approvals.pending` the read twin of
+            //                            `exec.approval.resolve` — without it
+            //                            parked tool calls are invisible and
+            //                            every gated run sits until it times out;
+            //   `clarification.pending`  the Panel's only way to render an
+            //                            `ask_user` question;
+            //   `subagent.tree`          the run's own subagent view.
+            // The durable answer to "which reads are still misfiled" is not a
+            // longer list here but `method_census`'s per-method lane ruling,
+            // which fails until a human classifies each newly registered method.
+            "fs.list_dir"
+            | "exec.approvals.pending"
+            | "clarification.pending"
+            | "subagent.tree" => Some(Self::Query),
             // gateway.identity.get matches the .get suffix; listed
             // defensively in case it's ever renamed.
             "gateway.identity.get" => Some(Self::Query),
@@ -158,6 +192,22 @@ impl Lane {
     #[must_use]
     pub const fn needs_idempotency(&self) -> bool {
         !matches!(self, Self::Query)
+    }
+
+    /// Whether a human named this method in [`Self::override_for`], rather
+    /// than letting it fall through the suffix heuristic to the `Mutate`
+    /// default.
+    ///
+    /// Exists for `method_census`'s guard on **dotless** methods. Those skip
+    /// the suffix heuristic entirely, so for them "not overridden" and
+    /// "idempotency-guarded" are the same statement — which is how `connect`
+    /// came to be refused before it could authorize anything, taking every
+    /// client with it. A method with a dot at least gets a chance to be
+    /// classified by its suffix; a dotless one gets none.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn is_explicitly_classified(method: &str) -> bool {
+        Self::override_for(method).is_some()
     }
 }
 
@@ -651,6 +701,46 @@ mod tests {
     #[test]
     fn unknown_method_with_no_suffix_defaults_to_mutate() {
         assert_eq!(Lane::for_method("totally_unknown_rpc"), Lane::Mutate);
+    }
+
+    /// `require_idempotency_key = true` must never be able to lock every
+    /// client out of the gateway. `connect` is the only way any connection
+    /// authorizes, so if it is idempotency-guarded the handshake is refused
+    /// before `resolve_connect_auth` runs and the login wall then refuses
+    /// everything else — including the loopback desktop Panel, whose only
+    /// recovery is editing config.toml and restarting.
+    #[test]
+    fn the_handshake_is_never_gated_by_the_mutation_hardening_flag() {
+        assert_eq!(Lane::for_method("connect"), Lane::Query);
+        assert!(
+            !Lane::for_method("connect").needs_idempotency(),
+            "connect must not need an idempotency key: no first-party client \
+             sends one, so requiring it makes the daemon unreachable"
+        );
+    }
+
+    /// The four verified reads that the hand-written whitelist had not yet
+    /// been patched for. Asserted at the consumer (`needs_idempotency`) rather
+    /// than only at the lane, because that is the bit the handshake gate and
+    /// the idempotency gate both read.
+    #[test]
+    fn the_remaining_verified_reads_are_query_lane() {
+        for m in [
+            "fs.list_dir",
+            "exec.approvals.pending",
+            "clarification.pending",
+            "subagent.tree",
+        ] {
+            assert_eq!(Lane::for_method(m), Lane::Query, "{m} is a pure read");
+            assert!(
+                !Lane::for_method(m).needs_idempotency(),
+                "{m} must not be refused under require_idempotency_key"
+            );
+        }
+        // Their mutating siblings must stay guarded — this half is what makes
+        // the test above mean something.
+        assert_eq!(Lane::for_method("fs.create_dir"), Lane::Mutate);
+        assert_eq!(Lane::for_method("exec.approval.resolve"), Lane::Mutate);
     }
 
     #[test]

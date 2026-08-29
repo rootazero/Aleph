@@ -933,22 +933,59 @@ struct TruncateReply {
     tokens_removed_estimate: u64,
 }
 
+/// Resolve `session.truncate`'s `keep_count` for "drop the last turn", in the
+/// index space the SERVER counts in.
+///
+/// `keep_count` is an ordinal over the stored `messages` rows. This screen's
+/// `state.messages` is not those rows: `history_message_from_json` maps every
+/// `tool` row to `None`, and the live stream never appends one at all — so two
+/// turns with two tool calls each are 8 stored rows and 4 rendered ones. A count
+/// taken from the rendered list therefore names a boundary several turns earlier
+/// than the user's last one, and `session.truncate` is irreversible. (Same shape
+/// as the "storage form vs display form" criterion in CLAUDE.md §0.)
+///
+/// So the boundary is derived from a fresh `chat.history`: keep everything
+/// strictly before the newest `user` row. `total` is what makes this exact when
+/// the response is a tail WINDOW rather than the whole transcript — without it
+/// the window's own length would masquerade as the transcript's.
+fn keep_count_before_last_turn(result: &Value) -> Option<usize> {
+    let rows = result.get("messages").and_then(Value::as_array)?;
+    let last_user = rows
+        .iter()
+        .rposition(|m| m.get("role").and_then(Value::as_str) == Some("user"))?;
+    // `total` absent (older gateway) ⇒ the window is all there is.
+    let total = result
+        .get("total")
+        .and_then(Value::as_u64)
+        .map_or(rows.len(), |t| t as usize);
+    let dropped_from_end = rows.len() - last_user;
+    Some(total.saturating_sub(dropped_from_end))
+}
+
 async fn execute_undo(state: &mut AppState, client: &AlephClient) -> bool {
     if state.current_run.is_some() {
         state.add_system_message("Stop the active run first (/stop), then /undo.".to_string());
         return false;
     }
-    // Count non-system messages — we only undo the last user+assistant pair.
-    let conversational_count = state
-        .messages
-        .iter()
-        .filter(|m| !matches!(m, app::ChatMessage::System { .. }))
-        .count();
-    if conversational_count < 2 {
+    // Ask the server where the last turn starts. Counting locally would be
+    // counting in the wrong index space — see `keep_count_before_last_turn`.
+    let history = match client
+        .call::<_, Value>(
+            "chat.history",
+            Some(json!({ "session_key": state.session_key })),
+        )
+        .await
+    {
+        Ok(h) => h,
+        Err(e) => {
+            state.add_system_message(format!("Undo error: {e}"));
+            return false;
+        }
+    };
+    let Some(keep_count) = keep_count_before_last_turn(&history) else {
         state.add_system_message("Nothing to undo.".to_string());
         return false;
-    }
-    let keep_count = conversational_count.saturating_sub(2);
+    };
     let params = json!({
         "session_key": state.session_key,
         "keep_count": keep_count,
@@ -1155,10 +1192,7 @@ fn format_replay_list(page: &AgentTraceListPage) -> String {
     }
     lines.push(String::new());
     if page.next_cursor.is_some() {
-        lines.push(format!(
-            "(showing {} — more exist)",
-            page.traces.len()
-        ));
+        lines.push(format!("(showing {} — more exist)", page.traces.len()));
     }
     lines.push("Use /replay <task_id> to load one.".to_string());
     lines.join("\n")
@@ -1317,6 +1351,45 @@ pub(super) async fn fetch_my_user_id(client: &AlephClient) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `/undo`'s boundary must be an ordinal over the STORED rows.
+    ///
+    /// The rendered list drops every `tool` row, so a count taken from it names
+    /// a boundary several turns earlier than the user's last one — and
+    /// `session.truncate` deletes irreversibly and (since it now also retires
+    /// the event log) takes the model's memory of those turns with it.
+    #[test]
+    fn undo_keeps_everything_before_the_last_user_row_counting_stored_rows() {
+        let row = |role: &str| serde_json::json!({ "role": role, "content": "x" });
+        // Two turns with two tool calls each: 8 stored rows, 4 of them rendered.
+        let history = serde_json::json!({
+            "messages": [
+                row("user"), row("tool"), row("tool"), row("assistant"),
+                row("user"), row("tool"), row("tool"), row("assistant"),
+            ],
+            "total": 8,
+        });
+        assert_eq!(
+            keep_count_before_last_turn(&history),
+            Some(4),
+            "the boundary must be the newest `user` row's ordinal among STORED \
+             rows — counting the rendered list would keep only 2 and silently \
+             delete the first turn as well"
+        );
+
+        // A tail WINDOW: `total` is what keeps the ordinal absolute.
+        let windowed = serde_json::json!({
+            "messages": [row("assistant"), row("user"), row("assistant")],
+            "total": 103,
+        });
+        assert_eq!(keep_count_before_last_turn(&windowed), Some(101));
+
+        // Nothing to undo.
+        assert_eq!(
+            keep_count_before_last_turn(&serde_json::json!({ "messages": [], "total": 0 })),
+            None
+        );
+    }
 
     #[test]
     fn cost_line_renders_amount_and_na() {

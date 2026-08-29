@@ -21,6 +21,8 @@ pub mod btw;
 pub mod canvas;
 pub mod channel_pairing;
 pub mod channels;
+pub mod commands;
+pub mod cron;
 pub mod desktop_bridge;
 pub mod dreaming;
 pub mod events;

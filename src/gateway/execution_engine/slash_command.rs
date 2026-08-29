@@ -965,7 +965,7 @@ mod arg_mapping_tests {
     }
 
     /// Every session knob that stamps a request-carried pick onto the session
-    /// must have its resolver run on the slash-command fast path too.
+    /// must have its resolver run on **every** surface that completes a turn.
     ///
     /// A fast-path dispatch **is** the turn. It builds no prompt and no tool
     /// surface, so it needs none of the resolved *values* — but the resolvers
@@ -983,15 +983,27 @@ mod arg_mapping_tests {
     /// `turn_*.rs` sibling containing a `persist_session_*` function — rather
     /// than from any list a person maintains. A fifth twin turns this red on
     /// the commit that adds it, which is the only moment the omission is cheap.
+    ///
+    /// # And the surfaces are derived too
+    ///
+    /// This used to read exactly one file, `slash_command.rs`, which made it
+    /// structurally blind to the OTHER early return: `gate.rs`'s mid-loop-steer
+    /// arm answers `GateOutcome::HandledInline`, `execute()` returns `Ok(())`,
+    /// and `run_loop::inner` — where the four resolvers otherwise live — is
+    /// never reached. Every knob riding a message that got folded into a running
+    /// sibling was therefore dropped, silently, for as long as the session had a
+    /// run in flight.
+    ///
+    /// The surface set is now "every production caller of
+    /// `resolve_turn_permissions`", because resolving this turn's tier is what
+    /// makes something a turn. A new surface that resolves permissions without
+    /// its twins is red on the commit that adds it.
     #[test]
     fn every_stamp_on_carry_resolver_runs_on_the_fast_path() {
         use crate::utils::source_scan::code_text;
 
         let dir =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway/execution_engine");
-        let fast_path = code_text(
-            &std::fs::read_to_string(dir.join("slash_command.rs")).expect("slash_command.rs"),
-        );
 
         // The twins: `turn_*.rs` modules that persist a carried pick. Read off
         // the filesystem, so membership is a property of the code and not of
@@ -1036,18 +1048,61 @@ mod arg_mapping_tests {
              scan stopped matching, so its green would mean nothing"
         );
 
-        let missing: Vec<&str> = twins
-            .iter()
-            .filter(|(_, resolver)| !fast_path.contains(&format!("self.{resolver}(")))
-            .map(|(module, _)| module.as_str())
-            .collect();
+        // The surfaces: every production file under `execution_engine/` that
+        // resolves this turn's tier. Resolving the tier is what makes something
+        // a turn, so this is the set that owes the other resolvers — derived,
+        // not a list of file names someone remembered to extend.
+        let mut surfaces: Vec<(String, String)> = Vec::new();
+        let mut stack = vec![dir.clone()];
+        while let Some(current) = stack.pop() {
+            for entry in std::fs::read_dir(&current)
+                .expect("execution_engine dir")
+                .flatten()
+            {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                let body = code_text(&std::fs::read_to_string(&path).expect("engine module"));
+                if !body.contains("self.resolve_turn_permissions(") {
+                    continue;
+                }
+                let name = path
+                    .strip_prefix(&dir)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .to_string();
+                surfaces.push((name, body));
+            }
+        }
+
+        assert!(
+            surfaces.len() >= 3,
+            "expected at least the three turn surfaces (the slash fast path, \
+             the mid-loop-steer inline fold, and the run loop); found {:?} — \
+             the scan stopped matching, so its green would mean nothing",
+            surfaces.iter().map(|(n, _)| n).collect::<Vec<_>>()
+        );
+
+        let mut missing: Vec<String> = Vec::new();
+        for (surface, body) in &surfaces {
+            for (module, resolver) in &twins {
+                if !body.contains(&format!("self.{resolver}(")) {
+                    missing.push(format!("{surface} is missing {module}'s {resolver}"));
+                }
+            }
+        }
 
         assert!(
             missing.is_empty(),
-            "these knobs stamp a request-carried pick onto the session, but \
-             the slash-command fast path never runs their resolver — a pick \
-             riding a slash message is silently dropped and the next turn \
-             reads the stale stamp: {missing:?}"
+            "these knobs stamp a request-carried pick onto the session, but a \
+             surface that completes a turn never runs their resolver — a pick \
+             riding that message is silently dropped and the next turn reads \
+             the stale stamp: {missing:?}"
         );
     }
 

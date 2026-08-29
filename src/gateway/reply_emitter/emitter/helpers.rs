@@ -232,15 +232,51 @@ impl ReplyEmitter {
     ///
     /// Idempotent — the buffer is `mem::take`n, so a second call (or a run that
     /// produced no media at all) sends nothing.
+    ///
+    /// # Why the cleanup is conditional
+    ///
+    /// The delivery queue may have persisted the attachment message for durable
+    /// retry, and when it could not inline the bytes (unreadable file, or a
+    /// payload that would blow `max_payload_bytes` — a JSON byte array is ~4×
+    /// the file) the queued row still references the **path**, into this very
+    /// directory. Deleting it on the next statement turned a recoverable
+    /// reconnect into a permanent loss that then dead-lettered as `Ambiguous`,
+    /// which redrive refuses: the operator was told the outcome was unknown for
+    /// a picture that provably never left the machine.
+    ///
+    /// `MediaCache::cleanup_stale()` at boot is still the backstop, so
+    /// withholding the delete here leaks nothing permanently.
+    ///
+    /// The question is asked of [`ReplyEmitter::media_may_be_queued`], not of
+    /// this call's own result: media leaves the emitter from four drain sites
+    /// and only this one is followed by the cleanup, so a transient failure at
+    /// any of the other three would otherwise have its files deleted by the
+    /// empty drain that lands here.
     pub(crate) async fn deliver_run_media(&self) {
         let attachments = self.drain_and_send_media().await;
         self.send_media_standalone(attachments).await;
+        if self.media_may_be_queued.load(Ordering::SeqCst) {
+            warn!(
+                run_id = %self.run_id,
+                "media send failed transiently; leaving this run's media cache in place \
+                 because a queued row may still reference it by path"
+            );
+            return;
+        }
         if let Err(e) = crate::media::cache::MediaCache::cleanup_session(&self.run_id) {
             warn!(error = %e, "Failed to cleanup media session");
         }
     }
 
     /// Send media as a separate standalone message.
+    ///
+    /// Latches [`ReplyEmitter::media_may_be_queued`] when the send failed in a
+    /// way the durable queue accepts (`delivery_queue::should_enqueue`) — i.e. a
+    /// queued row for this media may now exist, and it may reference the files
+    /// by path. Asking the queue's own predicate rather than re-deriving custody
+    /// here keeps one answer to "is this recoverable?"; latching it on the
+    /// emitter rather than returning it means the three call sites that never
+    /// clean up inherit the answer without knowing the problem exists.
     pub(crate) async fn send_media_standalone(
         &self,
         attachments: Vec<crate::gateway::channel::Attachment>,
@@ -269,9 +305,15 @@ impl ReplyEmitter {
             .await
         {
             Ok(_) => {
-                info!(run_id = %self.run_id, count = count, "Media standalone message sent successfully")
+                info!(run_id = %self.run_id, count = count, "Media standalone message sent successfully");
             }
-            Err(e) => warn!(error = %e, "Failed to send media standalone message"),
+            Err(e) => {
+                let queued = crate::gateway::delivery_queue::should_enqueue(&e);
+                warn!(error = %e, queued, "Failed to send media standalone message");
+                if queued {
+                    self.media_may_be_queued.store(true, Ordering::SeqCst);
+                }
+            }
         }
     }
 
@@ -345,7 +387,16 @@ impl ReplyEmitter {
 
     // ── Shared helpers ──────────────────────────────────────────────────
 
-    const MAX_MESSAGE_LENGTH: usize = 4000;
+    /// How long one outbound message may be, for THIS channel.
+    ///
+    /// Delegates to [`crate::gateway::channel::outbound_chunk_len`] — the one
+    /// answer every outbound chunker shares — reading the cap
+    /// `apply_channel_capabilities` already copied out of the channel's own
+    /// `ChannelCapabilities`. This used to be a hardcoded 4000 regardless of
+    /// the channel; see that function for what that cost.
+    fn outbound_chunk_len(&self) -> usize {
+        crate::gateway::channel::outbound_chunk_len(self.config.max_message_length)
+    }
 
     /// Send content to the channel, sanitizing first and splitting into chunks.
     pub(crate) async fn send_to_channel(&self, content: &str) {
@@ -431,7 +482,7 @@ impl ReplyEmitter {
             Marking::NeverTheAnswer => content,
         };
 
-        let chunks = Self::split_message(&content, Self::MAX_MESSAGE_LENGTH);
+        let chunks = Self::split_message(&content, self.outbound_chunk_len());
         let total_chunks = chunks.len();
 
         let metadata = reasoning
@@ -472,14 +523,34 @@ impl ReplyEmitter {
                     );
                 }
                 Err(e) => {
+                    // Whether the rest of the answer is still worth offering is
+                    // the queue's question, so ask the queue's own predicate
+                    // rather than writing a second classification here.
+                    //
+                    // Transient (`NotConnected` / `RateLimited`): keep going.
+                    // Each remaining chunk fails live too and is persisted by
+                    // `ChannelRegistry::maybe_enqueue` in ascending row id, and
+                    // `claim_conversation` replays a conversation in id order —
+                    // so the tail is delivered late but in one piece. Breaking
+                    // here dropped chunks i+1..N on the floor: not sent, not
+                    // queued, not dead-lettered, and not even named in this log
+                    // line, so `channel_outbox` showed a healthy queue while the
+                    // conversation ended mid-sentence forever.
+                    let transient = crate::gateway::delivery_queue::should_enqueue(&e);
                     error!(
-                        "Failed to send reply to channel {} (chunk {}/{}): {}",
-                        self.route.channel_id,
-                        i + 1,
+                        channel = %self.route.channel_id,
+                        chunk = i + 1,
                         total_chunks,
-                        e
+                        abandoned = if transient { 0 } else { total_chunks - i - 1 },
+                        error = %e,
+                        "Failed to send reply chunk to channel"
                     );
-                    break;
+                    if !transient {
+                        // Terminal for this message: retrying the tail against a
+                        // transport that just refused it permanently only adds
+                        // noise. The count above is what makes the loss nameable.
+                        break;
+                    }
                 }
             }
         }

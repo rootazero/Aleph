@@ -1059,7 +1059,7 @@ mod tests {
         let connections = kick.connections.clone();
         {
             let mut conns = connections.write().await;
-            let mut state = ConnectionState::new(std::net::IpAddr::from([203, 0, 113, 7]));
+            let mut state = ConnectionState::new(std::net::IpAddr::from([203, 0, 113, 7]), false);
             state.caller_role = "operator".to_string();
             state.caller_user = Some("u-alice".to_string());
             state.device_id = Some("dev-a1".to_string());
@@ -1191,7 +1191,7 @@ mod tests {
         let kick = test_kick_sink();
         {
             let mut conns = kick.connections.write().await;
-            let mut state = ConnectionState::new(std::net::IpAddr::from([203, 0, 113, 7]));
+            let mut state = ConnectionState::new(std::net::IpAddr::from([203, 0, 113, 7]), false);
             state.caller_role = role.to_string();
             state.caller_user = Some(user_id.to_string());
             state.device_id = Some(device_id.to_string());

@@ -345,6 +345,33 @@ impl PairLoopGuard {
 
 /// Resolve effective settings from channel config, account/global defaults,
 /// and the `default_enabled` policy. Mirrors the openclaw kernel.
+///
+/// ⚠️ SEVERED AS OF 2026-08-29 — this function has **zero production
+/// callers**. Its only call sites are in this file's own `#[cfg(test)]`
+/// module, and `InboundMessageRouter::with_bot_loop_protection` (the one
+/// writer of the router's `pair_loop_config`) is likewise called only from
+/// `inbound_router`'s test module. Production therefore runs on
+/// `PairLoopGuardConfig::default()`, which is `enabled: true` with the
+/// `DEFAULT_*` budget — an ACTIVE, hard-coded 20-per-60s silent drop
+/// (`pair_loop_check` logs one `warn!` and returns false; nobody is told).
+/// Since telegram/discord/slack all opt in to `MessageMeta::BotAuthored`, a
+/// bridged notification bot bursting 21 messages in a minute is suppressed
+/// and the operator has no configuration that can widen or disable it: the
+/// only key with that name, `ChannelAccessConfig::bot_loop_protection`, is
+/// reachable solely from `[channels.whatsapp].access` and has no reader.
+/// (`channel_policy.rs` still documents that field as falling back "via
+/// [`resolve_pair_loop_settings`]"; that is a promise nothing keeps.)
+///
+/// This is a CONNECT, not a CUT: "how do I widen or disable bot-loop
+/// protection" has no other answer in the repo, so deleting the merge would
+/// leave a fail-closed default with no door handle at all. Wiring it needs a
+/// decision that cannot be made in this file, because the shapes disagree —
+/// the router holds ONE `pair_loop_config` while `bot_loop_protection` is
+/// declared per-channel. Either (a) add a global config block and resolve it
+/// once at boot, or (b) give the router a `HashMap<channel_id, _>` and have
+/// `pair_loop_check` look up by `msg.channel_id`. Do not ship a per-channel
+/// key that silently collapses to a global — that is a second answer to the
+/// same question, which is how this ended up severed.
 #[must_use]
 pub fn resolve_pair_loop_settings(
     channel: Option<&PairLoopGuardConfig>,

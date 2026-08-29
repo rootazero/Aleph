@@ -32,12 +32,40 @@ use axum::extract::State;
 use axum::http::header::CONTENT_TYPE;
 use axum::response::IntoResponse;
 
+use std::collections::HashMap;
+
 use super::GatewaySharedState;
 use crate::gateway::middleware::latency::get_global_latency;
 use crate::gateway::middleware::request_state::get_global_registry;
 
 /// Prometheus exposition content type (format version 0.0.4).
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
+
+/// How many of the open connections actually hold authority.
+///
+/// # Why `wall_admits` and not a local `matches!(role, "operator" | "member")`
+///
+/// This was `connections_active` — the collector returned `(active, active)`,
+/// justified by a "LAN-trust: every connection is an implicit operator"
+/// comment that stopped being true when the login wall and the
+/// guest/member/operator split landed. The exported gauge's own HELP text
+/// ("Open connections that have authenticated") had been contradicting it
+/// since. Ten remote sockets parked at the login wall reported
+/// `authenticated == active`, so an alert on "connections that never
+/// authenticate" could never fire.
+///
+/// Reusing [`handler::wall_admits`] rather than re-deriving the role set keeps
+/// ONE derivation of "does this connection hold authority" in the gateway: a
+/// demotion via `handlers::users::restamp_live_connections` moves this gauge in
+/// the same instant it closes the request and event planes. `method: ""` is the
+/// same argument the event-forward arm passes — there is no `connect`
+/// exemption to grant when nobody asked anything.
+fn count_authenticated(conns: &HashMap<String, super::ConnectionState>) -> u64 {
+    conns
+        .values()
+        .filter(|c| super::handler::wall_admits(Some(c.caller_role.as_str()), ""))
+        .count() as u64
+}
 
 /// Flat, owned snapshot of every value the endpoint renders. Decoupling the
 /// data-gathering (async, touches shared state) from the formatting (pure,
@@ -69,10 +97,7 @@ pub async fn handle_metrics(State(state): State<Arc<GatewaySharedState>>) -> imp
 
     let (connections_active, connections_authenticated) = {
         let conns = state.connections.read().await;
-        let active = conns.len() as u64;
-        // LAN-trust: every connection is an implicit operator, so all active
-        // connections count as authenticated.
-        (active, active)
+        (conns.len() as u64, count_authenticated(&conns))
     };
 
     // Request-lifecycle counts come from the global registry the middleware
@@ -287,5 +312,63 @@ mod tests {
     fn escapes_label_special_characters() {
         assert_eq!(escape_label(r#"a"b\c"#), r#"a\"b\\c"#);
         assert_eq!(escape_label("line\nbreak"), "line\\nbreak");
+    }
+
+    /// `renders_connection_and_uptime_gauges` above hand-builds
+    /// `connections_active: 3, connections_authenticated: 2` — a pair the
+    /// collector could not produce, because it returned `(active, active)`.
+    /// The formatter was always right; nothing tested the collector. This
+    /// tests the collector.
+    #[test]
+    fn the_authenticated_gauge_excludes_a_walled_guest() {
+        use crate::gateway::server::ConnectionState;
+        use std::net::IpAddr;
+
+        let ip: IpAddr = "203.0.113.7".parse().unwrap();
+        let mut conns: HashMap<String, ConnectionState> = HashMap::new();
+        for (id, role) in [("c1", "operator"), ("c2", "member"), ("c3", "guest")] {
+            let mut st = ConnectionState::new(ip, false);
+            st.caller_role = role.to_string();
+            conns.insert(id.to_string(), st);
+        }
+
+        assert_eq!(conns.len(), 3, "three open connections");
+        assert_eq!(
+            count_authenticated(&conns),
+            2,
+            "a connection parked at the login wall with caller_role=\"guest\" \
+             has not authenticated; reporting it as authenticated makes an \
+             alert on \"connections that never authenticate\" unable to fire"
+        );
+    }
+
+    /// The other half: the gauge must not become a second derivation of "holds
+    /// authority". If someone re-writes it as a local role `matches!`, a
+    /// demotion through `restamp_live_connections` would move the delivery
+    /// planes and leave this behind.
+    #[test]
+    fn the_authenticated_gauge_reuses_the_login_walls_own_predicate() {
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/gateway/server/metrics_endpoint.rs"
+        ))
+        .expect("this file is readable from its own test");
+        let production = crate::utils::source_scan::production_prefix(&src);
+        let code = crate::utils::source_scan::strip_comment_lines(&production);
+        assert!(
+            code.contains("handler::wall_admits("),
+            "count_authenticated must call the login wall's own predicate, not \
+             restate the authorized role set"
+        );
+        // And the collector must actually use it. `count_authenticated` being
+        // correct proves nothing while `handle_metrics` still exports
+        // `(active, active)` — that is exactly the shape this started as, with
+        // a passing formatter test beside it.
+        assert!(
+            code.contains("count_authenticated(&conns)"),
+            "handle_metrics must derive the authenticated gauge from \
+             count_authenticated; exporting connections_active twice makes the \
+             two gauges structurally unable to differ"
+        );
     }
 }

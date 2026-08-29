@@ -26,6 +26,7 @@
 
 pub mod config;
 pub mod directory;
+pub(crate) mod errors;
 pub mod message_ops;
 
 pub use config::SlackConfig;

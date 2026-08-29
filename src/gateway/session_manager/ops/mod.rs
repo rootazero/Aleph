@@ -16,7 +16,25 @@ mod tests;
 pub(crate) use crud::NewMessage;
 pub(crate) use emit::*;
 
-fn map_session_metadata(row: &rusqlite::Row) -> Result<SessionMetadata, rusqlite::Error> {
+/// The `sessions` column list every `SELECT` that feeds [`map_session_metadata`]
+/// must use, in the order that mapper decodes positionally.
+///
+/// One constant rather than five hand-copied lists. A positional decoder plus N
+/// hand-written `SELECT`s is a contract with no compiler behind it: adding a
+/// column to one of them turns another one's `row.get(K)` into a RUNTIME type
+/// error, and the five copies here had already drifted in whitespace. Both
+/// mappers (this one and the `SessionStore` impl's) read the same order because
+/// there is now only one mapper.
+pub(crate) const SESSION_COLUMNS: &str =
+    "key, agent_id, session_type, created_at, last_active_at, \
+     message_count, total_tokens, auto_reset_at, state, metadata, \
+     label, input_tokens, output_tokens, model, model_provider, \
+     parent_session_key, compaction_count, derived_title, \
+     estimated_cost_usd, owner_user_id, scope_id, last_message_preview";
+
+pub(crate) fn map_session_metadata(
+    row: &rusqlite::Row,
+) -> Result<SessionMetadata, rusqlite::Error> {
     let state_str: Option<String> = row.get(8)?;
     let state = state_str
         .and_then(|s| serde_json::from_str(&format!("\"{s}\"")).ok())
@@ -56,6 +74,12 @@ fn map_session_metadata(row: &rusqlite::Row) -> Result<SessionMetadata, rusqlite
         // (legacy, adoption-by-absence) rather than panicking.
         owner_user_id: row.get(19).ok(),
         scope_id: row.get(20).ok(),
+        // Column added later, same `.ok()` treatment. Until it existed this
+        // field had a writer only in the FILE backend, so a
+        // `session_store_backend = "sqlite"` install rendered a null preview on
+        // `sessions.preview` and on every `sessions` tool row, forever —
+        // indistinguishable from "this conversation has no messages yet".
+        last_message_preview: row.get(21).ok().flatten(),
         ..Default::default()
     })
 }

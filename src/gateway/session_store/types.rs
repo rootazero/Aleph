@@ -232,9 +232,15 @@ pub struct SessionMetadata {
     /// Preview of the last message content (first N chars, updated on append).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_message_preview: Option<String>,
-    /// Cumulative runtime in milliseconds (updated on session close).
-    #[serde(default)]
-    pub runtime_ms: i64,
+    // `runtime_ms` was CUT here. It was documented "updated on session close"
+    // and had ZERO writers repo-wide: no column, no assignment, no setter —
+    // only a `Default` and two renderers (`sessions.preview` and the `sessions`
+    // tool row), so every session reported `"runtime_ms": 0` to the model and
+    // to RPC clients as a fact about how long it had run. Its twin
+    // `estimated_cost_usd` below got a column and a writer in the same audit;
+    // this one did not, and a `#[serde(default)]` scalar with two readers is
+    // invisible to every lint. Connecting it would be a new capability (a
+    // duration accumulated off `SessionEvent::AssistantRunMeta`), not a wire.
     /// Estimated cost in USD (updated on session close / usage update).
     #[serde(default)]
     pub estimated_cost_usd: f64,

@@ -696,6 +696,53 @@ mod tests {
         }
     }
 
+    /// A registered method with no `.` in its name skips
+    /// `Lane::for_method`'s suffix heuristic entirely and lands on the
+    /// `Mutate` default — which `needs_idempotency()`. Under
+    /// `[gateway] require_idempotency_key = true` that is a refusal issued
+    /// before dispatch, and no first-party client sends such a key.
+    ///
+    /// `connect` was in exactly that position: the handshake was refused
+    /// before `resolve_connect_auth` ran, the login wall then refused
+    /// everything else, and the daemon stayed up and healthy while nothing —
+    /// desktop Panel on loopback included — could reach it. The lane table's
+    /// own tests could not see it (none of them mention `connect`) and no test
+    /// anywhere sets the flag: both in-process harnesses hardcode it `false`.
+    ///
+    /// Derived from the sweep, not from a list restated here, so a newly
+    /// registered dotless method fails until a human rules on its lane.
+    #[test]
+    fn every_dotless_registered_method_is_explicitly_lane_classified() {
+        use crate::gateway::lane::Lane;
+
+        let (swept, _unknown) = sweep_rpc_methods();
+        let dotless: Vec<&str> = swept
+            .keys()
+            .map(String::as_str)
+            .filter(|m| !m.contains('.'))
+            .collect();
+        assert!(
+            !dotless.is_empty(),
+            "this guard proved nothing: the sweep found no dotless method at \
+             all, so the filter below never reached an assertion"
+        );
+
+        let unruled: Vec<&str> = dotless
+            .iter()
+            .copied()
+            .filter(|m| !Lane::is_explicitly_classified(m))
+            .collect();
+        assert!(
+            unruled.is_empty(),
+            "dotless RPC methods with no lane ruling. They fall through to \
+             Lane::Mutate, which needs an idempotency key, so under \
+             `require_idempotency_key = true` they are refused before \
+             dispatch. Name each one in `Lane::override_for` — Query or \
+             Mutate is a DECISION, not a default:
+  {unruled:?}"
+        );
+    }
+
     #[test]
     fn the_role_tables_have_no_ghost_entries() {
         let (swept, _unknown) = sweep_rpc_methods();

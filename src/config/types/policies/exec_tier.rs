@@ -71,6 +71,32 @@ pub struct ToolFacts<'a> {
 /// are the serialized `FileOperation` variants (`src/builtin_tools/file_ops/types.rs`).
 const DESTRUCTIVE_FILE_OPS: &[&str] = &["delete", "move", "batch_move", "organize"];
 
+/// `node_manage` actions that destroy fleet membership irreversibly.
+///
+/// Same shape and same reason as [`DESTRUCTIVE_FILE_OPS`]: one tool name
+/// multiplexes an idempotent verb and a destructive one, so no name-keyed rule
+/// can tell them apart. `node_manage` was in NEITHER name-keyed list — not
+/// [`is_destructive`]'s curated set, not `CONFIRMATION_REQUIRED_TOOLS` — so at
+/// the shipped default tier a `deregister` raised no card at all, while
+/// `agent_delete` (which removes one local config file) did.
+///
+/// `deregister` evicts the live session, tears down the socket, and revokes the
+/// device: the node is refused on reconnect and exits by design. Recovery needs
+/// a re-enrol AND someone physically restarting `aleph-server node` on that
+/// host. Three places in the tree already call it destructive — the tool's own
+/// DESCRIPTION ("the removal STICKS … Deregistering is destructive to fleet
+/// membership") and two comments in `cluster::enrollment` — and the two lists
+/// that actually decide said it was not.
+///
+/// `enroll` is deliberately absent: it is idempotent (enrolling an existing
+/// name returns the same node_id, unchanged), so carding it would be noise, and
+/// noise is what trains a user to approve without reading.
+///
+/// Adding `node_manage` to `CONFIRMATION_REQUIRED_TOOLS` would have been the
+/// wrong lever for exactly that reason — it is name-keyed and would card
+/// `enroll` too.
+const DESTRUCTIVE_NODE_ACTIONS: &[&str] = &["deregister"];
+
 /// Tools whose entire effect is to contact the human, and which therefore can
 /// never be gated behind contacting the human.
 ///
@@ -318,6 +344,13 @@ impl ExecTier {
                 .get("operation")
                 .and_then(Value::as_str)
                 .is_some_and(|op| DESTRUCTIVE_FILE_OPS.contains(&op)),
+            // Fleet membership: `deregister` is irreversible from this side
+            // (see `DESTRUCTIVE_NODE_ACTIONS`) and its sibling `enroll` is
+            // idempotent, so the tool name alone cannot decide.
+            "node_manage" => input
+                .get("action")
+                .and_then(Value::as_str)
+                .is_some_and(|a| DESTRUCTIVE_NODE_ACTIONS.contains(&a)),
             // Loop-graph governance: any write touching a `root:` or `frozen:`
             // node pauses for the person. Root references are human-supplied
             // BY DEFINITION (the store already enforces origin=human); this
@@ -668,6 +701,116 @@ pub const fn session_tiers() -> &'static [TierPreset] {
         TierPreset { id: "auto" },
         TierPreset { id: "full" },
     ]
+}
+
+#[cfg(test)]
+mod node_manage_gate_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The `node_manage` actions this file has judged NOT destructive.
+    ///
+    /// `enroll` is idempotent — enrolling a name that already exists returns
+    /// the same node_id, unchanged — so carding it is noise, and noise is what
+    /// trains a user to approve without reading.
+    ///
+    /// Paired with [`DESTRUCTIVE_NODE_ACTIONS`] this is a partition, and
+    /// [`every_node_manage_action_has_a_destructiveness_verdict`] asserts
+    /// SET EQUALITY against the tool's own dispatch arms in both directions —
+    /// so it is not an allowlist that can quietly grant an exemption to an
+    /// action nobody looked at, and it cannot rot into naming actions that no
+    /// longer exist.
+    const NON_DESTRUCTIVE_NODE_ACTIONS: &[&str] = &["enroll"];
+
+    /// `node_manage {"action":"deregister"}` must raise a card at the shipped
+    /// default tier, and `enroll` must not.
+    ///
+    /// On a default install (`Auto`, loopback Panel = operator, so the
+    /// OPERATOR_TOOLS gate is satisfied) a deregister used to pass ungated: it
+    /// is in neither `CONFIRMATION_REQUIRED_TOOLS` nor `is_destructive`'s
+    /// curated set, and `asks_for_arguments` had arms only for `file_ops` and
+    /// `loop_graph`. Meanwhile `agent_delete` — one local config file — did
+    /// card.
+    #[test]
+    fn deregistering_a_node_asks_but_enrolling_one_does_not() {
+        let auto = ExecTier::Auto;
+        assert!(
+            auto.asks_for_arguments(
+                "node_manage",
+                &json!({"action": "deregister", "node": "gpu"})
+            ),
+            "deregister evicts the node, revokes its device, and it is refused on \
+             reconnect — recovery needs a re-enrol AND a physical restart"
+        );
+        assert!(
+            !auto.asks_for_arguments("node_manage", &json!({"action": "enroll", "node": "gpu"})),
+            "enroll is idempotent; carding it is noise, and noise trains a user \
+             to approve without reading"
+        );
+        // A call naming no action names nothing destructive, so this rule has
+        // nothing to say; the tier's name-keyed rules still apply.
+        assert!(!auto.asks_for_arguments("node_manage", &json!({})));
+    }
+
+    /// The actions `node_manage` dispatches and the actions this file has an
+    /// opinion about must be the SAME SET.
+    ///
+    /// Derived from the tool's own `match`, not restated, because the failure
+    /// this rule exists to fix is exactly a destructive verb that no list
+    /// mentions. Equality in both directions: a third action added to the tool
+    /// goes red instead of shipping ungated, and an action deleted from the
+    /// tool goes red instead of leaving a stale entry that reads like a
+    /// standing permission.
+    #[test]
+    fn every_node_manage_action_has_a_destructiveness_verdict() {
+        const NODE_MANAGE_SRC: &str = include_str!("../../../builtin_tools/node_manage.rs");
+
+        // The dispatch arms are the vocabulary: `"<action>" => …` inside the
+        // `match args.action.as_str()` block, up to its catch-all.
+        let dispatch = NODE_MANAGE_SRC
+            .split_once("match args.action.as_str() {")
+            .expect("node_manage no longer dispatches on `args.action` — re-derive this census")
+            .1;
+        let mut dispatched: Vec<&str> = Vec::new();
+        for line in dispatch.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("other =>") {
+                break;
+            }
+            let Some((name, tail)) = trimmed
+                .strip_prefix('"')
+                .and_then(|rest| rest.split_once('"'))
+            else {
+                continue;
+            };
+            if tail.trim_start().starts_with("=>") {
+                dispatched.push(name);
+            }
+        }
+        dispatched.sort_unstable();
+
+        // Self-check: the extractor must actually see arms, so this guard
+        // cannot pass by finding nothing to compare.
+        assert!(
+            dispatched.len() >= 2,
+            "extracted too few node_manage actions ({dispatched:?}) — the census is \
+             reading the wrong block"
+        );
+
+        let mut judged: Vec<&str> = DESTRUCTIVE_NODE_ACTIONS
+            .iter()
+            .chain(NON_DESTRUCTIVE_NODE_ACTIONS)
+            .copied()
+            .collect();
+        judged.sort_unstable();
+
+        assert_eq!(
+            dispatched, judged,
+            "node_manage's action vocabulary and this file's verdicts disagree. \
+             Every dispatched action must be in DESTRUCTIVE_NODE_ACTIONS or in \
+             NON_DESTRUCTIVE_NODE_ACTIONS with a reason."
+        );
+    }
 }
 
 #[cfg(test)]

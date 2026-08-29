@@ -315,8 +315,21 @@ pub trait SessionStore: Send + Sync {
     /// event, so the Panel can restore the occupancy gauge on session reload
     /// without a live `run_complete` event.
     ///
-    /// Default: no-op (`Ok(())`). Only the SQLite-backed store overrides this;
-    /// file-backend and test stubs compile unchanged.
+    /// Default: no-op (`Ok(())`) — for TEST STUBS only. **Both production
+    /// backends override it**: SQLite with an `UPDATE ... WHERE id = (SELECT
+    /// MAX(id) ... role='assistant')`, the file backend with a locked rewrite
+    /// of `transcript.jsonl`.
+    ///
+    /// ⚠️ This sentence read "Only the SQLite-backed store overrides this;
+    /// file-backend and test stubs compile unchanged" until 2026-08-29, and it
+    /// was not describing a design — it was describing a gap, in the voice of a
+    /// decision. The file backend is the DEFAULT (`default_session_store_backend()`
+    /// returns `"file"`), so what the sentence actually meant was that every
+    /// assistant row in `chat.history` carried a null `run_id` and null
+    /// occupancy on a stock install, and the one thing that would have made a
+    /// reader look — the trait's own doc — told them it was on purpose. A
+    /// default arm that some implementors legitimately keep must say WHICH ones
+    /// and why, or it hands the next reader a ruling that was never made.
     async fn stamp_last_assistant_metadata(
         &self,
         _key: &SessionKey,

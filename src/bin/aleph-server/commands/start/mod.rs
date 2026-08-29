@@ -1762,9 +1762,28 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // P1 fix: close the open-auth gap on `/v1/*`. Snapshot the current
     // bearer token from SharedTokenManager so the OpenAI-compat handler
     // can reject mismatched bearers with 401 before they reach the
-    // per-agent busy-lock or upstream LLM. Token rotation requires a
-    // server restart — acceptable trade-off for single-user self-hosted
-    // deployments.
+    // per-agent busy-lock or upstream LLM.
+    //
+    // ⚠️ KNOWN GAP — the trade-off recorded here until 2026-08-29 read "token
+    // rotation requires a server restart — acceptable trade-off for
+    // single-user self-hosted deployments", and it stated only the harmless
+    // half. Being a snapshot has TWO directions, and the one that was never
+    // written down is the expensive one:
+    //   · the operator's NEW token 401s on `/v1/*` until restart (the half the
+    //     old note described — annoying, reads as "the OpenAI API broke");
+    //   · the LEAKED OLD token keeps running full agent turns through
+    //     `ExecutionAdapter` on `/v1/chat/completions` until restart — i.e.
+    //     `gateway.token.rotate`, which `handlers/gateway_token.rs` and
+    //     `SECURITY.md` both describe without qualification as the "revoke all
+    //     remotes" path, does not revoke this surface.
+    // The two sibling faces of the same secret read it LIVE (`/ws` through
+    // `SharedTokenManager::global().validate`, `/v1/admin` through
+    // `admin_auth_middleware`'s `state.shared_token.get_current_token()`);
+    // only this one is frozen. The fix is to give `OpenAiApiState` the
+    // `Arc<SharedTokenManager>` instead of an `Option<String>` and compare at
+    // request time in `openai_api::completions::handle`, then delete
+    // `GatewayServer::openai_api_token` so no snapshot can come back — both
+    // of those live outside this file's change set.
     server.openai_api_token = auth_bundle.auth_ctx.shared_token_mgr.get_current_token();
 
     // Spec C: mount /v1/admin IPC router for CLI subcommands routed via

@@ -342,11 +342,13 @@ impl ChannelRegistry {
 
     /// Get the capabilities for a channel by ID.
     ///
-    /// Retained as part of the `ChannelRegistry` public API. In-tree callers
-    /// resolve capabilities via the `ChannelHandle::read` path returned by
-    /// `ChannelRegistry::get` (the typical pattern inside dispatch handlers),
-    /// so this convenience accessor is a thin wrapper kept for symmetry.
-    #[allow(dead_code)]
+    /// `None` when the channel is not registered — deliberately not a
+    /// `Default`, because "this transport declares no cap" and "this transport
+    /// is gone" are different answers and the caller decides.
+    ///
+    /// Used by the origin fan-out to size its outbound chunks; callers already
+    /// holding a `ChannelHandle` from [`ChannelRegistry::get`] read
+    /// `capabilities()` through the guard instead.
     pub async fn get_capabilities(&self, channel_id: &ChannelId) -> Option<ChannelCapabilities> {
         let channels = self.channels.read().await;
         if let Some(handle) = channels.get(channel_id) {

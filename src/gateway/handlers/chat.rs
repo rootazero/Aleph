@@ -295,6 +295,38 @@ pub async fn handle_send(
     }
 }
 
+/// Drop every queued message belonging to one conversation: the addressed
+/// session and, when this key has one, its derived `/btw` side lane.
+///
+/// # Why both, and why this is a named function
+///
+/// A `/btw` side question is ticketed on a lane DERIVED from the addressed key
+/// (`busy_queue::register_run` → `btw::execution_session`), so purging the
+/// addressed key alone leaves a queued side question in a lane that key can
+/// never reach. `cancel_run` → `cancel_session` then cancels the *running*
+/// side run, and that release wakes the survivor into a full LLM turn AFTER
+/// the user pressed Stop — while the receipt says `dropped: 0`. To the person
+/// pressing Stop there is one conversation, and
+/// `inbound_router::command_handler::handle_stop` (the channel `/stop` face)
+/// has purged both lanes all along; `handle_abort` copied that block's
+/// ordering rule and not its both-lanes rule.
+///
+/// It takes a parsed [`SessionKey`], never the client's raw string: tickets
+/// are registered under `SessionKey::to_key_string()`, so any accepted form
+/// that does not round-trip byte-for-byte would purge a lane nothing ever
+/// registered on and still answer success. `side_session_of` returns `None`
+/// for an already-derived key, so this cannot mint a phantom lane.
+///
+/// It is a function rather than an inline expression so the guard test can
+/// exercise the real composition — an inline expression can only be *restated*
+/// by a test, which then passes whatever `handle_abort` does.
+fn purge_conversation_lanes(session: &SessionKey) -> usize {
+    crate::gateway::busy_queue::purge(&session.to_key_string())
+        + crate::gateway::btw::side_session_of(session).map_or(0, |side| {
+            crate::gateway::busy_queue::purge(&side.to_key_string())
+        })
+}
+
 /// Handle chat.abort RPC request
 ///
 /// Aborts an in-progress message generation.
@@ -320,16 +352,18 @@ pub async fn handle_abort(
     // parse can therefore never equal one that succeeded. This is
     // load-bearing, not just a comment: see
     // `visibility_guards::a_canonical_session_key_always_round_trips_so_a_malformed_one_cannot_collide`.
-    if let Some(ref key_str) = params.session_key {
-        if let Some(session_key) = SessionKey::from_key_string(key_str) {
-            let meta = match session_store.get_metadata(&session_key).await {
-                Ok(Some(m)) => m,
-                Ok(None) => return visibility::not_found_response(request.id),
-                Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
-            };
-            if !visibility::session_visible(&meta) {
-                return visibility::not_found_response(request.id); // same error as missing (GC 4)
-            }
+    let parsed_session_key = match params.session_key.as_deref() {
+        Some(key_str) => SessionKey::from_key_string(key_str),
+        None => None,
+    };
+    if let Some(ref session_key) = parsed_session_key {
+        let meta = match session_store.get_metadata(session_key).await {
+            Ok(Some(m)) => m,
+            Ok(None) => return visibility::not_found_response(request.id),
+            Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
+        };
+        if !visibility::session_visible(&meta) {
+            return visibility::not_found_response(request.id); // same error as missing (GC 4)
         }
     }
 
@@ -353,10 +387,11 @@ pub async fn handle_abort(
     // session slot, which wakes the lane's front waiter, which can be admitted
     // (and so leave the lane) before a later purge could mark it. Same ordering
     // rule as `/stop` in `inbound_router::command_handler::handle_stop`.
-    let dropped = params
-        .session_key
-        .as_deref()
-        .map_or(0, crate::gateway::busy_queue::purge);
+    //
+    // Both lanes and the parsed key: see `purge_conversation_lanes`.
+    let dropped = parsed_session_key
+        .as_ref()
+        .map_or(0, purge_conversation_lanes);
 
     // Cancel the run
     let cancelled = run_manager.cancel_run(&params.run_id).await;
@@ -1054,6 +1089,97 @@ mod tests {
             waiting.is_cancelled() && behind.is_cancelled(),
             "a purged ticket must read as cancelled to its own waiter, which is \
              what stops it being delivered once the cancel frees the slot"
+        );
+    }
+
+    /// Stop means the whole conversation, including the `/btw` side lane.
+    ///
+    /// The test above could not see this: it registers both tickets on ONE
+    /// invented key, so "purges the conversation" and "purges one key" are
+    /// indistinguishable to it. Here the second ticket is registered on the
+    /// key `busy_queue::register_run` actually derives for a side question —
+    /// the lane the addressed key cannot reach.
+    ///
+    /// Asserted at the consumer (the ticket reads cancelled to its own
+    /// waiter), because that is what stops it being delivered when
+    /// `cancel_session` frees the slot.
+    #[test]
+    fn an_abort_drops_the_side_question_lane_too_not_just_the_addressed_one() {
+        use crate::gateway::{btw, busy_queue};
+
+        let main =
+            SessionKey::from_key_string("agent:btw-abort-test:main").expect("canonical key parses");
+        let side = btw::side_session_of(&main).expect("a main key has a side lane");
+        assert_ne!(
+            side.to_key_string(),
+            main.to_key_string(),
+            "precondition: the side lane really is a different key, or this \
+             test would pass for the wrong reason"
+        );
+
+        let on_main = busy_queue::register(&main.to_key_string(), 8, "queued-main")
+            .expect("main lane has room");
+        let on_side = busy_queue::register(&side.to_key_string(), 8, "queued-btw")
+            .expect("side lane has room");
+
+        // The production function `handle_abort` calls — NOT a restatement of
+        // it. Restating the expression here would make this test pass for
+        // whatever `handle_abort` happens to do; calling it makes reverting
+        // the fix turn this test red.
+        let dropped = super::purge_conversation_lanes(&main);
+
+        assert_eq!(
+            dropped, 2,
+            "both lanes must be reported; a receipt of 1 (or 0) tells the user \
+             nothing was queued while a side question is still waiting"
+        );
+        assert!(
+            on_main.is_cancelled(),
+            "the addressed lane must still be purged"
+        );
+        assert!(
+            on_side.is_cancelled(),
+            "the /btw side lane survived Stop: cancel_session will cancel the \
+             running side run, and that release wakes this ticket into a full \
+             turn after the user pressed Stop"
+        );
+    }
+
+    /// The purge must be keyed on the parsed `SessionKey`, not on the raw
+    /// string the client sent: tickets are registered under
+    /// `to_key_string()`, so any accepted form that does not round-trip
+    /// byte-for-byte would purge an empty lane and still answer success.
+    #[test]
+    fn the_abort_purge_is_keyed_on_the_canonical_form_of_the_session_key() {
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/gateway/handlers/chat.rs"
+        ))
+        .expect("this file is readable from its own test");
+        let production = crate::utils::source_scan::production_prefix(&src);
+        let stripped = crate::utils::source_scan::strip_comment_lines(&production);
+        // Whitespace removed, because rustfmt decides where this expression
+        // wraps and that decision is not the property under test. A guard
+        // pinned to the incidental line breaks goes red on a reformat while
+        // the behaviour it names is untouched — and a reader then learns to
+        // ignore it.
+        let code: String = stripped.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            code.contains("parsed_session_key.as_ref().map_or(0,purge_conversation_lanes)"),
+            "handle_abort must purge from the parsed SessionKey via \
+             `purge_conversation_lanes`; purging `params.session_key` directly \
+             re-derives the lane key from the client's string instead of from \
+             the form tickets are stored under"
+        );
+        assert!(
+            code.contains("btw::side_session_of(session)"),
+            "purge_conversation_lanes must reach the /btw side lane, the way \
+             `inbound_router::command_handler::handle_stop` does"
+        );
+        assert!(
+            !code.contains("map_or(0,crate::gateway::busy_queue::purge)"),
+            "handle_abort must not purge the client's raw session_key string: \
+             that is the single-lane form this replaced"
         );
     }
 

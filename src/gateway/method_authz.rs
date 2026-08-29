@@ -105,6 +105,23 @@ const OPERATOR_TOOLS: &[&str] = &[
     // finding one surface over. `"member"` and `"guest"` both fail
     // `turn_context::role_is_operator`, so this one entry covers both.
     "workspace_manage",
+    // The tool face of the wholesale-gated `plugin.` / `plugins.` RPC family
+    // (`method_admin::ADMIN_PREFIXES`), and exactly the same shape as the
+    // `workspace_manage` entry above. `plugin_manage` became dispatchable on
+    // 2026-08-19 and its actions are the same verbs one surface over:
+    // `trust_enforce` turns owner-trust enforcement off install-wide,
+    // `marketplace_add` registers and fetches an arbitrary catalogue,
+    // `config_set` REPLACES a plugin's stored configuration, `enable`/`reload`
+    // decide what loads next. A default-tier Telegram bot calling
+    // `trust_enforce(false)` is issuing the same request that answers
+    // AUTH_REQUIRED over JSON-RPC.
+    //
+    // The gate keys on the tool NAME (`ScopedToolService::check_operator_gate`),
+    // so this covers the read-only actions too. That is the honest trade: if
+    // `list` / `show` / `trust_status` must stay chat-reachable they need
+    // their own read-only tool name — not a carve-out inside a tool whose
+    // other arms rewrite install-wide trust.
+    "plugin_manage",
 ];
 
 /// True when `tool` mutates Aleph's own configuration and therefore requires an
@@ -158,6 +175,44 @@ mod tests {
     fn config_tools_require_operator() {
         for t in MUST_STAY_GATED {
             assert!(tool_requires_operator(t), "{t} must require operator");
+        }
+    }
+
+    /// A tool that duplicates an admin-gated RPC family must be operator-gated
+    /// too, or the same verbs answer AUTH_REQUIRED on one surface and run on
+    /// the other.
+    ///
+    /// The expectation is DERIVED from the other face's own predicate
+    /// (`method_admin::method_requires_admin`) rather than restated: adding a
+    /// name to the curated `MUST_STAY_GATED` subset above cannot catch a tool
+    /// face nobody has thought about yet, which is how `plugin_manage`
+    /// shipped ungated while every `plugin.*` RPC was closed. Each pair names
+    /// a method the census pins as registered, so a renamed family goes red in
+    /// `method_census` rather than silently making a row here vacuous.
+    #[test]
+    fn every_tool_face_of_an_admin_rpc_family_is_operator_gated() {
+        // (builtin tool name, a registered method of the RPC family it duplicates)
+        const TOOL_FACES: &[(&str, &str)] = &[
+            ("plugin_manage", "plugin.enable"),
+            ("workspace_manage", "workspace.create"),
+            ("hooks_manage", "hooks.add"),
+            ("skill_manage", "skills.remove"),
+            ("skill_install", "skills.install"),
+            ("node_manage", "cluster.enroll"),
+        ];
+        for (tool, rpc) in TOOL_FACES {
+            assert!(
+                super::super::method_admin::method_requires_admin(rpc),
+                "precondition: `{rpc}` is supposed to be the admin-gated RPC \
+                 half of `{tool}`. If it stopped being admin-gated this row \
+                 proves nothing and the pairing needs re-deciding, not deleting"
+            );
+            assert!(
+                tool_requires_operator(tool),
+                "`{tool}` is the tool face of the admin-gated `{rpc}` family, \
+                 so a chat-tier channel can run over the tool what it is \
+                 refused over JSON-RPC"
+            );
         }
     }
 

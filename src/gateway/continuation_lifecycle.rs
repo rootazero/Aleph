@@ -847,4 +847,74 @@ mod tests {
             unwired.join("\n  ")
         );
     }
+
+    /// Every face of "start a new conversation" — bump the epoch AND retire the
+    /// predecessor — must first ask whether the key can actually roll.
+    ///
+    /// `with_epoch` / `with_next_epoch` end in `_ => {}`: for Group / Task /
+    /// Subagent / Ephemeral the "new" key IS the old one, so the sequence
+    /// (terminate continuations → close → get_or_create) stops the running
+    /// loop, deletes the `/btw` side session and stamps the still-live row
+    /// `status: "closed"`, then hands the caller back the key it started with
+    /// and reports success. Only the `session_new` tool checked; the channel
+    /// `/new` command and the `sessions.new` RPC did not, and a `/new` typed in
+    /// any group chat reached both of the unguarded ones.
+    ///
+    /// Phrased over the rule, not over the three file names, for the reason the
+    /// census above is: the previous state of this family WAS a list — the one
+    /// correct predicate lived in `new_tool.rs` with its own passing test, and
+    /// that made the family read as covered.
+    ///
+    /// Trigger is deliberately "bumps AND terminates", not "bumps": a site that
+    /// mints a successor without retiring the predecessor (`AgentRouter::route`
+    /// hands out a fresh key for a keyless request; `agent_resolver` resolves
+    /// an existing epoch) is not this verb and must not be forced to answer
+    /// this question.
+    #[test]
+    fn every_face_that_rolls_and_retires_asks_whether_the_key_can_roll() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        rust_files(&root, &mut files);
+
+        let mut triggered = Vec::new();
+        let mut ungated = Vec::new();
+        for path in files {
+            if is_test_only(&path) {
+                continue;
+            }
+            let Ok(raw) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let src = production_source(&raw);
+            let bumps =
+                src.contains("with_next_epoch()") || calls_on_non_self(&src, "with_epoch") > 0;
+            let retires = src.contains("terminate_session_continuations(");
+            if !(bumps && retires) {
+                continue;
+            }
+            triggered.push(path.clone());
+            if !src.contains("rolls_to_new_epoch()") {
+                ungated.push(path.display().to_string());
+            }
+        }
+
+        // Self-check: "no ungated face" and "the scanner stopped finding faces"
+        // are the same green without this. Three faces today.
+        assert!(
+            triggered.len() >= 3,
+            "census went blind: only {} file(s) both bump an epoch and retire \
+             the predecessor — the markers or the cfg(test) split stopped matching",
+            triggered.len()
+        );
+
+        assert!(
+            ungated.is_empty(),
+            "these production files roll a conversation to a new epoch AND \
+             retire the old one without first asking `SessionKey::\
+             rolls_to_new_epoch()` — on a Group/Task/Subagent/Ephemeral key the \
+             bump is a clone, so they destroy the live session and report a \
+             fresh one:\n  {}",
+            ungated.join("\n  ")
+        );
+    }
 }

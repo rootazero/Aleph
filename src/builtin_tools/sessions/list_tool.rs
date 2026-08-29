@@ -70,9 +70,9 @@ pub struct SessionListRow {
     /// Preview of the last message content (first N chars, updated on append).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_message_preview: Option<String>,
-    /// Cumulative runtime in milliseconds (updated on session close).
-    #[serde(default)]
-    pub runtime_ms: i64,
+    // `runtime_ms` was CUT with the `SessionMetadata` field behind it: it had
+    // no writer anywhere in the tree, and with no `skip_serializing_if` every
+    // row handed the model `"runtime_ms": 0` for a six-hour conversation.
     /// Estimated cost in USD (updated on session close / usage update).
     #[serde(default)]
     pub estimated_cost_usd: f64,
@@ -170,7 +170,6 @@ impl SessionsListTool {
             topic,
             derived_title: meta.derived_title.clone(),
             last_message_preview: meta.last_message_preview.clone(),
-            runtime_ms: meta.runtime_ms,
             estimated_cost_usd: meta.estimated_cost_usd,
             checkpoints: meta.checkpoints.clone(),
         }

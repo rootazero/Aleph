@@ -103,14 +103,22 @@ pub struct AgentTraceListPage {
 mod tests {
     use super::*;
 
-    /// The `trace.list` envelope must round-trip, and its rows must not gain a
+    /// The `trace.list` envelope must round-trip, and no row field may gain a
     /// `#[serde(default)]` by accident.
     ///
-    /// The second half is the one that matters. Every field below is required,
-    /// so a server that renames or drops one produces a LOUD parse error at the
-    /// client. The type this replaced had two fields the server never sent;
-    /// with defaults they would have rendered as a column of dashes forever,
-    /// which reads as "no value yet" rather than as a broken contract.
+    /// The second half is the one that matters: a defaulted field turns a
+    /// renamed or dropped server key into a column of dashes forever, which
+    /// reads as "no value yet" rather than as a broken contract. The type this
+    /// replaced had two such fields the server never sent.
+    ///
+    /// ⚠️ `Option<T>` fields are exempt, and NOT by choice. serde gives every
+    /// `Option` field an implicit default — a missing key deserializes to
+    /// `None` with no attribute present — so absence cannot be made loud for
+    /// them at all. This guard originally asserted "every one of them" and was
+    /// red from the moment it was written, on `started_at`. The nullable set is
+    /// DERIVED below (serialize a row whose optionals are `None`; the keys that
+    /// come out `null` are exactly the exempt ones) rather than listed, so it
+    /// cannot rot into an exemption for a field that stopped being optional.
     #[test]
     fn the_trace_list_page_round_trips_and_every_row_field_is_required() {
         let page = AgentTraceListPage {
@@ -133,10 +141,36 @@ mod tests {
         assert_eq!(back.traces[0].status, "completed");
         assert_eq!(back.next_cursor.expect("cursor").task_id, "run-1");
 
-        // Drop each row key in turn: every one must refuse to parse.
-        let row = json["traces"][0].as_object().expect("row is an object").clone();
+        // Which keys serde can be made to demand: derived, by serializing a row
+        // whose every optional is `None` and reading off the nulls.
+        let all_none = serde_json::to_value(AgentTraceListRow {
+            task_id: String::new(),
+            status: String::new(),
+            started_at: None,
+            last_timestamp: 0,
+            event_count: 0,
+            prompt_preview: String::new(),
+        })
+        .expect("serialize");
+        let nullable: Vec<String> = all_none
+            .as_object()
+            .expect("row is an object")
+            .iter()
+            .filter(|(_, v)| v.is_null())
+            .map(|(k, _)| k.clone())
+            .collect();
+
+        // Drop each non-nullable row key in turn: every one must refuse to parse.
+        let row = json["traces"][0]
+            .as_object()
+            .expect("row is an object")
+            .clone();
         assert_eq!(row.len(), 6, "row shape changed — update this guard");
+        let mut checked = 0usize;
         for key in row.keys() {
+            if nullable.contains(key) {
+                continue;
+            }
             let mut broken = row.clone();
             broken.remove(key);
             assert!(
@@ -145,7 +179,18 @@ mod tests {
                 "`{key}` parsed while absent — a `#[serde(default)]` here turns a \
                  broken server contract into a silently empty column"
             );
+            checked += 1;
         }
+        // Self-check: the exemption must not have swallowed the whole row.
+        assert_eq!(
+            checked,
+            row.len() - nullable.len(),
+            "the nullable exemption is covering more keys than it derived"
+        );
+        assert!(
+            checked >= 5,
+            "only {checked} row keys were actually checked"
+        );
     }
 
     #[test]

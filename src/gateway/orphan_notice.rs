@@ -34,7 +34,15 @@ pub async fn notify_interrupted_tasks(store: &dyn SessionStore, orphans: &[Agent
         if task.lane != Lane::Main {
             continue;
         }
-        let Some(key) = SessionKey::parse(&task.parent_session_id) else {
+        // `from_key_string` (= `parse().or_else(from_legacy)`), not `parse`.
+        // This reads a key string somebody else PERSISTED, so it must accept
+        // every spelling the store ever wrote; `parse` alone rejects the legacy
+        // form (`agent:x:peer:a:b`) and the only trace was a `warn!` — the
+        // orphan whose conversation is oldest is the one most likely to carry
+        // it, and it silently got no notice at all. `sessions.new` documents
+        // this exact divergence as the bug it just fixed
+        // (`db_handlers::create`).
+        let Some(key) = SessionKey::from_key_string(&task.parent_session_id) else {
             tracing::warn!(
                 task_id = %task.id,
                 session = %task.parent_session_id,
@@ -163,5 +171,34 @@ mod tests {
         let orphan = main_orphan("run-3", "not-a-valid-session-key");
         let written = notify_interrupted_tasks(&store, std::slice::from_ref(&orphan)).await;
         assert_eq!(written, 0);
+    }
+
+    /// A LEGACY-spelled `parent_session_id` must still get its notice.
+    ///
+    /// This reads a string the store persisted, so it has to accept every
+    /// spelling the store ever wrote. `SessionKey::parse` alone rejects the
+    /// legacy form, and the only trace was a `warn!` — so the conversations
+    /// oldest enough to carry it were exactly the ones that went silent.
+    /// Derived from the parser pair rather than from a hand-written key: the
+    /// fixture asserts the string is legacy-only before relying on it.
+    #[tokio::test]
+    async fn a_legacy_spelled_session_key_still_gets_its_notice() {
+        let legacy = "agent:legacyorphan:peer:telegram:99";
+        assert!(
+            SessionKey::parse(legacy).is_none() && SessionKey::from_key_string(legacy).is_some(),
+            "fixture no longer exercises the legacy-only branch"
+        );
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(&temp);
+        let key = SessionKey::from_key_string(legacy).unwrap();
+        store.get_or_create(&key).await.unwrap();
+
+        let orphan = main_orphan("run-4", legacy);
+        let written = notify_interrupted_tasks(&store, std::slice::from_ref(&orphan)).await;
+        assert_eq!(
+            written, 1,
+            "a legacy-spelled key got no interruption notice at all"
+        );
     }
 }

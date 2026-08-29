@@ -293,10 +293,13 @@ async fn serve_artifact(
     let client_ip = resolved.ip;
     let secure = state.tls_enabled || resolved.secure;
 
-    // 1. Plaintext-remote refusal, identical to the `/ws` upgrade. A capability
-    //    handed over an unencrypted leg is a capability handed to whoever is on
-    //    the path.
-    if refuse_insecure_remote(client_ip, secure, state.allow_insecure_remote) {
+    // 1. Plaintext-remote refusal, identical to the `/ws` upgrade — including
+    //    that it reads `resolved.local`, not `client_ip.is_loopback()`. A
+    //    capability handed over an unencrypted leg is a capability handed to
+    //    whoever is on the path, and behind a same-host reverse proxy that
+    //    emits no `X-Forwarded-For` the resolved IP falls back to the proxy's
+    //    own loopback address.
+    if refuse_insecure_remote(resolved.local, secure, state.allow_insecure_remote) {
         warn!(
             client = %client_ip,
             "refused artifact read: insecure transport to a remote client"

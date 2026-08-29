@@ -111,6 +111,24 @@ pub async fn handle_new_session_db(
         return visibility::not_found_response(request.id);
     }
 
+    // Refuse a key that cannot actually roll, BEFORE anything destructive.
+    //
+    // `with_next_epoch` returns an identical key for Group / Task / Subagent /
+    // Ephemeral, so the sequence below (terminate continuations → close →
+    // get_or_create) would stop the running loop, delete the `/btw` side
+    // session, stamp the LIVE row `status: "closed"`, hand the caller back the
+    // key it already had, and report success. The `session_new` tool has
+    // refused this since it was written; this face and the channel `/new`
+    // command did not, and both are reachable for a Group key (a `/new` typed
+    // in any Telegram/Discord/Slack group chat).
+    if !legacy_key.rolls_to_new_epoch() {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            SessionKey::NEW_SESSION_UNSUPPORTED,
+        );
+    }
+
     // Terminate the closing session's autonomous continuations BEFORE the
     // epoch bump — a loop/goal keyed under the old epoch would otherwise keep
     // its self-sustaining chain alive with no session left that can stop it
@@ -233,6 +251,49 @@ mod visibility_guards {
         assert_eq!(
             after.state, before.state,
             "a denied sessions.new must not close the foreign session"
+        );
+    }
+
+    /// A Group key has no epoch, so `with_next_epoch` returns the SAME key.
+    /// Running the verb anyway terminated the running loop, deleted the `/btw`
+    /// side session and stamped the still-live row `status: "closed"`, then
+    /// handed the caller back the key it started with under
+    /// `"new_session_key"` and reported success. The `session_new` tool refused
+    /// this from the day it was written; this face did not.
+    ///
+    /// Reachable from Panel/CLI against any visible Group or Task key.
+    #[tokio::test]
+    async fn sessions_new_refuses_a_key_that_cannot_roll_and_leaves_it_open() {
+        let temp = TempDir::new().unwrap();
+        let store = store(&temp);
+        let group_key = SessionKey::group(
+            "main",
+            "telegram",
+            crate::routing::session_key::PeerKind::Group,
+            "-100777",
+        );
+        store.get_or_create(&group_key).await.unwrap();
+        let before = store.get_metadata(&group_key).await.unwrap().unwrap();
+
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "sessions.new".into(),
+            params: Some(json!({ "session_key": group_key.to_key_string() })),
+            id: Some(json!(1)),
+        };
+        let response = handle_new_session_db(req, store.clone()).await;
+        assert_eq!(
+            response.error.as_ref().map(|e| e.code),
+            Some(INVALID_PARAMS),
+            "the destructive half ran on a key that cannot roll: {:?}",
+            response.result
+        );
+
+        let after = store.get_metadata(&group_key).await.unwrap().unwrap();
+        assert_eq!(after.state, before.state);
+        assert_eq!(
+            after.status, before.status,
+            "the live session was stamped closed while remaining the current one"
         );
     }
 }

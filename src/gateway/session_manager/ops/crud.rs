@@ -3,6 +3,7 @@ use tracing::debug;
 
 use super::{
     map_session_metadata, SessionManager, SessionManagerError, SessionMetadata, SessionState,
+    SESSION_COLUMNS,
 };
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_store::types::{HistoryPage, MessageRecord};
@@ -64,12 +65,7 @@ impl SessionManager {
         // Try to get existing session
         let existing: Option<SessionMetadata> = conn
             .query_row(
-                "SELECT key, agent_id, session_type, created_at, last_active_at,
-                        message_count, total_tokens, auto_reset_at, state, metadata,
-                        label, input_tokens, output_tokens, model, model_provider,
-                        parent_session_key, compaction_count, derived_title,
-                        estimated_cost_usd, owner_user_id, scope_id
-                 FROM sessions WHERE key = ?",
+                &format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE key = ?"),
                 params![&key_str],
                 map_session_metadata,
             )
@@ -358,8 +354,23 @@ impl SessionManager {
             // twice for the same tokens. One writer, and it is the run's report:
             // it also covers the calls a retry discarded before they could ever
             // become a message row.
+            // The same preview the FILE backend keeps in
+            // `FileSessionStore::append_message` — same 120-char cap, same
+            // char-boundary-safe truncation. This column had no writer at all
+            // on the SQLite side while two readers surfaced it, so the two
+            // backends answered differently about the same conversation.
+            let preview = {
+                let trimmed = content.trim();
+                if trimmed.chars().count() > 120 {
+                    trimmed.chars().take(120).collect::<String>() + "..."
+                } else {
+                    trimmed.to_string()
+                }
+            };
+
             let mut session_update_sql = String::from(
-                "UPDATE sessions SET last_active_at = ?, message_count = message_count + 1",
+                "UPDATE sessions SET last_active_at = ?, message_count = message_count + 1, \
+                 last_message_preview = ?",
             );
             if valid_transition {
                 session_update_sql.push_str(", state = 'running'");
@@ -369,7 +380,7 @@ impl SessionManager {
             }
             session_update_sql.push_str(" WHERE key = ?");
 
-            let mut params: Vec<&dyn rusqlite::ToSql> = vec![&now];
+            let mut params: Vec<&dyn rusqlite::ToSql> = vec![&now, &preview];
             if let Some(ref dt) = derived_title {
                 params.push(dt);
             }
@@ -437,7 +448,7 @@ impl SessionManager {
     /// [`stamp_millis_sql`]: Self::stamp_millis_sql
     fn history_sql(limit: Option<usize>, cursored: bool) -> String {
         const COLS: &str = "id, role, content, timestamp, metadata, input_tokens, \
-                            output_tokens, tool_call_id, tool_name";
+                            output_tokens, tool_call_id, tool_name, source_seq";
         let stamp = Self::stamp_millis_sql();
         // The cursor is compared against the same normalized expression the
         // ordering uses, never the bare column.
@@ -468,9 +479,31 @@ impl SessionManager {
     /// hand-copied instances before this.
     ///
     /// [`history_sql`]: Self::history_sql
-    fn map_message_row(row: &rusqlite::Row) -> rusqlite::Result<MessageRecord> {
+    ///
+    /// # The id we hand back is the id we were handed
+    ///
+    /// `add_message_full` parses the projector's row id (`"{key}:{seq}"`,
+    /// [`crate::session::projection::row_id`]) into the `source_seq` column and
+    /// then this mapper substituted the SQL rowid on the way out — so on the
+    /// SQLite backend every reader that recovers a seq from a row id
+    /// ([`crate::session::projection::parse_source_seq`]) got `None` for EVERY
+    /// row. That is not one caller's problem: `ProjectionReconciler` reads the
+    /// empty seq set as "legacy transcript, no projector seq ids" and skips the
+    /// session outright, and `session.truncate` had no way at all to place its
+    /// cut in the event log's index space. The file backend returns the id it
+    /// stored, so the two backends answered differently about the same fact.
+    ///
+    /// Rows with a NULL `source_seq` (legacy transcripts, boot-time orphan
+    /// notices) keep the rowid string — `parse_source_seq` rejects it, which is
+    /// exactly the "not event-sourced, leave it alone" answer those rows need.
+    fn map_message_row(row: &rusqlite::Row, key_str: &str) -> rusqlite::Result<MessageRecord> {
+        let rowid = row.get::<_, i64>(0)?;
+        let source_seq: Option<i64> = row.get(9)?;
         Ok(MessageRecord {
-            id: row.get::<_, i64>(0)?.to_string(),
+            id: match source_seq.filter(|s| *s >= 0) {
+                Some(seq) => crate::session::projection::row_id(key_str, seq as u64),
+                None => rowid.to_string(),
+            },
             role: row.get(1)?,
             content: row.get(2)?,
             timestamp: row.get(3)?,
@@ -501,8 +534,11 @@ impl SessionManager {
         if let Some(ms) = before_ms.as_ref() {
             binds.push(ms);
         }
+        let owned_key = key_str.to_string();
         let rows = stmt
-            .query_map(binds.as_slice(), Self::map_message_row)
+            .query_map(binds.as_slice(), |row| {
+                Self::map_message_row(row, &owned_key)
+            })
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
             .filter_map(Result::ok)
             .collect();
