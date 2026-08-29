@@ -2736,6 +2736,53 @@ impl Default for TerminalConfig {
 **判据（这一条比这个 Task 大）**：一句「无需重启」的声明，必须由被它覆盖的**每一个**字段兑现。
 先问**这句话是谁执行的**，再问**是不是每条路径、每个字段都会执行它**——第二问才是这类缺陷的家。
 
+⚠️ **controller 在派单前查实（2026-08-29）：这里有一条既有守卫，它挡得住一半，另一半要你自己补。**
+
+`live_apply.rs` 的 `every_live_section_has_an_apply_arm` 是**双向**的：往 `LIVE_SUBSECTIONS`
+加了名字而没往它的 `known_arms` 里加 ⇒ 红；反过来也红。所以**你会被它逼着改三处**
+（`LIVE_SUBSECTIONS` / `known_arms` / `match` 臂）。
+
+但它比对的是**两张名单**，不是「臂真的存在」——`known_arms` 是测试里**手写**的第三份拷贝。
+把名字加进 `known_arms` 和 `LIVE_SUBSECTIONS`、**忘了写 `match` 臂**，这条守卫**照绿**：
+控制流落进 `_ => false`，`landed = false`，走 fail-soft 的降级日志。那个降级是对的
+（响应会诚实地说没落地），但它意味着**这条守卫证明不了你真的接上了线**。
+
+**所以必须再补一条断言效果的测试**——不是断言 `close_all` 能杀会话（那是它自己的单测，
+sketch 里已经有了），而是断言**走 `apply_live_sections` 这条路会到达它**：
+
+```rust
+    /// The census above only proves the name is on both lists. `known_arms`
+    /// is a hand-written third copy, so a missing `match` arm still passes it
+    /// -- the call falls through to `_ => false` and honestly downgrades.
+    /// This asserts the wire itself: a live patch that disables the terminal
+    /// must reach `close_all`, and the target must be reported as applied.
+    #[test]
+    fn disabling_the_terminal_live_kills_sessions_through_apply_live_sections() {
+        let mgr = crate::gateway::pty::manager();
+        let sid = mgr.spawn(&SpawnOptions::default()).expect("spawn").session_id;
+
+        let mut cfg = Config::default();
+        cfg.gateway.terminal.enabled = false;
+        let applied = apply_live_sections(&cfg, &["gateway"]);
+
+        assert!(
+            applied.contains(&"gateway.terminal"),
+            "a declared-live target that does not land is not live"
+        );
+        assert!(
+            mgr.list().iter().all(|s| s.session_id != sid || s.closed),
+            "the in-flight session must be gone, not merely reported gone"
+        );
+    }
+```
+
+⚠️ 注意 `top_sections` 传的是 `["gateway"]` 而**不是** `["gateway.terminal"]`——单条 patch 的
+调用方（`patcher.rs`）只知道它写的那条路径的**顶层** section，`dotted_prefix_matches` 就是为这个
+写的。用精确名字传进去会让这条测试走一条生产上不存在的路。
+
+（`Config::default()` / `SpawnOptions` 的实际可见性与构造方式按该文件既有测试的写法来；
+若 `manager()` 的进程级单例让这条测试与兄弟测试互相干扰，**说出来再决定**，别改成断言调用次数。）
+
 `live_apply.rs::apply_live_sections` 加一臂：把新值应用到进程 —— 关闭时 `close_all`：
 
 ```rust
