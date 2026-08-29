@@ -125,9 +125,15 @@ impl Grid {
         (self.cursor_row, self.cursor_col)
     }
 
-    /// Rows evicted into scrollback so far. Reported in `pty.attach` so a
-    /// client knows how far back it can scroll before the server has
-    /// nothing left to give it.
+    /// Rows CURRENTLY retained in scrollback -- not a running total of rows
+    /// ever evicted. The ring is capped at `scrollback_limit`, and once it
+    /// saturates each new eviction drops the oldest row, so this value stops
+    /// growing while the cumulative count keeps climbing. Reported in
+    /// `pty.attach` so a client knows how far back it can scroll before the
+    /// server has nothing left to give it, which is exactly the retained
+    /// count and never the cumulative one: a client that treated this as
+    /// "rows evicted so far" would compute scrollback offsets against rows
+    /// the server discarded long ago.
     #[must_use]
     pub fn scrollback_len(&self) -> u32 {
         self.scrollback.len() as u32
