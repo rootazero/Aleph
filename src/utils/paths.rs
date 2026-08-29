@@ -15,6 +15,7 @@
 
 use crate::error::{AlephError, Result};
 use std::path::{Path, PathBuf};
+use tracing::{info, warn};
 
 /// Returns true when two paths refer to the same filesystem entry by
 /// canonicalizing both (symlink-resistant). Falls back to byte-wise
@@ -572,8 +573,6 @@ fn collect_project_skills_dirs(
     start_dir: &std::path::Path,
     stop_at: Option<&std::path::Path>,
 ) -> Vec<PathBuf> {
-    use tracing::info;
-
     let mut dirs = Vec::new();
     let mut current = start_dir.to_path_buf();
     loop {
@@ -802,7 +801,6 @@ pub fn get_plugin_skills_dirs(project_dir: Option<&std::path::Path>) -> Vec<Path
 
 /// Append the active agent's skills directory (if any) to `dirs`.
 fn agent_skills_dir(dirs: &mut Vec<PathBuf>) {
-    use tracing::info;
     if let Some(agent_id) = crate::agents::current_agent_id() {
         if is_safe_agent_id(&agent_id) {
             if let Ok(config_dir) = get_config_dir() {
@@ -822,8 +820,6 @@ fn agent_skills_dir(dirs: &mut Vec<PathBuf>) {
 
 /// Append global user-level skills directories to `dirs`.
 fn user_skills_dirs(dirs: &mut Vec<PathBuf>) -> Result<()> {
-    use tracing::info;
-
     let global_aleph = get_skills_dir()?;
     if global_aleph.is_dir() && !dirs.contains(&global_aleph) {
         info!(path = %global_aleph.display(), "Found global ~/.aleph/skills");
@@ -851,7 +847,6 @@ fn user_skills_dirs(dirs: &mut Vec<PathBuf>) -> Result<()> {
 
 /// Push `dir` into `dirs` if it's a directory that isn't already present.
 fn push_if_new_skills_dir(dirs: &mut Vec<PathBuf>, dir: &std::path::Path, label: &str) {
-    use tracing::info;
     if dir.is_dir() && !dirs.iter().any(|d| d.as_path() == dir) {
         info!(path = %dir.display(), "Found {label}");
         dirs.push(dir.to_path_buf());
@@ -859,8 +854,6 @@ fn push_if_new_skills_dir(dirs: &mut Vec<PathBuf>, dir: &std::path::Path, label:
 }
 
 pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<PathBuf>> {
-    use tracing::info;
-
     let mut dirs = Vec::new();
 
     // 0. Agent level (highest precedence): the currently-active agent's private
@@ -1003,9 +996,9 @@ pub fn migrate_legacy_db_files() {
         let new = data_dir.join(name);
         if old.exists() && !new.exists() {
             if let Err(e) = std::fs::rename(&old, &new) {
-                tracing::warn!("Failed to migrate {}: {}", name, e);
+                warn!("Failed to migrate {}: {}", name, e);
             } else {
-                tracing::info!("Migrated {} to {}", old.display(), new.display());
+                info!("Migrated {} to {}", old.display(), new.display());
             }
         }
     }
