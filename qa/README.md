@@ -30,6 +30,15 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/announce/run.sh collected   # the model collected it itself -> no turn is spent
 ./qa/announce/run.sh midrun      # the run is still alive -> absorbed as steering, ONE run
 
+./qa/run_halt/run.sh crash    # a failed run's receipt: `failed`, and the work it did
+./qa/run_halt/run.sh cap      # a capped run: the umbrella token AND the cap in `terminate_detail`
+./qa/run_halt/run.sh receipt  # the same crash through real `aleph ask`, once per LC_ALL
+./qa/run_halt/run.sh panel    # boot + hold; the halt badge is a LIVE projection, so the
+                              # browser has to be attached BEFORE the run ends
+                              # ⚠️ `crash` reports 4 failures today — a real defect it
+                              # found (one terminal frame per retry attempt, last one
+                              # zeroed). See the header of its run.sh.
+
 ./qa/leftovers/run.sh            # converged tool DESCRIPTIONs + relocated-ALEPH_HOME hooks + [agents.defaults] roots
 
 ./qa/picker_nav/run.sh           # keyboard walk + conditional bottom fade + phone add-a-provider,

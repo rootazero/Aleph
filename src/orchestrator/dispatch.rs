@@ -1220,6 +1220,84 @@ mod outcome_tests {
         );
     }
 
+    /// Every terminate token this enum can produce has words on the terminal
+    /// surfaces — and the shared table has no row for a token that cannot.
+    ///
+    /// The set is **derived from `as_static_str`'s own arms**, not restated
+    /// here. That matters more than it looks: `as_static_str` is an exhaustive
+    /// `match`, so a sixteenth variant cannot be added without adding a line
+    /// there, which means the scan below cannot miss one. A hand-written list
+    /// in this test could — and the class it would miss is precisely the one
+    /// that already happened: `diminishing_returns` had a label on **zero** of
+    /// the five surfaces that render this field, and nothing said so.
+    ///
+    /// The equality runs in both directions on purpose. Left-only is a token
+    /// that renders on screen as a raw wire string (`hit_max_iterations` at a
+    /// person, which `aleph watch` really did print). Right-only is words for a
+    /// token that no longer exists — dead weight that also has to be carried
+    /// through `interfaces/webchat`'s locale files, since the panel's guard
+    /// walks the same table.
+    ///
+    /// Not in scope, said plainly: this checks that a token is *labelled*, not
+    /// that any particular surface renders it. `gateway::i18n::render_loop_halt`
+    /// (full prose with advice, server-side locale) and
+    /// `reply_emitter::cap_notice_for` (the channel one-liner) both keep private
+    /// tables and are not measured here.
+    #[test]
+    fn every_terminate_token_has_words_on_the_terminal_surfaces() {
+        let src = include_str!("dispatch.rs").replace('\r', "");
+        let src = crate::utils::source_scan::production_prefix(&src);
+        let at = src
+            .find("pub const fn as_static_str")
+            .expect("as_static_str is the fact this guard derives from");
+
+        // The window ends at the function's own closing brace, not after N
+        // lines: a fixed window is a boundary someone else's edit can move,
+        // and the failure is silent in the direction that under-scans.
+        let body = {
+            let mut depth = 0usize;
+            let mut end = None;
+            for (i, c) in src[at..].char_indices() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(i);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            &src[at..at + end.expect("as_static_str's body never closes")]
+        };
+
+        let mut produced: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for (i, _) in body.match_indices("=> \"") {
+            let rest = &body[i + 4..];
+            let end = rest.find('"').expect("an unterminated token literal");
+            produced.insert(&rest[..end]);
+        }
+        assert!(
+            produced.len() >= 10 && produced.contains("completed"),
+            "the scan found {} tokens, which means it stopped matching the \
+             shape of `as_static_str` rather than that the enum shrank",
+            produced.len(),
+        );
+
+        let labelled: std::collections::BTreeSet<&str> =
+            aleph_protocol::terminate::labelled_tokens().collect();
+        assert_eq!(
+            produced, labelled,
+            "left = tokens `TerminateReason::as_static_str` can produce, \
+             right = tokens `aleph_protocol::terminate` has words for. A \
+             left-only token renders on screen as its raw wire string; a \
+             right-only one is dead words in this crate AND in \
+             interfaces/webchat/locales/{{en,zh}}.json.",
+        );
+    }
+
     #[test]
     fn flow_outcome_default_is_completed_clean_run() {
         let outcome = FlowOutcome::default();

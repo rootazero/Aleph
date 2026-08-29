@@ -986,28 +986,48 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
         // that keeps re-creating its prefix is paying 1.25x for history it
         // already sent. Shown cumulatively as well as per-run, because the
         // first run of any session necessarily reads 0%.
+        //
+        // The hover text is localised, which it had not been: a `title=` whose
+        // value arrives through a `let` was invisible to the English census
+        // until that census learned to follow one binding hop
+        // (`i18n_census::painted_identifiers`). `cache` is the *second* hop —
+        // it reaches the screen inside `cost_title`'s own interpolation — and
+        // is still outside what that scan can see; it is localised here because
+        // a half-translated hover is worse than an untranslated one.
         let cache = match (cost.prefix_reuse(), chat.session_prefix_reuse()) {
-            (Some(run), Some(session)) => format!(
-                " · cache {} read / {} created · prefix reuse {:.0}% (session {:.0}%)",
-                cost.cache_read_tokens,
-                cost.cache_creation_tokens,
-                run * 100.0,
-                session * 100.0
-            ),
+            (Some(run), Some(session)) => t_string!(
+                i18n,
+                chat.cost_cache_fragment,
+                read = cost.cache_read_tokens.to_string(),
+                created = cost.cache_creation_tokens.to_string(),
+                run = format!("{:.0}", run * 100.0),
+                session = format!("{:.0}", session * 100.0),
+            )
+            .to_string(),
             _ => String::new(),
         };
-        let title = format!(
-            "input {} · output {} · total {} tokens{}{}",
-            cost.input_tokens,
-            cost.output_tokens,
-            cost.total_tokens,
-            cache,
-            if cost.is_exact() {
-                String::new()
-            } else {
-                format!(" · cost {}", cost.status.as_deref().unwrap_or("unknown"))
-            }
-        );
+        let status = if cost.is_exact() {
+            String::new()
+        } else {
+            // Core's own `cost_status` token passes through verbatim — it is a
+            // wire value, not copy, the same rule `RunHalt::label`'s
+            // fall-through applies. Only the client's own "core said nothing"
+            // word is ours to translate.
+            let raw = cost.status.clone().unwrap_or_else(|| {
+                t_string!(i18n, chat.cost_status_unknown).to_string()
+            });
+            t_string!(i18n, chat.cost_status_fragment, status = raw).to_string()
+        };
+        let title = t_string!(
+            i18n,
+            chat.cost_title,
+            input = cost.input_tokens.to_string(),
+            output = cost.output_tokens.to_string(),
+            total = cost.total_tokens.to_string(),
+            cache = cache,
+            status = status,
+        )
+        .to_string();
         // Read-only meta line: the full token/cost breakdown it used to
         // open lived in the right pane's inspector, which no longer exists.
         // The `title` hover still carries the exact figures.

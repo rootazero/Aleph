@@ -1560,6 +1560,76 @@
   - **`aleph exec` 的徽标是中文、TUI/频道是英文**——这是既有的不一致（`terminate_badge` 整张表都是中文），本轮只是给它加了一行同风格的，没有统一。
   - **`terminate_detail` 目前只有一个生产者**（`BudgetExhaustedPartialResult` 的内层 cap 标签）。`RunHalt` 已经按"detail 优先"读它，多一个生产者时不需要改客户端。
 
+### 3.17e 终止标签的五个面收敛成一张表；文案普查补上「一跳」 (2026-08-29)
+
+- **口语关键词**：`aleph exec` 打中文而 TUI 打英文、`aleph watch` 直接印 `hit_max_iterations`、达到迭代上限 CLI 只说「预算耗尽（部分结果）」、换个 core 版本 CLI 把新的 halt 全报成「已结束」、Panel 悬停的 token 明细是英文、i18n 普查报绿但那一行英文就在屏幕上
+- **背景**：§3.17d 收尾时点名的四条遗留，用户裁定本轮一并处理。**①②合流成一条**——查下去发现「语言不一致」只是表象：同一个 wire 字段有**五个渲染面**，各自覆盖 14 个 halt token 里的 0 / 4 / 7 / 10 / 13，两种语言，两种 `terminate_detail` 优先级。所以 ② 的真实内容不是"缺第二个生产者"（那是个陈述句，不是缺陷），而是**第三、第四个面根本没读那个字段**。③ 建了真机装置。④ 是一条独立的守卫缺陷，与终止标签无关。
+- **用户裁定（2026-08-29）**：语言方向选 **POSIX locale + 回落英文**。CLI/TUI 两个 crate 完全没有 locale 管道，且**结构上读不到**服务端的 `[general] language`（那在 `config.toml`，客户端只加载 `~/.aleph/cli.toml`，而且它可能指向另一台机器上的 server）。POSIX 环境变量是终端程序真正握有的信号，`icon.rs` 已经在读同一族变量判字符集。
+- **代码锚点**：`shared/protocol/src/terminate.rs`（**新**，唯一的表）· `interfaces/cli/src/output/exec_echo.rs::{render_summary_footer_in, terminate_badge}`（**改**）· `interfaces/cli/src/commands/watch.rs::render_settled_line`（**改**）· `interfaces/tui/src/tui/app/events.rs::halt_notice`（**新**）· `interfaces/webchat/src/platform/wide/views/chat/state/mod.rs`（locale key 改名 + 对账守卫）· `interfaces/webchat/src/i18n_census.rs::{painted_identifiers, bound_copy_lines, direct_binding_literal, end_of_statement}`（**新**）· `qa/run_halt/`（**新**装置）
+
+**① 五个面，五种覆盖率，两种语言，两种优先级——而最贵的分歧在兜底臂**
+
+`TerminateReason` 有 **15** 个 token，其中 **14 个是 halt**（除 `completed`——每个徽标面都抑制它）。按这 14 个计：
+
+| 面 | 标签数 | 语言 | 读 `terminate_detail` | 未知 token |
+|---|---|---|---|---|
+| `reply_emitter::streaming::cap_notice_for`（频道） | 7 | 英文 | ✗ | 原样 |
+| TUI run footer | 4 | 英文 | ✓ | 原样 |
+| `aleph exec` 收据 | 10 | **中文** | **✗** | **「已结束」** |
+| `aleph watch` 活动板 | **0**（直接印 wire token） | — | ✗ | 原样 |
+| Panel halt 徽标 | 13 | 按 locale | ✓ | 原样 |
+
+五个面的**并集是 13 不是 14**。缺覆盖的代价不均匀：缺标签读起来像"这个还没做"，而 `aleph exec` 的兜底把未知 token 换成中性的**「已结束」**——那是**错的标签，读起来像事实**，所以一个比二进制新的 core 报出的每一种新 halt 都被它读成「结束了」，而读者没有任何办法察觉。`diminishing_returns` 在**五个面上一个标签都没有**（它是退役信号、无生产者，但"今天产不出"和"没有读者会看见它"是两句不同的话——旧 core 写下的持久 summary 仍然带得动它）。
+
+**② 单一源落在 `aleph-protocol` 而不是 `aleph-client`**：`trace_presentation.rs` 是先例（"presentation / formatting for all frontends … CLI, TUI, and web panel all consume these functions instead of duplicating formatting logic"），而 `aleph-client` 的 charter 是 WebSocket 传输。更硬的理由是**被依赖的一侧**：渲染的对象是 `crate::events::RunSummary` 的两个字段，它们就定义在隔壁。`effective_token`（detail 优先、空串读作缺席）、`label`（未知 token **原样透传**）、`severity`（`Clean` / `Capped` / `Failed` 三态，未知 token 判 `Capped`——把未知报成崩溃会让读者去找一份不存在的堆栈）都在那里。
+
+**③ Panel 刻意不调它，而这一次"刻意"是有守卫的**：panel 的 locale 是**浏览器端**设置而不是 `LC_MESSAGES`（一台 `LANG=zh_CN` 的机器上把 UI 设成英文的读者必须拿到英文——两个 resolver 答的确实是不同的问题），且 `td_string!` 是**编译期**解析（缺 key 是构建错误）。所以两份拷贝都留着，靠 `interfaces/webchat` 侧的两条守卫钉住：`the_panel_says_the_same_words_as_the_terminal_clients`（走 `labelled_tokens()`，逐 token 逐 locale 比字节）与 `every_halt_key_has_a_token_and_every_token_has_a_key`（读 `locales/{en,zh}.json`，key 集合与 token 集合**相等**）。后者是为此把 key 改成 `halt_<token>` 逐字对应的（`halt_budget_partial` → `halt_budget_exhausted_partial_result` 等六个）——**一个只是"看起来像"它的 token 的 key，只有人能比对，机器不能**。
+
+**④ 上游穷尽、下游带兜底：token 集合必须从穷尽的那一侧派生**：`as_static_str` 是穷尽 `match`（加变体必编译错），下游每个渲染面都有 `_ =>`（加变体不报错）。所以 core 侧的 census `every_terminate_token_has_words_on_the_terminal_surfaces` **源码扫 `as_static_str` 的臂**取 token 集合，与 `labelled_tokens()` 作**双向**相等断言：左多 = 一个 token 会在屏幕上印成 wire 字符串；右多 = 死文案，而且要连着 panel 的两个 locale 文件一起养。窗口按**自己的平衡大括号**收尾而不是行数，并带一条自保断言（扫到 < 10 个 token 说明扫描器不再认识 `as_static_str` 的形状，而不是枚举缩小了）。
+
+**⑤ locale 解析是纯函数，且刻意不读 `LC_CTYPE`**：`UiLocale::from_locale_vars(lc_all, lc_messages, lang)` 取三者中第一个**非空**值，`zh` 前缀（大小写无关）判中文，其余（含 `C`/`POSIX`/全空）判英文。纯函数是为了可测——`std::env` 是进程全局而 libtest 并行跑，`icon.rs::detect_unicode` 为此付了一个 `Mutex` 的税，而忘了那把锁的兄弟测试是绿得没道理的那种。语言链的中间一环是 `LC_MESSAGES` 不是 `LC_CTYPE`：一个 `LC_CTYPE=zh_CN.UTF-8`（为字形宽度设的）+ `LC_MESSAGES=en_US.UTF-8` 的终端要的是英文字、中文字体。`render_summary_footer` 保留原签名（读环境）并把全部工作交给纯的 `render_summary_footer_in(summary, locale)`。
+
+**⑥ 真机装置 `qa/run_halt/`**（§3.17c 说"没有装置"的那个）：`crash` 走**失败臂**（mock 烧掉 2 个带工具的回合再以 HTTP 401 拒绝——401 而不是 5xx，因为 5xx 会让重试阶梯把预算花光、把确定性装置变成慢装置），`cap` 走**成功臂**（`max_iterations=3`，且这是唯一能让 `terminate_detail` 有值的路径）。实测：`crash` ⇒ `terminate_reason="failed"`，loops=2，tool_calls=2，total_tokens=356；`cap` ⇒ `terminate_reason="budget_exhausted_partial_result"` + `terminate_detail="hit_max_iterations"`，loops=3，total_tokens=534。`receipt` 场景把一个**触顶**的 run 送进真的 `aleph ask`，各跑一次 `LC_ALL=en_US.UTF-8` / `zh_CN.UTF-8`：断言两侧措辞正确、英文那份不含中文、**且两份都不含 umbrella 文案**——最后一条就是 `terminate_detail` 在真二进制上的证明（`terminate_reason` 在这条路径上是 `budget_exhausted_partial_result`，只有读了 detail 才印得出「已达迭代上限」）。"`LC_ALL` 真的拨得动它"只有跑两次二进制才答得出来。
+- ⚠️ **`receipt` 今天过不了，原因与本轮无关：CLI 从真 gateway 收不到任何 stream 帧**。同一个 socket、同一时刻并排测的（2026-08-29）：`drive_halt.py`（python websockets）收到每一帧、5/5 断言通过；`aleph watch` 只打出自己那行 banner、**零帧**；`aleph ask --json` **一个字节都没有**，而与此同时 mock 记下了 turn、server 真的把 run 跑完了。所以 run 发生了、服务端广播了，**两个 CLI 面都是瞎的**。这一条是既有的（本轮没有碰事件流），装置**留着不删**——它就是那一天修好时现成的测试。也因此 `render_summary_footer` 的双语行为改由单测钉（`render_summary_footer_in` 是纯的、两个 locale 都断言，`UiLocale::from_locale_vars` 按 POSIX 优先级链断言），真机上**没有验到的只剩 `from_env` 那六行包装**。
+- ⚠️ **装置自己踩到的三个坑**，都写进了注释，因为三个都长得像产品缺陷：**① `aleph ask` 读非 TTY 的 stdin 会读到 EOF**（那正是 `git diff | aleph ask "review"` 的机制），而 fixture 继承的管道永不关闭 ⇒ CLI 在发出任何东西之前就阻塞，mock 零请求、server 零日志，读起来就是"服务器没应答"（修法 `</dev/null` + `timeout`）。**② mock 抢不到端口时无人发现**（上一次挂掉的 run 留着 18802）⇒ 每条断言都为一个与代码无关的理由失败，所以现在起 mock 之后要**证明它 bound**、否则点名退出 70。**③ `--server` 是 flag 不是 `cli.toml`**：`main.rs` 读 `cli.server`，那个字段带 clap `default_value`，所以 flag 永远在、`CliConfig.server` 在这个二进制里**没有任何读者**（TUI 读的是它自己的 `args.server`）——一份写好的 fixture 配置文件会被静默忽略。
+- **Panel 那半这一轮真的在浏览器里跑过了**（`playwright-cli`，因为 Claude 的 Chrome 扩展没连上；两个 driver 的口径见 §3.12）。实测四条，逐条抄下读数：
+  - **crash 计划**：气泡下方第二行 `⚠️ 运行失败`，`title="terminate_reason: failed"`，成本行 `≈$0.0000 · 356 tok`。
+  - **cap 计划（中文）**：`title="terminate_reason: budget_exhausted_partial_result"` 而徽标写 **`⚠️ 已达迭代上限`**——**detail 优先在屏幕上成立**，这是这条线端到端最强的一次证明：帧上是 umbrella，画出来的是真正撞上的那个 cap。
+  - **cap 计划（英文，`document.cookie='i18n_pref_locale=en'` 后重载）**：`⚠️ hit max iterations`，悬停 `input 411 · output 123 · total 534 tokens · cost unknown`——**本轮新加的 `chat.cost_title` 两个 locale 都在真机上渲染过**（那正是 ④ 里 cost_view 的那几句英文）。
+  - **成本行没有被重试的空帧盖掉**：⑨ 那条缺陷让最后一帧带 0 token，而 Panel 上仍然显示 356。原因是 `apply_run_cost` 的 `if usd.is_none() && total_tokens == 0 { return; }`——那行的存在理由是"没有成本的 run 该什么都不显示、而不是显示 `$0.00`"，**不是**为重试帧写的。**这是运气不是设计**，别拿它当 ⑨ 的缓解措施：`parse_run_halt` 没有同样的守卫，最后一帧照旧覆盖徽标（这里三帧都说 `failed`，所以看不出来）。
+- **Panel 那半是手动的，而且必须是**：`run_halts` 是**实时投影**（`run_complete` 帧喂养，与旁边的 `run_costs` 同生命周期），**不从 `chat.history` 重新水化**——所以徽标只有"运行结束时已经连着的浏览器"看得见。事后刷新看不到不是 bug 是设计。`panel` 场景启同一套装置并 hold，打印的清单就是断言。
+- ⚠️ **装置自己踩到的坑**（写进了共享 patcher）：`cap` 需要设 `max_iterations`，直接往 config 追加 `[execution]` 会撞 `duplicate key 'execution'`——**服务器响亮拒绝，但它先打了一条带默认端口的 banner**，所以读起来像"场景起错了端口"而不像配置错误。这与 `add_overrides.py` 的 doc 记的是同一件事，所以走 `patch_config.py --max-iterations`（它有 `set_key`）。
+
+**⑦ i18n 英文普查补上「一跳」——182 → 215，而没有一行是新写的**（这是 ④，一条独立的守卫缺陷）：`english_copy_lines` 的精度来自「形状 ∧ 位置」，而它认得的位置只有子节点位和属性字面量。`cost_view` 的 `let title = format!("input {} · output {} · total {} tokens…")` 三行之后就是 `title=title`——**渲染位上是个标识符，不是字面量**，于是整段英文对普查不可见。补法是 `painted_identifiers`（把渲染位上的**裸**标识符收成集合；`title=cost.title()` 不算——跟进那个是跨函数问题）+ `bound_copy_lines`（回头扫那个 `let` 的语句范围，范围按 `{}()[]` 平衡后的 `;` 收尾）。
+- **两个坑，各自实测过**：把「`=` 之后的字面量」做成 `rendered_literals` 的第四种通用形状 ⇒ **多报 96 行、其中 90 行是 Tailwind**（RSX 每个属性都是 `name="值"`），所以它只在 `bound_copy_lines` 里作为 `direct_binding_literal` 存在，那里的 `=` 已知是某个 `let` 的；绑定值含 `view!` 时**整条跳过** ⇒ 否则多报 16 行（`class=format!("px-4 {x}")` 命中 `is_format`）。
+- **数字的来历，按判据写清楚**：先用**旧**探测器跑同一棵树读到 **175**（低于它当时被要求的 182——2026-08-19 那次重钉留了七行余量，正是那段 doc 自己说不该留的），补一跳后 **217**，本地化 `cost_view` 的两行后 **215**。所以 182→215 里**没有一个字节是新增的文案**，是量具第一次看见——与工具描述棘轮 `82,462 → 93,358` 同一类事件。剩下 40 行**没有**扫（九个手机端路由模式标签、三个 Discord 权限词、三条 re-embed 进度、三块屏幕上的 `"Agent not found"` / `"Loading…"` / `"Connecting…"`）：那是一轮翻译，而它们现在**被计数了**，这正是棘轮的意义。两个已知误报留在那 40 里，按 doc 既有的 floor 口径：`format!("{ms}ms")` 是单位后缀，`"every" => "5m, 2h, 30s"` 是占位示例。
+- **第二跳仍在盲区，而且有实例**：`cost_view` 的 `let cache = …` 是经 `cost_title` 的插值到达屏幕的，比 join key 能走的距离多一跳。它是**手工**本地化的，并在 `rendered_literals` 的 doc 里作为那半个缺口的实例写下来——半翻译的悬停文案比不翻译更糟。
+
+**⑧ 变异证伪（全部手动跑过并还原）**：删掉 `hits.extend(bound_copy_lines(…))` ⇒ `copy_bound_to_a_name_this_file_paints_is_counted` 红；`if !joined.contains("view!")` → `if true` ⇒ `a_binding_that_holds_markup_does_not_drag_its_stylesheet_in` 红；`HARDCODED_ENGLISH_LINE_CEILING` 215 → 214 ⇒ 棘轮红（说明它钉在实测值上、没有余量）；协议表里改一个中文标签 ⇒ panel 对账红；往 `locales/en.json` 加一个没有 token 的 `halt_*` key ⇒ key 集合守卫红（反过来**删掉**一个有读者的 key 是**编译错误**，因为 `td_string!` 编译期解析——所以那条守卫真正的主语是"死 key"和"无 key 的 token"这两个方向）；删掉 `LABELS` 的一行 ⇒ core census 红并逐字点名缺的那个 token；把 `effective_token(reason, detail)` 改成 `effective_token(reason, None)` ⇒ `footer_names_the_cap_hiding_under_the_budget_umbrella` 红。
+- ⚠️ **其中一条第一次变异是绿的**，值得单独记：`view!` 跳过的 RED 测试原本用 `class="px-4 py-3"` 当 fixture，而那个形状**任何规则都不匹配**（`is_binding` 已经被我从通用形状里拿掉了），所以删掉被守的那一行它照绿。换成 `class=format!(…)` 才红。判据补一句：**变异之后一条都没红时，先别断定被删的那行多余——去问 fixture 里有没有那条规则真正认得的形状**。
+
+**⑨ 装置第一次跑就抓到一条活的缺陷——而它是 §3.17c 那次修复的后果，不是旧账**
+
+`crash` 场景今天报 **4 条失败，全部是产品的**。真机帧序：
+
+```
+run_complete{failed, loops:2, tool_calls:2, tokens:356}   <- 诚实的那一帧，attempt 1
+run_retrying                                              <- run_loop/inner.rs
+run_complete{failed, loops:0, tool_calls:0, tokens:0}     <- 重试的 dispatch 立刻 401
+run_retrying
+run_complete{failed, loops:0, tool_calls:0, tokens:0}
+run_error
+```
+
+**每个客户端留的是最后一帧**，于是收据读出来是 0 轮 / 0 工具 / 0 token——**正是 §3.17c 要消灭的那个症状**，从一条那一轮没有考虑到的路径上原样长了回来。`terminate_reason` 是对的（`failed` 而不是枚举默认值），所以 §3.17c 的一半确实成立；不成立的是**记账**。
+
+成因是那次修复本身：settle 原本在 `run_result.map_err(..)?` **之下**，所以失败的 attempt 什么都不发、只有成功的 attempt 才 settle；把它上移到错误返回之前，它就变成**每个 attempt 发一次**。而 `run_loop/inner.rs` 会重试它判为 `Transient` 的 dispatch——一次 401 恰好是（`failover::provider` 在两行之前把**同一个错误**判作 `kind=Permanent`，两层给出相反的分类，这一条单独存在且没有查）。
+
+⚠️ **"第一帧胜出"和"最后一帧胜出"都不是答案**：一个重试后**成功**的 run，第一帧是失败的那次 attempt。正解是**不给一个即将被重试的 attempt 发终局帧**（`run_retrying` 才是那个 attempt 结束时该发的帧），而**知道会不会重试的那一层（`run_loop/inner.rs`）不是发出它的那一层**——drain 在分类存在之前就已经转发了。那是一次设计改动，不是补丁，**本轮没有做**。
+
+装置里那条断言**故意留红**：一条被改成同意自己发现的缺陷的断言，会永远同意它。
+- **⚠️ 本轮明确未做**：`cap_notice_for`（频道那一面）**没有**接进这张表——它在服务端、有自己的 locale 来源（`[general] language`，`gateway::i18n`），把它一起改会在没有被要求的情况下改变所有 zh 部署的频道字节。它因此仍是 7 个标签、恒英文，而 core census 的 doc 逐字说明了自己不覆盖它和 `render_loop_halt`。
+
 ## 4. Loop 层
 
 ### 4.1 Goal 命令 (Standing Goal)

@@ -144,7 +144,8 @@ pub struct RunHalt {
     pub reason: String,
     /// Granular cap label under the `budget_exhausted_partial_result`
     /// umbrella (`summary.terminate_detail`). Preferred over `reason` when
-    /// present — same precedence the TUI applies.
+    /// present — the precedence is `aleph_protocol::terminate::effective_token`,
+    /// which every terminal surface now reads as well.
     #[serde(default)]
     pub detail: Option<String>,
 }
@@ -172,24 +173,25 @@ impl RunHalt {
                 td_string!(locale, chat.halt_context_budget_exhausted).to_string()
             }
             "max_output_tokens_exhausted" => {
-                td_string!(locale, chat.halt_max_output_tokens).to_string()
+                td_string!(locale, chat.halt_max_output_tokens_exhausted).to_string()
             }
             "budget_exhausted_partial_result" => {
-                td_string!(locale, chat.halt_budget_partial).to_string()
+                td_string!(locale, chat.halt_budget_exhausted_partial_result).to_string()
             }
             "consecutive_failure_cap" => {
-                td_string!(locale, chat.halt_consecutive_failures).to_string()
+                td_string!(locale, chat.halt_consecutive_failure_cap).to_string()
             }
-            "empty_response_exhausted" => td_string!(locale, chat.halt_empty_responses).to_string(),
+            "empty_response_exhausted" => td_string!(locale, chat.halt_empty_response_exhausted).to_string(),
             "reactive_compact_exhausted" => {
-                td_string!(locale, chat.halt_reactive_compact).to_string()
+                td_string!(locale, chat.halt_reactive_compact_exhausted).to_string()
             }
             "stall_timeout" => td_string!(locale, chat.halt_stall_timeout).to_string(),
             "turn_timeout" => td_string!(locale, chat.halt_turn_timeout).to_string(),
             "verifier_veto" => td_string!(locale, chat.halt_verifier_veto).to_string(),
-            "stop_hook_halt" => td_string!(locale, chat.halt_stop_hook).to_string(),
+            "stop_hook_halt" => td_string!(locale, chat.halt_stop_hook_halt).to_string(),
             "cancelled" => td_string!(locale, chat.halt_cancelled).to_string(),
             "failed" => td_string!(locale, chat.halt_failed).to_string(),
+            "diminishing_returns" => td_string!(locale, chat.halt_diminishing_returns).to_string(),
             other => other.to_string(),
         }
     }
@@ -3454,5 +3456,112 @@ mod history_window_gap_tests {
     fn an_empty_session_offers_nothing_to_load() {
         assert_eq!(history_window_gap(0, 200, Some(0)), (false, Some(0)));
         assert_eq!(history_window_gap(0, 200, None), (false, None));
+    }
+}
+
+/// The two copies of the halt vocabulary, held against each other.
+///
+/// `RunHalt::label` and `aleph_protocol::terminate::label` answer the same
+/// question for different readers — a browser whose language is a UI setting,
+/// and a terminal whose language is `LC_MESSAGES`. Both copies are deliberate
+/// (see the protocol module's doc for why this crate does not simply call it),
+/// and "deliberate" is exactly the condition under which two tables drift
+/// without anyone noticing: each has its own tests, each stays green, and the
+/// only place the disagreement shows is a screenshot next to a terminal.
+#[cfg(test)]
+mod halt_vocabulary_is_shared_tests {
+    use super::RunHalt;
+    use crate::i18n::Locale;
+    use aleph_protocol::terminate::{self, UiLocale};
+
+    fn halt(token: &str) -> RunHalt {
+        RunHalt {
+            reason: token.to_string(),
+            detail: None,
+        }
+    }
+
+    /// Every token the shared table has words for renders the same bytes here.
+    ///
+    /// Walks [`terminate::labelled_tokens`] rather than restating it, so a
+    /// fourteenth row reddens this on the commit that adds it — which is the
+    /// whole point: the panel is the copy that has to be edited by hand.
+    ///
+    /// One row is skipped, and only one: `CLEAN_TOKEN`. The panel never prints
+    /// a word for a clean run (`parse_run_halt` returns `None` for it), so a
+    /// `chat.halt_completed` key would be a key with no reader — the other half
+    /// of the very defect this crate's English sweep was about.
+    #[test]
+    fn the_panel_says_the_same_words_as_the_terminal_clients() {
+        let mut checked = 0usize;
+        for token in terminate::labelled_tokens() {
+            if token == terminate::CLEAN_TOKEN {
+                continue;
+            }
+            for (panel, shared) in [(Locale::en, UiLocale::En), (Locale::zh, UiLocale::Zh)] {
+                assert_eq!(
+                    halt(token).label(panel),
+                    terminate::label(token, shared),
+                    "the panel and aleph_protocol::terminate disagree about {token:?} \
+                     in {panel:?}; both are hand-written and this is where they drift",
+                );
+            }
+            checked += 1;
+        }
+        assert!(
+            checked >= 13,
+            "only {checked} tokens compared — the shared table shrank, or \
+             `labelled_tokens` stopped yielding",
+        );
+    }
+
+    /// Neither table has a row the other lacks.
+    ///
+    /// Read off `locales/en.json` rather than off the `match` above, because the
+    /// two failure modes are different and only this one sees both: a `match`
+    /// arm with no key does not compile, but a **key with no arm** compiles
+    /// fine and is dead weight in both locale files, and a **token with no key**
+    /// falls through to the raw wire string on screen while every test here
+    /// stays green.
+    ///
+    /// The `halt_` prefix plus the exact token is what makes this decidable at
+    /// all; the keys were renamed to that shape (`halt_budget_partial` ->
+    /// `halt_budget_exhausted_partial_result`) in the same change that wrote
+    /// this guard, because a key whose name only resembles its token can be
+    /// compared by a human and by nothing else.
+    #[test]
+    fn every_halt_key_has_a_token_and_every_token_has_a_key() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut keyed: Vec<String> = Vec::new();
+        for locale_file in ["en.json", "zh.json"] {
+            let path = root.join("locales").join(locale_file);
+            let src = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let mut here: Vec<String> = src
+                .lines()
+                .filter_map(|l| l.trim().strip_prefix("\"halt_"))
+                .filter_map(|l| l.split('"').next())
+                .map(str::to_string)
+                .collect();
+            here.sort();
+            if keyed.is_empty() {
+                keyed = here;
+            } else {
+                assert_eq!(keyed, here, "the two locale files carry different halt keys");
+            }
+        }
+        assert!(!keyed.is_empty(), "no halt keys found — did the scan break?");
+
+        let mut expected: Vec<String> = terminate::labelled_tokens()
+            .filter(|t| *t != terminate::CLEAN_TOKEN)
+            .map(str::to_string)
+            .collect();
+        expected.sort();
+        assert_eq!(
+            keyed, expected,
+            "left = chat.halt_* keys in locales/, right = tokens the shared \
+             table has words for. A key on the left only is dead weight; a \
+             token on the right only renders as a raw wire string on screen.",
+        );
     }
 }

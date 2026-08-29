@@ -1,8 +1,86 @@
 use super::*;
+use aleph_protocol::terminate::{self, UiLocale};
 use aleph_protocol::{
     AgentTraceEvent, AgentTraceReplay, AgentTraceSessionOutcome, AgentTraceTextKind,
     SessionSnapshot, StreamEvent,
 };
+
+/// The lead-in and the label have to move together — a localised label under an
+/// English lead-in is a sentence in neither language.
+#[test]
+fn a_halt_notice_is_written_in_one_language() {
+    use super::events::halt_notice;
+    let en = halt_notice("hit_max_iterations", UiLocale::En);
+    assert_eq!(en, "Run stopped: hit max iterations");
+    let zh = halt_notice("hit_max_iterations", UiLocale::Zh);
+    assert_eq!(zh, "运行已停止：已达迭代上限");
+    // An unrecognised token still says something true.
+    assert!(halt_notice("quota_exceeded_v9", UiLocale::En).contains("quota_exceeded_v9"));
+}
+
+/// The arm fires, and it reads `terminate_detail` before `terminate_reason`.
+///
+/// Deliberately asserted against `terminate::label(.., from_env())` rather than
+/// against a fixed string: the notice is written in whatever language the
+/// developer's shell asks for, and pinning one of them would make this test
+/// pass or fail on `LANG`. What is being pinned here is *which token* was
+/// rendered, which is the thing the surface used to get wrong.
+#[test]
+fn a_capped_run_names_the_cap_under_the_umbrella_token() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::RunComplete {
+        run_id: "run-1".into(),
+        seq: 1,
+        summary: RunSummary {
+            terminate_reason: Some("budget_exhausted_partial_result".into()),
+            terminate_detail: Some("hit_max_iterations".into()),
+            ..Default::default()
+        },
+        total_duration_ms: 10,
+    });
+    let notice = state
+        .messages
+        .iter()
+        .filter_map(|m| match m {
+            ChatMessage::System { content } => Some(content.clone()),
+            _ => None,
+        })
+        .find(|c| c.contains("stopped") || c.contains("已停止"))
+        .expect("a non-clean run must leave a system line");
+    let locale = UiLocale::from_env();
+    assert!(
+        notice.contains(terminate::label("hit_max_iterations", locale)),
+        "{notice}",
+    );
+    assert!(
+        !notice.contains(terminate::label("budget_exhausted_partial_result", locale)),
+        "the umbrella hid the cap that was actually hit: {notice}",
+    );
+}
+
+/// And a clean run leaves none.
+#[test]
+fn a_clean_run_leaves_no_halt_line() {
+    let mut state = AppState::new("s".into(), "m".into());
+    let before = state.messages.len();
+    state.handle_gateway_event(StreamEvent::RunComplete {
+        run_id: "run-1".into(),
+        seq: 1,
+        summary: RunSummary {
+            terminate_reason: Some("completed".into()),
+            final_response: Some("done".into()),
+            ..Default::default()
+        },
+        total_duration_ms: 10,
+    });
+    assert!(
+        !state.messages[before..]
+            .iter()
+            .any(|m| matches!(m, ChatMessage::System { content } if content.contains("stopped")
+                || content.contains("已停止"))),
+        "a clean finish must not be badged",
+    );
+}
 
 #[test]
 fn new_state_has_welcome_message() {

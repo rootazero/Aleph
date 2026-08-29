@@ -372,7 +372,38 @@ pub(crate) fn offending_lines(src: &str) -> Vec<usize> {
 /// surviving hardcoded placeholders went with it. Re-pinned rather than left
 /// as slack: a ceiling above the measurement hands the next author that
 /// difference for free.
-const HARDCODED_ENGLISH_LINE_CEILING: usize = 182;
+///
+/// ## 2026-08-29, third measurement: 182 -> 215
+///
+/// **Again nothing was added.** Same event as `298 -> 332`, same direction, and
+/// it deserves the same sentence: the budget was not spent, the instrument
+/// stopped being blind. [`painted_identifiers`] and [`bound_copy_lines`] follow
+/// **one binding hop** — an identifier this file puts in painted position, back
+/// to the `let` that gives it its value — which is the half of the named gap
+/// below that does not need to cross a function boundary.
+///
+/// The claim that nothing was added is measured, not assumed: the previous
+/// detector was run against this same tree first and read **175**. Two things
+/// follow. The 42 lines it could not see are the widening. And 175 is *below*
+/// the 182 it was being held to — the 2026-08-19 re-pin left seven lines of
+/// slack after all, which is the exact thing that doc paragraph says not to do,
+/// so this measurement is pinned to the line rather than rounded up.
+///
+/// Of the 42, one file's two lines were swept in the same change and the rest
+/// were not: `chat/messages.rs`'s `cost_view` built its hover text as
+/// `let title = format!("input {} · output {} · total {} tokens…")`, which is
+/// the case that prompted the widening. 217 - 2 = **215**. The remaining 40 are
+/// a translation round of their own — nine route-mode labels in
+/// `platform/phone/settings/model_route.rs`, three Discord permission words,
+/// three re-embed progress lines, `"Agent not found"` / `"Loading…"` /
+/// `"Connecting…"` on three phone screens — and they are now *counted*, which
+/// is the whole point of a ratchet.
+///
+/// Two known false positives are inside that 40 and stay, on the floor terms
+/// the section above already sets: `format!("{ms}ms")` in `agent_trace.rs` is a
+/// unit suffix, and `"every" => "5m, 2h, 30s"` in `cron/job_editor.rs` is a
+/// placeholder specimen.
+const HARDCODED_ENGLISH_LINE_CEILING: usize = 215;
 
 /// Human-facing names the derivation cannot see, because the crate has never
 /// localised one.
@@ -442,6 +473,8 @@ pub(crate) fn english_copy_lines(src: &str, attrs: &BTreeSet<String>) -> Vec<usi
     let lines = production_lines(src);
     let trimmed: Vec<String> = lines.iter().map(|(_, l)| l.trim().to_string()).collect();
     let mut hits = Vec::new();
+    let painted_names = painted_identifiers(&trimmed, attrs);
+    hits.extend(bound_copy_lines(&lines, &trimmed, &painted_names));
     for (i, (number, line)) in lines.iter().enumerate() {
         // Every painted literal on the line, not the first one: a line may
         // carry both, and the first match is not the copy. `<span
@@ -457,6 +490,187 @@ pub(crate) fn english_copy_lines(src: &str, attrs: &BTreeSet<String>) -> Vec<usi
         if painted.iter().any(|t| looks_like_copy(t)) {
             hits.push(*number);
         }
+    }
+    hits.sort_unstable();
+    hits.dedup();
+    hits
+}
+
+/// Names this file puts in painted position.
+///
+/// `title=title` and `<span>{money}</span>` both paint the value of a binding.
+/// Every rule above stops at the identifier — it is not a literal, so it is not
+/// copy — and the copy is one `let` away, in the same function, three lines up.
+/// That is where `chat/messages.rs`'s `cost_view` kept
+/// `"input {} · output {} · total {} tokens"` and
+/// `" · cache {} read / {} created · prefix reuse {:.0}%"`: English a reader
+/// hovers and sees, invisible to a census that reads only the render site.
+///
+/// Only a **bare** identifier counts. `title=cost.title()` names a call, and
+/// following that is the cross-function problem this still does not solve (see
+/// [`rendered_literals`]); binding the *receiver* `cost` would report every
+/// literal in an unrelated constructor.
+fn painted_identifiers(trimmed: &[String], attrs: &BTreeSet<String>) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for (i, line) in trimmed.iter().enumerate() {
+        for name in attrs {
+            let mut from = 0;
+            while let Some(rel) = line[from..].find(name.as_str()) {
+                let at = from + rel;
+                let boundary = at == 0 || {
+                    let c = line[..at].chars().next_back().unwrap_or(' ');
+                    !c.is_ascii_alphanumeric() && c != '_' && c != '-'
+                };
+                let rest = line[at + name.len()..].trim_start();
+                if boundary {
+                    if let Some(value) = rest.strip_prefix('=') {
+                        let value = value.trim_start();
+                        let value = value.strip_prefix("move || ").unwrap_or(value);
+                        if let Some(id) = leading_ident(value) {
+                            out.insert(id);
+                        }
+                    }
+                }
+                from = at + name.len();
+            }
+        }
+        for expr in braced_child_expressions(trimmed, i) {
+            if let Some(id) = whole_ident(&expr) {
+                out.insert(id);
+            }
+        }
+    }
+    out
+}
+
+/// The identifier `s` opens with, or `None` if it opens with something else.
+///
+/// A trailing `(`, `!`, `.` or `:` means this is a call, a macro, a field access
+/// or a path — the name is not the thing being painted, and treating it as one
+/// would drag in every literal bound to a same-named variable elsewhere.
+fn leading_ident(s: &str) -> Option<String> {
+    let id: String = s
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    if id.is_empty() || id.starts_with(|c: char| c.is_ascii_digit()) {
+        return None;
+    }
+    let next = s[id.len()..].chars().next().unwrap_or(' ');
+    (!matches!(next, '(' | '!' | '.' | ':')).then_some(id)
+}
+
+/// `s` is exactly one identifier and nothing else.
+fn whole_ident(s: &str) -> Option<String> {
+    let t = s.trim();
+    leading_ident(t).filter(|id| id.len() == t.len())
+}
+
+/// `let title = …` / `let mut title: String = …` -> `Some("title")`.
+///
+/// A destructuring pattern (`let (mark, label, style) = …`) yields `None`: the
+/// binding this pass follows has to be one name, and asking which element of a
+/// tuple reached the screen is the value-flow problem this scan does not do.
+fn let_binding_name(line: &str) -> Option<String> {
+    let rest = line.trim_start().strip_prefix("let ")?.trim_start();
+    let rest = rest.strip_prefix("mut ").unwrap_or(rest).trim_start();
+    let id: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    if id.is_empty() || id.starts_with(|c: char| c.is_ascii_digit()) {
+        return None;
+    }
+    let after = rest[id.len()..].trim_start();
+    // Skip a type annotation to the `=` that follows it.
+    let after = after
+        .strip_prefix(':')
+        .map_or(after, |ty| ty.find('=').map_or("", |at| &ty[at..]));
+    after.starts_with('=').then_some(id)
+}
+
+/// Index one past the `let` statement starting at `from`.
+///
+/// Braces, parens and brackets are balanced before the terminating `;` counts,
+/// so `let cache = match … { … };` is one statement and not three. Ends at the
+/// end of the slice for a statement that never closes — a scan that runs off
+/// the end reports too much, which is the direction that reddens rather than
+/// the one that goes quiet.
+fn end_of_statement(trimmed: &[String], from: usize) -> usize {
+    let mut depth: i32 = 0;
+    for (offset, line) in trimmed[from..].iter().enumerate() {
+        let code = outside_string_literals(line);
+        for c in code.chars() {
+            match c {
+                '{' | '(' | '[' => depth += 1,
+                '}' | ')' | ']' => depth -= 1,
+                _ => {}
+            }
+        }
+        if depth <= 0 && code.trim_end().ends_with(';') {
+            return from + offset + 1;
+        }
+    }
+    trimmed.len()
+}
+
+/// `let title = "Save";` — the literal a binding is set to outright.
+///
+/// Deliberately NOT a fourth arm of [`rendered_literals`]. "A literal straight
+/// after an `=`" is the shape of every RSX attribute (`class="px-4 py-3"`,
+/// `type="text"`, `rel="noopener"`), so as a general rule it reports the whole
+/// stylesheet; it is only decidable here, where the `=` is known to be a
+/// `let`'s. Measured: as a general rule it added 96 lines, 90 of them CSS.
+fn direct_binding_literal(statement: &str) -> Option<(usize, String)> {
+    let at = statement.find('=')?;
+    let rest = statement[at + 1..].trim_start();
+    let offset = statement.len() - rest.len();
+    let text = read_literal(statement, offset)?;
+    Some((offset, text))
+}
+
+/// Line numbers where a painted binding is given English copy.
+///
+/// The conjunction is the same one [`rendered_literals`] already relies on —
+/// a literal in an evaluated-to shape, in painted position — with the position
+/// established one hop earlier, at the `let`. Without the hop the shapes alone
+/// are 90% noise; with it, `let title = format!("input {} · output {} …")` is
+/// as painted as `<span>"Save"</span>`.
+fn bound_copy_lines(
+    lines: &[(usize, String)],
+    trimmed: &[String],
+    painted: &BTreeSet<String>,
+) -> Vec<usize> {
+    let mut hits = Vec::new();
+    let mut i = 0;
+    while i < trimmed.len() {
+        let Some(name) = let_binding_name(&trimmed[i]) else {
+            i += 1;
+            continue;
+        };
+        if !painted.contains(&name) {
+            i += 1;
+            continue;
+        }
+        let end = end_of_statement(trimmed, i);
+        let joined = trimmed[i..end].join("\n");
+        // A binding whose value is a `view!` is not copy — it is markup, and
+        // every literal inside it is already in child or attribute position,
+        // where the three rules above see it. Scanning it here would report
+        // every Tailwind class in the block: RSX writes attributes as
+        // `class="…"`, which is a literal directly after an `=`.
+        if !joined.contains("view!") {
+            let mut found: Vec<usize> = rendered_literals_with_span(&joined)
+                .into_iter()
+                .chain(direct_binding_literal(&joined))
+                .filter(|(_, text)| looks_like_copy(text))
+                .map(|(at, _)| i + joined[..at].matches('\n').count())
+                .collect();
+            found.sort_unstable();
+            found.dedup();
+            hits.extend(found.into_iter().filter_map(|row| lines.get(row).map(|(n, _)| *n)));
+        }
+        i = end.max(i + 1);
     }
     hits
 }
@@ -555,12 +769,32 @@ fn balanced_from(line: &str, at: usize) -> String {
 /// them turns up copy like `"Needs Setup ({})"`, `"New MoA preset"` and
 /// `"Refreshing..."` that nothing in this crate could previously see.
 ///
-/// What is still outside: the same three shapes anywhere else — a `match` in a
-/// helper function whose `&str` is returned to a caller that paints it. That
-/// needs to follow a value across a function boundary, which is a different
-/// kind of program than this one, and the doc above still does not claim to
-/// measure the class.
+/// What was still outside, when this was written: the same three shapes
+/// anywhere else. That has since split into two halves, because they cost very
+/// different amounts to reach:
+///
+/// * **one hop inside the same function** — `let title = format!("…")` three
+///   lines above a `title=title`. Closed by [`painted_identifiers`] and
+///   [`bound_copy_lines`], which need no value flow at all: the identifier is
+///   the join key, and it is spelled in both places.
+/// * **across a function boundary** — a `match` in a helper whose `&str` is
+///   returned to a caller that paints it. Still outside. That needs to follow a
+///   value out of one function and into another, which is a different kind of
+///   program than this one.
+///
+/// A worked instance of the second, so it is not merely asserted: `cost_view`'s
+/// `let cache = …` reaches the screen *inside* `cost_title`'s interpolation,
+/// one hop further than the join key can go. It was localised by hand.
 fn rendered_literals(content: &str) -> Vec<String> {
+    rendered_literals_with_span(content)
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect()
+}
+
+/// [`rendered_literals`] with each literal's offset, for the one caller that
+/// needs to say *which line* inside a multi-line statement carried the copy.
+fn rendered_literals_with_span(content: &str) -> Vec<(usize, String)> {
     let mut out = Vec::new();
     for (start, end, text) in literals_with_span(content) {
         let before = content[..start].trim_end();
@@ -578,7 +812,7 @@ fn rendered_literals(content: &str) -> Vec<String> {
         let is_arm = (before.ends_with('{') || before.ends_with("=>"))
             && (after.is_empty() || after.starts_with('}') || after.starts_with(','));
         if is_format || is_fallback || is_arm {
-            out.push(text);
+            out.push((start, text));
         }
     }
     out
@@ -1103,6 +1337,125 @@ mod tests {
         );
     }
 
+    /// One binding hop: the copy is three lines from the render site.
+    ///
+    /// Falsified by deleting the `hits.extend(bound_copy_lines(…))` line —
+    /// the literal is not in child position and not an attribute value, so
+    /// every other rule reads this file as clean.
+    #[test]
+    fn copy_bound_to_a_name_this_file_paints_is_counted() {
+        let attrs: BTreeSet<String> = ["title".to_string()].into_iter().collect();
+        let sample = concat!(
+            "fn cost_view() {\n",
+            "    let title = format!(\n",
+            "        \"input {} · output {} · total {} tokens\",\n",
+            "        a, b, c\n",
+            "    );\n",
+            "    view! {\n",
+            "        <div title=title>{money}</div>\n",
+            "    }\n",
+            "}\n",
+        );
+        assert_eq!(
+            english_copy_lines(sample, &attrs),
+            vec![3],
+            "the hover text `title=title` paints was not counted",
+        );
+    }
+
+    /// `let x = "Save";` counts too, and only because the `=` is a `let`'s.
+    #[test]
+    fn a_bare_literal_bound_to_a_painted_name_is_counted() {
+        let attrs: BTreeSet<String> = ["title".to_string()].into_iter().collect();
+        let sample = concat!(
+            "fn f() {\n",
+            "    let title = \"Retry the upload\";\n",
+            "    view! { <button title=title></button> }\n",
+            "}\n",
+        );
+        assert_eq!(english_copy_lines(sample, &attrs), vec![2]);
+    }
+
+    /// The position half is load-bearing: nothing paints this binding.
+    ///
+    /// Without it the rule degenerates into "any literal after an `=`", which
+    /// is the shape of every RSX attribute in the crate. Measured at the time
+    /// the pass was written: 96 extra lines, 90 of them Tailwind.
+    #[test]
+    fn copy_bound_to_a_name_nobody_paints_is_not_counted() {
+        let attrs: BTreeSet<String> = ["title".to_string()].into_iter().collect();
+        let sample = concat!(
+            "fn f() {\n",
+            "    let log_line = format!(\"failed to parse the manifest: {e}\");\n",
+            "    tracing::warn!(\"{log_line}\");\n",
+            "}\n",
+        );
+        assert!(english_copy_lines(sample, &attrs).is_empty());
+    }
+
+    /// A binding whose value is markup is not copy — its literals are already
+    /// in child and attribute position, where the other rules see them, and
+    /// scanning it here would report the stylesheet.
+    ///
+    /// The `class=format!(…)` line is what makes this test sensitive, and it
+    /// took a mutation run to find that out: the first version of this fixture
+    /// used a plain `class="px-4 py-3"`, which no shape in
+    /// [`rendered_literals`] matches anyway, so deleting the `view!` guard left
+    /// it green. A Tailwind string assembled with `format!` *is* matched, and
+    /// there are 16 such lines in this crate — measured by running the ratchet
+    /// with this guard removed: 215 -> 231.
+    #[test]
+    fn a_binding_that_holds_markup_does_not_drag_its_stylesheet_in() {
+        let attrs: BTreeSet<String> = ["title".to_string()].into_iter().collect();
+        let sample = concat!(
+            "fn f() {\n",
+            "    let row = view! {\n",
+            "        <div class=format!(\"px-4 py-3 flex items-center {extra}\")>\n",
+            "            <span class=\"truncate text-xs\">{name}</span>\n",
+            "        </div>\n",
+            "    };\n",
+            "    view! { <div title=row></div> }\n",
+            "}\n",
+        );
+        assert!(
+            english_copy_lines(sample, &attrs).is_empty(),
+            "a Tailwind class inside a bound `view!` was reported as copy",
+        );
+    }
+
+    /// The boundary, pinned rather than described.
+    ///
+    /// A destructuring pattern is not followed (which element reached the
+    /// screen is a value-flow question), and neither is a second hop — `inner`
+    /// reaches the screen through `title`'s interpolation, one join key
+    /// further than this scan can see. Both are real misses; the reason to
+    /// assert them is so a later widening reddens this test and has to decide
+    /// deliberately, instead of being credited to a scan that never claimed it.
+    #[test]
+    fn the_second_hop_and_the_tuple_are_both_outside() {
+        let attrs: BTreeSet<String> = ["title".to_string()].into_iter().collect();
+        let second_hop = concat!(
+            "fn f() {\n",
+            "    let inner = format!(\" · cache {} read\", n);\n",
+            "    let title = format!(\"{}\", inner);\n",
+            "    view! { <div title=title></div> }\n",
+            "}\n",
+        );
+        assert_eq!(
+            english_copy_lines(second_hop, &attrs),
+            Vec::<usize>::new(),
+            "the second hop is outside this scan; if it is now inside, say so \
+             in `rendered_literals`'s doc and re-measure the ratchet",
+        );
+        let tuple = concat!(
+            "fn f() {\n",
+            "    let (title, other) = (\"Save changes\", 1);\n",
+            "    view! { <div title=title></div> }\n",
+            "}\n",
+        );
+        assert!(english_copy_lines(tuple, &attrs).is_empty());
+    }
+
     #[test]
     fn hardcoded_english_line_ratchet() {
         let rows = english_census();
@@ -1288,3 +1641,4 @@ mod tests {
         assert!(!opens_a_cfg_test_literal("mod tests {"));
     }
 }
+
