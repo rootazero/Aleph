@@ -477,21 +477,18 @@ impl SessionStore for SessionManager {
     /// See the trait doc. Written directly against `self.conn` — like
     /// `stamp_last_assistant_metadata` above — rather than as an inherent
     /// `SessionManager` method plus `map_err`: `SessionManagerError` has no
-    /// variant for "this key/scope shape is not rescopable", because that is
-    /// a store-level concept (`SessionStoreError::Unsupported`), not a
-    /// manager-level one.
+    /// variant for "this key is not rescopable", because that is a
+    /// store-level concept (`SessionStoreError::Unsupported`), not a
+    /// manager-level one. There is no scope-kind check here: `project_id` is
+    /// not a rendered scope string, so there is no "wrong kind of scope"
+    /// value for this verb to reject — it only ever renders `Project`.
     async fn rescope_attribution(
         &self,
         key: &SessionKey,
-        scope_id: &str,
+        project_id: &str,
     ) -> Result<bool, SessionStoreError> {
-        crate::gateway::session_store::conversation_key(key)?;
-        if crate::scope::ScopeId::parse(scope_id)
-            .filter(|s| matches!(s, crate::scope::ScopeId::Project(_)))
-            .is_none()
-        {
-            return Err(SessionStoreError::Unsupported);
-        }
+        crate::gateway::session_store::require_conversation_key(key)?;
+        let scope_id = crate::scope::ScopeId::Project(project_id.to_string()).render();
         let key_str = key.to_key_string();
         let conn = self
             .conn
@@ -742,7 +739,7 @@ mod tests {
         .unwrap();
 
         let changed = store
-            .rescope_attribution(&key, "project:p-1")
+            .rescope_attribution(&key, "p-1")
             .await
             .expect("a sqlite backend supports rescoping");
         assert!(changed, "the row moved");
@@ -764,7 +761,7 @@ mod tests {
         let temp = tempdir().unwrap();
         let store = test_store(&temp);
         let key = SessionKey::main("main");
-        let result = store.rescope_attribution(&key, "project:p-1").await;
+        let result = store.rescope_attribution(&key, "p-1").await;
         assert!(
             result.is_err(),
             "only a group conversation may be rescoped into a room"
@@ -784,7 +781,7 @@ mod tests {
         let store = test_store(&temp);
         let key = SessionKey::group("main", "telegram", PeerKind::Group, "C-unspoken");
         let changed = store
-            .rescope_attribution(&key, "project:p-1")
+            .rescope_attribution(&key, "p-1")
             .await
             .expect("a sqlite backend supports rescoping");
         assert!(

@@ -967,21 +967,18 @@ impl SessionStore for FileSessionStore {
         Ok(true)
     }
 
-    /// See the trait doc. Validation of the key/scope shape happens before
-    /// the row is even locked — no reason to take the lock for an input this
-    /// verb was never going to accept.
+    /// See the trait doc. Validation of the key shape happens before the row
+    /// is even locked — no reason to take the lock for an input this verb
+    /// was never going to accept. There is no scope-kind check: `project_id`
+    /// is not a rendered scope string, so there is no "wrong kind of scope"
+    /// value for this verb to reject — it only ever renders `Project`.
     async fn rescope_attribution(
         &self,
         key: &SessionKey,
-        scope_id: &str,
+        project_id: &str,
     ) -> Result<bool, SessionStoreError> {
-        crate::gateway::session_store::conversation_key(key)?;
-        if crate::scope::ScopeId::parse(scope_id)
-            .filter(|s| matches!(s, crate::scope::ScopeId::Project(_)))
-            .is_none()
-        {
-            return Err(SessionStoreError::Unsupported);
-        }
+        crate::gateway::session_store::require_conversation_key(key)?;
+        let scope_id = crate::scope::ScopeId::Project(project_id.to_string()).render();
         let key_str = key.to_key_string();
         let mut guard = self.lock_metadata(&key_str).await?;
         // No row yet — a freshly bound room whose members have not spoken.
@@ -990,7 +987,7 @@ impl SessionStore for FileSessionStore {
         let Some(meta) = guard.existing_mut() else {
             return Ok(false);
         };
-        meta.scope_id = Some(scope_id.to_string());
+        meta.scope_id = Some(scope_id);
         guard.commit().await?;
         Ok(true)
     }
@@ -1895,7 +1892,7 @@ mod rescope_attribution_tests {
         .unwrap();
 
         let changed = store
-            .rescope_attribution(&key, "project:p-1")
+            .rescope_attribution(&key, "p-1")
             .await
             .expect("a file backend supports rescoping");
         assert!(changed, "the row moved");
@@ -1916,7 +1913,7 @@ mod rescope_attribution_tests {
     async fn rescoping_refuses_a_key_that_is_not_a_conversation() {
         let (store, _dir) = temp_store();
         let key = SessionKey::main("main");
-        let result = store.rescope_attribution(&key, "project:p-1").await;
+        let result = store.rescope_attribution(&key, "p-1").await;
         assert!(
             result.is_err(),
             "only a group conversation may be rescoped into a room"
@@ -1933,7 +1930,7 @@ mod rescope_attribution_tests {
         let (store, _dir) = temp_store();
         let key = SessionKey::group("main", "telegram", PeerKind::Group, "C-unspoken");
         let changed = store
-            .rescope_attribution(&key, "project:p-1")
+            .rescope_attribution(&key, "p-1")
             .await
             .expect("a file backend supports rescoping");
         assert!(

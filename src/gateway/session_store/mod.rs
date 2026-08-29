@@ -168,9 +168,24 @@ pub trait SessionStore: Send + Sync {
     /// itself, not at the call site, so "only a conversation may be rescoped"
     /// is a property of the method rather than a rule each caller has to
     /// remember. A DM has one human on the far side and no roster to grant
-    /// visibility to. Implementors: check this with [`conversation_key`]
-    /// rather than re-deriving the match, so the property has one author
-    /// across every backend, not one per implementor.
+    /// visibility to. Implementors: check this with
+    /// [`require_conversation_key`] rather than re-deriving the match, so the
+    /// property has one author across every backend, not one per
+    /// implementor.
+    ///
+    /// `project_id` — not a rendered `scope_id` — deliberately. This is the
+    /// one place the two types diverge, and it is not an inconsistency to
+    /// "harmonize" back: `backfill_attribution` can legitimately stamp *any*
+    /// scope, because it heals a NULL row to whatever the run's ambient
+    /// attribution happened to be — personal, org, or project — so its
+    /// `scope_id: &str` has to accept all three. This verb can only ever
+    /// target a project: there is no such thing as rescoping a conversation
+    /// into someone's personal scope or into org scope. Accepting a project
+    /// id — not a rendered scope string of any kind — makes "which kind of
+    /// scope" the parameter's meaning rather than a value it can carry
+    /// wrongly: there is no longer a rendered-personal-scope string for a
+    /// caller to pass here, so this verb has nothing left to detect and
+    /// reject at runtime. The check was deleted, not centralized.
     ///
     /// Move ONLY the scope. `owner_user_id` still names whoever spoke first:
     /// for a project-scoped row, visibility is decided by the roster, so
@@ -190,9 +205,9 @@ pub trait SessionStore: Send + Sync {
     async fn rescope_attribution(
         &self,
         key: &SessionKey,
-        scope_id: &str,
+        project_id: &str,
     ) -> Result<bool, SessionStoreError> {
-        let _ = (key, scope_id);
+        let _ = (key, project_id);
         Err(SessionStoreError::Unsupported)
     }
 
@@ -421,7 +436,7 @@ pub trait SessionStore: Send + Sync {
 /// `matches!(key, SessionKey::Group { .. })` check inline; a future third
 /// implementor of `rescope_attribution` should too, rather than writing its
 /// own copy that can drift from this one.
-pub(crate) fn conversation_key(key: &SessionKey) -> Result<(), SessionStoreError> {
+pub(crate) fn require_conversation_key(key: &SessionKey) -> Result<(), SessionStoreError> {
     if matches!(key, SessionKey::Group { .. }) {
         Ok(())
     } else {

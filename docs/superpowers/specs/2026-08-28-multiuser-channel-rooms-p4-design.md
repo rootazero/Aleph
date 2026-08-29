@@ -123,7 +123,26 @@ fn room_claiming(session_key) -> Option<String>
 
 **频道 inbound router 的 scope 盖戳一行不改**（仍是 `personal(speaker)`）。「这一 run 是什么 scope」保持 round-8 ⑤ 建立的**单一推导**，不给它第二个答案。
 
-`handlers::agent::room_claiming` 与 `run_loop::room_claiming` 这对孪生**继续不合并**——它们的 `None` 喂给不同分支（一个可拒绝、一个在准入之后），doc 已写明 "deliberately not shared"。
+> ⚠️ **本段已被 Ruling AE 推翻（2026-08-29，commit `4da644834`）。原文保留在下方，
+> 因为「当初为什么这么裁」和「后来为什么改」都要看得见；但**它描述的世界已经不在了**，
+> 读到这里不要照它行事。**
+>
+> **现状**：两个孪生**已经合并**到唯一的 `ProjectStore::room_claiming`
+> （`src/projects/store.rs:945`，`pub(crate)`），返回 `Option<(String, ClaimSource)>`；
+> `handlers::agent::resolve_attribution`（准入面）与 `run_loop::request_scope`
+> （准入之后）各自 `match` 那个 `ClaimSource` 来决定自己的处置。
+>
+> **原裁定错在哪**：它把「两个消费者对同一个答案做不同的事」当成了「两个消费者要各自
+> 算一遍那个答案」。前者是对的、且现在仍然成立（arm 1 拒绝、arm 2 落回 personal，
+> 不对称是设计）；后者是一条规则有了两个作者——正是这类缺陷的标准形状。**处置的分歧
+> 不是重新推导的理由。**
+>
+> 守卫：`the_two_room_claim_twins_agree_on_which_project_governs`
+> （`run_loop/tests.rs`）与 `the_two_claim_arms_are_gated_differently_for_the_same_non_member`
+> （`handlers/agent.rs`）——前者钉住两面同答，后者钉住两臂不同闸，**两条必须同时绿**：
+> 只有前者会诱使下一个人把两臂"对称化"，只有后者会诱使他把两面重新拆开。
+
+~~`handlers::agent::room_claiming` 与 `run_loop::room_claiming` 这对孪生**继续不合并**——它们的 `None` 喂给不同分支（一个可拒绝、一个在准入之后），doc 已写明 "deliberately not shared"。~~
 
 ### 4.4 名册闸 —— 本轮真正的安全新增
 
