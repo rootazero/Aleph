@@ -3905,7 +3905,49 @@ resize 的那个——与判据「一帧带着自己的归属到达」同形。
 
 `interfaces/webchat/src/platform/wide/views/terminal/session.rs` 的 `mod tests`：
 
+⚠️ **先改夹具，而且 `(4, 20)` 不是随便填的。** 该模块已有 `run(text)` / `frame(seq,row,text)` /
+`frame_for(session_id,seq,row,text)` 三个 helper，而**现存每一条测试都用 `ClientScreen::new(4, 20, ..)`**。
+`PtyScreenFrame` 新增必填的 `rows`/`cols` 之后 `frame_for` 必须补上它们，**而补什么决定了整个套件
+会不会静默改变行为**：
+
+- 填 `(4, 20)` ⇒ 与现有屏幕尺寸一致，`resize` 早返回，**现存测试逐字节不变**。这是要的。
+- 填别的 ⇒ 每条现存测试在第一帧就被 resize，`row_text` 的答案随之改变；
+- 填 `(0, 0)` 最坏 ⇒ `resize` 会 clamp 到 `(1, 1)`，整个套件塌成一行，读起来像「我的改动
+  把所有东西都弄坏了」，而真相是**夹具在撒谎**。
+
 ```rust
+    // Existing helper, unchanged: `PtyStyleRun` does NOT derive `Default`.
+    // fn run(text: &str) -> PtyStyleRun { .. }
+
+    /// The dimensions every existing test's screen already has, so a frame
+    /// built by `frame_for` resizes nothing and the suite is unchanged by
+    /// this field's arrival. Any other value silently resizes on frame one.
+    const FIXTURE_DIMS: (u16, u16) = (4, 20);
+
+    fn frame_for(session_id: &str, seq: u64, row: u16, text: &str) -> PtyScreenFrame {
+        frame_sized(session_id, seq, FIXTURE_DIMS.0, FIXTURE_DIMS.1, row, text)
+    }
+
+    fn frame_sized(
+        session_id: &str,
+        seq: u64,
+        rows: u16,
+        cols: u16,
+        row: u16,
+        text: &str,
+    ) -> PtyScreenFrame {
+        PtyScreenFrame {
+            session_id: session_id.into(),
+            seq,
+            rows,
+            cols,
+            patch: PtyScreenPatch {
+                rows: vec![PtyRowPatch { row, runs: vec![run(text)] }],
+                ..Default::default()
+            },
+        }
+    }
+
     /// A resize the client did not ask for still has to land. Sizing is
     /// smallest-wins across clients, so a client can be shrunk by someone
     /// else joining without ever calling `pty.resize` itself -- and a grow
@@ -3913,20 +3955,9 @@ resize 的那个——与判据「一帧带着自己的归属到达」同形。
     #[test]
     fn a_frame_carrying_new_geometry_grows_the_screen_before_its_rows_land() {
         let mut s = ClientScreen::new(24, 80, 5, SID);
-        let frame = PtyScreenFrame {
-            session_id: SID.to_string(),
-            seq: 6,
-            rows: 40,
-            cols: 100,
-            patch: PtyScreenPatch {
-                rows: vec![PtyRowPatch {
-                    row: 39,
-                    runs: vec![PtyStyleRun { text: "bottom".into(), ..Default::default() }],
-                }],
-                ..Default::default()
-            },
-        };
-        assert_eq!(s.apply(frame), ApplyOutcome::Applied);
+
+        assert_eq!(s.apply(frame_sized(SID, 6, 40, 100, 39, "bottom")), ApplyOutcome::Applied);
+
         assert_eq!(s.dims(), (40, 100));
         // The ordering assertion: adopting AFTER write_patch leaves the grid
         // 24 rows long, `get_mut(39)` returns None, and the row is dropped
@@ -3944,32 +3975,31 @@ resize 的那个——与判据「一帧带着自己的归属到达」同形。
     #[test]
     fn a_shrinking_frame_drops_the_rows_below_the_new_bottom() {
         let mut s = ClientScreen::new(40, 100, 5, SID);
-        let grow = PtyScreenFrame {
-            session_id: SID.to_string(),
-            seq: 6,
-            rows: 40,
-            cols: 100,
-            patch: PtyScreenPatch {
-                rows: vec![PtyRowPatch {
-                    row: 39,
-                    runs: vec![PtyStyleRun { text: "gone".into(), ..Default::default() }],
-                }],
-                ..Default::default()
-            },
-        };
-        assert_eq!(s.apply(grow), ApplyOutcome::Applied);
+        assert_eq!(s.apply(frame_sized(SID, 6, 40, 100, 39, "gone")), ApplyOutcome::Applied);
         assert_eq!(s.row_text(39), "gone");
 
+        // A frame with no row patches at all, carrying only the new size.
         let shrink = PtyScreenFrame {
-            session_id: SID.to_string(),
+            session_id: SID.into(),
             seq: 7,
             rows: 24,
             cols: 80,
             patch: PtyScreenPatch::default(),
         };
         assert_eq!(s.apply(shrink), ApplyOutcome::Applied);
+
         assert_eq!(s.dims(), (24, 80));
         assert_eq!(s.row_text(39), "", "a row past the new bottom must not survive");
+    }
+
+    /// A frame we are throwing away must not move the geometry either. Its
+    /// dimensions are as old as its content.
+    #[test]
+    fn a_discarded_frame_does_not_move_the_geometry() {
+        let mut s = ClientScreen::new(24, 80, 5, SID);
+        let stale = frame_sized(SID, 3, 40, 100, 0, "old");
+        assert!(matches!(s.apply(stale), ApplyOutcome::Discarded { .. }));
+        assert_eq!(s.dims(), (24, 80), "a discarded frame carries stale dimensions too");
     }
 ```
 
