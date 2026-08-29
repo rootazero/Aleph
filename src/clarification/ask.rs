@@ -245,6 +245,19 @@ fn secret_refusal(channel_id: &str) -> String {
 /// question being a secret on a channel turn. Every one of them is immediate: a
 /// tool that cannot be answered must fail fast, never occupy the 600-second
 /// wait.
+///
+/// # Runtime requirement
+///
+/// `ask` must be called from inside a Tokio runtime. The returned
+/// `RetireOnAbandon` guard schedules its drop cleanup via
+/// `tokio::runtime::Handle::try_current()`; outside a runtime, the
+/// cleanup silently no-ops and the registry entry is left as a zombie
+/// until the next sweep. This is an *unattended*-run contract — the
+/// clarifying test suite runs `ask` under `#[tokio::test]` precisely so
+/// a real runtime is current. Calling `ask` from a non-tokio context
+/// (e.g. a blocking `#[test]`) leaves the abandoned-session entry
+/// stuck in the registry; the next `ask` call with a matching key
+/// will reattach to it.
 pub async fn ask(
     deps: &ClarificationDeps,
     mut request: ClarificationRequest,

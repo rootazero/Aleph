@@ -59,10 +59,24 @@ impl LocalVoiceTool {
 
         let endpoint = local.endpoint.trim_end_matches('/').to_string();
         // Lightweight reachability probe: GET {endpoint}/models is implemented
-        // by most OpenAI-compatible servers.
-        let mut req = reqwest::Client::new()
-            .get(format!("{endpoint}/models"))
-            .timeout(std::time::Duration::from_secs(3));
+        // by most OpenAI-compatible servers. 3 s is a generous window for
+        // "is the local voice stack reachable" — slower than that and the
+        // operator can already see the daemon is wedged.
+        const REACHABILITY_PROBE_TIMEOUT: std::time::Duration =
+            std::time::Duration::from_secs(3);
+        // Reuse a single client across calls so the keep-alive pool
+        // applies (a fresh `Client::new` per probe pays full TLS+TCP
+        // setup on every status check, which the operator's
+        // reachability tests do not want to thrash).
+        let client = reqwest::Client::builder()
+            .timeout(REACHABILITY_PROBE_TIMEOUT)
+            .build()
+            .map_err(|e| {
+                crate::builtin_tools::error::ToolError::Execution(format!(
+                    "local_voice: failed to build HTTP client: {e}"
+                ))
+            })?;
+        let mut req = client.get(format!("{endpoint}/models"));
         if let Some(key) = local.api_key.as_deref().filter(|k| !k.is_empty()) {
             req = req.bearer_auth(key);
         }

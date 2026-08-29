@@ -76,6 +76,37 @@ pub(super) fn ops_shape(ops: &[CanvasOp]) -> Result<(), CanvasError> {
 /// protocol exists to serve. The post-state shape cap rejects the WHOLE
 /// batch; the caller must then drop its guard uncommitted.
 pub(super) fn apply_ops(doc: &mut CanvasDoc, ops: &[CanvasOp]) -> Result<(), CanvasError> {
+    // Compute the post-state shape count BEFORE mutating so a cap
+    // violation can be rejected without leaving `doc` in a half-
+    // applied state. The previous shape checked the cap after the
+    // in-place mutations and returned Err, but the caller (which
+    // discards its lock on Err) could not roll the half-applied
+    // state back, so a rejected batch would persist partial edits
+    // through the guard's drop.
+    let post_shape_count = ops
+        .iter()
+        .fold(doc.shapes.len(), |count, op| match op {
+            CanvasOp::UpsertShape { shape } => {
+                if doc.shapes.iter().any(|s| s.id() == shape.id()) {
+                    count // upsert replaces, no count change
+                } else {
+                    count + 1
+                }
+            }
+            CanvasOp::DeleteShape { id } => {
+                if doc.shapes.iter().any(|s| s.id() == id) {
+                    count - 1
+                } else {
+                    count
+                }
+            }
+            _ => count,
+        });
+    if post_shape_count > MAX_SHAPES {
+        return Err(CanvasError::Invalid(format!(
+            "{post_shape_count} shapes would exceed the {MAX_SHAPES}-shape document cap"
+        )));
+    }
     for op in ops {
         match op {
             CanvasOp::UpsertShape { shape } => {
@@ -92,12 +123,6 @@ pub(super) fn apply_ops(doc: &mut CanvasDoc, ops: &[CanvasOp]) -> Result<(), Can
             },
             CanvasOp::DeleteDeck { id } => doc.decks.retain(|d| &d.id != id),
         }
-    }
-    if doc.shapes.len() > MAX_SHAPES {
-        return Err(CanvasError::Invalid(format!(
-            "{} shapes exceeds the {MAX_SHAPES}-shape document cap",
-            doc.shapes.len()
-        )));
     }
     Ok(())
 }
