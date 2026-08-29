@@ -118,6 +118,39 @@ pub const fn peer_kind_str(kind: PeerKind) -> &'static str {
     wire_str(to_wire(kind))
 }
 
+/// Which of the two ways a room can claim a conversation produced an answer.
+///
+/// Lives here, not at either consumer, because it describes the *catalogue's*
+/// two claim mechanisms rather than either reader's policy, and both readers
+/// — `gateway::handlers::agent::resolve_attribution` on the admission path and
+/// `gateway::execution_engine::run_loop::request_scope` after it — already
+/// depend on `projects`. Owned by one consumer it would have to be re-`match`ed
+/// by the other, which is the shape this whole split exists to remove.
+///
+/// The distinction is load-bearing on **both** sides, for the same underlying
+/// reason: arm 1 is a *declaration*, arm 2 is an *inference*. It is not
+/// load-bearing in the same *direction* — see
+/// [`ProjectStore::room_claiming`], the one place that answers, and each
+/// consumer for what it does with a room the caller cannot see.
+///
+/// [`ProjectStore::room_claiming`]: crate::projects::ProjectStore::room_claiming
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClaimSource {
+    /// An explicit `projects.room_session` claim naming this exact session
+    /// key. `ProjectStore::claim_session_key` is the sole writer of that
+    /// column, so it is a room saying "this key is mine" — a declaration, not
+    /// an inference about the key.
+    ExplicitClaim,
+    /// A channel conversation an operator bound to the room via
+    /// `projects.channel.bind`, discovered through [`conversation_of`].
+    ///
+    /// The *binding* is an operator's declaration; being in the bound
+    /// conversation is not. That gap is why neither consumer lets this arm
+    /// speak for a caller the roster does not admit — and why the two differ
+    /// on what to do about it.
+    BoundConversation,
+}
+
 /// The conversation a session key addresses, when it addresses one.
 ///
 /// `None` for every other key shape — a DM, a task, a subagent and a main

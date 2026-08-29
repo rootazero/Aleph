@@ -1365,3 +1365,180 @@ fn an_explicit_claim_upgrades_a_producer_whose_owner_is_not_on_the_roster() {
          its owner is on no roster at all"
     );
 }
+
+// ============================================================================
+// Task AE — the two room-claim twins must not drift apart again
+// ============================================================================
+
+/// The pair this pins are `handlers::agent::resolve_attribution` (admission)
+/// and [`super::request_scope`] (after it). Both ask
+/// [`crate::projects::ProjectStore::room_claiming`] which project claims a
+/// session key; only that *lookup* is shared, because the two do genuinely
+/// different things with the answer. What they must never do is disagree about
+/// **which project governs the turn** — that is what this asserts.
+///
+/// The two are reachable by the *same principal* on the *same conversation*
+/// through two different doors. A bound Telegram group's real traffic goes
+/// channel → inbound router → `request_scope`. That same person can also send
+/// that same channel-shaped session key to `agent.run` / `chat.send` from the
+/// TUI, the CLI, or any RPC client, and land on `resolve_attribution` instead.
+/// Task 6 gated the two claim arms identically on the admission path and
+/// differently after it, so those two doors answered differently for the
+/// non-member-on-a-bound-conversation case. That is the defect this test
+/// exists to keep out.
+///
+/// **"Governs" is not "admits."** Admission may refuse; `request_scope`
+/// structurally cannot — it runs on a request already cleared to execute. A
+/// refusal is still an answer about which project governs: it names one, and
+/// refuses *because of* it. So it is compared as that project rather than
+/// skipped. Reading a refusal as "no project governs" instead would make row 3
+/// vacuous and would let row 4 — the actual regression — pass while broken.
+///
+/// The admission side is driven through the public
+/// `handlers::agent::build_run_request` rather than the private resolver: that
+/// is the funnel every Panel / TUI / CLI run really passes, and using it needs
+/// no visibility widened for a test's convenience.
+#[tokio::test]
+async fn the_two_room_claim_twins_agree_on_which_project_governs() {
+    use crate::gateway::caller_identity::CALLER_USER;
+    use crate::gateway::handlers::agent::{build_run_request, AgentRunParams, BuildRunError};
+    use crate::routing::session_key::{PeerKind, SessionKey};
+
+    // The project a side concluded governs this turn, or `None` for "this is a
+    // personal turn". Deliberately not a `Result`: the question is which
+    // project governs, and a stamp and a refusal both answer it.
+    async fn admission_says(principal: &str, key: &SessionKey) -> Option<String> {
+        let params = AgentRunParams {
+            input: "hi".into(),
+            session_key: None,
+            channel: None,
+            peer_id: None,
+            stream: false,
+            thinking: None,
+            attachments: vec![],
+            agent_id: None,
+            project_root: None,
+            model_override: None,
+            exec_tier: None,
+            mode: None,
+            memory: None,
+            voice_input: false,
+            // No `project_id` — the whole question is what the KEY says.
+            project_id: None,
+        };
+        let built = CALLER_USER
+            .scope(
+                Some(principal.to_string()),
+                build_run_request(
+                    "r-twins".into(),
+                    key,
+                    params,
+                    None,
+                    // No session store: the documented Simulated-fallback
+                    // carve-out, which cannot tell an existing session from a
+                    // new one and so takes Path 2 for every turn. Path 2 is
+                    // the path under test.
+                    None,
+                    &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                ),
+            )
+            .await;
+        match built {
+            Ok(req) => match crate::scope::scope_from_metadata(&req.metadata).map(|a| a.scope) {
+                Some(crate::scope::ScopeId::Project(pid)) => Some(pid),
+                _ => None,
+            },
+            // A refusal names the project it refused on behalf of. That IS its
+            // answer to "which project governs" — see this test's doc.
+            Err(BuildRunError::ProjectNotFound(pid)) => Some(pid),
+            Err(other) => panic!("unexpected admission failure: {other}"),
+        }
+    }
+
+    // The post-admission twin, driven the way the channel inbound router
+    // drives it: `personal:<speaker>` in the metadata, same key.
+    fn loop_says(principal: &str, key: &SessionKey) -> Option<String> {
+        let mut metadata = std::collections::HashMap::new();
+        crate::scope::stamp_metadata(
+            &mut metadata,
+            &crate::scope::ScopeAttribution::personal(principal),
+        );
+        let mut request = minimal_request(metadata);
+        request.session_key = key.clone();
+        match super::request_scope(&request).map(|a| a.scope) {
+            Some(crate::scope::ScopeId::Project(pid)) => Some(pid),
+            _ => None,
+        }
+    }
+
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+
+    // Arm 1: a room that claimed a Panel-minted key of its own.
+    let claimed = store.create("twins-arm1", Some("u-alice"), None).unwrap();
+    store.add_member(&claimed.id, "u-member").unwrap();
+    let claimed_key = SessionKey::project_room("main", &claimed.id);
+    store
+        .claim_session_key(&claimed.id, &claimed_key.to_key_string())
+        .unwrap();
+
+    // Arm 2: a room an operator bound to a channel conversation.
+    let bound = store.create("twins-arm2", Some("u-alice"), None).unwrap();
+    store.add_member(&bound.id, "u-member").unwrap();
+    store
+        .bind_conversation(
+            &bound.id,
+            "telegram",
+            aleph_protocol::projects::BindingPeerKind::Group,
+            "C-twins",
+            Some("u-alice"),
+            None,
+        )
+        .unwrap();
+    let bound_key = SessionKey::group("main", "telegram", PeerKind::Group, "C-twins");
+
+    let rows: [(&str, &SessionKey, &str); 4] = [
+        (
+            "u-member",
+            &claimed_key,
+            "a member on a room's own claimed key",
+        ),
+        (
+            "u-member",
+            &bound_key,
+            "a member on a bound channel conversation",
+        ),
+        (
+            // Both sides say the room governs — admission by refusing in its
+            // name, the loop by upgrading the stamp to it. They differ only on
+            // whether to let this caller in, which is admission's job alone and
+            // is not what this test claims.
+            "u-stranger",
+            &claimed_key,
+            "a non-member on a room's own claimed key",
+        ),
+        (
+            // The regression. Before this fix admission refused with the room's
+            // id while the loop said "personal": the same person, the same
+            // conversation, two different governing projects depending on which
+            // door they came through.
+            "u-stranger",
+            &bound_key,
+            "a non-member on a bound channel conversation",
+        ),
+    ];
+
+    for (who, key, what) in rows {
+        assert_eq!(
+            admission_says(who, key).await,
+            loop_says(who, key),
+            "the two room-claim twins disagree about which project governs the \
+             turn for {what}. They share the claim LOOKUP and split only on \
+             policy; a split that changes the GOVERNING project means one \
+             principal gets a different room depending on whether they spoke \
+             through a channel or through agent.run / chat.send."
+        );
+    }
+}

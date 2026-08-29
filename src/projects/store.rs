@@ -28,7 +28,7 @@ use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
 use crate::gateway::security::store::OWNER_USER_ID;
-use crate::projects::binding::{self, ChannelBinding};
+use crate::projects::binding::{self, ChannelBinding, ClaimSource};
 use crate::projects::roster::{self, RosterSnapshot};
 use crate::sync_primitives::{Arc, Mutex};
 
@@ -855,7 +855,7 @@ impl ProjectStore {
     ///
     /// Sibling of [`Self::project_for_session_key`]: both answer "which room
     /// owns this turn" and both must stay a cheap indexed lookup, because
-    /// `run_loop::room_claiming` calls them on every run.
+    /// [`Self::room_claiming`] calls them on every run.
     ///
     /// `channel_id` and `peer_id` are normalized the same way
     /// [`Self::bind_conversation`] normalizes them before storing. A caller
@@ -892,12 +892,13 @@ impl ProjectStore {
     /// as well as for a conversation nothing is bound to — both mean the same
     /// thing to a caller asking "does a room claim this key".
     ///
-    /// This is arm 2 of `room_claiming`, and both twins that name
-    /// (`run_loop::room_claiming`, `handlers::agent::room_claiming`) call it
-    /// rather than each re-composing `conversation_of` with
-    /// `project_for_conversation` on its own — the same rule arm 1 already
-    /// follows by calling [`Self::project_for_session_key`] directly instead
-    /// of duplicating its query.
+    /// This is arm 2 of [`Self::room_claiming`], which is now its only caller
+    /// — it re-composes neither this nor `conversation_of` +
+    /// `project_for_conversation`, the same rule arm 1 already follows by
+    /// calling [`Self::project_for_session_key`] directly instead of
+    /// duplicating its query. It stays a method of its own rather than being
+    /// inlined there because the decomposition it performs is a property of
+    /// the *key*, not of the claim precedence above it.
     pub fn project_for_bound_session(
         &self,
         session_key: &crate::routing::session_key::SessionKey,
@@ -906,6 +907,83 @@ impl ProjectStore {
             return Ok(None);
         };
         self.project_for_conversation(&channel_id, peer_kind, &peer_id)
+    }
+
+    /// The project that claims `session_key` as its room conversation, by
+    /// either of the two ways a room can claim one — and **which** of the two
+    /// answered.
+    ///
+    /// The single composition of [`Self::project_for_session_key`] (arm 1,
+    /// [`ClaimSource::ExplicitClaim`]) and [`Self::project_for_bound_session`]
+    /// (arm 2, [`ClaimSource::BoundConversation`]). It lives on `ProjectStore`
+    /// for the same reason arm 2's own composition does — see that method's
+    /// doc: a composition of catalogue lookups belongs on the catalogue, not
+    /// re-assembled at each caller. `projects::binding` is the other plausible
+    /// home and is deliberately not used: that module is store-free by
+    /// construction (`store.rs` depends on it, never the reverse), and putting
+    /// this there would invert that dependency to buy nothing.
+    ///
+    /// **Precedence:** an explicit claim outranks a binding. The two
+    /// disagreeing means an operator bound a conversation some room had
+    /// already claimed by key; the claim is the declaration, so it wins — and
+    /// the mismatch is said out loud rather than silently resolved.
+    ///
+    /// **Returns `Option`, not `Result`** — the only lookup on this type that
+    /// swallows its own error, and the reason it can is that both callers had
+    /// already ruled the same way on a degraded catalogue: a SQLite hiccup
+    /// must turn into neither a mis-scoped turn nor a refused one. The cost is
+    /// bounded (the row is then stamped the way it was stamped before rooms
+    /// existed); the alternative makes a transient database fault look like a
+    /// permissions failure. A ruling both callers share is exactly the thing
+    /// that must not be written twice.
+    ///
+    /// What the callers do **not** share is what a `None` *means* to them —
+    /// "leave the producer's stamp alone" after admission, "fall through to
+    /// the personal arm" on it — nor what an invisible project means, which
+    /// differs per arm on one side and not the other. Those are policy and
+    /// stay at the two call sites; only the lookup is here.
+    pub(crate) fn room_claiming(
+        &self,
+        session_key: &crate::routing::session_key::SessionKey,
+    ) -> Option<(String, ClaimSource)> {
+        // (1) The Panel-minted room conversation, claimed by `projects.room_session`.
+        let claimed = match self.project_for_session_key(&session_key.to_key_string()) {
+            Ok(pid) => pid,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "projects: room claim lookup failed; treating the key as not-a-room"
+                );
+                None
+            }
+        };
+        // (2) A channel conversation bound to a room. Keyed on the
+        // conversation, so an `agent_switch` (which changes the session key's
+        // agent component) does not un-bind it.
+        let bound = match self.project_for_bound_session(session_key) {
+            Ok(pid) => pid,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "projects: conversation binding lookup failed; treating the key as not-a-room"
+                );
+                None
+            }
+        };
+        match (claimed, bound) {
+            (Some(a), Some(b)) if a != b => {
+                tracing::warn!(
+                    claimed = %a,
+                    bound = %b,
+                    "projects: a session key is claimed by one room and its conversation is bound to another; \
+                     taking the explicit claim"
+                );
+                Some((a, ClaimSource::ExplicitClaim))
+            }
+            (Some(a), _) => Some((a, ClaimSource::ExplicitClaim)),
+            (None, Some(b)) => Some((b, ClaimSource::BoundConversation)),
+            (None, None) => None,
+        }
     }
 
     /// Every conversation a room is bound to, oldest first.

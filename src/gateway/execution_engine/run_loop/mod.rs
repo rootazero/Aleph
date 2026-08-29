@@ -21,6 +21,7 @@ use super::{ExecutionError, RunRequest};
 use crate::extension::HookEvent;
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::event_emitter::EventEmitter;
+use crate::projects::binding::ClaimSource;
 
 use crate::executor::ToolRegistry;
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
@@ -50,22 +51,24 @@ use super::engine::ExecutionEngine;
 ///
 /// `handlers::agent::resolve_attribution` already asks this question for ONE
 /// producer, the Panel's `agent.run` / `chat.send`, and keeps asking it there
-/// because it can also *refuse*: a non-member gets `ProjectNotFound`, the same
-/// refusal a named foreign project gets. This function cannot refuse — it runs
-/// after admission, on a request that is already going to execute — so it only
-/// corrects the filing. The six producers that never pass through that handler
-/// (the channel inbound router, cron, heartbeat, the teams dispatcher,
-/// `session_send`, A2A) get the correction here.
+/// because it can also *refuse*: for an arm-1 room a non-member gets
+/// `ProjectNotFound`, the same refusal a named foreign project gets. This
+/// function cannot refuse — it runs after admission, on a request that is
+/// already going to execute — so it only corrects the filing. The six
+/// producers that never pass through that handler (the channel inbound router,
+/// cron, heartbeat, the teams dispatcher, `session_send`, A2A) get the
+/// correction here.
 ///
 /// Only the scope is replaced. `owner_user_id` still names whoever spoke: for a
 /// project-scoped row visibility is decided by the roster
 /// ([`crate::gateway::visibility::owner_and_scope_visible_to`]), so overwriting
 /// the owner would buy nothing and lose the attribution.
 ///
-/// A catalogue failure reads as "not a room", matching
-/// `handlers::agent::room_claiming`'s ruling for the same lookup: a degraded
-/// SQLite must not turn into a mis-scoped turn *or* a refused one. The cost is
-/// bounded — the row is then stamped the way it is stamped today.
+/// A catalogue failure reads as "not a room" — a degraded SQLite must not turn
+/// into a mis-scoped turn *or* a refused one. That ruling is not made here: it
+/// is made once, in [`crate::projects::ProjectStore::room_claiming`], because
+/// this path and the admission path had always made it identically and a
+/// ruling two callers share must not be written twice.
 ///
 /// The upgrade — replacing a producer's own stamp with the room's — passes a
 /// roster gate first, but **only for a room discovered through arm 2** (a
@@ -89,9 +92,20 @@ use super::engine::ExecutionEngine;
 /// dropped into the room: being in the channel conversation must not be
 /// equivalent to being on the roster, and this is the only place downstream
 /// of the channel inbound router that ever asks.
+///
+/// The admission twin reaches the same verdict for arm 2 by a different route
+/// — it falls through to its personal arm — and that agreement is deliberate,
+/// because the two are reachable by the *same* principal in the *same*
+/// conversation through two different doors: through the channel, which lands
+/// here, or with the same channel-shaped session key on `agent.run` /
+/// `chat.send`, which lands there. `handlers::agent::resolve_attribution`'s
+/// `None` arm carries the other half of this argument, and
+/// `the_two_room_claim_twins_agree_on_which_project_governs` pins the pair.
 fn request_scope(request: &RunRequest) -> Option<crate::scope::ScopeAttribution> {
     let stamped = crate::scope::scope_from_metadata(&request.metadata);
-    let Some((pid, source)) = room_claiming(&request.session_key) else {
+    let Some((pid, source)) =
+        crate::projects::ProjectStore::shared().room_claiming(&request.session_key)
+    else {
         return stamped;
     };
     let mut attr = stamped?;
@@ -106,75 +120,6 @@ fn request_scope(request: &RunRequest) -> Option<crate::scope::ScopeAttribution>
     }
     attr.scope = target;
     Some(attr)
-}
-
-/// Which of `room_claiming`'s two arms produced an id — read only by
-/// [`request_scope`]'s roster gate, which trusts arm 1 unconditionally and
-/// gates arm 2. See that function's doc for why the two are not
-/// interchangeable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ClaimSource {
-    /// An explicit `projects.room_session` claim on the key itself.
-    ExplicitClaim,
-    /// A channel conversation bound to the room, discovered via
-    /// [`crate::projects::binding::conversation_of`].
-    BoundConversation,
-}
-
-/// The project that has claimed `session_key` as its room conversation, by
-/// either of the two ways a room can claim one.
-///
-/// Twin of `handlers::agent::room_claiming`, deliberately not shared with it:
-/// that one lives on the admission path and its `None` feeds a branch that may
-/// refuse, this one lives after admission and its `None` means "leave the
-/// producer's stamp alone". Both arms below read the same columns through the
-/// same store methods as their twin, which is the part that must not be
-/// duplicated — arm 2 in particular is written once, on
-/// [`crate::projects::ProjectStore::project_for_bound_session`], and both
-/// twins call it rather than each re-composing
-/// [`crate::projects::binding::conversation_of`] with
-/// `project_for_conversation` on its own.
-///
-/// Unlike the admission-path twin, this one also reports which arm answered —
-/// see [`ClaimSource`] and [`request_scope`]'s doc for why that distinction
-/// matters here and does not on the admission path (which gates both arms the
-/// same way, because there a live caller identity is always the question).
-fn room_claiming(
-    session_key: &crate::routing::session_key::SessionKey,
-) -> Option<(String, ClaimSource)> {
-    let store = crate::projects::ProjectStore::shared();
-    // (1) The Panel-minted room conversation, claimed by `projects.room_session`.
-    let claimed = match store.project_for_session_key(&session_key.to_key_string()) {
-        Ok(pid) => pid,
-        Err(e) => {
-            tracing::warn!(error = %e, "projects: room claim lookup failed; leaving the producer's scope stamp alone");
-            None
-        }
-    };
-    // (2) A channel conversation bound to a room. Keyed on the conversation,
-    // so an `agent_switch` (which changes the session key's agent component)
-    // does not un-bind it.
-    let bound = match store.project_for_bound_session(session_key) {
-        Ok(pid) => pid,
-        Err(e) => {
-            tracing::warn!(error = %e, "projects: conversation binding lookup failed; leaving the producer's scope stamp alone");
-            None
-        }
-    };
-    match (claimed, bound) {
-        (Some(a), Some(b)) if a != b => {
-            tracing::warn!(
-                claimed = %a,
-                bound = %b,
-                "projects: a session key is claimed by one room and its conversation is bound to another; \
-                 taking the explicit claim"
-            );
-            Some((a, ClaimSource::ExplicitClaim))
-        }
-        (Some(a), _) => Some((a, ClaimSource::ExplicitClaim)),
-        (None, Some(b)) => Some((b, ClaimSource::BoundConversation)),
-        (None, None) => None,
-    }
 }
 
 /// Establishes this run's scope attribution (owner/scope) and this turn's
