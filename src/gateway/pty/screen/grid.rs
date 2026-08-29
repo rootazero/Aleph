@@ -258,6 +258,50 @@ impl Grid {
         self.cursor_col = 0;
     }
 
+    /// Resize, keeping the top-left content that still fits. Reflow is
+    /// deliberately not attempted: a wrong reflow scrambles a screen the user
+    /// is looking at, whereas clipping is legible and self-corrects on the
+    /// application's next repaint (which every full-screen app does on SIGWINCH).
+    pub fn resize(&mut self, rows: u16, cols: u16) {
+        let (rows, cols) = (rows.max(1), cols.max(1));
+        if (rows, cols) == (self.rows, self.cols) {
+            return;
+        }
+        let mut next = vec![Cell::default(); rows as usize * cols as usize];
+        for r in 0..rows.min(self.rows) {
+            for c in 0..cols.min(self.cols) {
+                next[r as usize * cols as usize + c as usize] = self.cells[self.idx(r, c)];
+            }
+            self.repair_edge_truncated_glyph(&mut next, r, cols);
+        }
+        self.cells = next;
+        self.rows = rows;
+        self.cols = cols;
+        self.cursor_row = self.cursor_row.min(rows - 1);
+        self.cursor_col = self.cursor_col.min(cols - 1);
+    }
+
+    /// Narrowing can cut a wide glyph's spacer off at the new right edge,
+    /// leaving its owner alone in `next` with no spacer to follow it — the
+    /// same corruption class [`Self::repair_straddled_glyph`] guards
+    /// against for writes, here for the edge a resize can create instead of
+    /// a cursor write. If the first column this narrowing drops was a
+    /// spacer, the column it keeps right before it must be the spacer's
+    /// owner; blank that owner rather than let a truncated half-glyph
+    /// survive into the resized grid. `next` is still `self.cols` wide at
+    /// this point (the field is not reassigned until after the copy loop),
+    /// so `self.idx` remains valid for indexing into it via `new_cols`.
+    fn repair_edge_truncated_glyph(&self, next: &mut [Cell], row: u16, new_cols: u16) {
+        if new_cols >= self.cols {
+            return; // widening or unchanged: nothing was cut off.
+        }
+        let dropped = self.idx(row, new_cols);
+        if self.cells[dropped].is_spacer() {
+            let owner = row as usize * new_cols as usize + (new_cols - 1) as usize;
+            next[owner] = Cell::default();
+        }
+    }
+
     fn scroll_up(&mut self) {
         let first: Vec<Cell> = self.row_cells(0).to_vec();
         if self.scrollback.len() >= self.scrollback_limit {
@@ -402,5 +446,57 @@ mod tests {
         assert_eq!(g.scrollback.len(), 1, "exactly one row was evicted");
         let evicted: String = g.scrollback[0].iter().map(|c| c.ch).collect();
         assert_eq!(evicted, "row0!", "the evicted row is what fell off the top");
+    }
+
+    /// Narrowing must not strand a wide glyph's owner without its spacer at
+    /// the new right edge -- the same corruption class
+    /// `repair_straddled_glyph` guards against for writes. Asserted via
+    /// `row_cells`, not `row_text`: `row_text` filters spacers and would
+    /// hide a half-glyph surviving where its spacer used to be, which is
+    /// exactly how the original spacer bug survived its first tests.
+    #[test]
+    fn narrowing_resize_does_not_strand_a_wide_glyph_at_the_new_edge() {
+        let mut g = Grid::new(2, 10);
+        g.put('a', PLAIN);
+        g.put('中', PLAIN); // columns 1-2
+
+        g.resize(2, 2);
+
+        let cells = g.row_cells(0);
+        assert_eq!(cells[0].ch, 'a', "the surviving column is untouched");
+        assert_eq!(
+            cells[1].ch, ' ',
+            "the truncated wide glyph's owner must be blanked, not left as a half-rendered glyph"
+        );
+    }
+
+    /// The mirror case: narrowing to a boundary that falls cleanly between
+    /// glyphs (not through one) must leave the surviving glyph intact.
+    #[test]
+    fn narrowing_resize_leaves_a_glyph_that_fits_entirely_untouched() {
+        let mut g = Grid::new(2, 10);
+        g.put('中', PLAIN); // columns 0-1
+
+        g.resize(2, 2);
+
+        let cells = g.row_cells(0);
+        assert_eq!(cells[0].ch, '中', "the glyph owner survives");
+        assert!(cells[1].is_spacer(), "its spacer survives alongside it");
+    }
+
+    #[test]
+    fn resize_clamps_a_cursor_that_would_now_be_out_of_bounds() {
+        let mut g = Grid::new(5, 20);
+        g.goto(4, 15);
+        g.resize(2, 5);
+        assert_eq!(g.cursor(), (1, 4), "cursor is clamped into the smaller grid");
+    }
+
+    #[test]
+    fn resize_to_the_same_dimensions_is_a_cheap_no_op() {
+        let mut g = Grid::new(3, 10);
+        g.put('x', PLAIN);
+        g.resize(3, 10);
+        assert_eq!(g.row_text(0), "x", "content is untouched by a same-size resize");
     }
 }

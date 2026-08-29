@@ -7,6 +7,8 @@ use super::grid::{Attrs, Color, Grid};
 /// arrive in two chunks, and a parser rebuilt per read would lose the tail.
 pub struct Screen {
     pub grid: Grid,
+    /// The saved primary screen while the alternate screen is active.
+    saved: Option<Grid>,
     parser: vte::Parser,
     state: ScreenState,
 }
@@ -18,12 +20,21 @@ struct ScreenState {
     attrs: Attrs,
     title: Option<String>,
     bell: bool,
+    /// Set by `csi_dispatch` for `?1049h`/`?1049l`; applied by `feed` after
+    /// the parser returns, because swapping the grid needs ownership the
+    /// Performer's borrow of `Screen` does not have.
+    pending_alt: Option<bool>,
 }
 
 impl Screen {
     #[must_use]
     pub fn new(rows: u16, cols: u16) -> Self {
-        Self { grid: Grid::new(rows, cols), parser: vte::Parser::new(), state: ScreenState::default() }
+        Self {
+            grid: Grid::new(rows, cols),
+            saved: None,
+            parser: vte::Parser::new(),
+            state: ScreenState::default(),
+        }
     }
 
     pub fn feed(&mut self, bytes: &[u8]) {
@@ -31,6 +42,27 @@ impl Screen {
         let mut performer = Performer { grid: &mut self.grid, state: &mut self.state };
         parser.advance(&mut performer, bytes);
         self.parser = parser;
+
+        // Applied here, not inside the Performer, because swapping `self.grid`
+        // needs an owning `&mut self` that the Performer's split borrow (grid
+        // and state as two separate fields) cannot provide.
+        match self.state.pending_alt.take() {
+            // A nested `?1049h` while already on the alt screen is a no-op:
+            // clobbering `self.saved` here would replace the real primary
+            // with the alt screen's own content, losing the user's shell
+            // scrollback for good the next time they exit.
+            Some(true) if self.saved.is_none() => {
+                let (rows, cols) = self.grid.dims();
+                let primary = std::mem::replace(&mut self.grid, Grid::new(rows, cols));
+                self.saved = Some(primary);
+            }
+            Some(false) => {
+                if let Some(primary) = self.saved.take() {
+                    self.grid = primary;
+                }
+            }
+            _ => {}
+        }
     }
 
     #[must_use]
@@ -41,6 +73,24 @@ impl Screen {
     /// Reads and clears the bell flag — a bell is an edge, not a level.
     pub fn take_bell(&mut self) -> bool {
         std::mem::take(&mut self.state.bell)
+    }
+
+    /// True while the alternate screen buffer (`\e[?1049h`) is active —
+    /// e.g. while `vim`, `htop`, or a pager is running in the shell.
+    #[must_use]
+    pub const fn alt_screen(&self) -> bool {
+        self.saved.is_some()
+    }
+
+    /// Resize the visible grid and, if the alternate screen is active, the
+    /// saved primary underneath it too — so a resize made while inside e.g.
+    /// `vim` is not silently lost, and the primary comes back at the right
+    /// dimensions once the program exits and restores it.
+    pub fn resize(&mut self, rows: u16, cols: u16) {
+        self.grid.resize(rows, cols);
+        if let Some(saved) = &mut self.saved {
+            saved.resize(rows, cols);
+        }
     }
 }
 
@@ -126,7 +176,7 @@ impl vte::Perform for Performer<'_> {
         }
     }
 
-    fn csi_dispatch(&mut self, params: &vte::Params, _intermediates: &[u8], _ignore: bool, action: char) {
+    fn csi_dispatch(&mut self, params: &vte::Params, inter: &[u8], _ignore: bool, action: char) {
         // Flatten sub-parameters: only SGR's 38/48 use them, and it reads the
         // colon form (38:2:r:g:b) identically to the semicolon form.
         let flat: Vec<u16> = params.iter().flat_map(|p| p.iter().copied()).collect();
@@ -149,6 +199,14 @@ impl vte::Perform for Performer<'_> {
             'D' => self.grid.move_cursor(0, -i32::from(p(0, 1))),
             'J' => self.grid.erase_in_display(flat.first().copied().unwrap_or(0)),
             'K' => self.grid.erase_in_line(flat.first().copied().unwrap_or(0)),
+            // `\e[?1049h` / `\e[?1049l`: enter/exit the alternate screen.
+            // `?` only ever arrives via `intermediates`, never `params` — a
+            // guard on `action` alone would also swallow the private-mode-less
+            // `h`/`l` sequences (unused here, but real DEC private modes like
+            // `?25` cursor-visibility share these final bytes).
+            'h' | 'l' if inter == b"?" && flat.first() == Some(&1049) => {
+                self.state.pending_alt = Some(action == 'h');
+            }
             _ => {}
         }
     }
@@ -355,5 +413,28 @@ mod tests {
         assert_eq!(row[0].ch, '中', "the first glyph is untouched");
         assert_eq!(row[2].ch, ' ', "the orphaned owner must be blanked");
         assert_eq!(row[3].ch, 'x');
+    }
+
+    #[test]
+    fn alt_screen_is_separate_and_the_primary_survives_the_round_trip() {
+        let mut s = Screen::new(3, 20);
+        s.feed(b"primary");
+        s.feed(b"\x1b[?1049h");
+        assert!(s.alt_screen());
+        assert_eq!(s.grid.row_text(0), "", "the alt screen starts blank");
+        s.feed(b"alt");
+        assert_eq!(s.grid.row_text(0), "alt");
+        s.feed(b"\x1b[?1049l");
+        assert!(!s.alt_screen());
+        assert_eq!(s.grid.row_text(0), "primary", "the primary screen must survive");
+    }
+
+    #[test]
+    fn resize_preserves_content_that_still_fits() {
+        let mut s = Screen::new(3, 20);
+        s.feed(b"hello");
+        s.resize(5, 40);
+        assert_eq!(s.grid.dims(), (5, 40));
+        assert_eq!(s.grid.row_text(0), "hello");
     }
 }
