@@ -5168,10 +5168,17 @@ git commit -m "docs: record Part 1 implementation deltas against the terminal sp
 
 1. 验证集十条命令全绿。
 2. Task 17 的真机十条全过。
-3. `rg '"pty\.output"'` 零命中。
+3. `pty.output` **两半**都零命中——代码那半 `rg '"pty\.output"'`，**散文那半**
+   `rg 'pty\.output' -g '*.md' -g '!docs/superpowers/**'`。⚠️ 这一条原来只写了带引号的那个，
+   而 Step 2 正好花了一段证明它结构性看不见散文——**一条判据在上游被推翻、在下游原样留着**，
+   就是这个计划自己反复付账的那一类。三份文档曾在代码零命中的情况下仍然点着它的名。
 4. `pty.*` 的注册数与 census 数相等。
 5. spec §12（Phase 0 结论）与「Part 1 实施偏差」两节都已写实。
-6. `rg 'todo!|unimplemented!'` 在本计划触及的四个目录下零命中。
+6. `rg 'todo!|unimplemented!'` 在 Step 2 那条命令**列出的那几条路径**下零命中
+   （`src/gateway/pty/`、`shared/protocol/src/pty.rs`、
+   `interfaces/webchat/src/platform/wide/views/terminal/`）。⚠️ 这一条原来写的是「四个目录」——
+   一个写在散文里的**数目**，而命令里是三条路径且其中一条是文件不是目录。跑 Step 2 的那条命令，
+   别按这句话去数目录。
 
 **Part 1 交付物明确不含**（不是缺陷，是划线，见上方「Part 1 显式不做的」）：
 
