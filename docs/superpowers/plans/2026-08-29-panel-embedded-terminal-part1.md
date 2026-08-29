@@ -3937,8 +3937,10 @@ pub fn TerminalView() -> impl IntoView {
         });
     };
 
-    // Mount: subscribe BEFORE spawning. Whatever the shell prints on startup
-    // then cannot land in the gap between spawn and subscribe.
+    // Mount: subscribe BEFORE resolving a session. Whatever the shell prints
+    // on startup then cannot land in the gap between spawn and subscribe.
+    //
+    // Resolving is list-then-spawn, NOT spawn. See the note below this block.
     Effect::new(move |_| {
         let state = state;
         spawn_local(async move {
@@ -3946,6 +3948,41 @@ pub fn TerminalView() -> impl IntoView {
                 error.set(Some(e));
                 return;
             }
+
+            // A live session already on the server IS this view's session.
+            // A refresh, a second tab and a reconnect all arrive here.
+            let existing: Option<String> = match state
+                .rpc_call("pty.list", serde_json::json!({}))
+                .await
+            {
+                Ok(v) => v.get("sessions").and_then(|s| s.as_array()).and_then(|arr| {
+                    arr.iter()
+                        .find(|s| {
+                            s.get("closed").and_then(serde_json::Value::as_bool) == Some(false)
+                        })
+                        .and_then(|s| s.get("session_id"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                }),
+                // A failed list is not evidence that there are no sessions.
+                // Falling through to spawn is still right: a gateway broken
+                // enough to fail `pty.list` fails `pty.spawn` too and says so.
+                // What must not happen is showing the failure as an answer.
+                Err(_) => None,
+            };
+
+            if let Some(sid) = existing {
+                // Dimensions and seq arrive with the attach response and
+                // `finish_attach` re-seats both, so this placeholder is never
+                // observed. Setting the id BEFORE the RPC matters: the frame
+                // handler DROPS frames whose session it cannot name, and a
+                // dropped frame is not a buffered one.
+                screen.set_value(Some(ClientScreen::new(24, 80, 0)));
+                session_id.set_value(Some(sid.clone()));
+                resync(sid);
+                return;
+            }
+
             let (rows, cols) = (24_u16, 80_u16); // replaced by the measured
                                                  // viewport in the resize step below
             match state
@@ -4004,10 +4041,41 @@ pub fn TerminalView() -> impl IntoView {
 }
 ```
 
+⚠️ **controller 在派单前查实（2026-08-29），上面两处都改过，两处都是与已落地代码相反的：**
+
+**其一，`pty.resize` 不带 `client_id`。** 原文写的是 `{session_id, rows, cols, client_id}`，
+那是 Task 10 **明确否决过**的那条降级路（视口表按调用方自己挑的 id 键控 ⇒ 分级轴由被分级的一方
+决定，且断线时没有任何东西释放它）。已落地的 `handle_resize` 从 task-local `current_caller_conn_id()`
+取连接身份，`ResizeParams` 只有三个字段。而 serde **默认忽略未知键**——所以多发一个 `client_id`
+不会报错，它只是被静默丢掉，然后在 wire 上留下一个看起来在起作用的字段，正好把 Task 10 用一段
+doc comment 否掉的那个设计重新讲了一遍。
+
+**其二，挂载路径必须先 `pty.list` 再决定 spawn。** 原文无条件 `pty.spawn`，而**同一份 brief 的
+Step 4 里有两条 QA 断言的正好是相反的行为**：
+
+- 第 6 条「**刷新页面 → 屏幕内容原样恢复**（这是服务端持屏的核心收益）」
+- 第 9 条「开第二个标签页 → 两个标签页看到同一块屏」
+
+无条件 spawn 之下，刷新拿到的是一个**新 shell 的新提示符**，第二个标签页拿到的是**第二个 shell**。
+两条都必然不过。而这不只是两条 QA 失败——**Part 1 的服务端持屏架构会因此没有任何用户可见的收益**：
+Task 8 把屏幕搬到服务端、Task 10 为多客户端共享建了 smallest-wins 视口表，而唯一能观测到这两件事
+的那个动作（刷新）被客户端自己关掉了。
+
+顺带还有一个不响的代价：旧会话**不会**被关闭（断线只 `release_conn` 释放视口，不 `pty.close`），
+所以每刷新一次泄漏一个 shell，直到 `MAX_SESSIONS = 64` 的 FIFO 把最老的踢掉——**一块看不见的
+64 个空闲 shell 的天花板**。
+
+**这条判据本身值得记**：*一个「服务端持有状态」的架构，它的全部用户可见收益都压在客户端**重新
+找回那个状态**的那一步上；客户端每次无条件新建，服务端那半就等于没做——而两边各自的测试都是绿的。*
+
+⚠️ 关于共享是否安全：`pty.*` 整族在 `ADMIN_PREFIXES` 里（`server/handler.rs:512`），够得到它的
+人本来就是 operator、本来就能自己 spawn 一个 shell，所以复用不授予任何他拿不到的东西。这正是
+Task 10 的 smallest-wins 视口表所设想的形态，不是它的例外。
+
 剩下三段按同样风格补：
 
 1. **重绘**：一个 `Effect` 读 `repaint_tick`，取 canvas、`render::measure`、`render::paint`。**取 canvas 与测量收进一个私有函数**，不要在 `request_animation_frame` 回调里 `get_untracked()`。
-2. **resize**：`ResizeObserver`（或窗口 resize 事件）→ `render::viewport_cells` → `rpc_call("pty.resize", {session_id, rows, cols, client_id})`。挂载时也跑一次，替换上面写死的 `(24, 80)`。
+2. **resize**：`ResizeObserver`（或窗口 resize 事件）→ `render::viewport_cells` → `rpc_call("pty.resize", {session_id, rows, cols})`。挂载时也跑一次，替换上面写死的 `(24, 80)`。
 3. **keydown**：`encode_key` 返回 `Some(bytes)` 才 `prevent_default()` 并发 `rpc_call("pty.input", {session_id, data: BASE64(bytes), base64: true})`；返回 `None` 一律不拦（否则浏览器快捷键全被吞掉）。
 
 **注意 `error` 的展示用 `{move || error.get().map(..)}` 而不是 `<Show>`** —— `<Show when=…>` 的守卫与 body 是两个独立的反应式作用域，body 在信号刚被清空时可以先跑一次新值，把 `expect("visible implies Some")` 变成整页崩溃。单次读 + `Option` 视图没有这个裂缝。
