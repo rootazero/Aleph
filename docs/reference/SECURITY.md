@@ -2412,7 +2412,12 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
     directions, and the event-forward arm had four terms, none of them
     authentication. Combined with `pty.output` classifying as `Global`, an
     unauthenticated LAN socket received the operator's raw shell bytes while
-    `"pty."` had been in `ADMIN_PREFIXES` all along;
+    `"pty."` had been in `ADMIN_PREFIXES` all along. (`pty.output` no longer
+    exists: the embedded-terminal work replaced the raw-byte topic with the
+    row-diff `pty.screen`. The name is kept here because it is what the defect
+    happened to — grep `PTY_SCREEN_TOPIC` for the topic that carries terminal
+    output today, and note the shape is unchanged: it is still a topic whose
+    payload is the operator's shell.)
   - `partition_visible` had only the task-local way of naming an actor, which is
     dead inside a spawned run — so every tool reaching for it would have got a
     silent always-true. It now has an explicit-actor twin
