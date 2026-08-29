@@ -492,22 +492,62 @@ mod tests {
     /// effect, not just the reply: the session table must not gain an
     /// entry as a result of the call. (Review round 1, Major finding.)
     ///
-    /// Session ids are compared as a set difference, not a bare count,
-    /// because `pty::manager()` is a process-global singleton shared with
-    /// every other test in this binary — a length-only comparison would be
-    /// racy against a concurrently-running test's own spawn/close. A set
-    /// difference isolates a genuinely *new* id (this call's, if the jail
-    /// were bypassed) from churn happening elsewhere: every other test in
-    /// this file spawns and closes within its own body, so no id it
-    /// creates should still be missing from `before` and present in
-    /// `after` unless this call itself produced it.
+    /// This does NOT compare `pty::manager().list()` before and after the
+    /// call — a round-1 version of this test did, and it was wrong. The
+    /// manager is a process-global singleton shared with every other test
+    /// in this binary, libtest runs tests on parallel threads, and a
+    /// before/after set difference picks up *any* sibling's spawn/close
+    /// landing inside this call's window: measured (fix-round-1
+    /// re-review) at 10/12 to 14/14 failures under filters that include
+    /// the heaviest sibling
+    /// (`pty::tests::a_write_reaches_a_real_subscriber_over_the_pty_screen_topic`,
+    /// which holds a session open across its own 100 x 50ms polling loop).
+    /// Every one of those failures reported a sibling's id as evidence of
+    /// a jail bypass that never happened — the expensive direction, since
+    /// the next reader goes looking for a security bug that is not there.
+    ///
+    /// Instead this names *this call's own* session by giving it a program
+    /// label no other spawn anywhere in this test binary uses, then checks
+    /// whether any session carrying that label exists — a predicate a
+    /// sibling's activity cannot satisfy no matter how the scheduler
+    /// interleaves it. `SessionInfo.shell` is that label verbatim:
+    /// `session.rs`'s spawn does
+    /// `Some(prog) => (CommandBuilder::new(prog), prog.clone())`, so
+    /// whatever string is passed as `command` is exactly what shows up
+    /// here. On Unix, `"/bin/sh"` is the same real binary every other
+    /// spawn in this crate reaches via the bare name `"sh"`
+    /// (`session.rs:295`, `manager.rs:331`) or via the omitted-command
+    /// fallback `default_shell_label()` (which reports `$SHELL` — by
+    /// convention a user's interactive login shell such as bash or zsh,
+    /// not `/bin/sh` verbatim) — so the full path is a distinct string
+    /// from every label those two paths produce. On Windows,
+    /// `"powershell.exe"` resolves via `PATH` the same way the bare
+    /// `"cmd.exe"` used by those same two call sites does, and is distinct
+    /// both from that literal and from the omitted-command fallback's
+    /// `%COMSPEC%` (a stock install sets that to a *full path* to
+    /// `cmd.exe`, not the bare name `"powershell.exe"`).
+    ///
+    /// The probe must stay alive for this to mean anything: if the jail
+    /// were bypassed, the session is inserted synchronously, but
+    /// `spawn_reader` calls `manager().remove()` the instant the child
+    /// hits EOF, so a short-lived probe could be reaped before this looks
+    /// for it and the assertion would pass vacuously on a real bypass.
     #[tokio::test]
     async fn spawn_with_a_cwd_outside_every_root_creates_no_session() {
-        let before: std::collections::HashSet<String> = pty::manager()
-            .list()
-            .into_iter()
-            .map(|s| s.session_id)
-            .collect();
+        // See the doc comment above for why this exact pair of labels was
+        // chosen, and why a before/after id snapshot is not used instead.
+        let (probe_command, probe_args): (&str, Vec<String>) = if cfg!(windows) {
+            (
+                "powershell.exe",
+                vec![
+                    "-NoProfile".to_string(),
+                    "-Command".to_string(),
+                    "Start-Sleep -Seconds 30".to_string(),
+                ],
+            )
+        } else {
+            ("/bin/sh", vec!["-c".to_string(), "sleep 30".to_string()])
+        };
 
         // "/" is outside every registered workspace root on every platform
         // this repo supports: `resolve_spawn_cwd` rejects any `asked` that
@@ -516,7 +556,13 @@ mod tests {
         // filesystem root itself.
         let resp = handle_spawn(req(
             "pty.spawn",
-            json!({ "cwd": "/", "rows": 24, "cols": 80 }),
+            json!({
+                "cwd": "/",
+                "command": probe_command,
+                "args": probe_args,
+                "rows": 24,
+                "cols": 80
+            }),
         ))
         .await;
 
@@ -529,15 +575,21 @@ mod tests {
             .expect("a cwd outside every root must be refused");
         assert_eq!(err.code, INVALID_PARAMS);
 
-        let after: std::collections::HashSet<String> = pty::manager()
+        let leaked: Vec<pty::SessionInfo> = pty::manager()
             .list()
             .into_iter()
-            .map(|s| s.session_id)
+            .filter(|s| s.shell == probe_command)
             .collect();
-        let leaked: Vec<&String> = after.difference(&before).collect();
+        // A bypass would leave the probe alive (it sleeps 30s); close it
+        // first so a failing run does not leak a process into the rest of
+        // this binary's life.
+        for session in &leaked {
+            pty::manager().close(&session.session_id).ok();
+        }
         assert!(
             leaked.is_empty(),
-            "a refused spawn must not have created a session, but found new id(s): {leaked:?}"
+            "a refused spawn must not have created a session, but found one \
+             carrying this test's probe label {probe_command:?}: {leaked:?}"
         );
     }
 
@@ -565,19 +617,56 @@ mod tests {
     /// through" here. The omitted-`cwd` arm can: `session.rs`'s spawn only
     /// calls `CommandBuilder::cwd()` `if let Some(cwd) = &opts.cwd`, so a
     /// handler that lets `params.cwd` (`None`) through unresolved never
-    /// calls it at all, and the child inherits the *daemon's own* process
-    /// cwd instead of the resolved workspace root — reliably a different,
-    /// observable place, with no dependency on this machine's filesystem
-    /// happening to contain a symlink.
+    /// calls it at all.
     ///
-    /// There is no config-injection point for `handle_spawn` (see the
-    /// report's answer on `Config::load()`), so the only workspace root a
-    /// hermetic test can rely on is whatever `workspace_roots()` resolves
-    /// against the real on-disk config — the exact function, and the
-    /// exact config, `handle_spawn` itself resolves against, derived here
-    /// rather than hardcoded.
+    /// What the child inherits then is **not** the daemon's own process
+    /// cwd — an earlier version of this comment, and of the failure
+    /// message below, both said that, and both were wrong (fix-round-1
+    /// re-review, New Minor). `portable-pty` 0.8.1's `CommandBuilder`
+    /// falls back to the home directory it reads from the child's own
+    /// environment (`cmdbuilder.rs`'s `get_home_dir`/`current_directory`:
+    /// `$HOME` on Unix, `USERPROFILE` on Windows), inherited straight from
+    /// this test binary's own process environment for an unmodified
+    /// spawn. Measured directly under both mutations in the fix-round-1
+    /// re-review: the screen held `/Users/…` (the account's `$HOME`),
+    /// while the test binary's own cwd was the worktree. So the real
+    /// discriminating margin is "resolved workspace root" vs.
+    /// "`$HOME`/`USERPROFILE`", not vs. "wherever the daemon process
+    /// happens to be running from" — and that margin is machine-dependent
+    /// in a way an earlier version of this doc denied: on an install whose
+    /// `[agents.defaults] workspace_root` resolves to `$HOME`, or to any
+    /// string `$HOME` contains as a substring (e.g. `/Users`, or `/`), an
+    /// unjailed child's screen would *also* satisfy `contains(expected)`,
+    /// and this test would go green with the jail bypassed. The guard
+    /// below turns that into a loud failure instead of a silent pass.
+    ///
+    /// There *is* a config-injection point for `handle_spawn` — contrary
+    /// to what an earlier version of this comment claimed: `ALEPH_HOME`,
+    /// via this repo's `crate::utils::paths::AlephHomeEnvGuard` /
+    /// `IsolatedAlephHome`. It is deliberately not used here. Partially
+    /// isolating this one test in a parallel suite while its siblings
+    /// still read the real `ALEPH_HOME` is a documented trap in this
+    /// repo: the unisolated siblings would go on writing into a tree this
+    /// test does not know exists and is about to drop, which passes when
+    /// this test runs alone and fails intermittently under a full run —
+    /// trading the substring edge case above for a flake that is harder
+    /// to reproduce. So the only workspace root this test relies on is
+    /// whatever `workspace_roots()` resolves against the real on-disk
+    /// config — the exact function, and the exact config, `handle_spawn`
+    /// itself resolves against, derived here rather than hardcoded — with
+    /// the guard below covering the one case that makes this an
+    /// insufficient discriminator on its own.
     #[tokio::test(flavor = "multi_thread")]
     async fn spawn_with_no_cwd_actually_chdirs_the_child_into_the_first_root() {
+        // The poll loop below drains its budget at ITERATIONS x
+        // INTERVAL_MS; both platforms' child processes are bounded to a
+        // fixed multiple of that budget (not a bare guess), so they
+        // comfortably outlive every iteration on a slow runner while
+        // still being bounded rather than open-ended.
+        const POLL_ITERATIONS: u32 = 100;
+        const POLL_INTERVAL_MS: u64 = 50;
+        const CHILD_LIFETIME_SECS: u64 = POLL_ITERATIONS as u64 * POLL_INTERVAL_MS / 1000 * 6;
+
         let defaults = crate::config::Config::load()
             .unwrap_or_default()
             .agents
@@ -588,18 +677,72 @@ mod tests {
             .cloned()
             .expect("workspace_roots always returns one root");
 
-        // The child must OUTLIVE the assertion, which is why it sleeps rather
-        // than just printing. `spawn_reader` calls `manager().remove(&id)` the
-        // moment the child hits EOF (session.rs, end of the reader thread), so
-        // a one-shot `pwd` races its own reaper: the first `attach_snapshot`
-        // can land before the reader has fed the screen, and every later one
-        // returns `Err` because the session is already gone from the map. The
-        // symptom is a blank screen and a five-second timeout, which reads
-        // exactly like "the cwd was wrong". It is not: the session was reaped.
-        let (command, args) = if cfg!(windows) {
-            ("cmd.exe", vec!["/K".to_string(), "cd".to_string()])
+        // What the handler should have handed the child: the canonical,
+        // display-boundary-converted form of the root — computed
+        // independently here (not by calling `resolve_spawn_cwd` and
+        // trusting its own answer), so this cannot pass by construction
+        // against that function. (It is not independent of
+        // `workspace_roots` itself, which both this test and the handler
+        // call — see the doc comment above.)
+        let expected =
+            crate::utils::paths::display_string(&std::fs::canonicalize(&root).expect("canonical"));
+
+        // If the unjailed `cwd: None` fallback (`$HOME`/`USERPROFILE`)
+        // already contains `expected` as a substring, a bypassed
+        // handler's screen would satisfy `contains(expected)` too, and
+        // the loop below could not tell "jailed" from "bypassed" on this
+        // machine. Fail loudly here instead of passing vacuously on a
+        // real bypass.
+        let home_fallback = if cfg!(windows) {
+            std::env::var("USERPROFILE")
         } else {
-            ("sh", vec!["-c".to_string(), "pwd; sleep 30".to_string()])
+            std::env::var("HOME")
+        }
+        .expect("this test needs $HOME/USERPROFILE set to know what it must discriminate against");
+        assert!(
+            !home_fallback.contains(expected.as_str()),
+            "this machine cannot discriminate a jailed spawn from a bypassed \
+             one: the resolved workspace root {expected:?} is a substring of \
+             the unjailed cwd:-None fallback ({home_fallback:?}, which is \
+             what portable-pty's CommandBuilder falls back to when no cwd is \
+             set). Configure a workspace root outside {home_fallback:?} to \
+             run this test meaningfully."
+        );
+
+        // The child must OUTLIVE the assertion, which is why it sleeps
+        // rather than just printing. `spawn_reader` calls
+        // `manager().remove(&id)` the moment the child hits EOF
+        // (session.rs, end of the reader thread), so a one-shot `pwd`
+        // races its own reaper: the first `attach_snapshot` can land
+        // before the reader has fed the screen, and every later one
+        // returns `Err` because the session is already gone from the map.
+        // The symptom is a blank screen and a five-second timeout, which
+        // reads exactly like "the cwd was wrong". It is not: the session
+        // was reaped.
+        let (command, args) = if cfg!(windows) {
+            // `/K` never terminates on its own — a panic between spawn and
+            // `close()` would leave the shell running with no bound at
+            // all. `/C` runs the given command line and exits once it
+            // finishes; `ping -n N 127.0.0.1` is the traditional
+            // dependency-free sleep on Windows (no `sleep.exe`/`timeout`
+            // required to be present, and no console-input assumptions
+            // the way `timeout` makes), and `N` pings take about `N - 1`
+            // seconds, hence the `+ 1` below.
+            (
+                "cmd.exe",
+                vec![
+                    "/C".to_string(),
+                    format!("cd & ping -n {} 127.0.0.1 > NUL", CHILD_LIFETIME_SECS + 1),
+                ],
+            )
+        } else {
+            (
+                "sh",
+                vec![
+                    "-c".to_string(),
+                    format!("pwd; sleep {CHILD_LIFETIME_SECS}"),
+                ],
+            )
         };
         // Deliberately no `cwd` field at all — the omitted-cwd request the
         // jail must resolve to the first registered root.
@@ -616,16 +759,9 @@ mod tests {
             .expect("session_id")
             .to_string();
 
-        // What the handler should have handed the child: the canonical,
-        // display-boundary-converted form of the root — computed
-        // independently here (not by calling `resolve_spawn_cwd` and
-        // trusting its own answer), so this cannot pass by construction.
-        let expected =
-            crate::utils::paths::display_string(&std::fs::canonicalize(&root).expect("canonical"));
-
         let mut found = false;
         let mut last_seen = String::from("<no snapshot ever returned Ok>");
-        for _ in 0..100 {
+        for _ in 0..POLL_ITERATIONS {
             if let Ok(snap) = pty::manager().attach_snapshot(&sid) {
                 // Concatenate the whole screen, not just one row's runs: a
                 // long path can hard-wrap across a row boundary, and a
@@ -648,14 +784,14 @@ mod tests {
                     break;
                 }
             }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS)).await;
         }
 
         pty::manager().close(&sid).ok();
         assert!(
             found,
             "an omitted cwd must chdir the child into the resolved first workspace root \
-             {expected}, not the daemon's own process cwd; screen held: {last_seen:?}"
+             {expected}, not the unjailed $HOME/USERPROFILE fallback; screen held: {last_seen:?}"
         );
     }
 }
