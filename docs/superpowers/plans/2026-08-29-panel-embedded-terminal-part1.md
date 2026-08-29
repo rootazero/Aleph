@@ -4446,6 +4446,13 @@ Task 10 的 smallest-wins 视口表所设想的形态，不是它的例外。
 
 1. **重绘**：一个 `Effect` 读 `repaint_tick`，取 canvas、`render::measure`、`render::paint`。**取 canvas 与测量收进一个私有函数**，不要在 `request_animation_frame` 回调里 `get_untracked()`。
 2. **resize**：`ResizeObserver`（或窗口 resize 事件）→ `render::viewport_cells` → `rpc_call("pty.resize", {session_id, rows, cols})`。挂载时也跑一次，替换上面写死的 `(24, 80)`。
+
+   ⚠️ **这一步只负责「把我的视口告诉服务端」，不许顺手更新本地 `ClientScreen` 的尺寸。**
+   诱惑很自然（我刚要了 40x120，那就把屏幕设成 40x120），但它是错的：尺寸是 **smallest-wins**
+   （Task 10），另一个客户端挂着 24x80 时 PTY 就是 24x80，而 `pty.resize` 只回 `{"ok": true}`
+   ——**你要到的和你拿到的不是一回事**。本地写入会造出一个恰好在共享场景下出错的第二真源。
+   Task 19 之后，尺寸由**帧自己**带回来（`ClientScreen::apply` 采纳 `frame.rows`/`frame.cols`），
+   所以这一步**发完就完了**，`ClientScreen::resize` 也因此保持私有。
 3. **keydown**：`encode_key` 返回 `Some(bytes)` 才 `prevent_default()` 并发 `rpc_call("pty.input", {session_id, data: BASE64(bytes), base64: true})`；返回 `None` 一律不拦（否则浏览器快捷键全被吞掉）。
 
 **注意 `error` 的展示用 `{move || error.get().map(..)}` 而不是 `<Show>`** —— `<Show when=…>` 的守卫与 body 是两个独立的反应式作用域，body 在信号刚被清空时可以先跑一次新值，把 `expect("visible implies Some")` 变成整页崩溃。单次读 + `Option` 视图没有这个裂缝。
