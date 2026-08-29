@@ -4897,6 +4897,20 @@ rg -n 'todo!|unimplemented!' src/gateway/pty/ shared/protocol/src/pty.rs interfa
 rg -n 'BASE64' src/gateway/pty/session.rs   # 只应出现在 pty.input 相关处，或零命中
 ```
 
+⚠️ **上面第一条带引号，所以它只看得见 Rust 字符串字面量——散文那一半它结构性看不见。**
+controller 2026-08-29 已经踩了这一条：`pty.output` 在代码里确实零命中，而**三份文档仍在点名它**
+（`src/gateway/CLAUDE.md` 的地雷 J、`docs/reference/SECURITY.md`、`FEATURE_LOCATOR §5.22`），
+其中第一份是那条「一条连接有两个方向」判据的经典例子。已修（31f532333），这里留作判据：
+
+```bash
+# 散文那一半。plans/ 与 specs/ 是本次改动自己的叙述，正当保留，故排除。
+rg -n 'pty\.output' -g '*.md' -g '!docs/superpowers/**'
+```
+
+**判据：一个被删掉的标识符，它的其余表述住在散文里；而对一份安全文档，散文正是会被读的那一半。**
+⚠️ 修法**不是**把文档里的名字改掉——那三段记的是一个真实发生过的缺陷，改名等于伪造记录。
+正确做法是**保住原名 + 补一个指针**说明它现在叫什么、形状变没变。
+
 - [ ] **Step 3: 确认没有留下第二条半接的路**
 
 ```bash
