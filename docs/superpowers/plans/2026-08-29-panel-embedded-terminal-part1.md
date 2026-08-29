@@ -2915,6 +2915,20 @@ Add to `src/tools/scoped/gate_chain.rs` 的 `mod tests`：
 
 （函数名 `arguments_are_destructive` 以该文件真实导出的谓词为准 —— 先 `grep -n 'fn tier_asks_for_arguments\|fn arguments_are_destructive\|DestructiveArguments' src/tools/scoped/gate_chain.rs`。）
 
+⚠️ **controller 在派单前查实（2026-08-29）：先决定用哪条规则，`DestructiveArguments` 很可能是错的那一条。**
+
+`gate_chain.rs::is_floor()` 只对 **`ToolDeclared` 与 `GateRemoval`** 返回 `true`；`DestructiveArguments` 明确是 `false`。**floor 在这个子系统里同时意味着两件事**（那个函数的注释自己写着）：① 这条规则举的卡**不许提供持久授权**（"always allow"）；② 在 `effective_permission` 里它是 **rung 0**，一条显式的 `[policies.tool_permissions]` 条目**掀不翻它**——也就是**每一个档位都问，`full` 也问**。
+
+用 `DestructiveArguments` 的后果因此有两个，都不是我们要的：
+- **`full` 档下这张卡不响**——而一个跑在 `full` 上的 operator 正是最可能一句话就把终端打开的人；
+- 卡上会出现「始终允许」，**点一次就永久授权此后每一次对终端配置的 `self_config` 写入**。
+
+而 `GateRemoval` 的 doc **逐字描述的就是这个情形**：「This call can reach the configuration that decides whether the approval gates fire at all」。而 `[gateway.terminal] enabled = true` **确实**是这样一个配置——`handlers/pty.rs` 的模块 doc 写着「A PTY is a raw shell: the command policy does not see it and the exec tier does not gate it」，所以打开终端等于开出一条**命令策略看不见、exec 档位管不着**的执行路径。
+
+**要求**：在 `DestructiveArguments` 与 `GateRemoval` 之间做一次显式裁定，并把理由写进报告。**推荐 `GateRemoval`**，理由如上。若选它，则它的两条既有约束一并生效且必须遵守——**reason 不许指向某个可调设置**（因为没有哪个设置能关掉它），**卡不许提供持久授权**。若你在读完两个变体的 doc 后认为 `DestructiveArguments` 才对，那就用它，但要在报告里回答「`full` 档下这张卡还响吗」。
+
+（controller 核实过的是**机制**——`is_floor` 的返回值与两段 doc 的原文；**没有**核实过设计意图，所以这是一次带论据的推荐，不是既成裁定。）
+
 Add to `src/gateway/pty/manager.rs` 的 `mod tests`：
 
 ```rust
