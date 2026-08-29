@@ -154,6 +154,26 @@ impl IncomingHandler {
             Ok(p) => p,
             Err(e) => return e,
         };
+        // Cap the size we are willing to materialize in memory before the
+        // optional line window is applied. Without this an agent can
+        // exfiltrate arbitrary bytes from the workspace (e.g. /proc/self/maps,
+        // a multi-GB log) into a single read result.
+        let metadata = match tokio::fs::metadata(&abs).await {
+            Ok(m) => m,
+            Err(e) => {
+                return HandlerOutcome::internal(format!("fs/read_text_file: {e}"));
+            }
+        };
+        if metadata.len() > MAX_FS_READ_BYTES {
+            return HandlerOutcome::Error {
+                code: INVALID_PARAMS,
+                message: format!(
+                    "fs/read_text_file: file size {} exceeds cap of {} bytes",
+                    metadata.len(),
+                    MAX_FS_READ_BYTES
+                ),
+            };
+        }
         let content = match tokio::fs::read_to_string(&abs).await {
             Ok(c) => c,
             Err(e) => {
@@ -182,6 +202,18 @@ impl IncomingHandler {
         let Some(content) = params.get("content").and_then(Value::as_str) else {
             return HandlerOutcome::invalid_params("fs/write_text_file: missing 'content'");
         };
+        // Cap inline content. A single agent call must not be able to
+        // dump arbitrarily large blobs into the workspace.
+        if content.len() > MAX_FS_WRITE_BYTES {
+            return HandlerOutcome::Error {
+                code: INVALID_PARAMS,
+                message: format!(
+                    "fs/write_text_file: content length {} exceeds cap of {} bytes",
+                    content.len(),
+                    MAX_FS_WRITE_BYTES
+                ),
+            };
+        }
         let abs = match self.confine(path).await {
             Ok(p) => p,
             Err(e) => return e,
@@ -239,7 +271,26 @@ impl IncomingHandler {
                     .and_then(|t| t.get("kind"))
                     .and_then(Value::as_str)
                     .unwrap_or("");
-                matches!(kind, "read" | "search" | "fetch" | "think")
+                if !matches!(kind, "read" | "search" | "fetch" | "think") {
+                    return false;
+                }
+                // Defense in depth: even with a "safe" kind, an agent
+                // could send a `toolCall` that also carries a `path`,
+                // `command`, `shell`, or `url` field. Auto-approving a
+                // read based on kind alone while the payload actually
+                // describes a write/exec is the exact bypass this guard
+                // closes. If any sensitive parameter is present, fall
+                // through to UI confirmation rather than auto-approve.
+                let tool_call = params.get("toolCall");
+                let has_sensitive_param = tool_call.is_some_and(|tc| {
+                    tc.get("path").is_some()
+                        || tc.get("file_path").is_some()
+                        || tc.get("command").is_some()
+                        || tc.get("shell").is_some()
+                        || tc.get("exec").is_some()
+                        || tc.get("url").is_some()
+                });
+                !has_sensitive_param
             }
         }
     }
@@ -319,6 +370,22 @@ impl IncomingHandler {
 /// JSON-RPC-adjacent permission error code. Negative app-defined range; mirrors
 /// the spirit of acpx's `PERMISSION_DENIED` classification.
 const PERMISSION_DENIED: i64 = -32000;
+
+/// JSON-RPC standard `-32602` ("Invalid params"). Local mirror of the
+/// gateway-side constant so we can return it directly from `HandlerOutcome`.
+const INVALID_PARAMS: i64 = -32602;
+
+/// Maximum size of a file an agent is allowed to materialize in memory
+/// through `fs/read_text_file`. Without a cap, a single agent call could
+/// pull arbitrary bytes out of the workspace (e.g. `/proc/self/maps`,
+/// multi-GB logs) into one read result and pin them in the heap until
+/// the caller drops the response.
+const MAX_FS_READ_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Maximum size of the inline `content` string accepted by
+/// `fs/write_text_file`. Without a cap, a single agent call could dump
+/// arbitrarily large blobs into the workspace.
+const MAX_FS_WRITE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Lexically normalize a path (resolve `.`/`..` without touching the
 /// filesystem). Mirrors `manager::session_key::normalize_path` but kept local

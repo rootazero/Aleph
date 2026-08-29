@@ -104,12 +104,18 @@ impl AcpAdapterManager {
                 .collect()
         };
 
-        let mut available = Vec::new();
-        for (id, adapter) in snapshot {
-            if adapter.is_available().await {
-                available.push(id);
-            }
-        }
+        // Run all availability probes concurrently with `join_all`. The
+        // previous serial loop blocked wall-clock for N × 5s on N harnesses,
+        // which dragged gateway startup and health checks well beyond their
+        // budget.
+        let results = futures::future::join_all(snapshot.into_iter().map(|(id, adapter)| async move {
+            (id, adapter.is_available().await)
+        }))
+        .await;
+        let mut available: Vec<String> = results
+            .into_iter()
+            .filter_map(|(id, ok)| ok.then_some(id))
+            .collect();
         available.sort();
         available
     }

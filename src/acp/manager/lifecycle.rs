@@ -536,7 +536,18 @@ impl AcpAdapterManager {
             .get(&key)
             .map(|entry| entry.cancel.clone());
         if let Some(handle) = cancel_handle {
-            let _ = handle.send_cancel().await;
+            // Best-effort pre-fire so the harness can shut down its turn
+            // cleanly, but log if the cancel channel is already closed or
+            // the receiver has been dropped — the caller otherwise sees
+            // `Ok(())` while the agent keeps running, which is exactly
+            // the silent failure that makes "why won't it stop?" tickets
+            // undebuggable.
+            if let Err(e) = handle.send_cancel().await {
+                tracing::warn!(
+                    error = %e,
+                    "shutdown_named: pre-fire cancel failed; agent may not stop promptly"
+                );
+            }
         }
 
         // Now evict + kill. Drop the write lock before locking the inner

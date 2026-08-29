@@ -523,7 +523,13 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
                 count = reaped,
                 "reaping background bash jobs before forced exit"
             );
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            // 2s gives the runtime enough scheduler passes for
+            // `tokio::process::Child::kill_on_drop` to fire on every
+            // reaped process before `process::exit` teardown. 250ms was
+            // observed insufficient for a long `cargo build` to receive
+            // SIGKILL through the tokio → Child → kill_on_drop chain,
+            // leaving the workspace writable after the daemon exits.
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
         std::process::exit(0);
     });

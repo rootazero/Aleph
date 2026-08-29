@@ -750,12 +750,16 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             .await
             .map_err(|e| format!("sub-agent failed: emit UserMessage: {e}"))?;
 
-        // Emit SubagentSpawned to the parent session.
+        // Emit SubagentSpawned to the parent session. durably-recovered
+        // background sub-agents rely on this event reaching the session log
+        // — silently dropping an emit failure would make `check_status` /
+        // `wait` return "No background sub-agent found" after a restart, so
+        // log the failure to at least make it diagnosable.
         let child_key = child_id.clone();
         let flow_name = req.agent_def.id.clone();
         if let Some(ref parent_str) = base.parent_session_id {
             if let Some(parent_id) = parent_session_id_of(parent_str) {
-                let _ = base
+                if let Err(e) = base
                     .session
                     .emit_event(
                         &parent_id,
@@ -766,7 +770,15 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                             at: now_ms(),
                         },
                     )
-                    .await;
+                    .await
+                {
+                    tracing::error!(
+                        error = %e,
+                        parent_id = %parent_id,
+                        child_id = %child_key,
+                        "subagent_spawner: SubagentSpawned emit_event failed; durable recovery may not find this sub-agent"
+                    );
+                }
             }
         }
 
@@ -1026,11 +1038,15 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 )
                 .await?;
 
-                // Emit SubagentReturned to the parent session.
+                // Emit SubagentReturned to the parent session. Same
+                // rationale as SubagentSpawned above: durably-recovered
+                // background sub-agents need this event in the session
+                // log; silently dropping an emit failure would make the
+                // sub-agent look "still running" forever after a restart.
                 let summary = result.final_text.clone().unwrap_or_default();
                 if let Some(ref parent_str) = base.parent_session_id {
                     if let Some(parent_id) = parent_session_id_of(parent_str) {
-                        let _ = base
+                        if let Err(e) = base
                             .session
                             .emit_event(
                                 &parent_id,
@@ -1041,7 +1057,15 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                                     at: now_ms(),
                                 },
                             )
-                            .await;
+                            .await
+                        {
+                            tracing::error!(
+                                error = %e,
+                                parent_id = %parent_id,
+                                child_id = %child_id,
+                                "subagent_spawner: SubagentReturned emit_event failed; durable recovery may not find this sub-agent"
+                            );
+                        }
                     }
                 }
 

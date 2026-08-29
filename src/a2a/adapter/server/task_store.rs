@@ -80,6 +80,32 @@ impl A2ATaskManager for TaskStore {
         Ok(task)
     }
 
+    async fn claim_task(&self, task_id: &str, context_id: &str) -> A2AResult<bool> {
+        // Atomically: insert-if-absent (in Submitted) THEN promote to
+        // Working, all under a single write-lock. Any concurrent caller
+        // either inserts first (returns false here because the row is
+        // already non-Submitted by the time we try to promote) or loses
+        // the insert race (sees an existing entry, returns false).
+        let mut tasks = self.tasks.write().await;
+        if !tasks.contains_key(task_id) {
+            let task = A2ATask::new(task_id, context_id);
+            evict_terminal_tasks(&mut tasks);
+            tasks.insert(task_id.to_string(), task);
+        }
+        let task = tasks
+            .get_mut(task_id)
+            .expect("invariant: task either existed or was just inserted");
+        if !matches!(task.status.state, TaskState::Submitted | TaskState::InputRequired) {
+            return Ok(false);
+        }
+        task.status = TaskStatus {
+            state: TaskState::Working,
+            message: None,
+            timestamp: Utc::now(),
+        };
+        Ok(true)
+    }
+
     async fn get_task(&self, task_id: &str, history_length: Option<usize>) -> A2AResult<A2ATask> {
         let tasks = self.tasks.read().await;
         let task = tasks

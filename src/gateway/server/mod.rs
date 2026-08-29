@@ -410,11 +410,14 @@ pub struct GatewayServer {
     /// agent registry + session + tool + provider + sandbox are assembled.
     /// Task 10 (Gateway `run_agent_loop` replacement) consumes this.
     pub orchestrator: Option<Arc<crate::orchestrator::Orchestrator>>,
-    /// Bearer token snapshot for OpenAI-compatible `/v1/*` routes.
-    /// Sourced from `SharedTokenManager` at boot. Some → handler rejects
-    /// mismatched bearers with 401; None → dev-open (any bearer accepted).
-    /// Token rotation requires a server restart.
-    pub openai_api_token: Option<String>,
+    // Note: the OpenAI-compat bearer token used to live here as an
+    // `Option<String>` snapshot taken from `SharedTokenManager` at boot.
+    // That snapshot was frozen for the lifetime of the server, so a
+    // `gateway.token.rotate` would not revoke the previously issued
+    // token for `/v1/*`. The auth path now reads the *current* token
+    // through the `api_token` closure injected into `OpenAiApiState`
+    // at boot, which captures `SharedTokenManager` directly. Do not
+    // reintroduce a snapshot here.
     /// Admin IPC router (Spec C). Mounted under `/v1/admin` when set.
     /// `None` means CLI subcommands routed via `LockOrIpc` will receive
     /// 404 from the server side — the CLI is expected to take the local
@@ -512,7 +515,6 @@ impl GatewayServer {
             openai_provider_configs: Vec::new(),
             embedding_provider: None,
             orchestrator: None,
-            openai_api_token: None,
             admin_router: None,
             reconciler_handle: None,
             webhook_mounts: Arc::new(crate::gateway::webhook_receiver::WebhookMountTable::new()),
@@ -571,7 +573,6 @@ impl GatewayServer {
             openai_provider_configs: Vec::new(),
             embedding_provider: None,
             orchestrator: None,
-            openai_api_token: None,
             admin_router: None,
             reconciler_handle: None,
             webhook_mounts: Arc::new(crate::gateway::webhook_receiver::WebhookMountTable::new()),
@@ -821,11 +822,17 @@ impl GatewayServer {
         // OpenAI-compatible API routes (/v1/models, /v1/health, /v1/chat/completions)
         let openai_state = Arc::new(OpenAiApiState {
             server_id: format!("aleph-{}", self.addr),
-            // Bearer-token snapshot from SharedTokenManager. `None` leaves the
-            // endpoint open (dev mode); `Some(token)` rejects mismatched
-            // bearers with 401 in completions/mod.rs before reaching the
-            // per-agent busy-lock or the LLM.
-            api_token: self.openai_api_token.clone(),
+            // Live read of the current bearer token from SharedTokenManager.
+            // Using a closure (rather than a snapshot `Option<String>`)
+            // means `SharedTokenManager::rotate` immediately revokes the
+            // previously issued token — previously the snapshot was taken
+            // at boot and `/v1/*` would accept the rotated-out token
+            // indefinitely.
+            api_token: {
+                let mgr = self.shared_token_manager.clone();
+                Arc::new(move || mgr.get_current_token())
+                    as Arc<dyn Fn() -> Option<String> + Send + Sync>
+            },
             execution_adapter: self.execution_adapter.clone(),
             provider_map: self.openai_provider_map.clone(),
             agent_registry: self.openai_agent_registry.clone(),

@@ -68,6 +68,15 @@ pub async fn run_node_approval(
     // An older node sends none; fall back to the tool name rather than an empty
     // card.
     let shown = if action.is_empty() { tool } else { action };
+    // Sanitize cross-trust-boundary RPC fields before they are formatted
+    // into the operator-facing `command` string. A malicious node can
+    // otherwise inject newlines / ANSI escapes / control characters that
+    // (a) impersonate entries in the audit log and pending-approvals panel
+    // and (b) corrupt terminal/UI rendering when an operator opens the
+    // card.
+    let node_name = sanitize_for_display(node_name, 64);
+    let reason = sanitize_for_display(reason, 256);
+    let shown = sanitize_for_display(shown, 256);
     let command = format!("node '{node_name}': {shown} — {reason}");
     let request = ApprovalRequest {
         id: uuid::Uuid::new_v4().to_string(),
@@ -238,4 +247,29 @@ mod tests {
 
         assert_eq!(handle.await.unwrap(), ("approved_session", None));
     }
+}
+
+/// Sanitize a remote-RPC string before it is embedded in the operator-facing
+/// `command` field or rendered into a UI card.
+///
+/// Strips control characters (incl. newline, which would let a malicious
+/// node forge a fake audit-log entry) and truncates to `max_len` bytes.
+/// ANSI escape sequences are stripped to defend terminal/UI rendering.
+fn sanitize_for_display(s: &str, max_len: usize) -> String {
+    let mut out = String::with_capacity(s.len().min(max_len));
+    for c in s.chars() {
+        if c.is_control() {
+            out.push(' ');
+        } else if c == '\u{1b}' {
+            // ESC — drop the start of any ANSI sequence by replacing with space.
+            out.push(' ');
+        } else {
+            out.push(c);
+        }
+        if out.len() >= max_len {
+            out.push('…');
+            break;
+        }
+    }
+    out
 }

@@ -25,14 +25,33 @@ pub fn now_ms() -> u64 {
 ///
 /// Skips emission when `session_id` is empty — there is no session to scope to
 /// (mirrors the `SubAgentCompleted` announce's "no parent session" guard).
+///
 /// Must be called from within a Tokio runtime (every spawn / trace path is).
+/// If invoked outside a runtime, the event is dropped and a debug-level log
+/// line is emitted rather than letting `tokio::spawn` panic and tear down
+/// the calling task.
 pub fn emit_tree_event(agent_id: String, session_id: String, ev: SubagentTreeEvent) {
     if session_id.is_empty() {
         return;
     }
+    if tokio::runtime::Handle::try_current().is_err() {
+        tracing::debug!(
+            agent_id = %agent_id,
+            "emit_tree_event called outside a Tokio runtime; dropping event"
+        );
+        return;
+    }
     tokio::spawn(async move {
-        GlobalBus::global()
+        if let Err(e) = GlobalBus::global()
             .broadcast(&agent_id, &session_id, AlephEvent::SubAgentTreeUpdate(ev))
-            .await;
+            .await
+        {
+            tracing::debug!(
+                agent_id = %agent_id,
+                session_id = %session_id,
+                error = %e,
+                "emit_tree_event: GlobalBus broadcast returned error"
+            );
+        }
     });
 }

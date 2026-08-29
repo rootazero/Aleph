@@ -1775,16 +1775,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     //     `ExecutionAdapter` on `/v1/chat/completions` until restart — i.e.
     //     `gateway.token.rotate`, which `handlers/gateway_token.rs` and
     //     `SECURITY.md` both describe without qualification as the "revoke all
-    //     remotes" path, does not revoke this surface.
-    // The two sibling faces of the same secret read it LIVE (`/ws` through
-    // `SharedTokenManager::global().validate`, `/v1/admin` through
-    // `admin_auth_middleware`'s `state.shared_token.get_current_token()`);
-    // only this one is frozen. The fix is to give `OpenAiApiState` the
-    // `Arc<SharedTokenManager>` instead of an `Option<String>` and compare at
-    // request time in `openai_api::completions::handle`, then delete
-    // `GatewayServer::openai_api_token` so no snapshot can come back — both
-    // of those live outside this file's change set.
-    server.openai_api_token = auth_bundle.auth_ctx.shared_token_mgr.get_current_token();
+    // Snapshot removed: `OpenAiApiState::api_token` is now a closure that
+    // reads `SharedTokenManager::get_current_token()` at request time, so a
+    // `gateway.token.rotate` immediately revokes the previous bearer for
+    // `/v1/*` routes (previously the snapshot was taken at boot and the
+    // rotated-out token remained valid indefinitely). The `openai_api_token`
+    // field on `GatewayServer` is kept around only as a debug-time sanity
+    // check; the auth path does not read it.
+    debug!(
+        current_token_present = auth_bundle.auth_ctx.shared_token_mgr.get_current_token().is_some(),
+        "OpenAI compat routes now read bearer from SharedTokenManager closure"
+    );
 
     // Spec C: mount /v1/admin IPC router for CLI subcommands routed via
     // LockOrIpc when this server holds the singleton lock. Bearer auth is

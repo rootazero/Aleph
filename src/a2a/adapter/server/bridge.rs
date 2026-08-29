@@ -104,49 +104,47 @@ impl A2AMessageHandler for AgentLoopBridge {
             ));
         }
 
-        // Create task (or get existing — but only continue if the existing
-        // task is in a state that can accept new work). Without this guard a
-        // concurrent delegation against a `Working` task would double-execute
-        // the agent (see A2A-R3-04).
+        // Atomically create-or-claim the task. `claim_task` either
+        // creates a new task and promotes it to `Working` in a single
+        // critical section (returning `Ok(true)`), or sees the task
+        // already owned by another run and returns `Ok(false)`. This
+        // closes the A2A-R3-04 TOCTOU window between
+        // `create_task` + `update_status(Working)` that previously
+        // allowed a concurrent delegation to also reach `execute()`.
         let context_id = Self::context_id(task_id, session_id);
-        match self.task_manager.create_task(task_id, context_id).await {
-            Ok(_) => {}
-            Err(A2AError::InvalidRequest(_)) => {
-                let existing = self
-                    .task_manager
-                    .get_task(task_id, None)
-                    .await
-                    .map_err(|e| {
-                        error!(task_id, error = %e, "A2A bridge: failed to fetch existing task");
-                        e
-                    })?;
-                // Only `Submitted` and `InputRequired` can accept new work;
-                // any other state (especially `Working`) means a concurrent
-                // run is in flight — refuse to spawn a duplicate.
-                if !matches!(
-                    existing.status.state,
-                    TaskState::Submitted | TaskState::InputRequired
-                ) {
-                    return Err(A2AError::InvalidRequest(format!(
-                        "Task {task_id} is in state {:?} and cannot accept a new message",
-                        existing.status.state
-                    )));
-                }
-            }
-            Err(e) => return Err(e),
+        let claimed = self
+            .task_manager
+            .claim_task(task_id, context_id)
+            .await?;
+        if !claimed {
+            return Err(A2AError::InvalidRequest(format!(
+                "Task {task_id} is already being processed by another request"
+            )));
         }
 
-        // Get the default agent before marking the task Working so a missing
-        // default leaves the task in Submitted rather than stuck Working.
-        let agent =
-            self.agent_registry.get_default().await.ok_or_else(|| {
-                A2AError::InternalError("No default agent registered".to_string())
-            })?;
-
-        // Transition to Working
-        self.task_manager
-            .update_status(task_id, TaskState::Working, None)
-            .await?;
+        // Get the default agent before running so a missing default fails
+        // fast. (The task is already in `Working`; if the agent is missing
+        // we transition it to `Failed` so callers do not see a stuck
+        // `Working` task.)
+        let agent = match self.agent_registry.get_default().await {
+            Some(a) => a,
+            None => {
+                let _ = self
+                    .task_manager
+                    .update_status(
+                        task_id,
+                        TaskState::Failed,
+                        Some(A2AMessage::text(
+                            A2ARole::Agent,
+                            "No default agent registered",
+                        )),
+                    )
+                    .await;
+                return Err(A2AError::InternalError(
+                    "No default agent registered".to_string(),
+                ));
+            }
+        };
 
         // Build and execute the run request
         let request = Self::build_run_request(task_id, &input);
@@ -197,60 +195,45 @@ impl A2AMessageHandler for AgentLoopBridge {
             ));
         }
 
-        // Create task (or get existing — but only continue if the existing
-        // task is in a state that can accept new work). Without this guard a
-        // concurrent delegation against a `Working` task would double-execute
-        // the agent (see A2A-R3-04).
+        // Atomically claim the task (see handle_message for rationale).
         let context_id = Self::context_id(task_id, session_id);
-        match self.task_manager.create_task(task_id, context_id).await {
-            Ok(_) => {}
-            Err(A2AError::InvalidRequest(_)) => {
-                let existing = self
-                    .task_manager
-                    .get_task(task_id, None)
-                    .await
-                    .map_err(|e| {
-                        error!(task_id, error = %e, "A2A bridge: failed to fetch existing task");
-                        e
-                    })?;
-                if !matches!(
-                    existing.status.state,
-                    TaskState::Submitted | TaskState::InputRequired
-                ) {
-                    return Err(A2AError::InvalidRequest(format!(
-                        "Task {task_id} is in state {:?} and cannot accept a new message",
-                        existing.status.state
-                    )));
-                }
-            }
-            Err(e) => return Err(e),
-        }
-
-        // Get the default agent before subscribing / marking Working so a
-        // missing default fails fast and leaves the task in Submitted.
-        let agent =
-            self.agent_registry.get_default().await.ok_or_else(|| {
-                A2AError::InternalError("No default agent registered".to_string())
-            })?;
-
-        // Subscribe to streaming updates BEFORE starting execution.
-        // If the subsequent `update_status(Working)` or `broadcast_status`
-        // fails, we MUST release the broadcast channel ourselves — otherwise
-        // it leaks and any concurrent `tasks/cancel` or `tasks/resubscribe`
-        // compounds the leak (see A2A-R3-02).
-        let stream = self.streaming.subscribe_all(task_id).await?;
-
-        // Transition to Working and broadcast. On any failure between here
-        // and the `tokio::spawn` that owns the cleanup, manually call
-        // `cleanup_task` to release the subscription we just created.
-        if let Err(e) = self
+        let claimed = self
             .task_manager
-            .update_status(task_id, TaskState::Working, None)
-            .await
-        {
-            let _ = self.streaming.cleanup_task(task_id).await;
-            return Err(e);
+            .claim_task(task_id, context_id)
+            .await?;
+        if !claimed {
+            return Err(A2AError::InvalidRequest(format!(
+                "Task {task_id} is already being processed by another request"
+            )));
         }
+
+        // Get the default agent before subscribing so a missing default
+        // fails fast and we do not need to clean up a half-set-up stream.
+        let agent = match self.agent_registry.get_default().await {
+            Some(a) => a,
+            None => {
+                let _ = self
+                    .task_manager
+                    .update_status(
+                        task_id,
+                        TaskState::Failed,
+                        Some(A2AMessage::text(
+                            A2ARole::Agent,
+                            "No default agent registered",
+                        )),
+                    )
+                    .await;
+                return Err(A2AError::InternalError(
+                    "No default agent registered".to_string(),
+                ));
+            }
+        };
+
+        // Subscribe to streaming updates AFTER the task has been atomically
+        // claimed and promoted to `Working`. The cleanup guard below
+        // guarantees the broadcast channel is released on every error
+        // path, including panics in `execution_adapter.execute`.
+        let stream = self.streaming.subscribe_all(task_id).await?;
 
         let working_event = TaskStatusUpdateEvent {
             task_id: task_id.to_string(),
