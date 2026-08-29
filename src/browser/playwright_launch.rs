@@ -253,7 +253,7 @@ pub fn config_path_for(session_key: &str) -> Result<PathBuf, super::error::Brows
 }
 
 /// `~/.aleph/data/browser/<leaf>`, resolved through the one home-dir helper.
-fn browser_state_dir(leaf: &str) -> Result<PathBuf, super::error::BrowserError> {
+pub(super) fn browser_state_dir(leaf: &str) -> Result<PathBuf, super::error::BrowserError> {
     Ok(crate::discovery::aleph_home_dir()
         .map_err(|e| {
             super::error::BrowserError::PlaywrightCliError(format!(
