@@ -124,6 +124,13 @@ qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 shared-ui-logic = { path = "../../shared/ui_logic", features = ["leptos", "wasm"] }
 aleph-protocol = { path = "../../shared/protocol" }
 
+# Terminal grid rendering — must resolve to the same copy the server's PTY
+# grid uses (`cargo tree -p alephcore -i unicode-width`), which is 0.2.0.
+# Writing "0.1" here would pin the panel to the other copy already in the
+# lockfile (a transitive dep of a dev tool) and create the very duplicate
+# this pin is meant to avoid.
+unicode-width = "0.2"
+
 [build-dependencies]
 leptos_i18n_build = "0.6"
 

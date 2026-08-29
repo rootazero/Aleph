@@ -334,6 +334,7 @@ dependencies = [
  "similar",
  "syntect",
  "tailwind_fuse",
+ "unicode-width 0.2.0",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

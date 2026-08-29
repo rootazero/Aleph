@@ -13,6 +13,7 @@
 
 use leptos::prelude::*;
 
+pub mod render;
 pub mod session;
 
 #[component]
