@@ -210,7 +210,8 @@ impl InstallRegistry {
                 std::io::ErrorKind::Interrupted,
                 format!(
                     "reconcile: {skipped} entries in {} could not be read; \
-                     not updating manifest to preserve provenance"
+                     not updating manifest to preserve provenance",
+                    skills_dir.display(),
                 ),
             ));
         }

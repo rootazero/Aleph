@@ -181,7 +181,11 @@ impl BuiltinToolRegistry {
                 Arc::clone(coord_store),
                 config.artifact_store.clone(),
             );
-            let status = TeamStatusTool::new(Arc::clone(store), Arc::clone(coord_store));
+            let status = TeamStatusTool::new(
+                Arc::clone(store),
+                Arc::clone(coord_store),
+                current_agent_id.clone(),
+            );
             let disband = TeamDisbandTool::new(Arc::clone(store), current_agent_id.clone())
                 .with_cleanup_stores(
                     config.message_store.clone(),

@@ -5,7 +5,7 @@
 //! caller can fall back to the embedded snapshot.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use tracing::info;
 
 /// In-process single-flight table keyed by `checkout_dir`. Two concurrent
@@ -15,8 +15,10 @@ use tracing::info;
 /// held by another process" message. Holding the per-dir mutex across
 /// the open-or-clone decision is cheap (no IO on the hot path) and
 /// closes the TOCTOU. The `static` is a single global; a `HashMap`
-/// inside lets us keep many distinct checkouts unblocked.
-static CHECKOUT_LOCKS: OnceLock<Mutex<std::collections::HashMap<PathBuf, Mutex<()>>>> =
+/// inside lets us keep many distinct checkouts unblocked. The inner
+/// value is `Arc<Mutex<()>>` so callers can clone the guard out of
+/// the table and drop the table lock before holding the per-dir one.
+static CHECKOUT_LOCKS: OnceLock<Mutex<std::collections::HashMap<PathBuf, Arc<Mutex<()>>>>> =
     OnceLock::new();
 
 /// Clone `repo_url` (branch `main`) into `checkout_dir` if absent; otherwise
@@ -49,7 +51,7 @@ pub(crate) fn clone_or_update_at(
         let mut guard = table.lock().unwrap_or_else(|e| e.into_inner());
         guard
             .entry(checkout_dir.to_path_buf())
-            .or_insert_with(|| Mutex::new(()))
+            .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     };
     let _flight = per_dir_mutex.lock().unwrap_or_else(|e| e.into_inner());
