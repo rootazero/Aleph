@@ -27,6 +27,17 @@ impl Scope {
     }
 }
 
+impl std::fmt::Display for Scope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::All => "all",
+            Self::CurrentSession => "current_session",
+            Self::Both => "both",
+        };
+        f.write_str(s)
+    }
+}
+
 use super::error::ToolError;
 use crate::config::types::profile::SmartRecallConfig;
 use crate::error::Result;
@@ -222,7 +233,10 @@ impl MemorySearchTool {
     /// L2 distance in high-dimensional space (1536-dim) produces lower similarity
     /// scores than one might expect. 0.3 is a pragmatic floor that balances
     /// recall (not missing relevant memories) with precision (not returning noise).
-    const DEFAULT_SIMILARITY_THRESHOLD: f32 = 0.3;
+    // `DEFAULT_SIMILARITY_THRESHOLD` was removed: the value used to feed a
+    // `let _threshold = ...` binding that never reached `NoteFactRetrieval`.
+    // When the threshold gate lands upstream, re-introduce the constant
+    // alongside the `with_similarity_threshold` setter.
 
     /// Create a new `MemorySearchTool` instance.
     ///

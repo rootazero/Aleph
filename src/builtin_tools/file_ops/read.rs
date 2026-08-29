@@ -77,6 +77,15 @@ pub struct FileReadOutput {
 // FileReadTool
 // =============================================================================
 
+/// Default cap for `FileReadTool::max_read_size` — the previous
+/// `100 * 1024 * 1024 // 100 MB` inline literal was duplicated in
+/// three places (the default constructor, the `MAX_EDIT_BYTES` const
+/// in `edit.rs`, and the 32 MB `FileWriteTool::call` cap), each
+/// independent and prone to drift. Centralising the read cap here is
+/// the first step; the write cap will follow when the
+/// `FileWriteTool` constructor takes a `max_write_size` field.
+const DEFAULT_MAX_READ_SIZE: u64 = 100 * 1024 * 1024;
+
 /// Standalone tool for reading file contents.
 pub struct FileReadTool {
     /// Maximum file size allowed for read operations (default 100 MB).
@@ -100,7 +109,7 @@ impl FileReadTool {
         );
 
         Self {
-            max_read_size: 100 * 1024 * 1024, // 100 MB
+            max_read_size: DEFAULT_MAX_READ_SIZE,
             denied_paths,
             tool_context_handle: None,
             read_cache: ReadCache::default(),
