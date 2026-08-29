@@ -86,6 +86,15 @@ const fn default_max_results() -> usize {
 pub struct FactResult {
     pub content: String,
     pub note_type: String,
+    /// Caller-facing signal of how strongly the result matched the
+    /// query. For the vector leg this is the cosine similarity
+    /// (`f.similarity_score`); for the FTS leg this is the rank-
+    /// derived pseudo-score (currently `1.0` — FTS rank is tracked
+    /// separately in `BM25`, not folded into this field). Two fields
+    /// exist because `similarity_score` is reserved for the
+    /// vector-only metric so the long-term path can expose a
+    /// meaningful value; callers should prefer `similarity_score`
+    /// when present and fall back to `confidence` for FTS-only hits.
     pub confidence: f32,
     pub similarity_score: f32,
     pub path: String,

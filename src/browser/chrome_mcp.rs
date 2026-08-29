@@ -51,21 +51,21 @@ fn looks_like_transport_error(s: &str) -> bool {
         "channel closed",
     ];
     for n in needles {
-        if s.contains(n) {
-            // Require the substring to be preceded by a separator or the
-            // start of the string — anchors against "subprocess exited"
-            // (where "process exited" is a substring) and similar
-            // false positives. The Display impls of the underlying
-            // io::Error / tungstenite::Error prepend a label like "IO
-            // error: " or "(os error N)", which is exactly the boundary
-            // we want.
-            if let Some(idx) = s.find(n) {
-                if idx == 0
-                    || s.as_bytes()[idx - 1].is_ascii_whitespace()
-                    || s.as_bytes()[idx - 1] == b':'
-                {
-                    return true;
-                }
+        // Drop the `s.contains(n)` guard — `s.find(n)` returns `None`
+        // exactly when `s.contains(n)` is false, and a single
+        // linear scan is cheaper than two. The boundary check
+        // below still anchors against "subprocess exited" and
+        // similar false positives by requiring the match to be at
+        // the start of the string or preceded by whitespace/colon
+        // (the Display impls of io::Error / tungstenite::Error
+        // prepend a label like "IO error: " or "(os error N)",
+        // which is exactly the boundary we want).
+        if let Some(idx) = s.find(n) {
+            if idx == 0
+                || s.as_bytes()[idx - 1].is_ascii_whitespace()
+                || s.as_bytes()[idx - 1] == b':'
+            {
+                return true;
             }
         }
     }
