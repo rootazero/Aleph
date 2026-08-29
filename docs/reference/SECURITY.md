@@ -262,8 +262,9 @@ message. Nothing in `src/harness/` learns that plan mode exists.
 ```
 tier resolves to Plan          turn_permissions mints a PlanGate
         ↓                      (AtomicBool + the tier to restore to)
-model explores, writes the     file_read / file_ops list|search / ctx_search /
-plan to `scratchpad`           search / web_fetch / memory_* / ask_user / subagent
+model explores, writes the     file_read / grep / find / file_ops list|search /
+plan to `scratchpad`           ctx_search / search / web_fetch / memory_* /
+                               ask_user / subagent
         ↓                      everything else: PermissionDenied(GateRule::PlanMode)
 scratchpad(request_approval)   the persisted plan → clarification::ask → a person
         ↓  "approved"

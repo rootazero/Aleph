@@ -73,6 +73,8 @@ impl ToolRegistry for BuiltinToolRegistry {
             "web_fetch" => Box::pin(async move { self.web_fetch_tool.call_json(arguments).await }),
             "file_ops" => Box::pin(async move { self.file_ops_tool.call_json(arguments).await }),
             "file_read" => Box::pin(async move { self.file_read_tool.call_json(arguments).await }),
+            "grep" => Box::pin(async move { self.grep_tool.call_json(arguments).await }),
+            "find" => Box::pin(async move { self.find_tool.call_json(arguments).await }),
             "file_write" => {
                 Box::pin(async move { self.file_write_tool.call_json(arguments).await })
             }

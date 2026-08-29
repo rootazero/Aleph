@@ -145,3 +145,68 @@ async fn flag_user_correction_files_under_the_turns_agent_not_the_boot_agent() {
         "nothing may land under the boot-time base agent"
     );
 }
+
+/// The tree-search pair reaches `execute_tool` and comes back with results.
+///
+/// Every other guard on these two asks a *registration* surface whether the
+/// tool exists, and every registration surface answers yes even when the
+/// dispatch arm is missing — that is precisely how `plugin_manage` shipped
+/// answering `Unknown tool` while its 959 B description was billed on every
+/// request. So this one runs the whole chain (catalog entry -> constructor ->
+/// dispatch arm -> tool) against a real directory and asserts the *effect*:
+/// a match found, an ignored tree not searched.
+#[tokio::test]
+async fn grep_and_find_dispatch_end_to_end_and_respect_gitignore() {
+    use crate::executor::builtin_registry::{BuiltinToolConfig, BuiltinToolRegistry};
+    use crate::executor::tool_registry::ToolRegistry;
+
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(".gitignore"),
+        "vendor/
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("keep.rs"),
+        "fn needle() {}
+",
+    )
+    .unwrap();
+    std::fs::create_dir(dir.path().join("vendor")).unwrap();
+    std::fs::write(
+        dir.path().join("vendor/dep.rs"),
+        "fn needle() {}
+",
+    )
+    .unwrap();
+
+    let registry = BuiltinToolRegistry::with_config(BuiltinToolConfig::default())
+        .await
+        .unwrap();
+    let root = dir.path().to_string_lossy().to_string();
+
+    let grep = registry
+        .execute_tool(
+            "grep",
+            serde_json::json!({ "pattern": "needle", "path": root }),
+        )
+        .await
+        .expect("grep must dispatch, not answer `Unknown tool`");
+    assert_eq!(grep["total_matches"], serde_json::json!(1), "{grep}");
+    assert!(
+        grep["matches"].as_str().unwrap().starts_with("keep.rs:1:"),
+        "{grep}"
+    );
+
+    let find = registry
+        .execute_tool(
+            "find",
+            serde_json::json!({ "pattern": "*.rs", "path": root }),
+        )
+        .await
+        .expect("find must dispatch, not answer `Unknown tool`");
+    assert_eq!(find["total"], serde_json::json!(1), "{find}");
+    assert_eq!(find["paths"], serde_json::json!("keep.rs"), "{find}");
+}

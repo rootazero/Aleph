@@ -53,9 +53,9 @@ use crate::builtin_tools::{
     ApplyPatchTool, BashExecTool, CodeCheckTool, CodeExecTool, ConfigAuditTool, CtxSearchTool,
     DesktopAxQueryByRole, DesktopAxQueryFocused, DesktopAxQueryTree, DesktopAxSnapshot,
     DesktopCheckPermissions, DesktopGuiLocate, DesktopSom, DesktopTool, DoctorTool, FileEditTool,
-    FileOpsTool, FileReadTool, FileWriteTool, FlagUserCorrectionTool, ImageGenerateTool,
-    PdfGenerateTool, ReadConfigGuideTool, RecallEventsTool, RememberTool, SearchTool,
-    SelectModelTool, SelfManageTool, VaultStoreTool, WebFetchTool,
+    FileOpsTool, FileReadTool, FileWriteTool, FindTool, FlagUserCorrectionTool, GrepTool,
+    ImageGenerateTool, PdfGenerateTool, ReadConfigGuideTool, RecallEventsTool, RememberTool,
+    SearchTool, SelectModelTool, SelfManageTool, VaultStoreTool, WebFetchTool,
 };
 use crate::tools::AlephToolDyn;
 
@@ -92,6 +92,16 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "file_ops",
         description: <FileOpsTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "grep",
+        description: <GrepTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "find",
+        description: <FindTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -1024,6 +1034,8 @@ pub fn create_tool_boxed(
             ),
         )),
         "file_ops" => Some(Box::new(FileOpsTool::new())),
+        "grep" => Some(Box::new(GrepTool::new())),
+        "find" => Some(Box::new(FindTool::new())),
         "file_read" => Some(Box::new(FileReadTool::new())),
         "file_write" => Some(Box::new(FileWriteTool::new())),
         "file_edit" => Some(Box::new(FileEditTool::new())),
@@ -2307,7 +2319,44 @@ mod tests {
     /// cua-driver), not a convention; (3) the consumers are `DesktopTool` and
     /// `DesktopAxSnapshot`, shipped and dispatched, and every token refusal
     /// path reads as an instruction only if the model was told the contract.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 108_800;
+    /// 2026-08-29: 108_800 -> 111_856 B for the `grep` / `find` pair and the
+    /// `bash` steer that points at them. Decomposed by measuring each literal
+    /// (bytes, not chars — the em-dashes cost 3 apiece):
+    /// `grep` +1_481, `find` +805, `bash` 4_159 -> 4_796 (+637), `file_ops`
+    /// +210. That sums to 3_133 against an observed delta of 3_056, and the
+    /// 77 B difference is not a rounding error — it is headroom the previous
+    /// entry left unspent while its own doc said not to. Set flush this time.
+    ///
+    /// The three questions:
+    ///
+    /// (1) No schema can carry it. `grep`'s parameters say "a string called
+    /// pattern"; what earns the bytes is that THIS search obeys `.gitignore`
+    /// and a shell one does not, that several terms belong in one alternation
+    /// rather than N calls, that a match line is a 240-char *locator* to follow
+    /// with `file_read{offset,limit}`, and that `files_only` is the cheap first
+    /// move. `bash`'s addition is a cross-tool trade-off by construction — no
+    /// single tool's schema can say which other tool replaces it.
+    ///
+    /// (2) A stronger model cannot infer them. Which shell verbs this harness
+    /// has builtins for, that `rg` is the sanctioned shell fallback while
+    /// `grep -r` is not, and that `file_ops{operation:"search"}` and `find`
+    /// answer different questions are facts about this repository's tool
+    /// surface, not reasoning a better model performs.
+    ///
+    /// (3) The consumers are shipped and dispatched: both tools have catalog
+    /// entries, `create_tool_boxed` arms and `execute_tool` arms (the
+    /// `dispatchable` census asserts the last one), both are in
+    /// `default_core_tools()` so they stay schema-resident in every session
+    /// mode, and `tools/scoped/search_steer.rs` repeats the same judgement at
+    /// call time — with a test asserting it and `bash`'s DESCRIPTION name the
+    /// same replacements, so the two surfaces cannot drift.
+    ///
+    /// Worth noting what these bytes buy back. They are the round's whole
+    /// point: before it, the only way to search file contents was `bash`, and
+    /// one `grep -r` across a repository carrying `node_modules/` routinely
+    /// returns tens of KB of matches nobody asked for — per call, in the
+    /// context window, forever. 3 KB of constants against that is not close.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 111_856;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -2690,7 +2739,7 @@ mod tests {
     /// not bookkeeping, it is a pre-authorised allowance that the next author
     /// spends without an edit here. Zero headroom means the next byte costs a
     /// deliberate paragraph, which is the whole mechanism.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 100_254;
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 102_639;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -2736,7 +2785,9 @@ mod tests {
         ("file_ops", 2989),
         ("file_read", 594),
         ("file_write", 697),
+        ("find", 840),
         ("goal", 4985),
+        ("grep", 1545),
         ("heartbeat_report", 764),
         ("hooks_manage", 2219),
         ("list_models", 597),

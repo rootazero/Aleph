@@ -321,6 +321,16 @@ impl ScopedToolService {
             pre_hook_contexts.push(steer);
         }
 
+        // Second steer at the same seam, same contract: a shell command that
+        // duplicates `grep` / `find` / `file_read` gets told which builtin does
+        // the same job without pouring an ignored tree into the context. Also
+        // advisory — `bash` remains the right answer for everything that is not
+        // a search or a read, and `rg` remains the sanctioned shell fallback
+        // for the searches that genuinely have to run there.
+        if let Some(steer) = super::search_steer::shell_search_steer(name, &effective_input) {
+            pre_hook_contexts.push(steer);
+        }
+
         // Route to subagent tool if name matches; otherwise route into the
         // inner LoopToolRegistry. Both paths share the retry/Layer 2/sanitize
         // pipeline below.
@@ -683,14 +693,11 @@ impl ScopedToolService {
                     // for the rest of the run in the cross-batch memo and
                     // (b) hand the model an empty persistence hint.
                     Err(ToolError::Execution { name: n, cause })
-                        if cancel.is_cancelled()
-                            && cause.trim_end().ends_with("cancelled") =>
+                        if cancel.is_cancelled() && cause.trim_end().ends_with("cancelled") =>
                     {
                         Err(ToolError::Cancelled { name: n })
                     }
-                    Err(err) if cancel.is_cancelled() => {
-                        Err(Self::sanitize_tool_error(name, err))
-                    }
+                    Err(err) if cancel.is_cancelled() => Err(Self::sanitize_tool_error(name, err)),
                     Err(err) => Err(Self::sanitize_tool_error(name, err)),
                 }
             }

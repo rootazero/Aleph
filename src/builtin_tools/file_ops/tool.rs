@@ -228,7 +228,10 @@ impl AlephTool for FileOpsTool {
 - copy: Copy single file or directory
 - delete: Delete file or directory
 - mkdir: Create directory
-- search: Search files by glob pattern (e.g., "*.pdf", "**/*.jpg")
+- search: Glob for files HERE, returning size/type/extension per hit — the
+  file-management view that feeds organize/batch_move/stats over any directory
+  (e.g. "*.pdf", "**/*.jpg"). To navigate code use `find` instead: it obeys
+  .gitignore, returns paths only, and pages.
 - stats: Recursive line/byte counts. Returns an aggregate {total_files, total_lines, total_bytes} plus per-file FileInfo {size, lines}. Use this to answer "how many lines / files / bytes are in this directory" — DO NOT loop over file_read for that.
 - batch_move: Move ALL files matching a pattern to destination (e.g., pattern="*.jpg" moves all JPGs)
 - organize: Auto-organize files by type into categorized folders (Images, Documents, Videos, Audio, Archives, Code, Apps, Others)

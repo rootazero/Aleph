@@ -172,6 +172,10 @@ pub fn default_core_tools() -> Vec<String> {
         "code_exec",
         "code_check",
         "file_read",
+        // Repository-aware search. Core in every mode, including chat, where
+        // `bash` is core-subtracted: the cheap tool must be the resident one.
+        "grep",
+        "find",
         "file_write",
         "file_edit",
         "file_ops",
@@ -741,7 +745,13 @@ mod core_tools_tests {
         assert!(c.core.iter().any(|t| t == "mcp_list_resource_templates"));
         // R8 one-step mode switch — every mode prompt line points at it.
         assert!(c.core.iter().any(|t| t == "session_set_mode"));
-        assert_eq!(c.core.len(), 26);
+        // Repository-aware search. Core because a search tool the model must
+        // round-trip through `get_tool_schema` to call is exactly the friction
+        // that sends it back to `bash` and a `grep -r` — the defect the pair
+        // was added to close.
+        assert!(c.core.iter().any(|t| t == "grep"));
+        assert!(c.core.iter().any(|t| t == "find"));
+        assert_eq!(c.core.len(), 28);
         assert!(!c.truncate_tool_descriptions);
     }
 

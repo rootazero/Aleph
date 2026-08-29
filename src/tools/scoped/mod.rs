@@ -25,6 +25,7 @@ mod dispatch;
 mod gate_chain;
 mod ledger;
 mod progressive_disclosure;
+mod search_steer;
 mod traits;
 
 // The sub-agent allowlist wrapper refuses calls *above* this chokepoint; its

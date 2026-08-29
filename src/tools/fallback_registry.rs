@@ -107,7 +107,10 @@ impl ToolFamily {
         // tail because they are common English words that could
         // collide with other contexts; the structured prefixes above
         // catch the cases that actually matter.
-        if n == "ls" || n == "read" || n == "write" {
+        // `grep` / `find` are exact names, not substrings: the tree-search
+        // builtins read the filesystem, so a failure there should suggest
+        // the file family, never the web-research ladder `search` heads.
+        if n == "ls" || n == "read" || n == "write" || n == "grep" || n == "find" {
             return Self::File;
         }
         Self::Other

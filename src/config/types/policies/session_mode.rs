@@ -518,6 +518,11 @@ mod tests {
             "remember",
             "note_manage",
             "file_read",
+            // The cheap alternative to a shell search must be the resident one
+            // in the mode where `bash` is core-subtracted, or chat is exactly
+            // the mode that pushes the model back to `grep -r`.
+            "grep",
+            "find",
             "session_send",
             "skill_read",
             "bash",             // collapsed out of core, but still listed

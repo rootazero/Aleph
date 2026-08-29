@@ -203,6 +203,12 @@ git2 = { version = "0.19", features = ["vendored-openssl"] }
 glob = "0.3"
 glob-match = "0.2"
 walkdir = "2.5"
+# `.gitignore`-aware recursive walker (the ripgrep family's own crate).
+# Owns ONE question — "which files does this repository consider its own" —
+# whose real answer (negation, dir-only rules, anchoring, nested
+# `.gitignore`s, `.git/info/exclude`, core.excludesFile) is not something a
+# hand-rolled skip-list can express. `file_search/` is its only consumer.
+ignore = "0.4"
 which = "6.0"
 schemars = "1.2"
 jsonschema = "0.29"

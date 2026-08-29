@@ -62,6 +62,18 @@ impl BuiltinToolRegistry {
         );
         reg(
             tools,
+            "grep",
+            <crate::builtin_tools::GrepTool as crate::tools::AlephTool>::DESCRIPTION,
+            schema::<crate::builtin_tools::GrepArgs>("grep"),
+        );
+        reg(
+            tools,
+            "find",
+            <crate::builtin_tools::FindTool as crate::tools::AlephTool>::DESCRIPTION,
+            schema::<crate::builtin_tools::FindArgs>("find"),
+        );
+        reg(
+            tools,
             "file_write",
             FileWriteTool::DESCRIPTION,
             schema::<crate::builtin_tools::file_ops::write::FileWriteArgs>("file_write"),

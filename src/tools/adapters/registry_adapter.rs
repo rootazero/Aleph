@@ -113,6 +113,11 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     "document_extract",
     // File reads (writers are path-scoped, see `bounded_file_writer_path`).
     "file_read",
+    // Tree reads. Pure searches over a bounded walk — and they must be callable
+    // under `Ask` and `Plan` for the same reason `file_read` is: a planning turn
+    // that cannot search is a planning turn that shells out.
+    "grep",
+    "find",
     // Memory / context reads.
     "memory_search",
     "memory_browse",
