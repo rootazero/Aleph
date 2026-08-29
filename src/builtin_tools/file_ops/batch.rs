@@ -115,9 +115,15 @@ pub async fn execute_batch_move(
                     let _path_guards =
                         crate::tools::path_locks::lock_path_pair(&src_canonical, &dest_path).await;
 
-                    match fs::rename(&path, &dest_path) {
+                    // Use `tokio::fs` for the rename + the post-rename stat: a rename on a slow
+                    // / network filesystem used to block the executor for the
+                    // duration of the syscall. The per-iteration path lock
+                    // (released each loop turn) is still the right grain here.
+                    match tokio::fs::rename(&path, &dest_path).await {
                         Ok(_) => {
-                            let size = fs::metadata(&dest_path).map_or(0, |m| m.len());
+                            let size = tokio::fs::metadata(&dest_path)
+                                .await
+                                .map_or(0, |m| m.len());
                             moved_files.push(FileInfo {
                                 name: file_name.to_string_lossy().to_string(),
                                 path: dest_path.to_string_lossy().to_string(),
@@ -243,17 +249,37 @@ pub async fn execute_organize(
     let mut errors = Vec::new();
     let mut category_counts: HashMap<String, usize> = HashMap::new();
 
-    // Read directory entries
-    let entries: Vec<_> = fs::read_dir(&canonical)
-        .map_err(|e| ToolError::Execution(format!("Failed to read directory: {e}")))?
-        .filter_map(|e| e.ok())
-        .collect();
+    // Walk via `tokio::fs` so the executor thread is not blocked for every
+    // syscall — a directory with thousands of files stalls the worker under
+    // the previous `std::fs::read_dir` + `std::fs::metadata` pair.
+    let mut rd = tokio::fs::read_dir(&canonical)
+        .await
+        .map_err(|e| ToolError::Execution(format!("Failed to read directory: {e}")))?;
+    let mut entries = Vec::new();
+    loop {
+        match rd.next_entry().await {
+            Ok(Some(entry)) => entries.push(entry),
+            Ok(None) => break,
+            Err(e) => {
+                errors.push(format!("Failed to read entry: {e}"));
+                continue;
+            }
+        }
+    }
 
     for entry in entries {
         let path = entry.path();
 
-        // Skip directories
-        if path.is_dir() {
+        // Skip directories (use `symlink_metadata` so a symlink-to-dir is not
+        // treated as a directory and recursively sorted).
+        let is_dir = match tokio::fs::symlink_metadata(&path).await {
+            Ok(md) => md.file_type().is_dir(),
+            Err(_) => {
+                errors.push(format!("Failed to stat {}: vanished mid-walk", path.display()));
+                continue;
+            }
+        };
+        if is_dir {
             continue;
         }
 
@@ -282,9 +308,16 @@ pub async fn execute_organize(
         // is `organize`'s whole purpose, so it always creates them — each is a
         // one-level child of an already-existing directory.
         let category_dir = canonical.join(category);
-        if !category_dir.exists() {
-            if let Err(e) = fs::create_dir(&category_dir) {
-                errors.push(format!("Failed to create {category}: {e}"));
+        match tokio::fs::try_exists(&category_dir).await {
+            Ok(false) => {
+                if let Err(e) = tokio::fs::create_dir(&category_dir).await {
+                    errors.push(format!("Failed to create {category}: {e}"));
+                    continue;
+                }
+            }
+            Ok(true) => {}
+            Err(e) => {
+                errors.push(format!("Failed to stat {category_dir}: {e}"));
                 continue;
             }
         }
@@ -303,10 +336,12 @@ pub async fn execute_organize(
         // stable lock key.
         let _path_guards = crate::tools::path_locks::lock_path_pair(&path, &dest_path).await;
 
-        match fs::rename(&path, &dest_path) {
+        match tokio::fs::rename(&path, &dest_path).await {
             Ok(_) => {
                 *category_counts.entry(category.to_string()).or_insert(0) += 1;
-                let size = fs::metadata(&dest_path).map_or(0, |m| m.len());
+                let size = tokio::fs::metadata(&dest_path)
+                    .await
+                    .map_or(0, |m| m.len());
                 moved_files.push(FileInfo {
                     name: file_name.to_string_lossy().to_string(),
                     path: dest_path.to_string_lossy().to_string(),

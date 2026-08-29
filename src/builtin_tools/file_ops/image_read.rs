@@ -19,7 +19,7 @@
 use std::io::Cursor;
 
 use base64::Engine;
-use image::{DynamicImage, ImageFormat};
+use image::{DynamicImage, ImageFormat, ImageReader};
 
 /// Anthropic's recommended maximum image edge. Above ~1568px Claude downscales
 /// server-side anyway, so uploading larger pixels only burns request tokens for
@@ -27,6 +27,18 @@ use image::{DynamicImage, ImageFormat};
 /// image from bloating the request. (pi caps at 2000²; 1568 is the
 /// token-optimal edge for current Claude vision.)
 const MAX_IMAGE_EDGE: u32 = 1568;
+
+/// Hard ceiling on the *decoded* pixel dimensions, well above `MAX_IMAGE_EDGE`
+/// so the legitimate path always succeeds and the cap only fires on a malicious
+/// header that claims a 100k × 100k image. Without this, `image::load_from_memory`
+/// will allocate the full buffer before any size guard can fire — the
+/// decompression-bomb vector a crafted multi-MB PNG/GIF/TIFF can exploit.
+const MAX_DECODED_DIMENSION: u32 = 16_384;
+
+/// Hard ceiling on the *decoded* byte budget. 512 MiB stops a 16k×16k RGBA
+/// image (256 MiB) AND a 32k×8k RGBA image (256 MiB) from succeeding — both
+/// pass the dimension check but neither is a real-world photograph.
+const MAX_DECODED_BYTES: u64 = 512 * 1024 * 1024;
 
 /// A model-ready image lifted out of a `file_read` of a raster image file.
 pub(super) struct EncodedImage {
@@ -54,8 +66,22 @@ pub(super) fn encode_for_model(bytes: &[u8]) -> Option<EncodedImage> {
     // Magic-byte sniff first: a cheap reject for the ~all non-image binaries an
     // agent reads, before paying for a full decode.
     let sniffed = image::guess_format(bytes).ok()?;
-    // Decode — `None` for formats not compiled in or for corrupt data.
-    let decoded = image::load_from_memory(bytes).ok()?;
+    // Decode with a strict `Limits` so a crafted header (a 100k × 100k PNG,
+    // a multi-GB TIFF) cannot materialize a giant allocation before the
+    // caller has a chance to refuse. `ImageReader::decode` returns
+    // `ImageError::Limits` on a breach, which we fold into `None` so the
+    // outer flow degrades to the binary-not-displayable stub — never a
+    // multi-minute decode that wedges the executor.
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_DECODED_DIMENSION);
+    limits.max_image_height = Some(MAX_DECODED_DIMENSION);
+    limits.max_alloc = Some(MAX_DECODED_BYTES);
+    let decoded = ImageReader::from_memory(bytes)
+        .with_guessed_format()
+        .ok()?
+        .with_limits(limits)
+        .decode()
+        .ok()?;
 
     let (w, h) = (decoded.width(), decoded.height());
     let fitted = if w.max(h) > MAX_IMAGE_EDGE {

@@ -114,7 +114,18 @@ impl AlephTool for AgentListTool {
         info!("Agent list requested");
 
         // 1. Get all channels bound to each agent (many-to-one aware).
-        let bindings = self.workspace_mgr.bindings_by_agent().unwrap_or_default();
+        // A store failure here used to silently produce an empty `bindings`
+        // map, so the model saw every channel as unbound even when the DB
+        // was down — that inverted the routing signal. Log and propagate.
+        let bindings = match self.workspace_mgr.bindings_by_agent() {
+            Ok(b) => b,
+            Err(e) => {
+                warn!(error = %e, "agent_list: failed to read channel bindings");
+                return Err(crate::error::AlephError::other(format!(
+                    "agent_list: failed to read channel bindings: {e}"
+                )));
+            }
+        };
 
         // 2. Resolve the per-channel switch binding (or the registry default when
         //    unbound). NOTE: this is not necessarily the fully effective agent —
@@ -129,7 +140,18 @@ impl AlephTool for AgentListTool {
         } else {
             match self.workspace_mgr.get_active_agent(channel) {
                 Ok(Some(id)) => Some(id),
-                _ => Some(self.registry.default_agent_id().to_string()),
+                // Ok(None) is a genuine "unbound channel" — fall back to the
+                // registry default so the listing still shows an `active` row.
+                // An Err is a store failure: surface it (the model is using
+                // `active` to make routing decisions; a phantom default would
+                // be worse than an explicit failure).
+                Err(e) => {
+                    warn!(channel, error = %e, "agent_list: failed to read active binding");
+                    return Err(crate::error::AlephError::other(format!(
+                        "agent_list: failed to read active agent binding for channel '{channel}': {e}"
+                    )));
+                }
+                Ok(None) => Some(self.registry.default_agent_id().to_string()),
             }
         };
 

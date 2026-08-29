@@ -455,10 +455,35 @@ fn swap_dir_into_place(staged: &Path, dest: &Path) -> bool {
 }
 
 fn extract_dir_recursive(dir: &Dir, target: &Path) -> std::io::Result<()> {
+    // Mirror `prepare_plugin_temp_dir`'s symlink guard: a pre-existing symlink
+    // at `target` would let `create_dir_all` succeed (it follows symlinks) and
+    // then `extract_dir_contents` would write through the symlink to wherever
+    // it points — an attacker who can write under skills_dir can redirect a
+    // bundled extraction outside the cache. Reject and fail loudly.
+    reject_target_if_symlink(target)?;
     std::fs::create_dir_all(target)?;
     extract_dir_contents(dir, target)?;
     prune_stale_entries(dir, target)?;
     Ok(())
+}
+
+/// Return `Err(InvalidInput)` if `target` exists and is a symlink. Used at the
+/// boundary of every extractor that creates a directory at a caller-controlled
+/// path — without this, a pre-planted symlink would survive `create_dir_all`
+/// and the subsequent write would follow it.
+fn reject_target_if_symlink(target: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(target) {
+        Ok(m) if m.file_type().is_symlink() => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "refusing to extract into symlink target {} — remove the symlink first",
+                target.display()
+            ),
+        )),
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 fn prune_stale_entries(dir: &Dir, target: &Path) -> std::io::Result<()> {
@@ -659,6 +684,10 @@ pub(crate) fn copy_skill_leaf(src: &std::path::Path, dst: &std::path::Path) -> s
 /// Recursively copy `src` → `dst`, skipping VCS metadata, then prune any
 /// entries in `dst` no longer present in `src` (mirrors `prune_stale_entries`).
 fn copy_tree_with_prune(src: &Path, dst: &Path) -> std::io::Result<()> {
+    // Same symlink guard as `extract_dir_recursive`: `create_dir_all` follows
+    // a symlink, so without this an attacker-planted symlink at `dst` would
+    // redirect the skill copy (and its prune) outside the skills dir.
+    reject_target_if_symlink(dst)?;
     std::fs::create_dir_all(dst)?;
     copy_dir_into(src, dst)?;
     use std::collections::HashSet;
