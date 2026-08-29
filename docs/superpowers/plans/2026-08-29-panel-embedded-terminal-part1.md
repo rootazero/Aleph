@@ -4002,6 +4002,43 @@ resize 的那个——与判据「一帧带着自己的归属到达」同形。
         assert!(matches!(s.apply(stale), ApplyOutcome::Discarded { .. }));
         assert_eq!(s.dims(), (24, 80), "a discarded frame carries stale dimensions too");
     }
+
+    /// The replay path, which is the one a fix written only into `apply`
+    /// misses entirely. Frames that arrive while an attach is in flight are
+    /// buffered and replayed by `finish_attach` -- and a resize is exactly
+    /// what can happen in that window, since sizing is smallest-wins and
+    /// another client leaving grows this one without it calling anything.
+    ///
+    /// Without `settle`, replay writes rows straight into a grid still sized
+    /// to the attach snapshot, `get_mut` returns None past the old bottom,
+    /// the rows vanish, and `seq` advances anyway -- so nothing gaps and
+    /// nothing ever heals. That is the same defect this task exists to fix,
+    /// reproduced inside the code that was written to fix it.
+    #[test]
+    fn a_buffered_frame_that_grows_the_screen_lands_its_rows_on_replay() {
+        let mut s = ClientScreen::new(24, 80, 5, SID);
+        s.begin_attach();
+
+        // Arrives mid-attach, carrying a geometry the snapshot will not have.
+        assert_eq!(s.apply(frame_sized(SID, 7, 40, 100, 39, "late")), ApplyOutcome::Buffered);
+
+        // The snapshot is older and smaller: 24x80 at seq 6.
+        let resp = PtyAttachResponse {
+            seq: 6,
+            rows: 24,
+            cols: 80,
+            patch: PtyScreenPatch::default(),
+            scrollback_len: 0,
+        };
+        assert_eq!(s.finish_attach(resp), AttachOutcome::Resynced);
+
+        assert_eq!(s.dims(), (40, 100), "the replayed frame's geometry must be adopted too");
+        assert_eq!(
+            s.row_text(39),
+            "late",
+            "a replayed row past the snapshot's bottom must not be silently dropped"
+        );
+    }
 ```
 
 `shared/protocol/src/pty.rs` 的 `mod tests` —— Task 7 已有一条**键集相等**的对账测试
@@ -4091,21 +4128,82 @@ pub struct PtyScreenFrame {
 
 紧挨着的 `attach_snapshot` 已经是这个写法（同一把锁里同时读 dims 和快照），照它。
 
-**客户端**（`ClientScreen::apply`）—— 在 `write_patch` **之前**采纳几何，且**只在真正应用的那条
-路径上**：
+**客户端** —— 几何必须在写入行**之前**采纳。而这里有个陷阱，controller 在派单前查实
+（2026-08-29）：**`write_patch` 有两个调用者，把采纳写进 `apply` 只覆盖了其中一个。**
+
+`finish_attach` 的重放循环（Task 15 复审后新增的那段）调的是 `self.write_patch(&frame.patch)`，
+**不是 `self.apply(frame)`**。所以「在 `apply` 里 resize」这个改法对重放路径是 no-op：
+
+- attach 在飞的时候 PTY 被别人挤大（smallest-wins，另一个客户端离开）；
+- 缓冲下来的帧带着**新**几何，而网格还是 attach 快照那么大；
+- 重放直接 `write_patch` ⇒ `grid.get_mut(row)` 对超出旧底部的行返回 `None` ⇒ **静默丢行**；
+- 而 `seq` 照常前进 ⇒ 不 gap ⇒ 不重新 attach ⇒ **永不自愈**。
+
+那**逐字就是这个任务要修的那个 C1**，只不过发生在为修另一个 C1 而新写的代码里。而下面 Step 1 的
+两条测试只走 `apply`，**它们会在这条路还坏着的时候全绿**。
+
+**所以修法是结构性的，不是纪律性的：删掉 `write_patch`，把它的函数体并进一个必须同时收下几何的
+私有方法。** 这样「先采纳几何」不再是一条要记住的规则，而是**唯一存在的写法**——没有第二个方法
+可以伸手。
 
 ```rust
+    /// Adopt this frame's geometry, then write its rows.
+    ///
+    /// The two steps are one method rather than two calls because the order
+    /// between them is the whole correctness argument: `write_patch`'s
+    /// `grid.get_mut(row)` silently returns `None` for a row past the current
+    /// bottom, so writing before resizing drops rows with no error anywhere
+    /// and no gap to trigger a re-attach. There were two call sites for the
+    /// write half (`apply` and `finish_attach`'s replay loop) and a rule that
+    /// only one of them followed; there is now no way to write a patch
+    /// without handing over the geometry it belongs to.
+    fn settle(&mut self, rows: u16, cols: u16, patch: &PtyScreenPatch) {
+        if (rows, cols) != (self.rows, self.cols) {
+            self.rows = rows.max(1);
+            self.cols = cols.max(1);
+            self.grid.resize(self.rows as usize, Vec::new());
+        }
+        for row in &patch.rows {
+            if let Some(slot) = self.grid.get_mut(row.row as usize) {
+                slot.clone_from(&row.runs);
+            }
+        }
+        if let Some(c) = patch.cursor {
+            self.cursor = c;
+        }
+        if let Some(alt) = patch.alt_screen {
+            self.alt_screen = alt;
+        }
+        if let Some(t) = &patch.title {
+            self.title = Some(t.clone());
+        }
+    }
+```
+
+`fn resize` 与 `fn write_patch` **都删掉**（`resize` 的三行已经并进 `settle` 的头部；它此前唯一的
+调用者就是 `finish_attach`）。三个调用点改成：
+
+```rust
+    // apply(), on the Applied path only:
         self.seq = frame.seq;
-        self.resize(frame.rows, frame.cols);   // BEFORE write_patch
-        self.write_patch(&frame.patch);
+        self.settle(frame.rows, frame.cols, &frame.patch);
         ApplyOutcome::Applied
+
+    // finish_attach(), the snapshot:
+        self.seq = resp.seq;
+        self.settle(resp.rows, resp.cols, &resp.patch);
+
+    // finish_attach(), inside the replay loop:
+            self.seq = frame.seq;
+            self.settle(frame.rows, frame.cols, &frame.patch);
 ```
 
 ⚠️ **`Discarded` 与 `Gap` 两条臂不许采纳几何。** `Discarded` 的帧比我们手上的旧，它的几何也旧；
 `Gap` 会触发重新 attach，而 attach 响应本来就带 `rows`/`cols`。在这两条臂上采纳等于让一个被丢弃的
-帧改写当前状态。
+帧改写当前状态。重放循环里 `frame.seq <= self.seq` 的 `continue` 同理——**那条臂什么都不许碰**。
 
-`ClientScreen::resize` **保持私有**——它现在有了一个真正的生产者（`apply`），不需要第二个。
+⚠️ 顺带确认一件**不要改**的事：`finish_attach` 里对快照的 `settle` 排在重放循环**之前**，
+顺序不变。快照是基线，缓冲帧是它之后的增量。
 
 **顺手带一条 doc（你本来就在这个文件里）。** Task 15 的复审提了一条不值得单开一轮、但**理由目前
 只活在一份报告里**的观察：`finish_attach` 的 `resp.seq < self.seq` 那条臂返回 `Resynced`，而它
@@ -4134,9 +4232,21 @@ just wasm
 ⚠️ 那条 wire 测试在 `gateway::pty::` 的过滤范围里，但它是 `#[tokio::test(flavor = "multi_thread")]`
 且要真起一个 PTY —— **确认它真的跑了**，别只看总数是绿的。
 
-**并且做一次变异**：把 `self.resize(..)` 挪到 `write_patch(..)` **之后**，跑一遍，确认
-`a_frame_carrying_new_geometry_grows_the_screen_before_its_rows_land` **红**，再改回来。
-把 RED 输出贴进报告。顺序是这个修复的全部内容，而一条不能证伪顺序的测试证明不了顺序。
+**并且做两次变异**（两次都要贴 RED 输出，做完各自改回来）：
+
+1. **顺序**：把 `settle` 里那段 `grid.resize` 挪到写行的 `for` 循环**之后**。确认
+   `a_frame_carrying_new_geometry_grows_the_screen_before_its_rows_land` **红**。
+   顺序是这个修复的全部内容，而一条不能证伪顺序的测试证明不了顺序。
+
+2. **覆盖面**：这次不改 `settle`，改**调用点**——把重放循环里的
+   `self.settle(frame.rows, frame.cols, &frame.patch)` 换回「只写不采纳」
+   （临时加一个本地的 `write_only` 内联那段 `for` 循环即可）。确认
+   `a_buffered_frame_that_grows_the_screen_lands_its_rows_on_replay` **红**，
+   而另外三条**仍然绿**。
+
+第二次变异是有意义的那一次：它模拟的正是「把修复只写进 `apply`」这个最自然的错法。如果它红了
+而第一条测试没红，说明两条测试各自守着一个真正不同的调用点——这正是要的。**如果第二次变异
+一条都没红，别当成「守卫很稳」，去查那条测试有没有真的走到重放路径。**
 
 - [ ] **Step 5: 提交**
 
