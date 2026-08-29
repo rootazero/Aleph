@@ -102,8 +102,8 @@ pub fn TrustModal(
                             </footer>
                         </div>
                     </div>
-                }
+                }.into_any()
             }}
         </Show>
-    }
+    }.into_any()
 }

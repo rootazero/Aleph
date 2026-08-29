@@ -145,8 +145,8 @@ pub fn ExtensionDetailDrawer() -> impl IntoView {
                             </footer>
                         </aside>
                     </div>
-                }
+                }.into_any()
             }}
         </Show>
-    }
+    }.into_any()
 }

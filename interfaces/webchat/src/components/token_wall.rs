@@ -67,5 +67,5 @@ pub fn TokenWall() -> impl IntoView {
                 </div>
             </div>
         </Show>
-    }
+    }.into_any()
 }

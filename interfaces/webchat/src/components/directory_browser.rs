@@ -504,5 +504,5 @@ pub fn DirectoryBrowser(
                 </div>
             </div>
         </Show>
-    }
+    }.into_any()
 }
