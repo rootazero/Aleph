@@ -573,11 +573,19 @@ impl AcpAdapterManager {
             let mut sessions = self.sessions.write().await;
             sessions.drain().collect::<Vec<_>>()
         };
-        for (key, entry) in &entries {
+        for (key, _) in &entries {
             info!(harness_id = %key.harness_id, cwd = ?key.cwd, "Shutting down ACP session");
+        }
+        // Kill all sessions concurrently. A single wedged session
+        // (e.g. one whose child is stuck in uninterruptible IO) used
+        // to block every other session's teardown behind it because
+        // the kill loop was sequential. With `join_all` the wall-clock
+        // cost is bounded by the slowest session, not the sum.
+        futures::future::join_all(entries.iter().map(|(_, entry)| async move {
             let mut session = entry.session.lock().await;
             session.kill().await;
-        }
+        }))
+        .await;
         for (key, _) in entries {
             self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
                 harness_id: key.harness_id,

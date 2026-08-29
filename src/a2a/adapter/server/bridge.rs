@@ -6,11 +6,12 @@
 
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use futures::Stream;
+use futures::{FutureExt, Stream};
 use tracing::{error, info};
 
 use crate::a2a::domain::{
@@ -290,75 +291,107 @@ impl A2AMessageHandler for AgentLoopBridge {
             side_question: false,
         };
 
-        tokio::spawn(TURN_CONTEXT.scope(a2a_turn, async move {
-            match execution_adapter.execute(request, agent, emitter).await {
-                Ok(()) => {
-                    let response_msg =
-                        A2AMessage::text(A2ARole::Agent, "Task completed successfully");
-                    if let Err(e) = task_manager
-                        .update_status(
-                            &task_id_owned,
-                            TaskState::Completed,
-                            Some(response_msg.clone()),
-                        )
-                        .await
-                    {
-                        error!(task_id = %task_id_owned, error = %e, "Failed to update task to Completed");
-                        // Still release the broadcast channel — otherwise the
-                        // hub entry leaks and subscribers hang with no final event.
-                        let _ = streaming.cleanup_task(&task_id_owned).await;
-                        return;
-                    }
+        tokio::spawn(TURN_CONTEXT.scope(
+            a2a_turn,
+            // AssertUnwindSafe so a panic inside the execution / update /
+            // broadcast chain still triggers the trailing cleanup_task.
+            // Without this, a poisoned mutex or a contract change that
+            // introduces an unwrap would unwind past
+            // `cleanup_task(&task_id_owned)` and leak the broadcast
+            // channel entry — see A2A-R3-02.
+            AssertUnwindSafe(async move {
+                match execution_adapter.execute(request, agent, emitter).await {
+                    Ok(()) => {
+                        let response_msg =
+                            A2AMessage::text(A2ARole::Agent, "Task completed successfully");
+                        if let Err(e) = task_manager
+                            .update_status(
+                                &task_id_owned,
+                                TaskState::Completed,
+                                Some(response_msg.clone()),
+                            )
+                            .await
+                        {
+                            error!(task_id = %task_id_owned, error = %e, "Failed to update task to Completed");
+                            // Still release the broadcast channel — otherwise the
+                            // hub entry leaks and subscribers hang with no final event.
+                            let _ = streaming.cleanup_task(&task_id_owned).await;
+                            return;
+                        }
 
-                    let completed_event = TaskStatusUpdateEvent {
-                        task_id: task_id_owned.clone(),
-                        context_id: context_id_owned,
-                        status: TaskStatus {
-                            state: TaskState::Completed,
-                            message: Some(response_msg),
-                            timestamp: Utc::now(),
-                        },
-                        is_final: true,
-                        metadata: None,
-                    };
-                    let _ = streaming
-                        .broadcast_status(&task_id_owned, completed_event)
-                        .await;
-                    info!(task_id = %task_id_owned, "A2A bridge: streaming task completed");
-                }
-                Err(e) => {
-                    let error_msg =
-                        A2AMessage::text(A2ARole::Agent, format!("Execution failed: {e}"));
-                    if let Err(update_err) = task_manager
-                        .update_status(&task_id_owned, TaskState::Failed, Some(error_msg.clone()))
-                        .await
-                    {
-                        error!(task_id = %task_id_owned, error = %update_err, "Failed to update task to Failed");
-                        // Still release the broadcast channel — otherwise the
-                        // hub entry leaks and subscribers hang with no final event.
-                        let _ = streaming.cleanup_task(&task_id_owned).await;
-                        return;
+                        let completed_event = TaskStatusUpdateEvent {
+                            task_id: task_id_owned.clone(),
+                            context_id: context_id_owned,
+                            status: TaskStatus {
+                                state: TaskState::Completed,
+                                message: Some(response_msg),
+                                timestamp: Utc::now(),
+                            },
+                            is_final: true,
+                            metadata: None,
+                        };
+                        let _ = streaming
+                            .broadcast_status(&task_id_owned, completed_event)
+                            .await;
+                        info!(task_id = %task_id_owned, "A2A bridge: streaming task completed");
                     }
+                    Err(e) => {
+                        let error_msg =
+                            A2AMessage::text(A2ARole::Agent, format!("Execution failed: {e}"));
+                        if let Err(update_err) = task_manager
+                            .update_status(
+                                &task_id_owned,
+                                TaskState::Failed,
+                                Some(error_msg.clone()),
+                            )
+                            .await
+                        {
+                            error!(task_id = %task_id_owned, error = %update_err, "Failed to update task to Failed");
+                            // Still release the broadcast channel — otherwise the
+                            // hub entry leaks and subscribers hang with no final event.
+                            let _ = streaming.cleanup_task(&task_id_owned).await;
+                            return;
+                        }
 
-                    let failed_event = TaskStatusUpdateEvent {
-                        task_id: task_id_owned.clone(),
-                        context_id: context_id_owned,
-                        status: TaskStatus {
-                            state: TaskState::Failed,
-                            message: Some(error_msg),
-                            timestamp: Utc::now(),
-                        },
-                        is_final: true,
-                        metadata: None,
-                    };
-                    let _ = streaming
-                        .broadcast_status(&task_id_owned, failed_event)
-                        .await;
-                    error!(task_id = %task_id_owned, error = %e, "A2A bridge: streaming task failed");
+                        let failed_event = TaskStatusUpdateEvent {
+                            task_id: task_id_owned.clone(),
+                            context_id: context_id_owned,
+                            status: TaskStatus {
+                                state: TaskState::Failed,
+                                message: Some(error_msg),
+                                timestamp: Utc::now(),
+                            },
+                            is_final: true,
+                            metadata: None,
+                        };
+                        let _ = streaming
+                            .broadcast_status(&task_id_owned, failed_event)
+                            .await;
+                        error!(task_id = %task_id_owned, error = %e, "A2A bridge: streaming task failed");
+                    }
                 }
-            }
-            let _ = streaming.cleanup_task(&task_id_owned).await;
-        }));
+                let _ = streaming.cleanup_task(&task_id_owned).await;
+            })
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|_| {
+                // Cleanup_task is still required on the panic path —
+                // without it the broadcast channel entry leaks and any
+                // concurrent resubscribe / cancel compounds.
+                tracing::error!(
+                    task_id = %task_id_owned,
+                    "A2A bridge: streaming spawn panicked; forcing cleanup"
+                );
+                // We cannot await inside the unwrap_or_else (the
+                // future has already been dropped), so the cleanup
+                // happens synchronously via `tokio::spawn` itself.
+                let streaming_for_cleanup = streaming.clone();
+                let task_id_for_cleanup = task_id_owned.clone();
+                tokio::spawn(async move {
+                    let _ = streaming_for_cleanup.cleanup_task(&task_id_for_cleanup).await;
+                });
+            }),
+        ));
 
         Ok(stream)
     }
