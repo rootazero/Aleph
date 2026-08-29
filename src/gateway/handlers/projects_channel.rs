@@ -103,6 +103,38 @@ fn row(b: ChannelBinding) -> ChannelBindingRow {
 /// The generalisation, for whoever meets this shape next: **when a construction
 /// forces you to invent a field, look upstream for the projection that dropped
 /// it. The fix is to stop requiring the field, not to guess it better.**
+///
+/// # What this scan can silently miss, and therefore what `NothingToMove` costs
+///
+/// The receipt is only as honest as `list_sessions` is complete, so the ways it
+/// can come back short are disclosed here rather than left to be rediscovered.
+/// None of these is fixed by this handler — two live in the backends and one is
+/// inherent — but a reader owes themselves the list before trusting a
+/// `NothingToMove`:
+///
+/// - **SQLite backend (the shipped default, `[general] session_store =
+///   "sqlite"`).** `session_manager::ops::query::list_sessions` collects with
+///   `rows.filter_map(|r| r.ok())` — a row whose column mapping fails is
+///   dropped **in complete silence**. One damaged `sessions` row for the bound
+///   conversation therefore yields `NothingToMove`, which is Ruling AG's defect
+///   one layer down: an `Err` folded into an absence, and a receipt then
+///   asserting the absence. Not fixed here deliberately — that `filter_map` is
+///   pre-existing, has other callers, and re-classifying it is its own task.
+/// - **File backend.** Same class, but it is *loud*: an unparseable
+///   `metadata.json` is skipped with a named `warn!`. An unreadable one (IO
+///   error rather than parse error) is still silent.
+/// - **The listing is a snapshot.** A turn whose routing resolved
+///   `room_claiming` before `bind_conversation` committed, but whose session row
+///   is created after this listing, is stamped `personal:<speaker>` and never
+///   seen. `stamp_attribution` is create-only and `backfill_attribution` heals
+///   only NULL rows, so that row stays personal. The window is milliseconds and
+///   the remedy is free: **re-running `bind` on the same room is a documented
+///   no-op that re-runs this scan.** Said out loud so the next person to meet it
+///   looks at the clock rather than at the matching logic.
+///
+/// 这次扫描可能静默漏掉什么——写出来，因为 `NothingToMove` 的诚实程度取决于
+/// `list_sessions` 的完整程度：SQLite（出厂默认）静默丢坏行、file 后端对解析失败
+/// 出声但对读失败不出声、以及快照与并发回合的赛跑（重跑 bind 即可再扫一遍）。
 async fn rescope_existing_transcript(
     sessions: &dyn SessionStore,
     bound: &ChannelBinding,
@@ -213,11 +245,19 @@ async fn rescope_existing_transcript(
 /// Turn the scan's aggregate result into the three values the receipt carries
 /// — and log the two things the enum cannot say.
 ///
-/// Split from the `await`s above so the mapping is testable without a
-/// thirty-method stub store: neither shipped backend can be made to return
-/// `Err` on demand, and a hand-written stub that could would be a second
-/// derivation of the thing under test. This function IS the production
-/// mapping, called with the production arguments.
+/// Split from the `await`s above so the mapping is testable in isolation
+/// without a thirty-method stub store — a stub that could return `Err` on
+/// demand would be a second derivation of the thing under test. This function
+/// IS the production mapping, called with the production arguments.
+///
+/// ⚠️ It used to say here that neither shipped backend can be made to return
+/// `Err` at all. **That stopped being true when the scan was added**, and the
+/// sentence outlived its truth by one commit: `list_sessions` is a second
+/// `Err` source and a real `FileSessionStore` produces one if its base
+/// directory is removed. `a_store_that_cannot_be_listed_reports_unknown_and_still_records_the_binding`
+/// exercises exactly that, end to end. Corrected rather than deleted because a
+/// written "this cannot be done" does not just describe the code wrongly — it
+/// talks the next reader out of the fix.
 ///
 /// `Err` must not fold into "nothing moved". `RescopeOutcome::NothingToMove`
 /// tells every client no row was found, which would be a confident factual
@@ -302,8 +342,10 @@ pub async fn handle_bind(
     let actor = crate::gateway::caller_identity::current_caller_user();
     // `params.peer_kind` goes STRAIGHT through: the store's binding methods
     // take `aleph_protocol::projects::BindingPeerKind`, the same type the wire
-    // carries; nothing on this path converts. (`binding::from_wire` exists for
-    // the ROUTING enum, which this handler no longer needs — see Ruling AM.)
+    // carries. Nothing on this path converts to the routing `PeerKind` at all —
+    // the enumeration compares wire kinds, so no inverse of `binding::to_wire`
+    // is needed anywhere (Ruling AM; the inverse was deleted for having no
+    // consumer).
     let bound = match store.bind_conversation(
         &project.id,
         &params.channel_id,
@@ -351,6 +393,41 @@ pub async fn handle_bind(
 ///
 /// Operator-only; see the module doc.
 ///
+/// # It deliberately does NOT check room visibility, unlike `bind`
+///
+/// [`handle_bind`] runs [`gate_project`]; this does not, and cannot: it is
+/// addressed by CONVERSATION (`channel_id`, `peer_kind`, `peer_id`) and carries
+/// no project id for a gate to gate on. The only way to add one would be to
+/// resolve the owning room and refuse on it. Read cold, the asymmetry looks
+/// like an oversight, and "symmetrizing" it is a one-line change that would
+/// pass review — so the three reasons live here, where the next reader is
+/// standing, and not only in a report:
+///
+/// 1. **It runs in the safe direction.** `bind` creates an outward exposure;
+///    `unbind` removes one. "Anyone who may call this can always stop it" is
+///    the failure mode you want.
+/// 2. **Gating it would make a stale binding un-detachable** — a door with no
+///    handle is not a gate, it is a wall. This is reachable, not hypothetical:
+///    `projects.remove` deletes the roster, and the roster IS the visibility
+///    predicate, so a conversation bound to a room no principal can see is a
+///    state the system can reach. Gated, that binding could never be released.
+/// 3. **The authority exercised is over the CHANNEL CONVERSATION, not the
+///    room** — "this Telegram group stops being a room conversation" is a
+///    channel-level decision, and it is audit-logged with the room it was
+///    taken from.
+///
+/// Access control for this verb is the admin gate in
+/// [`method_admin::ADMIN_METHODS`], pinned separately. Nothing leaks either:
+/// the response is `{unbound: bool}`, and that bool answers an operator-only
+/// question anyway.
+///
+/// Pinned by `unbind_deliberately_succeeds_for_a_room_the_caller_cannot_see`.
+/// If that goes red because somebody added a visibility gate, it is a product
+/// decision to re-open with a human, not a test to update.
+///
+/// 解绑刻意不做房间可见性检查（`bind` 做）。三条理由见上：方向安全、
+/// 加闸会造出解不掉的陈旧绑定（没有门把手的门是墙）、权限主体是频道会话而非房间。
+///
 /// # Unbinding does not move the transcript back — and that is deliberate
 ///
 /// Once a session row's `scope_id` is `project:<pid>`, nothing moves it:
@@ -371,15 +448,19 @@ pub async fn handle_bind(
 ///
 /// What would be wrong is silence about it. The receipt reports only that the
 /// binding is gone, so an operator will reasonably assume symmetry that does
-/// not exist. The statement is unconditionally true — it holds whether or not
-/// a transcript exists — so it is client copy rather than wire state, and it
-/// belongs in every surface's `unbind` output:
+/// not exist. Every surface must therefore print
+/// [`aleph_protocol::projects::UNBIND_KEEPS_TRANSCRIPT_NOTICE`] after a
+/// successful unbind.
 ///
-/// > The conversation's existing transcript stays with the room — unbinding
-/// > stops future turns from joining it, it does not move history back.
+/// The sentence is **not repeated here on purpose.** It is unconditionally
+/// true, so it is client copy rather than wire state (Ruling AI) — but copy
+/// that must be byte-identical on three surfaces needs one author, and quoting
+/// it in this doc would make this the second. See that constant for the whole
+/// argument.
 ///
 /// 解绑不会把已有记录搬回去：这是有意的，因为没有一个正确的目的地可搬。
-/// 每个客户端面都必须把上面那句话打印出来。
+/// 每个客户端面都必须打印 `UNBIND_KEEPS_TRANSCRIPT_NOTICE`——**这里刻意不复述那句话**，
+/// 复述就是给它第二个作者。
 ///
 /// [`SessionStore::rescope_attribution`]: crate::gateway::session_store::SessionStore::rescope_attribution
 pub async fn handle_unbind(
@@ -547,9 +628,13 @@ mod tests {
     /// folding it into "nothing moved" makes every client report that no row
     /// was found for a conversation whose store just failed.
     ///
-    /// This calls the production mapping directly. Neither shipped backend can
-    /// be made to return `Err` on demand, and a stub that could would be a
-    /// second derivation of the thing under test.
+    /// This calls the production mapping directly, which is what makes it a
+    /// unit test of the mapping rather than of the plumbing. The `Err` arm is
+    /// ALSO covered end to end by
+    /// `a_store_that_cannot_be_listed_reports_unknown_and_still_records_the_binding`
+    /// — the two are complementary, and neither replaces the other: this one
+    /// pins which value each outcome maps to, that one pins that the value
+    /// reaches the wire and that the bind is not rolled back on the way.
     #[test]
     fn a_store_error_is_reported_as_unknown_and_not_as_nothing_to_move() {
         let bound = a_binding();
@@ -668,9 +753,10 @@ mod tests {
     #[tokio::test]
     async fn a_non_member_cannot_list_a_rooms_bindings() {
         let (store, project, _guard) = room();
-        // `zz-standup`, not the `C1` the other tests use: see the assertion at
-        // the end of this test for why the probed peer id must contain
-        // non-hex letters.
+        // `zz-standup` rather than the `C1` the other tests use. The probe that
+        // needed a non-hex spelling is gone (see the end of this test), but the
+        // room must still HAVE a binding for the refusal to be worth asserting:
+        // a stranger being refused an unbound room proves less.
         store
             .bind_conversation(
                 &project.id,
@@ -712,22 +798,25 @@ mod tests {
             format!("project not found: {}", project.id),
             "the refusal must be the not-found wording, never a permission denial"
         );
-        // ⚠️ The peer id probed for here MUST be one that cannot occur inside
-        // a project id. Project ids are `p-<32 hex chars>`
-        // (`store::mint_id`), so the first version of this assertion looked
-        // for `"c1"` — the peer id the rest of the file uses — and fired on
-        // roughly one run in nine when the fixture's own random id happened to
-        // contain those two hex digits. It passed twice before failing on
-        // `p-fa211571c4d24960bdcbe9c108d2f81e`.
+        // The no-oracle property is carried ENTIRELY by the `assert_eq!` above:
+        // pinning the message to exactly `project not found: {id}` already
+        // makes leaking `telegram` or the peer id impossible. A `contains`
+        // probe underneath it could not fail, so it is documentation dressed
+        // as an assertion, and it is gone.
         //
-        // The lesson is not "that was unlucky": a negative assertion has to be
+        // ⚠️ Keeping the lesson it cost, because it generalises past this file.
+        // That probe originally looked for `"c1"` — the peer id the rest of the
+        // file uses. Project ids are `p-<32 hex chars>` (`store::mint_id`), and
+        // `c1` is two hex digits, so it fired on roughly one run in nine when
+        // the fixture's own random id happened to contain them. It passed twice
+        // before failing on `p-fa211571c4d24960bdcbe9c108d2f81e`.
+        //
+        // The lesson is not "that was unlucky": **a negative assertion has to be
         // over an alphabet the haystack cannot produce, or it is testing the
-        // random number generator. `zz-standup` and `telegram` both contain
-        // non-hex letters and therefore cannot appear in a project id.
-        assert!(
-            !refused_msg.contains("telegram") && !refused_msg.contains("zz-standup"),
-            "a refusal must not leak what is bound: {refused_msg}"
-        );
+        // random number generator.** The second lesson arrived with the review:
+        // the assertion that cost a cycle to repair was the one carrying no
+        // weight. Repairing a guard is not the same as checking it guards
+        // anything.
     }
 
     /// A roster member sees where their own room lives. `list` is deliberately
@@ -1070,7 +1159,8 @@ mod tests {
     /// Ruling AM constraint 1, pinned so the reflex cannot be added back
     /// silently.
     ///
-    /// The scan runs `SessionFilter::default()` — `owner_visible_to: None` —
+    /// The scan sets `owner_visible_to: None` — see the filter in
+    /// `rescope_existing_transcript`, where all four fields are written out —
     /// because the rows it is looking for BELONG TO OTHER PEOPLE.
     /// `personal:<first speaker>` is exactly the class being moved, and the
     /// first speaker is usually not the operator doing the bind. Adding
@@ -1427,6 +1517,145 @@ mod tests {
                 .unwrap(),
             None,
             "and it really released the conversation"
+        );
+    }
+
+    /// MEDIUM-2: the SHIPPED DEFAULT backend, exercised at handler level.
+    ///
+    /// `[general] session_store` defaults to `"sqlite"`
+    /// (`config/types/general.rs`), and every other `handle_bind` test in this
+    /// file builds a `FileSessionStore`. So until this test the scan had never
+    /// run against the store most installs actually use — and the two backends
+    /// are not interchangeable for this verb's purposes: they disagree about
+    /// what happens to a row they cannot decode (file warns by name, sqlite's
+    /// `filter_map(|r| r.ok())` drops it silently). See
+    /// `rescope_existing_transcript`'s doc for what that costs a
+    /// `NothingToMove`.
+    ///
+    /// This does not fix that asymmetry — it is pre-existing and has other
+    /// callers. It makes sure the default path is executed at all, so a future
+    /// change that works on one backend and not the other cannot pass unseen.
+    ///
+    /// 出厂默认是 sqlite，而其余 14 条 handler 测试全跑 file 后端；这一条让默认路径
+    /// 至少被执行一次。
+    #[tokio::test]
+    async fn the_scan_works_on_the_shipped_default_sqlite_backend() {
+        let (store, project, _guard) = room();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sessions: Arc<dyn SessionStore> = Arc::new(
+            crate::gateway::session_manager::SessionManager::new(
+                crate::gateway::session_manager::SessionManagerConfig {
+                    db_path: dir.path().join("sessions.db"),
+                    ..Default::default()
+                },
+            )
+            .expect("sqlite session store"),
+        );
+
+        let key = SessionKey::group("main", "telegram", PeerKind::Group, "C1");
+        with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            sessions.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+
+        let resp = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_bind(
+                    rpc("projects.channel.bind", bind_params(&project.id, "C1")),
+                    store.clone(),
+                    sessions.clone(),
+                    bus(),
+                ),
+            )
+            .await;
+
+        let result: ChannelBindResult =
+            serde_json::from_value(resp.result.expect("bind succeeds")).expect("bind result");
+        assert_eq!(
+            result.rescoped_session,
+            RescopeOutcome::Moved,
+            "the enumeration must find the row on the default backend too — \
+             `list_sessions`, key parsing and `rescope_attribution` are all \
+             separate implementations there"
+        );
+        assert_eq!(
+            sessions
+                .get_metadata(&key)
+                .await
+                .unwrap()
+                .unwrap()
+                .scope_id
+                .as_deref(),
+            Some(format!("project:{}", project.id).as_str())
+        );
+    }
+
+    /// MEDIUM-3: the `Unknown` arm, end to end, on a real backend.
+    ///
+    /// The doc used to claim no shipped backend could be made to return `Err`.
+    /// That was true in round 1, when `rescope_attribution` was the only `Err`
+    /// source — and **round 2 falsified it** by adding the scan:
+    /// `list_sessions` on a `FileSessionStore` whose base directory has been
+    /// removed is `tokio::fs::read_dir` on a missing path, i.e. `Err`, with no
+    /// stub anywhere.
+    ///
+    /// This pins the two properties the whole Ruling AG argument rests on, and
+    /// which `a_store_error_is_reported_as_unknown_and_not_as_nothing_to_move`
+    /// structurally cannot see because it calls the mapping directly:
+    ///
+    /// 1. `Unknown` **reaches the wire** — a client is told the outcome was not
+    ///    observed, rather than being told no row was found.
+    /// 2. The bind **is not rolled back** by the failure. The binding committed
+    ///    before the scan ran, and a scan that cannot see the store must not
+    ///    undo it; otherwise a transient IO error silently discards an
+    ///    operator's decision.
+    ///
+    /// 这两条性质此前只活在散文里。
+    #[tokio::test]
+    async fn a_store_that_cannot_be_listed_reports_unknown_and_still_records_the_binding() {
+        let (store, project, _guard) = room();
+        let (sessions, dir) = sessions();
+
+        // Make the store genuinely unlistable. No stub: this is the shipped
+        // `FileSessionStore` meeting a missing base directory.
+        std::fs::remove_dir_all(dir.path()).expect("remove the session store's base dir");
+
+        let resp = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_bind(
+                    rpc("projects.channel.bind", bind_params(&project.id, "C1")),
+                    store.clone(),
+                    sessions.clone(),
+                    bus(),
+                ),
+            )
+            .await;
+
+        let result: ChannelBindResult = serde_json::from_value(
+            resp.result
+                .expect("a scan failure must NOT fail the RPC — the bind already committed"),
+        )
+        .expect("bind result");
+        assert_eq!(
+            result.rescoped_session,
+            RescopeOutcome::Unknown,
+            "an unreadable store means the transcript's fate is unobserved. \
+             Reporting NothingToMove here would be the receipt asserting an \
+             absence it never saw — the exact defect Ruling AG removed."
+        );
+        assert_eq!(
+            store
+                .project_for_conversation("telegram", BindingPeerKind::Group, "C1")
+                .unwrap()
+                .as_deref(),
+            Some(project.id.as_str()),
+            "the binding committed before the scan ran and must survive its \
+             failure — a transient IO error must not discard the operator's \
+             decision"
         );
     }
 }

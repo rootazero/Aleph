@@ -78,14 +78,22 @@ pub struct ChannelBindingRow {
 pub enum RescopeOutcome {
     /// An existing transcript was moved into the room scope.
     Moved,
-    /// No session row was found for that conversation.
+    /// No session row was found for that conversation — or every row it found
+    /// had vanished by the time it was reached.
     ///
     /// Worded as what the server **observed**, not as what it would infer.
     /// "Nobody has spoken in that conversation yet" is the usual explanation
     /// and is true today, but it is an interpretation layered on top of "I
     /// found no row" — and an interpretation becomes a lie in the hands of
     /// whoever next narrows the search. The value only ever means the search
-    /// came back empty.
+    /// produced nothing to move.
+    ///
+    /// The second clause covers a narrow race the server can genuinely be in:
+    /// the scan lists rows, then rescopes each one, and a row deleted between
+    /// those two steps answers "no such row". Reporting that as
+    /// [`Self::Unknown`] would render a benign race as an alarming receipt, so
+    /// it lands here — but the doc says so rather than letting the value mean
+    /// something narrower than the code does.
     ///
     /// A distinct answer from [`Self::Moved`], because a receipt that claims a
     /// migration happened when it did not is a client asserting a result it
@@ -143,6 +151,36 @@ pub struct ChannelUnbindResult {
     /// `false` means nothing was bound.
     pub unbound: bool,
 }
+
+/// The sentence every surface prints after a successful `unbind`.
+///
+/// **Deliberately a `const`, not a field on [`ChannelUnbindResult`]** — those
+/// are two different questions and only the first was settled by Ruling AI.
+///
+/// *Should it go on the wire?* No. The statement is unconditionally true — it
+/// holds whether or not a transcript exists — so the server would be sending a
+/// constant, which is client copy rather than wire state.
+///
+/// *Does that mean it needs no owner?* Also no, and that half does not follow
+/// from the first. Copy that must be **identical** on three surfaces (CLI,
+/// Panel, and any future one) otherwise acquires three authors, and this
+/// repo's most-recorded defect is one fact with two statements where only one
+/// gets updated. A `const` here is the same remedy `ADMIN_REQUIRED_MESSAGE`
+/// already uses for cross-surface wording.
+///
+/// Why the sentence exists at all: `unbind` does not move the transcript back
+/// out of the room, and there is no correct destination to move it to (the
+/// previous scope was never recorded, and reverting to `personal:<somebody>`
+/// means picking a person, where picking wrong is worse than not reverting).
+/// An operator who is not told will reasonably assume a symmetry that does not
+/// exist.
+///
+/// 每个客户端面在 unbind 成功后都要打印这句话。刻意是 `const` 而不是 wire 字段：
+/// 它无条件为真（所以不该上 wire），但**不上 wire ≠ 不需要所有者**——必须在三个
+/// 面上逐字一致的文案，否则就是三个作者。
+pub const UNBIND_KEEPS_TRANSCRIPT_NOTICE: &str = "The conversation's existing transcript \
+    stays with the room — unbinding stops future turns from joining it, it does not move \
+    history back.";
 
 /// `projects.channel.list` result.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

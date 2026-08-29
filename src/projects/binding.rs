@@ -80,31 +80,21 @@ pub const fn to_wire(kind: PeerKind) -> BindingPeerKind {
     }
 }
 
-/// Convert a wire [`BindingPeerKind`] back to a routing [`PeerKind`].
-///
-/// The inverse of [`to_wire`], and the only `BindingPeerKind -> PeerKind`
-/// conversion in the tree. It lives next to `to_wire` so the pair stays
-/// readable as a pair: the alternative — an `if params.peer_kind == Thread`
-/// at the one call site that needs a routing key — would be a second author
-/// for the correspondence, and is the shape that silently picks `Group` the
-/// day a third variant is added.
-///
-/// Its caller is `handlers::projects_channel::handle_bind`, which needs a
-/// routing key to address the conversation's existing session row. Note the
-/// asymmetry that makes this function easy to over-apply: `ProjectStore`'s
-/// binding methods take the WIRE enum directly, so nothing on that path
-/// converts at all — only [`SessionKey::group`] needs the routing one.
-///
-/// 与 [`to_wire`] 互为逆函数，且是全仓唯一的 `BindingPeerKind -> PeerKind`
-/// 转换。注意不对称：`ProjectStore` 的绑定方法直接吃 wire 枚举，**不**需要
-/// 转换；只有 [`SessionKey::group`] 吃 routing 枚举才需要这一个。
-#[must_use]
-pub const fn from_wire(kind: BindingPeerKind) -> PeerKind {
-    match kind {
-        BindingPeerKind::Group => PeerKind::Group,
-        BindingPeerKind::Thread => PeerKind::Thread,
-    }
-}
+// `from_wire` (the `BindingPeerKind -> PeerKind` inverse of `to_wire`) lived
+// here between 716396475 and 836c4d21d. It was deleted once the room-binding
+// scan stopped constructing session keys: nothing in the tree converts a wire
+// peer kind back to a routing one any more, because the enumeration compares
+// WIRE kinds on both sides.
+//
+// Recorded rather than silently removed, because its doc had become the thing
+// this repo punishes: it named `handle_bind` as its caller, which was true when
+// written and false three commits later — and that sentence is exactly the half
+// a reader uses to decide the function is load-bearing.
+//
+// The property it was reached for is NOT dead and did not go with it — see
+// `what_conversation_of_reports_is_what_the_store_normalizes` below, which pins
+// it without needing the inverse. If a future caller genuinely needs a routing
+// kind from a wire one, write it back; do not resurrect it speculatively.
 
 /// Stable storage spelling for a peer kind.
 ///
@@ -259,50 +249,48 @@ mod tests {
         }
     }
 
-    /// `from_wire` is the inverse of `to_wire` and nothing else. A conversion
-    /// pair that is not actually a bijection would let a `thread` binding
-    /// address a `group` session row — the row would not be found, and
-    /// `handle_bind` would report "nobody has spoken in that conversation
-    /// yet" about a conversation with a full transcript.
+    /// The property the room-binding scan actually rests on, stated without
+    /// the `from_wire` inverse that used to express it.
     ///
-    /// Both loops are written as exhaustive matches over their own enum, so
-    /// adding a variant to either side is a compile error rather than a
-    /// silently half-covered test.
+    /// `handlers::projects_channel::rescope_existing_transcript` compares the
+    /// components of a STORED [`ChannelBinding`] against what
+    /// [`conversation_of`] reports for a live [`SessionKey`]. That comparison
+    /// is only sound if both sides are the output of the same normalization:
+    /// the store side runs [`normalize_component`] (inside
+    /// `ProjectStore::bind_conversation`), and the key side runs
+    /// `sanitize_component` at `SessionKey::group` construction — and
+    /// `normalize_component` *is* `sanitize_component`. This test is where
+    /// that identity is pinned rather than assumed.
+    ///
+    /// Note the input: a deliberately mixed-case, mixed-punctuation spelling,
+    /// so a normalization that silently became a no-op on either side fails
+    /// here. Passing an already-normalized string would make the test green
+    /// for both a working and a broken normalizer.
+    ///
+    /// 绑定扫描依赖的那条性质：入库分量与 `conversation_of` 对活键报出的分量，
+    /// 必须是同一个归一化函数的输出。这里钉住它，不再经由 `from_wire`。
     #[test]
-    fn the_wire_and_routing_peer_kinds_round_trip_both_ways() {
-        for k in [PeerKind::Group, PeerKind::Thread] {
-            match k {
-                PeerKind::Group | PeerKind::Thread => {}
-            }
-            assert_eq!(from_wire(to_wire(k)), k);
-        }
-        for w in [BindingPeerKind::Group, BindingPeerKind::Thread] {
-            match w {
-                BindingPeerKind::Group | BindingPeerKind::Thread => {}
-            }
-            assert_eq!(to_wire(from_wire(w)), w);
-        }
-    }
-
-    /// The property `from_wire` exists to keep: a key built from a binding's
-    /// stored `peer_kind` must be the same key a live conversation of that
-    /// kind produces. This is what `handle_bind` relies on to find the row.
-    #[test]
-    fn a_key_rebuilt_from_a_binding_matches_the_live_conversation_key() {
+    fn what_conversation_of_reports_is_what_the_store_normalizes() {
         for (routing, wire) in [
             (PeerKind::Group, BindingPeerKind::Group),
             (PeerKind::Thread, BindingPeerKind::Thread),
         ] {
-            let live = SessionKey::group("main", "telegram", routing, "C0A1");
+            let live = SessionKey::group("main", "TeLeGrAm", routing, "C0A1");
             let (channel, kind, peer) = conversation_of(&live).expect("a conversation");
-            assert_eq!(kind, wire);
-            let rebuilt = SessionKey::group("main", &channel, from_wire(kind), &peer);
+
             assert_eq!(
-                rebuilt, live,
-                "rebuilding a session key from what `conversation_of` reported \
-                 must land on the same key, or the rescope in \
-                 `handle_bind` addresses a row that does not exist"
+                kind, wire,
+                "the routing kind must report as its wire twin, or a bound \
+                 `thread` would be compared against a `group` row"
             );
+            assert_eq!(
+                channel,
+                normalize_component("TeLeGrAm"),
+                "the channel a live key reports must equal what the store wrote \
+                 for the same operator spelling — otherwise the scan compares \
+                 two different normalizations and finds nothing"
+            );
+            assert_eq!(peer, normalize_component("C0A1"), "same for the peer id");
         }
     }
 }
