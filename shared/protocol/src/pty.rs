@@ -108,6 +108,16 @@ fn is_false(b: &bool) -> bool {
 pub struct PtyScreenFrame {
     pub session_id: String,
     pub seq: u64,
+    /// The screen's dimensions as of this frame.
+    ///
+    /// Beside `seq` rather than inside `patch`, and matching
+    /// `PtyAttachResponse`'s shape, because geometry is a property of the
+    /// frame rather than of the content delta. Carried on EVERY frame, not
+    /// just the ones after a resize: sizing is smallest-wins across attached
+    /// clients, so a client can be resized by someone else joining without
+    /// having called anything, and there is no response it could read.
+    pub rows: u16,
+    pub cols: u16,
     pub patch: PtyScreenPatch,
 }
 
@@ -145,6 +155,8 @@ mod tests {
         let frame = PtyScreenFrame {
             session_id: "s".into(),
             seq: 1,
+            rows: 24,
+            cols: 80,
             patch: PtyScreenPatch::default(),
         };
         let v = serde_json::to_value(&frame).expect("serialisable");
@@ -156,7 +168,7 @@ mod tests {
             .collect();
         assert_eq!(
             keys,
-            ["patch", "seq", "session_id"]
+            ["patch", "seq", "session_id", "rows", "cols"]
                 .into_iter()
                 .collect::<std::collections::BTreeSet<_>>()
         );

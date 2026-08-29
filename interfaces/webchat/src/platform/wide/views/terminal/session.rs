@@ -183,12 +183,31 @@ impl ClientScreen {
             // not held forever — but they are dropped rather than replayed:
             // once the snapshot they were meant to be ordered against is
             // rejected, there is no `expected` left to replay them against.
+            //
+            // This branch is only reachable for an out-of-order or duplicate
+            // attach response — under the "one attach in flight at a time"
+            // invariant, `self.seq` cannot outrun a fresh snapshot, so `resp`
+            // must be a stale or repeated reply reaching this screen late.
+            // Dropping the buffer instead of replaying it against a rejected
+            // snapshot is deliberate: once the snapshot's own validity is
+            // rejected, there is no basis left to replay against, and
+            // replaying anyway would reintroduce the exact silent-drop bug
+            // this type split was meant to fix. Reporting `Resynced` here
+            // rather than adding a third `AttachOutcome` variant is also
+            // deliberate, not an oversight: this outcome is not quite "the
+            // snapshot was adopted" (nothing was adopted) and not quite a
+            // resync failure either (there is nothing to resync from, and
+            // nothing broken to signal). A third variant would give every
+            // caller a branch it does not know how to act on, for a path
+            // that self-heals on its own: `seq` did not move, so the very
+            // next live frame either applies normally or reports its own
+            // ordinary `Gap` — the same outcome a dedicated variant would
+            // have driven the caller toward anyway.
             self.pending = None;
             return AttachOutcome::Resynced;
         }
-        self.resize(resp.rows, resp.cols);
         self.seq = resp.seq;
-        self.write_patch(&resp.patch);
+        self.settle(resp.rows, resp.cols, &resp.patch);
         let buffered = self.pending.take().unwrap_or_default();
         for frame in buffered {
             if frame.seq <= self.seq {
@@ -209,7 +228,7 @@ impl ClientScreen {
                 };
             }
             self.seq = frame.seq;
-            self.write_patch(&frame.patch);
+            self.settle(frame.rows, frame.cols, &frame.patch);
         }
         AttachOutcome::Resynced
     }
@@ -249,20 +268,26 @@ impl ClientScreen {
             };
         }
         self.seq = frame.seq;
-        self.write_patch(&frame.patch);
+        self.settle(frame.rows, frame.cols, &frame.patch);
         ApplyOutcome::Applied
     }
 
-    fn resize(&mut self, rows: u16, cols: u16) {
-        if (rows, cols) == (self.rows, self.cols) {
-            return;
+    /// Adopt this frame's geometry, then write its rows.
+    ///
+    /// The two steps are one method rather than two calls because the order
+    /// between them is the whole correctness argument: a naive `write` half's
+    /// `grid.get_mut(row)` silently returns `None` for a row past the current
+    /// bottom, so writing before resizing drops rows with no error anywhere
+    /// and no gap to trigger a re-attach. There were two call sites for the
+    /// write half (`apply` and `finish_attach`'s replay loop) and a rule that
+    /// only one of them followed; there is now no way to write a patch
+    /// without handing over the geometry it belongs to.
+    fn settle(&mut self, rows: u16, cols: u16, patch: &PtyScreenPatch) {
+        if (rows, cols) != (self.rows, self.cols) {
+            self.rows = rows.max(1);
+            self.cols = cols.max(1);
+            self.grid.resize(self.rows as usize, Vec::new());
         }
-        self.rows = rows.max(1);
-        self.cols = cols.max(1);
-        self.grid.resize(self.rows as usize, Vec::new());
-    }
-
-    fn write_patch(&mut self, patch: &PtyScreenPatch) {
         for row in &patch.rows {
             if let Some(slot) = self.grid.get_mut(row.row as usize) {
                 slot.clone_from(&row.runs);
@@ -302,10 +327,28 @@ mod tests {
         frame_for(SID, seq, row, text)
     }
 
+    /// The dimensions every existing test's screen already has, so a frame
+    /// built by `frame_for` resizes nothing and the suite is unchanged by
+    /// this field's arrival. Any other value silently resizes on frame one.
+    const FIXTURE_DIMS: (u16, u16) = (4, 20);
+
     fn frame_for(session_id: &str, seq: u64, row: u16, text: &str) -> PtyScreenFrame {
+        frame_sized(session_id, seq, FIXTURE_DIMS.0, FIXTURE_DIMS.1, row, text)
+    }
+
+    fn frame_sized(
+        session_id: &str,
+        seq: u64,
+        rows: u16,
+        cols: u16,
+        row: u16,
+        text: &str,
+    ) -> PtyScreenFrame {
         PtyScreenFrame {
             session_id: session_id.into(),
             seq,
+            rows,
+            cols,
             patch: PtyScreenPatch {
                 rows: vec![PtyRowPatch {
                     row,
@@ -314,6 +357,118 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+
+    /// A resize the client did not ask for still has to land. Sizing is
+    /// smallest-wins across clients, so a client can be shrunk by someone
+    /// else joining without ever calling `pty.resize` itself -- and a grow
+    /// leaves `seq` contiguous, so nothing ever gaps and nothing self-heals.
+    #[test]
+    fn a_frame_carrying_new_geometry_grows_the_screen_before_its_rows_land() {
+        let mut s = ClientScreen::new(24, 80, 5, SID);
+
+        assert_eq!(
+            s.apply(frame_sized(SID, 6, 40, 100, 39, "bottom")),
+            ApplyOutcome::Applied
+        );
+
+        assert_eq!(s.dims(), (40, 100));
+        // The ordering assertion: adopting AFTER write_patch leaves the grid
+        // 24 rows long, `get_mut(39)` returns None, and the row is dropped
+        // with no error anywhere.
+        assert_eq!(
+            s.row_text(39),
+            "bottom",
+            "the new geometry must be adopted before its rows are written"
+        );
+    }
+
+    /// Shrink is the other half and it is not symmetric: rows past the new
+    /// bottom must go away, or the renderer keeps painting content the
+    /// server no longer has.
+    #[test]
+    fn a_shrinking_frame_drops_the_rows_below_the_new_bottom() {
+        let mut s = ClientScreen::new(40, 100, 5, SID);
+        assert_eq!(
+            s.apply(frame_sized(SID, 6, 40, 100, 39, "gone")),
+            ApplyOutcome::Applied
+        );
+        assert_eq!(s.row_text(39), "gone");
+
+        // A frame with no row patches at all, carrying only the new size.
+        let shrink = PtyScreenFrame {
+            session_id: SID.into(),
+            seq: 7,
+            rows: 24,
+            cols: 80,
+            patch: PtyScreenPatch::default(),
+        };
+        assert_eq!(s.apply(shrink), ApplyOutcome::Applied);
+
+        assert_eq!(s.dims(), (24, 80));
+        assert_eq!(
+            s.row_text(39),
+            "",
+            "a row past the new bottom must not survive"
+        );
+    }
+
+    /// A frame we are throwing away must not move the geometry either. Its
+    /// dimensions are as old as its content.
+    #[test]
+    fn a_discarded_frame_does_not_move_the_geometry() {
+        let mut s = ClientScreen::new(24, 80, 5, SID);
+        let stale = frame_sized(SID, 3, 40, 100, 0, "old");
+        assert!(matches!(s.apply(stale), ApplyOutcome::Discarded { .. }));
+        assert_eq!(
+            s.dims(),
+            (24, 80),
+            "a discarded frame carries stale dimensions too"
+        );
+    }
+
+    /// The replay path, which is the one a fix written only into `apply`
+    /// misses entirely. Frames that arrive while an attach is in flight are
+    /// buffered and replayed by `finish_attach` -- and a resize is exactly
+    /// what can happen in that window, since sizing is smallest-wins and
+    /// another client leaving grows this one without it calling anything.
+    ///
+    /// Without `settle`, replay writes rows straight into a grid still sized
+    /// to the attach snapshot, `get_mut` returns None past the old bottom,
+    /// the rows vanish, and `seq` advances anyway -- so nothing gaps and
+    /// nothing ever heals. That is the same defect this task exists to fix,
+    /// reproduced inside the code that was written to fix it.
+    #[test]
+    fn a_buffered_frame_that_grows_the_screen_lands_its_rows_on_replay() {
+        let mut s = ClientScreen::new(24, 80, 5, SID);
+        s.begin_attach();
+
+        // Arrives mid-attach, carrying a geometry the snapshot will not have.
+        assert_eq!(
+            s.apply(frame_sized(SID, 7, 40, 100, 39, "late")),
+            ApplyOutcome::Buffered
+        );
+
+        // The snapshot is older and smaller: 24x80 at seq 6.
+        let resp = PtyAttachResponse {
+            seq: 6,
+            rows: 24,
+            cols: 80,
+            patch: PtyScreenPatch::default(),
+            scrollback_len: 0,
+        };
+        assert_eq!(s.finish_attach(resp), AttachOutcome::Resynced);
+
+        assert_eq!(
+            s.dims(),
+            (40, 100),
+            "the replayed frame's geometry must be adopted too"
+        );
+        assert_eq!(
+            s.row_text(39),
+            "late",
+            "a replayed row past the snapshot's bottom must not be silently dropped"
+        );
     }
 
     #[test]

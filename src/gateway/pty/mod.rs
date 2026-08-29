@@ -89,7 +89,7 @@ mod tests {
         };
         manager().write(&sid, input).expect("write");
 
-        let mut found = false;
+        let mut found: Option<(u16, u16)> = None;
         for _ in 0..100 {
             loop {
                 match rx.try_recv() {
@@ -115,24 +115,29 @@ mod tests {
                                     .any(|run| run.text.contains("ALEPH_FLUSH_WIRE_OK"))
                             })
                         {
-                            found = true;
+                            found = Some((frame.rows, frame.cols));
                         }
                     }
                     Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
                     Err(_) => break,
                 }
             }
-            if found {
+            if found.is_some() {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
         manager().close(&sid).ok();
-        assert!(
+        // Geometry on the wire. The client-side unit tests prove `apply`
+        // does the right thing WITH a frame's dimensions; only this one
+        // proves the server puts them there. An implementation that read
+        // dims outside the screen lock, or transposed them, passes every
+        // other test in this change.
+        assert_eq!(
             found,
-            "a pty.screen frame carrying the written output must reach a real \
-             subscriber of the bus attach_event_bus was given, within the polling window"
+            Some((10, 40)),
+            "the frame must carry the geometry it was spawned with, rows first"
         );
     }
 }

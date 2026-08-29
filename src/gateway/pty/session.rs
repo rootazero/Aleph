@@ -192,9 +192,11 @@ impl PtySession {
     /// The diff since the last call, already in wire form, with a fresh `seq`.
     /// `None` when nothing changed — that is what makes a quiet terminal free.
     pub fn feed_and_take_frame(&self) -> Option<aleph_protocol::pty::PtyScreenFrame> {
-        let patch = {
+        let (patch, rows, cols) = {
             let mut screen = self.screen.lock().unwrap_or_else(|e| e.into_inner());
-            screen.take_patch()?
+            let patch = screen.take_patch()?;
+            let (rows, cols) = screen.grid.dims();
+            (patch, rows, cols)
         };
         let seq = {
             let mut s = self.seq.lock().unwrap_or_else(|e| e.into_inner());
@@ -204,6 +206,8 @@ impl PtySession {
         Some(aleph_protocol::pty::PtyScreenFrame {
             session_id: self.id.clone(),
             seq,
+            rows,
+            cols,
             patch: super::screen::convert::patch(&patch),
         })
     }
