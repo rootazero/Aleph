@@ -3,6 +3,7 @@
 //! Contains `run_agent_loop` (the think-act two-step loop).
 
 mod author_census;
+mod flow_scope_census;
 mod inner;
 mod project_context;
 #[cfg(test)]
@@ -120,6 +121,46 @@ fn request_scope(request: &RunRequest) -> Option<crate::scope::ScopeAttribution>
     }
     attr.scope = target;
     Some(attr)
+}
+
+/// The two strings [`crate::orchestrator::FlowRequest`] carries for this run's
+/// scope attribution — derived from [`request_scope`], never read back out of
+/// `request.metadata`.
+///
+/// This is the FOURTH reader of `request_scope` (`src/gateway/CLAUDE.md` 地雷 Q
+/// names the other three: the session row, the loop's task-local, the sidebar
+/// recency touch), and it is the boundary where the room upgrade used to be
+/// lost. The raw keys hold whatever the PRODUCER stamped — for a channel turn
+/// that is `personal:<speaker>` — and `request_scope` is the only thing that
+/// turns that into the room's scope when the conversation is bound. Reading
+/// the keys directly here handed the un-upgraded pair to
+/// `orchestrator::dispatch`, which re-seeds the scope task-local inside its
+/// `tokio::spawn`, so the session row was filed under the room while
+/// everything downstream of the spawn — the memory partition, the
+/// `<room_context>` roster (`harness_bridge::prompt_build` reads this very
+/// task-local and its comment claims it equals what `request_scope`
+/// resolved), and the transcript's speaker attribution — ran personal.
+///
+/// `FlowRequest` carries strings rather than a `ScopeAttribution`, because it
+/// has no metadata map. That is a reason to CONVERT here, not a reason to read
+/// a different source: `ScopeId::render` is the same call
+/// [`crate::scope::stamp_metadata`] makes, so `dispatch`'s rebuild — a map of
+/// these two keys fed back through [`crate::scope::scope_from_metadata`] —
+/// parses back exactly the attribution this returned, including its
+/// fail-closed `None`.
+///
+/// A named function rather than two inline expressions: the property that must
+/// NOT change is that an off-roster speaker in a bound conversation is
+/// projected to the same pair the raw read produced, and a test that
+/// re-derived the projection to check that would be measuring its own copy.
+/// `flow_scope_census` keeps the site honest; the two tests named in that
+/// module keep this function honest.
+fn request_scope_strings(request: &RunRequest) -> (Option<String>, Option<String>) {
+    let attr = request_scope(request);
+    (
+        attr.as_ref().map(|a| a.owner_user_id.clone()),
+        attr.as_ref().map(|a| a.scope.render()),
+    )
 }
 
 /// Establishes this run's scope attribution (owner/scope) and this turn's

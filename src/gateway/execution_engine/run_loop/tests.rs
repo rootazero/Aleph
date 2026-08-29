@@ -1278,8 +1278,10 @@ fn an_unpaired_speaker_in_a_bound_conversation_takes_no_room_scope() {
         )
         .unwrap();
 
-    let mut request =
-        channel_group_request(&crate::scope::ScopeAttribution::personal("ignored"), "C-anon");
+    let mut request = channel_group_request(
+        &crate::scope::ScopeAttribution::personal("ignored"),
+        "C-anon",
+    );
     request.metadata.clear(); // an unpaired sender stamps nothing at all
     assert!(
         super::request_scope(&request).is_none(),
@@ -1343,8 +1345,7 @@ fn an_explicit_claim_upgrades_a_producer_whose_owner_is_not_on_the_roster() {
         .create("claimed-room-not-on-roster", Some("u-alice"), None)
         .unwrap();
     // Deliberately NOT added to the roster.
-    let key =
-        crate::routing::session_key::SessionKey::project_room("test-agent", &room.id);
+    let key = crate::routing::session_key::SessionKey::project_room("test-agent", &room.id);
     store
         .claim_session_key(&room.id, &key.to_key_string())
         .unwrap();
@@ -1355,8 +1356,7 @@ fn an_explicit_claim_upgrades_a_producer_whose_owner_is_not_on_the_roster() {
     let mut request = minimal_request(metadata);
     request.session_key = key;
 
-    let resolved =
-        super::request_scope(&request).expect("a stamped run resolves a scope");
+    let resolved = super::request_scope(&request).expect("a stamped run resolves a scope");
     assert_eq!(
         resolved.scope,
         crate::scope::ScopeId::Project(room.id),
@@ -1581,4 +1581,183 @@ async fn the_two_room_claim_twins_agree_on_which_project_governs() {
              through a channel or through agent.run / chat.send."
         );
     }
+}
+
+// ============================================================================
+// Task 15 — the fourth reader: what `FlowRequest` carries across the spawn
+// ============================================================================
+//
+// `request_scope_strings` is the projection `inner.rs` hands to
+// `orchestrator::dispatch`, which re-seeds the scope task-local inside its
+// `tokio::spawn`. Until this task it read `request.metadata` directly, so the
+// room upgrade below reached the session ROW and nothing after the spawn.
+//
+// The two tests are a pair and neither is redundant. The first says the
+// upgrade is carried; the second says nothing else moved — an off-roster
+// speaker must be projected to the very bytes the raw read produced, which is
+// the only way to show this change did not widen who gets a room scope.
+
+/// The two strings the shipped code used to forward: a verbatim copy of the
+/// old `inner.rs` expression, kept so the tests below can state the OLD value
+/// as a measured fact rather than describe it.
+fn raw_metadata_pair(request: &RunRequest) -> (Option<String>, Option<String>) {
+    (
+        request.metadata.get(crate::scope::OWNER_META_KEY).cloned(),
+        request.metadata.get(crate::scope::SCOPE_META_KEY).cloned(),
+    )
+}
+
+#[test]
+fn the_flow_request_projection_carries_the_room_upgrade() {
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+    let room = store.create("flow-room-1", Some("u-alice"), None).unwrap();
+    store.add_member(&room.id, "u-alice").unwrap();
+    store
+        .bind_conversation(
+            &room.id,
+            "telegram",
+            aleph_protocol::projects::BindingPeerKind::Group,
+            "C-flow",
+            Some("u-alice"),
+            None,
+        )
+        .unwrap();
+
+    let request = channel_group_request(
+        &crate::scope::ScopeAttribution::personal("u-alice"),
+        "C-flow",
+    );
+
+    assert_eq!(
+        raw_metadata_pair(&request).1.as_deref(),
+        Some("personal:u-alice"),
+        "premise: the channel producer stamps the SPEAKER, not the room. If this \
+         ever stops being true the test below stops testing the upgrade."
+    );
+
+    let (owner, scope) = super::request_scope_strings(&request);
+    let expected_room_scope = format!("project:{}", room.id);
+    assert_eq!(
+        scope.as_deref(),
+        Some(expected_room_scope.as_str()),
+        "the scope handed to the harness must be the room's. This is the whole \
+         defect: with the raw read it was `personal:u-alice`, so the session row \
+         was filed under the room while the memory partition, the <room_context> \
+         roster and the transcript byline all ran personal."
+    );
+    assert_eq!(
+        owner.as_deref(),
+        Some("u-alice"),
+        "the owner still names whoever spoke — `request_scope` replaces only the \
+         scope, and the projection must not invent a different rule"
+    );
+}
+
+#[test]
+fn an_off_roster_speaker_is_projected_exactly_as_the_raw_read_was() {
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+    let room = store.create("flow-room-2", Some("u-alice"), None).unwrap();
+    store.add_member(&room.id, "u-alice").unwrap();
+    store
+        .bind_conversation(
+            &room.id,
+            "telegram",
+            aleph_protocol::projects::BindingPeerKind::Group,
+            "C-flow-out",
+            Some("u-alice"),
+            None,
+        )
+        .unwrap();
+
+    // In the bound conversation, not on the roster: arm 2's gate keeps this
+    // speaker personal, and that decision is made in `request_scope`, not here.
+    let request = channel_group_request(
+        &crate::scope::ScopeAttribution::personal("u-bob"),
+        "C-flow-out",
+    );
+
+    assert_eq!(
+        super::request_scope_strings(&request),
+        raw_metadata_pair(&request),
+        "an off-roster speaker in a bound conversation must reach the harness with \
+         BYTE-IDENTICAL strings before and after this change. Deriving the pair from \
+         `request_scope` carries the decision arm 2's roster gate already made; it \
+         must not make a new one. If these ever diverge, being in the Telegram group \
+         has become equivalent to being on the roster."
+    );
+    assert_eq!(
+        super::request_scope_strings(&request).1.as_deref(),
+        Some("personal:u-bob"),
+        "stated absolutely as well as relatively: equality with the raw read is \
+         also satisfied if BOTH sides became the room, which is the direction that \
+         would matter"
+    );
+}
+
+#[test]
+fn an_unstamped_turn_projects_no_strings() {
+    let mut request = minimal_request(std::collections::HashMap::new());
+    request.metadata.insert(
+        crate::scope::OWNER_META_KEY.to_string(),
+        "u-alice".to_string(),
+    );
+    // Owner without scope: `scope_from_metadata` is fail-closed on the pair.
+    assert_eq!(
+        super::request_scope_strings(&request),
+        (None, None),
+        "the projection must inherit `scope_from_metadata`'s fail-closed pairing. \
+         The raw read forwarded `Some(owner), None` here; `dispatch` rebuilds a map \
+         from whatever it gets and runs it through `scope_from_metadata` again, so \
+         both spellings land on the same dead task-local — but only this one says so \
+         at the boundary instead of two layers later."
+    );
+}
+
+#[test]
+fn the_projection_round_trips_through_the_dispatch_rebuild() {
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+    let room = store.create("flow-room-3", Some("u-alice"), None).unwrap();
+    store.add_member(&room.id, "u-alice").unwrap();
+    store
+        .bind_conversation(
+            &room.id,
+            "telegram",
+            aleph_protocol::projects::BindingPeerKind::Group,
+            "C-flow-rt",
+            Some("u-alice"),
+            None,
+        )
+        .unwrap();
+
+    let request = channel_group_request(
+        &crate::scope::ScopeAttribution::personal("u-alice"),
+        "C-flow-rt",
+    );
+    let (owner, scope) = super::request_scope_strings(&request);
+
+    // Verbatim shape of `orchestrator::dispatch`'s rebuild inside its spawn.
+    let mut rebuilt = std::collections::HashMap::new();
+    if let Some(owner) = owner {
+        rebuilt.insert(crate::scope::OWNER_META_KEY.to_string(), owner);
+    }
+    if let Some(scope) = scope {
+        rebuilt.insert(crate::scope::SCOPE_META_KEY.to_string(), scope);
+    }
+
+    assert_eq!(
+        crate::scope::scope_from_metadata(&rebuilt),
+        super::request_scope(&request),
+        "`ScopeId::render` must be the same spelling `scope::stamp_metadata` writes \
+         and `ScopeId::parse` reads, or the strings would cross the spawn and fail \
+         to parse on the far side — which is indistinguishable from an unscoped run"
+    );
 }
