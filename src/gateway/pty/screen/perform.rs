@@ -25,10 +25,6 @@ struct ScreenState {
     attrs: Attrs,
     title: Option<String>,
     bell: bool,
-    /// Set by `csi_dispatch` for `?1049h`/`?1049l`; applied by `feed` after
-    /// the parser returns, because swapping the grid needs ownership the
-    /// Performer's borrow of `Screen` does not have.
-    pending_alt: Option<bool>,
 }
 
 impl Screen {
@@ -46,30 +42,16 @@ impl Screen {
 
     pub fn feed(&mut self, bytes: &[u8]) {
         let mut parser = std::mem::take(&mut self.parser);
-        let mut performer = Performer { grid: &mut self.grid, state: &mut self.state };
+        // `&mut *self` reborrows rather than moves, so `self` is usable
+        // again below once `performer`'s borrow ends (its last use is the
+        // `advance` call). Performer holding the whole `Screen`, not a
+        // split grid/state borrow, is what lets `csi_dispatch` swap
+        // `screen.grid` inline the instant `?1049h`/`?1049l` is parsed --
+        // see `Performer::toggle_alt_screen` for why that has to happen
+        // there and not after this function returns.
+        let mut performer = Performer { screen: &mut *self };
         parser.advance(&mut performer, bytes);
         self.parser = parser;
-
-        // Applied here, not inside the Performer, because swapping `self.grid`
-        // needs an owning `&mut self` that the Performer's split borrow (grid
-        // and state as two separate fields) cannot provide.
-        match self.state.pending_alt.take() {
-            // A nested `?1049h` while already on the alt screen is a no-op:
-            // clobbering `self.saved` here would replace the real primary
-            // with the alt screen's own content, losing the user's shell
-            // scrollback for good the next time they exit.
-            Some(true) if self.saved.is_none() => {
-                let (rows, cols) = self.grid.dims();
-                let primary = std::mem::replace(&mut self.grid, Grid::new(rows, cols));
-                self.saved = Some(primary);
-            }
-            Some(false) => {
-                if let Some(primary) = self.saved.take() {
-                    self.grid = primary;
-                }
-            }
-            _ => {}
-        }
     }
 
     #[must_use]
@@ -147,14 +129,18 @@ impl Screen {
     }
 }
 
+/// Holds the whole `Screen`, not split `grid`/`state` borrows: `csi_dispatch`
+/// needs to swap `screen.grid` itself (entering/exiting the alternate
+/// screen) at the exact point `?1049h`/`?1049l` is parsed, and a split
+/// borrow of just `grid` can't be replaced wholesale -- see
+/// `Performer::toggle_alt_screen`.
 struct Performer<'a> {
-    grid: &'a mut Grid,
-    state: &'a mut ScreenState,
+    screen: &'a mut Screen,
 }
 
 impl Performer<'_> {
     fn style(&self) -> (Color, Color, Attrs) {
-        (self.state.fg, self.state.bg, self.state.attrs)
+        (self.screen.state.fg, self.screen.state.bg, self.screen.state.attrs)
     }
 
     /// SGR. Consumes the parameter list because 38/48 take trailing
@@ -164,24 +150,24 @@ impl Performer<'_> {
         while i < params.len() {
             match params[i] {
                 0 => {
-                    self.state.fg = Color::Default;
-                    self.state.bg = Color::Default;
-                    self.state.attrs = Attrs::NONE;
+                    self.screen.state.fg = Color::Default;
+                    self.screen.state.bg = Color::Default;
+                    self.screen.state.attrs = Attrs::NONE;
                 }
-                1 => self.state.attrs.insert(Attrs::BOLD),
-                3 => self.state.attrs.insert(Attrs::ITALIC),
-                4 => self.state.attrs.insert(Attrs::UNDERLINE),
-                7 => self.state.attrs.insert(Attrs::REVERSE),
-                22 => self.state.attrs.remove(Attrs::BOLD),
-                23 => self.state.attrs.remove(Attrs::ITALIC),
-                24 => self.state.attrs.remove(Attrs::UNDERLINE),
-                27 => self.state.attrs.remove(Attrs::REVERSE),
-                30..=37 => self.state.fg = Color::Indexed((params[i] - 30) as u8),
-                39 => self.state.fg = Color::Default,
-                40..=47 => self.state.bg = Color::Indexed((params[i] - 40) as u8),
-                49 => self.state.bg = Color::Default,
-                90..=97 => self.state.fg = Color::Indexed((params[i] - 90 + 8) as u8),
-                100..=107 => self.state.bg = Color::Indexed((params[i] - 100 + 8) as u8),
+                1 => self.screen.state.attrs.insert(Attrs::BOLD),
+                3 => self.screen.state.attrs.insert(Attrs::ITALIC),
+                4 => self.screen.state.attrs.insert(Attrs::UNDERLINE),
+                7 => self.screen.state.attrs.insert(Attrs::REVERSE),
+                22 => self.screen.state.attrs.remove(Attrs::BOLD),
+                23 => self.screen.state.attrs.remove(Attrs::ITALIC),
+                24 => self.screen.state.attrs.remove(Attrs::UNDERLINE),
+                27 => self.screen.state.attrs.remove(Attrs::REVERSE),
+                30..=37 => self.screen.state.fg = Color::Indexed((params[i] - 30) as u8),
+                39 => self.screen.state.fg = Color::Default,
+                40..=47 => self.screen.state.bg = Color::Indexed((params[i] - 40) as u8),
+                49 => self.screen.state.bg = Color::Default,
+                90..=97 => self.screen.state.fg = Color::Indexed((params[i] - 90 + 8) as u8),
+                100..=107 => self.screen.state.bg = Color::Indexed((params[i] - 100 + 8) as u8),
                 38 | 48 => {
                     let is_fg = params[i] == 38;
                     // 38;5;N (indexed) or 38;2;R;G;B (truecolour). A malformed
@@ -191,7 +177,11 @@ impl Performer<'_> {
                         Some(5) => {
                             if let Some(&n) = params.get(i + 2) {
                                 let c = Color::Indexed(n as u8);
-                                if is_fg { self.state.fg = c } else { self.state.bg = c }
+                                if is_fg {
+                                    self.screen.state.fg = c
+                                } else {
+                                    self.screen.state.bg = c
+                                }
                             }
                             i += 2;
                         }
@@ -200,7 +190,11 @@ impl Performer<'_> {
                                 (params.get(i + 2), params.get(i + 3), params.get(i + 4))
                             {
                                 let c = Color::Rgb(r as u8, g as u8, b as u8);
-                                if is_fg { self.state.fg = c } else { self.state.bg = c }
+                                if is_fg {
+                                    self.screen.state.fg = c
+                                } else {
+                                    self.screen.state.bg = c
+                                }
                             }
                             i += 4;
                         }
@@ -212,19 +206,44 @@ impl Performer<'_> {
             i += 1;
         }
     }
+
+    /// Enter (`enter == true`) or exit the alternate screen. Called from
+    /// `csi_dispatch` at the exact point `?1049h`/`?1049l` is parsed -- not
+    /// deferred until `feed` finishes the chunk. Deferring it was the
+    /// original design; it passed the round-trip test because that test
+    /// feeds the escape and the following bytes in separate `feed()` calls,
+    /// but broke the common case of a program (vim, less) writing the enter
+    /// escape and its first frame in ONE chunk: those bytes would print
+    /// onto the PRIMARY grid before the deferred swap ever ran, and the
+    /// swap would then stash that now-polluted primary into `saved`.
+    fn toggle_alt_screen(&mut self, enter: bool) {
+        if enter {
+            // A nested `?1049h` while already on the alt screen is a
+            // no-op: clobbering `saved` here would replace the real
+            // primary with the alt screen's own content, losing the
+            // user's shell scrollback for good the next time they exit.
+            if self.screen.saved.is_none() {
+                let (rows, cols) = self.screen.grid.dims();
+                let primary = std::mem::replace(&mut self.screen.grid, Grid::new(rows, cols));
+                self.screen.saved = Some(primary);
+            }
+        } else if let Some(primary) = self.screen.saved.take() {
+            self.screen.grid = primary;
+        }
+    }
 }
 
 impl vte::Perform for Performer<'_> {
     fn print(&mut self, c: char) {
         let style = self.style();
-        self.grid.put(c, style);
+        self.screen.grid.put(c, style);
     }
 
     fn execute(&mut self, byte: u8) {
         match byte {
-            b'\n' => self.grid.newline(),
-            b'\r' => self.grid.carriage_return(),
-            0x07 => self.state.bell = true,
+            b'\n' => self.screen.grid.newline(),
+            b'\r' => self.screen.grid.carriage_return(),
+            0x07 => self.screen.state.bell = true,
             _ => {}
         }
     }
@@ -245,20 +264,21 @@ impl vte::Perform for Performer<'_> {
         };
         match action {
             // CUP / HVP: 1-based on the wire, 0-based in the grid.
-            'H' | 'f' => self.grid.goto(p(0, 1) - 1, p(1, 1) - 1),
-            'A' => self.grid.move_cursor(-i32::from(p(0, 1)), 0),
-            'B' => self.grid.move_cursor(i32::from(p(0, 1)), 0),
-            'C' => self.grid.move_cursor(0, i32::from(p(0, 1))),
-            'D' => self.grid.move_cursor(0, -i32::from(p(0, 1))),
-            'J' => self.grid.erase_in_display(flat.first().copied().unwrap_or(0)),
-            'K' => self.grid.erase_in_line(flat.first().copied().unwrap_or(0)),
+            'H' | 'f' => self.screen.grid.goto(p(0, 1) - 1, p(1, 1) - 1),
+            'A' => self.screen.grid.move_cursor(-i32::from(p(0, 1)), 0),
+            'B' => self.screen.grid.move_cursor(i32::from(p(0, 1)), 0),
+            'C' => self.screen.grid.move_cursor(0, i32::from(p(0, 1))),
+            'D' => self.screen.grid.move_cursor(0, -i32::from(p(0, 1))),
+            'J' => self.screen.grid.erase_in_display(flat.first().copied().unwrap_or(0)),
+            'K' => self.screen.grid.erase_in_line(flat.first().copied().unwrap_or(0)),
             // `\e[?1049h` / `\e[?1049l`: enter/exit the alternate screen.
             // `?` only ever arrives via `intermediates`, never `params` — a
             // guard on `action` alone would also swallow the private-mode-less
             // `h`/`l` sequences (unused here, but real DEC private modes like
-            // `?25` cursor-visibility share these final bytes).
+            // `?25` cursor-visibility share these final bytes). Applied
+            // inline, not deferred -- see `Performer::toggle_alt_screen`.
             'h' | 'l' if inter == b"?" && flat.first() == Some(&1049) => {
-                self.state.pending_alt = Some(action == 'h');
+                self.toggle_alt_screen(action == 'h');
             }
             _ => {}
         }
@@ -269,7 +289,7 @@ impl vte::Perform for Performer<'_> {
         let Some(kind) = params.first() else { return };
         if matches!(*kind, b"0" | b"2") {
             if let Some(raw) = params.get(1) {
-                self.state.title = Some(String::from_utf8_lossy(raw).into_owned());
+                self.screen.state.title = Some(String::from_utf8_lossy(raw).into_owned());
             }
         }
     }
@@ -489,5 +509,37 @@ mod tests {
         s.resize(5, 40);
         assert_eq!(s.grid.dims(), (5, 40));
         assert_eq!(s.grid.row_text(0), "hello");
+    }
+
+    /// The alt-screen swap must apply at the exact point `?1049h`/`?1049l`
+    /// is parsed, not deferred until `feed` finishes the whole chunk. The
+    /// round-trip test above feeds the escape and the following bytes in
+    /// SEPARATE `feed()` calls, which cannot see this: real programs (vim,
+    /// less) routinely emit the enter escape and their first frame in ONE
+    /// write. If the swap is deferred, that first frame prints onto the
+    /// PRIMARY grid — which a deferred swap then stashes into `saved`,
+    /// permanently burying it under the (still-blank) alt screen and
+    /// leaving alt-screen content sitting in the user's shell scrollback.
+    #[test]
+    fn alt_screen_swap_applies_before_the_rest_of_the_same_chunk_is_parsed() {
+        let mut s = Screen::new(3, 20);
+        s.feed(b"primary");
+        // Escape AND its first frame in one feed() call — the case a
+        // deferred swap cannot handle.
+        s.feed(b"\x1b[?1049hHELLO");
+        assert!(s.alt_screen());
+        assert_eq!(
+            s.grid.row_text(0),
+            "HELLO",
+            "HELLO must land on the alt grid, not the primary"
+        );
+
+        s.feed(b"\x1b[?1049l");
+        assert!(!s.alt_screen());
+        assert_eq!(
+            s.grid.row_text(0),
+            "primary",
+            "the primary must not have been polluted by alt-screen content written in the same chunk"
+        );
     }
 }

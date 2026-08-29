@@ -324,9 +324,17 @@ impl Grid {
     /// a cursor write. If the first column this narrowing drops was a
     /// spacer, the column it keeps right before it must be the spacer's
     /// owner; blank that owner rather than let a truncated half-glyph
-    /// survive into the resized grid. `next` is still `self.cols` wide at
-    /// this point (the field is not reassigned until after the copy loop),
-    /// so `self.idx` remains valid for indexing into it via `new_cols`.
+    /// survive into the resized grid.
+    ///
+    /// Two different widths are in play, and indexing must not mix them up:
+    /// `self.idx` always computes an offset into the OLD grid (`self.cells`,
+    /// still `self.cols` wide — the field is not reassigned until after
+    /// `resize`'s copy loop returns), which is why `self.idx(row, new_cols)`
+    /// correctly reads the dropped column's original content below. `next`
+    /// is a different array, already `new_cols` wide from the moment
+    /// `resize` allocated it — so the owner's index into `next` is computed
+    /// by hand with `new_cols`, not via `self.idx`, which would compute the
+    /// wrong offset for it.
     fn repair_edge_truncated_glyph(&self, next: &mut [Cell], row: u16, new_cols: u16) {
         if new_cols >= self.cols {
             return; // widening or unchanged: nothing was cut off.
