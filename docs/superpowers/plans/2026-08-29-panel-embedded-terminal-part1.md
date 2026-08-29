@@ -4542,6 +4542,21 @@ pub fn encode_key(key: &str, ctrl: bool, alt: bool, _shift: bool) -> Option<Vec<
 
 `TerminalView` 完整实现（`terminal/mod.rs`）。仓库真实 helper 签名（已核实）：`expect_context::<DashboardState>()` · `state.rpc_call(method, params).await -> Result<Value, String>` · `state.subscribe_topic_ephemeral(pattern).await -> Result<(), String>` · `state.subscribe_events(|GatewayEvent{topic, data}| ..) -> usize` · `state.unsubscribe_events(id)`。
 
+⚠️ **这是一次整体重写，而现有那 28 行里有两样东西没有读者——所以丢掉它们不会有任何东西变红。**
+controller 派单前查实（2026-08-29），两样都要**原样保留**：
+
+1. **模块 doc**（文件顶部那 12 行）。它解释的是**非显然的设计理由**——VT 在服务端所以本视图只是
+   渲染器、**卸载是无损的（屏幕活在服务端、`pty.attach` 能恢复）所以订阅是 ephemeral 且这里
+   没有 park/reveal 机件**、以及手机端为什么渲染空（与 `PanelMode::Projects` 同样处置）。
+   下面的代码块**从 `pub mod keymap;` 开始，不含这段 doc**——那不是让你删掉它的意思。
+   补一句 `pub mod keymap;` 进去即可。
+
+2. **`data-terminal-view=""` 属性**。全仓**零消费者**（controller grep 过），但它是 Part 2 真机
+   装置 `qa/terminal/run.sh` 的锚点。一个零消费者的钩子在整体重写里必然被静默丢掉，而它没有
+   任何守卫——这正是判据「一个机制的存在理由如果只写在别的文件里，删它的人不会读到那里」，
+   而这里的理由**根本没被写在任何地方**。现在写在这里了：保留它，并在它旁边留一行注释说明
+   它是给谁用的。
+
 **核心正确性点是 `resync` 那一段** —— gap 检测到之后必须 `begin_attach` → RPC → `finish_attach`，中间到达的帧全部走 `Buffered`。写成真代码而不是注释：
 
 ```rust
