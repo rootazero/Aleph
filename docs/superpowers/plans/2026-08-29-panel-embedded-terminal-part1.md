@@ -2907,6 +2907,12 @@ sketch 里已经有了），而是断言**走 `apply_live_sections` 这条路会
 
 `session.rs` 的 `PtySession` 加转发（`scrollback_limit()` 供测试读回）；`manager.rs` 加：
 
+⚠️ **本段是 Task 12 的历史形态，已被它自己的收尾改掉，不要照它实现。**
+落地的是把 `scrollback_lines` 折进 `SpawnOptions`（`spawn` 在构造 `Screen` 之后、
+`spawn_reader` 之前应用它），`spawn_with_scrollback` **已删除**，那句
+"Task 13 re-points this" 注释也已删除。理由与实测见提交 `891dc8b7e` 与
+`SpawnOptions::scrollback_lines` 的 doc。以树为准。
+
 ```rust
     /// Spawn with an explicit scrollback ceiling. `spawn` delegates here with
     /// the configured value so there is one path, not two.
@@ -3142,13 +3148,15 @@ is already open still open."
 - Consumes: `ExecTier::floor_asks_for_arguments` → `ScopedToolService::gate_removal_floor` →
   `confirmation_rule` 第 2 位 `GateRule::GateRemoval`（既有链，**不是** `DestructiveArguments`——
   见下方裁定）、`crate::gateway::visibility::ambient_actor()`（既有，`visibility.rs:143`）、
-  Task 12 已落地的 `PtyManager::{spawn_with_scrollback, scrollback_limit_of, close_all}`
-  ⚠️ **controller 对树核实（2026-08-30）**：本行原来还列着 `PtyManager::set_scrollback_limit`，
-  **那个方法不在 `PtyManager` 上**，它在 `PtySession`（`src/gateway/pty/session.rs:218`），
-  下面还有 `Screen::set_scrollback_limit` 与 `Grid::set_scrollback_limit`。经 manager 走的路是
-  `spawn_with_scrollback(&opts, lines)`（内部替你调 session 那个），读回来用
-  `scrollback_limit_of(&session_id) -> Option<usize>`。**别按错的类型名去 grep**——本仓已经有两次
-  半小时花在一个「名字对、住在别的模块里」的符号上
+  Task 12 已落地的 `PtyManager::{scrollback_limit_of, close_all}` 与
+  `SpawnOptions::scrollback_lines`
+  ⚠️ **controller 对树核实（2026-08-30，Task 12 提交 `891dc8b7e` 之后）**：本行原来还列着
+  `PtyManager::{spawn_with_scrollback, set_scrollback_limit}`。**两个都不在 `PtyManager` 上**——
+  前者已被删除（`scrollback_lines` 折进 `SpawnOptions`），后者在 `PtySession`
+  （`src/gateway/pty/session.rs`），下面还有 `Screen::` / `Grid::` 两层同名方法。
+  经 manager 走的路现在是 `spawn(&opts)` + `opts.scrollback_lines`，读回来用
+  `scrollback_limit_of(&session_id) -> Option<usize>`。**别按记忆里的类型名去 grep**——
+  本仓已经有两次半小时花在一个「名字对、住在别的模块里」的符号上
 - Produces: `SessionInfo` 增 `created_by: Option<String>`
 
 - [ ] **Step 1: 写失败的测试**
@@ -3325,9 +3333,14 @@ Add to `src/gateway/pty/manager.rs` 的 `mod tests`：
     /// multi-user install "which operator" is the question an audit asks.
     #[test]
     fn a_spawn_records_who_asked_for_it() {
+        // A LOCAL PtyManager, so `list()` really is this test's own sessions.
+        // Never index the process-global one -- see the handler test below.
         let mgr = PtyManager::new();
         let sid = mgr
-            .spawn_as(&SpawnOptions::default(), Some("u-alice".to_string()))
+            .spawn(&SpawnOptions {
+                created_by: Some("u-alice".to_string()),
+                ..Default::default()
+            })
             .expect("spawn")
             .session_id;
         assert_eq!(mgr.list()[0].created_by.as_deref(), Some("u-alice"));
@@ -3359,27 +3372,36 @@ decide whether the argument-level cards above are raised at all」——加了�
 不响）。新 doc 写**成员资格规则**，别写成员数——一条注释里写着数目就是一条会腐烂的名单，
 本仓已在这个形状上栽过四次。
 
-`manager.rs`：`SessionInfo` 加 `pub created_by: Option<String>`；`PtySession` 加同名字段；`spawn` 改名为内部 `spawn_as(&self, opts, created_by: Option<String>)`，并保留 `spawn(&self, opts)` 委托给 `spawn_as(opts, None)`（既有测试与调用点不改）。
+⚠️ **controller 对树核实并改写本步（2026-08-30，Task 12 落地之后）。** 本步原来写的是
+「`spawn` 改名为内部 `spawn_as(&self, opts, created_by)`，`spawn` 委托给它，并把
+`spawn_with_scrollback` 改成收第三个参数转调 `spawn_as`」。**那条路已经不存在了**：
+`PtyManager::spawn_with_scrollback` 在 Task 12 收尾时被删除，`scrollback_lines` 折进了
+`SpawnOptions`（提交 `891dc8b7e`）。理由记在 `SpawnOptions::scrollback_lines` 的 doc 上——
+一个"先 spawn 再回头设"的 wrapper 要把刚建好的会话**再查一次**，而 `spawn_reader` 在子进程
+EOF 时会 `manager().remove(&id)`。
 
-同时把 Task 12 的 `spawn_with_scrollback` 改成收 `created_by` 并转调 `spawn_as`，把 Task 12 里留下的那句 "Task 13 re-points this" 注释一并删掉 —— **一条说"将来会改"的注释在改完之后就是假话**：
+**而 `created_by` 是同一个形状的东西，所以答案也一样：它进 `SpawnOptions`，不要新增
+`spawn_as`。** 判据一句：**这个值是不是"这次 spawn 的一个参数"**？是 ⇒ 它和 `command` /
+`cwd` / `rows` / `scrollback_lines` 住在一起，由构造时一次写入，**不要为它开第三条 spawn
+路径**。开一条 wrapper 就是本仓刚刚花一轮删掉的那个东西。
 
 ```rust
-    pub fn spawn_with_scrollback(
-        &self,
-        opts: &SpawnOptions,
-        scrollback_lines: usize,
-        created_by: Option<String>,
-    ) -> Result<SpawnResult, String> {
-        let result = self.spawn_as(opts, created_by)?;
-        self.with_session(&result.session_id, |s| {
-            s.set_scrollback_limit(scrollback_lines);
-            Ok(())
-        })?;
-        Ok(result)
-    }
+// src/gateway/pty/session.rs — SpawnOptions
+    /// Who asked for this session, for `pty.list`'s accountability column.
+    /// `None` = not attributable (a spawn that did not come through a
+    /// caller-identified face). Carried here rather than through a
+    /// `spawn_as` wrapper for the same reason `scrollback_lines` is — see
+    /// that field's doc.
+    pub created_by: Option<String>,
 ```
 
-Task 12 里那条 `the_configured_scrollback_reaches_the_session_grid` 测试同步补第三个参数 `None`。
+`PtySession` 加同名字段，从 `opts.created_by.clone()` 初始化；`SessionInfo` 加
+`pub created_by: Option<String>` 并从会话读出。**`spawn` 的签名一个字都不用改**，既有调用点
+与测试（含 `the_configured_scrollback_reaches_the_session_grid`，它用 `..Default::default()`）
+**全部不受影响** —— 这正是把参数放进 options 结构体买到的东西。
+
+⚠️ 别去找 `spawn_with_scrollback` 或那句 "Task 13 re-points this" 注释，**两者都已经不在树上**。
+读一遍 `SpawnOptions` 现在的样子再动手：`grep -n 'pub struct SpawnOptions' -A 30 src/gateway/pty/session.rs`。
 
 `handlers/pty.rs::handle_spawn` 传入施动者：
 
@@ -3387,7 +3409,8 @@ Task 12 里那条 `the_configured_scrollback_reaches_the_session_grid` 测试同
     let actor = crate::gateway::visibility::ambient_actor();
 ```
 （函数路径以 `grep -rn 'pub fn ambient_actor' src/` 为准。）
-并改调 **`spawn_with_scrollback(&opts, terminal.scrollback_lines as usize, actor.clone())`**，
+并把它写进 `opts`：**`created_by: actor.clone()`**，紧挨着 Task 12 已经放在那里的
+`scrollback_lines: Some(terminal.scrollback_lines as usize)`。`spawn` 的调用行不变。
 ⚠️ **这一步原来还要求「随后落一条审计记录」，controller 已在派单前把它撤掉（2026-08-29）。
 不要落审计记录，也不要为它新增 `AuditEventType` 变体。**
 
@@ -3413,40 +3436,55 @@ to answer either question cleanly」。那张表上每个变体都带着一段�
 后续轮次——带着「该不该给 `AuditEventType` 加一个变体」这个**问题**，而不是带着一个
 在本任务里顺手做出的答案。报告里请原样重述这一段裁定，别自行恢复这一步。
 
-⚠️ **不要在这里调 `spawn_as`**，哪怕它读起来更直接。controller 在派单前查实
-（2026-08-29）：本任务原来写的就是 `spawn_as(&opts, actor.clone())`，那会**把 Task 12 刚接上的
-scrollback 丢掉**——配置里的 `scrollback_lines` 从此到不了任何一个真实会话，而终端历史退回内置默认值。
+⚠️ **这一步欠一条经过 handler 的测试，而两个任务各自的单测都抓不到它要抓的东西。**
 
-**而它不会被任何测试抓到。** Task 12 的 `the_configured_scrollback_reaches_the_session_grid`
-直接调 `mgr.spawn_with_scrollback(..)`，**从不经过 `handle_spawn`** ⇒ 它守的是那个辅助函数，
-坏掉的是调用点，两者在测试报告里长得一模一样。这正是判据「守卫要断言**效果到达了**，
-不是**调用发生了**」。
+原因在 Task 12 折叠之后变得更简单，但一个字都没变弱：`created_by` 与 `scrollback_lines` 现在
+是 `SpawnOptions` 上**并列的两个字段**，而**没有任何东西强制 `handle_spawn` 两个都填**。漏掉
+`scrollback_lines` ⇒ 配置里的值到不了任何真实会话、终端历史静默退回内置默认；漏掉
+`created_by` ⇒ `pty.list` 的问责列对每一行都是空。
 
-所以**这一步欠一条经过 handler 的测试**，而且它必须同时断言两件事——一次 spawn 之后，
-这个会话既记住了施动者、也拿到了配置的 scrollback：
+**两个漏法在测试报告里都长得一模一样地绿。** Task 12 的
+`the_configured_scrollback_reaches_the_session_grid` 直接构造 `SpawnOptions` 调 `mgr.spawn(..)`,
+**从不经过 `handle_spawn`** ⇒ 它守的是"字段接到了 grid"，坏掉的是"handler 填了那个字段"。
+本任务若只给 `created_by` 写一条同样形状的单测，就是把同一个盲区再造一遍。这正是判据
+「守卫要断言**效果到达了**，不是**调用发生了**」——而这里"产地"是 `SpawnOptions`，
+"连线"是 handler 那几行赋值。
+
+所以这条测试必须走 handler，并**同时**断言两件事：
 
 ```rust
-    /// The handler is the only place both facts have to travel together, and
-    /// it is the one place neither task's own test looks: Task 12's asserts
-    /// `spawn_with_scrollback` works, this task's asserts `spawn_as` works,
-    /// and a handler that called either one alone passes both of them.
+    /// The handler is the only place both fields have to be filled in, and it
+    /// is the one place neither task's own test looks: Task 12's constructs
+    /// `SpawnOptions` by hand and asserts the scrollback field reaches the
+    /// grid; a `created_by` test of the same shape would assert the same
+    /// thing about the other field. A `handle_spawn` that filled exactly one
+    /// of them passes both.
     #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
     async fn a_spawn_through_the_handler_carries_both_the_actor_and_the_scrollback() {
         let cfg = /* Arc<RwLock<Config>> with policies.terminal.scrollback_lines = 7 */;
         let resp = pty::handle_spawn(spawn_request(), cfg).await;
         let sid = session_id_of(&resp);
 
-        let info = &pty::manager().list()[0];
+        let info = /* the SessionInfo for `sid` -- look it up BY ID, never list()[0]:
+                      this binary's tests share one process-global manager */;
         assert_eq!(info.created_by.as_deref(), Some("u-alice"), "the actor must reach the session");
         assert_eq!(
             pty::manager().scrollback_limit_of(&sid),
             Some(7),
-            "and so must the configured scrollback -- a handler that calls spawn_as \
-             instead of spawn_with_scrollback passes every other test in both tasks"
+            "and so must the configured scrollback -- a handler that fills one \
+             SpawnOptions field and not the other passes every other test in both tasks"
         );
         pty::manager().close(&sid).expect("close");
     }
 ```
+
+⚠️ **两条本轮刚落地的纪律，这条测试必须遵守，否则它会让别人的测试变 flaky：**
+1. **`#[serial_test::parallel(pty_global_manager)]` 是必填的**，`gateway::handlers::pty::tests`
+   里每一条都有，而且有一条源码级 census（`every_test_here_is_tagged_against_the_global_manager_killer`）
+   会**按名字**红掉。理由见 `config::live_apply` 那条 `close_all` 测试的 doc。
+2. **`pty::manager().list()[0]` 是错的。** 这个 manager 是进程全局的，兄弟测试同时在里面
+   spawn；`[0]` 拿到的是**别人的会话**。按你自己的 `sid` 查。
 
 施动者怎么在测试里落到 `Some("u-alice")`，取决于 `ambient_actor()` 的取值方式——**先读它**
 （`grep -rn 'pub fn ambient_actor' src/`），它大概率是 task-local，那就用仓库既有的
