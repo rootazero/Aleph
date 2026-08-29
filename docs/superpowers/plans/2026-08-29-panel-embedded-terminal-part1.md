@@ -4933,6 +4933,36 @@ rg -n 'pty\.output' -g '*.md' -g '!docs/superpowers/**'
 ⚠️ 修法**不是**把文档里的名字改掉——那三段记的是一个真实发生过的缺陷，改名等于伪造记录。
 正确做法是**保住原名 + 补一个指针**说明它现在叫什么、形状变没变。
 
+- [ ] **Step 2b: handler 级接线普查（Task 11 复审的 Major 推广而来）**
+
+Task 11 的复审抓到：**没有任何测试用带 `cwd` 的参数跑过 `handle_spawn`**，所以一个根本不调
+jail 的 handler 能通过全部测试——`jail.rs` 的五条测试证明 `resolve_spawn_cwd` 在孤立状态下正确，
+而**没有一条证明它被接上了**。那一条已在 Task 11 的修复轮补上。
+
+controller 顺手数了同族（2026-08-29），**还有两个**：
+
+- `handle_input` 的两条测试都是拒绝臂（未知会话 / 坏 base64）。成功路径在 handler 层无测试——
+  Task 8 那条 wire 测试走的是 `manager().write(&sid, input)`，**不经过 handler**。
+- `handle_close` 是薄委托，**零测试**。
+
+**这一步不是"再补两条测试"，是把这一问逐个回答出来并写进报告**。六个 handler 各一行：
+
+| handler | 证明它被接上了的那条测试 |
+|---|---|
+| `handle_spawn` | （Task 11 修复轮补的那条） |
+| `handle_attach` | |
+| `handle_input` | |
+| `handle_resize` | |
+| `handle_close` | |
+| `handle_list` | |
+
+填不出来的格子写 **NONE**，别写"由 X 间接覆盖"——间接覆盖正是这条 Major 的成因
+（`resolve_spawn_cwd` 被完美地间接覆盖着，而那个函数不是会坏的那一层）。
+
+判据：**一条测试只有在「把被测的那一步删掉会让它红」时，才算证明了那一步。**
+对每个 NONE，报告里给出一句话：删掉这个 handler 里那一步会发生什么、谁会发现。
+补不补测试由 controller 按那句话裁定——**这一步的产出是那张表，不是新代码**。
+
 - [ ] **Step 3: 确认没有留下第二条半接的路**
 
 ```bash
