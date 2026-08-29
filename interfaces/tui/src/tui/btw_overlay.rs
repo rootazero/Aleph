@@ -272,6 +272,9 @@ impl BtwOverlay {
 
     /// Record that `run_id` is answering the active side question.
     pub fn claim_run(&mut self, run_id: String) {
+        if run_id.is_empty() {
+            return;
+        }
         if let Some(active) = &mut self.active {
             active.run_id = Some(run_id.clone());
         }
@@ -319,7 +322,7 @@ impl BtwOverlay {
     /// The run id of the side question being answered right now.
     #[must_use]
     pub fn active_run_id(&self) -> Option<&str> {
-        self.active.as_ref()?.run_id.as_deref()
+        self.active.as_ref()?.run_id.as_deref().filter(|id| !id.is_empty())
     }
 
     /// Append a streamed delta to the active answer.

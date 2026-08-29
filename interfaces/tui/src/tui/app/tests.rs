@@ -465,6 +465,18 @@ fn request_quit_sets_flag() {
 }
 
 #[test]
+fn send_history_is_capped() {
+    let mut state = AppState::new("s".into(), "m".into());
+    for i in 0..1_002 {
+        state.push_send_history(format!("msg-{i}"));
+    }
+    assert_eq!(state.send_history.len(), 1_000);
+    assert_eq!(state.send_history.first().unwrap(), "msg-2");
+    assert_eq!(state.send_history.last().unwrap(), "msg-1001");
+    assert!(state.history_index.is_none());
+}
+
+#[test]
 fn handle_run_accepted() {
     let mut state = AppState::new("s".into(), "m".into());
     let event = StreamEvent::RunAccepted {

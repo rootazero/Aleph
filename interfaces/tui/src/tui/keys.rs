@@ -637,9 +637,18 @@ fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
 /// immediately, arrows move the highlight, Enter confirms the highlight.
 fn handle_approval_key(state: &mut AppState, key: KeyEvent) -> Action {
     match key.code {
-        KeyCode::Char(c) if ('1'..='3').contains(&c) => Action::ResolveApproval {
-            index: (c as usize) - ('1' as usize),
-        },
+        // Number keys select the Nth decision this card actually offers. The
+        // offer list can be shorter or longer than the historical three
+        // (e.g. a card that includes `allow-always`), so the bound is the
+        // live list, not a hardcoded digit.
+        KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
+            let index = (c as u8 - b'1') as usize;
+            if index < state.approval.as_ref().map_or(0, |a| a.decisions.len()) {
+                Action::ResolveApproval { index }
+            } else {
+                Action::None
+            }
+        }
         KeyCode::Up => {
             if let Some(approval) = &mut state.approval {
                 if approval.selected > 0 {

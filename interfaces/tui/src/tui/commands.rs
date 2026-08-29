@@ -1027,7 +1027,7 @@ async fn execute_retry(state: &mut AppState, client: &AlephClient) {
 
     // Phase 2: re-submit the captured user message via the shared send site
     state.add_user_message(last_user.clone());
-    state.send_history.push(last_user.clone());
+    state.push_send_history(last_user.clone());
     send_to_agent(state, client, &last_user, "Retry send error").await;
 }
 

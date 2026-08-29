@@ -1622,4 +1622,18 @@ impl AppState {
     pub const fn update_token_usage(&mut self, summary: &RunSummary) {
         self.total_tokens = self.total_tokens.saturating_add(summary.total_tokens);
     }
+
+    /// Append a sent message to the input history, capping the list so a long
+    /// session cannot grow it without bound.
+    pub fn push_send_history(&mut self, text: String) {
+        const CAP: usize = 1_000;
+        if self.send_history.len() >= CAP {
+            self.send_history.remove(0);
+            if let Some(idx) = self.history_index.as_mut() {
+                *idx = idx.saturating_sub(1);
+            }
+        }
+        self.send_history.push(text);
+        self.history_index = None;
+    }
 }

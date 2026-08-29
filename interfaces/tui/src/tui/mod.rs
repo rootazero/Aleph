@@ -503,8 +503,7 @@ async fn main_loop<'c>(
 
                 // Save to input history
                 if !msg.is_empty() {
-                    state.send_history.push(msg.clone());
-                    state.history_index = None;
+                    state.push_send_history(msg.clone());
                 }
 
                 send_to_agent(state, client, &msg, "Send error").await;
@@ -516,8 +515,7 @@ async fn main_loop<'c>(
                 state.ctrl_c_count = 0;
 
                 if !text.is_empty() {
-                    state.send_history.push(text.clone());
-                    state.history_index = None;
+                    state.push_send_history(text.clone());
                 }
 
                 // Not `send_to_agent` directly: a `/btw` must reach the
