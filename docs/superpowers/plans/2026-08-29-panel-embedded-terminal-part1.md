@@ -2551,7 +2551,7 @@ Expected: `rg` 无输出；测试全 passed。
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/gateway/pty/ src/gateway/handlers/pty.rs
+git add src/gateway/pty/jail.rs src/gateway/pty/mod.rs src/gateway/handlers/pty.rs
 git commit -m "pty: jail spawn cwd to the registered workspaces
 
 The client's cwd is a request, not an authorisation. EXEC_WORKSPACE is the
@@ -2981,7 +2981,7 @@ Expected: 全 passed。
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/config/ src/gateway/
+git add src/config/types/policies/mod.rs src/config/types/policies/terminal.rs src/config/reload_impact.rs src/config/live_apply.rs src/gateway/handlers/pty.rs src/gateway/pty/manager.rs src/gateway/handlers/mod.rs src/bin/aleph-server/commands/start/builder/handlers/
 git commit -m "gateway: add the [policies.terminal] session gate, live and default-on
 
 Declared in LIVE_SUBSECTIONS with a real handle behind it: a security switch
@@ -2990,12 +2990,16 @@ sessions, because a gate evaluated only at admission leaves the shell that
 is already open still open."
 ```
 
+⚠️ **具名路径，别用目录。** 这棵树上同时有多个 agent 在干活，目录暂存会把别人的在飞工作
+一起提交进你的任务（`git add src/` 尤其——它扫得到整棵源码树）。提交前跑一次
+`git diff --cached --stat` 并确认它印出来的就是上面这几条，多一条都要停下来查。
+
 ---
 
 ## Task 13: `self_config` 举卡 + 问责 + SECURITY.md
 
 **Files:**
-- Modify: `src/tools/scoped/gate_chain.rs`、`src/gateway/pty/manager.rs`、`src/gateway/handlers/pty.rs`、`docs/reference/SECURITY.md`
+- Modify: `src/tools/scoped/gate_chain.rs`、`src/config/types/policies/exec_tier.rs`（`GATE_DECIDING_CONFIG_PATHS`，Step 3 要改它而这一行原来漏了它）、`src/gateway/pty/manager.rs`、`src/gateway/handlers/pty.rs`、`docs/reference/SECURITY.md`
 
 **Interfaces:**
 - Consumes: `gate_chain::DestructiveArguments`（既有）、`ambient_actor()`（既有）
@@ -3215,13 +3219,17 @@ Expected: 全 passed。
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/ docs/reference/SECURITY.md
+git add src/tools/scoped/gate_chain.rs src/config/types/policies/exec_tier.rs src/gateway/pty/manager.rs src/gateway/handlers/pty.rs docs/reference/SECURITY.md
 git commit -m "pty: gate the terminal switch's writer, record who spawned, document the limit
 
 SECURITY.md states plainly what the cwd jail buys and what it does not: it
 constrains the starting directory, not where a cd can go. Written down so
 the next reader does not cite it as isolation."
 ```
+
+⚠️ **具名路径，别用目录。** 这棵树上同时有多个 agent 在干活，目录暂存会把别人的在飞工作
+一起提交进你的任务（`git add src/` 尤其——它扫得到整棵源码树）。提交前跑一次
+`git diff --cached --stat` 并确认它印出来的就是上面这几条，多一条都要停下来查。
 
 ---
 
@@ -4774,7 +4782,7 @@ cargo run --bin aleph-server &
 
 ```bash
 kill %1
-git add interfaces/webchat/
+git add interfaces/webchat/src/platform/wide/views/terminal/keymap.rs interfaces/webchat/src/platform/wide/views/terminal/mod.rs
 git commit -m "panel: keyboard encoding and the mounted terminal view
 
 encode_key returns None for keys it does not claim rather than the key's
@@ -4782,6 +4790,10 @@ name, or an unhandled F13 types 'F13' into the shell. Ctrl-<letter> is the
 letter's alphabet position: getting that arithmetic wrong means the user
 cannot stop a runaway process."
 ```
+
+⚠️ **具名路径，别用目录。** 这棵树上同时有多个 agent 在干活，目录暂存会把别人的在飞工作
+一起提交进你的任务（`git add src/` 尤其——它扫得到整棵源码树）。提交前跑一次
+`git diff --cached --stat` 并确认它印出来的就是上面这几条，多一条都要停下来查。
 
 ---
 
