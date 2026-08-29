@@ -78,11 +78,21 @@ pub struct ChannelBindingRow {
 pub enum RescopeOutcome {
     /// An existing transcript was moved into the room scope.
     Moved,
-    /// There was no such row: nobody has spoken in that conversation yet.
+    /// No session row was found for that conversation.
+    ///
+    /// Worded as what the server **observed**, not as what it would infer.
+    /// "Nobody has spoken in that conversation yet" is the usual explanation
+    /// and is true today, but it is an interpretation layered on top of "I
+    /// found no row" — and an interpretation becomes a lie in the hands of
+    /// whoever next narrows the search. The value only ever means the search
+    /// came back empty.
     ///
     /// A distinct answer from [`Self::Moved`], because a receipt that claims a
     /// migration happened when it did not is a client asserting a result it
     /// never saw.
+    ///
+    /// 措辞描述服务端**观测到**什么，而不是它**推断**什么：「没找到行」是事实，
+    /// 「没人说过话」是对它的解释，而解释会在下一个收窄搜索的人手里变成假话。
     NothingToMove,
     /// The session store could not say. The binding itself committed — this
     /// arm reports only that the transcript's fate is **unobserved**.

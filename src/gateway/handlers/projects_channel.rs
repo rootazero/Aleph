@@ -44,8 +44,10 @@ use super::parse_params;
 use super::projects::{gate_project, project_error_response};
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::events::ChangeKind;
+use crate::gateway::session_store::types::SessionFilter;
 use crate::gateway::session_store::SessionStore;
 use crate::projects::{binding, ChannelBinding, ProjectStore};
+use crate::routing::session_key::SessionKey;
 use aleph_protocol::projects::{
     ChannelBindParams, ChannelBindResult, ChannelBindingRow, ChannelListParams, ChannelListResult,
     ChannelUnbindParams, ChannelUnbindResult, RescopeOutcome,
@@ -79,96 +81,165 @@ fn row(b: ChannelBinding) -> ChannelBindingRow {
 /// `personal:<first speaker>`, so every other member's `session_visible_to`
 /// says false and the group stays invisible in their session list. The binding
 /// would look correct on every surface and be useless on all but one.
+///
+/// # Why it enumerates instead of addressing one key (Ruling AM)
+///
+/// [`SessionKey::Group`] carries an `agent_id`; a binding, by design, does not
+/// — `binding::conversation_of` drops it, and
+/// `the_agent_id_is_not_part_of_the_conversation` pins that an `agent_switch`
+/// must not silently un-bind a room. So there is no correct single key to
+/// build here: any agent id this function named would be a guess, differing
+/// only in how often it happened to be right. Naming `"main"` would miss every
+/// deployment that repointed the channel (`channels.set_agent`, a route
+/// binding), leaving that row `personal:<first speaker>` while the receipt
+/// said `NothingToMove` — a confident claim about a conversation with a full
+/// transcript.
+///
+/// Enumerating removes the question rather than answering it: every row whose
+/// key decomposes to THIS conversation is moved, whichever agent served it.
+/// That also handles the case a single key cannot express at all — two agents
+/// having served the same group over its lifetime, which is two rows.
+///
+/// The generalisation, for whoever meets this shape next: **when a construction
+/// forces you to invent a field, look upstream for the projection that dropped
+/// it. The fix is to stop requiring the field, not to guess it better.**
 async fn rescope_existing_transcript(
     sessions: &dyn SessionStore,
-    params: &ChannelBindParams,
-    project_id: &str,
+    bound: &ChannelBinding,
 ) -> RescopeOutcome {
-    // `SessionKey::group` takes the ROUTING `PeerKind`; `ProjectStore`'s
-    // binding methods take the WIRE `BindingPeerKind` and are called with
-    // `params.peer_kind` unconverted. This is the one place the conversion is
-    // needed, and `binding::from_wire` is its only author.
-    //
-    // `SessionKey::group` normalizes `channel` and `peer_id` through the same
-    // `sanitize_component` that `binding::normalize_component` calls, so
-    // passing the operator's raw spelling here lands on the same key a live
-    // inbound message produces.
-    let key = crate::routing::session_key::SessionKey::group(
-        default_conversation_agent_id(),
-        &params.channel_id,
-        binding::from_wire(params.peer_kind),
-        &params.peer_id,
+    // `bound` rather than the raw `ChannelBindParams`: `bind_conversation`
+    // already normalized `channel_id` / `peer_id` through
+    // `binding::normalize_component`, and those normalized components are
+    // exactly what `conversation_of` reports for a live key. Comparing against
+    // the stored row removes any second opinion about how normalization works.
+    let target = (
+        bound.channel_id.as_str(),
+        bound.peer_kind,
+        bound.peer_id.as_str(),
     );
-    classify_rescope(
-        sessions.rescope_attribution(&key, project_id).await,
-        params,
-        project_id,
-    )
+
+    // ⚠️ `owner_visible_to` is deliberately `None`, and that is a FUNCTIONAL
+    // REQUIREMENT rather than a missing gate.
+    //
+    // The rows being searched for may belong to ANYBODY: `personal:<first
+    // speaker>` is precisely the class this verb exists to move. Adding
+    // `visible_owner_filter()` here — the reflex, and correct almost
+    // everywhere else in this crate — would silently drop exactly the rows the
+    // bind is supposed to relocate, and the receipt would still say it
+    // succeeded.
+    //
+    // The admission decision was already made upstream: `bind` is admin-gated
+    // in `method_admin::ADMIN_METHODS`, and `gate_project` has already refused
+    // a room the caller cannot see. An operator entitled to bind the room is
+    // entitled to move its conversation's rows.
+    //
+    // This is the mirror image of the repo's `..Default::default()` criterion,
+    // where leaving this same field `None` was the DEFECT (`session_list`
+    // showing every owner's rows). Same field, opposite direction: there the
+    // filter was the point, here the filter would be the bug. Stated at length
+    // so the next reader can see it was considered rather than forgotten.
+    let scan_started = std::time::Instant::now();
+    let rows = match sessions.list_sessions(SessionFilter::default()).await {
+        Ok(rows) => rows,
+        Err(e) => return classify_rescope(Err(e), bound),
+    };
+    let scanned = rows.len();
+
+    let keys: Vec<SessionKey> = rows
+        .iter()
+        .filter_map(|meta| SessionKey::from_key_string(&meta.key))
+        .filter(|key| {
+            binding::conversation_of(key).is_some_and(|(channel, peer_kind, peer_id)| {
+                (channel.as_str(), peer_kind, peer_id.as_str()) == target
+            })
+        })
+        .collect();
+
+    // The cost of the scan, at whatever size this install actually is. The
+    // approval for enumerating rests on "bind is a rare operator action", and
+    // this is the line that lets an operator check that reasoning against
+    // their own data rather than taking it on trust.
+    tracing::debug!(
+        scanned,
+        matched = keys.len(),
+        elapsed_ms = scan_started.elapsed().as_millis(),
+        channel_id = %bound.channel_id,
+        peer_id = %bound.peer_id,
+        "projects.channel.bind: scanned the session store for rows belonging to this conversation"
+    );
+
+    let mut moved_by = Vec::new();
+    for key in &keys {
+        match sessions.rescope_attribution(key, &bound.project_id).await {
+            Ok(true) => moved_by.push(key.agent_id().to_string()),
+            // The row was listed a moment ago and is gone now — a concurrent
+            // delete. Not an error, and not something moved.
+            Ok(false) => {}
+            Err(e) => return classify_rescope(Err(e), bound),
+        }
+    }
+    classify_rescope(Ok(moved_by), bound)
 }
 
-/// Turn [`SessionStore::rescope_attribution`]'s three outcomes into the three
-/// the receipt carries — and log the third.
+/// Turn the scan's aggregate result into the three values the receipt carries
+/// — and log the two things the enum cannot say.
 ///
-/// Split from the `await` above so the mapping is testable without a
+/// Split from the `await`s above so the mapping is testable without a
 /// thirty-method stub store: neither shipped backend can be made to return
 /// `Err` on demand, and a hand-written stub that could would be a second
 /// derivation of the thing under test. This function IS the production
 /// mapping, called with the production arguments.
 ///
-/// `Err` must not fold into `Ok(false)`. `RescopeOutcome::NothingToMove` is
-/// rendered by clients as "nobody has spoken in that conversation yet", which
-/// would be a confident factual claim about a conversation whose store just
-/// failed. The bind itself has already committed by the time this runs, so an
-/// error must not fail the RPC — but a swallowed error with no log is how
-/// "something will heal it later" becomes "nobody ever knew", hence the
-/// `warn!`.
+/// `Err` must not fold into "nothing moved". `RescopeOutcome::NothingToMove`
+/// tells every client no row was found, which would be a confident factual
+/// claim about a conversation whose store just failed. The bind itself has
+/// already committed by the time this runs, so an error must not fail the RPC
+/// — but a swallowed error with no log is how "something will heal it later"
+/// becomes "nobody ever knew", hence the `warn!`.
+///
+/// An `Err` after some rows already moved is still [`RescopeOutcome::Unknown`],
+/// not `Moved`: `Moved` asserts the conversation's transcript is in the room,
+/// and with one row unmoved that assertion is false for part of it. `Unknown`
+/// claims only that the outcome is unobserved, which is exactly the case.
+///
+/// 把扫描的聚合结果映射成收据的三个值，并把枚举说不出的两件事写进日志。
 fn classify_rescope(
-    result: Result<bool, crate::gateway::session_store::error::SessionStoreError>,
-    params: &ChannelBindParams,
-    project_id: &str,
+    result: Result<Vec<String>, crate::gateway::session_store::error::SessionStoreError>,
+    bound: &ChannelBinding,
 ) -> RescopeOutcome {
-    match result {
-        Ok(true) => RescopeOutcome::Moved,
-        Ok(false) => RescopeOutcome::NothingToMove,
+    let moved_by = match result {
+        Ok(moved_by) => moved_by,
         Err(e) => {
             tracing::warn!(
                 error = %e,
-                channel_id = %params.channel_id,
-                peer_id = %params.peer_id,
-                project_id = %project_id,
+                channel_id = %bound.channel_id,
+                peer_id = %bound.peer_id,
+                project_id = %bound.project_id,
                 "projects.channel.bind: binding recorded, but the session store could not \
                  report whether an existing transcript moved"
             );
-            RescopeOutcome::Unknown
+            return RescopeOutcome::Unknown;
         }
+    };
+    if moved_by.is_empty() {
+        return RescopeOutcome::NothingToMove;
     }
-}
-
-/// The agent id a bound conversation's session row is keyed under.
-///
-/// # This is a known approximation, deliberately isolated here
-///
-/// A binding is keyed on the CONVERSATION and carries no agent id on purpose —
-/// see `projects::binding`'s `the_agent_id_is_not_part_of_the_conversation`:
-/// an `agent_switch` must not silently un-bind a room. But
-/// [`SessionKey::group`] does carry one, so addressing the conversation's
-/// existing row forces this handler to name an agent the binding does not have.
-///
-/// `"main"` is the value [`crate::gateway::router::AgentRouter`] and
-/// `AgentInstanceManager` both default to, so it is correct on every
-/// deployment that has not repointed the channel. On one that has
-/// (`channels.set_agent`, a route binding),
-/// `inbound_router::agent_resolver::resolve_session_key_with_agent` built the
-/// row under THAT agent id and this lookup misses it: the row keeps
-/// `personal:<first speaker>` and the receipt reports
-/// [`RescopeOutcome::NothingToMove`].
-///
-/// It is a function rather than a literal so the miss has one address to be
-/// fixed at, and so the reason survives next to the value.
-///
-/// [`SessionKey::group`]: crate::routing::session_key::SessionKey::group
-const fn default_conversation_agent_id() -> &'static str {
-    "main"
+    // More than one agent has served this conversation over its lifetime, so
+    // the bind moved more than one row. That is an operator-visible oddity and
+    // `Moved` — a three-valued enum — structurally cannot say it. This is not
+    // a fourth variant; it is the log carrying the half the enum does not.
+    if moved_by.len() > 1 {
+        tracing::warn!(
+            agent_ids = %moved_by.join(", "),
+            moved = moved_by.len(),
+            channel_id = %bound.channel_id,
+            peer_id = %bound.peer_id,
+            project_id = %bound.project_id,
+            "projects.channel.bind: more than one agent has served this conversation; \
+             every one of their session rows moved into the room"
+        );
+    }
+    RescopeOutcome::Moved
 }
 
 /// `projects.channel.bind` — point a room at a channel conversation.
@@ -202,8 +273,9 @@ pub async fn handle_bind(
     let actor = crate::gateway::caller_identity::current_caller_user();
     // `params.peer_kind` goes STRAIGHT through: the store's binding methods
     // take `aleph_protocol::projects::BindingPeerKind`, the same type the wire
-    // carries. Only `SessionKey::group` needs `binding::from_wire`.
-    let binding = match store.bind_conversation(
+    // carries; nothing on this path converts. (`binding::from_wire` exists for
+    // the ROUTING enum, which this handler no longer needs — see Ruling AM.)
+    let bound = match store.bind_conversation(
         &project.id,
         &params.channel_id,
         params.peer_kind,
@@ -218,7 +290,10 @@ pub async fn handle_bind(
         Err(e) => return project_error_response(request.id, e),
     };
 
-    let rescoped = rescope_existing_transcript(sessions.as_ref(), &params, &project.id).await;
+    // The STORED binding, not `params`: its `channel_id` / `peer_id` are
+    // already normalized the way a live `SessionKey` normalizes, which is what
+    // the scan below compares against.
+    let rescoped = rescope_existing_transcript(sessions.as_ref(), &bound).await;
 
     if let Some(log) = crate::security::audit::global() {
         log.log(crate::security::audit::AuditEntry::authority_change(
@@ -228,7 +303,7 @@ pub async fn handle_bind(
             // now on. The raw spelling is preserved in the binding's `label`.
             format!(
                 "projects.channel.bind: {}:{} → {} (rescoped_session={rescoped})",
-                binding.channel_id, binding.peer_id, project.id
+                bound.channel_id, bound.peer_id, project.id
             ),
         ));
     }
@@ -237,7 +312,7 @@ pub async fn handle_bind(
     JsonRpcResponse::success(
         request.id,
         json!(ChannelBindResult {
-            binding: row(binding),
+            binding: row(bound),
             rescoped_session: rescoped,
         }),
     )
@@ -426,20 +501,32 @@ mod tests {
         })
     }
 
+    /// A stored binding, for the classifier's `&ChannelBinding` argument.
+    fn a_binding() -> ChannelBinding {
+        ChannelBinding {
+            project_id: "p-1".into(),
+            channel_id: "telegram".into(),
+            peer_kind: BindingPeerKind::Group,
+            peer_id: "c1".into(),
+            bound_by: Some("u-alice".into()),
+            bound_at: 0,
+            label: None,
+        }
+    }
+
     /// Ruling AG, at the one place it is decided. `Err` must be its own answer:
-    /// folding it into `Ok(false)` makes every client print "nobody has spoken
-    /// in that conversation yet" about a conversation whose store just failed.
+    /// folding it into "nothing moved" makes every client report that no row
+    /// was found for a conversation whose store just failed.
     ///
     /// This calls the production mapping directly. Neither shipped backend can
     /// be made to return `Err` on demand, and a stub that could would be a
     /// second derivation of the thing under test.
     #[test]
     fn a_store_error_is_reported_as_unknown_and_not_as_nothing_to_move() {
-        let params: ChannelBindParams =
-            serde_json::from_value(bind_params("p-1", "c1")).expect("params");
-        let moved = classify_rescope(Ok(true), &params, "p-1");
-        let nothing = classify_rescope(Ok(false), &params, "p-1");
-        let failed = classify_rescope(Err(SessionStoreError::Unsupported), &params, "p-1");
+        let bound = a_binding();
+        let moved = classify_rescope(Ok(vec!["main".to_string()]), &bound);
+        let nothing = classify_rescope(Ok(Vec::new()), &bound);
+        let failed = classify_rescope(Err(SessionStoreError::Unsupported), &bound);
 
         assert_eq!(moved, RescopeOutcome::Moved);
         assert_eq!(nothing, RescopeOutcome::NothingToMove);
@@ -448,6 +535,21 @@ mod tests {
             failed, nothing,
             "a store that errored has not found nothing to move — a client \
              rendering the two identically asserts a result it never saw"
+        );
+    }
+
+    /// `Moved` means "at least one row moved" (Ruling AM), so the enum is
+    /// unchanged by the switch to enumeration and Tasks 10/11 need no further
+    /// patching. Two moved rows are still `Moved`; the fact that there were
+    /// two is carried by the `warn!`, which the enum structurally cannot say.
+    #[test]
+    fn moving_more_than_one_row_is_still_moved() {
+        let bound = a_binding();
+        assert_eq!(
+            classify_rescope(Ok(vec!["main".into(), "coder".into()]), &bound),
+            RescopeOutcome::Moved,
+            "a three-valued receipt does not gain a fourth value for the \
+             multi-agent case — the log carries that half"
         );
     }
 
@@ -537,12 +639,15 @@ mod tests {
     #[tokio::test]
     async fn a_non_member_cannot_list_a_rooms_bindings() {
         let (store, project, _guard) = room();
+        // `zz-standup`, not the `C1` the other tests use: see the assertion at
+        // the end of this test for why the probed peer id must contain
+        // non-hex letters.
         store
             .bind_conversation(
                 &project.id,
                 "telegram",
                 BindingPeerKind::Group,
-                "C1",
+                "zz-standup",
                 Some("u-alice"),
                 None,
             )
@@ -578,8 +683,20 @@ mod tests {
             format!("project not found: {}", project.id),
             "the refusal must be the not-found wording, never a permission denial"
         );
+        // ⚠️ The peer id probed for here MUST be one that cannot occur inside
+        // a project id. Project ids are `p-<32 hex chars>`
+        // (`store::mint_id`), so the first version of this assertion looked
+        // for `"c1"` — the peer id the rest of the file uses — and fired on
+        // roughly one run in nine when the fixture's own random id happened to
+        // contain those two hex digits. It passed twice before failing on
+        // `p-fa211571c4d24960bdcbe9c108d2f81e`.
+        //
+        // The lesson is not "that was unlucky": a negative assertion has to be
+        // over an alphabet the haystack cannot produce, or it is testing the
+        // random number generator. `zz-standup` and `telegram` both contain
+        // non-hex letters and therefore cannot appear in a project id.
         assert!(
-            !refused_msg.contains("telegram") && !refused_msg.contains("c1"),
+            !refused_msg.contains("telegram") && !refused_msg.contains("zz-standup"),
             "a refusal must not leak what is bound: {refused_msg}"
         );
     }
@@ -800,6 +917,324 @@ mod tests {
         assert!(
             store.bindings_for(&project.id).unwrap().is_empty(),
             "nothing may be written for a spelling the wire does not accept"
+        );
+    }
+
+    /// The defect option A would have shipped, and the reason Ruling AM chose
+    /// enumeration: the conversation's row lives under whichever agent the
+    /// route resolved, and on a deployment that ran `channels.set_agent` that
+    /// is not `"main"`. A handler that built one key named `"main"` finds
+    /// nothing here, reports `NothingToMove`, and leaves the row
+    /// `personal:<first speaker>` — the split this whole verb exists to close.
+    #[tokio::test]
+    async fn a_row_created_under_a_non_default_agent_is_still_moved() {
+        let (store, project, _guard) = room();
+        let (sessions, _dir) = sessions();
+
+        // NOT "main": this channel is pointed at another agent.
+        let key = SessionKey::group("coder", "telegram", PeerKind::Group, "C1");
+        with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            sessions.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+
+        let resp = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_bind(
+                    rpc("projects.channel.bind", bind_params(&project.id, "C1")),
+                    store.clone(),
+                    sessions.clone(),
+                    bus(),
+                ),
+            )
+            .await;
+        let result: ChannelBindResult =
+            serde_json::from_value(resp.result.expect("bind succeeds")).expect("bind result");
+        assert_eq!(
+            result.rescoped_session,
+            RescopeOutcome::Moved,
+            "the binding does not carry an agent id, so the search must not \
+             assume one — this row is under `coder`"
+        );
+        assert_eq!(
+            sessions
+                .get_metadata(&key)
+                .await
+                .unwrap()
+                .unwrap()
+                .scope_id
+                .as_deref(),
+            Some(format!("project:{}", project.id).as_str())
+        );
+    }
+
+    /// The case a single addressed key cannot express AT ALL: two agents have
+    /// served this group over its lifetime, so there are two rows. Both must
+    /// move — leaving one behind would keep that half of the conversation
+    /// invisible to the roster.
+    #[tokio::test]
+    async fn every_agents_row_for_the_conversation_moves_not_just_one() {
+        let (store, project, _guard) = room();
+        let (sessions, _dir) = sessions();
+
+        let main_key = SessionKey::group("main", "telegram", PeerKind::Group, "C1");
+        let coder_key = SessionKey::group("coder", "telegram", PeerKind::Group, "C1");
+        // A DIFFERENT conversation on the same channel, and the same peer id on
+        // a different channel: neither may be swept up by the scan.
+        let other_peer = SessionKey::group("main", "telegram", PeerKind::Group, "C2");
+        let other_channel = SessionKey::group("main", "slack", PeerKind::Group, "C1");
+        for k in [&main_key, &coder_key, &other_peer, &other_channel] {
+            with_scope(
+                Some(ScopeAttribution::personal("u-alice")),
+                sessions.get_or_create(k),
+            )
+            .await
+            .unwrap();
+        }
+
+        let resp = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_bind(
+                    rpc("projects.channel.bind", bind_params(&project.id, "C1")),
+                    store.clone(),
+                    sessions.clone(),
+                    bus(),
+                ),
+            )
+            .await;
+        let result: ChannelBindResult =
+            serde_json::from_value(resp.result.expect("bind succeeds")).expect("bind result");
+        assert_eq!(result.rescoped_session, RescopeOutcome::Moved);
+
+        let scope_of = |k: &SessionKey| {
+            let sessions = sessions.clone();
+            let k = k.clone();
+            async move {
+                sessions
+                    .get_metadata(&k)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .scope_id
+                    .clone()
+            }
+        };
+        let room_scope = Some(format!("project:{}", project.id));
+        assert_eq!(scope_of(&main_key).await, room_scope, "main's row moved");
+        assert_eq!(scope_of(&coder_key).await, room_scope, "coder's row moved");
+        assert_eq!(
+            scope_of(&other_peer).await,
+            Some("personal:u-alice".to_string()),
+            "a different peer id in the same channel is a different conversation"
+        );
+        assert_eq!(
+            scope_of(&other_channel).await,
+            Some("personal:u-alice".to_string()),
+            "the same peer id on another channel is a different conversation"
+        );
+    }
+
+    /// Ruling AM constraint 1, pinned so the reflex cannot be added back
+    /// silently.
+    ///
+    /// The scan runs `SessionFilter::default()` — `owner_visible_to: None` —
+    /// because the rows it is looking for BELONG TO OTHER PEOPLE.
+    /// `personal:<first speaker>` is exactly the class being moved, and the
+    /// first speaker is usually not the operator doing the bind. Adding
+    /// `visible_owner_filter()` there reads like closing a hole; it would
+    /// instead drop precisely the rows the bind exists to relocate, while the
+    /// receipt still said it succeeded.
+    ///
+    /// Here `u-bob` spoke first and `u-alice` binds. Under a caller-scoped
+    /// filter the row is invisible to alice and this test goes RED with
+    /// `NothingToMove`.
+    #[tokio::test]
+    async fn a_row_owned_by_another_user_is_still_moved() {
+        let (store, project, _guard) = room();
+        let (sessions, _dir) = sessions();
+
+        let key = SessionKey::group("main", "telegram", PeerKind::Group, "C1");
+        with_scope(
+            Some(ScopeAttribution::personal("u-bob")),
+            sessions.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+
+        let resp = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_bind(
+                    rpc("projects.channel.bind", bind_params(&project.id, "C1")),
+                    store.clone(),
+                    sessions.clone(),
+                    bus(),
+                ),
+            )
+            .await;
+        let result: ChannelBindResult =
+            serde_json::from_value(resp.result.expect("bind succeeds")).expect("bind result");
+        assert_eq!(
+            result.rescoped_session,
+            RescopeOutcome::Moved,
+            "the scan must not be narrowed to the caller: the row it is looking \
+             for is owned by whoever spoke first, not by the operator binding"
+        );
+        let meta = sessions.get_metadata(&key).await.unwrap().unwrap();
+        assert_eq!(
+            meta.scope_id.as_deref(),
+            Some(format!("project:{}", project.id).as_str())
+        );
+        assert_eq!(
+            meta.owner_user_id.as_deref(),
+            Some("u-bob"),
+            "only the scope moves — the byline still names whoever spoke first"
+        );
+    }
+
+    /// A key shape that is not a conversation at all must never be swept up.
+    /// `conversation_of` returns `None` for a DM, and a DM has exactly one
+    /// human on the far side: moving it into a room would put a shared
+    /// partition behind a private conversation.
+    #[tokio::test]
+    async fn a_dm_on_the_same_channel_is_never_swept_into_the_room() {
+        let (store, project, _guard) = room();
+        let (sessions, _dir) = sessions();
+
+        let dm = SessionKey::dm(
+            "main",
+            "telegram",
+            "C1",
+            crate::routing::session_key::DmScope::PerPeer,
+        );
+        with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            sessions.get_or_create(&dm),
+        )
+        .await
+        .unwrap();
+
+        let resp = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_bind(
+                    rpc("projects.channel.bind", bind_params(&project.id, "C1")),
+                    store.clone(),
+                    sessions.clone(),
+                    bus(),
+                ),
+            )
+            .await;
+        let result: ChannelBindResult =
+            serde_json::from_value(resp.result.expect("bind succeeds")).expect("bind result");
+        assert_eq!(
+            result.rescoped_session,
+            RescopeOutcome::NothingToMove,
+            "a DM sharing the channel and peer id is not the bound conversation"
+        );
+        assert_eq!(
+            sessions
+                .get_metadata(&dm)
+                .await
+                .unwrap()
+                .unwrap()
+                .scope_id
+                .as_deref(),
+            Some("personal:u-alice"),
+            "the DM stays where it was"
+        );
+    }
+
+    /// Ruling AM constraint 4: the scan's cost, measured rather than reasoned
+    /// about.
+    ///
+    /// Enumerating was approved on the judgement that `bind` is a rare
+    /// operator action. That judgement is reasoning, not measurement, so this
+    /// seeds a store with many unrelated conversations and checks the needle is
+    /// still found — and prints the wall time for the report.
+    ///
+    /// **Timing is printed, never asserted.** A wall-clock threshold in a test
+    /// suite that runs 17k tests in parallel on shared hardware is a flake
+    /// generator, and a flaky guard is worse than none: it teaches people to
+    /// re-run until green. The assertion here is on CORRECTNESS at scale — the
+    /// one row that should move did, and the 200 that should not did not.
+    ///
+    /// The shape of the cost, for anyone extrapolating: one `list_sessions`
+    /// (the file backend reads every session's metadata) plus O(n) key parses.
+    /// It grows linearly with the number of sessions on the install, and it is
+    /// paid once per `bind`.
+    #[tokio::test]
+    async fn the_scan_still_finds_the_conversation_among_many_unrelated_sessions() {
+        const NOISE: usize = 200;
+        let (store, project, _guard) = room();
+        let (sessions, _dir) = sessions();
+
+        for i in 0..NOISE {
+            let noise = SessionKey::group("main", "telegram", PeerKind::Group, format!("noise{i}"));
+            with_scope(
+                Some(ScopeAttribution::personal("u-alice")),
+                sessions.get_or_create(&noise),
+            )
+            .await
+            .unwrap();
+        }
+        let key = SessionKey::group("main", "telegram", PeerKind::Group, "C1");
+        with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            sessions.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+
+        let started = std::time::Instant::now();
+        let resp = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_bind(
+                    rpc("projects.channel.bind", bind_params(&project.id, "C1")),
+                    store.clone(),
+                    sessions.clone(),
+                    bus(),
+                ),
+            )
+            .await;
+        let elapsed = started.elapsed();
+        eprintln!(
+            "[scan cost] {} session rows in the store, bind took {} ms",
+            NOISE + 1,
+            elapsed.as_millis()
+        );
+
+        let result: ChannelBindResult =
+            serde_json::from_value(resp.result.expect("bind succeeds")).expect("bind result");
+        assert_eq!(result.rescoped_session, RescopeOutcome::Moved);
+        assert_eq!(
+            sessions
+                .get_metadata(&key)
+                .await
+                .unwrap()
+                .unwrap()
+                .scope_id
+                .as_deref(),
+            Some(format!("project:{}", project.id).as_str()),
+            "the needle moved"
+        );
+        let stray = SessionKey::group("main", "telegram", PeerKind::Group, "noise0");
+        assert_eq!(
+            sessions
+                .get_metadata(&stray)
+                .await
+                .unwrap()
+                .unwrap()
+                .scope_id
+                .as_deref(),
+            Some("personal:u-alice"),
+            "and nothing else did — a scan that matched loosely would sweep the \
+             whole channel into the room"
         );
     }
 }
