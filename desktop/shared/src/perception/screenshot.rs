@@ -545,6 +545,10 @@ pub fn process_screenshot_with_scale(
         max_bytes,
     );
 
+    // JPEG quality must live in the encoder's supported range; a caller that
+    // passes 0 or >100 would otherwise panic `image::JpegEncoder`.
+    let quality = quality.clamp(1, 100);
+
     let img = image::load_from_memory(raw_image)
         .map_err(|e| DesktopError::ScreenCapture(format!("Failed to decode image: {e}")))?;
 

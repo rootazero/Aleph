@@ -273,9 +273,11 @@ pub fn screen_record(
     }
 }
 
-/// Generate the output file path: `~/.aleph/data/_media/screen_record_{timestamp}.mp4`
+/// Generate the output file path: `~/.aleph/data/_media/screen_record_{timestamp}_{counter}.mp4`
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn screen_record_output_path() -> Result<std::path::PathBuf> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     let home = dirs::home_dir()
         .ok_or_else(|| DesktopError::ScreenCapture("Cannot determine home directory".into()))?;
     let media_dir = home.join(".aleph/data/_media");
@@ -286,7 +288,11 @@ fn screen_record_output_path() -> Result<std::path::PathBuf> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    Ok(media_dir.join(format!("screen_record_{ts}.mp4")))
+    // Two recordings started in the same millisecond would otherwise collide
+    // and overwrite each other.
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let counter = COUNTER.fetch_add(1, Ordering::SeqCst);
+    Ok(media_dir.join(format!("screen_record_{ts}_{counter}.mp4")))
 }
 
 /// Check if we can use `SCRecordingOutput` (macOS 15.0+).
