@@ -4205,7 +4205,7 @@ git commit -m "docs: record Part 1 implementation deltas against the terminal sp
 - **中文 / 日文 / 韩文输入**（IME 归 Part 2）—— 交付时要向用户明说这一条，否则它读起来像 bug。
 - **ESC 族转义序列**（`ESC 7`/`ESC 8` DECSC/DECRC、`ESC M` RI 归 Part 2；落回 vte 默认 no-op）—— `less` / `vim` 等全屏程序下可能出现光标位置错位，交付时要向用户明说这一条，否则它读起来像 bug。
 - 向上滚动看历史（`pty.scrollback` 归 Part 2；服务端**已经在存**）。
-- **会话退出的任何提示**（归 Part 2）—— 服务端发 `pty.exit`，Part 1 的 Panel 不订阅它。用户 `exit` 之后终端只是停止更新，不报错也不变灰。交付时要向用户明说这一条：它比另外两条更像 bug，因为一块不再响应的矩形和一块坏掉的矩形在屏幕上是同一个东西。
+- **会话退出的任何提示**（归 Part 2）—— 服务端发 `pty.exit`，Part 1 的 Panel 不订阅它。用户 `exit` 之后终端只是停止更新，不报错也不变灰。交付时要向用户明说这一条：它比另外两条更像 bug，因为一块不再响应的矩形和一块坏掉的矩形在屏幕上是同一个东西。**不过 Task 17 的 list-then-spawn 顺带给了它一条出路**——退出的会话 `closed: true`，复用扫描会跳过它，所以**刷新一次就换来一个新 shell**。缺口的严重度因此从「永久死掉的矩形」降到「刷新之前死掉的矩形」，交付措辞按后者写。⚠️ 这不是把它修好了：用户仍然不知道**为什么**要刷新，而「刷新一下试试」正是一句会掩盖真缺陷的话。
 - Tab 条 / 分屏 / 选区 / 搜索（B 档结构，归 Part 2）。
 
 达成后立刻写 Part 2（Phase 5–8：Tab 条 / 分屏树 / `pty.scrollback` + 滚动 / IME / 选区 / 搜索 / `qa/terminal/run.sh` / FEATURE_LOCATOR 与判据清单补充），引用「Part 1 实施偏差」里记录的真实签名。
