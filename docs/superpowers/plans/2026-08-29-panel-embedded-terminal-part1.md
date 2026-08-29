@@ -2962,6 +2962,28 @@ Task 11 在同一个函数里留下了：
 `pty.spawn` 那一行要从 `src/gateway/handlers/mod.rs:362` 挪到 bin 那侧、写成
 `register_handler!(server, "pty.spawn", pty::handle_spawn, config);`。
 
+**controller 已把这条路全程走过一遍（2026-08-29），四个前提都核实过，别再推演：**
+
+1. **行号是准的**：`handlers/mod.rs:362` 就是 `pty.spawn`，362–367 六条连号。
+2. **宏形态对得上**：`register_handler!` 的 1-ctx 臂做 `Arc::clone(&$ctx1)` 再
+   `$handler(req, ctx1)` ⇒ handler 收 `Arc<RwLock<Config>>`，与上面的签名逐字匹配。
+3. **搬到哪个文件**：`src/bin/aleph-server/commands/start/builder/handlers/system.rs`。
+   那个目录有 11 个文件，随便挑一个都编得过——**而 `pty.spawn` 落进 `settings.rs` 是一个
+   没有任何测试会发现的归档错误**。`system.rs` 是 daemon/系统面，且已有同形先例
+   `register_oauth_handlers(server, oauth_state, config, vault, daemon)`。
+   ⚠️ 注意那里的 `config` 是**逐函数参数**、不是文件级绑定，所以形状是**新加一个
+   `register_pty_handlers(server: &mut GatewayServer, config: &Arc<RwLock<Config>>)`**，
+   照 `register_oauth_handlers` 抄签名。
+4. **调用点**：`src/bin/aleph-server/commands/start/mod.rs:1919` 附近，
+   `register_oauth_handlers(&mut server, …, &app_config_for_oauth, …)` 那一行旁边。
+
+⚠️ **别被 `app_config_for_oauth` 这个名字劝退——它不是给 OAuth 单做的快照。**
+`mod.rs:1832` 是 `let app_config_for_oauth = app_config.clone();`，`Arc::clone`，
+**同一个活句柄**（旁边 1831 行的 `app_config_for_reload` 正是热重载的写入端，所以经它读到的
+永远是当前值）。按该处局部约定新建一个 `app_config_for_pty = app_config.clone()` 即可。
+这一段写在这里，是因为一个谨慎的实施者会恰好在这里停下来怀疑自己拿到的是不是活配置——
+而**怀疑是对的，答案是「是活的」**。
+
 ⚠️ **搬走而忘了落地 = `pty.spawn` 从注册表里静默消失**（判据「注册不是派发」）。这条**有守卫**：
 `method_census.rs` 的扫描器是**源码级**的，`register(` 与 `register_handler!(` 两种形状它都认
 （见 `literal_after_paren` 专门剥掉 `register_handler!` 多出来的那个 receiver 实参），所以搬家
