@@ -167,8 +167,9 @@ fn request_scope(request: &RunRequest) -> Option<crate::scope::ScopeAttribution>
 /// `flow_scope_census` keeps the site honest lexically;
 /// `tests::the_flow_request_projection_carries_the_room_upgrade` and
 /// `tests::the_projection_round_trips_through_the_dispatch_rebuild` keep this
-/// function honest behaviourally, and they are the only two that go red when
-/// the scope is re-resolved here under a different spelling.
+/// function honest behaviourally: they are the only two that go red when a
+/// re-resolution here LOSES the room upgrade, whatever spelling it uses. A
+/// re-resolution that keeps it is layer 3's counts, not theirs.
 fn request_scope_strings(request: &RunRequest) -> crate::scope::FlowScope {
     crate::scope::FlowScope::resolved(request_scope(request).as_ref())
 }

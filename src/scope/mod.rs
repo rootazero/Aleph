@@ -343,9 +343,11 @@ pub fn stamp_metadata(meta: &mut HashMap<String, String>, attr: &ScopeAttributio
 /// `run_loop::tests::the_flow_request_projection_carries_the_room_upgrade` and
 /// `::the_projection_round_trips_through_the_dispatch_rebuild`, which assert
 /// that a claimed session key reaches the harness as the ROOM. They are red for
-/// any second resolution however it is spelled, which no rule about a spelling
-/// can be. `flow_scope_census`'s module doc lists them as layer 4 and states
-/// this bound in full; do not trade them away as redundant with this type.
+/// any resolution that LOSES that upgrade, however it is spelled — which no
+/// rule about a spelling can be. Not for a second resolution that reaches the
+/// same answer: that one is layer 3's counts, not theirs.
+/// `flow_scope_census`'s module doc lists them as layer 4 and states the bound
+/// in full; do not trade them away as redundant with this type.
 ///
 /// [`FlowScope::unscoped`] is the empty pair (`None`, `None`) — legacy owner
 /// semantics, what every non-gateway dispatcher and every test fixture passes.

@@ -59,11 +59,14 @@
 //!    `the_projection_round_trips_through_the_dispatch_rebuild`. These are the
 //!    layer that owns PROVENANCE, and they are the strongest guard in this
 //!    package because they assert the property — a claimed key reaches the
-//!    harness as the room — rather than a spelling, so a second resolution is
-//!    red however it is written, `as` alias included. They are named here
-//!    because 1–3 are the layers a reader can see, and a defence nobody names
-//!    is one refactor away from being deleted as redundant with the layers
-//!    that are named.
+//!    harness as the room — rather than a spelling. So a resolution that LOSES
+//!    the room upgrade is red however it is written, `as` alias included.
+//!    Precisely that, and not more: a second resolution that happens to reach
+//!    the same answer stays green here, and it is layer 3's counts that object
+//!    to a second answer existing at all. The two layers do different work.
+//!    Named here because 1–3 are the layers a reader can see, and a defence
+//!    nobody names is one refactor away from being deleted as redundant with
+//!    the layers that are named.
 //!
 //! The bounds, stated so nobody has to infer them:
 //!
