@@ -56,6 +56,53 @@ mod tests {
     use crate::gateway::event_bus::GatewayEventBus;
     use crate::sync_primitives::Arc;
 
+    /// `workspace_roots` must resolve the root the rest of the daemon
+    /// actually uses, which means honouring a configured
+    /// `[agents.defaults] workspace_root` rather than answering with the
+    /// built-in default.
+    ///
+    /// Written because the two are a documented trap in this repo and this
+    /// function had no test of its own: `default_workspace_root()` answers
+    /// "where does this live when nothing is configured", while
+    /// `workspace_root_for(defaults)` answers "where does it live". Reaching
+    /// for the first is silent on an unconfigured machine — including every
+    /// developer's and CI's — and wrong on exactly the installs that set the
+    /// key. The signatures are the tell: one takes no argument, so it cannot
+    /// be reading configuration at all.
+    ///
+    /// The assertion is also the reason this test needs no environment
+    /// isolation, which is the second half of why it is worth having: with
+    /// `workspace_root` set, `workspace_root_for` returns it without
+    /// consulting `ALEPH_HOME` at all (`agent_resolver/mod.rs:487`). Every
+    /// path here is one the test owns.
+    #[test]
+    fn workspace_roots_honours_a_configured_root_rather_than_the_default() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let configured = tmp.path().join("chosen");
+
+        let defaults = crate::config::types::AgentDefaults {
+            workspace_root: Some(configured.clone()),
+            ..Default::default()
+        };
+
+        let roots = workspace_roots(&defaults);
+
+        assert_eq!(
+            roots.len(),
+            1,
+            "one root, so `canonical_roots[0]` is deterministic"
+        );
+        assert_eq!(
+            roots[0], configured,
+            "a configured workspace_root must win over default_workspace_root()"
+        );
+        assert!(
+            configured.is_dir(),
+            "the root must exist afterwards -- the jail refuses a root it cannot canonicalise, \
+             so a resolver that only computes the path hands the jail an empty allowed set"
+        );
+    }
+
     /// The wire from the public `attach_event_bus` entry point to a real bus
     /// subscriber, exercised end-to-end rather than by checking that
     /// `start_flush_loop` was *called* — `build_router()`'s own tests already
