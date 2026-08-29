@@ -1322,15 +1322,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // spawn while the row kept it. That `FlowRequest` carries strings
             // is why this converts (`ScopeId::render`, matching
             // `scope::stamp_metadata`), not why it should read another source.
-            let (scope_owner_user_id, scope_id) = super::request_scope_strings(request);
+            // `FlowScope`'s fields are private, so the raw-read spelling does
+            // not type-check here at all — see that type's doc.
+            let scope = super::request_scope_strings(request);
             let req = crate::orchestrator::FlowRequest {
                 flow_id: None,
                 agent_id: agent.id().to_string(),
                 input: flow_input,
                 channel: request.metadata.get("platform").cloned(),
                 session_hint: Some(request.session_key.to_key_string()),
-                owner_user_id: scope_owner_user_id,
-                scope_id,
+                scope,
                 parent_session: None,
                 depth: 0,
                 tool_service: Some(tool_service),

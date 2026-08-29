@@ -293,6 +293,74 @@ pub fn stamp_metadata(meta: &mut HashMap<String, String>, attr: &ScopeAttributio
     meta.insert(SCOPE_META_KEY.to_string(), attr.scope.render());
 }
 
+/// The scope attribution [`crate::orchestrator::FlowRequest`] carries across
+/// `orchestrator::dispatch`'s `tokio::spawn` — the same two strings
+/// [`stamp_metadata`] writes, in a struct that cannot be assembled by hand.
+///
+/// # Why a type and not the two `Option<String>` fields it replaces
+///
+/// `FlowRequest` used to carry them raw, and the gateway filled them by
+/// reading `request.metadata` back out. That read is the whole defect
+/// `src/gateway/CLAUDE.md` 地雷 Q describes: the metadata holds whatever the
+/// PRODUCER stamped, and for a channel turn in a bound room that is
+/// `personal:<speaker>`, not the room —
+/// `gateway::execution_engine::run_loop::request_scope` is the only thing that
+/// applies the room's claim on top of it. The session row got the corrected
+/// scope and everything past the spawn got the producer's, with no error
+/// anywhere.
+///
+/// The census in `run_loop::flow_scope_census` catches that read when it is
+/// spelled with the key CONSTANTS, and — since this round — when it is spelled
+/// with their literal values. Both are lexical: they detect a spelling. This
+/// type removes the shape instead. The fields are private and the only way to
+/// mint a non-empty value is [`FlowScope::resolved`], which takes an
+/// already-resolved [`ScopeAttribution`]; handing the site a pair of strings
+/// lifted out of a metadata map no longer type-checks, whatever it is spelled
+/// like. 编译错误强于登记表.
+///
+/// # What it does NOT prevent
+///
+/// A caller can still resolve an attribution the wrong way — `scope_from_metadata`
+/// on the raw map, skipping the room correction — and pass THAT here. That
+/// shape is not a type error and is not meant to be: it is what
+/// `flow_scope_census`'s `scope_from_metadata` call count owns, which is why
+/// the two layers are kept side by side rather than one replacing the other.
+///
+/// [`Default`] is the unscoped pair (`None`, `None`) — legacy owner semantics,
+/// what every non-gateway dispatcher and every test fixture passes.
+#[derive(Clone, Debug, Default)]
+pub struct FlowScope {
+    owner_user_id: Option<String>,
+    scope_id: Option<String>,
+}
+
+impl FlowScope {
+    /// Project an already-resolved attribution into the pair `FlowRequest`
+    /// carries.
+    ///
+    /// `None` (the fail-closed result of [`scope_from_metadata`], and of
+    /// `request_scope` built on it) projects to the unscoped pair, so a
+    /// half-stamped turn arrives as `(None, None)` rather than
+    /// `(Some(owner), None)` — `dispatch` re-runs [`scope_from_metadata`] on
+    /// the rebuilt map and would reach the same dead task-local either way,
+    /// but only this says so at the boundary.
+    #[must_use]
+    pub(crate) fn resolved(attr: Option<&ScopeAttribution>) -> Self {
+        Self {
+            owner_user_id: attr.map(|a| a.owner_user_id.clone()),
+            scope_id: attr.map(|a| a.scope.render()),
+        }
+    }
+
+    /// The `(owner_user_id, scope_id)` pair, for the one consumer that rebuilds
+    /// a metadata map from it (`orchestrator::dispatch`, re-seeding the scope
+    /// task-local inside its spawn).
+    #[must_use]
+    pub(crate) fn into_parts(self) -> (Option<String>, Option<String>) {
+        (self.owner_user_id, self.scope_id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1638,7 +1638,7 @@ fn the_flow_request_projection_carries_the_room_upgrade() {
          ever stops being true the test below stops testing the upgrade."
     );
 
-    let (owner, scope) = super::request_scope_strings(&request);
+    let (owner, scope) = super::request_scope_strings(&request).into_parts();
     let expected_room_scope = format!("project:{}", room.id);
     assert_eq!(
         scope.as_deref(),
@@ -1683,7 +1683,7 @@ fn an_off_roster_speaker_is_projected_exactly_as_the_raw_read_was() {
     );
 
     assert_eq!(
-        super::request_scope_strings(&request),
+        super::request_scope_strings(&request).into_parts(),
         raw_metadata_pair(&request),
         "an off-roster speaker in a bound conversation must reach the harness with \
          BYTE-IDENTICAL strings before and after this change. Deriving the pair from \
@@ -1692,7 +1692,10 @@ fn an_off_roster_speaker_is_projected_exactly_as_the_raw_read_was() {
          has become equivalent to being on the roster."
     );
     assert_eq!(
-        super::request_scope_strings(&request).1.as_deref(),
+        super::request_scope_strings(&request)
+            .into_parts()
+            .1
+            .as_deref(),
         Some("personal:u-bob"),
         "stated absolutely as well as relatively: equality with the raw read is \
          also satisfied if BOTH sides became the room, which is the direction that \
@@ -1709,7 +1712,7 @@ fn an_unstamped_turn_projects_no_strings() {
     );
     // Owner without scope: `scope_from_metadata` is fail-closed on the pair.
     assert_eq!(
-        super::request_scope_strings(&request),
+        super::request_scope_strings(&request).into_parts(),
         (None, None),
         "the projection must inherit `scope_from_metadata`'s fail-closed pairing. \
          The raw read forwarded `Some(owner), None` here; `dispatch` rebuilds a map \
@@ -1742,7 +1745,7 @@ fn the_projection_round_trips_through_the_dispatch_rebuild() {
         &crate::scope::ScopeAttribution::personal("u-alice"),
         "C-flow-rt",
     );
-    let (owner, scope) = super::request_scope_strings(&request);
+    let (owner, scope) = super::request_scope_strings(&request).into_parts();
 
     // Verbatim shape of `orchestrator::dispatch`'s rebuild inside its spawn.
     let mut rebuilt = std::collections::HashMap::new();

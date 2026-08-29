@@ -149,18 +149,22 @@ fn request_scope(request: &RunRequest) -> Option<crate::scope::ScopeAttribution>
 /// parses back exactly the attribution this returned, including its
 /// fail-closed `None`.
 ///
+/// The two strings ride inside [`crate::scope::FlowScope`], whose fields are
+/// private and whose only non-empty constructor takes an already-resolved
+/// `ScopeAttribution`. That is what makes the raw read a COMPILE error at the
+/// `FlowRequest` site rather than something a census has to notice: a pair
+/// lifted out of `request.metadata` is `(Option<String>, Option<String>)` and
+/// no longer fits the field, whichever way the keys are spelled. See that
+/// type's doc for what it deliberately does not prevent.
+///
 /// A named function rather than two inline expressions: the property that must
 /// NOT change is that an off-roster speaker in a bound conversation is
 /// projected to the same pair the raw read produced, and a test that
 /// re-derived the projection to check that would be measuring its own copy.
-/// `flow_scope_census` keeps the site honest; the two tests named in that
+/// `flow_scope_census` keeps the site honest; the three tests named in that
 /// module keep this function honest.
-fn request_scope_strings(request: &RunRequest) -> (Option<String>, Option<String>) {
-    let attr = request_scope(request);
-    (
-        attr.as_ref().map(|a| a.owner_user_id.clone()),
-        attr.as_ref().map(|a| a.scope.render()),
-    )
+fn request_scope_strings(request: &RunRequest) -> crate::scope::FlowScope {
+    crate::scope::FlowScope::resolved(request_scope(request).as_ref())
 }
 
 /// Establishes this run's scope attribution (owner/scope) and this turn's
