@@ -18,7 +18,11 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
     let (progress_total, set_progress_total) = signal(0usize);
     let (progress_completed, set_progress_completed) = signal(0usize);
     let (progress_failed, set_progress_failed) = signal(0usize);
-    let (result_message, set_result_message) = signal(Option::<String>::None);
+    // `(facts migrated, facts total, errors)` — the numbers, not a rendered
+    // sentence. The sentence used to be built here, inside the `'static` event
+    // closure: hard-coded English, and frozen at event time even if it had not
+    // been, because a locale switch cannot reach a `String` already stored.
+    let (result_counts, set_result_counts) = signal(Option::<(u64, u64, u64)>::None);
     let (result_errors, set_result_errors) = signal(Vec::<String>::new());
     let (error_message, set_error_message) = signal(Option::<String>::None);
 
@@ -79,17 +83,11 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
                             // are diagnosable from the panel, not just a count.
                             set_result_errors.set(error_list.into_iter().take(5).collect());
 
-                            let msg = format!(
-                                "Facts: {}/{} migrated{}",
-                                facts_updated,
-                                facts_total,
-                                if errors > 0 {
-                                    format!(", {errors} errors")
-                                } else {
-                                    String::new()
-                                },
-                            );
-                            set_result_message.set(Some(msg));
+                            set_result_counts.set(Some((
+                                facts_updated as u64,
+                                facts_total as u64,
+                                errors as u64,
+                            )));
                         }
                     }
                     _ => {}
@@ -101,7 +99,7 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
     // Start migration
     let handle_start = move |_| {
         set_migrating.set(true);
-        set_result_message.set(None);
+        set_result_counts.set(None);
         set_result_errors.set(Vec::new());
         set_error_message.set(None);
         set_progress_completed.set(0);
@@ -148,9 +146,9 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
                     let phase = progress_phase.get();
                     let pct = (completed * 100).checked_div(total).unwrap_or(0);
                     let phase_label = match phase.as_str() {
-                        "facts" => "Processing facts...",
-                        "memories" => "Processing memories...",
-                        _ => "Preparing...",
+                        "facts" => t_string!(i18n, settings.embedding.phase_facts),
+                        "memories" => t_string!(i18n, settings.embedding.phase_memories),
+                        _ => t_string!(i18n, settings.embedding.phase_preparing),
                     };
 
                     view! {
@@ -173,10 +171,26 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
             }}
 
             // Result message
-            {move || result_message.get().map(|msg| view! {
-                <div class="p-3 bg-success-subtle border border-success/20 rounded-lg text-success text-sm">
-                    {msg}
-                </div>
+            {move || result_counts.get().map(|(done, total, errors)| {
+                let mut msg = t_string!(
+                    i18n,
+                    settings.embedding.result_facts,
+                    done = done,
+                    total = total
+                )
+                .to_string();
+                if errors > 0 {
+                    msg.push_str(&t_string!(
+                        i18n,
+                        settings.embedding.result_errors_suffix,
+                        count = errors
+                    ));
+                }
+                view! {
+                    <div class="p-3 bg-success-subtle border border-success/20 rounded-lg text-success text-sm">
+                        {msg}
+                    </div>
+                }
             })}
 
             // Per-note error detail (first few concrete reasons)
@@ -184,7 +198,7 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
                 let errs = result_errors.get();
                 (!errs.is_empty()).then(|| view! {
                     <div class="p-3 bg-warning-subtle border border-warning/20 rounded-lg text-warning text-xs space-y-1">
-                        <div class="font-semibold">"Error details:"</div>
+                        <div class="font-semibold">{t!(i18n, settings.embedding.error_details)}</div>
                         <ul class="list-disc list-inside space-y-0.5 font-mono">
                             {errs.into_iter().map(|e| view! { <li>{e}</li> }).collect_view()}
                         </ul>
@@ -215,7 +229,7 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
                                 on:click=handle_cancel
                                 class="px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger rounded-lg hover:bg-danger-subtle/80 transition-colors font-medium text-sm"
                             >
-                                "Cancel"
+                                {t!(i18n, common.cancel)}
                             </button>
                         }.into_any()
                     } else {

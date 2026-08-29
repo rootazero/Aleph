@@ -412,6 +412,11 @@ async fn run_via_parent(parent: &str, subcommand: &[&str]) -> Result<CmdOutcome,
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The guard type, not just the `Mutex`: `super::*` re-exports what this
+    // file imports, and it imports only `Mutex`. Without this the lib TEST
+    // target does not compile — which `cargo check` cannot tell you, because it
+    // does not build `#[cfg(test)]`.
+    use crate::sync_primitives::MutexGuard;
 
     #[test]
     fn test_has_spec_known() {

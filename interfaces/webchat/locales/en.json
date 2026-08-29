@@ -278,6 +278,10 @@
     "team_create_failed": "Failed to create team: ",
     "search_placeholder": "Search chats...",
     "no_conversations": "No conversations yet",
+    "history_title": "History",
+    "history_load_failed": "Couldn't load conversations",
+    "untitled_conversation": "Untitled",
+    "message_count": "{{ count }} messages",
     "new_chat": "New Chat",
     "new_group_chat": "New group chat",
     "confirm_delete": "Confirm delete?",
@@ -896,6 +900,12 @@
       "reembed_desc": "Re-embed all existing data with the current provider after switching embedding providers.",
       "migrate": "Migrate to Current Provider",
       "migrating": "Migrating...",
+      "phase_facts": "Processing facts...",
+      "phase_memories": "Processing memories...",
+      "phase_preparing": "Preparing...",
+      "result_facts": "Facts: {{ done }}/{{ total }} migrated",
+      "result_errors_suffix": ", {{ count }} errors",
+      "error_details": "Error details:",
       "id_name_required": "ID and Name are required"
     },
     "reranking": {
@@ -904,6 +914,7 @@
       "loading": "Loading reranking providers...",
       "providers_section": "Reranking Providers",
       "add_custom": "+ Add Custom Provider",
+      "preset_custom": "Custom",
       "select_to_configure": "Select a provider to configure",
       "select_or_add": "or add a custom reranking provider",
       "active": "Active",
@@ -1718,6 +1729,7 @@
       "pairing_placeholder": "e.g. XPL3A7",
       "perm_all_granted": "All permissions granted",
       "perm_fix_suggestions": "Fix Suggestions",
+      "perm_grant_hint": "Grant '{{ name }}' permission in Server Settings > Roles",
       "perm_missing": "Missing permissions",
       "perm_no_data": "No permission data available",
       "perm_not_audited": "Not audited",
@@ -1870,6 +1882,9 @@
       "local_providers": "Local providers",
       "cloud_providers": "Cloud providers",
       "connection": "Connection",
+      "core": "Core",
+      "core_remote": "remote",
+      "core_local": "local",
       "catalog_unavailable": "Couldn't load the provider catalogue."
     },
     "fetch": {
@@ -2006,6 +2021,7 @@
   },
   "agents": {
     "cannot_delete_default": "Cannot delete default agent",
+    "not_found": "Agent not found",
     "channels": {
       "title": "Channel Binding",
       "bound": "BOUND",

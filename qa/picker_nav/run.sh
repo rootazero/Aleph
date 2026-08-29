@@ -66,6 +66,7 @@ MOCK_PORT="${MOCK_PORT:-18798}"
 DEAD_PORT="${DEAD_PORT:-18799}"
 
 . "$HERE/../lib/scratch_home.sh"
+. "$HERE/../lib/build.sh"
 qa_redirect_home "$QA_ROOT"
 mkdir -p "$ALEPH_HOME"
 CONFIG="$ALEPH_HOME/config.toml"
@@ -92,7 +93,7 @@ trap cleanup EXIT
 
 say "build"
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
-  if ! (cd "$REPO" && HOME="$REAL_HOME" cargo build --bin aleph-server 2>&1 | tail -5); then
+  if ! qa_build --bin aleph-server; then
     echo "build failed" >&2; exit 1
   fi
 fi

@@ -207,12 +207,11 @@ pub(crate) async fn emit_flow_event(
         }
 
         FlowStreamEvent::Complete(outcome) => {
-            // Drain any partial-tag tail the scrubber held back at end of run
-            // before the terminal summary, so a trailing non-fence fragment
-            // isn't lost.
-            flush_text_boundary(emitter, run_id, state).await?;
-            let plan = state.lock().await.plan.clone();
-            emit_complete(emitter, run_id, &outcome, plan).await?;
+            // One implementation, two callers: the live drain in
+            // `helpers.rs` takes the two halves separately so it can decide
+            // *not* to send. See [`hold_complete`].
+            let held = hold_complete(emitter, run_id, state, outcome).await?;
+            emit_held_complete(emitter, run_id, &held).await?;
         }
     }
     Ok(())
@@ -263,6 +262,58 @@ async fn flush_text_boundary(
 /// P3a: populates the enriched `RunSummary` fields that were previously
 /// always empty. Channels that ignore the new fields keep working — the
 /// schema additions are all `#[serde(default)]`.
+/// A terminal frame that has been *prepared* but not sent.
+///
+/// The gateway's outer loop retries a transient dispatch failure, and until
+/// this type existed each attempt broadcast its own `RunComplete` on its way
+/// out: the harness settles and broadcasts `Complete` before returning the
+/// error, so by the time anyone knew a retry was coming the frame was already
+/// on every socket. Measured on a real server, a run that had spent two loops
+/// and 356 tokens before its provider refused reported
+/// `run_complete{failed, loops:2, tokens:356}` — then two more instant
+/// `run_complete{failed, loops:0, tokens:0}` from the retried dispatches. Every
+/// client keeps the last terminal frame it sees, so the receipt said the run
+/// had done nothing.
+///
+/// Neither "first frame wins" nor "last frame wins" fixes that at the client:
+/// first-wins reports a run that retried and then SUCCEEDED as failed. The
+/// frame has to be withheld from an attempt that is about to be retried, which
+/// means the layer that emits it has to wait for the layer that classifies the
+/// failure. Splitting the terminal arm in two is how it waits.
+pub(crate) struct HeldComplete {
+    outcome: FlowOutcome,
+    plan: Option<aleph_protocol::plan::PlanSnapshot>,
+}
+
+/// Everything the `Complete` arm of [`emit_flow_event`] does *except* send the
+/// terminal frame.
+///
+/// The flush is not deferred with it: the assembler's held-back tail belongs to
+/// the text this attempt already streamed, and a retry restreams from scratch,
+/// so holding it back would drop a fragment the user has already been shown the
+/// front half of.
+pub(crate) async fn hold_complete(
+    emitter: &Arc<dyn EventEmitter>,
+    run_id: &str,
+    state: &Arc<Mutex<DrainState>>,
+    outcome: FlowOutcome,
+) -> Result<HeldComplete, EventEmitError> {
+    // Drain any partial-tag tail the scrubber held back at end of run before
+    // the terminal summary, so a trailing non-fence fragment isn't lost.
+    flush_text_boundary(emitter, run_id, state).await?;
+    let plan = state.lock().await.plan.clone();
+    Ok(HeldComplete { outcome, plan })
+}
+
+/// Send a frame captured by [`hold_complete`].
+pub(crate) async fn emit_held_complete(
+    emitter: &Arc<dyn EventEmitter>,
+    run_id: &str,
+    held: &HeldComplete,
+) -> Result<(), EventEmitError> {
+    emit_complete(emitter, run_id, &held.outcome, held.plan.clone()).await
+}
+
 async fn emit_complete(
     emitter: &Arc<dyn EventEmitter>,
     run_id: &str,
@@ -434,6 +485,103 @@ mod tests {
         let inner = Arc::new(CollectingEventEmitter::new());
         let dyn_ref: Arc<dyn EventEmitter> = inner.clone();
         (inner, dyn_ref)
+    }
+
+    /// Preparing the terminal frame must not send it, or the split buys
+    /// nothing: the whole reason [`hold_complete`] exists is that `helpers.rs`
+    /// gets to decide, after `handle.completion` resolves, that this attempt is
+    /// about to be retried and therefore says nothing terminal at all.
+    ///
+    /// Delete the `Ok(HeldComplete { .. })` and emit inline and the first
+    /// assertion goes red — which is the only reason it is written as two
+    /// observations of the same emitter rather than one.
+    #[tokio::test]
+    async fn preparing_the_terminal_frame_does_not_send_it() {
+        let (inner, emitter) = make_emitter();
+        let state = make_state();
+        let outcome = FlowOutcome {
+            iterations: 2,
+            total_tokens: 356,
+            ..FlowOutcome::default()
+        };
+
+        let held = hold_complete(&emitter, "run-hold", &state, outcome)
+            .await
+            .expect("hold ok");
+        assert!(
+            !inner
+                .events()
+                .await
+                .iter()
+                .any(|e| matches!(e, StreamEvent::RunComplete { .. })),
+            "a frame already on the wire cannot be withheld"
+        );
+
+        emit_held_complete(&emitter, "run-hold", &held)
+            .await
+            .expect("emit ok");
+        let completes: Vec<_> = inner
+            .events()
+            .await
+            .into_iter()
+            .filter_map(|e| match e {
+                StreamEvent::RunComplete { summary, .. } => Some(summary),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(completes.len(), 1, "exactly one, and only when asked");
+        // The numbers survive the wait. A held frame that arrived zeroed would
+        // reproduce the very symptom this machinery exists to remove.
+        assert_eq!(completes[0].total_tokens, 356);
+        assert_eq!(completes[0].loops, 2);
+    }
+
+    /// The `Complete` arm of [`emit_flow_event`] and the pair above must stay
+    /// one implementation: a second `RunComplete` builder is how the two would
+    /// drift, and the drift is invisible (both emit *a* terminal frame).
+    #[tokio::test]
+    async fn the_inline_arm_and_the_held_pair_produce_the_same_frame() {
+        let outcome = FlowOutcome {
+            iterations: 3,
+            tool_calls_made: 1,
+            total_tokens: 99,
+            ..FlowOutcome::default()
+        };
+
+        let (inline_inner, inline_emitter) = make_emitter();
+        emit_flow_event(
+            FlowStreamEvent::Complete(outcome.clone()),
+            &inline_emitter,
+            "run-same",
+            &make_state(),
+        )
+        .await
+        .expect("inline ok");
+
+        let (held_inner, held_emitter) = make_emitter();
+        let state = make_state();
+        let held = hold_complete(&held_emitter, "run-same", &state, outcome)
+            .await
+            .expect("hold ok");
+        emit_held_complete(&held_emitter, "run-same", &held)
+            .await
+            .expect("emit ok");
+
+        let pick = |events: Vec<StreamEvent>| {
+            events
+                .into_iter()
+                .find_map(|e| match e {
+                    StreamEvent::RunComplete { summary, .. } => {
+                        Some(serde_json::to_value(summary).unwrap())
+                    }
+                    _ => None,
+                })
+                .expect("a terminal frame")
+        };
+        assert_eq!(
+            pick(inline_inner.events().await),
+            pick(held_inner.events().await)
+        );
     }
 
     #[tokio::test]

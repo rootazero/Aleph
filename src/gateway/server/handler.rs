@@ -323,9 +323,9 @@ pub(super) async fn ws_upgrade_handler(
 /// both surface identical `events_overflow` diagnostics (with `advice:reconnect`)
 /// before the connection is closed with WS code 1008.
 fn overflow_warning_frame(dropped: u64, total_overflow: u64) -> String {
-    serde_json::json!({
-        "method": "event",
-        "params": {
+    serde_json::to_string(&aleph_protocol::JsonRpcRequest::notification(
+        "event",
+        Some(serde_json::json!({
             "topic": "connection.warning",
             "data": {
                 "reason": "events_overflow",
@@ -333,9 +333,9 @@ fn overflow_warning_frame(dropped: u64, total_overflow: u64) -> String {
                 "total_overflow": total_overflow,
                 "advice": "reconnect"
             }
-        }
-    })
-    .to_string()
+        })),
+    ))
+    .unwrap_or_else(|_| String::new())
 }
 
 /// Drain the global event bus into a single client's per-client buffer.
@@ -523,7 +523,14 @@ fn event_wire_form(
         obj.insert("params".to_string(), payload);
     }
     if event_obj.get("topic").is_some() && event_obj.get("method").is_none() {
-        serde_json::json!({ "method": "event", "params": event_obj }).to_string()
+        // The shared constructor, so this envelope carries `"jsonrpc": "2.0"`
+        // like every other notification on the wire — see
+        // `event_bus.rs::publish_frame` for what a hand-built one cost.
+        serde_json::to_string(&aleph_protocol::JsonRpcRequest::notification(
+            "event",
+            Some(event_obj),
+        ))
+        .unwrap_or_else(|_| String::new())
     } else if rewritten {
         event_obj.to_string()
     } else {

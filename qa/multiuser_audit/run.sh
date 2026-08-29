@@ -34,6 +34,7 @@ DEVICE_ID="qa-panel-mu6"
 # Build BEFORE HOME is redirected: cargo's registry, git cache and rustup
 # toolchain all live under the real HOME.
 . "$HERE/../lib/scratch_home.sh"
+. "$HERE/../lib/build.sh"
 qa_redirect_home "$QA_ROOT"
 export REAL_HOME
 mkdir -p "$ALEPH_HOME"
@@ -75,10 +76,10 @@ say "build"
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
   # Two invocations: `aleph` lives in the `aleph-cli` package, which is not in
   # the workspace's default-run set, so a bare `--bin aleph` resolves to nothing.
-  if ! (cd "$REPO" && HOME="$REAL_HOME" cargo build --bin aleph-server 2>&1 | tail -3); then
+  if ! qa_build --bin aleph-server; then
     echo "server build failed" >&2; exit 1
   fi
-  if ! (cd "$REPO" && HOME="$REAL_HOME" cargo build -p aleph-cli --bin aleph 2>&1 | tail -3); then
+  if ! qa_build -p aleph-cli --bin aleph; then
     echo "cli build failed" >&2; exit 1
   fi
 fi

@@ -83,14 +83,17 @@ async def collect(ws, run_id, budget, quiet_after_terminal):
     first version of this driver did and what makes the most interesting claim
     unaskable. §3.17c moved the terminal settle ABOVE `run_result.map_err(..)?`
     so a failed run settles at all — and `run_loop/inner.rs` retries a dispatch
-    it classifies `Transient`, which a 401 turns out to be (the failover layer
-    calls the same error `Permanent` two log lines earlier). A settle that now
-    runs on the failure arm, inside something the caller retries, is one
-    terminal frame per attempt unless something stops it.
+    it classifies `Transient`, which a 401 used to be, while the failover layer
+    called the same error `Permanent` two log lines earlier. A settle that runs
+    on the failure arm, inside something the caller retries, is one terminal
+    frame per attempt unless something stops it.
 
-    So the fixture keeps listening past the first `run_complete` and counts.
-    Cheap, and it is the only way this claim is observable at all: the second
-    frame is well-formed, arrives seconds later, and every client renders it.
+    Two things now stop it (2026-08-29): the two classifiers agree, so a 401 is
+    not retried at all; and a transient attempt that WILL be retried has its
+    terminal frame withheld rather than broadcast. Neither is asserted by
+    reading the code — the claim below counts frames on the wire, which is why
+    this function still listens past the first one. Stop listening early and
+    `len(completes) == 1` becomes a tautology.
     """
     frames = []
     end = time.monotonic() + budget

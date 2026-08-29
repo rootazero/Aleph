@@ -9,6 +9,7 @@ use leptos_router::NavigateOptions;
 
 use crate::components::chat_sidebar::hydrate_and_follow;
 use crate::context::DashboardState;
+use crate::i18n::{t, t_string};
 use crate::platform::phone::shell::PhoneShell;
 use crate::state::layout::WorkspaceState;
 use crate::state::sessions::SessionMap;
@@ -141,7 +142,7 @@ pub fn PhoneChatHistory() -> impl IntoView {
     };
 
     view! {
-        <PhoneShell title="History" back="/" back_label="Chat">
+        <PhoneShell title=t_string!(i18n, chat.history_title) back="/" back_label="Chat">
             // Single wrapping element for PhoneShell children (the dynamic list
             // block must not be a bare direct child).
             <div style="display:flex; flex-direction:column; gap:20px;">
@@ -149,27 +150,38 @@ pub fn PhoneChatHistory() -> impl IntoView {
                 if loading.get() {
                     // Distinguish "waiting for the socket" from "fetch in flight"
                     // so a cold boot shows Connecting… instead of a stuck spinner.
-                    let label = if dashboard.is_connected.get() { "Loading…" } else { "Connecting…" };
+                    let label = if dashboard.is_connected.get() {
+                        t_string!(i18n, common.loading)
+                    } else {
+                        t_string!(i18n, common.connecting)
+                    };
                     return view! { <div class="list-header">{label}</div> }.into_any();
                 }
                 if let Some(err) = load_error.get() {
                     return view! {
                         <div class="list">
-                            <div class="cell"><div class="cell-body"><div class="cell-title">"Couldn't load conversations"</div><div class="cell-sub">{err}</div></div></div>
-                            <div class="cell" on:click=move |_| load()><div class="cell-body"><div class="cell-title" style="color:var(--color-primary);">"Retry"</div></div></div>
+                            <div class="cell"><div class="cell-body"><div class="cell-title">{t!(i18n, chat.history_load_failed)}</div><div class="cell-sub">{err}</div></div></div>
+                            <div class="cell" on:click=move |_| load()><div class="cell-body"><div class="cell-title" style="color:var(--color-primary);">{t!(i18n, common.retry)}</div></div></div>
                         </div>
                     }.into_any();
                 }
                 let items = rows.get();
                 if items.is_empty() {
-                    return view! { <div class="list-header">"No conversations yet"</div> }.into_any();
+                    return view! { <div class="list-header">{t!(i18n, chat.no_conversations)}</div> }.into_any();
                 }
                 view! {
                     <div class="list">
                         {items.into_iter().map(|row| {
                             let on_select = on_select.clone();
-                            let title = row.topic.clone().filter(|t| !t.is_empty()).unwrap_or_else(|| "Untitled".to_string());
-                            let sub = format!("{} messages", row.message_count);
+                            let title = row
+                                .topic
+                                .clone()
+                                .filter(|t| !t.is_empty())
+                                .unwrap_or_else(|| {
+                                    t_string!(i18n, chat.untitled_conversation).to_string()
+                                });
+                            let sub = t_string!(i18n, chat.message_count, count = row.message_count as u64)
+                                .to_string();
                             let row_for_click = row.clone();
                             view! {
                                 <div class="cell" on:click=move |_| on_select(row_for_click.clone())>

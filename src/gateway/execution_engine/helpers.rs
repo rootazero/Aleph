@@ -14,11 +14,13 @@
 
 use crate::sync_primitives::Arc;
 
+use std::time::Duration;
+
 use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use super::event_drain::{emit_flow_event, DrainState};
+use super::event_drain::{emit_flow_event, emit_held_complete, hold_complete, DrainState, HeldComplete};
 use super::ExecutionError;
 use crate::gateway::event_emitter::EventEmitter;
 use crate::gateway::i18n::{self, Locale};
@@ -27,6 +29,16 @@ use crate::orchestrator::{
 };
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::session::events::MessageContent;
+
+/// How long the `completion dropped` arm waits for the drain to hand back the
+/// terminal frame it prepared.
+///
+/// Only that arm is bounded. The two ordinary arms join the drain after the
+/// flow task has finished, so its event channel is on its way closed; this one
+/// runs precisely when the task died without answering, and a broadcast sender
+/// held somewhere else would otherwise park the join — and with it the run's
+/// last word — indefinitely.
+const TERMINAL_DRAIN_GRACE: Duration = Duration::from_secs(2);
 
 /// What a completed run is worth remembering, captured from the authoritative
 /// [`FlowOutcome`] so the gateway can persist it onto the assistant message and
@@ -194,6 +206,9 @@ pub async fn run_dispatch_and_drain(
         cancel_token,
         locale,
         &occupancy,
+        // Never withholds the terminal frame: this wrapper has no retry loop
+        // above it, so an attempt of its is always the run's last word.
+        false,
     )
     .await
     .map_err(ExecutionError::from)
@@ -211,6 +226,7 @@ pub async fn run_dispatch_and_drain_classified(
     cancel_token: CancellationToken,
     locale: Locale,
     occupancy_out: &std::sync::Mutex<Option<RunContextOccupancy>>,
+    may_retry: bool,
 ) -> Result<String, DispatchFailure> {
     // Session this run's provider dials are witnessed under. Captured before
     // `req` moves into the dispatch; the drain below reads the witness at the
@@ -235,12 +251,18 @@ pub async fn run_dispatch_and_drain_classified(
         }
     });
 
-    // 2. Drain task. Resolves to `true` when the terminal `Complete` event
-    //    was forwarded to the emitter, so step 4 can emit a safety-net
-    //    `RunComplete` in the rare case the broadcast channel lagged past
-    //    the `Complete` frame (or emitting it failed).
+    // 2. Drain task. Resolves to the *prepared but unsent* terminal frame
+    //    (`Some`) when the harness broadcast `Complete`, and to `None` when it
+    //    never did — so step 4 can emit a safety-net `RunComplete` in the rare
+    //    case the broadcast channel lagged past that frame.
+    //
+    //    It stops short of sending because the decision is not the drain's to
+    //    make: a failed attempt the outer loop is about to retry must not
+    //    broadcast a terminal frame at all, and that classification does not
+    //    exist until `handle.completion` has resolved below. See
+    //    [`HeldComplete`].
     let drain_state = Arc::new(Mutex::new(DrainState::default()));
-    let drain = tokio::spawn({
+    let drain: tokio::task::JoinHandle<Option<HeldComplete>> = tokio::spawn({
         let emitter = emitter.clone();
         let run_id = run_id.to_string();
         let drain_state = drain_state.clone();
@@ -249,35 +271,31 @@ pub async fn run_dispatch_and_drain_classified(
         async move {
             loop {
                 if cancel.is_cancelled() {
-                    return false;
+                    return None;
                 }
                 match events.recv().await {
-                    Ok(event) => {
-                        let is_complete = matches!(event, FlowStreamEvent::Complete(_));
+                    Ok(FlowStreamEvent::Complete(outcome)) => {
                         // The route correction has to precede the terminal
                         // frame, not follow the dispatch: channel replies append
                         // their fallback notice while flushing on `Complete`, so
                         // a `ModelResolved` emitted after this point sets
                         // `fallback_info` that nothing will ever read.
-                        if is_complete {
-                            emit_route_correction(&emitter, &run_id, witness_session.as_deref())
-                                .await;
-                        }
-                        match emit_flow_event(event, &emitter, &run_id, &drain_state).await {
-                            Ok(()) => {
-                                if is_complete {
-                                    return true;
-                                }
-                            }
+                        emit_route_correction(&emitter, &run_id, witness_session.as_deref()).await;
+                        return match hold_complete(&emitter, &run_id, &drain_state, outcome).await {
+                            Ok(held) => Some(held),
                             Err(e) => {
-                                warn!(run_id = %run_id, error = %e, "emit_flow_event failed");
-                                if is_complete {
-                                    return false;
-                                }
+                                warn!(run_id = %run_id, error = %e, "terminal flush failed");
+                                None
                             }
+                        };
+                    }
+                    Ok(event) => {
+                        if let Err(e) = emit_flow_event(event, &emitter, &run_id, &drain_state).await
+                        {
+                            warn!(run_id = %run_id, error = %e, "emit_flow_event failed");
                         }
                     }
-                    Err(broadcast::error::RecvError::Closed) => return false,
+                    Err(broadcast::error::RecvError::Closed) => return None,
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         warn!(n, run_id = %run_id, "orchestrator stream lagged; dropping frames");
                     }
@@ -312,24 +330,62 @@ pub async fn run_dispatch_and_drain_classified(
             // the safety net, or channel/Panel consumers hang on a run end
             // that never comes. `complete_forwarded` is the discriminator —
             // the drain reports whether it actually forwarded the frame.
-            let complete_forwarded = drain.await.unwrap_or(false);
+            let held = drain.await.ok().flatten();
             propagate.abort();
             emit_route_correction(&emitter, run_id, witness_session_for_fallback.as_deref()).await;
             // Both halves of this line were fixed independently and both are
-            // load-bearing: the `complete_forwarded` guard stops a synthetic
-            // zeroed frame from overwriting the real one the drain already
-            // forwarded, and the receipt text stops the flattened internal
-            // chain from being pushed to a bound channel as the assistant's
-            // answer. Dropping either one restores a shipped defect.
+            // load-bearing: the `held` guard stops a synthetic zeroed frame
+            // from overwriting the real one the drain prepared, and the receipt
+            // text stops the flattened internal chain from being pushed to a
+            // bound channel as the assistant's answer. Dropping either one
+            // restores a shipped defect.
             let failure = map_flow_error(e);
-            if !complete_forwarded {
-                emit_error_run_complete(&emitter, run_id, &failure, locale).await;
+            // The third guard, and the newest: an attempt the caller is about
+            // to retry says nothing terminal at all. Its numbers are real but
+            // they are not the run's, and the next attempt's frame is — a
+            // client keeping the last terminal frame it saw would otherwise
+            // report the run as whatever the final, instant, zeroed retry did.
+            let superseded_by_a_retry =
+                may_retry && matches!(failure, DispatchFailure::Transient { .. });
+            if !superseded_by_a_retry {
+                match held {
+                    Some(held) => {
+                        if let Err(err) = emit_held_complete(&emitter, run_id, &held).await {
+                            warn!(run_id, error = %err, "failed to emit the held RunComplete");
+                        }
+                    }
+                    None => emit_error_run_complete(&emitter, run_id, &failure, locale).await,
+                }
             }
             return Err(failure);
         }
         Err(e) => {
+            // The flow task died without answering (panic / abort). The drain
+            // may still have prepared a terminal frame; nothing else will send
+            // it, and a client that never sees one waits forever. Not gated on
+            // `may_retry`: a dropped completion is not something the outer loop
+            // classifies as transient, so this attempt is the run's last word.
+            // Bounded, and only on this arm: the other two reach `drain.await`
+            // knowing the flow task finished, so its event channel is closing.
+            // Here it did not finish — it was dropped — and nothing proves the
+            // broadcast sender went with it, so an unbounded join could park a
+            // run's last word forever. On expiry the task stays detached, which
+            // is exactly what this arm did before the frame was withheld.
+            let held = match tokio::time::timeout(TERMINAL_DRAIN_GRACE, drain).await {
+                Ok(joined) => joined.ok().flatten(),
+                Err(_) => None,
+            };
             propagate.abort();
-            return Err(DispatchFailure::Fatal(format!("completion dropped: {e}")));
+            let failure = DispatchFailure::Fatal(format!("completion dropped: {e}"));
+            match held {
+                Some(held) => {
+                    if let Err(err) = emit_held_complete(&emitter, run_id, &held).await {
+                        warn!(run_id, error = %err, "failed to emit the held RunComplete");
+                    }
+                }
+                None => emit_error_run_complete(&emitter, run_id, &failure, locale).await,
+            }
+            return Err(failure);
         }
     };
 
@@ -375,9 +431,15 @@ pub async fn run_dispatch_and_drain_classified(
     //    re-emit it here from the authoritative `FlowOutcome` so channel
     //    and Panel consumers still observe the run end — with the full
     //    enriched summary instead of an all-zeros placeholder.
-    let complete_forwarded = drain.await.unwrap_or(false);
+    let held = drain.await.ok().flatten();
     propagate.abort();
-    if !complete_forwarded {
+    if let Some(held) = held {
+        // A successful attempt always speaks: `may_retry` is irrelevant here
+        // because there is nothing left to supersede it.
+        if let Err(err) = emit_held_complete(&emitter, run_id, &held).await {
+            warn!(run_id, error = %err, "failed to emit the held RunComplete");
+        }
+    } else {
         // The drain never reached its correction either, so make it here — still
         // ahead of the terminal frame, which is the ordering channel replies
         // depend on. A no-op if the drain already took the witness.

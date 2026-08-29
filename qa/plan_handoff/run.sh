@@ -56,6 +56,7 @@ MOCK_PORT="${MOCK_PORT:-18996}"
 # Build BEFORE HOME is redirected — cargo's registry, git cache and rustup
 # toolchain all live under the real HOME. See qa/README.md.
 . "$HERE/../lib/scratch_home.sh"
+. "$HERE/../lib/build.sh"
 # Redirects HOME/ALEPH_HOME into the scratch root AND pins RUSTUP_HOME/
 # CARGO_HOME at the real ones — the redirect and the pin are inseparable
 # on purpose; see that file for the 1.3 GB-per-run leak it closes.
@@ -95,7 +96,7 @@ trap cleanup EXIT
 
 say "build ($SCENARIO)"
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
-  if ! (cd "$REPO" && HOME="$REAL_HOME" cargo build --bin aleph-server 2>&1 | tail -5); then
+  if ! qa_build --bin aleph-server; then
     echo "build failed" >&2; exit 1
   fi
 fi

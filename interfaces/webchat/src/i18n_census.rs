@@ -403,7 +403,34 @@ pub(crate) fn offending_lines(src: &str) -> Vec<usize> {
 /// the section above already sets: `format!("{ms}ms")` in `agent_trace.rs` is a
 /// unit suffix, and `"every" => "5m, 2h, 30s"` in `cron/job_editor.rs` is a
 /// placeholder specimen.
-const HARDCODED_ENGLISH_LINE_CEILING: usize = 215;
+///
+/// ## 2026-08-29, second English sweep: 215 -> 182
+///
+/// The 40 the paragraph above deferred, less the tail this round did not reach.
+/// Like the first sweep it was mostly **wiring**, and one file made the point
+/// on its own: `platform/phone/settings/model_route.rs` rendered nine
+/// hard-coded English labels — `"Auto"`, `"Round Robin"`, `"Cost Aware"` — while
+/// `settings.route.mode_*` / `lb_*` had carried all nine in both locales since
+/// the wide screen was written. Both screens now read them through
+/// [`crate::components::route_labels`], which also swallows the `MODE_KEYS` /
+/// `LB_KEYS` pair the phone file had copied under a comment saying so.
+/// `settings.channels.perm_status_{granted,partial,missing}` were the same
+/// story on the Discord page.
+///
+/// The rest needed keys written: the re-embed card's phase and result lines
+/// (whose result sentence was being *built inside a `'static` event closure*,
+/// so a locale switch could not have moved it even after translation — it now
+/// stores the three numbers and renders them in the view), the phone history
+/// screen, and `"Agent not found"` / `"Loading…"` / `"Connecting…"` on three
+/// phone screens.
+///
+/// What is left is the tail again, and it is honest to name its shape: the
+/// phone tree is still largely English — tab bar, screen titles, `aria-label`s
+/// — because a phone screen's copy was never routed through the locale files at
+/// all. The zero-tolerance phone guard beside this one only looks for *Chinese*,
+/// so it has nothing to say about that; this ratchet is the only instrument
+/// that counts it.
+const HARDCODED_ENGLISH_LINE_CEILING: usize = 182;
 
 /// Human-facing names the derivation cannot see, because the crate has never
 /// localised one.

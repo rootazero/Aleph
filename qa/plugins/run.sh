@@ -53,6 +53,7 @@ MOCK_PORT="${MOCK_PORT:-18802}"   # nothing listens; the config must merely not 
 # toolchain all live under the real HOME, and a build launched with the scratch
 # one silently degrades into a full network fetch that then times out.
 . "$HERE/../lib/scratch_home.sh"
+. "$HERE/../lib/build.sh"
 # Redirects HOME/ALEPH_HOME into the scratch root AND pins RUSTUP_HOME/
 # CARGO_HOME at the real ones -- the redirect and the pin are inseparable on
 # purpose; see that file for the 1.3 GB-per-run leak it closes.
@@ -89,10 +90,10 @@ if [ "${SKIP_BUILD:-0}" != "1" ]; then
   # Two packages, so two invocations: `-p` is positional-ish here -- a single
   # `cargo build -p aleph-cli --bin aleph-server --bin aleph` resolves BOTH
   # `--bin` flags against `aleph-cli` and fails on the server.
-  if ! (cd "$REPO" && HOME="$REAL_HOME" cargo build -p alephcore --bin aleph-server 2>&1 | tail -5); then
+  if ! qa_build -p alephcore --bin aleph-server; then
     echo "build failed" >&2; exit 1
   fi
-  if ! (cd "$REPO" && HOME="$REAL_HOME" cargo build -p aleph-cli --bin aleph 2>&1 | tail -5); then
+  if ! qa_build -p aleph-cli --bin aleph; then
     echo "cli build failed" >&2; exit 1
   fi
 fi

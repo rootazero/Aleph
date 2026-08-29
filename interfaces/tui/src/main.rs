@@ -14,8 +14,13 @@ use aleph_tui::{CliConfig, CliResult};
 #[command(author, version, about = "Interactive terminal interface for Aleph")]
 struct Args {
     /// Gateway server URL
-    #[arg(short, long, default_value = aleph_client::DEFAULT_GATEWAY_URL)]
-    server: String,
+    ///
+    /// Falls back to `server` in the config file, then to
+    /// `ws://127.0.0.1:18790/ws` — see the same field on `aleph` for why this
+    /// is not a clap `default_value`. Both binaries load the same `CliConfig`,
+    /// so both had the same dead key.
+    #[arg(short, long)]
+    server: Option<String>,
 
     /// Session key (creates new if not specified)
     #[arg(short = 'k', long)]
@@ -70,8 +75,13 @@ async fn main() -> CliResult<()> {
 
     info!("Aleph TUI v{}", env!("CARGO_PKG_VERSION"));
 
+    let server_url = args
+        .server
+        .clone()
+        .unwrap_or_else(|| config.server.clone());
+
     aleph_tui::run(
-        &args.server,
+        &server_url,
         None,
         args.session.as_deref(),
         args.continue_last,

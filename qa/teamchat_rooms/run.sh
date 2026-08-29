@@ -74,7 +74,7 @@ command -v node >/dev/null 2>&1 || { echo "node is required for this fixture" >&
 # of it happens. Nothing after this line runs cargo.
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
   echo "=== build ==="
-  (cd "$REPO" && cargo build --bin aleph-server 2>&1 | tail -3) || {
+  qa_build --bin aleph-server || {
     echo "server build failed" >&2; exit 1; }
 fi
 TARGET_DIR="$(cd "$REPO" && cargo metadata --format-version 1 --no-deps 2>/dev/null \
@@ -94,6 +94,7 @@ if [ -z "${QA_ROOT:-}" ]; then
 fi
 
 . "$HERE/../lib/scratch_home.sh"
+. "$HERE/../lib/build.sh"
 qa_redirect_home "$QA_ROOT"
 export REAL_HOME
 mkdir -p "$ALEPH_HOME"

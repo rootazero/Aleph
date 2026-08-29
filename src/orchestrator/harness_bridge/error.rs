@@ -6,10 +6,15 @@ use crate::orchestrator::errors::FlowError;
 /// Classify a non-cancelled `HarnessError` as either a provider-transient
 /// failure (retryable by Gateway's outer fallback loop) or an internal error.
 ///
-/// Transient indicators (per Gateway's existing classification in the
-/// retiring `run_loop.rs::run_agent_loop`): HTTP 5xx (500/502/503), network
-/// failures, connection drops, timeouts, and 401/403 auth errors that the
-/// fallback loop used to treat as "try another provider".
+/// Transient indicators: HTTP 5xx (500/502/503), 429, network failures,
+/// connection drops and timeouts.
+///
+/// **Auth is not among them.** 401/403 used to be classified transient here,
+/// on the reasoning that the fallback loop should "try another provider" — but
+/// trying another provider is `FailoverProvider`'s job and it happens *inside*
+/// one dispatch, so a credential failure that reaches this function has already
+/// exhausted the chain and tripped its breakers. See the permanence gate in
+/// [`is_transient_harness_message`] for what re-dispatching it cost.
 ///
 /// Intentionally message-based — `HarnessError` wraps `AlephError` but the
 /// specific `AlephError` variant isn't propagated structurally through
@@ -40,16 +45,6 @@ fn is_transient_harness_message(msg: &str) -> bool {
         "dns",
         "timed out",
     ];
-    // Auth is deliberately NOT a bare-substring list. It used to be
-    // `["401", "403", "Unauthorized"]` matched with `str::contains`, which
-    // fires on any message that merely *embeds* those digits — a token count
-    // ("401234 tokens > 200000 maximum"), a request id, a 13-digit epoch. A
-    // fatal, deterministic error classified Transient here is re-dispatched by
-    // the gateway's outer loop up to `MAX_FALLBACK_ATTEMPTS` times, burning
-    // budget and finally surfacing a provider error instead of the real cause.
-    // `has_status_code` is the same digit-boundary check the rest of the repo
-    // uses; CLAUDE.md §9 names `contains("401")` matching `40123` by hand.
-    const AUTH_PHRASE_MARKERS: &[&str] = &["Unauthorized"];
     const RATE_LIMIT_MARKERS: &[&str] = &[
         "rate limit",
         "Rate limit",
@@ -71,11 +66,38 @@ fn is_transient_harness_message(msg: &str) -> bool {
     // guards) — two answers to "is this number an HTTP status", one of which
     // the auth arm above was not even using.
     const TRANSIENT_STATUSES: &[u16] = &[500, 502, 503, 429];
-    const AUTH_STATUSES: &[u16] = &[401, 403];
+
+    // An expired OAuth access token is the one auth failure this process holds
+    // the remedy for: the retry arm in `run_loop/inner.rs` calls
+    // `codex_token_refresher` to mint a new one and hot-swap the live provider
+    // before re-dispatching. Checked FIRST because such a message also carries
+    // a 401, which the permanence gate below would otherwise shed.
+    if crate::gateway::codex_token_refresher::is_oauth_token_expired_error(msg) {
+        return true;
+    }
+
+    // Every other 401/403 is permanent by the repo's one definition of that
+    // word, and this layer used to disagree with it.
+    //
+    // `FailoverProvider` walks the whole chain inside a SINGLE dispatch and
+    // tags a credential failure `FailureKind::Permanent`, which sheds that
+    // provider on the first strike with a long cooldown. A message that reaches
+    // here therefore means the walk is already over and the breakers are
+    // already open. Calling it transient made the gateway's outer loop
+    // re-dispatch the identical resolution up to `MAX_FALLBACK_ATTEMPTS` times
+    // against a chain that now refuses to dial — measured on a real server, the
+    // 2nd and 3rd attempts failed instantly with 0 loops and 0 tokens, and each
+    // of them broadcast its own terminal frame, so every client keeping the
+    // last one reported a run that had spent real work as `0 tools / 0 tokens`.
+    //
+    // Two layers answering "is this recoverable?" in opposite directions is the
+    // defect; `is_permanent_failure` is the answer that already had consumers
+    // (the circuit breaker), so it is the one that wins.
+    if crate::providers::llm_retry::is_permanent_failure(msg) {
+        return false;
+    }
 
     has_any_marker(msg, NETWORK_MARKERS)
-        || has_any_marker(msg, AUTH_PHRASE_MARKERS)
-        || has_any_status(msg, AUTH_STATUSES)
         || has_any_status(msg, TRANSIENT_STATUSES)
         || has_any_marker(msg, RATE_LIMIT_MARKERS)
 }
@@ -115,11 +137,11 @@ mod tests {
 
     /// A number that merely *contains* an auth status is not an auth status.
     ///
-    /// Written against the bug: `AUTH_MARKERS` matched with `str::contains`,
-    /// so this message — a deterministic, fatal, retry-proof failure — was
-    /// classified `Transient` and re-dispatched three times. Break
-    /// `has_any_status` back into `msg.contains("401")` and this goes red at
-    /// this line; that is the only reason it exists.
+    /// Written against the bug where auth was matched with `str::contains`, so
+    /// this message — a deterministic, fatal, retry-proof failure — was read as
+    /// a credential failure. The digit-boundary check now lives one layer down,
+    /// in `llm_retry::has_status_code` via `is_permanent_failure`; break it back
+    /// into `msg.contains("401")` and this goes red.
     #[test]
     fn a_number_embedding_an_auth_status_is_not_an_auth_failure() {
         assert!(!is_transient_harness_message(
@@ -130,19 +152,71 @@ mod tests {
         ));
     }
 
-    /// The other half: narrowing the match must not stop recognising real
-    /// auth failures. Without this, "fix the false positive" and "delete the
-    /// classification" look identical in the suite.
+    /// A real credential failure is NOT transient, and this replaces a test
+    /// that asserted the opposite.
+    ///
+    /// The old rule said "401/403 → try another provider". Trying another
+    /// provider is `FailoverProvider`'s job and it happens inside one dispatch,
+    /// so a 401 arriving here means the walk already finished and shed the
+    /// provider as `FailureKind::Permanent`. Re-dispatching from the gateway's
+    /// outer loop re-dialed a chain with open breakers: three attempts, two of
+    /// them instant, each broadcasting its own terminal frame — which is how a
+    /// run that had really spent two loops and 356 tokens ended up reported to
+    /// every client as `0 tools / 0 tokens`.
     #[test]
-    fn a_real_auth_status_is_still_transient() {
-        assert!(is_transient_harness_message(
+    fn a_real_auth_failure_is_permanent_not_transient() {
+        assert!(!is_transient_harness_message(
             "llm error: request failed with status 401: invalid api key"
         ));
-        assert!(is_transient_harness_message(
+        assert!(!is_transient_harness_message(
             "llm error: HTTP 403 (forbidden) from provider"
         ));
-        assert!(is_transient_harness_message(
-            "llm error: Unauthorized — token expired"
+        assert!(!is_transient_harness_message(
+            "llm error: Unauthorized — check your API key"
         ));
+    }
+
+    /// The other half, so "shed permanent auth failures" and "stop classifying
+    /// auth at all" do not look identical in the suite: the one auth failure
+    /// this process can fix is an expired OAuth token, because the retry arm
+    /// refreshes it and hot-swaps the provider before re-dispatching. It is
+    /// checked before the permanence gate precisely because it also carries a
+    /// 401 — reorder the two and the self-heal path dies silently.
+    #[test]
+    fn an_expired_oauth_token_is_still_transient() {
+        assert!(is_transient_harness_message(
+            "llm error: request failed with status 401: {\"code\":\"token_expired\"}"
+        ));
+        assert!(is_transient_harness_message(
+            "llm error: 401 Unauthorized: your authentication token is expired"
+        ));
+    }
+
+    /// Both layers must answer "will this recover on its own?" the same way.
+    ///
+    /// Asserted against `is_permanent_failure` itself rather than against a
+    /// re-listed set of statuses: a second list here would be the same drift
+    /// this test exists to forbid.
+    #[test]
+    fn the_two_layers_agree_about_what_is_permanent() {
+        for msg in [
+            "llm error: request failed with status 401: invalid api key",
+            "llm error: HTTP 403 (forbidden) from provider",
+            "llm error: Unauthorized",
+        ] {
+            assert!(
+                crate::providers::llm_retry::is_permanent_failure(msg),
+                "fixture must be permanent by the breaker's lens: {msg}"
+            );
+            assert!(
+                !is_transient_harness_message(msg),
+                "the outer retry loop must not re-dispatch what the breaker shed: {msg}"
+            );
+        }
+        // …and the converse, so this is not satisfied by "nothing is ever
+        // transient".
+        let overload = "llm error: 503 overloaded, please wait a moment";
+        assert!(!crate::providers::llm_retry::is_permanent_failure(overload));
+        assert!(is_transient_harness_message(overload));
     }
 }

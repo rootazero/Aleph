@@ -42,8 +42,19 @@ use commands::cli_args::{
 #[command(author, version = env!("ALEPH_VERSION"), about, long_about = None)]
 pub(crate) struct Cli {
     /// Gateway server URL
-    #[arg(short, long, default_value = aleph_client::DEFAULT_GATEWAY_URL)]
-    server: String,
+    ///
+    /// Falls back to `server` in the config file, then to
+    /// `ws://127.0.0.1:18790/ws`.
+    ///
+    /// Deliberately NOT a clap `default_value`: with one, this field is always
+    /// `Some` and `CliConfig.server` — a documented, `#[serde(default)]`-backed
+    /// config key — had no reader in this binary at all. Anyone pointing
+    /// `~/.config/aleph-cli/config.toml` at a remote gateway was silently
+    /// talking to loopback. `--ca-cert` two fields down already resolves
+    /// flag ▸ file ▸ built-in; this is the same rule, and there is no reason
+    /// for one connection setting to answer it differently from the other.
+    #[arg(short, long)]
+    server: Option<String>,
 
     /// Enable verbose logging
     #[arg(short, long)]
@@ -111,7 +122,7 @@ async fn run() -> CliResult<()> {
         config.ca_cert = cli.ca_cert.clone();
     }
     let config = config;
-    let server_url = cli.server.clone();
+    let server_url = cli.server.clone().unwrap_or_else(|| config.server.clone());
     let json = cli.json;
 
     info!("Aleph CLI v{}", env!("ALEPH_VERSION"));

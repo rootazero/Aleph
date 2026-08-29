@@ -8,25 +8,11 @@
 
 use crate::api::{RateLimit, RouteConfigApi, RouteConfigUpdate, RouteProviderInfo};
 use crate::context::DashboardState;
+use crate::components::route_labels::{lb_label, mode_desc, mode_label, LB_KEYS, MODE_KEYS};
 use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use std::collections::BTreeMap;
-
-/// The three selectable mode keys. Display copy is resolved per-locale from the
-/// `settings.route.*` translation table at render time.
-const MODE_KEYS: &[&str] = &["auto", "always_local", "always_cloud"];
-
-/// Load-balancing strategy keys, matched 1:1 to the backend
-/// `LoadBalanceStrategy` serde names.
-const LB_KEYS: &[&str] = &[
-    "ordered",
-    "round_robin",
-    "least_busy",
-    "latency_aware",
-    "usage_based",
-    "cost_aware",
-];
 
 #[component]
 #[must_use]
@@ -123,16 +109,8 @@ pub fn RouteView() -> impl IntoView {
                     <div class="space-y-3">
                         {MODE_KEYS.iter().map(|key| {
                             let key = *key;
-                            let label = move || match key {
-                                "auto" => t_string!(i18n, settings.route.mode_auto),
-                                "always_local" => t_string!(i18n, settings.route.mode_local),
-                                _ => t_string!(i18n, settings.route.mode_cloud),
-                            };
-                            let desc = move || match key {
-                                "auto" => t_string!(i18n, settings.route.mode_auto_desc),
-                                "always_local" => t_string!(i18n, settings.route.mode_local_desc),
-                                _ => t_string!(i18n, settings.route.mode_cloud_desc),
-                            };
+                            let label = move || mode_label(i18n, key);
+                            let desc = move || mode_desc(i18n, key);
                             let selected = Signal::derive(move || mode.get() == key);
                             view! {
                                 <button
@@ -177,14 +155,7 @@ pub fn RouteView() -> impl IntoView {
                         >
                             {LB_KEYS.iter().map(|key| {
                                 let key = *key;
-                                let label = move || match key {
-                                    "ordered" => t_string!(i18n, settings.route.lb_ordered),
-                                    "round_robin" => t_string!(i18n, settings.route.lb_round_robin),
-                                    "least_busy" => t_string!(i18n, settings.route.lb_least_busy),
-                                    "latency_aware" => t_string!(i18n, settings.route.lb_latency_aware),
-                                    "cost_aware" => t_string!(i18n, settings.route.lb_cost_aware),
-                                    _ => t_string!(i18n, settings.route.lb_usage_based),
-                                };
+                                let label = move || lb_label(i18n, key);
                                 view! { <option value=key>{label}</option> }
                             }).collect::<Vec<_>>()}
                         </select>

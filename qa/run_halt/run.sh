@@ -10,9 +10,10 @@
 #
 # Exit code = number of failed claims.
 #
-# ## `crash` reports 4 failures today, and they are the product, not the fixture
+# ## `crash` reported 4 failures for a round, and they were the product
 #
-# First run, 2026-08-29. A failed run emits a terminal frame PER RETRY ATTEMPT:
+# First run, 2026-08-29. A failed run emitted a terminal frame PER RETRY
+# ATTEMPT:
 #
 #   run_complete{failed, loops:2, tokens:356}   <- honest, attempt 1
 #   run_retrying                                 <- run_loop/inner.rs, attempt 2
@@ -21,44 +22,83 @@
 #   run_complete{failed, loops:0, tokens:0}
 #   run_error
 #
-# Every client keeps the LAST terminal frame, so the receipt reads 0 loops /
-# 0 tools / 0 tokens — which is the §3.17c symptom, resurrected by a path that
-# round did not consider. `terminate_reason` is right (`failed`, not the enum
-# Default), so the half of §3.17c that this fixture was built to confirm does
-# hold; what does not hold is the accounting.
+# Every client keeps the LAST terminal frame, so the receipt read 0 loops /
+# 0 tools / 0 tokens — the §3.17c symptom, resurrected by a path that round did
+# not consider.
 #
-# It is a consequence of that fix rather than an old bug: the settle used to sit
-# below `run_result.map_err(..)?`, so a failed attempt emitted nothing and only a
-# succeeding attempt settled. Moving it above the error return made it fire once
-# per attempt. Neither "first frame wins" nor "last frame wins" is the answer —
-# first-wins reports a run that retried and then SUCCEEDED as failed — so the
-# terminal frame has to be withheld from an attempt that is about to be retried,
-# and the layer that knows that (`run_loop/inner.rs`) is not the layer that emits
-# it (the drain, which has already forwarded by the time the classification
-# exists). That is a design change, not a patch, and it is not in this round.
+# Two separate defects, both closed 2026-08-29, and this scenario now passes
+# 6/6:
 #
-# The assertion stays RED on purpose. A fixture that was edited to agree with
-# the defect it found is a fixture that will agree with it forever.
+#   1. **The retry should never have happened.** `harness_bridge/error.rs`
+#      classified 401/403 as transient while `llm_retry::is_permanent_failure`
+#      — the predicate the circuit breaker acts on — called the identical error
+#      permanent, and acted on it: `FailoverProvider` sheds a credential failure
+#      on the first strike with a long cooldown. So the outer loop re-dispatched
+#      into a chain whose breakers were already open, which is exactly why
+#      attempts 2 and 3 came back instantly having done nothing. Two layers
+#      answering "will this recover on its own?" in opposite directions; the one
+#      that already had a consumer wins. The single auth failure that IS
+#      recoverable — an expired OAuth token, because this process holds the
+#      remedy — is checked first and still retries.
+#   2. **A retried attempt must not speak.** Neither "first frame wins" nor
+#      "last frame wins" fixes that at the client (first-wins reports a run that
+#      retried and then SUCCEEDED as failed), so the frame has to be withheld
+#      from an attempt that is about to be retried. The layer that classifies
+#      the failure is not the layer that emits it — the drain has already
+#      forwarded by the time the classification exists — so the drain now stops
+#      one step short: it returns a prepared `HeldComplete` and
+#      `run_dispatch_and_drain_classified` decides whether to send it, knowing
+#      both the classification and this attempt's place in the retry budget.
 #
-# ## `receipt` cannot pass today either, and for an unrelated reason
+# The `len(completes) == 1` assertion is kept exactly as it was written while it
+# was red. A fixture edited to agree with the defect it found is a fixture that
+# will agree with it forever.
 #
-# The CLI receives NO stream frames from a real gateway. Measured side by side
+# ## `receipt` could not pass either, for an unrelated reason, and that one was
+# ## bigger than this fixture
+#
+# The CLI received NO stream frames from a real gateway. Measured side by side
 # on the same socket at the same moment, 2026-08-29:
 #
 #   drive_halt.py (python websockets)  -> every frame, 5/5 claims pass
 #   aleph watch                        -> its banner, and nothing else
-#   aleph ask --json                   -> nothing at all, while the mock logs
-#                                         the turns and the server runs the run
+#   aleph ask --json                   -> nothing at all, while the mock logged
+#                                         the turns and the server ran the run
 #
-# So the run happens, the server broadcasts, and both CLI surfaces are blind to
-# it. That is pre-existing and has nothing to do with this round (nothing here
-# touches the event stream), but it is what `receipt` fails on — and the
-# scenario is kept rather than deleted because it is the ready-made test for
-# the day that is fixed. It is also why `render_summary_footer`'s two-language
-# behaviour is pinned by unit tests instead: `render_summary_footer_in` is pure
-# and asserted in both locales, and `UiLocale::from_locale_vars` is asserted
-# against the POSIX precedence chain. What stays unverified on a real machine is
-# only the six-line `from_env` wrapper.
+# Cause: the gateway published events as a bare
+# `{"method":"stream.X","params":{…}}` while `shared/client` parsed them with
+# `serde_json::from_str::<JsonRpcRequest>`, whose `jsonrpc: String` is a
+# required field. Every frame failed with `missing field 'jsonrpc'` and was
+# discarded behind one `debug!` line — and `shared/client` is the TUI's client
+# too, so neither surface had ever received a `stream.*` frame from a real
+# server. `aleph ask` parked forever on a run that had already finished.
+#
+# `gateway::events::frame_census` guards the other half of that same contract —
+# that every `stream.*` method has a `StreamEvent` twin to decode into — and was
+# green throughout: it checks the PAYLOAD, and the envelope carrying every
+# payload was what dropped them.
+#
+# Both halves are fixed: the server builds the envelope with
+# `JsonRpcRequest::notification` (one type, not two hand-written shapes) and the
+# client reads `method`/`params`/`id` off a `Value` so a producer that forgets
+# the version tag costs a warning rather than the event plane. `receipt` is what
+# proves it end to end, and it is also the only thing that exercises
+# `UiLocale::from_env` on a real machine — `render_summary_footer` resolves the
+# language from the process environment, so "does LC_MESSAGES actually move it"
+# is only answerable by running the binary twice.
+#
+# ## The instrument was broken too, and it is worth more than the finding
+#
+# The paragraph above was first measured against a `target/debug/aleph` that was
+# sixteen days old. `cargo build --bin aleph` fails — that bin belongs to
+# `aleph-cli`, and the invocation was missing `-p` — and the failure went
+# through `| tail -5`, whose exit status is what `if !` tested. A failed build
+# read as a successful one and the fixture ran whatever was already in the
+# shared target dir. Every `run.sh` under `qa/` had that shape; they now share
+# `qa/lib/build.sh::qa_build`, which checks `PIPESTATUS[0]`.
+#
+# The finding happened to be true anyway, which is the unnerving part: an
+# instrument that agrees with reality by accident is still broken.
 #
 # ## Why this needs a real machine
 #
@@ -113,6 +153,7 @@ case "$SCENARIO" in
 esac
 
 . "$HERE/../lib/scratch_home.sh"
+. "$HERE/../lib/build.sh"
 qa_redirect_home "$QA_ROOT"
 mkdir -p "$ALEPH_HOME"
 CONFIG="$ALEPH_HOME/config.toml"
@@ -139,10 +180,14 @@ trap cleanup EXIT
 
 say "build ($SCENARIO)"
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
-  BUILD_TARGETS=(--bin aleph-server)
-  [ "$SCENARIO" = "receipt" ] && BUILD_TARGETS+=(--bin aleph)
-  if ! (cd "$REPO" && HOME="$REAL_HOME" cargo build "${BUILD_TARGETS[@]}" 2>&1 | tail -5); then
-    echo "build failed" >&2; exit 1
+  # One invocation per package, and `-p` on both. `aleph` is a bin of
+  # `aleph-cli`, not of the default-run package, so `cargo build --bin aleph`
+  # fails with `no bin target named aleph` — which this fixture did not notice
+  # for a whole round, because the failure went through a `| tail`. See
+  # `qa/lib/build.sh` for what that cost.
+  qa_build -p alephcore --bin aleph-server || exit 1
+  if [ "$SCENARIO" = "receipt" ]; then
+    qa_build -p aleph-cli --bin aleph || exit 1
   fi
 fi
 # `.cargo/config.toml` pins a shared absolute target dir, so `$REPO/target` is
@@ -243,11 +288,14 @@ case "$SCENARIO" in
     # process environment, so "does LC_MESSAGES actually move it" is only
     # answerable by running the binary twice.
     [ -x "$CLI" ] || { echo "no CLI binary at $CLI" >&2; exit 1; }
-    # `--server`, not a `cli.toml`. `main.rs` reads `cli.server`, which carries
-    # a clap `default_value`, so the flag is ALWAYS present and
-    # `CliConfig.server` is never consulted — that field has no reader in this
-    # binary at all (the TUI reads its own `args.server`). Worth knowing before
-    # writing a fixture config file that would be silently ignored.
+    # `--server`, and it is now a real precedence rather than the only path:
+    # the flag used to carry a clap `default_value`, so it was ALWAYS present
+    # and `CliConfig.server` had no reader in this binary at all — a config file
+    # pointing at a remote gateway was silently ignored while the CLI talked to
+    # loopback. `--ca-cert` beside it had resolved flag ▸ file ▸ built-in since
+    # it was written; `--server` now does too (same fix in `aleph-tui`, which
+    # loads the same `CliConfig`). An explicit flag here is still the right call
+    # for a fixture: it pins the port this run bound.
     SERVER_URL="ws://127.0.0.1:$GATEWAY_PORT/ws"
     # `</dev/null` is load-bearing, and it is an instrument caveat rather than a
     # product one. `ask::read_piped_stdin` reads stdin to EOF whenever stdin is
