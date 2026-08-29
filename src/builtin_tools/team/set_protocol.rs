@@ -71,6 +71,15 @@ impl AlephTool for TeamSetProtocolTool {
     type Output = TeamSetProtocolOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // BT-D-R4-23: gate before any store mutation — the protocol is
+        // injected verbatim into every member's launch context, so an
+        // attacker setting it on a team they don't belong to would
+        // hijack the next member launch. The shared team-auth helper
+        // also matches the NotFound-shaped refusal the rest of the
+        // team tools use, so probing for foreign team ids returns the
+        // same shape as a genuinely-missing team.
+        super::require_team_auth(&*self.store, &args.team_id, &self.actor()).await?;
+
         // Determine the resulting state before the write so the message is
         // accurate (the store normalizes whitespace-only input to "cleared").
         let will_be_set = args

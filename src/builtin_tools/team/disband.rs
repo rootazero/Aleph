@@ -88,6 +88,11 @@ impl AlephTool for TeamDisbandTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // BT-D-R4-23: gate before any store mutation — the previous shape
+        // relied on `requires_confirmation` (a UX safeguard) as the only
+        // gate, which is bypassable. Verify the caller is the team's
+        // leader or a member.
+        super::require_team_auth(&*self.store, &args.team_id, &self.actor()).await?;
         self.store.disband_team(&args.team_id).await?;
 
         info!(team_id = %args.team_id, "team_disband: team disbanded");

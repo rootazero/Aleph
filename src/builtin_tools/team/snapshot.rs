@@ -147,6 +147,16 @@ impl AlephTool for TeamSnapshotTool {
                 let team_id = args.team_id.as_deref().ok_or_else(|| {
                     AlephError::other("team_snapshot(create): team_id is required")
                 })?;
+                // BT-D-R4-23: gate before any snapshot_store write — a
+                // caller that isn't a member could otherwise write a
+                // snapshot (which then lives in the store, and shows up in
+                // every later List for the team).
+                crate::builtin_tools::team::require_team_auth(
+                    &*self.team_store,
+                    team_id,
+                    &self.actor(),
+                )
+                .await?;
                 let tag = args.tag.as_deref().unwrap_or("");
                 let note = args.note.as_deref().unwrap_or("");
                 let out = capture_snapshot(

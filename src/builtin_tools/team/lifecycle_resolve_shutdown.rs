@@ -72,6 +72,9 @@ impl AlephTool for LifecycleResolveShutdownTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let actor = self.actor();
+        // BT-D-R4-23: gate before any store mutation — any agent that knew
+        // a team's id could approve / reject any worker's shutdown request.
+        super::require_team_auth(&*self.team_store, &args.team_id, &actor).await?;
         let leader_id = if actor.is_empty() {
             "leader".to_string()
         } else {

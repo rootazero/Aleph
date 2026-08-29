@@ -71,6 +71,12 @@ impl AlephTool for PlanResolveTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let actor = self.actor();
+        // BT-D-R4-23: gate before any store mutation — any agent that knew
+        // a team's id could approve / reject any submitted plan. Use the
+        // shared team-auth helper so the NotFound-shaped refusal matches
+        // every other team tool (a non-leader probing ids cannot distinguish
+        // "not found" from "not authorized").
+        super::require_team_auth(&*self.team_store, &args.team_id, &actor).await?;
         let leader_id = if actor.is_empty() { "leader" } else { &actor };
 
         let decision = args.decision.trim().to_lowercase();

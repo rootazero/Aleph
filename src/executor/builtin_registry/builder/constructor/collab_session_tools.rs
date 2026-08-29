@@ -300,22 +300,34 @@ impl BuiltinToolRegistry {
         let (session_collaborate_tool, session_turn_tool, session_read_tool) = {
             let current_agent_id = current_agent_id.clone();
 
-            let collaborate = config.session_coordinator.as_ref().map(|coord| {
-                crate::builtin_tools::team::SessionCollaborateTool::new(
-                    Arc::clone(coord),
-                    current_agent_id.clone(),
-                )
-            });
+            let collaborate = match (
+                config.session_coordinator.as_ref(),
+                config.team_store.as_ref(),
+            ) {
+                (Some(coord), Some(team_store)) => Some(
+                    crate::builtin_tools::team::SessionCollaborateTool::new(
+                        Arc::clone(coord),
+                        current_agent_id.clone(),
+                        Arc::clone(team_store),
+                    ),
+                ),
+                _ => None,
+            };
             let turn = config.session_coordinator.as_ref().map(|coord| {
                 crate::builtin_tools::team::SessionTurnTool::new(
                     Arc::clone(coord),
                     current_agent_id,
                 )
             });
-            let read = config
-                .session_store
-                .as_ref()
-                .map(|store| crate::builtin_tools::team::SessionReadTool::new(Arc::clone(store)));
+            let read = match (config.session_store.as_ref(), config.team_store.as_ref()) {
+                (Some(store), Some(team_store)) => Some(
+                    crate::builtin_tools::team::SessionReadTool::new(
+                        Arc::clone(store),
+                        Arc::clone(team_store),
+                    ),
+                ),
+                _ => None,
+            };
 
             // Register parameter schemas
             {
