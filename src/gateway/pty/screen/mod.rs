@@ -7,7 +7,9 @@
 //! an unbounded byte stream.
 
 pub mod grid;
+pub mod perform;
 pub use grid::{Attrs, Cell, Color, Grid};
+pub use perform::Screen;
 
 #[cfg(test)]
 mod tests {
