@@ -1,4 +1,5 @@
 use crate::gateway::channel::{ChannelCapabilities, StreamProtocol};
+use crate::gateway::i18n::Locale;
 use crate::gateway::runtime_footer::RuntimeFooterConfig;
 
 #[derive(Debug, Clone)]
@@ -71,6 +72,25 @@ pub struct ReplyEmitterConfig {
     /// orchestrated lanes) inherit it without a second construction argument to
     /// forget.
     pub side_answer: bool,
+
+    /// The language this run's channel reply is written in.
+    ///
+    /// One message, two producers. When a run halts with no text of its own,
+    /// `helpers::run_dispatch_and_drain_classified` renders the paragraph the
+    /// user reads through `i18n::render_loop_halt`, in the language
+    /// `[general] language` names; the emitter then appends a one-line halt tag
+    /// beneath it. That tag was English for every deployment, so a `zh` install
+    /// shipped a Chinese paragraph with an English label stuck to the bottom.
+    ///
+    /// Resolved at construction from the same `app_config` read that assembles
+    /// the rest of this struct, which is the **same derivation** the
+    /// `metadata["locale"]` stamp makes a few hundred lines later in
+    /// `inbound_router::executor` (`Locale::from_config(cfg.general.language)`)
+    /// and which `run_loop::inner` then re-reads for the paragraph — not a
+    /// second answer. Carried in the config for the reason
+    /// [`Self::side_answer`] gives: the Feishu and Telegram emitters clone this
+    /// struct, and a second constructor argument is a thing to forget.
+    pub locale: Locale,
 }
 
 impl Default for ReplyEmitterConfig {
@@ -85,6 +105,11 @@ impl Default for ReplyEmitterConfig {
             max_message_length: 0,
             footer: RuntimeFooterConfig::default(),
             side_answer: false,
+            // Not a literal `Zh`. This is the same call the stamping site
+            // makes with an absent `[general] language`, so an emitter built
+            // without config lands on whatever the halt paragraph beside it
+            // will land on — which is the entire property this field buys.
+            locale: Locale::from_config(None),
         }
     }
 }

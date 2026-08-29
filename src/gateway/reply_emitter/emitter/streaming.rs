@@ -92,7 +92,7 @@ impl ReplyEmitter {
         // the run did not complete cleanly. Pulls `terminate_reason`
         // off the enriched RunSummary; silent when the field is
         // missing (legacy producers) or equals "completed".
-        if let Some(notice) = cap_notice_for(&summary) {
+        if let Some(notice) = cap_notice_for(&summary, self.config.locale) {
             self.buffer.lock().await.push_str(&notice);
         }
 
@@ -730,24 +730,50 @@ impl EventEmitter for ReplyEmitter {
 /// Append a one-line notice when the run hit a cap. Returns `None` for a
 /// clean exit so the user sees just the model's reply on the happy path.
 ///
-/// `summary.terminate_reason` is the stable string from
-/// `TerminateReason::as_static_str()` (populated by P3a/P3 wiring). Missing
-/// or `"completed"` → no notice; anything else → user-facing tag.
-fn cap_notice_for(summary: &crate::gateway::event_emitter::RunSummary) -> Option<String> {
-    let reason = summary.terminate_reason.as_deref()?;
-    if reason == "completed" {
-        return None;
-    }
-    let label = match reason {
-        "hit_max_iterations" => "max iterations",
-        "context_budget_exhausted" => "context budget",
-        "stall_timeout" => "stalled",
-        "turn_timeout" => "turn timeout",
-        "consecutive_failure_cap" => "repeated failures",
-        "verifier_veto" => "verifier blocked",
-        "cancelled" => "cancelled",
-        other => other,
-    };
+/// # The fifth surface
+///
+/// [`aleph_protocol::terminate`] is the one table five surfaces render a
+/// `terminate_reason` from, and this was the row it named as **out of scope**:
+/// a private map of seven English labels, no `terminate_detail`, and a raw
+/// token for everything else. Joining the table closes three gaps at once.
+///
+/// * Coverage. Fourteen of the table's fifteen tokens are halts (all but
+///   `completed`, which every badge surface suppresses). The private map
+///   answered seven of those fourteen; the other seven fell through
+///   `other => other`, and six of the seven are snake_case identifiers a
+///   channel user was handed as prose — `reactive_compact_exhausted` at a
+///   person. (`failed` is the seventh and read acceptably by accident.)
+/// * The umbrella. `budget_exhausted_partial_result` names *that* a budget ran
+///   out, never which one. [`effective_token`](aleph_protocol::terminate::effective_token)
+///   is the precedence rule the TUI and the Panel already apply.
+/// * The language. This one was recorded as a product decision rather than a
+///   refactor, on the grounds that it would move the bytes every `zh`
+///   deployment's channels emit — which is true, and the direction it moves
+///   them is *toward* the paragraph they are stuck to. When a run halts with no
+///   text of its own, `helpers::run_dispatch_and_drain_classified` returns
+///   `i18n::render_loop_halt`'s output as the reply body, resolved from
+///   `[general] language`; this tag is appended beneath it. A `zh` install has
+///   therefore been shipping a Chinese paragraph with an English label glued to
+///   the bottom, and the split was never anybody's decision — it was two halves
+///   of one message that had never been read together.
+///
+/// The locale is [`ReplyEmitterConfig::locale`](crate::gateway::reply_emitter::ReplyEmitterConfig),
+/// resolved from the same `[general] language` read that stamps the run's
+/// `metadata["locale"]`, so the two halves derive from one key.
+///
+/// An unrecognised token still reaches the reader verbatim — that fall-through
+/// is the table's, and is the one behaviour here that must not change: a core
+/// newer than this binary must say something true, and the raw token is truer
+/// than a neutral placeholder.
+fn cap_notice_for(
+    summary: &crate::gateway::event_emitter::RunSummary,
+    locale: crate::gateway::i18n::Locale,
+) -> Option<String> {
+    let token = aleph_protocol::terminate::effective_token(
+        summary.terminate_reason.as_deref(),
+        summary.terminate_detail.as_deref(),
+    )?;
+    let label = aleph_protocol::terminate::label(token, locale.into());
     Some(format!("\n\n\u{26a0}\u{fe0f} {label}"))
 }
 
@@ -755,6 +781,7 @@ fn cap_notice_for(summary: &crate::gateway::event_emitter::RunSummary) -> Option
 mod cap_notice_tests {
     use super::cap_notice_for;
     use crate::gateway::event_emitter::RunSummary;
+    use crate::gateway::i18n::Locale;
 
     fn summary_with(reason: Option<&str>) -> RunSummary {
         RunSummary {
@@ -763,49 +790,152 @@ mod cap_notice_tests {
         }
     }
 
+    fn notice(reason: Option<&str>, locale: Locale) -> Option<String> {
+        cap_notice_for(&summary_with(reason), locale)
+    }
+
     #[test]
     fn completed_returns_none() {
-        assert!(cap_notice_for(&summary_with(Some("completed"))).is_none());
+        for locale in [Locale::En, Locale::Zh] {
+            assert!(notice(Some("completed"), locale).is_none());
+        }
     }
 
     #[test]
     fn missing_reason_returns_none() {
-        assert!(cap_notice_for(&summary_with(None)).is_none());
+        assert!(notice(None, Locale::En).is_none());
     }
 
     /// A run that died rather than capped still owes the channel a word.
     ///
-    /// `"failed"` is already human, so it rides the `other => other`
-    /// fall-through rather than earning a map entry — this pins that the
-    /// fall-through is what produces the notice, so a future label map that
-    /// starts swallowing unknown tokens fails here instead of silently
-    /// restoring "a crash reads as a clean finish".
+    /// `"failed"` used to ride an `other => other` fall-through; it now has a
+    /// row in the shared table, and in English the bytes are unchanged. The
+    /// assertion stays because what it pins is not the map entry but that a
+    /// crash produces a notice at all — a table that started swallowing tokens
+    /// it did not recognise would restore "a crash reads as a clean finish".
     #[test]
     fn a_failed_run_gets_a_notice() {
         assert_eq!(
-            cap_notice_for(&summary_with(Some("failed"))).as_deref(),
+            notice(Some("failed"), Locale::En).as_deref(),
             Some("\n\n\u{26a0}\u{fe0f} failed")
+        );
+        assert_eq!(
+            notice(Some("failed"), Locale::Zh).as_deref(),
+            Some("\n\n\u{26a0}\u{fe0f} \u{8fd0}\u{884c}\u{5931}\u{8d25}")
         );
     }
 
     #[test]
     fn hit_max_iterations_renders_label() {
-        let s = cap_notice_for(&summary_with(Some("hit_max_iterations"))).expect("notice");
-        assert!(s.contains("max iterations"));
+        let s = notice(Some("hit_max_iterations"), Locale::En).expect("notice");
+        assert!(s.contains("hit max iterations"), "got {s:?}");
         assert!(s.starts_with("\n\n"));
     }
 
+    /// The reason this row joined the table: one message, one language.
+    ///
+    /// `render_loop_halt` writes the paragraph above this tag from
+    /// `[general] language`. Before the join, a `zh` deployment shipped that
+    /// paragraph in Chinese and this label in English, every time.
     #[test]
-    fn verifier_veto_uses_human_label() {
-        let s = cap_notice_for(&summary_with(Some("verifier_veto"))).expect("notice");
-        assert!(s.contains("verifier blocked"));
+    fn a_zh_deployment_gets_a_zh_label() {
+        let s = notice(Some("hit_max_iterations"), Locale::Zh).expect("notice");
+        assert!(
+            s.contains("\u{5df2}\u{8fbe}\u{8fed}\u{4ee3}\u{4e0a}\u{9650}"),
+            "the tag must be in the same language as the halt paragraph it is \
+             appended to, got {s:?}"
+        );
+    }
+
+    /// Every token the enum can produce now has words, not just the seven the
+    /// private map happened to list.
+    ///
+    /// `reactive_compact_exhausted` is the sharpest of the seven that did not:
+    /// it is what a run says when the context overflowed and compaction could
+    /// not recover it, and a channel user was handed that identifier raw.
+    #[test]
+    fn a_token_the_private_map_never_had_now_reads_as_prose() {
+        let s = notice(Some("reactive_compact_exhausted"), Locale::En).expect("notice");
+        assert!(s.contains("context overflow"), "got {s:?}");
+        assert!(
+            !s.contains("reactive_compact_exhausted"),
+            "the raw token must not reach the reader once the table has words \
+             for it, got {s:?}"
+        );
+    }
+
+    /// The umbrella token must not hide which cap was actually hit.
+    ///
+    /// Same precedence rule the TUI and the Panel apply
+    /// (`terminate::effective_token`): `terminate_detail` names the real cap,
+    /// `terminate_reason` only says a budget ran out.
+    #[test]
+    fn the_detail_beats_the_umbrella_reason() {
+        let summary = RunSummary {
+            terminate_reason: Some("budget_exhausted_partial_result".to_string()),
+            terminate_detail: Some("max_output_tokens_exhausted".to_string()),
+            ..Default::default()
+        };
+        let s = cap_notice_for(&summary, Locale::En).expect("notice");
+        assert!(s.contains("max output tokens"), "got {s:?}");
+        assert!(
+            !s.contains("partial result"),
+            "the umbrella must give way to the cap it is hiding, got {s:?}"
+        );
+    }
+
+    /// Every row of the shared table reaches a channel as that row's words.
+    ///
+    /// Walks [`labelled_tokens`](aleph_protocol::terminate::labelled_tokens)
+    /// rather than restating them, so a sixteenth row is covered by the commit
+    /// that adds it — the same shape as the panel's guard on the other copy of
+    /// these strings.
+    ///
+    /// What it proves and what it does not: it is not independent verification
+    /// of the words (they come from the table both here and in the assertion).
+    /// It fails when a **second** table grows back in this file — a `match`
+    /// arm added for one token would have to reproduce the table's bytes in
+    /// both languages to stay green, which is the same work as calling the
+    /// table — and when a token stops being covered at all, which is the state
+    /// this row was in for seven of the fourteen halts: the private map listed
+    /// the other seven and let these through as raw identifiers.
+    #[test]
+    fn every_labelled_token_reaches_the_channel_as_the_tables_words() {
+        use aleph_protocol::terminate::{label, labelled_tokens, UiLocale, CLEAN_TOKEN};
+
+        let mut checked = 0_usize;
+        for token in labelled_tokens() {
+            if token == CLEAN_TOKEN {
+                // Suppressed on every badge surface; `effective_token` returns
+                // `None` for it and the assertion above pins that.
+                continue;
+            }
+            for (locale, ui) in [(Locale::En, UiLocale::En), (Locale::Zh, UiLocale::Zh)] {
+                let rendered = notice(Some(token), locale)
+                    .unwrap_or_else(|| panic!("{token} produced no notice in {locale:?}"));
+                assert!(
+                    rendered.contains(label(token, ui)),
+                    "{token} in {locale:?} rendered {rendered:?}, which is not this \
+                     table's words for it"
+                );
+            }
+            checked += 1;
+        }
+
+        assert!(
+            checked >= 14,
+            "walked only {checked} tokens — the table shrank or this walk stopped \
+             reaching it, and every assertion above is vacuous"
+        );
     }
 
     #[test]
     fn unknown_reason_falls_through_to_raw_string() {
         // A future TerminateReason variant lands here without code change —
         // user sees the canonical name instead of "completed" or nothing.
-        let s = cap_notice_for(&summary_with(Some("new_future_cap"))).expect("notice");
-        assert!(s.contains("new_future_cap"));
+        for locale in [Locale::En, Locale::Zh] {
+            let s = notice(Some("new_future_cap"), locale).expect("notice");
+            assert!(s.contains("new_future_cap"));
+        }
     }
 }

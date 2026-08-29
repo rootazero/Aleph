@@ -32,13 +32,33 @@
 //! "not done yet"; a wrong one reads as a fact, and only the second is
 //! invisible to the person reading it.
 //!
-//! **The fifth row is not fixed here, and saying which is the point.** The
-//! channel notice is server-side, and the server has a locale source these
-//! clients do not (`[general] language`, via `gateway::i18n`). Wiring it into
-//! this table would change the bytes every `zh` deployment's channels emit,
-//! which is a product decision and not a refactor. It keeps its own seven
-//! labels; core's census names it as out of scope rather than implying
-//! coverage.
+//! **The fifth row joined a round later, and what it cost was the sentence
+//! that used to stand here.** That sentence deferred the channel notice as a
+//! product decision on the grounds that wiring it in would move the bytes every
+//! `zh` deployment emits. The premise was right and the conclusion did not
+//! follow, because nobody had read the two halves of that message together:
+//! when a run halts with no text of its own, the channel reply body **is**
+//! `gateway::i18n::render_loop_halt`'s output — full prose, resolved from
+//! `[general] language` — and the notice is appended underneath it. A `zh`
+//! install was shipping a Chinese paragraph with an English label glued to the
+//! bottom, on every capped run. The split was never a decision; it was two
+//! producers of one message that had never been diffed against each other.
+//!
+//! So the channel row renders from this table, reads `terminate_detail` like
+//! the rest, and takes its locale through `gateway::i18n::Locale -> UiLocale` —
+//! resolved from the same `[general] language` read that stamps the run's
+//! `metadata["locale"]`, so the paragraph and the label beneath it derive from
+//! one key rather than two. Coverage went 7 → 14 of the fourteen halts in the
+//! same change: the seven its private map did not list had been falling through
+//! to the raw token, and six of those seven are snake_case identifiers a channel
+//! user was handed as prose (`reactive_compact_exhausted`, at a person — the
+//! seventh, `failed`, read acceptably by accident).
+//!
+//! `render_loop_halt` keeps its own table and belongs there. It is keyed on the
+//! `TerminateReason` **enum**, not on a token, and its strings are paragraphs
+//! carrying per-cause advice ("raise `[execution] max_iterations`", "trim the
+//! conversation") — a different question from what to call the halt, answered
+//! with data this table does not have.
 //!
 //! # Why this crate
 //!

@@ -365,26 +365,23 @@ pub async fn run_dispatch_and_drain_classified(
             // it, and a client that never sees one waits forever. Not gated on
             // `may_retry`: a dropped completion is not something the outer loop
             // classifies as transient, so this attempt is the run's last word.
-            // Bounded, and only on this arm: the other two reach `drain.await`
-            // knowing the flow task finished, so its event channel is closing.
-            // Here it did not finish — it was dropped — and nothing proves the
-            // broadcast sender went with it, so an unbounded join could park a
-            // run's last word forever. On expiry the task stays detached, which
-            // is exactly what this arm did before the frame was withheld.
-            let held = match tokio::time::timeout(TERMINAL_DRAIN_GRACE, drain).await {
-                Ok(joined) => joined.ok().flatten(),
-                Err(_) => None,
-            };
+            // Why the settle below is bounded — and why only here — is in
+            // `settle_dropped_completion`'s doc, next to the code that does it.
+            //
+            // Reaped before that grace window rather than after it: this task
+            // forwards an outer cancel into a flow task that is already gone,
+            // and the drain reads the outer token itself.
             propagate.abort();
             let failure = DispatchFailure::Fatal(format!("completion dropped: {e}"));
-            match held {
-                Some(held) => {
-                    if let Err(err) = emit_held_complete(&emitter, run_id, &held).await {
-                        warn!(run_id, error = %err, "failed to emit the held RunComplete");
-                    }
-                }
-                None => emit_error_run_complete(&emitter, run_id, &failure, locale).await,
-            }
+            settle_dropped_completion(
+                &emitter,
+                run_id,
+                drain,
+                &failure,
+                locale,
+                TERMINAL_DRAIN_GRACE,
+            )
+            .await;
             return Err(failure);
         }
     };
@@ -484,6 +481,48 @@ pub async fn run_dispatch_and_drain_classified(
         outcome.final_text
     };
     Ok(response)
+}
+
+/// Say the run's last word after the flow task died without answering.
+///
+/// Split out of the arm that calls it because the arm itself is unreachable
+/// from a test: `run_dispatch_and_drain_classified` takes a concrete
+/// `Arc<Orchestrator>`, and reaching `handle.completion.await == Err(_)`
+/// requires a flow task that panics or is aborted after dispatch — so the
+/// grace window below shipped on source reasoning alone, with no test that had
+/// ever entered this branch. As a function over the drain handle it is
+/// directly answerable: hand it a join that never returns and assert a
+/// terminal frame comes out anyway.
+///
+/// **Why bounded, and only here.** The two ordinary arms join the drain
+/// knowing the flow task finished, so its event channel is on its way closed.
+/// This one runs precisely when it did *not* finish, and nothing proves the
+/// broadcast sender went with it — an unbounded join would park the run's last
+/// word forever. On expiry the drain task stays detached, which is what this
+/// arm did before the frame was withheld at all.
+///
+/// `grace` is a parameter rather than a read of [`TERMINAL_DRAIN_GRACE`] so a
+/// test can state the boundary it is asserting instead of inheriting it.
+async fn settle_dropped_completion(
+    emitter: &Arc<dyn EventEmitter>,
+    run_id: &str,
+    drain: tokio::task::JoinHandle<Option<HeldComplete>>,
+    failure: &DispatchFailure,
+    locale: Locale,
+    grace: Duration,
+) {
+    let held = match tokio::time::timeout(grace, drain).await {
+        Ok(joined) => joined.ok().flatten(),
+        Err(_) => None,
+    };
+    match held {
+        Some(held) => {
+            if let Err(err) = emit_held_complete(emitter, run_id, &held).await {
+                warn!(run_id, error = %err, "failed to emit the held RunComplete");
+            }
+        }
+        None => emit_error_run_complete(emitter, run_id, failure, locale).await,
+    }
 }
 
 /// Emit the `ModelResolved` correction, if this run's provider dials ended up
@@ -899,6 +938,121 @@ mod pre_outcome_summary_tests {
                 .1,
             "the frame must carry the SAME receipt every other user-facing \
              failure path renders, not a second wording of it"
+        );
+    }
+}
+
+#[cfg(test)]
+mod dropped_completion_tests {
+    use super::{settle_dropped_completion, DispatchFailure, HeldComplete};
+    use crate::gateway::event_emitter::{CollectingEventEmitter, EventEmitter, StreamEvent};
+    use crate::gateway::i18n::Locale;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    const GRACE: Duration = Duration::from_secs(2);
+
+    /// A real `HeldComplete`, built through the production path rather than a
+    /// test-only constructor, so what these tests emit is what the drain emits.
+    async fn prepared_frame(iterations: u32) -> HeldComplete {
+        let sink = Arc::new(CollectingEventEmitter::new());
+        let emitter: Arc<dyn EventEmitter> = Arc::clone(&sink) as Arc<dyn EventEmitter>;
+        let state = Arc::new(tokio::sync::Mutex::new(
+            crate::gateway::execution_engine::event_drain::DrainState::default(),
+        ));
+        let outcome = crate::orchestrator::FlowOutcome {
+            iterations,
+            ..Default::default()
+        };
+        crate::gateway::execution_engine::event_drain::hold_complete(
+            &emitter, "run-1", &state, outcome,
+        )
+        .await
+        .expect("hold_complete")
+    }
+
+    fn failure() -> DispatchFailure {
+        DispatchFailure::Fatal("completion dropped: channel closed".to_string())
+    }
+
+    /// The frame the drain prepared is the one the client gets — the numbers a
+    /// run really spent, not a synthesized zero.
+    #[tokio::test]
+    async fn a_prepared_frame_is_what_reaches_the_client() {
+        let sink = Arc::new(CollectingEventEmitter::new());
+        let emitter: Arc<dyn EventEmitter> = Arc::clone(&sink) as Arc<dyn EventEmitter>;
+        let held = prepared_frame(7).await;
+        let drain = tokio::spawn(async move { Some(held) });
+
+        settle_dropped_completion(&emitter, "run-1", drain, &failure(), Locale::En, GRACE).await;
+
+        let events = sink.events().await;
+        let completes: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::RunComplete { summary, .. } => Some(summary),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(completes.len(), 1, "exactly one terminal frame");
+        assert_eq!(
+            completes[0].loops, 7,
+            "the prepared frame's real numbers must survive, not be replaced by \
+             the synthesized pre-outcome receipt, which reports zero"
+        );
+    }
+
+    /// The property the grace window exists for, asserted as an effect.
+    ///
+    /// The drain here never returns — the shape a live broadcast sender
+    /// outliving a dead flow task produces. Before the bound, this parked the
+    /// run's last word forever and the client waited for a terminal frame that
+    /// never came. Time is paused, so the two seconds are virtual and the
+    /// elapsed assertion below is what separates "the timeout fired" from "the
+    /// join happened to return immediately" — without it this test would pass
+    /// against a `settle` that ignored `grace` entirely.
+    #[tokio::test(start_paused = true)]
+    async fn a_drain_that_never_returns_still_produces_a_terminal_frame() {
+        let sink = Arc::new(CollectingEventEmitter::new());
+        let emitter: Arc<dyn EventEmitter> = Arc::clone(&sink) as Arc<dyn EventEmitter>;
+        let drain = tokio::spawn(std::future::pending::<Option<HeldComplete>>());
+
+        let started = tokio::time::Instant::now();
+        // Bounded by the test as well as by the code under test. The mutation
+        // this test exists to catch is "the grace window is gone", and an
+        // unbounded `settle` under a `pending` drain would hang the whole
+        // suite rather than fail — the one failure mode a test run cannot
+        // report. Paused time makes the outer budget virtual, so the mutant
+        // fails here in milliseconds instead of parking 17k tests.
+        let settled = tokio::time::timeout(
+            GRACE * 10,
+            settle_dropped_completion(&emitter, "run-1", drain, &failure(), Locale::En, GRACE),
+        )
+        .await;
+        assert!(
+            settled.is_ok(),
+            "settle parked on a drain that never returns — the grace window is \
+             not doing anything"
+        );
+        let waited = started.elapsed();
+
+        assert!(
+            waited >= GRACE,
+            "the join must be given the full grace window before giving up, waited {waited:?}"
+        );
+        let events = sink.events().await;
+        let summary = events
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::RunComplete { summary, .. } => Some(summary),
+                _ => None,
+            })
+            .expect("a run whose completion was dropped still owes the client a terminal frame");
+        assert!(
+            summary.terminate_reason.is_none(),
+            "the synthesized receipt must not claim a terminate reason it cannot know; \
+             `FlowOutcome::default()` carries `Completed` and four renderers read that \
+             as 'nothing worth saying'"
         );
     }
 }

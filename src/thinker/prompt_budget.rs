@@ -213,10 +213,22 @@ pub fn truncate_with_head_tail(
         .saturating_sub(head_chars)
         .saturating_sub(tail_chars);
     let marker = format!("\n\n[... {truncated_count} chars truncated ...]\n\n");
+    // One-directional on purpose. `reserved_chars` is measured against
+    // `total_chars` while the marker that actually ships carries
+    // `truncated_count`, which is `total_chars` minus the head and the tail —
+    // so the shipped marker is routinely one decimal digit *shorter* than the
+    // reservation, and an `==` here fires on ordinary input rather than on
+    // drift (it did, for every caller, from the commit that added it).
+    //
+    // What the reservation has to buy is that the split cannot *under*-budget:
+    // if a future marker could grow past what was reserved, `usable` would be
+    // too large, the head and tail would overfill, and the safety net below
+    // would clip the tail the caller asked to keep. That is the `<=`.
     debug_assert!(
-        marker.chars().count() == reserved_chars,
-        "marker format changed but budget reservation was computed against a different shape; \
-         pin the ASCII invariant or extend reserved_chars to track both branches",
+        marker.chars().count() <= reserved_chars,
+        "the shipped marker ({} chars) outgrew its reservation ({reserved_chars} chars); \
+         the head/tail split was computed against the smaller shape and will overfill",
+        marker.chars().count(),
     );
 
     // Char-accurate offsets: the first `head_chars` characters and the last

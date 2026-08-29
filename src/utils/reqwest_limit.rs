@@ -27,13 +27,51 @@ use futures::TryStreamExt;
 /// from `Err` so the call site can decide whether the cap is a hard
 /// refusal (firecrawl, generation poll: yes) or a soft signal.
 pub async fn bytes_with_limit(resp: reqwest::Response, limit: usize) -> Result<Option<Vec<u8>>> {
-    if let Some(cl) = resp.content_length() {
-        if cl > limit as u64 {
-            return Ok(None);
-        }
+    if declared_over_limit(resp.content_length(), limit) {
+        return Ok(None);
     }
+    accumulate_capped(resp.bytes_stream(), limit).await
+}
+
+/// Does the upstream's *advertised* size already exceed the cap?
+///
+/// A named function over two scalars rather than an arm of
+/// [`bytes_with_limit`], because that is the only shape a test can reach
+/// honestly. The test that used to cover this branch stood up a mock server
+/// advertising `content-length: 9999999` over a 47-byte body — and an HTTP
+/// client that trusts Content-Length reads a short body as a *truncated
+/// message*, so `reqwest::send()` failed with `IncompleteMessage` before the
+/// helper was ever called. It failed that way on every run from the commit
+/// that added it; what it measured was hyper's framing, never this line.
+///
+/// `>` and not `>=`: `limit` bytes is exactly the cap, not past it, and the
+/// streaming half agrees (`buf.len() + chunk.len() > limit`). The two halves
+/// disagreeing by one is the shape this boundary exists to pin.
+fn declared_over_limit(content_length: Option<u64>, limit: usize) -> bool {
+    content_length.is_some_and(|cl| cl > limit as u64)
+}
+
+/// Accumulate a body stream, refusing the chunk that would cross `limit`.
+///
+/// Split out for the same reason as [`declared_over_limit`], and with more at
+/// stake: reaching this loop from a mock server requires a response with **no**
+/// Content-Length, and `wiremock`'s `set_body_bytes` always sets one. Both
+/// server-driven tests that named this loop in their docs — one of them
+/// claiming to pin `buf.len() + chunk.len() > limit` against an off-by-one —
+/// were answered by [`declared_over_limit`] and returned before a chunk was
+/// ever read. Measured, not reasoned: probing `resp.content_length()` inside
+/// the "chunked" test returns `Some(2049)`.
+///
+/// Generic over the stream so the test can supply the chunk boundaries
+/// directly; that is what makes "the cap holds *across* chunks" an assertion
+/// rather than a hope about how the network split the body.
+async fn accumulate_capped<S, E>(stream: S, limit: usize) -> Result<Option<Vec<u8>>>
+where
+    S: futures::Stream<Item = std::result::Result<bytes::Bytes, E>>,
+    E: std::error::Error + Send + Sync + 'static,
+{
     let mut buf = Vec::new();
-    let mut stream = resp.bytes_stream();
+    let mut stream = std::pin::pin!(stream);
     while let Some(chunk) = stream.try_next().await? {
         if buf.len() + chunk.len() > limit {
             return Ok(None);
@@ -93,44 +131,89 @@ mod tests {
         assert_eq!(bytes_with_limit(resp, 1024).await.unwrap(), Some(body.to_vec()));
     }
 
-    /// Content-Length pre-check: a server that *advertises* a body larger
-    /// than the cap is refused before any chunk is read. Verified by
-    /// pairing the over-limit Content-Length with a body that would itself
-    /// be under the cap — the only way to tell the pre-check fired is if
-    /// `None` comes back even though the bytes-on-the-wire were small.
-    #[tokio::test]
-    async fn bytes_with_limit_refuses_on_content_length_above_limit() {
-        let server = MockServer::start().await;
-        let body = b"under-the-cap body, but lied about in the header";
-        Mock::given(any())
-            .and(method("GET"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_bytes(body)
-                    .insert_header("content-length", "9999999"),
-            )
-            .mount(&server)
-            .await;
-
-        let resp = fetch(&server).await;
-        assert_eq!(resp.content_length(), Some(9999999));
-        assert_eq!(bytes_with_limit(resp, 1024).await.unwrap(), None);
+    /// The advertised-size boundary, asked directly.
+    ///
+    /// `limit` bytes is the cap, not past it. Its predecessor tried to reach
+    /// this branch through a mock server that lied in its `content-length`
+    /// header, which no HTTP client will carry — see [`declared_over_limit`]
+    /// for what that test actually measured.
+    #[test]
+    fn declared_over_limit_refuses_only_strictly_above_the_cap() {
+        assert!(!declared_over_limit(None, 1024), "no header is not a refusal");
+        assert!(!declared_over_limit(Some(0), 1024));
+        assert!(
+            !declared_over_limit(Some(1024), 1024),
+            "a body of exactly `limit` bytes fits; refusing it here would \
+             disagree with the streaming half, which admits it"
+        );
+        assert!(declared_over_limit(Some(1025), 1024));
     }
 
-    /// Streaming cap (no Content-Length): the upstream doesn't tell us the
-    /// size in advance, so the streaming accumulator is the only line of
-    /// defence. The body is `limit + 1` bytes long; the very first chunk
-    /// pushes `buf.len() + chunk.len() > limit` true and the helper returns
-    /// `None`. Pinned because a check that read `buf.len() < limit` rather
-    /// than `buf.len() + chunk.len() > limit` would let the last byte
-    /// through.
+    /// The streaming cap, across chunk boundaries the test chooses.
+    ///
+    /// This is the assertion the two server-driven "chunked" tests were
+    /// believed to be making. Three chunks of 500 bytes: the first two are
+    /// admitted, the third would take the total to 1500 and is refused — so a
+    /// check written `buf.len() < limit` (true at 1000) instead of
+    /// `buf.len() + chunk.len() > limit` would let it through and return 1500
+    /// bytes for a 1024-byte cap.
     #[tokio::test]
-    async fn bytes_with_limit_refuses_a_chunked_body_above_limit() {
+    async fn accumulate_capped_refuses_the_chunk_that_would_cross_the_cap() {
+        let chunks: Vec<std::result::Result<bytes::Bytes, std::io::Error>> = (0..3)
+            .map(|_| Ok(bytes::Bytes::from(vec![b'c'; 500])))
+            .collect();
+        let out = accumulate_capped(futures::stream::iter(chunks), 1024)
+            .await
+            .unwrap();
+        assert_eq!(out, None, "1500 bytes must not pass a 1024-byte cap");
+    }
+
+    /// The mirror of the case above: chunks summing to exactly the cap are
+    /// admitted whole. Pins the same `>` the boundary test pins on the
+    /// declared side, so the two halves cannot drift apart by one byte.
+    #[tokio::test]
+    async fn accumulate_capped_admits_chunks_summing_to_exactly_the_cap() {
+        let chunks: Vec<std::result::Result<bytes::Bytes, std::io::Error>> = (0..2)
+            .map(|_| Ok(bytes::Bytes::from(vec![b'c'; 512])))
+            .collect();
+        let out = accumulate_capped(futures::stream::iter(chunks), 1024)
+            .await
+            .unwrap();
+        assert_eq!(out, Some(vec![b'c'; 1024]));
+    }
+
+    /// A stream error is an `Err`, not a silent short read.
+    ///
+    /// The size cap answers with `Ok(None)`; a transport failure must not be
+    /// folded into that answer, or a caller treating `None` as "upstream is
+    /// too big" would report a network fault as a policy refusal.
+    #[tokio::test]
+    async fn accumulate_capped_surfaces_a_stream_error_as_err() {
+        let chunks: Vec<std::result::Result<bytes::Bytes, std::io::Error>> = vec![
+            Ok(bytes::Bytes::from_static(b"partial")),
+            Err(std::io::Error::other("upstream reset")),
+        ];
+        let err = accumulate_capped(futures::stream::iter(chunks), 1024)
+            .await
+            .expect_err("a stream error must not be reported as a size refusal");
+        assert!(err.to_string().contains("upstream reset"), "got: {err}");
+    }
+
+    /// End-to-end refusal of an over-cap body, through a real response.
+    ///
+    /// It does **not** exercise the streaming accumulator, whatever its name
+    /// used to say: `wiremock`'s `set_body_bytes` sets a Content-Length, so
+    /// this response arrives as `Some(2049)` (measured, by asserting it) and
+    /// [`declared_over_limit`] answers before a chunk is read. The
+    /// `buf.len() + chunk.len() > limit` arithmetic its old doc claimed to pin
+    /// is pinned by `accumulate_capped_refuses_the_chunk_that_would_cross_the_cap`.
+    ///
+    /// What it is still worth keeping for is the seam: that a real
+    /// `reqwest::Response` reaches the cap at all, and that the pre-check is
+    /// wired into `bytes_with_limit` rather than merely existing.
+    #[tokio::test]
+    async fn bytes_with_limit_refuses_a_response_whose_declared_size_is_over_the_cap() {
         let server = MockServer::start().await;
-        // Force transfer-encoding: chunked by setting the body via a stream
-        // template. wiremock's default `set_body_bytes` also works because
-        // reqwest surfaces `content_length() = None` for chunked responses,
-        // but explicit is cheaper to read than implicit.
         let body = vec![b'x'; 2049];
         Mock::given(any())
             .and(method("GET"))
@@ -139,16 +222,22 @@ mod tests {
             .await;
 
         let resp = fetch(&server).await;
+        assert_eq!(
+            resp.content_length(),
+            Some(2049),
+            "this response is not chunked; if wiremock ever stops setting \
+             Content-Length, this test starts covering a different branch and \
+             its doc above becomes false"
+        );
         assert_eq!(bytes_with_limit(resp, 1024).await.unwrap(), None);
     }
 
-    /// The cap holds across many chunks, not just the first: a body just
-    /// under the limit must come back whole. Pinned because the
-    /// streaming-check's arithmetic (`buf.len() + chunk.len()`) could
-    /// overflow on `usize` if a future refactor cast to a narrower type —
-    /// a body close to the cap forces the addition to happen.
+    /// A body one byte under the cap comes back whole, through a real
+    /// response. Also not the streaming path (see the test above): its value
+    /// is that `bytes_with_limit` returns the bytes rather than the refusal
+    /// when the declared size fits, which is the other side of the same seam.
     #[tokio::test]
-    async fn bytes_with_limit_returns_some_for_a_large_chunked_body() {
+    async fn bytes_with_limit_returns_a_response_just_under_the_cap_whole() {
         let server = MockServer::start().await;
         let body = vec![b'a'; 1023]; // one byte under the limit
         Mock::given(any())

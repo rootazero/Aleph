@@ -116,7 +116,17 @@ impl InboundMessageRouter {
                     .behavior
                     .as_ref()
                     .map_or("typewriter", |b| b.output_mode.as_str());
-                ReplyEmitterConfig::from_output_mode(mode)
+                let mut config = ReplyEmitterConfig::from_output_mode(mode);
+                // Same config read, same derivation as the `metadata["locale"]`
+                // stamp below (`general.language` -> `Locale::from_config`), so
+                // the halt tag this emitter appends and the halt paragraph
+                // `run_loop::inner` renders from that stamp cannot disagree
+                // about which language this reply is in. Resolved here rather
+                // than from the request for the ordering reason `side_answer`
+                // documents: the `RunRequest` does not exist yet.
+                config.locale =
+                    crate::gateway::i18n::Locale::from_config(cfg.general.language.as_deref());
+                config
             }
             None => ReplyEmitterConfig::default(),
         };

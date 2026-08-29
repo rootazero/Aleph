@@ -43,6 +43,26 @@ impl Locale {
     }
 }
 
+/// The terminal clients' locale, for the one table both sides render from.
+///
+/// [`aleph_protocol::terminate`] answers "what do I call this halt" for every
+/// surface that renders a `terminate_reason`, and deliberately resolves its own
+/// locale from POSIX environment variables — because its readers are `aleph-cli`
+/// and `aleph-tui`, which cannot read the server's `config.toml` and may be
+/// pointed at another machine entirely. The server-side channel notice reads the
+/// same table but is **not** a terminal client: it is emitted by this process,
+/// beside a halt paragraph this module already renders from
+/// `[general] language`. This conversion is the seam between those two answers,
+/// and it exists so the seam is one line rather than a second locale resolver.
+impl From<Locale> for aleph_protocol::terminate::UiLocale {
+    fn from(locale: Locale) -> Self {
+        match locale {
+            Locale::En => Self::En,
+            Locale::Zh => Self::Zh,
+        }
+    }
+}
+
 /// The process-wide UI locale, installed once at server boot.
 ///
 /// # Why a process global rather than a parameter

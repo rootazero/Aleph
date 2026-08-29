@@ -1240,9 +1240,13 @@ mod outcome_tests {
     ///
     /// Not in scope, said plainly: this checks that a token is *labelled*, not
     /// that any particular surface renders it. `gateway::i18n::render_loop_halt`
-    /// (full prose with advice, server-side locale) and
-    /// `reply_emitter::cap_notice_for` (the channel one-liner) both keep private
-    /// tables and are not measured here.
+    /// keeps a private table and is not measured here — it is keyed on this
+    /// enum rather than on the token, and its strings are paragraphs of
+    /// per-cause advice rather than a name for the halt.
+    ///
+    /// `reply_emitter::cap_notice_for` used to be named here too. It is not any
+    /// more: the channel one-liner renders from `aleph_protocol::terminate`
+    /// like the other four surfaces, so this guard does now reach it.
     #[test]
     fn every_terminate_token_has_words_on_the_terminal_surfaces() {
         let src = include_str!("dispatch.rs").replace('\r', "");

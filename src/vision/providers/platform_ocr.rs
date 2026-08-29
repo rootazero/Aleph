@@ -279,7 +279,10 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_png_bytes_from_base64_input() {
-        // Well-known 1×1 transparent PNG (96 base64 chars → 72 bytes).
+        // Well-known 1×1 transparent PNG. 96 base64 characters, two of them
+        // `=` padding, so 3 * (96 / 4) - 2 = 70 decoded bytes — the padding is
+        // what the "→ 72" this comment used to claim left out, and 72 is what
+        // the assertion below asked for, so it had never once been green.
         // The post-decode magic-byte check needs a payload that actually
         // starts with the PNG signature (`89 50 4E 47 0D 0A 1A 0A`).
         let image = ImageInput::Base64 {
@@ -293,7 +296,7 @@ mod tests {
             &result[..8],
             &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n']
         );
-        assert_eq!(result.len(), 72);
+        assert_eq!(result.len(), 70);
     }
 
     #[tokio::test]
