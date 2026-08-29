@@ -1508,7 +1508,7 @@ mod tests {
 - [ ] **Step 2: 跑它，确认失败**
 
 ```bash
-cargo test -p aleph_protocol pty::
+cargo test -p aleph-protocol pty::   # hyphen: `-p` does NOT accept the underscore
 ```
 Expected: FAIL（类型不存在）。若 crate 名不是 `aleph_protocol`，用 `sed -n '1,10p' shared/protocol/Cargo.toml` 确认后替换。
 
@@ -1657,7 +1657,7 @@ pub mod pty;
 - [ ] **Step 4: 跑测试，确认通过**
 
 ```bash
-cargo test -p aleph_protocol pty::
+cargo test -p aleph-protocol pty::   # hyphen: `-p` does NOT accept the underscore
 ```
 Expected: 3 passed。
 
@@ -4142,7 +4142,7 @@ cargo test -p alephcore --lib --no-run
 cargo test -p alephcore --bins
 cargo test -p alephcore --features test-helpers --test '*' --no-run
 cargo test -p alephcore --lib gateway::pty
-cargo test -p aleph_protocol pty::
+cargo test -p aleph-protocol pty::   # hyphen: `-p` does NOT accept the underscore
 cargo test -p aleph-panel --lib
 cargo check -p aleph-desktop-macos
 cargo clippy --workspace --all-targets
