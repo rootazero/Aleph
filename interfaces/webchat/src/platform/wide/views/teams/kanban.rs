@@ -35,6 +35,9 @@ pub fn KanbanView() -> impl IntoView {
     let pending_confirm: RwSignal<Option<DropRequest>> = RwSignal::new(None);
     // Surfaces a failed drag/quick-action move without touching the drawer.
     let move_error: RwSignal<Option<String>> = RwSignal::new(None);
+    // Surfaces a failed board load so a network/admin error does not look
+    // like an empty board.
+    let load_error: RwSignal<Option<String>> = RwSignal::new(None);
 
     // Fetch tasks for the currently-selected team.
     let refresh = move || {
@@ -43,8 +46,16 @@ pub fn KanbanView() -> impl IntoView {
             return;
         };
         spawn_local(async move {
-            if let Ok(list) = TeamsApi::list_tasks(&dash, &team_id, TaskFilter::default()).await {
-                tasks.set(list);
+            match TeamsApi::list_tasks(&dash, &team_id, TaskFilter::default()).await {
+                Ok(list) => {
+                    tasks.set(list);
+                    load_error.set(None);
+                }
+                Err(e) => load_error.set(Some(
+                    crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                        e.to_string()
+                    }),
+                )),
             }
         });
     };
@@ -170,6 +181,15 @@ pub fn KanbanView() -> impl IntoView {
                                 </button>
                             </div>
                             <StatsChips tasks=tasks status_filter=status_filter />
+                            {move || load_error.get().map(|e| view! {
+                                <div class="mx-3 mb-2 px-3 py-2 rounded bg-danger/10 border border-danger/20 text-xs text-danger flex items-center gap-2">
+                                    <span class="flex-1">{e}</span>
+                                    <button
+                                        class="text-danger/70 hover:text-danger cursor-pointer"
+                                        on:click=move |_| load_error.set(None)
+                                    >"✕"</button>
+                                </div>
+                            })}
                             {move || move_error.get().map(|e| view! {
                                 <div class="mx-3 mb-2 px-3 py-2 rounded bg-danger/10 border border-danger/20 text-xs text-danger flex items-center gap-2">
                                     <span class="flex-1">{e}</span>
