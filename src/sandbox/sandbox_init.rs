@@ -779,6 +779,7 @@ fn apply_seccomp(policy: &LinuxInitPolicy) -> Result<(), String> {
     };
 
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
+    let mut skipped: Vec<&str> = Vec::new();
     for name in SECCOMP_DENYLIST_SIMPLE {
         // `syscall_nr` returns `None` for denylist entries that do not exist
         // on the current architecture (e.g. `umount`, `mknod`, `nfsservctl`
@@ -788,10 +789,23 @@ fn apply_seccomp(policy: &LinuxInitPolicy) -> Result<(), String> {
         // the whole filter (which would `exit(65)` and kill every sandboxed
         // process on those arches).
         let Some(nr) = syscall_nr(name) else {
+            skipped.push(name);
             continue;
         };
         // Empty rule vec = unconditional match for this syscall.
         rules.insert(nr, vec![]);
+    }
+    // Surface the architecture-skipped entries so an operator on arm64 /
+    // a future-arch kernel can audit the actual protection level (not
+    // just trust the x86_64-shaped denylist).
+    if !skipped.is_empty() {
+        tracing::warn!(
+            target: "sandbox",
+            arch = std::env::consts::ARCH,
+            skipped = ?skipped,
+            "[sandbox] seccomp denylist entries skipped on this architecture; \
+             the catastrophic floor is partial here"
+        );
     }
 
     // clone/unshare with CLONE_NEWUSER → deny (nested user-namespace

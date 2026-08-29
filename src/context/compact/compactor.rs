@@ -1436,12 +1436,37 @@ pub(crate) fn deterministic_truncation(messages: &[UnifiedMessage]) -> String {
     /// emits no newlines at all (interior ones are escaped), and every
     /// `ToolResult` `build_prompt` constructs is exactly one such block. So
     /// `lines().next()` returned an 8 KB payload verbatim and uncapped, while
-    /// deleting the assistant prose around it — this fallback runs precisely
-    /// when the summarizer failed, i.e. when losing the prose costs most.
+    /// deleting the assistant prose around it.
     ///
     /// [`cap_transcript_text`] is the same cap the summarizer's *input* path
     /// already applies to every message ([`serialize_transcript`]); the two
     /// paths disagreeing on whether a message has a size was the asymmetry.
+    ///
+    /// ## Where this runs — it is not only the summarizer-failed path
+    ///
+    /// An earlier version of this doc said the fallback "runs precisely when
+    /// the summarizer failed, i.e. when losing the prose costs most". That
+    /// sentence was true of the call site it was written next to and false of
+    /// the function. Four reachings, three distinct triggers:
+    ///
+    /// * **Summarizer failed or timed out** — `compact_inner`'s window arm and
+    ///   `reapply_cached`'s merge arm, both gated on `fallback_to_truncation`.
+    ///   This is the case the sentence described.
+    /// * **The turn was cancelled** — `summarize_slice` folds
+    ///   `SummarizerOutcome::Cancelled` into the same arm on purpose, because
+    ///   its two callers (the session-split child seed and manual `/compact`)
+    ///   must return *something*.
+    /// * **No summarizer provider is wired at all** — [`super::manual::compact_session`]
+    ///   calls this directly on its `None` arm. Nothing failed there: the
+    ///   truncation *is* the product of a user-typed `/compact`, not a
+    ///   degradation from a better answer that did not arrive.
+    ///
+    /// The cap is wanted in all three, but for different reasons, and only the
+    /// third is user-visible as itself. On that path the 2000-char ceiling is
+    /// what a `/compact` on a provider-less deployment actually returns — and
+    /// it is also what makes `manual`'s `tokens_after < tokens_before` refusal
+    /// (a summary no smaller than what it replaces is pure loss) reachable at
+    /// all on a span of long single-line turns.
     fn head(text: &str) -> std::borrow::Cow<'_, str> {
         cap_transcript_text(text.lines().next().unwrap_or(""))
     }

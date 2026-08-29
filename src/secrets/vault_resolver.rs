@@ -1,12 +1,11 @@
 //! `AsyncSecretResolver` impl backed by `SharedTokenManager`.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 
 use crate::gateway::security::shared_token::SharedTokenManager;
 use crate::secrets::injection::AsyncSecretResolver;
 use crate::secrets::types::{DecryptedSecret, SecretError};
+use crate::sync_primitives::Arc;
 
 /// `AsyncSecretResolver` impl that resolves secret names via the
 /// `SharedTokenManager`-managed vault. The only production resolver.

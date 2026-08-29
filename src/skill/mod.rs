@@ -70,6 +70,13 @@ struct Inner {
     eligibility: EligibilityService,
     config: RwLock<SkillsConfig>,
     config_path: PathBuf,
+    /// Last successfully-loaded main config snapshot. Used as a fallback when
+    /// `Config::load()` fails transiently (file locked, transient I/O error) so
+    /// the eligibility evaluation does not flap between "ready" and "needs
+    /// setup" on a single rebuild. Updated only on successful loads; an
+    /// always-failing `Config::load()` falls back to the initial empty value
+    /// the same way the old inline path did.
+    cached_config_value: RwLock<Option<serde_json::Value>>,
 }
 
 impl SkillSystem {
@@ -96,6 +103,7 @@ impl SkillSystem {
                 eligibility: EligibilityService::new(),
                 config: RwLock::new(config),
                 config_path,
+                cached_config_value: RwLock::new(None),
             }),
         }
     }
@@ -176,6 +184,50 @@ impl SkillSystem {
             .is_some_and(|env| std::env::var(env).is_ok())
     }
 
+    /// Load the main config and cache it for transient-failure fallback.
+    ///
+    /// On success the result is stored in `Inner::cached_config_value` so the
+    /// next caller can reuse it without re-reading + re-parsing + (on first
+    /// invocation) re-saving the config file. On any error the cached value
+    /// is returned unchanged; an empty object is the initial fallback so a
+    /// `SkillSystem` whose first call observes a broken config still matches
+    /// the old "empty on failure" behaviour rather than panicking or returning
+    /// inconsistent data on subsequent calls.
+    async fn load_or_cached_config_value(&self) -> serde_json::Value {
+        match crate::config::Config::load() {
+            Ok(c) => match serde_json::to_value(&c) {
+                Ok(v) => {
+                    let mut cache = self.inner.cached_config_value.write().await;
+                    *cache = Some(v.clone());
+                    v
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "skill snapshot: config serialization failed; using cached value"
+                    );
+                    self.cached_or_empty().await
+                }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "skill snapshot: config load failed; using cached value"
+                );
+                self.cached_or_empty().await
+            }
+        }
+    }
+
+    async fn cached_or_empty(&self) -> serde_json::Value {
+        self.inner
+            .cached_config_value
+            .read()
+            .await
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({}))
+    }
+
     /// Test-only helper: seed pre-built manifests straight into the registry.
     ///
     /// Production plugin/markdown skills are NOT registered this way — they flow
@@ -202,10 +254,7 @@ impl SkillSystem {
     /// `<skills_dir>/.usage.json` sidecar so consumers (Panel UI / LLM /
     /// CLI) can see usage counts and lifecycle state at a glance.
     pub async fn full_status(&self) -> Vec<SkillStatusEntry> {
-        let config_value = crate::config::Config::load()
-            .ok()
-            .and_then(|c| serde_json::to_value(&c).ok())
-            .unwrap_or_else(|| serde_json::json!({}));
+        let config_value = self.load_or_cached_config_value().await;
         let registry = self.inner.registry.read().await;
         let config = self.inner.config.read().await;
         let usage_index = self.collect_usage_snapshot().await;
@@ -520,11 +569,10 @@ impl SkillSystem {
         let current_version = *version;
         drop(version);
 
-        // Load config once; fall back to empty object on failure (defensive).
-        let config_value = crate::config::Config::load()
-            .ok()
-            .and_then(|c| serde_json::to_value(&c).ok())
-            .unwrap_or_else(|| serde_json::json!({}));
+        // Cached-load — see `load_or_cached_config_value`. Falls back to the
+        // last successful value on a transient I/O error so a single bad
+        // rebuild does not change the eligibility verdict.
+        let config_value = self.load_or_cached_config_value().await;
 
         // Snapshot the user's per-skill overrides (enable/disable, scope) and the
         // configured prompt budget so the rebuilt snapshot reflects them in

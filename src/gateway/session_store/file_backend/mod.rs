@@ -625,6 +625,35 @@ impl SessionStore for FileSessionStore {
         // read-modify-write of the same file at the end of every run. Taking
         // the same lock is what makes the two mutually exclusive; the append
         // itself is still O(one line) so the section stays short.
+        //
+        // What the producer named, or the insert clock when it named nothing.
+        // The rule lives in `producer_instant` because the SQLite backend asks
+        // it of the same record: this backend used to persist an undated row's
+        // `0` verbatim (1970) while that one substituted the insert clock, so
+        // the same message came back dated 56 years apart depending on which
+        // store held it. A 1970 row is not inert — it leads every ranking and
+        // sits at the deleted end of every DELETE that ranks the column.
+        //
+        // Persisted in milliseconds whatever unit it arrived in. Both spellings
+        // are already in this transcript — `agent_instance` stamps
+        // `Utc::now().timestamp()` (seconds) while the projector stamps
+        // `created_at_ms` — and normalizing at the boundary is what the SQLite
+        // half already does (`add_message_full`), so from here the two backends
+        // persist ONE unit and neither keeps widening a mixture that every
+        // future query has to remember about.
+        //
+        // NEW ROWS ONLY. Rows already on disk are not migrated and
+        // `stamp_millis` is therefore permanent, not transitional: the install
+        // that never runs a migration is exactly the install that still holds
+        // the old rows. Migrating them would buy no reader the right to stop
+        // normalizing, which is the only thing a migration could have bought.
+        //
+        // The normalization itself is a pure function of the record, so it runs
+        // before the lock; only the append needs the critical section.
+        let mut msg = msg;
+        let at = crate::gateway::session_store::types::producer_instant(Some(msg.timestamp))
+            .unwrap_or_else(chrono::Utc::now);
+        msg.timestamp = at.timestamp_millis();
         let mut guard = self.lock_metadata(&key_str).await?;
         self.append_transcript(&key_str, &msg).await?;
         if let Some(meta) = guard.existing_mut() {
@@ -639,15 +668,23 @@ impl SessionStore for FileSessionStore {
             // the future: the Panel's session list showed the year 58574, and
             // `now - session_expiry_secs` could never overtake it, so those
             // sessions never aged out. Caught on a real two-identity install
-            // 2026-08-09; the unit trap itself is CLAUDE.md §10.
+            // 2026-08-09; the unit trap itself is CLAUDE.md §10. (`msg.timestamp`
+            // is milliseconds on both backends now — that is the point of the
+            // normalization above — which changes nothing here: this column is
+            // seconds and the conversion has to happen either way.)
             //
-            // An unrepresentable stamp keeps the previous value rather than
-            // substituting `now()`: appending is activity, but inventing one
-            // would silently extend the life of a session whose input is
-            // already known to be garbage.
-            meta.last_active_at = msg
-                .instant()
-                .map_or(meta.last_active_at, |dt| dt.timestamp());
+            // `at`, not `msg.instant()` re-derived: the row's stamp and this
+            // clock are two projections of ONE resolution, so a row that was
+            // dated by the insert clock above dates the session by that same
+            // instant instead of by a second `now()` taken later.
+            //
+            // The unrepresentable case no longer reaches here (it was resolved
+            // above), which is why this is a plain assignment and not the
+            // keep-the-previous-value guard it used to be. That guard protected
+            // this field while letting the poisoned stamp through to the
+            // transcript; the row is fixed at the boundary now, so there is
+            // nothing left for it to protect against.
+            meta.last_active_at = at.timestamp();
             // The session's token/model columns are written by
             // `update_session_usage` alone (the run's `AssistantRunMeta`) — see
             // the twin comment in the SQLite backend's `add_message_full`.
@@ -1139,7 +1176,13 @@ impl SessionStore for FileSessionStore {
         let mut deleted = 0usize;
         let sessions = self.list_sessions(SessionFilter::default()).await?;
         for meta in sessions {
-            if meta.session_type == "ephemeral" && meta.last_active_at < expiry_threshold {
+            // `created_at` as well as `last_active_at`: nothing can have been
+            // idle for longer than it has existed. See
+            // `SessionStore::cleanup_expired`.
+            if meta.session_type == "ephemeral"
+                && meta.last_active_at < expiry_threshold
+                && meta.created_at < expiry_threshold
+            {
                 let dir = self.session_dir(&meta.key);
                 if tokio::fs::remove_dir_all(&dir).await.is_ok() {
                     deleted += 1;
@@ -1169,7 +1212,10 @@ impl SessionStore for FileSessionStore {
                 SessionKey::from_key_string(&meta.key),
                 Some(SessionKey::Task { task_type: t, .. }) if t == task_type
             );
-            if !is_target || meta.last_active_at >= cutoff_secs {
+            // `created_at` too — see `SessionStore::cleanup_expired`. A cron
+            // transcript replayed from an old event log would otherwise be
+            // reaped in the same boot that materialised it.
+            if !is_target || meta.last_active_at >= cutoff_secs || meta.created_at >= cutoff_secs {
                 continue;
             }
             // Hard delete (not the archive-rename of `delete_session`): the
@@ -1693,13 +1739,97 @@ mod reap_tests {
         (FileSessionStore::new(config).expect("store"), dir)
     }
 
-    /// Create a session and stamp its `last_active_at` to `age_secs` ago.
+    /// A session that has BEEN there for `age_secs` and been quiet the whole
+    /// time: both clocks aged, which is the only shape a real aged session has.
+    ///
+    /// Ageing `last_active_at` alone would describe something else entirely —
+    /// a conversation written just now that claims to be old, i.e. exactly what
+    /// `a_replayed_transcript_is_not_reaped_in_the_boot_that_wrote_it` builds
+    /// and what the reaper must NOT take.
     async fn seed(store: &FileSessionStore, key: &SessionKey, age_secs: i64) {
+        seed_clocks(store, key, age_secs, age_secs).await;
+    }
+
+    /// The two clocks separately: `idle_secs` ago for the newest message,
+    /// `existed_secs` ago for the row itself.
+    async fn seed_clocks(
+        store: &FileSessionStore,
+        key: &SessionKey,
+        idle_secs: i64,
+        existed_secs: i64,
+    ) {
         store.get_or_create(key).await.unwrap();
         let key_str = key.to_key_string();
+        let now = chrono::Utc::now().timestamp();
         let mut guard = store.lock_metadata(&key_str).await.unwrap();
-        guard.existing_mut().unwrap().last_active_at = chrono::Utc::now().timestamp() - age_secs;
+        let meta = guard.existing_mut().unwrap();
+        meta.last_active_at = now - idle_secs;
+        meta.created_at = now - existed_secs;
         guard.commit().await.unwrap();
+    }
+
+    /// A cron transcript projected from an old event log — an import, a
+    /// backfill, a reconciler replaying at boot — arrives with an old
+    /// `last_active_at` and a `created_at` of seconds ago.
+    ///
+    /// `last_active_at` follows the MESSAGE (it has to: the session list sorts
+    /// on it and a client renders it as `updated_at`), so it says "100 days
+    /// idle" the instant the row is written. Measured by that alone, the reaper
+    /// deletes the transcript in the same boot that materialised it. Nothing
+    /// can have been idle for longer than it has existed.
+    #[tokio::test]
+    async fn a_replayed_transcript_is_not_reaped_in_the_boot_that_wrote_it() {
+        let (store, _dir) = temp_store();
+        let day = 86_400_i64;
+
+        let replayed = SessionKey::task("main", "cron", "just-replayed");
+        seed_clocks(&store, &replayed, 100 * day, 5).await;
+
+        let cutoff = chrono::Utc::now().timestamp() - 30 * day;
+        let deleted = store.reap_task_sessions("cron", cutoff).await.unwrap();
+
+        assert_eq!(
+            deleted, 0,
+            "the reaper deleted a transcript written five seconds ago because \
+             the conversation it records happened 100 days ago"
+        );
+        assert!(store.session_dir(&replayed.to_key_string()).exists());
+    }
+
+    /// The same floor on the other sweep, plus the control that says the sweep
+    /// still sweeps — a floor that quietly disabled `cleanup_expired` would
+    /// pass every "it did not delete" assertion ever written.
+    #[tokio::test]
+    async fn cleanup_expired_measures_idleness_from_when_the_session_existed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let day = 86_400_i64;
+        let store = FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: dir.path().to_path_buf(),
+            session_expiry_secs: (30 * day) as u64,
+            ..Default::default()
+        })
+        .expect("store");
+
+        let aged = SessionKey::ephemeral("aged");
+        let replayed = SessionKey::ephemeral("replayed");
+        seed_clocks(&store, &aged, 100 * day, 100 * day).await;
+        seed_clocks(&store, &replayed, 100 * day, 5).await;
+
+        let deleted = store.cleanup_expired().await.unwrap();
+
+        assert_eq!(
+            deleted, 1,
+            "exactly the session that has been idle as long as it has existed"
+        );
+        assert!(
+            !store.session_dir(&aged.to_key_string()).exists(),
+            "the genuinely idle session survived — the floor disabled the sweep \
+             instead of bounding it"
+        );
+        assert!(
+            store.session_dir(&replayed.to_key_string()).exists(),
+            "a session created five seconds ago was swept as expired"
+        );
     }
 
     #[tokio::test]

@@ -216,7 +216,14 @@ fn compress_screenshot(output: &str) -> String {
     };
     let has_base64_padding = || output.ends_with('=');
 
-    if output.starts_with("data:image/")
+    // Case-insensitive data-URL detection: RFC 2397 makes mediatype case-
+    // insensitive, and a server that emits `DATA:image/png;base64,...` would
+    // otherwise fall through to the base64 prefix check and lose the
+    // `[Screenshot captured successfully]` placeholder.
+    let starts_with_data_image = output
+        .get(..10)
+        .is_some_and(|p| p.eq_ignore_ascii_case("data:image"));
+    if starts_with_data_image
         || (output.len() > 100
             && prefix_is_base64_chars()
             && (prefix_has_base64_marker() || has_base64_padding()))

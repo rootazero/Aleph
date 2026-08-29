@@ -27,6 +27,17 @@
 #      the turn a human started; this one is about a prompt built one spawn
 #      later, from a task-local the spawn had to re-establish.
 #
+# ## One claim this fixture does NOT make (2026-08-29)
+#
+# Claim 6's memory leg is not coverage of §3.17② (`request_scope_strings`).
+# `chat.send` arrives with its scope already corrected by
+# `handlers::agent::resolve_attribution`, so the correction that defect was
+# about is a no-op on every path this fixture drives. Reverting it and
+# re-running left all 46 green. Reaching it needs a run produced by
+# `inbound_router/executor.rs` or cron ON a room-claimed session key — a
+# channel fixture crossed with this one. See the note in `drive_rooms.mjs`
+# phase 6, which carries the full reasoning.
+#
 # ## The two identities are not optional
 #
 # `resolve_connect_auth` authorises a loopback peer on its first line, before it

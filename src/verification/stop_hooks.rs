@@ -454,6 +454,12 @@ async fn execute_shell_hook(
             if let Err(e) = child.kill().await {
                 tracing::debug!(error = %e, "stop hook kill after timeout failed");
             }
+            // Reap the killed process. `tokio::process::Child::drop` only
+            // sends SIGKILL on `kill_on_drop` — it does NOT call `waitpid`,
+            // so a child killed here and dropped would persist as a zombie
+            // until the parent reaps. Discard the status; the verdict is
+            // already Error. (2026-08-29 verification audit.)
+            let _ = child.wait().await;
             StopHookVerdict::Error {
                 hook_name: hook.hook_name.clone(),
                 message: "timed out".to_string(),
@@ -463,6 +469,8 @@ async fn execute_shell_hook(
             if let Err(e) = child.kill().await {
                 tracing::debug!(error = %e, "stop hook kill after cancel failed");
             }
+            // Same zombie-reap rationale as the timeout arm — see comment above.
+            let _ = child.wait().await;
             StopHookVerdict::Error {
                 hook_name: hook.hook_name.clone(),
                 message: "cancelled".to_string(),

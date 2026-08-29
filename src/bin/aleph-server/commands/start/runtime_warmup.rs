@@ -10,9 +10,8 @@ pub(super) async fn runtime_startup_warmup() {
         ledger::{migrate_from_legacy, CapabilityEntry},
         CapabilityLedger, CapabilityStatus, SPECS,
     };
-    use std::sync::Arc;
+    use alephcore::sync_primitives::{Arc, AsyncRwLock as RwLock};
     use std::time::{SystemTime, UNIX_EPOCH};
-    use tokio::sync::RwLock;
 
     let runtimes_dir = match runtimes::get_runtimes_dir() {
         Ok(d) => d,

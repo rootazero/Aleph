@@ -216,43 +216,47 @@ impl SessionManager {
         } = msg;
 
         let key_str = key.to_key_string();
-        // `now` is the SESSION's activity clock (`sessions.last_active_at`, in
-        // seconds). It is no longer also the message's timestamp — see `at_ms`.
-        let now = chrono::Utc::now().timestamp();
 
-        // When the message HAPPENED, in milliseconds.
+        // When the message HAPPENED. ONE resolution, two projections: the row's
+        // own stamp (`at_ms`, milliseconds) and the session's activity clock
+        // (`now`, seconds). Two `Utc::now()` calls would be two instants, and
+        // the pair would then disagree by whatever ran between them.
         //
-        // This column used to be `now` for EVERY row: `append_message` handed
-        // over the producer's stamp and this insert dropped it on the floor, so
-        // a SQLite install recorded when the row was WRITTEN rather than when
-        // the message occurred — and the file backend, which preserves the
-        // producer's stamp, disagreed with SQLite about the same conversation.
-        // Live turns hid it (the two instants differ by milliseconds); any path
-        // that projects an event later — a reconciler, a backfill, an import —
-        // did not.
+        // `timestamp` used to be the insert clock for EVERY row: `append_message`
+        // handed over the producer's stamp and this insert dropped it on the
+        // floor, so a SQLite install recorded when the row was WRITTEN rather
+        // than when the message occurred — and the file backend, which preserves
+        // the producer's stamp, disagreed with SQLite about the same
+        // conversation. Live turns hid it (the two instants differ by
+        // milliseconds); any path that projects an event later — a reconciler, a
+        // backfill, an import — did not.
         //
-        // The fallback is the OLD behaviour, narrowed, not a new guess. `None`
-        // (the `add_message` convenience, which has no record to speak for),
-        // `0` (a producer that left the field at its zero value) and a
-        // magnitude no calendar can represent all mean "the producer did not
-        // say when". For those, INSERT time is the one true statement available
-        // about the row, and it is exactly what all of them got before. So this
-        // change only ever REMOVES rows from the set that gets INSERT time; it
-        // never adds one, and it never keeps a stamp whose absurd magnitude
-        // would drag the row to one extreme of the two queries that rank this
-        // column to choose the boundary of a DELETE (`truncate_messages`,
-        // `compact_session`).
+        // What counts as "the producer did not say when" is decided by
+        // `producer_instant`, not here: the file backend asks the same question
+        // of the same record and the two used to answer it differently. The
+        // fallback is the OLD behaviour, narrowed, not a new guess — every row
+        // that reaches it got the insert clock before as well, so this only ever
+        // REMOVES rows from that set.
         //
         // Stored already normalized to milliseconds rather than verbatim: this
         // backend then keeps writing ONE unit going forward. Readers cope
         // either way (`stamp_millis` / `stamp_millis_sql`), but a column that
         // acquires a third mixture is a column every future query has to
         // remember about.
-        let at_ms = occurred_at
-            .filter(|raw| *raw != 0)
-            .map(crate::gateway::session_store::types::stamp_millis)
-            .filter(|ms| chrono::DateTime::from_timestamp_millis(*ms).is_some())
-            .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+        let at = crate::gateway::session_store::types::producer_instant(occurred_at)
+            .unwrap_or_else(chrono::Utc::now);
+        let at_ms = at.timestamp_millis();
+
+        // `sessions.last_active_at`, in seconds: the session's activity clock,
+        // read by the list's recency ordering, by the `updated_at` a client
+        // renders, and by the two idle sweeps that DELETE (`cleanup_expired`,
+        // `reap_task_sessions`). It answers "when did the newest thing in this
+        // conversation happen", so it follows the MESSAGE, not the insert —
+        // which is what the file backend has always done here. Stamping
+        // `Utc::now()` instead re-dated an imported or backfilled conversation
+        // to the moment it was re-read: it jumped to the head of the session
+        // list on one backend and stayed in its own past on the other.
+        let now = at.timestamp();
 
         // Use scope block to ensure lock is released before any await
         let (message_id, needs_compaction) = {
@@ -416,7 +420,7 @@ impl SessionManager {
 
     /// Get session history
     /// The SQL spelling of [`stamp_millis`] — `messages.timestamp` normalized to
-    /// milliseconds, for ranking and for the `before` cursor.
+    /// milliseconds, for the `before` cursor.
     ///
     /// Built from [`SECONDS_MILLIS_BOUNDARY`] rather than repeating the literal:
     /// a second copy of that number is a second definition of the rule, which is
@@ -426,9 +430,16 @@ impl SessionManager {
     /// both over the same values in a real connection — the only check that can
     /// see them drift, since neither is expressible in terms of the other.
     ///
-    /// There is no index on `messages(timestamp)` (only on `session_key`), so
-    /// ordering by this expression costs nothing an index would otherwise have
-    /// saved: SQLite was already sorting.
+    /// Nothing RANKS by this any more. The transcript's order is `id` — see
+    /// [`SessionStore::history_page`]'s doc for why, and
+    /// `no_message_query_orders_by_the_stamp` for the guard. What survives is
+    /// the one place the stamp is genuinely the subject: the `before` cursor
+    /// arrives as an instant and has to be compared against a column holding
+    /// two units, and the raw comparison ranks every millisecond row above
+    /// every seconds row — which is what answered `{count: 0}` for the largest
+    /// sessions on a real install.
+    ///
+    /// [`SessionStore::history_page`]: crate::gateway::session_store::SessionStore::history_page
     ///
     /// [`stamp_millis`]: crate::gateway::session_store::types::stamp_millis
     /// [`SECONDS_MILLIS_BOUNDARY`]: crate::gateway::session_store::types::SECONDS_MILLIS_BOUNDARY
@@ -445,15 +456,22 @@ impl SessionManager {
     /// [`stamp_millis_sql`], which is why `chat.history?before=…` answered
     /// `{count: 0}` for the largest sessions on a real install.
     ///
+    /// Rows come back in `id` order — the order they were recorded, which is
+    /// the transcript's order on both backends
+    /// ([`SessionStore::history_page`]). Only the cursor touches the stamp.
+    ///
+    /// [`SessionStore::history_page`]: crate::gateway::session_store::SessionStore::history_page
     /// [`stamp_millis_sql`]: Self::stamp_millis_sql
     fn history_sql(limit: Option<usize>, cursored: bool) -> String {
         const COLS: &str = "id, role, content, timestamp, metadata, input_tokens, \
                             output_tokens, tool_call_id, tool_name, source_seq";
-        let stamp = Self::stamp_millis_sql();
-        // The cursor is compared against the same normalized expression the
-        // ordering uses, never the bare column.
+        // The cursor is a PREDICATE on the stamp, so it goes through the
+        // normalizer; the ORDER is `id`, and the two are no longer the same
+        // expression. `before` names an instant and the column holds two units,
+        // so a raw comparison there would rank every millisecond row above
+        // every seconds row regardless of when either happened.
         let cursor = if cursored {
-            format!(" AND {stamp} < ?")
+            format!(" AND {stamp} < ?", stamp = Self::stamp_millis_sql())
         } else {
             String::new()
         };
@@ -463,12 +481,12 @@ impl SessionManager {
             Some(n) => format!(
                 "SELECT {COLS} FROM ( \
                     SELECT {COLS} FROM messages \
-                    WHERE session_key = ?{cursor} ORDER BY {stamp} DESC, id DESC LIMIT {n} \
-                 ) ORDER BY {stamp} ASC, id ASC"
+                    WHERE session_key = ?{cursor} ORDER BY id DESC LIMIT {n} \
+                 ) ORDER BY id ASC"
             ),
             None => format!(
                 "SELECT {COLS} FROM messages \
-                 WHERE session_key = ?{cursor} ORDER BY {stamp} ASC, id ASC"
+                 WHERE session_key = ?{cursor} ORDER BY id ASC"
             ),
         }
     }

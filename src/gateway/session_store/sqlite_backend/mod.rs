@@ -205,102 +205,71 @@ impl SessionStore for SessionManager {
             return Ok(TruncateResult::default());
         }
 
-        // Find the id of the keep_count-th message in chronological order
-        // (i.e. the last message we want to keep). When keep_count == 0 we
-        // delete all messages for the session, mirroring reset_session.
-        let threshold_id: Option<i64> = if keep_count == 0 {
-            None
-        } else {
-            // Ranked through `stamp_millis_sql`: this is the boundary of a
-            // DELETE (`/undo`), and the raw column ranks every millisecond row
-            // above every seconds row, so a mixed-unit column would make this
-            // keep and drop the wrong rows.
-            let stamp = SessionManager::stamp_millis_sql();
-            conn.query_row(
-                &format!(
-                    "SELECT id FROM messages WHERE session_key = ?
-                 ORDER BY {stamp} ASC, id ASC LIMIT 1 OFFSET ?"
-                ),
-                params![&key_str, (keep_count - 1) as i64],
-                |row| row.get(0),
-            )
-            .ok()
-        };
+        // The rows `/undo` drops, named by the SAME ranking that decides which
+        // ones are "the tail": everything past the oldest `keep_count` in
+        // reader order.
+        //
+        // Not a threshold id plus `id > threshold`. That spelling asks the
+        // ranking for a boundary and then applies it in a DIFFERENT order —
+        // `id` is insert order — so the two agree only while the column is the
+        // insert clock, which it no longer is (`add_message_full` keeps the
+        // producer's stamp). One out-of-order projection is then enough for the
+        // two to name different sets, and this is an irreversible delete.
+        //
+        // Ordered by `id` — the order the rows were recorded, which is the
+        // transcript's order on both backends (`SessionStore::history_page`).
+        // The file store's `/undo` is `drain(keep_count..)` on the transcript
+        // as it sits on disk; this is the same cut, expressed in SQL.
+        //
+        // `keep_count == 0` needs no special case here — `OFFSET 0` names every
+        // row, which is the "delete all messages, mirroring reset_session"
+        // behaviour it used to be spelled out for. `LIMIT -1` is SQLite's "no
+        // limit"; `OFFSET` requires a `LIMIT` beside it.
+        let doomed = "SELECT id FROM messages WHERE session_key = ?1
+             ORDER BY id ASC LIMIT -1 OFFSET ?2";
+        let keep = keep_count as i64;
 
         // Sum the tokens we are about to drop (best-effort; saturates on err).
-        let tokens_removed: i64 = match threshold_id {
-            Some(threshold) => conn
-                .query_row(
+        let tokens_removed: i64 = conn
+            .query_row(
+                &format!(
                     "SELECT COALESCE(SUM(input_tokens + output_tokens), 0)
-                     FROM messages WHERE session_key = ? AND id > ?",
-                    params![&key_str, threshold],
-                    |row| row.get::<_, i64>(0),
-                )
-                .unwrap_or(0),
-            None => conn
-                .query_row(
-                    "SELECT COALESCE(SUM(input_tokens + output_tokens), 0)
-                     FROM messages WHERE session_key = ?",
-                    params![&key_str],
-                    |row| row.get::<_, i64>(0),
-                )
-                .unwrap_or(0),
-        };
+                     FROM messages WHERE id IN ({doomed})"
+                ),
+                params![&key_str, keep],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0);
 
-        // ONE transaction for the FTS delete, the source delete and the
-        // `message_count` UPDATE — which is what both comments here have always
-        // claimed ("inside the same transaction as the source delete", "wrapped
-        // in a single transaction").
+        // **Audit fix**: FTS delete + source delete + count update are wrapped in
+        // a single transaction so a failure in any step rolls back the others
+        // (see `delete_messages_from_seq` for the full rationale). The FTS index
+        // belongs INSIDE it too — it would otherwise over-count messages the
+        // source delete already removed.
         //
-        // There were two `unchecked_transaction()` calls, and `let tx = ...`
-        // twice is SHADOWING, not replacement: the first transaction is still
-        // alive when the second is opened, so SQLite answered "cannot start a
-        // transaction within a transaction" and this method returned `Err` on
-        // EVERY call. `session.truncate` — the whole of TUI `/undo` and `/retry`
-        // and `aleph session truncate` — has never worked on the SQLite
-        // backend. Nothing caught it because the only tests that reach
-        // `truncate_messages` drive the file backend.
+        // ONE transaction. There were two `unchecked_transaction()` calls here,
+        // the FTS one shadowed rather than committed: a shadowed binding is not
+        // dropped, it lives to the end of the scope, so the second `BEGIN` ran
+        // inside the first and SQLite refused it — `cannot start a transaction
+        // within a transaction`. Every `session.truncate` on this backend
+        // returned that as an INTERNAL_ERROR, so `/undo` had never once
+        // succeeded against SQLite.
         let tx = conn
             .unchecked_transaction()
             .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
-        match threshold_id {
-            Some(threshold) => {
-                tx.execute(
-                    "DELETE FROM messages_fts WHERE rowid IN (
-                        SELECT id FROM messages WHERE session_key = ? AND id > ?
-                    )",
-                    params![&key_str, threshold],
-                )
-                .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
-            }
-            None => {
-                tx.execute(
-                    "DELETE FROM messages_fts WHERE rowid IN (
-                        SELECT id FROM messages WHERE session_key = ?
-                    )",
-                    params![&key_str],
-                )
-                .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
-            }
-        }
 
-        // Same `tx` as above — see its comment for why a second
-        // `unchecked_transaction()` here was not a second transaction but a
-        // hard error on every call.
-        let deleted = match threshold_id {
-            Some(threshold) => tx
-                .execute(
-                    "DELETE FROM messages WHERE session_key = ? AND id > ?",
-                    params![&key_str, threshold],
-                )
-                .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?,
-            None => tx
-                .execute(
-                    "DELETE FROM messages WHERE session_key = ?",
-                    params![&key_str],
-                )
-                .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?,
-        };
+        tx.execute(
+            &format!("DELETE FROM messages_fts WHERE rowid IN ({doomed})"),
+            params![&key_str, keep],
+        )
+        .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
+
+        let deleted = tx
+            .execute(
+                &format!("DELETE FROM messages WHERE session_key = ?1 AND id IN ({doomed})"),
+                params![&key_str, keep],
+            )
+            .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
 
         let new_count: i64 = tx
             .query_row(

@@ -1,6 +1,6 @@
 //! Runtime RPC handlers: list + install + refresh.
 
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AsyncRwLock as RwLock};
 
 use serde::Serialize;
 
@@ -10,7 +10,6 @@ use crate::gateway::event_bus::{
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use crate::runtimes::ledger::{CapabilityLedger, CapabilityStatus};
 use crate::runtimes::{ensure_capability, find_spec, supported_on_current_os, SPECS};
-use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RuntimeInfo {
@@ -243,9 +242,10 @@ mod tests {
         let bus = Arc::new(GatewayEventBus::new());
         let mut rx = bus.subscribe();
 
-        // cargo has `install: &[]` → Unsupported → ensure_capability Err path
-        // (on machines where cargo is already installed, probe succeeds and we
-        // get a "done" event instead — both paths must carry the `stderr` field).
+        // cargo installs via Shell (Unix) / PowerShell (Windows) per
+        // `src/runtimes/specs.rs`. We use it as the test target because it is
+        // almost always already installed (probe → done) — both the success
+        // and failure paths must carry the `stderr` field (null when unused).
         let req = JsonRpcRequest {
             jsonrpc: "2.0".into(),
             method: "runtimes.install".into(),

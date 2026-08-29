@@ -38,6 +38,22 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                               # ⚠️ `crash` reports 4 failures today — a real defect it
                               # found (one terminal frame per retry attempt, last one
                               # zeroed). See the header of its run.sh.
+./qa/session_order/run.sh        # the transcript's order and `session.truncate`, on BOTH
+                                 # backends. Drives one conversation into a file-backed
+                                 # server and a sqlite-backed one (separate scratch
+                                 # ALEPH_HOMEs), stops each, rewrites its stamps
+                                 # DESCENDING — the shape an import or a reconciler
+                                 # produces, and the only shape that tells "recording
+                                 # order" and "stamp order" apart — restarts, and asserts
+                                 # the served order did not move, that `session.truncate`
+                                 # reached the database (it answered INTERNAL_ERROR to
+                                 # every call ever made on sqlite: two transactions, the
+                                 # first shadowed rather than committed), that it kept the
+                                 # HEAD, and that both backends destroyed the same rows.
+                                 # Unit tests build both stores in one process and cannot
+                                 # see the config key that picks one — which is how
+                                 # `default_session_store_backend()` came to return "file"
+                                 # under a doc saying `"sqlite" (default)`.
 
 ./qa/leftovers/run.sh            # converged tool DESCRIPTIONs + relocated-ALEPH_HOME hooks + [agents.defaults] roots
 

@@ -141,4 +141,30 @@ mod tests {
         let readonly = [call("file_read")];
         assert!(v.verify(&ctx(&readonly, true), &token).await.is_continue());
     }
+
+    /// Strict-equality design (`stop_reason == Some(STOP_REASON_END_TURN)`):
+    /// the nudge fires only at a *model-initiated* stop. Forced terminations
+    /// — `max_loops`, `user_stopped`, `rate_limited` — bypass the nudge so a
+    /// system-stopped run does not get a "wrap up" prompt. Locks the design
+    /// against a future refactor that silently loosens it to `.is_some()`
+    /// (matching the other stop-only verifiers). (2026-08-29 audit.)
+    #[tokio::test]
+    async fn stays_silent_when_stop_reason_is_forced_termination() {
+        let v = MutationEvidenceVerifier::default();
+        let calls = [call("file_edit")];
+        let token = CancellationToken::new();
+        let forced_ctx = TurnVerifyContext {
+            iterations: 3,
+            tool_calls_made: calls.len(),
+            final_text: Some("done"),
+            recent_tool_calls: &calls,
+            stop_reason: Some("max_loops"),
+            session_id: Some("s1"),
+            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        };
+        assert!(
+            v.verify(&forced_ctx, &token).await.is_continue(),
+            "forced termination (max_loops) must not nudge — only end_turn does"
+        );
+    }
 }

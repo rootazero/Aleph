@@ -320,11 +320,16 @@ impl OnboardingFlow {
             return Err(WizardSessionError::Cancelled);
         }
 
-        // Note: actual config persistence is owned by the gateway boot path
-        // (`src/bin/aleph-server/commands/start/mod.rs`); the wizard
-        // collects the answers, the caller routes them onto the live
-        // `Config`. The previous `progress()` stub here has been removed
-        // (the trait had no real client-visible progress channel).
+        // KNOWN GAP (deferred): the answers collected into `OnboardingData` are
+        // dropped when `run()` returns. `WizardFlow::run` yields only
+        // `Result<(), _>`, and neither `WizardSession` nor the gateway's
+        // `WizardSessionManager` exposes a channel for a flow's result, so
+        // nothing persists the provider/model/key selections. Closing this needs
+        // a result seam on the flow contract plus wiring in
+        // `src/gateway/handlers/wizard.rs` and the boot path
+        // (`src/bin/aleph-server/commands/start/mod.rs`) — an API change that is
+        // out of scope for an in-module fix. Until then this wizard is a
+        // preview: the outro below promises more than the flow delivers.
 
         prompter
             .outro("Aleph is ready! Run 'aleph chat' to start.")

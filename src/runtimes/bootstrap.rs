@@ -1,7 +1,8 @@
 //! Runtime install dispatcher driven by `super::specs::SPECS`.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+
+use crate::sync_primitives::Mutex;
 
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
@@ -446,7 +447,7 @@ mod tests {
     /// resource's.
     static PATH_ENV: Mutex<()> = Mutex::new(());
 
-    fn lock_path_env() -> std::sync::MutexGuard<'static, ()> {
+    fn lock_path_env() -> MutexGuard<'static, ()> {
         PATH_ENV.lock().unwrap_or_else(|e| e.into_inner())
     }
 

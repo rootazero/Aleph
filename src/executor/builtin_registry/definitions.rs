@@ -2637,17 +2637,53 @@ mod tests {
     /// schema is bound to a tool with a real caller — the registry
     /// schema total is the sum of every tool the daemon advertises to
     /// the LLM, so any active tool is a live consumer.
-    /// 2026-08-28 (measured, raised from 99_700): 99_612 → 100_254 B (+642 B),
-    /// the `element` parameter that `81b0cdc76` ("desktop: element tokens")
-    /// added to both desktop argument structs. Against the three questions:
-    /// (1) runtime facts — the field's doc is the only place the token grammar
-    /// (`"s00000001:3"`, an `ax_snapshot` handle re-resolved against the live
-    /// UI at action time), the conflict set (`pid` / `app` / `window_id` /
-    /// `role` / `element_title` / `x` / `y`), and the list of accepting
-    /// sub-actions are stated; (2) unguessable — a model that does not know
-    /// the token conflicts with coordinates will send both and get a refusal
-    /// it cannot diagnose; (3) live consumer — every desktop mutating action
-    /// resolves it.
+    /// 2026-08-28 (measured, raised from 99_700): 99_612 → 100_254 B (+642 B).
+    /// Both endpoints are real measurements. The ATTRIBUTION that stood here —
+    /// "the `element` parameter that `81b0cdc76` (\"desktop: element tokens\")
+    /// added to both desktop argument structs" — was read off a diff, and it
+    /// was wrong in both directions at once.
+    ///
+    /// 2026-08-29 (corrected, by rebuilding both trees and measuring): three
+    /// points, `81b0cdc76^` (`a1c218e06`) / `81b0cdc76` / HEAD, each a full
+    /// `unconditional_registry_map()` measurement:
+    ///
+    /// | tool | `81b0cdc76^` | `81b0cdc76` | HEAD |
+    /// |---|---|---|---|
+    /// | `desktop`    | 20,404 | 20,275 | 20,275 |
+    /// | `loop_graph` |  7,466 |  7,466 |  8,235 |
+    /// | `bash`       |  2,228 |  2,228 |  2,230 |
+    /// | **total**    | **99,612** | **99,483** | **100,254** |
+    ///
+    /// `81b0cdc76` moved the schema total by **−129 B**: it made the thing it
+    /// was blamed for **smaller**. Its own commit note said so — "the batch
+    /// struct's `pid` doc stopped duplicating `DesktopArgs::pid`'s rail
+    /// paragraph (schema ratchet still fits without a raise)" — and it paid
+    /// for the element-token contract on the DESCRIPTION ceiling instead
+    /// (+244 B, measured, in the same commit). The attribution was written on
+    /// the wrong ratchet six days later, reaching for the most memorable
+    /// recent desktop change.
+    ///
+    /// What the +642 B actually is:
+    ///
+    /// * **`loop_graph` +769 B** — `83273e77b` ("loop_graph: types: shout
+    ///   DOCUMENTATION-ONLY on Arbitrates and Feeds"), a commit whose entire
+    ///   diff is thirteen lines of prose on two `EdgeKind` variants. `EdgeKind`
+    ///   derives `JsonSchema`, so a doc comment on a nested enum variant is
+    ///   rendered into the parameter schema's `description` and shipped to the
+    ///   model on every request. Two paragraphs explaining that these verbs are
+    ///   inert now cost more per request than most tools' entire schema. It is
+    ///   the only commit in the range touching either file that feeds this
+    ///   tool's schema.
+    /// * **`bash` +2 B** — `ce0bf2660`, the only commit in the range touching
+    ///   `bash_exec.rs`.
+    /// * **`desktop` −129 B** — `81b0cdc76`, above.
+    ///
+    /// Two lessons, both already in the criteria list and both re-earned here:
+    /// a doc comment on a `JsonSchema` type is not free, and **a total is not
+    /// an attribution** — this one was exactly right while its roster was
+    /// wrong in three places, two of them in opposite directions.
+    /// [`REGISTRY_SCHEMA_BASELINE`] exists so the next author is handed the
+    /// decomposition instead of rebuilding two worktrees to find that out.
     ///
     /// Set flush against the measurement, not above it. The previous entry
     /// left 88 B of headroom and the entry before that left none; headroom is
@@ -2655,6 +2691,86 @@ mod tests {
     /// spends without an edit here. Zero headroom means the next byte costs a
     /// deliberate paragraph, which is the whole mechanism.
     const REGISTRY_SCHEMA_CEILING_BYTES: usize = 100_254;
+
+    /// That same measurement, decomposed per tool.
+    ///
+    /// A scalar ceiling cannot say WHICH tool grew, so every entry above had
+    /// to attribute its delta by reading a diff. Reading is not measuring, and
+    /// a total is satisfiable by two errors that cancel — so the scalar can be
+    /// exactly right while the roster is wrong in both directions at once.
+    /// That is not hypothetical here; see the 2026-08-29 correction above.
+    ///
+    /// Deliberately NOT asserted entry by entry. The ceiling exists to allow
+    /// drift beneath it, and a guard that demanded an edit for every byte
+    /// would be turned off within a month. Two things are asserted instead:
+    ///
+    /// * the table SUMS to the ceiling — which is the machine-checked form of
+    ///   the "set flush against the measurement, not above it" rule the doc
+    ///   above states in prose, and which fails if either half is refreshed
+    ///   without the other;
+    /// * on a ceiling breach the failure message prints the per-tool delta
+    ///   against this table, plus a paste-ready replacement for it. That is
+    ///   the point: the next author's attribution is a measurement they are
+    ///   handed at the moment they need it, instead of an archaeology dig
+    ///   through two worktree rebuilds — which is what it took to find out
+    ///   that the last one was wrong.
+    ///
+    /// Refresh it in the same edit that raises the ceiling, from the message.
+    /// Do not hand-edit single rows: a row you did not measure is the thing
+    /// this table exists to stop.
+    const REGISTRY_SCHEMA_BASELINE: &[(&str, usize)] = &[
+        ("agent_identity", 978),
+        ("artifact_publish", 841),
+        ("ask_user", 2678),
+        ("automation", 1244),
+        ("bash", 2230),
+        ("channel_directory", 627),
+        ("channel_message", 1538),
+        ("channel_outbox", 1519),
+        ("channel_pairing", 743),
+        ("code_check", 837),
+        ("code_exec", 2128),
+        ("ctx_search", 579),
+        ("desktop", 20275),
+        ("file_edit", 2480),
+        ("file_ops", 2989),
+        ("file_read", 594),
+        ("file_write", 697),
+        ("goal", 4985),
+        ("heartbeat_report", 764),
+        ("hooks_manage", 2219),
+        ("list_models", 597),
+        ("local_voice", 332),
+        ("loop", 2998),
+        ("loop_graph", 8235),
+        ("media", 1045),
+        ("media_send", 946),
+        ("moa", 2871),
+        ("node_file", 896),
+        ("node_invoke", 825),
+        ("node_invoke_many", 960),
+        ("node_list", 410),
+        ("node_manage", 463),
+        ("pdf_generate", 2310),
+        ("permission", 833),
+        ("pim", 2801),
+        ("plugin_manage", 2992),
+        ("read_config_guide", 854),
+        ("recall_events", 553),
+        ("remember", 1907),
+        ("scratchpad", 4014),
+        ("search", 387),
+        ("self_config", 3553),
+        ("self_manage", 328),
+        ("session_list", 931),
+        ("session_send", 827),
+        ("skill_list", 47),
+        ("skill_read", 563),
+        ("strategy", 2322),
+        ("system", 1256),
+        ("voice_mode_set", 717),
+        ("web_fetch", 1536),
+    ];
 
     /// The tool map with nothing wired — the deterministic half of what the
     /// constructor builds.
@@ -2699,15 +2815,78 @@ mod tests {
         sizes.sort_by_key(|(name, len)| (std::cmp::Reverse(*len), *name));
         let largest: Vec<(&str, usize)> = sizes.iter().take(5).copied().collect();
 
-        assert!(
-            total <= REGISTRY_SCHEMA_CEILING_BYTES,
-            "registry tool schemas total {total} B across {} tools, over the ceiling of \
-             {REGISTRY_SCHEMA_CEILING_BYTES} B. Largest: {largest:?}. A `#[schemars(description \
-             = ...)]` on an argument costs exactly what a sentence in the tool's DESCRIPTION \
-             costs, and unlike a description it is easy to add without noticing. Answer the \
-             three questions documented on CATALOG_DESCRIPTION_CEILING_BYTES before raising it.",
-            sizes.len()
+        // The table and the ceiling are two halves of ONE measurement. Refresh
+        // either alone and this fires — which is the whole reason the table can
+        // be trusted as the thing the delta below is computed against.
+        let baseline_total: usize = REGISTRY_SCHEMA_BASELINE.iter().map(|(_, n)| n).sum();
+        assert_eq!(
+            baseline_total, REGISTRY_SCHEMA_CEILING_BYTES,
+            "REGISTRY_SCHEMA_BASELINE sums to {baseline_total} B but the ceiling is \
+             {REGISTRY_SCHEMA_CEILING_BYTES} B. They record the same measurement, so one of \
+             them was edited without the other — and until they agree, the per-tool \
+             attribution this guard prints is against a table nobody measured."
         );
+
+        if total > REGISTRY_SCHEMA_CEILING_BYTES {
+            let base: std::collections::BTreeMap<&str, usize> =
+                REGISTRY_SCHEMA_BASELINE.iter().copied().collect();
+            let now: std::collections::BTreeMap<&str, usize> = sizes.iter().copied().collect();
+
+            // Every tool that moved, biggest absolute move first — including
+            // the ones that moved DOWN. A shrink is exactly what hid the last
+            // wrong attribution: the tool that was blamed is the tool that got
+            // smaller, and only a signed per-tool list shows that.
+            let mut moved: Vec<(&str, i64, i64)> = base
+                .keys()
+                .chain(now.keys())
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .filter_map(|name| {
+                    let (was, is) = (
+                        base.get(name).copied().unwrap_or(0) as i64,
+                        now.get(name).copied().unwrap_or(0) as i64,
+                    );
+                    (was != is).then_some((name, was, is))
+                })
+                .collect();
+            moved.sort_by(|a, b| {
+                let (da, db) = ((a.2 - a.1).abs(), (b.2 - b.1).abs());
+                db.cmp(&da).then_with(|| a.0.cmp(b.0))
+            });
+            let ledger: String = moved
+                .iter()
+                .map(|(name, was, is)| {
+                    format!("\n    {name:<28} {was:>7} -> {is:>7} ({:+})", is - was)
+                })
+                .collect();
+
+            // Paste-ready: the replacement table, so refreshing the baseline is
+            // a copy rather than a second opinion about what was measured.
+            let refreshed: String = {
+                let mut rows: Vec<(&str, usize)> = sizes.clone();
+                rows.sort();
+                rows.iter()
+                    .map(|(name, len)| format!("\n        ({:?}, {len}),", name))
+                    .collect()
+            };
+
+            panic!(
+                "registry tool schemas total {total} B across {} tools, over the ceiling of \
+                 {REGISTRY_SCHEMA_CEILING_BYTES} B. Largest: {largest:?}.\n\
+                 \nA `#[schemars(description = ...)]` on an argument costs exactly what a \
+                 sentence in the tool's DESCRIPTION costs, and unlike a description it is easy \
+                 to add without noticing — a doc comment on a nested enum variant lands in the \
+                 schema too, which is how the last +769 B arrived from a commit whose diff was \
+                 nothing but prose. Answer the three questions documented on \
+                 CATALOG_DESCRIPTION_CEILING_BYTES before raising it, and attribute the delta \
+                 to the tools below rather than to whichever change you remember.\n\
+                 \nMoved since the baseline:{ledger}\n\
+                 \nRefreshed REGISTRY_SCHEMA_BASELINE (paste whole, with the new ceiling \
+                 {total}):{refreshed}",
+                sizes.len()
+            );
+        }
 
         // A ceiling over an empty measurement is not a ceiling — the same
         // non-vacuity every other ratchet in this module asserts. If the two

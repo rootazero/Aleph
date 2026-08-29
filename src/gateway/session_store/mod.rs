@@ -59,7 +59,46 @@ pub trait SessionStore: Send + Sync {
     /// majority of a real install's rows and returned nothing at all for its
     /// largest sessions, which a client can only read as "you have reached the
     /// beginning". A type the caller cannot spell in the wrong unit is the fix;
-    /// the ranking itself goes through [`stamp_millis`].
+    /// the comparison itself goes through [`stamp_millis`].
+    ///
+    /// **The transcript's order is the order its rows were recorded**, on every
+    /// backend: `messages.id` on SQLite (`INTEGER PRIMARY KEY AUTOINCREMENT`),
+    /// file position in `transcript.jsonl`. The stamp is data ABOUT a row, not
+    /// its position; it appears here as a predicate (`before`) and nowhere as a
+    /// rank.
+    ///
+    /// The two were one thing until they were not. SQLite ranked
+    /// `(stamp_millis_sql, id)` while the file store served and deleted by
+    /// position — spellings that agree only while `add_message_full` overwrites
+    /// every producer's stamp with the insert clock. Repairing that fidelity
+    /// bug made the two orders separable, and `/undo` (`truncate_messages`) and
+    /// `compact_session` choose their victims by this order: separable means
+    /// the two backends can destroy different rows of the same conversation,
+    /// each returning success.
+    ///
+    /// Recording order wins, for three reasons in descending weight:
+    ///
+    ///   * It is the only order both stores express NATIVELY and totally.
+    ///     Serving stamp order from the file store means sorting the transcript
+    ///     on every read — which relocates every legacy `timestamp: 0` row to
+    ///     the head of its conversation, and makes what is served differ from
+    ///     the bytes on disk.
+    ///   * It preserves causality. A reply is appended after the message it
+    ///     answers; an event clock can order them the other way (a channel
+    ///     message delayed in transit), and a transcript showing an answer
+    ///     above its question is wrong in a way no reader can repair.
+    ///   * Adopting it costs nothing. `session_projector` — the single append
+    ///     throat — stamps `SessionEventRecord::created_at_ms`, monotonic in
+    ///     `seq`, and `ProjectionReconciler` only fills the tail above
+    ///     `max(seq)`; the other two producers stamp `Utc::now()`. So on real
+    ///     data the two orders already coincide: this settles a rule, it does
+    ///     not repair a live symptom. `messages.source_seq` agrees with `id`
+    ///     wherever it is non-NULL, a third witness to the same order.
+    ///
+    /// Pinned by `no_message_query_orders_by_the_stamp` (source-level, the SQL
+    /// half) and `both_backends_serve_the_transcript_in_recording_order`
+    /// (runtime, both halves — the only check that can see the file store
+    /// start sorting).
     ///
     /// **There is deliberately no separate `history_len`.** There was, and its
     /// only caller fetched the count and the window in two calls against a
@@ -288,6 +327,27 @@ pub trait SessionStore: Send + Sync {
         &self,
         key: &SessionKey,
     ) -> Result<Option<String>, SessionStoreError>;
+    /// Delete `ephemeral` sessions that have been idle longer than
+    /// `session_expiry_secs`. Returns the number removed.
+    ///
+    /// **Both halves of the predicate are load-bearing**: a session is swept
+    /// only when its last activity AND its creation both predate the cutoff.
+    ///
+    /// `last_active_at` follows the MESSAGE, not the insert — it answers "when
+    /// did the newest thing in this conversation happen", which is what the
+    /// list's recency ordering and the client's `updated_at` need. That makes
+    /// it the right clock to measure idleness by and the wrong one to measure
+    /// idleness *from*: a conversation projected later than it happened (an
+    /// import, a backfill, a reconciler replaying an old event) lands with an
+    /// old `last_active_at` and is eligible for deletion the moment it is
+    /// written. A session cannot have been idle for longer than it has
+    /// existed, so `created_at` — which is stamped when the row is created and
+    /// by nothing else — is the floor.
+    ///
+    /// The file backend has compared the message clock since it was written, so
+    /// this hazard is as old as that backend; SQLite joined it when
+    /// `add_message_full` stopped stamping `Utc::now()` over the producer.
+    /// The floor closes it on both, and on `reap_task_sessions` below.
     async fn cleanup_expired(&self) -> Result<usize, SessionStoreError>;
 
     /// Hard-delete `task`-type sessions of the given `task_type` whose last
@@ -1361,18 +1421,23 @@ mod message_stamp_fidelity_tests {
         );
     }
 
-    /// Rows whose producer said nothing still get the insert clock, exactly as
-    /// every row did before. The fix only ever REMOVES rows from that set.
+    /// Rows whose producer said nothing get the insert clock, on BOTH backends,
+    /// exactly as every row already did on SQLite.
     ///
-    /// SQLite only: the file backend serializes whatever it is handed, so a
-    /// zero there stays a zero (1970). That divergence predates this change and
-    /// is untouched by it — no production producer leaves the field unset (all
-    /// four stamp it), and the value appears only in test fixtures.
-    #[tokio::test]
-    async fn sqlite_dates_an_unstamped_row_by_its_insert() {
+    /// The file backend used to serialize the zero verbatim, so the same
+    /// undated record came back as "now" from one store and as 1970 from the
+    /// other — 56 years apart, from one `append_message` call. Saying nothing
+    /// is not saying 1970, and 1970 is not an inert placeholder: it is the head
+    /// of every ranking, so it leads the transcript a reader sees and sits at
+    /// the deleted end of every DELETE that ranks the column.
+    ///
+    /// No production producer leaves the field unset — all four stamp it — so
+    /// this settles a rule rather than a live symptom, and it settles it in one
+    /// place (`producer_instant`) rather than in two backends that had written
+    /// down opposite answers.
+    async fn an_undated_row_gets_the_insert_clock(store: Arc<dyn SessionStore>) {
         let before = chrono::Utc::now().timestamp_millis();
-        let temp = TempDir::new().unwrap();
-        let read = write_then_read(&sqlite_store(&temp), row(0)).await;
+        let read = write_then_read(&store, row(0)).await;
         let at = read
             .instant()
             .expect("a representable stamp")
@@ -1383,6 +1448,105 @@ mod message_stamp_fidelity_tests {
              ({before}) — the zero was stored verbatim and the row now sorts to \
              1970, which is the head of every DELETE-boundary query"
         );
+    }
+
+    #[tokio::test]
+    async fn sqlite_dates_an_unstamped_row_by_its_insert() {
+        let temp = TempDir::new().unwrap();
+        an_undated_row_gets_the_insert_clock(sqlite_store(&temp)).await;
+    }
+
+    #[tokio::test]
+    async fn file_backend_dates_an_unstamped_row_by_its_insert() {
+        let temp = TempDir::new().unwrap();
+        an_undated_row_gets_the_insert_clock(file_store(&temp)).await;
+    }
+
+    /// `sessions.last_active_at` follows the MESSAGE, not the insert — on both
+    /// backends.
+    ///
+    /// The column answers "when did the newest thing in this conversation
+    /// happen": it is what the session list sorts on, what a client renders as
+    /// `updated_at`, and what the two idle sweeps compare against to DELETE.
+    /// The file backend has always taken it from the message; SQLite stamped
+    /// `Utc::now()`, so an imported or backfilled conversation jumped to the
+    /// head of the session list on one backend and stayed in its own past on
+    /// the other — the same divergence as the row stamp itself, one field over.
+    ///
+    /// Asserted as a bound rather than an equality because `get_or_create`
+    /// stamps this field with its own clock at the start of every turn; what
+    /// must not happen is the APPEND re-dating the session to now.
+    async fn the_session_clock_follows_the_message(store: Arc<dyn SessionStore>) {
+        let happened_at = HAPPENED_AT_MS / 1000;
+        store.get_or_create(&key()).await.unwrap();
+        store
+            .append_message(&key(), row(HAPPENED_AT_MS))
+            .await
+            .unwrap();
+        let meta = store.get_metadata(&key()).await.unwrap().expect("session");
+        assert_eq!(
+            meta.last_active_at, happened_at,
+            "the session's activity clock reads {} — it was stamped by the \
+             insert rather than by the message it recorded, so an imported \
+             conversation sorts as if it had just happened",
+            meta.last_active_at
+        );
+    }
+
+    #[tokio::test]
+    async fn file_backend_session_clock_follows_the_message() {
+        let temp = TempDir::new().unwrap();
+        the_session_clock_follows_the_message(file_store(&temp)).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_session_clock_follows_the_message() {
+        let temp = TempDir::new().unwrap();
+        the_session_clock_follows_the_message(sqlite_store(&temp)).await;
+    }
+
+    /// A stamp arriving in SECONDS is persisted in milliseconds, on both
+    /// backends, without moving the instant it names.
+    ///
+    /// Both spellings are already in one transcript — the projector stamps
+    /// `created_at_ms`, `agent_instance` stamps `Utc::now().timestamp()` — and
+    /// the file store used to write each straight through. Normalizing at the
+    /// boundary is what SQLite already did, so from here neither store widens
+    /// the mixture. Existing rows are NOT migrated: `stamp_millis` is permanent
+    /// (see [`MessageRecord::timestamp`]), which is why this asserts about the
+    /// raw field rather than about a reader — every reader normalizes, so no
+    /// reader can tell the two spellings apart, and a test written through one
+    /// would pass on the unnormalized store too.
+    ///
+    /// [`MessageRecord::timestamp`]: crate::gateway::session_store::types::MessageRecord::timestamp
+    async fn a_seconds_stamp_is_persisted_in_milliseconds(store: Arc<dyn SessionStore>) {
+        let in_seconds = HAPPENED_AT_MS / 1000;
+        let read = write_then_read(&store, row(in_seconds)).await;
+
+        assert_eq!(
+            read.instant().map(|d| d.timestamp_millis()),
+            Some(HAPPENED_AT_MS),
+            "normalizing the unit moved the instant the row names"
+        );
+        assert!(
+            read.timestamp.abs() >= crate::gateway::session_store::types::SECONDS_MILLIS_BOUNDARY,
+            "the row was persisted as {} — a seconds stamp written through \
+             verbatim. Both backends normalize on the way in so that neither \
+             keeps adding to a column that already holds two units.",
+            read.timestamp
+        );
+    }
+
+    #[tokio::test]
+    async fn file_backend_persists_a_seconds_stamp_in_milliseconds() {
+        let temp = TempDir::new().unwrap();
+        a_seconds_stamp_is_persisted_in_milliseconds(file_store(&temp)).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_backend_persists_a_seconds_stamp_in_milliseconds() {
+        let temp = TempDir::new().unwrap();
+        a_seconds_stamp_is_persisted_in_milliseconds(sqlite_store(&temp)).await;
     }
 
     /// A stamp no calendar can represent must not reach the column either:
@@ -1399,5 +1563,158 @@ mod message_stamp_fidelity_tests {
             .expect("fell back to a representable stamp")
             .timestamp_millis();
         assert!(at >= before, "stored an unrepresentable stamp: {at}");
+    }
+}
+
+/// The transcript's order, asserted against BOTH backends at once.
+///
+/// The property is not "this store sorts correctly" — either store alone can
+/// satisfy any order it likes and look right. It is that the two AGREE, and
+/// that neither can be edited into a second opinion about the same
+/// conversation. `no_message_query_orders_by_the_stamp` pins the SQL half at
+/// the source; nothing but a runtime test can see the file half start sorting,
+/// because there is no SQL there to scan.
+///
+/// See [`SessionStore::history_page`] for why recording order won.
+#[cfg(test)]
+mod transcript_order_tests {
+    use super::*;
+    use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+    use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+    use crate::sync_primitives::Arc;
+    use tempfile::TempDir;
+
+    /// Real epoch seconds, not 100/200/300: `stamp_millis` classifies by
+    /// magnitude, so toy numbers are a fixture that has never been on the
+    /// interesting side of the boundary this code reads.
+    const T_OLD: i64 = 1_700_000_100;
+    const T_MID: i64 = 1_700_000_200;
+    const T_NEW: i64 = 1_700_000_300;
+
+    /// Recorded `new, old, mid`; stamped so that the stamps claim
+    /// `old, mid, new`. Every position disagrees, which is the only arrangement
+    /// that can tell the two candidate orders apart — and no production
+    /// producer writes one, which is why it has to be built by hand.
+    const RECORDED: [(&str, i64); 3] = [("new", T_NEW), ("old", T_OLD), ("mid", T_MID)];
+
+    fn key() -> SessionKey {
+        SessionKey::main("transcript-order")
+    }
+
+    fn row(content: &str, timestamp: i64) -> MessageRecord {
+        MessageRecord {
+            id: content.into(),
+            role: "user".into(),
+            content: content.into(),
+            timestamp,
+            metadata: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            tool_call_id: None,
+            tool_name: None,
+        }
+    }
+
+    fn file_store(temp: &TempDir) -> Arc<dyn SessionStore> {
+        Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: temp.path().to_path_buf(),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+    }
+
+    fn sqlite_store(temp: &TempDir) -> Arc<dyn SessionStore> {
+        Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: temp.path().join("sessions.db"),
+                // High enough that nothing auto-compacts underneath the test.
+                max_messages: 100,
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+    }
+
+    async fn seeded(store: &Arc<dyn SessionStore>) {
+        store.get_or_create(&key()).await.unwrap();
+        for (content, at) in RECORDED {
+            store
+                .append_message(&key(), row(content, at))
+                .await
+                .unwrap();
+        }
+    }
+
+    async fn contents(store: &Arc<dyn SessionStore>) -> Vec<String> {
+        store
+            .get_history(&key(), None)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.content)
+            .collect()
+    }
+
+    fn recorded_order() -> Vec<String> {
+        RECORDED.iter().map(|(c, _)| (*c).to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn both_backends_serve_the_transcript_in_recording_order() {
+        let ftemp = TempDir::new().unwrap();
+        let stemp = TempDir::new().unwrap();
+        let file = file_store(&ftemp);
+        let sqlite = sqlite_store(&stemp);
+        seeded(&file).await;
+        seeded(&sqlite).await;
+
+        let from_file = contents(&file).await;
+        let from_sqlite = contents(&sqlite).await;
+
+        assert_eq!(
+            from_file, from_sqlite,
+            "the same three appends came back as {from_file:?} from the file \
+             store and {from_sqlite:?} from SQLite — one conversation, two \
+             orders, and the two DELETEs below choose their victims by it"
+        );
+        assert_eq!(
+            from_file,
+            recorded_order(),
+            "served {from_file:?}; the transcript's order is the order its rows \
+             were recorded. `old, mid, new` is a store ranking by the \
+             producers' stamps."
+        );
+    }
+
+    /// `/undo` keeps the head of that order — the file store's
+    /// `drain(keep_count..)` and SQLite's `OFFSET` naming the same rows.
+    #[tokio::test]
+    async fn both_backends_undo_the_same_rows() {
+        let ftemp = TempDir::new().unwrap();
+        let stemp = TempDir::new().unwrap();
+        let file = file_store(&ftemp);
+        let sqlite = sqlite_store(&stemp);
+        seeded(&file).await;
+        seeded(&sqlite).await;
+
+        let from_file = file.truncate_messages(&key(), 2).await.unwrap();
+        let from_sqlite = sqlite.truncate_messages(&key(), 2).await.unwrap();
+
+        assert_eq!(from_file.messages_removed, 1);
+        assert_eq!(from_sqlite.messages_removed, 1);
+
+        let kept_file = contents(&file).await;
+        let kept_sqlite = contents(&sqlite).await;
+        assert_eq!(
+            kept_file, kept_sqlite,
+            "`/undo` kept {kept_file:?} on the file store and {kept_sqlite:?} \
+             on SQLite. This is an irreversible delete: the two backends \
+             destroying different rows of the same conversation, both \
+             reporting success, is the failure this order was settled to \
+             prevent."
+        );
+        assert_eq!(kept_file, vec!["new".to_string(), "old".to_string()]);
     }
 }

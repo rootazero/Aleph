@@ -208,14 +208,18 @@ pub fn parse_skill_file(
     source: SkillSource,
 ) -> Result<SkillManifest, SkillParseError> {
     let path_ref = path.as_ref();
-    if let Ok(meta) = std::fs::metadata(path_ref) {
-        if meta.len() > MAX_SKILL_FILE_BYTES {
-            return Err(SkillParseError::FileTooLarge {
-                size: meta.len(),
-                max: MAX_SKILL_FILE_BYTES,
-                path: path_ref.to_path_buf(),
-            });
-        }
+    // Fail-closed size check: a metadata failure (permission denied, broken
+    // symlink, vanished inode) must NOT silently skip the cap and let a
+    // multi-GB payload reach `read`. If we cannot determine the size, refuse
+    // to load — the same conservative posture the YAML/ReDoS-bounded budget
+    // below takes against unbounded input.
+    let meta = std::fs::metadata(path_ref).map_err(SkillParseError::Io)?;
+    if meta.len() > MAX_SKILL_FILE_BYTES {
+        return Err(SkillParseError::FileTooLarge {
+            size: meta.len(),
+            max: MAX_SKILL_FILE_BYTES,
+            path: path_ref.to_path_buf(),
+        });
     }
     let content_bytes = std::fs::read(path_ref)?;
     // Funnel every load path through the install-time guard: a SKILL.md
@@ -288,8 +292,18 @@ pub fn parse_skill_content(
             "tool" => PromptScope::Tool,
             "standalone" => PromptScope::Standalone,
             "disabled" => PromptScope::Disabled,
-            // Unknown scopes default to Disabled so they never leak into prompts.
-            _ => PromptScope::Disabled,
+            // Unknown scopes default to Disabled so they never leak into
+            // prompts — and warn so a skill author whose frontmatter has a
+            // typo (e.g. `scope: System` capitalised) learns from the log
+            // rather than seeing the skill silently vanish from the index.
+            other => {
+                tracing::warn!(
+                    skill = %raw.name,
+                    scope = %other,
+                    "unknown skill scope; treating as Disabled"
+                );
+                PromptScope::Disabled
+            }
         };
         manifest.set_scope(scope);
     }
@@ -352,7 +366,16 @@ fn parse_install_specs(installs: Vec<RawInstallSpec>) -> Vec<InstallSpec> {
                 "uv" => InstallKind::Uv,
                 "go" => InstallKind::Go,
                 "download" => InstallKind::Download,
-                _ => return None,
+                other => {
+                    // A typo'd kind (`install.kind: brewx`) silently drops the
+                    // spec today; warn so the author can fix the manifest.
+                    tracing::warn!(
+                        install_id = %raw_spec.id,
+                        kind = %other,
+                        "unknown install kind; spec ignored"
+                    );
+                    return None;
+                }
             };
             let os = raw_spec.os.map(|os_list| {
                 os_list
@@ -581,6 +604,28 @@ Docker expert instructions."#;
         assert_eq!(installs[0].package, "docker");
     }
 
+    /// A typo'd `install.kind` (e.g. `brewx`) was silently dropped before the
+    /// warn was added — the skill parsed fine but its install step never
+    /// matched any selector. The fix surfaces a warn AND keeps the
+    /// drop-silently semantics so the rest of the manifest still loads.
+    #[test]
+    fn parse_unknown_install_kind_is_dropped() {
+        let content = r#"---
+name: Typosy Install
+description: install.kind has a typo
+install:
+  - id: broken-typo
+    kind: brewx
+    package: docker
+---
+Content."#;
+        let manifest = parse_skill_content(content, SkillSource::Bundled).unwrap();
+        assert!(
+            manifest.install_specs().is_empty(),
+            "unknown install.kind must be filtered out"
+        );
+    }
+
     #[test]
     fn parse_no_frontmatter() {
         let content = "Just some plain text without frontmatter.";
@@ -622,6 +667,45 @@ Body content from disk."#;
         let manifest = parse_skill_file(&file_path, SkillSource::Workspace).unwrap();
         assert_eq!(manifest.name(), "Disk Test");
         assert_eq!(manifest.content().as_str(), "Body content from disk.");
+    }
+
+    /// Regression: when `std::fs::metadata` fails (e.g. a broken symlink or
+    /// a permission-denied stat), the size cap must NOT be silently skipped.
+    /// Earlier versions of this guard read with `if let Ok(meta) = ...`,
+    /// which let an un-stat-able multi-GB payload reach `read` and OOM the
+    /// parser. The hardened path surfaces the metadata failure as an `Io`
+    /// error, refusing to load a file whose size we cannot bound.
+    #[cfg(unix)]
+    #[test]
+    fn parse_skill_file_rejects_unstatable_file() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::TempDir::new().unwrap();
+        let target = dir.path().join("does-not-exist.md");
+        let link = dir.path().join("dangling-skill.md");
+        symlink(&target, &link).unwrap();
+
+        let err = parse_skill_file(&link, SkillSource::Workspace).unwrap_err();
+        match err {
+            SkillParseError::Io(_) => {} // expected: stat failed
+            other => panic!("expected Io error from broken symlink, got {other:?}"),
+        }
+    }
+
+    /// Frontmatter `scope: something_unknown` must default to `Disabled`
+    /// (so the skill never leaks into the prompt) AND emit a warning so the
+    /// author can spot a typo. Note `scope: System` (capitalised) still
+    /// matches because the parser lowercases before matching; the warn path
+    /// fires only for values outside the enum after lowercasing.
+    #[test]
+    fn parse_unknown_scope_defaults_to_disabled() {
+        let content = r#"---
+name: Typo'd Scope
+description: scope is not in the enum
+scope: something_completely_unknown
+---
+Content."#;
+        let manifest = parse_skill_content(content, SkillSource::Bundled).unwrap();
+        assert_eq!(*manifest.scope(), PromptScope::Disabled);
     }
 
     #[test]

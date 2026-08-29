@@ -9,11 +9,9 @@ use crate::runtimes::ledger::{
     now_secs, CapabilityEntry, CapabilityLedger, CapabilitySource, CapabilityStatus,
 };
 use crate::runtimes::probe;
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AsyncRwLock as RwLock, OnceLock};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::OnceLock;
-use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 /// Process-global per-capability install lock.

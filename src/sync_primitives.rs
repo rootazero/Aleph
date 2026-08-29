@@ -34,4 +34,4 @@ pub use tokio::sync::RwLock as AsyncRwLock;
 
 #[allow(unused_imports)] // AtomicUsize used by test code only
 pub use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-pub use std::sync::{Mutex, MutexGuard, PoisonError, RwLock, RwLockWriteGuard};
+pub use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError, RwLock, RwLockWriteGuard};
