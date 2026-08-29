@@ -45,7 +45,7 @@ pub async fn send(
             .get("run_id")
             .and_then(|v| v.as_str())
             .map(str::to_string);
-        let _ = run_follow::follow_run(
+        let _outcome = run_follow::follow_run(
             &mut events,
             &FollowOptions {
                 json,
@@ -53,7 +53,7 @@ pub async fn send(
                 run_id,
             },
         )
-        .await;
+        .await?;
     } else if json {
         output::print_json(&result);
     } else {

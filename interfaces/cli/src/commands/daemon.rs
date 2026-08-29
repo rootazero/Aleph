@@ -304,16 +304,12 @@ pub fn stop(json: bool) -> CliResult<()> {
 
     #[cfg(not(unix))]
     {
-        if json {
-            output::print_json(&serde_json::json!({
-                "status": "error",
-                "error": "Daemon stop not supported on this platform",
-            }));
-        } else {
-            eprintln!("Daemon stop is only supported on Unix systems");
-        }
+        return Err(CliError::Other(
+            "Daemon stop is only supported on Unix systems".to_string(),
+        ));
     }
 
+    #[cfg(unix)]
     Ok(())
 }
 
