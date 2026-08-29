@@ -3054,42 +3054,127 @@ is already open still open."
 - Modify: `src/tools/scoped/gate_chain.rs`、`src/config/types/policies/exec_tier.rs`（`GATE_DECIDING_CONFIG_PATHS`，Step 3 要改它而这一行原来漏了它）、`src/gateway/pty/manager.rs`、`src/gateway/handlers/pty.rs`、`docs/reference/SECURITY.md`
 
 **Interfaces:**
-- Consumes: `gate_chain::DestructiveArguments`（既有）、`ambient_actor()`（既有）
+- Consumes: `ExecTier::floor_asks_for_arguments` → `ScopedToolService::gate_removal_floor` →
+  `confirmation_rule` 第 2 位 `GateRule::GateRemoval`（既有链，**不是** `DestructiveArguments`——
+  见下方裁定）、`crate::gateway::visibility::ambient_actor()`（既有，`visibility.rs:143`）、
+  Task 12 产出的 `PtyManager::{spawn_with_scrollback, set_scrollback_limit, scrollback_limit_of}`
 - Produces: `SessionInfo` 增 `created_by: Option<String>`
 
 - [ ] **Step 1: 写失败的测试**
 
 Add to `src/tools/scoped/gate_chain.rs` 的 `mod tests`：
 
+⚠️ **这一节原来写的两条测试断言的是 `arguments_are_destructive(..)`——即链上第 3 位
+`DestructiveArguments`，也就是下方裁定整段推翻的那条规则**，而且它们一条都没有把档位设成
+`Full`。换句话说：任务的**要求块**（下面第 1 问）和任务的**测试代码**互相矛盾，而测试代码是
+实施者会照抄的那一半。已按裁定重写，并按 `gate_chain.rs` 现有测试的写法落在
+`confirmation_rule` 上（controller 已核实 `service(..)` / `perms(..)` 两个 helper 的签名与
+`GateRule::id()` 的取值，`gate_chain.rs:506/524/178`）：
+
 ```rust
     /// A gate whose off-switch can be flipped without a card is not a gate:
-    /// two individually legal steps ("write config", "spawn terminal") would
-    /// add up to the thing the gate refuses.
+    /// two individually legal steps ("write the config", "spawn a terminal")
+    /// would add up to the thing the gate refuses.
+    ///
+    /// Asserted at `Full`, and through `confirmation_rule` rather than through
+    /// any single predicate, because `Full` is the whole point: it never asks
+    /// by contract, so a rule that only fires below it buys nothing against the
+    /// operator most likely to flip this switch in one sentence. Rule 2
+    /// (`GateRemoval`) returns before the chain ever reaches `permission_for`
+    /// — that position, not any `is_floor()` verdict, is what makes it
+    /// tier-independent.
     #[test]
-    fn writing_the_terminal_switch_trips_the_destructive_argument_filter() {
-        let args = serde_json::json!({
-            "action": "set",
-            "path": "policies.terminal.enabled",
-            "value": true
-        });
+    fn writing_the_terminal_switch_cards_even_at_full() {
+        let svc = service(
+            vec![Declared { name: "self_config", idempotent: false, confirm: false }],
+            ExecTier::Full,
+            Some(perms(PermissionAction::Allow, &[])),
+        );
+        let rule = svc
+            .confirmation_rule(
+                "self_config",
+                &json!({"action": "set", "path": "policies.terminal.enabled", "value": true}),
+            )
+            .expect("flipping the terminal gate must card at every tier, Full included");
+        // The constant, not the literal: `GateRule::id`'s own doc says a rename
+        // here is a compile error at the decision-set derivation, and a test
+        // spelling it out by hand would quietly opt out of that.
+        assert_eq!(rule.id(), crate::exec::allowed_decisions::GATE_REMOVAL_RULE);
+    }
+
+    /// The narrowness half. A rule that cards every `self_config` write would
+    /// answer this task's question and destroy the tool: the claim is
+    /// "gate-deciding subtrees", not "config writes".
+    #[test]
+    fn an_unrelated_config_write_still_does_not_card_at_full() {
+        let svc = service(
+            vec![Declared { name: "self_config", idempotent: false, confirm: false }],
+            ExecTier::Full,
+            Some(perms(PermissionAction::Allow, &[])),
+        );
         assert!(
-            arguments_are_destructive("self_config", &args),
-            "flipping the terminal gate must raise a card"
+            svc.confirmation_rule(
+                "self_config",
+                &json!({"action": "set", "path": "behavior.greeting", "value": "hi"}),
+            )
+            .is_none(),
+            "only the gate-deciding subtrees card at Full"
         );
     }
 
+    /// `dot_paths_intersect` compares by SEGMENT (`exec_tier.rs:614` — it tests
+    /// `starts_with("{b}.")`, with the dot), so a sibling key that merely shares
+    /// a prefix must not be swept in. Written because "add a prefix" is how this
+    /// change reads, and prefix matching would be the wrong mechanism.
     #[test]
-    fn an_unrelated_config_write_does_not_trip_it() {
-        let args = serde_json::json!({
-            "action": "set",
-            "path": "behavior.greeting",
-            "value": "hi"
-        });
-        assert!(!arguments_are_destructive("self_config", &args));
+    fn a_sibling_key_sharing_the_prefix_is_not_swept_in() {
+        let svc = service(
+            vec![Declared { name: "self_config", idempotent: false, confirm: false }],
+            ExecTier::Full,
+            Some(perms(PermissionAction::Allow, &[])),
+        );
+        assert!(
+            svc.confirmation_rule(
+                "self_config",
+                &json!({"action": "set", "path": "policies.terminal_legacy.x", "value": 1}),
+            )
+            .is_none(),
+            "`policies.terminal_legacy` is a different subtree"
+        );
+    }
+
+    /// Requirement 3, asserted rather than assumed: an exactly-named
+    /// `[policies.tool_permissions]` entry DOES stand this down, because
+    /// `gate_removal_floor` is `!explicitly_named(name) && ..`. That is
+    /// deliberate — the entry is a decision a person wrote, and the write that
+    /// created it carded through this very rule (`policies.tool_permissions` is
+    /// itself on the list). Do not "fix" this.
+    #[test]
+    fn an_exactly_named_entry_stands_the_terminal_floor_down() {
+        let svc = service(
+            vec![Declared { name: "self_config", idempotent: false, confirm: false }],
+            ExecTier::Full,
+            Some(perms(PermissionAction::Allow, &[("self_config", PermissionAction::Allow)])),
+        );
+        assert!(
+            svc.confirmation_rule(
+                "self_config",
+                &json!({"action": "set", "path": "policies.terminal.enabled", "value": true}),
+            )
+            .is_none(),
+            "an exact entry is a person's decision and stands the floor down by design"
+        );
     }
 ```
 
-（函数名 `arguments_are_destructive` 以该文件真实导出的谓词为准 —— 先 `grep -n 'fn tier_asks_for_arguments\|fn arguments_are_destructive\|DestructiveArguments' src/tools/scoped/gate_chain.rs`。）
+⚠️ **RED 阶段要看对地方。** 这四条里只有第一条在实现前会红；后三条（narrowness / sibling /
+exact-entry）在实现前就是绿的——它们钉的是**这次改动不许破坏的东西**，不是这次改动要带来的
+东西。报告里请分开写：哪一条 RED→GREEN，哪三条全程 GREEN 且**为什么它们全程绿也仍然值得写**。
+把「四条都红了」当成 RED 证据，或者反过来因为「三条本来就绿」就删掉它们，两种都是误读。
+
+⚠️ 第 2 问（这张卡提供「始终允许」吗）由 `GateRule::is_floor()` 回答，而 `GateRemoval` 在
+`is_floor()` 里**已经**是 `true`（`gate_chain.rs:217`）——**本任务不改它，也不需要为它写新测试**。
+在报告里指出这一行即可。
 
 ⚠️ **controller 在派单前查实（2026-08-29）：先决定用哪条规则，`DestructiveArguments` 很可能是错的那一条。**
 
@@ -3169,7 +3254,19 @@ Expected: FAIL。
 
 - [ ] **Step 3: 实现**
 
-`gate_chain.rs` 的破坏性参数判据里加 `policies.terminal` 前缀（与既有 `policies.tool_permissions` 那条同处，**照它的写法**，不新造一个平行表）。
+⚠️ **这一行原来写的是「`gate_chain.rs` 的破坏性参数判据里加 `policies.terminal` 前缀」——
+那正是上面整段裁定推翻的那条规则**（`DestructiveArguments` 是链上第 3 位，`full` 档下不响）。
+已按裁定改写：
+
+`src/config/types/policies/exec_tier.rs` 的 `GATE_DECIDING_CONFIG_PATHS`（`exec_tier.rs:567`，
+现有两项）加 `"policies.terminal"`，**并重写它上方的 doc**（`exec_tier.rs:560-566`）。
+`gate_chain.rs` 在本任务里**只加测试，不改判据**。
+
+⚠️ **doc 重写不许再写一个数目。** 它现在的第一句逐字是「The **two** config subtrees that
+decide whether the argument-level cards above are raised at all」——加了第三项之后，那句话
+**两个地方都错了**：数目错了，成员资格规则也错了（`policies.terminal.enabled` 不会让任何一张卡
+不响）。新 doc 写**成员资格规则**，别写成员数——一条注释里写着数目就是一条会腐烂的名单，
+本仓已在这个形状上栽过四次。
 
 `manager.rs`：`SessionInfo` 加 `pub created_by: Option<String>`；`PtySession` 加同名字段；`spawn` 改名为内部 `spawn_as(&self, opts, created_by: Option<String>)`，并保留 `spawn(&self, opts)` 委托给 `spawn_as(opts, None)`（既有测试与调用点不改）。
 
@@ -3200,7 +3297,30 @@ Task 12 里那条 `the_configured_scrollback_reaches_the_session_grid` 测试同
 ```
 （函数路径以 `grep -rn 'pub fn ambient_actor' src/` 为准。）
 并改调 **`spawn_with_scrollback(&opts, terminal.scrollback_lines as usize, actor.clone())`**，
-随后落一条审计记录（用仓库既有的审计入口 —— `grep -rn 'fn record_audit\|audit::' src/gateway/ | head` 确认）。
+⚠️ **这一步原来还要求「随后落一条审计记录」，controller 已在派单前把它撤掉（2026-08-29）。
+不要落审计记录，也不要为它新增 `AuditEventType` 变体。**
+
+撤掉的理由是查出来的，不是省事：本任务给的确认命令
+`grep -rn 'fn record_audit\|audit::' src/gateway/` **零命中**——`src/gateway/` 下根本没有
+审计入口。真正的设施在 `src/security/audit.rs`（`AuditEntry` + `SecurityAuditLog::log` +
+`audit::global()`），而它现有的五个构造器（`scoped_content_read` / `authority_change` /
+`command_policy` / `auth_failure` / `rate_limited`）**没有一个装得下「一个 PTY 被 spawn 了」**。
+换句话说，这一步读起来是一行接线，实际是一次**没有被指定的设计决定**：要么新增一个
+`AuditEventType` 变体，要么把这个含义塞进一个已有的列。
+
+而那个文件自己的 doc 恰恰在禁止后者——`CommandPolicy` 的 doc 逐字写着为什么它不复用
+`ExecBlocked`：「folding a second, unrelated meaning into that column would leave it unable
+to answer either question cleanly」。那张表上每个变体都带着一段多行论证和一个裁定日期；
+把第 N+1 个变体作为**另一个任务的一句顺带**加进去，正是一个列长出第二个含义的标准路径。
+
+**问责这一半本任务已经交付了**：`SessionInfo.created_by` 有一个真实的读者——`pty.list`，
+它是已注册、operator-only 的 RPC 面（判据「一个字段在提交前必须能指出读它的那一行」在这里
+答得出来）。审计行则**零读者**，加它就是 R10 的「零消费者的通道优先 CUT」。
+
+⚠️ **但撤掉不等于这个问题不存在**，所以理由留在这里而不是删干净：PTY 确实开出一条
+命令策略看不见、exec 档位管不着的执行面，那**是**一个可审计事件。它作为一条具名待办留给
+后续轮次——带着「该不该给 `AuditEventType` 加一个变体」这个**问题**，而不是带着一个
+在本任务里顺手做出的答案。报告里请原样重述这一段裁定，别自行恢复这一步。
 
 ⚠️ **不要在这里调 `spawn_as`**，哪怕它读起来更直接。controller 在派单前查实
 （2026-08-29）：本任务原来写的就是 `spawn_as(&opts, actor.clone())`，那会**把 Task 12 刚接上的
@@ -3257,7 +3377,21 @@ actor 那半留给 `a_spawn_records_who_asked_for_it`，并在报告里说明为
 - **同一装机的所有 operator 共享 `["*"]` 作用域**，能互相看见并 attach 彼此的会话。这是单层信任模型的有意结果，不是疏漏。
 ```
 
-同时把这三句的**同义表述**同批加到 `[policies.terminal]` 的 doc comment 与 `self_config` 的 `DESCRIPTION` —— 一句关于什么被闸住的话有三份拷贝，最贵的那份是发给模型的。
+同时把这三句的**同义表述**同批加到 `[policies.terminal]` 的 doc comment 与 `self_config` 的
+`DESCRIPTION` —— 一句关于什么被闸住的话有三份拷贝，最贵的那份是发给模型的。
+
+⚠️ **改 `self_config` 的 `DESCRIPTION` 会动描述字节棘轮，本任务原来对此一个字都没说。**
+controller 已查实（2026-08-29）：`self_config` 的 `DESCRIPTION`
+（`src/builtin_tools/self_config.rs:752`）经 `definitions.rs:263` 进 `BUILTIN_TOOL_DEFINITIONS`，
+而 `catalog_description_bytes_ratchet`（`src/executor/builtin_registry/definitions.rs:2313`）
+把它算进总和，天花板 `CATALOG_DESCRIPTION_CEILING_BYTES = 108_800`。**这些字节每个请求都付。**
+
+所以这一步欠三件事：
+1. 改之前跑一次 `cargo test -p alephcore --lib catalog_description_bytes_ratchet` 记下**实测**总数；
+2. 改之后再跑一次，把**增量**写进报告（不是「还在天花板以下」，是「+N B」）；
+3. ⚠️ **如果破线，停下来上报，不要抬天花板。** 下调不需要答三问，把闸设在实测值之上需要——
+   而抬高一条棘轮的正当理由不可能是「我这个任务需要空间」。真到了那一步，答案更可能是
+   把这句话写短，或者只留在 `[policies.terminal]` 的 doc comment 里（那份不进每个请求）。
 
 - [ ] **Step 4: 跑测试，确认通过**
 
