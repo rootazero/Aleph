@@ -3512,8 +3512,8 @@ impl Theme {
     pub fn resolve_fg(&self, c: PtyColor) -> String {
         match c {
             PtyColor::Default => self.fg.to_string(),
-            PtyColor::Indexed { n } => self.palette[(n as usize) % 16].to_string(),
-            PtyColor::Rgb { r, g, b } => format!("#{r:02x}{g:02x}{b:02x}"),
+            PtyColor::Indexed(n) => self.palette[(n as usize) % 16].to_string(),
+            PtyColor::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
         }
     }
 
