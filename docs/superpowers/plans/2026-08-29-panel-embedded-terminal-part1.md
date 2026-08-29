@@ -3524,6 +3524,7 @@ Expected: FAIL。
 //! under a frame. Run-level `fill_text` (not per-cell) is what keeps it cheap.
 
 use aleph_protocol::pty::{PtyAttrs, PtyColor};
+use unicode_width::UnicodeWidthStr;
 use web_sys::CanvasRenderingContext2d;
 
 use super::session::ClientScreen;
@@ -3602,6 +3603,8 @@ impl Theme {
 #[must_use]
 pub fn measure(ctx: &CanvasRenderingContext2d, font: &str) -> CellMetrics {
     ctx.set_font(font);
+    // ASCII only, and it must stay ASCII: the divisor below is `len()`, a BYTE
+    // count. A non-ASCII sample would silently make every cell too narrow.
     const SAMPLE: &str = "MMMMMMMMMMMMMMMMMMMM";
     let width = ctx
         .measure_text(SAMPLE)
@@ -3631,7 +3634,8 @@ pub fn paint(ctx: &CanvasRenderingContext2d, screen: &ClientScreen, m: CellMetri
         let y = f64::from(row) * m.height;
         let mut x = 0.0_f64;
         for run in screen.row_runs(row) {
-            let run_w = run.text.chars().count() as f64 * m.width;
+            // NOT `chars().count()` — see the note below this code block.
+            let run_w = UnicodeWidthStr::width(run.text.as_str()) as f64 * m.width;
             if let Some(bg) = theme.resolve_bg(run.bg) {
                 ctx.set_fill_style_str(&bg);
                 ctx.fill_rect(x, y, run_w, m.height);
@@ -3645,6 +3649,7 @@ pub fn paint(ctx: &CanvasRenderingContext2d, screen: &ClientScreen, m: CellMetri
         }
     }
 
+
     // Cursor as a block overlay.
     let (cr, cc) = screen.cursor();
     ctx.set_fill_style_str(theme.fg);
@@ -3653,6 +3658,34 @@ pub fn paint(ctx: &CanvasRenderingContext2d, screen: &ClientScreen, m: CellMetri
     ctx.set_global_alpha(1.0);
 }
 ```
+
+⚠️ **controller 在派单前查实（2026-08-29）：上面那个 `run_w` 原本写的是
+`run.text.chars().count()`，那是错的，而且错在这个项目最常见的输入上。**
+
+服务端 `diff.rs::row_runs` 对 spacer 是 `if cell.is_spacer() { continue; }` —— **跳过**。
+而一个宽字形（CJK / emoji）在网格里占**两个单元**：字形本身 + 一个 spacer
+（`grid.rs:168` 用 `UnicodeWidthChar::width(c).unwrap_or(0)` 决定）。
+所以线上的一个 run 里，**一个中文字符 = 一列文本，但 = 两列屏幕**。
+
+按 `chars().count()` 推进的后果：**一行里出现任何中文之后，其后每一个 run 都往左画偏一格，
+且每多一个宽字形就多偏一格**。在一个中文项目里，这意味着**几乎每一行都渲染错位**——
+而它不会报任何错。
+
+这是同一条不变量在本计划里的**第四次**：前三次在服务端（`put` / `clear_range` / `Grid::resize`
+各自漏掉「宽字形占两格」），这一次在客户端，成因是我把同一个错误的心智模型写进了渲染草稿。
+
+**要求**：
+1. `run_w` 与**背景矩形宽度**都用 `unicode_width::UnicodeWidthStr::width(run.text.as_str())`
+   （两者共用 `run_w`，所以改一处即可——但要确认背景块也跟着对）。
+2. `interfaces/webchat/Cargo.toml` 加 `unicode-width = "0.2"`。**这不违反「不引入新第三方依赖」**：
+   该 crate 已在 Cargo.lock 里、同一版本、同一份拷贝（根 `Cargo.toml` 的 `[dependencies]` 已有它，
+   但**不是** `[workspace.dependencies]`，而 panel 的 Cargo.toml 也不用 `workspace = true` 写法，
+   所以这里要直接写版本号）。它是纯查表 crate，wasm32 可用。
+3. 客户端**必须和服务端用同一个 crate 与同一套语义**——`UnicodeWidthStr::width` 逐字符求和
+   `UnicodeWidthChar::width(c).unwrap_or(0)`，与 `grid.rs:168` 逐字对应。自己写一张宽度表
+   就是「同一事实的两份表述」，而这一份的读者是像素。
+4. **测试必须用真实宽字形**：一条含 CJK 的 run，断言其后一个 run 的 x 位置。
+   只用 ASCII 的测试对这一整类**结构性失明**——这正是服务端三次都没被测到的原因。
 
 `mod.rs` 加 `pub mod render;`。
 
