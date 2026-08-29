@@ -2926,6 +2926,36 @@ sketch 里已经有了），而是断言**走 `apply_live_sections` 这条路会
 `handle_spawn` 改成 `handle_spawn(request: JsonRpcRequest, config: Arc<RwLock<Config>>)`，
 读 `config.read().await.policies.terminal`。
 
+⚠️ **拿到句柄之后，把这个函数里那个「第二个配置答案」一并消灭——这是本任务的熵减项，不是可选项。**
+Task 11 在同一个函数里留下了：
+
+```rust
+    let defaults = crate::config::Config::load().unwrap_or_default().agents.defaults;
+```
+
+它每次 spawn **重读一次磁盘**（并顺带安装一次进程级 defaults 槽）。Task 11 那样写是对的——
+当时那个函数手上没有任何句柄。但你把句柄注进来之后，同一个函数里就有了**两个「当前配置是什么」
+的答案，相隔三行**：一个是进程的活配置，一个是磁盘。两者在一次只改内存不落盘的 live patch 之后
+会分歧，而分歧的那一次决定的是**终端被 jail 到哪个目录**。
+
+改成从同一个快照取：
+
+```rust
+    let cfg = config.read().await;
+    if !cfg.policies.terminal.enabled { /* 上面那条拒绝 */ }
+    let roots = pty::workspace_roots(&cfg.agents.defaults);
+    let terminal = cfg.policies.terminal.clone();
+    drop(cfg);            // 别把读锁攥过 spawn
+```
+
+**同批删掉 `use` 里因此变成孤儿的那一项**（若 `Config::load` 是这个文件唯一的用处）。
+
+顺带回答 Task 11 报告里那条：`unwrap_or_default()` 在配置读不出时替换成 `AgentDefaults::default()`，
+于是 jail 指向一个**不是 operator 配置的**目录。它不是洞（fail 到另一个 jail，不是 fail 到无 jail），
+但它正是 `jail.rs` 自己的模块 doc 在论证的那个形状——「一个缺省值如果回答的是另一个问题，
+它就不是缺省值，是谎话」。收敛到注入句柄之后**这一问自动消失**：拿不到 config 的 handler 根本
+不存在，所以没有「读不出配置」这条臂需要编一个答案。
+
 **代价是注册要搬家**：`registry.register` 只接受 `Fn(JsonRpcRequest)`，捕获依赖的那一层是
 `src/bin/aleph-server/commands/start/builder/handlers/` 里的 `register_handler!` 宏
 （它闭包捕获 `Arc` 再调 `$handler(req, ctx1)`，底下仍是同一个 `register`）。所以
