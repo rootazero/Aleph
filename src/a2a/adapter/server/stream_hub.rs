@@ -136,8 +136,34 @@ impl A2AStreamingHandler for StreamHub {
             });
         }
         let sender = self.get_or_create_sender(task_id).await;
-        // Ignore SendError — no subscribers is OK
-        let _ = sender.send(UpdateEvent::StatusUpdate(update));
+        let is_terminal = update.is_final;
+        match sender.send(UpdateEvent::StatusUpdate(update)) {
+            Ok(_n) => {}
+            Err(tokio::sync::broadcast::error::SendError(_event)) => {
+                if is_terminal {
+                    // A terminal event with no subscribers (or all
+                    // subscribers lagged) silently turns `fold_stream`'s
+                    // `success=true` predicate into `success=false` — the
+                    // caller sees a "successful" task marked failed. Log
+                    // loudly so this is at least diagnosable, and return
+                    // Err so the bridge can choose to persist the
+                    // terminal state for late subscribers.
+                    tracing::error!(
+                        task_id = %task_id,
+                        "broadcast_status: terminal event dropped (no subscribers or all lagged); \
+                         downstream SSE consumers will see the task as not-finished"
+                    );
+                    return Err(A2AError::InternalError(format!(
+                        "terminal event for task {task_id} dropped: no live subscribers"
+                    )));
+                } else {
+                    tracing::debug!(
+                        task_id = %task_id,
+                        "broadcast_status: non-terminal event dropped (no subscribers)"
+                    );
+                }
+            }
+        }
         Ok(())
     }
 

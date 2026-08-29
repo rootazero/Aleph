@@ -54,8 +54,19 @@ struct JsonRpcErrorData {
 
 impl A2AClient {
     pub fn new(base_url: impl Into<String>) -> Self {
+        // Disable HTTP redirect following. The `base_url` is operator
+        // config — if it points to an attacker-controlled host, allowing
+        // redirects lets that host pivot into Aleph's private network
+        // (e.g. a 302 to `http://169.254.169.254/...` or an internal
+        // admin endpoint). Rejecting redirects forces every hop through
+        // the higher-level SSRF gate (`security::ssrf::validate_url_async`)
+        // when callers opt into it.
+        let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::limited(0))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
-            http: reqwest::Client::new(),
+            http,
             base_url: base_url.into().trim_end_matches('/').to_string(),
             auth_token: None,
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),

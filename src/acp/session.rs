@@ -160,14 +160,45 @@ impl AcpSession {
         })?;
 
         let stdin = child.stdin.take().ok_or_else(|| {
-            let _ = child.start_kill();
+            // Synchronously signal the child and wait for it to exit
+            // before returning, otherwise the harness process becomes a
+            // zombie until the parent drops the `Child` (which would only
+            // be the next `Drop` of the binding below — if the caller
+            // short-circuits, the zombie sticks around).
+            if let Err(e) = child.start_kill() {
+                tracing::warn!(
+                    harness_id,
+                    error = %e,
+                    "ACP spawn: failed to capture stdin AND failed to kill child; \
+                     zombie risk"
+                );
+            } else if let Err(e) = child.wait().await {
+                tracing::warn!(
+                    harness_id,
+                    error = %e,
+                    "ACP spawn: failed to wait on killed child"
+                );
+            }
             crate::acp::protocol::AcpOperationError::new(
                 crate::acp::protocol::AcpErrorCode::SpawnFailed,
                 format!("ACP harness '{harness_id}': failed to capture stdin"),
             )
         })?;
         let stdout = child.stdout.take().ok_or_else(|| {
-            let _ = child.start_kill();
+            if let Err(e) = child.start_kill() {
+                tracing::warn!(
+                    harness_id,
+                    error = %e,
+                    "ACP spawn: failed to capture stdout AND failed to kill child; \
+                     zombie risk"
+                );
+            } else if let Err(e) = child.wait().await {
+                tracing::warn!(
+                    harness_id,
+                    error = %e,
+                    "ACP spawn: failed to wait on killed child"
+                );
+            }
             crate::acp::protocol::AcpOperationError::new(
                 crate::acp::protocol::AcpErrorCode::SpawnFailed,
                 format!("ACP harness '{harness_id}': failed to capture stdout"),
