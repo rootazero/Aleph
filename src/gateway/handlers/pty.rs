@@ -71,6 +71,11 @@ pub struct CloseParams {
     pub session_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AttachParams {
+    pub session_id: String,
+}
+
 /// `pty.spawn` — open a new terminal session, returning its id.
 pub async fn handle_spawn(request: JsonRpcRequest) -> JsonRpcResponse {
     let id = request.id.clone();
@@ -95,10 +100,51 @@ pub async fn handle_spawn(request: JsonRpcRequest) -> JsonRpcResponse {
     };
 
     match pty::manager().spawn(&opts) {
-        Ok(res) => JsonRpcResponse::success(
-            id,
-            json!({ "session_id": res.session_id, "shell": res.shell }),
-        ),
+        Ok(res) => {
+            // The session is already registered by the time `spawn` returns
+            // (manager.rs inserts under the same lock it builds the result
+            // from), so this snapshot is real, not a guess — but fall back to
+            // the requested dimensions if it somehow can't be found, rather
+            // than failing a spawn that already succeeded.
+            let snapshot = pty::manager()
+                .attach_snapshot(&res.session_id)
+                .unwrap_or_else(|_| aleph_protocol::pty::PtyAttachResponse {
+                    seq: 0,
+                    rows: if params.rows == 0 { 24 } else { params.rows },
+                    cols: if params.cols == 0 { 80 } else { params.cols },
+                    patch: aleph_protocol::pty::PtyScreenPatch::default(),
+                    scrollback_len: 0,
+                });
+            let body = aleph_protocol::pty::PtySpawnResponse {
+                session_id: res.session_id,
+                shell: res.shell,
+                seq: snapshot.seq,
+                rows: snapshot.rows,
+                cols: snapshot.cols,
+            };
+            match serde_json::to_value(&body) {
+                Ok(v) => JsonRpcResponse::success(id, v),
+                Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, format!("encode failed: {e}")),
+            }
+        }
+        Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, e),
+    }
+}
+
+/// `pty.attach` — one snapshot of a session's screen plus the seq it was
+/// taken at. One call, not two: split across two round trips this opens a
+/// window where the client holds a screen and a different cursor.
+pub async fn handle_attach(request: JsonRpcRequest) -> JsonRpcResponse {
+    let id = request.id.clone();
+    let params: AttachParams = match parse(&request) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    match pty::manager().attach_snapshot(&params.session_id) {
+        Ok(snapshot) => match serde_json::to_value(&snapshot) {
+            Ok(v) => JsonRpcResponse::success(id, v),
+            Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, format!("encode failed: {e}")),
+        },
         Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, e),
     }
 }
@@ -217,5 +263,58 @@ mod tests {
         let resp = handle_list(req("pty.list", json!({}))).await;
         let result = resp.result.expect("list always succeeds");
         assert!(result.get("sessions").and_then(|s| s.as_array()).is_some());
+    }
+
+    #[tokio::test]
+    async fn attach_returns_a_snapshot_with_its_seq() {
+        let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 8, "cols": 30 }))).await;
+        let sid = spawn.result.as_ref().expect("spawned")["session_id"]
+            .as_str()
+            .expect("session_id")
+            .to_string();
+
+        let resp = handle_attach(req("pty.attach", json!({ "session_id": sid }))).await;
+        let value = resp.result.expect("attach must succeed");
+        let parsed: aleph_protocol::pty::PtyAttachResponse =
+            serde_json::from_value(value.clone()).expect("attach response must match the contract");
+        assert_eq!(parsed.rows, 8);
+        assert_eq!(parsed.cols, 30);
+        assert_eq!(parsed.patch.rows.len(), 8, "a snapshot carries every row");
+
+        // The contract is the key set, not a subset: a parse-only assertion
+        // is blind to over-sending because serde ignores unknown keys.
+        let keys: std::collections::BTreeSet<&str> =
+            value.as_object().expect("object").keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            ["cols", "patch", "rows", "scrollback_len", "seq"]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+
+        let _ = handle_close(req("pty.close", json!({ "session_id": sid }))).await;
+    }
+
+    #[tokio::test]
+    async fn attach_on_an_unknown_session_is_an_error_not_an_empty_screen() {
+        let resp = handle_attach(req("pty.attach", json!({ "session_id": "ghost" }))).await;
+        assert!(resp.result.is_none(), "an unknown session must not read as a blank screen");
+        assert!(resp.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn spawn_response_matches_the_contract_key_for_key() {
+        let resp = handle_spawn(req("pty.spawn", json!({ "rows": 4, "cols": 12 }))).await;
+        let value = resp.result.expect("spawned");
+        let keys: std::collections::BTreeSet<&str> =
+            value.as_object().expect("object").keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            ["cols", "rows", "seq", "session_id", "shell"]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+        let sid = value["session_id"].as_str().expect("id").to_string();
+        let _ = handle_close(req("pty.close", json!({ "session_id": sid }))).await;
     }
 }

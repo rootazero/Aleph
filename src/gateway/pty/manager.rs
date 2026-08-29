@@ -17,11 +17,16 @@ use std::sync::{LazyLock, Mutex};
 use serde::Serialize;
 
 use super::session::{PtySession, SpawnOptions};
-use crate::gateway::event_bus::GatewayEventBus;
+use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
 use crate::sync_primitives::Arc;
 
 /// Maximum concurrent PTY sessions. Beyond this the oldest is killed FIFO.
 const MAX_SESSIONS: usize = 64;
+
+/// Publish cadence. 16 ms ≈ 60 Hz: fast enough that no human sees the delay,
+/// slow enough that a process writing megabytes per second still costs one
+/// bounded frame per tick. This coalescing *is* the backpressure design.
+const FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
 
 /// Public summary of a session for `pty.list`.
 #[derive(Debug, Clone, Serialize)]
@@ -60,10 +65,12 @@ pub fn manager() -> &'static PtyManager {
     &GLOBAL
 }
 
-/// Attach the gateway event bus so session output is broadcast on `pty.screen`.
-/// Called once from `GatewayServer::build_router`. Idempotent.
+/// Attach the gateway event bus so session output is broadcast on `pty.screen`,
+/// and start the flush loop that publishes it. Called once from
+/// `GatewayServer::build_router`. Idempotent.
 pub fn attach_event_bus(bus: Arc<GatewayEventBus>) {
     manager().attach_event_bus(bus);
+    manager().start_flush_loop();
 }
 
 impl PtyManager {
@@ -121,6 +128,15 @@ impl PtyManager {
         self.with_session(session_id, |s| s.resize(rows, cols))
     }
 
+    /// Snapshot a session's screen. An unknown session is an error, never an
+    /// empty screen — a blank grid would read as "the terminal is idle".
+    pub fn attach_snapshot(
+        &self,
+        session_id: &str,
+    ) -> Result<aleph_protocol::pty::PtyAttachResponse, String> {
+        self.with_session(session_id, |s| Ok(s.attach_snapshot()))
+    }
+
     /// Terminate and remove a session.
     pub fn close(&self, session_id: &str) -> Result<(), String> {
         let session = {
@@ -173,6 +189,39 @@ impl PtyManager {
             Some(s) => f(&s),
             None => Err(format!("no such session: {session_id}")),
         }
+    }
+
+    /// Start the process-global flush loop. Idempotent — safe to call from
+    /// every gateway boot path.
+    pub fn start_flush_loop(&'static self) {
+        static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(FLUSH_INTERVAL);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                let Some(bus) = self.current_bus() else {
+                    continue;
+                };
+                let sessions: Vec<Arc<PtySession>> = {
+                    let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                    inner.sessions.values().cloned().collect()
+                };
+                for session in sessions {
+                    let Some(frame) = session.feed_and_take_frame() else {
+                        continue;
+                    };
+                    let Ok(data) = serde_json::to_value(&frame) else {
+                        continue;
+                    };
+                    let ev = TopicEvent::new(aleph_protocol::pty::PTY_SCREEN_TOPIC, data);
+                    let _ = bus.publish(serde_json::to_string(&ev).unwrap_or_default());
+                }
+            }
+        });
     }
 }
 

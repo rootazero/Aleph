@@ -11,9 +11,11 @@
 //! - [`session`]: a single PTY (`portable-pty` master/child) + reader thread.
 //! - [`manager`]: the process-global bounded session registry + event-bus sink.
 //!
-//! Handlers live in `gateway::handlers::pty` (`pty.spawn/input/resize/close/list`).
-//! Under the LAN-trust model every connection is the implicit owner/operator,
-//! so the PTY surface is open to all connections.
+//! Handlers live in `gateway::handlers::pty` (`pty.spawn/input/resize/close/list/attach`).
+//! Operator-only, on both the RPC and event faces — see the module doc on
+//! `gateway::handlers::pty` for why both faces matter and how the sentence
+//! that used to stand here (claiming the surface was open to all connections)
+//! survived one face going admin-only while the other didn't.
 
 pub mod manager;
 pub mod screen;
