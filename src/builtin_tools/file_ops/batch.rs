@@ -22,10 +22,13 @@ fn unique_dest(dir: &std::path::Path, file_name: &str) -> std::path::PathBuf {
     let p = std::path::Path::new(file_name);
     let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned());
     let ext = p.extension().map(|e| e.to_string_lossy().into_owned());
-    // Bounded loop: filesystems cannot hold usize::MAX same-named files, and a
-    // pathological directory falls back to the original (clobber) only after
-    // exhausting the range — effectively never.
-    for n in 1..usize::MAX {
+    // Bounded loop: 1 MiB attempts is far past what a real filesystem
+    // can hold (~250k files at the smallest sane dirent size) and
+    // ensures the loop terminates even on a pathologically crowded
+    // destination. Above the cap, fall through to the clobber
+    // candidate — the same end state as before, but with a guaranteed
+    // upper bound on the search.
+    for n in 1..1_000_000 {
         let name = match (&stem, &ext) {
             (Some(s), Some(e)) => format!("{s} ({n}).{e}"),
             (Some(s), None) => format!("{s} ({n})"),

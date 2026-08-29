@@ -125,7 +125,7 @@ pub(crate) fn cache_key(url: &str, mode: &ExtractMode) -> CacheKey {
 }
 
 pub(crate) fn cache_lookup(key: &CacheKey) -> Option<WebFetchResult> {
-    let mut guard = URL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = URL_CACHE.lock().unwrap_or_else(|e| { tracing::error!(reason = %e, "web_fetch URL_CACHE poisoned: a previous holder panicked; recovering"); e.into_inner() });
     // `LruCache::get` mutates recency, so we need &mut.
     let entry = guard.get(key)?;
     if entry.inserted_at.elapsed() > CACHE_TTL {
@@ -136,7 +136,7 @@ pub(crate) fn cache_lookup(key: &CacheKey) -> Option<WebFetchResult> {
 }
 
 pub(crate) fn cache_store(key: CacheKey, result: WebFetchResult) {
-    let mut guard = URL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = URL_CACHE.lock().unwrap_or_else(|e| { tracing::error!(reason = %e, "web_fetch URL_CACHE poisoned: a previous holder panicked; recovering"); e.into_inner() });
     guard.put(
         key,
         CacheEntry {
@@ -148,7 +148,7 @@ pub(crate) fn cache_store(key: CacheKey, result: WebFetchResult) {
 
 #[cfg(test)]
 pub(crate) fn cache_clear() {
-    URL_CACHE.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    URL_CACHE.lock().unwrap_or_else(|e| { tracing::error!(reason = %e, "web_fetch URL_CACHE poisoned: a previous holder panicked; recovering"); e.into_inner() }).clear();
 }
 
 #[cfg(test)]
@@ -202,7 +202,7 @@ mod tests {
 
     #[test]
     fn cache_lookup_returns_stored_entry() {
-        let _guard = CACHE_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = CACHE_TEST_GUARD.lock().unwrap_or_else(|e| { tracing::error!(reason = %e, "web_fetch test guard poisoned; recovering"); e.into_inner() });
         cache_clear();
         let key = cache_key("https://cache-test.invalid/a", &ExtractMode::Markdown);
         assert!(cache_lookup(&key).is_none(), "fresh cache should miss");
@@ -217,14 +217,14 @@ mod tests {
 
     #[test]
     fn cache_lookup_returns_none_for_expired_entry() {
-        let _guard = CACHE_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = CACHE_TEST_GUARD.lock().unwrap_or_else(|e| { tracing::error!(reason = %e, "web_fetch test guard poisoned; recovering"); e.into_inner() });
         cache_clear();
         let key = cache_key("https://cache-test.invalid/b", &ExtractMode::Markdown);
         // Direct insert with an `inserted_at` in the past — bypass
         // `cache_store` so the test doesn't have to actually wait 15
         // minutes for the TTL to elapse.
         {
-            let mut guard = URL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+            let mut guard = URL_CACHE.lock().unwrap_or_else(|e| { tracing::error!(reason = %e, "web_fetch URL_CACHE poisoned: a previous holder panicked; recovering"); e.into_inner() });
             guard.put(
                 key.clone(),
                 CacheEntry {
@@ -240,13 +240,13 @@ mod tests {
             "expired entry must be reported as a miss"
         );
         // And evicted.
-        let guard = URL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = URL_CACHE.lock().unwrap_or_else(|e| { tracing::error!(reason = %e, "web_fetch URL_CACHE poisoned: a previous holder panicked; recovering"); e.into_inner() });
         assert!(guard.peek(&key).is_none(), "expired entry must be evicted");
     }
 
     #[test]
     fn cache_key_normalises_url_for_hit() {
-        let _guard = CACHE_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = CACHE_TEST_GUARD.lock().unwrap_or_else(|e| { tracing::error!(reason = %e, "web_fetch test guard poisoned; recovering"); e.into_inner() });
         cache_clear();
         let stored = cache_key("HTTPS://Example.com:443/path", &ExtractMode::Markdown);
         cache_store(stored, dummy_result("https://example.com/path", "ok"));
