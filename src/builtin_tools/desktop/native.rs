@@ -1683,11 +1683,25 @@ impl super::DesktopTool {
                 };
                 // `Duration::from_secs_f64(NaN | Infinity)` panics inside the
                 // limb; refuse non-finite input explicitly instead of letting
-                // it crash the worker.
+                // it crash the worker. The previous shape also accepted a
+                // negative but finite value (e.g. -1.0): `is_finite()` is true
+                // for negatives, and `Duration::from_secs_f64(-1.0)` then
+                // panics with "overflow when converting duration to seconds"
+                // because the inner limb is unsigned. Gate both directions.
                 let duration_secs = match args.duration {
                     Some(v) if !v.is_finite() => {
                         return Ok(Some(invalid_args(
                             "screen_record duration must be a finite number of seconds",
+                        )));
+                    }
+                    Some(v) if v < 0.0 => {
+                        return Ok(Some(invalid_args(
+                            "screen_record duration must be non-negative",
+                        )));
+                    }
+                    Some(v) if v == 0.0 => {
+                        return Ok(Some(invalid_args(
+                            "screen_record duration must be greater than zero",
                         )));
                     }
                     Some(v) => v,

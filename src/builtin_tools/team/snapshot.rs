@@ -182,12 +182,37 @@ impl AlephTool for TeamSnapshotTool {
                     self.snapshot_store.get(snapshot_id).await?.ok_or_else(|| {
                         AlephError::NotFound(format!("snapshot `{snapshot_id}` not found"))
                     })?;
+                // BT-D-R4-23: gate using the snapshot's own team_id — the
+                // caller did not have to supply one, so we look it up.
+                crate::builtin_tools::team::require_team_auth(
+                    &*self.team_store,
+                    &meta.team_id,
+                    &self.actor(),
+                )
+                .await?;
                 TeamSnapshotOutput::Get { meta, payload }
             }
             SnapshotAction::Restore => {
                 let snapshot_id = args.snapshot_id.as_deref().ok_or_else(|| {
                     AlephError::other("team_snapshot(restore): snapshot_id is required")
                 })?;
+                // BT-D-R4-23: gate using the snapshot's own team_id BEFORE
+                // any restore mutation. Fetch just the meta first to learn
+                // the team_id, then check auth, then run the restore.
+                let meta = self
+                    .snapshot_store
+                    .get(snapshot_id)
+                    .await?
+                    .ok_or_else(|| {
+                        AlephError::NotFound(format!("snapshot `{snapshot_id}` not found"))
+                    })?
+                    .0;
+                crate::builtin_tools::team::require_team_auth(
+                    &*self.team_store,
+                    &meta.team_id,
+                    &self.actor(),
+                )
+                .await?;
                 let diff = restore_snapshot(
                     self.snapshot_store.as_ref(),
                     self.team_store.as_ref(),
