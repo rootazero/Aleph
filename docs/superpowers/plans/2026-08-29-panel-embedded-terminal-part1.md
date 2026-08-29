@@ -4277,7 +4277,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::context::DashboardState;
-use session::{ApplyOutcome, ClientScreen};
+use session::{ApplyOutcome, AttachOutcome, ClientScreen};
 
 #[component]
 pub fn TerminalView() -> impl IntoView {
@@ -4308,12 +4308,34 @@ pub fn TerminalView() -> impl IntoView {
             {
                 Ok(v) => match serde_json::from_value::<PtyAttachResponse>(v) {
                     Ok(resp) => {
-                        screen.update_value(|s| {
-                            if let Some(s) = s {
-                                s.finish_attach(resp);
-                            }
+                        // `finish_attach` reports whether the replay of
+                        // frames buffered during this RPC hit a hole. It
+                        // stops AT the hole rather than skipping it, so the
+                        // screen never claims to be more current than it is.
+                        let outcome = screen.try_update_value(|s| {
+                            s.as_mut().map(|s| s.finish_attach(resp))
                         });
                         repaint_tick.update(|n| *n = n.wrapping_add(1));
+                        // Deliberately NOT a re-attach from here. `resync` is
+                        // a closure and cannot call itself, and an immediate
+                        // retry is the shape that loops when the bus is
+                        // dropping faster than we attach. `finish_attach`
+                        // leaves `seq` at the last frame it actually applied,
+                        // so the next live frame gaps on its own and the frame
+                        // handler's existing `Gap` arm re-attaches -- one path,
+                        // already tested.
+                        //
+                        // The honest cost: on a terminal that goes quiet right
+                        // after the hole, no live frame arrives, so the rows
+                        // the missing frame would have touched stay wrong until
+                        // it speaks again. Worth knowing, not worth a retry
+                        // loop; if it ever matters the fix is a one-shot
+                        // re-attach guarded by a flag, not recursion.
+                        if let Some(Some(AttachOutcome::Gap { expected, got })) = outcome {
+                            leptos::logging::log!(
+                                "pty attach replay hit a hole: expected {expected}, got {got}"
+                            );
+                        }
                     }
                     Err(e) => error.set(Some(format!("attach decode failed: {e}"))),
                 },
