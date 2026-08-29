@@ -265,16 +265,55 @@ impl BusyInputMode {
     /// - **Unknown author reads as "not the same person".** An unstamped
     ///   incoming turn against a stamped running one queues, rather than
     ///   assuming they match.
+    ///
+    /// # Why "in a room" is two questions ORed, not one
+    ///
+    /// The stamp in `incoming` is what some PRODUCER wrote. For a channel turn
+    /// it is `personal:<speaker>` — the room correction is applied later, by
+    /// `run_loop::request_scope`, and this runs on the ADMISSION path, before
+    /// any run exists. So in a channel conversation bound to a room — the thing
+    /// `projects.channel.bind` creates, which did not exist before this round —
+    /// the stamped half is false and this guard early-returned: a room-mate's
+    /// message folded straight into your running turn, in the one place the
+    /// comment above says it must not. Panel-opened rooms were never affected,
+    /// because `handlers::agent::resolve_attribution` stamps the room before
+    /// the gate; that asymmetry is what made the gap dormant until now.
+    ///
+    /// `ProjectStore::room_claiming` is the gateway's own declaration — the
+    /// same single source `request_scope` consults — and answers for BOTH
+    /// doors. It is ORed rather than substituted: a project-scoped session that
+    /// no room has claimed keeps the protection it has today, so this can only
+    /// add cases, never remove one. Cheap where it sits, because `gate.rs`
+    /// calls this only when a sibling run is already in flight, not per message.
+    ///
+    /// # Why the roster gate does NOT come with it
+    ///
+    /// `request_scope`'s arm-2 gate refuses to *upgrade an off-roster speaker's
+    /// data scope*, which is a different question from this one. Here an
+    /// off-roster speaker steering a member's turn is WORSE, not better, so the
+    /// predicate is "is this session claimed by a room", full stop. Sharing
+    /// `room_claiming` and not the gate is deliberate: this is not a second
+    /// answer to `request_scope`'s question, it is a first answer to another.
+    ///
+    /// A catalogue failure reads as "not a room" and therefore does not queue.
+    /// That ruling is not remade here — `room_claiming` owns it for both
+    /// callers precisely so the two cannot drift, and a degraded SQLite must
+    /// not start reordering healthy conversations.
     #[must_use]
     pub fn for_shared_room(
         self,
+        session_key: &crate::routing::session_key::SessionKey,
         incoming: &HashMap<String, String>,
         running: &HashMap<String, String>,
     ) -> Self {
-        let in_a_room = incoming
+        let stamped_room = incoming
             .get(crate::scope::SCOPE_META_KEY)
             .and_then(|s| crate::scope::ScopeId::parse(s))
             .is_some_and(|s| matches!(s, crate::scope::ScopeId::Project(_)));
+        let in_a_room = stamped_room
+            || crate::projects::ProjectStore::shared()
+                .room_claiming(session_key)
+                .is_some();
         if !in_a_room {
             return self;
         }
@@ -545,6 +584,20 @@ mod shared_room_lane_tests {
         m
     }
 
+    /// A conversation-shaped key, the shape the channel inbound router mints.
+    /// Unless a test binds this peer to a room, `room_claiming` answers `None`
+    /// for it and only the stamped half of the predicate is live — which is
+    /// what keeps the four pre-existing cases below measuring what they always
+    /// measured.
+    fn key(peer: &str) -> crate::routing::session_key::SessionKey {
+        crate::routing::session_key::SessionKey::group(
+            "main",
+            "telegram",
+            crate::routing::session_key::PeerKind::Group,
+            peer,
+        )
+    }
+
     /// The rule itself: another member's run is not yours to steer or kill.
     #[test]
     fn a_room_mates_run_forces_queue_whatever_the_knob_says() {
@@ -552,7 +605,7 @@ mod shared_room_lane_tests {
         let running = turn(Some("project:p-1"), Some("u-alice"));
         for knob in [BusyInputMode::Steer, BusyInputMode::Interrupt] {
             assert_eq!(
-                knob.for_shared_room(&incoming, &running),
+                knob.for_shared_room(&key("unclaimed-1"), &incoming, &running),
                 BusyInputMode::Queue,
                 "{knob:?} must not reach across authors"
             );
@@ -568,13 +621,68 @@ mod shared_room_lane_tests {
     fn the_same_person_speaking_twice_in_a_room_still_steers() {
         let alice = turn(Some("project:p-1"), Some("u-alice"));
         assert_eq!(
-            BusyInputMode::Steer.for_shared_room(&alice, &alice),
+            BusyInputMode::Steer.for_shared_room(&key("unclaimed-2"), &alice, &alice),
             BusyInputMode::Steer
         );
         assert_eq!(
-            BusyInputMode::Interrupt.for_shared_room(&alice, &alice),
+            BusyInputMode::Interrupt.for_shared_room(&key("unclaimed-2"), &alice, &alice),
             BusyInputMode::Interrupt
         );
+    }
+
+    /// The door the stamped half cannot see: a channel conversation BOUND to a
+    /// room. The producer stamps `personal:<speaker>` — the room correction
+    /// happens later, in `run_loop::request_scope`, and this runs on the
+    /// admission path — so before the claim was consulted this guard
+    /// early-returned and a room-mate's message folded into the running turn.
+    ///
+    /// Bob is deliberately NOT added to the roster. `request_scope`'s arm-2
+    /// gate refuses to give an off-roster speaker the room's DATA scope; this
+    /// is a different question, and an off-roster speaker steering a member's
+    /// turn is worse rather than better. If someone later reuses that gate
+    /// here, this test is what goes red.
+    #[test]
+    fn a_room_mate_in_a_bound_channel_conversation_still_cannot_steer() {
+        let _guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = crate::projects::ProjectStore::shared();
+        let room = store
+            .create("busy-lane-bound-room", Some("u-alice"), None)
+            .unwrap();
+        store
+            .bind_conversation(
+                &room.id,
+                "telegram",
+                aleph_protocol::projects::BindingPeerKind::Group,
+                "C-busy-lane",
+                Some("u-alice"),
+                None,
+            )
+            .unwrap();
+
+        // Exactly what the channel inbound router stamps: the SPEAKER.
+        let incoming = turn(Some("personal:u-bob"), Some("u-bob"));
+        let running = turn(Some("personal:u-alice"), Some("u-alice"));
+
+        assert_eq!(
+            BusyInputMode::Steer.for_shared_room(&key("C-unbound"), &incoming, &running),
+            BusyInputMode::Steer,
+            "premise: on the stamped half alone this pair is invisible — both \
+             turns read `personal:`. If this ever queues, the assertions below \
+             stop proving that the room CLAIM is what saw through it."
+        );
+
+        let bound = key("C-busy-lane");
+        for knob in [BusyInputMode::Steer, BusyInputMode::Interrupt] {
+            assert_eq!(
+                knob.for_shared_room(&bound, &incoming, &running),
+                BusyInputMode::Queue,
+                "{knob:?} must not reach across authors in a room reached through \
+                 a bound channel conversation either — the binding is what makes \
+                 two humans share one transcript there"
+            );
+        }
     }
 
     /// A personal session has one human by construction, so the rule may never
@@ -584,13 +692,13 @@ mod shared_room_lane_tests {
         let incoming = turn(Some("personal:u-alice"), Some("u-bob"));
         let running = turn(Some("personal:u-alice"), Some("u-alice"));
         assert_eq!(
-            BusyInputMode::Steer.for_shared_room(&incoming, &running),
+            BusyInputMode::Steer.for_shared_room(&key("unclaimed-3"), &incoming, &running),
             BusyInputMode::Steer
         );
         // An unstamped (pre-P1) pair likewise.
         let bare = turn(None, None);
         assert_eq!(
-            BusyInputMode::Interrupt.for_shared_room(&bare, &bare),
+            BusyInputMode::Interrupt.for_shared_room(&key("unclaimed-4"), &bare, &bare),
             BusyInputMode::Interrupt
         );
     }
@@ -601,11 +709,11 @@ mod shared_room_lane_tests {
         let anonymous = turn(Some("project:p-1"), None);
         let alice = turn(Some("project:p-1"), Some("u-alice"));
         assert_eq!(
-            BusyInputMode::Steer.for_shared_room(&anonymous, &alice),
+            BusyInputMode::Steer.for_shared_room(&key("unclaimed-5"), &anonymous, &alice),
             BusyInputMode::Queue
         );
         assert_eq!(
-            BusyInputMode::Steer.for_shared_room(&alice, &anonymous),
+            BusyInputMode::Steer.for_shared_room(&key("unclaimed-5"), &alice, &anonymous),
             BusyInputMode::Queue
         );
     }
