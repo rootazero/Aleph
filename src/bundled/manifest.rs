@@ -196,11 +196,23 @@ impl InstallRegistry {
             .collect();
         let skipped = skip_count.get();
         if skipped > 0 {
+            // Fail-closed: skip BOTH the "add missing" and the "retain"
+            // passes. The previous shape logged a warning but still ran
+            // `self.skills.retain(...)`, which silently reaped the
+            // affected entries' manifest rows on the next save — a quiet
+            // loss of provenance on a transient read error.
             tracing::warn!(
                 skipped = skipped,
                 dir = %skills_dir.display(),
-                "reconcile: skipped entries due to errors; their manifest entries will be reaped"
+                "reconcile: skipping provenance update to preserve entries that could not be read"
             );
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                format!(
+                    "reconcile: {skipped} entries in {} could not be read; \
+                     not updating manifest to preserve provenance"
+                ),
+            ));
         }
 
         // Add missing directories as Local

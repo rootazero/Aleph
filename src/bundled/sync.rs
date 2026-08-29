@@ -4,8 +4,20 @@
 //! blocking — call from `spawn_blocking`. Never panics; returns `Err` so the
 //! caller can fall back to the embedded snapshot.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use tracing::info;
+
+/// In-process single-flight table keyed by `checkout_dir`. Two concurrent
+/// `clone_or_update_at` calls for the same checkout would otherwise both
+/// observe `existed = false` and both call `Repository::clone`, racing
+/// the second into libgit2 errors that surface as a confusing "lock
+/// held by another process" message. Holding the per-dir mutex across
+/// the open-or-clone decision is cheap (no IO on the hot path) and
+/// closes the TOCTOU. The `static` is a single global; a `HashMap`
+/// inside lets us keep many distinct checkouts unblocked.
+static CHECKOUT_LOCKS: OnceLock<Mutex<std::collections::HashMap<PathBuf, Mutex<()>>>> =
+    OnceLock::new();
 
 /// Clone `repo_url` (branch `main`) into `checkout_dir` if absent; otherwise
 /// fetch and hard-reset the working tree to `origin/main`. The checkout dir is
@@ -27,6 +39,20 @@ pub(crate) fn clone_or_update_at(
     checkout_dir: &Path,
     git_ref: Option<&str>,
 ) -> Result<(), String> {
+    // Per-checkout_dir single-flight. Acquires the global table lock
+    // briefly to look up (or insert) the per-dir mutex, then drops the
+    // table lock and holds only the per-dir one across the open-or-clone
+    // decision so distinct checkouts stay unblocked.
+    let table = CHECKOUT_LOCKS
+        .get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let per_dir_mutex = {
+        let mut guard = table.lock().unwrap_or_else(|e| e.into_inner());
+        guard
+            .entry(checkout_dir.to_path_buf())
+            .or_insert_with(|| Mutex::new(()))
+            .clone()
+    };
+    let _flight = per_dir_mutex.lock().unwrap_or_else(|e| e.into_inner());
     let existed = checkout_dir.join(".git").exists();
     let repo = if existed {
         git2::Repository::open(checkout_dir)
