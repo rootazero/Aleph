@@ -2344,7 +2344,7 @@ otherwise a crashed tab pins everyone else to its size."
 - Modify: `src/gateway/pty/mod.rs`, `src/gateway/handlers/pty.rs`
 
 **Interfaces:**
-- Consumes: `AgentEnvStore`（既有），`sandbox::config::SandboxConfig::workspace_root`
+- Consumes: `alephcore::workspace_root_for(&AgentDefaults)`（`src/config/agent_resolver/mod.rs:487`——**读配置的那一个**，不是 `default_workspace_root()`）。⚠️ 原本写的 `AgentEnvStore` 已查实给不出路径（`AgentEnv` 没有目录字段），`SandboxConfig::workspace_root` 是未配置时的回落、不是真源
 - Produces:
   - `pub fn resolve_spawn_cwd(requested: Option<&str>, roots: &[PathBuf]) -> Result<PathBuf, String>`
 
@@ -2500,28 +2500,44 @@ pub fn resolve_spawn_cwd(requested: Option<&str>, roots: &[PathBuf]) -> Result<P
 ```
 并把 `cwd: params.cwd` 换成 `cwd: Some(cwd.to_string_lossy().into_owned())`。
 
-`src/gateway/pty/mod.rs` 加 roots 取值函数 —— **这一步要先读 `AgentEnvStore` 的真实 API**：
+`src/gateway/pty/mod.rs` 加 roots 取值函数。
 
-```bash
-grep -rn 'pub fn list\|pub struct AgentEnv\b\|pub trait AgentEnvStore' --include='*.rs' src/ | head
-```
+**controller 已在派单前查实（2026-08-29），原本写在这里的 `todo!` 与它的前提都已作废**：
 
-按查到的签名实现：
+1. **`AgentEnvStore` 给不出路径**。`AgentEnv` 的字段是 `id` / `profile` / `created_at` /
+   `last_active_at` / `cache_state` / `description` / `name` / `icon` / `is_archived` /
+   `decay_rate` / `permanent_fact_types` —— **没有任何一个是目录**。workspace 路径是**推导**出来的
+   （root + agent id），不是存出来的。所以本 Task 的 `Consumes: AgentEnvStore` 是错的，删掉它。
+
+2. **不要用 `SandboxConfig::default().workspace_root`**，也不要用 `default_workspace_root()`。
+   那两个答的是「**没有配置时**住哪」。真源是 `alephcore::workspace_root_for(&AgentDefaults)`
+   （`src/config/agent_resolver/mod.rs:487`），它读 `[agents.defaults] workspace_root`、支持 `~`
+   展开，并在未配置时才回落到 `default_workspace_root()`。
+   **分辨的问法是「这个函数吃不吃配置」——无参 vs 有参，签名本身就在说它们答的不是同一问。**
+   那个函数自己的 doc 逐字写着：它存在是因为这条规则曾在同一个文件里有三份表述，而
+   **「一个复述它的 provisioning 站点必定漏掉配置的那一半」**；并且「任何创建或归档 agent 目录
+   的东西都必须与它一致，因为它才是重启后重建每个 agent 的那个函数」。
+   照 `SandboxConfig::default()` 写，等于在**每一台配过 `[agents.defaults] workspace_root` 的机器上**
+   让 jail 的允许根**不包含操作者真正的工作区** —— 那台机器上每一次 spawn 都被拒，而干净装机上一切正常。
+
+按此实现（`config` 从 handler 已有的取值路径拿，别新造一条）：
 
 ```rust
-/// The operator-registered workspace roots, plus the sandbox workspace root
-/// as a floor. Read fresh on every spawn — a boot-time snapshot would let a
-/// workspace registered after start-up stay unusable until restart.
+/// The workspace roots a PTY may be spawned under, read fresh on every spawn —
+/// a boot-time snapshot would let a workspace registered after start-up stay
+/// unusable until restart.
+///
+/// The root is `workspace_root_for(&defaults)`, NOT `default_workspace_root()`:
+/// the latter answers "where does this live when nothing is configured", which
+/// is a different question and is wrong on every install that sets
+/// `[agents.defaults] workspace_root`.
 #[must_use]
-pub fn workspace_roots() -> Vec<std::path::PathBuf> {
-    // Fill in from the AgentEnvStore signature found above; include
-    // `crate::sandbox::config::SandboxConfig::default().workspace_root` as the
-    // last entry so a fresh install is not dead on arrival.
-    todo!("replace with the AgentEnvStore call confirmed in this step")
+pub fn workspace_roots(defaults: &crate::config::types::AgentDefaults) -> Vec<std::path::PathBuf> {
+    vec![crate::workspace_root_for(defaults)]
 }
 ```
 
-**这个 `todo!` 不得留到提交** —— Step 3 结束前必须用真实调用替换。之所以在计划里写成这个形状，是因为 `AgentEnvStore` 的取值路径需要在有代码在手时确认，而计划不允许我编造一个签名。
+**如果实现时发现 `AgentDefaults` 的导入路径或 handler 侧的 config 取值路径与上面不符，以代码为准并在报告里说明** —— 上面这两点是查实的，导入路径没有逐字核过。
 
 - [ ] **Step 4: 跑测试，确认通过**
 
