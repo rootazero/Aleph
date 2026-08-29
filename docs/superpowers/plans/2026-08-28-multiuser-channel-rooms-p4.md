@@ -1656,6 +1656,23 @@ Claude-Session: https://claude.ai/code/session_01UwdBJyZsoECuz1PR8Ctdfr"
 - Produces: `ChannelBindingRow { project_id, channel_id, peer_kind, peer_id, bound_by, bound_at, label }`
 - Produces: `ChannelBindResult { binding, rescoped_session }` · `ChannelUnbindResult { unbound }` · `ChannelListResult { bindings }`
 
+> ⚠️ **SUPERSEDED by Ruling AG (2026-08-29) — `rescoped_session` is three-valued.**
+> `bool` became `RescopeOutcome { Moved, NothingToMove, Unknown }`. A store error
+> must not fold into `Ok(false)`: `NothingToMove` is rendered to a human as a
+> factual claim about a conversation, and making it also mean "the store failed"
+> is the client asserting an answer the server never gave.
+>
+> The authority is `shared/protocol/src/projects.rs` as shipped in `716396475`.
+> **Every code snippet below this line in Tasks 9 / 10 / 11 predates that ruling**
+> — the `bool` spellings at the old `:1721`, `:1724`, `:1941`, `:1965`, `:1976`,
+> `:2320`, `:2323` are the argument as it stood, not instructions. Task 10 and
+> Task 11 briefs carry the current three-arm copy.
+>
+> Also superseded: the receipt wording. "nobody has spoken in that conversation
+> yet" is an **inference**; what the call knows is "no session row was found".
+> The wording must describe what the function knows, not what it infers — that
+> inference is exactly how a silent no-op reads as a fact.
+
 **背景**：本仓在跨 crate wire 契约上复发过三次（`aleph workspace create`、TUI `agent.run`、`providers list/get/add`），每次成因相同：客户端手写字面量，没有对手可以分歧。形状必须住在两边都依赖的 crate 里，客户端**构造**、服务端**解析**。
 
 - [ ] **Step 1: 写契约 + 自对账测试**
