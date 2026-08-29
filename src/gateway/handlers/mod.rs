@@ -359,7 +359,15 @@ impl HandlerRegistry {
         // faces matter). Stateless: they reach the process-global
         // `pty::manager()` accessor; the event bus is attached once in
         // `GatewayServer::build_router`, so no boot-time wiring is required here.
-        registry.register("pty.spawn", pty::handle_spawn);
+        //
+        // `pty.spawn` is NOT registered here — it needs the live
+        // `Arc<RwLock<Config>>` to read `[policies.terminal]` (the session
+        // gate, and the scrollback/session-cap values), which this
+        // stateless registry has no handle to. It is registered instead by
+        // `register_pty_handlers` in
+        // `src/bin/aleph-server/commands/start/builder/handlers/system.rs`,
+        // via `register_handler!`, alongside the rest of the server's
+        // config-carrying handlers.
         registry.register("pty.input", pty::handle_input);
         registry.register("pty.resize", pty::handle_resize);
         registry.register("pty.close", pty::handle_close);

@@ -18,10 +18,16 @@ use serde::Serialize;
 
 use super::session::{PtySession, SpawnOptions};
 use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AtomicUsize, Ordering};
 
-/// Maximum concurrent PTY sessions. Beyond this the oldest is killed FIFO.
-const MAX_SESSIONS: usize = 64;
+/// Concurrent PTY session ceiling before any `[policies.terminal]
+/// max_sessions` config has been read. Not a hard cap — deliberately not a
+/// `const` used directly by `spawn`: `handle_spawn` reads the live config
+/// fresh on every `pty.spawn` and stores the configured ceiling via
+/// `PtyManager::set_max_sessions`, so a patched value takes effect on the
+/// very next spawn instead of needing a restart. This is only the value a
+/// freshly constructed `PtyManager` starts with.
+const DEFAULT_MAX_SESSIONS: usize = 64;
 
 /// Publish cadence. 16 ms ≈ 60 Hz: fast enough that no human sees the delay,
 /// slow enough that a process writing megabytes per second still costs one
@@ -65,6 +71,9 @@ struct Inner {
 pub struct PtyManager {
     inner: Mutex<Inner>,
     bus: Mutex<Option<Arc<GatewayEventBus>>>,
+    /// The current concurrent session ceiling — see [`DEFAULT_MAX_SESSIONS`]
+    /// and [`Self::set_max_sessions`].
+    max_sessions: AtomicUsize,
 }
 
 static GLOBAL: LazyLock<PtyManager> = LazyLock::new(PtyManager::new);
@@ -88,7 +97,19 @@ impl PtyManager {
         Self {
             inner: Mutex::new(Inner::default()),
             bus: Mutex::new(None),
+            max_sessions: AtomicUsize::new(DEFAULT_MAX_SESSIONS),
         }
+    }
+
+    /// Set the concurrent session ceiling. Called by `handle_spawn` on every
+    /// `pty.spawn` with `[policies.terminal] max_sessions` read fresh from
+    /// the live config — deliberately not cached at boot, so a live patch
+    /// takes effect on the very next spawn rather than needing a restart.
+    /// Clamped to at least 1: a ceiling of 0 would make every spawn evict
+    /// the session it just inserted.
+    pub fn set_max_sessions(&self, max_sessions: usize) {
+        self.max_sessions
+            .store(max_sessions.max(1), Ordering::SeqCst);
     }
 
     fn attach_event_bus(&self, bus: Arc<GatewayEventBus>) {
@@ -110,10 +131,11 @@ impl PtyManager {
         };
 
         // Evict-then-insert under the lock so the map never exceeds the cap.
+        let cap = self.max_sessions.load(Ordering::SeqCst);
         let evicted = {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             let mut evicted: Option<Arc<PtySession>> = None;
-            if inner.sessions.len() >= MAX_SESSIONS {
+            if inner.sessions.len() >= cap {
                 if let Some(old_id) = inner.order.pop_front() {
                     evicted = inner.sessions.remove(&old_id);
                 }
@@ -126,6 +148,15 @@ impl PtyManager {
             old.kill();
         }
         Ok(result)
+    }
+
+    /// The scrollback ceiling currently in effect for a live session — for
+    /// diagnostics/tests, so a configured value can be read back rather than
+    /// merely trusted to have been passed through.
+    #[must_use]
+    pub fn scrollback_limit_of(&self, session_id: &str) -> Option<usize> {
+        self.with_session(session_id, |s| Ok(s.scrollback_limit()))
+            .ok()
     }
 
     /// Write bytes to a session's stdin.
@@ -162,6 +193,23 @@ impl PtyManager {
             }
             None => Err(format!("no such session: {session_id}")),
         }
+    }
+
+    /// Terminate every live session, returning how many were killed. Used
+    /// when the terminal switch is turned off: a gate evaluated only at
+    /// admission leaves the shell that is already open still open.
+    pub fn close_all(&self) -> usize {
+        let sessions: Vec<Arc<PtySession>> = {
+            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            inner.order.clear();
+            inner.viewports.clear();
+            inner.sessions.drain().map(|(_, s)| s).collect()
+        };
+        let n = sessions.len();
+        for s in sessions {
+            s.kill();
+        }
+        n
     }
 
     /// Remove a session from the registry without killing it (called by the
@@ -409,5 +457,43 @@ mod tests {
         assert!(mgr.note_viewport("ghost", "conn-a", 24, 80).is_err());
         // And it must not have recorded anything under that dead id.
         assert_eq!(mgr.effective_size("ghost"), None);
+    }
+
+    /// A config field with no consumer is indistinguishable from one nobody
+    /// sets: it looks settable and never does anything. `scrollback_lines`
+    /// must reach the grid that actually bounds the ring.
+    #[test]
+    fn the_configured_scrollback_reaches_the_session_grid() {
+        let mgr = PtyManager::new();
+        let sid = mgr
+            .spawn(&SpawnOptions {
+                rows: 3,
+                cols: 10,
+                scrollback_lines: Some(7),
+                ..Default::default()
+            })
+            .expect("spawn")
+            .session_id;
+        assert_eq!(
+            mgr.scrollback_limit_of(&sid),
+            Some(7),
+            "the configured limit must bound the session's ring, not the built-in default"
+        );
+        mgr.close(&sid).expect("close");
+    }
+
+    /// Turning the switch off must kill live sessions, not merely block new
+    /// ones: a gate evaluated only at admission leaves the shell that is
+    /// already open still open.
+    #[test]
+    fn close_all_terminates_every_live_session() {
+        let mgr = PtyManager::new();
+        let a = mgr.spawn(&SpawnOptions::default()).expect("a").session_id;
+        let b = mgr.spawn(&SpawnOptions::default()).expect("b").session_id;
+        assert_eq!(mgr.list().len(), 2);
+        assert_eq!(mgr.close_all(), 2);
+        assert!(mgr.list().is_empty());
+        assert!(mgr.write(&a, b"x").is_err());
+        assert!(mgr.write(&b, b"x").is_err());
     }
 }

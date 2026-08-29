@@ -144,6 +144,24 @@ impl Grid {
         self.scrollback.len() as u32
     }
 
+    /// Override the scrollback ceiling. Called at spawn from
+    /// `[policies.terminal] scrollback_lines`; without this the field would
+    /// be settable and inert. Shrinking the ceiling below the current
+    /// retained count evicts the oldest rows immediately, same as
+    /// `scroll_up`'s own eviction when the ring is full.
+    pub fn set_scrollback_limit(&mut self, lines: usize) {
+        self.scrollback_limit = lines.max(1);
+        while self.scrollback.len() > self.scrollback_limit {
+            self.scrollback.pop_front();
+        }
+    }
+
+    /// The scrollback ceiling currently in effect.
+    #[must_use]
+    pub const fn scrollback_limit(&self) -> usize {
+        self.scrollback_limit
+    }
+
     fn idx(&self, row: u16, col: u16) -> usize {
         row as usize * self.cols as usize + col as usize
     }

@@ -44,6 +44,31 @@ pub struct SpawnOptions {
     pub rows: u16,
     /// Initial terminal columns (default 80).
     pub cols: u16,
+    /// Scrollback ceiling for this session's ring, from
+    /// `[policies.terminal] scrollback_lines`. `None` keeps the grid's
+    /// built-in default.
+    ///
+    /// It lives here, and not in a `PtyManager::spawn_with_scrollback`
+    /// wrapper that sets it after the fact, for two reasons. It closes a
+    /// window: `spawn` starts the reader thread before any caller could
+    /// reach back in, so a post-hoc setter races the child's first output.
+    /// And it removes a second spawn path: the wrapper it replaces
+    /// (`PtyManager::spawn_with_scrollback`) looked the session up AGAIN
+    /// after `spawn` returned and propagated the lookup error, so a child
+    /// already reaped by its own reader thread (`spawn_reader` calls
+    /// `manager().remove` at EOF) would have been reported as a spawn
+    /// FAILURE for a process that in fact ran.
+    ///
+    /// ⚠️ Honest about the strength of that second reason: it is real by
+    /// construction and unreachable in practice. Restoring the wrapper's
+    /// shape and spawning `sh -c "exit 0"` twenty times in a row did NOT
+    /// reproduce it — thread start-up plus process teardown is orders of
+    /// magnitude longer than the gap between the insert and the second
+    /// lookup. A test asserting it stayed green under that mutation, so it
+    /// was deleted rather than kept: a guard that cannot go red advertises
+    /// coverage it does not have. What remains is the first reason and one
+    /// path instead of two.
+    pub scrollback_lines: Option<usize>,
 }
 
 /// A live PTY session handle. Cloneable via `Arc`; all mutating operations are
@@ -129,6 +154,13 @@ impl PtySession {
             .take_writer()
             .map_err(|e| format!("take_writer failed: {e}"))?;
 
+        // Built and bounded BEFORE `spawn_reader` below, so the ceiling is in
+        // force for the child's very first byte. See `SpawnOptions::scrollback_lines`.
+        let mut screen = super::screen::Screen::new(rows, cols);
+        if let Some(lines) = opts.scrollback_lines {
+            screen.set_scrollback_limit(lines);
+        }
+
         let session = Arc::new(Self {
             id: id.clone(),
             shell: label,
@@ -137,7 +169,7 @@ impl PtySession {
             master: crate::sync_primitives::Mutex::new(master),
             killer: crate::sync_primitives::Mutex::new(killer),
             closed: AtomicBool::new(false),
-            screen: crate::sync_primitives::Mutex::new(super::screen::Screen::new(rows, cols)),
+            screen: crate::sync_primitives::Mutex::new(screen),
             seq: crate::sync_primitives::Mutex::new(0),
         });
 
@@ -210,6 +242,26 @@ impl PtySession {
             cols,
             patch: super::screen::convert::patch(&patch),
         })
+    }
+
+    /// Override the scrollback ceiling for this session. Called at spawn
+    /// from `[policies.terminal] scrollback_lines`; without this the field
+    /// would be settable and inert (`Grid::set_scrollback_limit`'s doc).
+    pub fn set_scrollback_limit(&self, lines: usize) {
+        self.screen
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_scrollback_limit(lines);
+    }
+
+    /// The scrollback ceiling currently in effect — read back by tests and
+    /// diagnostics to confirm a configured value actually reached the grid.
+    #[must_use]
+    pub fn scrollback_limit(&self) -> usize {
+        self.screen
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .scrollback_limit()
     }
 
     /// One snapshot for `pty.attach`: the whole screen plus the seq it was

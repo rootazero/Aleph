@@ -87,6 +87,24 @@ impl Screen {
         self.grid.mark_all_dirty();
     }
 
+    /// Override the scrollback ceiling on the visible grid and, if the
+    /// alternate screen is active, the saved primary underneath it too —
+    /// same reasoning as `resize`: a program running when the config is
+    /// patched should not come back to a primary grid with a stale ceiling
+    /// once it exits and restores.
+    pub fn set_scrollback_limit(&mut self, lines: usize) {
+        self.grid.set_scrollback_limit(lines);
+        if let Some(saved) = &mut self.saved {
+            saved.set_scrollback_limit(lines);
+        }
+    }
+
+    /// The scrollback ceiling currently in effect on the visible grid.
+    #[must_use]
+    pub fn scrollback_limit(&self) -> usize {
+        self.grid.scrollback_limit()
+    }
+
     /// The diff since the last call, or `None` when nothing changed. `None`
     /// is what makes a quiet terminal free: the flush task publishes
     /// nothing.

@@ -32,9 +32,9 @@ use builder::{
     register_extensions_install_handlers, register_fs_handlers, register_graph_handlers,
     register_group_chat_handlers, register_heartbeat_handlers, register_identity_handlers,
     register_mcp_config_handlers, register_mcp_handlers, register_memory_handlers,
-    register_oauth_handlers, register_projects_handlers, register_session_handlers,
-    register_teams_handlers, register_voice_capability_handlers, register_workspace_handlers,
-    setup_config_watcher, start_webchat_server,
+    register_oauth_handlers, register_projects_handlers, register_pty_handlers,
+    register_session_handlers, register_teams_handlers, register_voice_capability_handlers,
+    register_workspace_handlers, setup_config_watcher, start_webchat_server,
 };
 
 mod orchestrator_init;
@@ -1830,6 +1830,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let app_config_for_channels = app_config.clone();
     let app_config_for_reload = app_config.clone();
     let app_config_for_oauth = app_config.clone();
+    let app_config_for_pty = app_config.clone();
     // Clone here so `app_config` remains available for downstream wiring
     // (e.g. the task reaper that reads `tasks_reaper` after handlers are
     // registered). `register_config_handlers` owns it via `Arc`, so the
@@ -1905,6 +1906,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         args.daemon,
     );
     register_daemon_handlers(&mut server, start_time, args.daemon);
+    // `pty.spawn` needs the live config to read `[policies.terminal]` (the
+    // session gate, and the scrollback/session-cap values) — its siblings
+    // are already registered stateless in `HandlerRegistry::new()`. See
+    // `register_pty_handlers`'s doc for why it alone is wired here.
+    register_pty_handlers(&mut server, &app_config_for_pty);
 
     // OAuth state: restore from vault if chatgpt provider exists
     let oauth_vault = auth_bundle.auth_ctx.shared_token_mgr.clone();

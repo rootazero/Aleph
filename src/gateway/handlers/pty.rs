@@ -1,12 +1,19 @@
 //! Embedded PTY terminal handlers.
 //!
-//! JSON-RPC surface over the [`crate::gateway::pty`] subsystem. These handlers
-//! are stateless — they reach the process-global [`pty::manager`] accessor (the
-//! same pattern user-hooks admin uses) so no boot-time closure wiring is
-//! needed. The gateway event bus is attached to the manager once in
+//! JSON-RPC surface over the [`crate::gateway::pty`] subsystem. Most of these
+//! handlers are stateless — they reach the process-global [`pty::manager`]
+//! accessor (the same pattern user-hooks admin uses) so no boot-time closure
+//! wiring is needed. The gateway event bus is attached to the manager once in
 //! `GatewayServer::build_router`; live output is streamed to subscribers on the
 //! `pty.screen` / `pty.exit` topics (subscribe via `events.subscribe` with
 //! pattern `pty.*`).
+//!
+//! [`handle_spawn`] is the one exception: it needs the live `Config` to read
+//! `[policies.terminal]` (the session gate, and the scrollback/session-cap
+//! values), so it takes an `Arc<RwLock<Config>>` and is registered
+//! separately from its siblings — see its own doc, and
+//! `register_pty_handlers` in
+//! `src/bin/aleph-server/commands/start/builder/handlers/system.rs`.
 //!
 //! ## Operator-only, on BOTH faces
 //!
@@ -27,9 +34,12 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::Deserialize;
 use serde_json::json;
+use tokio::sync::RwLock;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
+use crate::config::Config;
 use crate::gateway::pty::{self, SpawnOptions};
+use crate::sync_primitives::Arc;
 
 #[derive(Debug, Default, Deserialize)]
 pub struct SpawnParams {
@@ -77,7 +87,17 @@ pub struct AttachParams {
 }
 
 /// `pty.spawn` — open a new terminal session, returning its id.
-pub async fn handle_spawn(request: JsonRpcRequest) -> JsonRpcResponse {
+///
+/// `config` is read exactly once, into `cfg` below, and every downstream
+/// decision in this call — the `[policies.terminal] enabled` gate, the
+/// workspace-root jail, and the `scrollback_lines`/`max_sessions` values
+/// handed to the manager — comes from that one snapshot. Two `Config`
+/// answers three lines apart (one live, one re-read from disk) is exactly
+/// how a live-patched `enabled = false` and a stale on-disk workspace root
+/// could disagree within a single spawn; see `jail.rs`'s module doc on why a
+/// fallback that answers a different question than the one asked is a lie,
+/// not a default.
+pub async fn handle_spawn(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -> JsonRpcResponse {
     let id = request.id.clone();
     let params: SpawnParams = match &request.params {
         Some(p) => match serde_json::from_value(p.clone()) {
@@ -90,16 +110,26 @@ pub async fn handle_spawn(request: JsonRpcRequest) -> JsonRpcResponse {
         None => SpawnParams::default(),
     };
 
+    // Read fresh on every spawn (not cached at boot) so a `[policies.terminal]`
+    // patch — the gate below, or a workspace root registered after
+    // start-up — is usable on the very next call.
+    let cfg = config.read().await;
+    if !cfg.policies.terminal.enabled {
+        return JsonRpcResponse::error(
+            id,
+            INVALID_PARAMS,
+            "the embedded terminal is disabled: set `[policies.terminal] enabled = true` \
+             in config.toml to turn it on"
+                .to_string(),
+        );
+    }
+    let roots = pty::workspace_roots(&cfg.agents.defaults);
+    let terminal = cfg.policies.terminal.clone();
+    drop(cfg); // don't hold the read lock across the spawn below
+
     // The client's cwd is a request, not an authorisation: resolve it
     // against the operator-registered workspace roots before it ever reaches
-    // the child process. Config is read fresh on every spawn (not cached at
-    // boot) so a workspace registered after start-up is usable immediately —
-    // see `pty::workspace_roots`'s doc for why.
-    let defaults = crate::config::Config::load()
-        .unwrap_or_default()
-        .agents
-        .defaults;
-    let roots = pty::workspace_roots(&defaults);
+    // the child process.
     let cwd = match pty::jail::resolve_spawn_cwd(params.cwd.as_deref(), &roots) {
         Ok(p) => p,
         Err(e) => return JsonRpcResponse::error(id, INVALID_PARAMS, e),
@@ -119,8 +149,12 @@ pub async fn handle_spawn(request: JsonRpcRequest) -> JsonRpcResponse {
         env: params.env.into_iter().collect(),
         rows: params.rows,
         cols: params.cols,
+        // Carried in the options rather than applied afterwards — see
+        // `SpawnOptions::scrollback_lines` for the race a post-hoc setter opens.
+        scrollback_lines: Some(terminal.scrollback_lines as usize),
     };
 
+    pty::manager().set_max_sessions(terminal.max_sessions);
     match pty::manager().spawn(&opts) {
         Ok(res) => {
             // The session is already registered by the time `spawn` returns
@@ -286,7 +320,33 @@ mod tests {
         }
     }
 
+    /// A config handle whose `[agents.defaults] workspace_root` points at a
+    /// private tempdir this call owns — deliberately NOT `Config::load()`.
+    ///
+    /// `Config::load()` (and `workspace_root_for`'s `default_workspace_root`
+    /// fallback it hits when unset) reads `ALEPH_HOME`/`$HOME`, which are
+    /// process-global. libtest runs this module's tests on parallel threads
+    /// alongside sibling tests elsewhere in this binary that isolate their
+    /// own `ALEPH_HOME` via `AlephHomeEnvGuard`/`IsolatedAlephHome` — so a
+    /// handler that re-read the real env on every spawn was racing whichever
+    /// sibling happened to be swapping that variable at the same instant.
+    /// Measured: `cargo test -p alephcore --lib` intermittently failed two
+    /// of this file's own tests on that exact symptom (two different
+    /// resolved roots, one per test) before `handle_spawn` took its config
+    /// as a parameter instead of loading it itself (Task 12).
+    ///
+    /// The caller must keep the returned `TempDir` alive for as long as the
+    /// config handle is used — dropping it deletes the directory out from
+    /// under a still-running child.
+    fn isolated_config() -> (Arc<RwLock<Config>>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut cfg = Config::default();
+        cfg.agents.defaults.workspace_root = Some(dir.path().to_path_buf());
+        (Arc::new(RwLock::new(cfg)), dir)
+    }
+
     #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
     async fn input_unknown_session_is_error_not_panic() {
         let resp = handle_input(req(
             "pty.input",
@@ -297,6 +357,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
     async fn input_rejects_bad_base64() {
         let resp = handle_input(req(
             "pty.input",
@@ -307,6 +368,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
     async fn list_returns_sessions_array() {
         let resp = handle_list(req("pty.list", json!({}))).await;
         let result = resp.result.expect("list always succeeds");
@@ -314,8 +376,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
     async fn attach_returns_a_snapshot_with_its_seq() {
-        let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 8, "cols": 30 }))).await;
+        let (config, _tmp) = isolated_config();
+        let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 8, "cols": 30 })), config).await;
         let sid = spawn.result.as_ref().expect("spawned")["session_id"]
             .as_str()
             .expect("session_id")
@@ -348,6 +412,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
     async fn attach_on_an_unknown_session_is_an_error_not_an_empty_screen() {
         let resp = handle_attach(req("pty.attach", json!({ "session_id": "ghost" }))).await;
         assert!(
@@ -363,8 +428,10 @@ mod tests {
     /// with no `CALLER_CONN_ID` scope at all, matching how a non-gateway
     /// caller actually looks.
     #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
     async fn resize_without_conn_id_is_refused_not_applied() {
-        let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 24, "cols": 80 }))).await;
+        let (config, _tmp) = isolated_config();
+        let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 24, "cols": 80 })), config).await;
         let sid = spawn.result.as_ref().expect("spawned")["session_id"]
             .as_str()
             .expect("session_id")
@@ -389,8 +456,11 @@ mod tests {
     /// The happy path: a real gateway connection resizes and its viewport is
     /// recorded and applied (single attached client ⇒ its own request wins).
     #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
     async fn resize_with_conn_id_records_viewport_and_applies_it() {
-        let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 40, "cols": 120 }))).await;
+        let (config, _tmp) = isolated_config();
+        let spawn =
+            handle_spawn(req("pty.spawn", json!({ "rows": 40, "cols": 120 })), config).await;
         let sid = spawn.result.as_ref().expect("spawned")["session_id"]
             .as_str()
             .expect("session_id")
@@ -418,8 +488,11 @@ mod tests {
     /// the smallest wins, and the JSON-RPC surface must produce the same
     /// behavior `PtyManager::note_viewport`'s own unit tests establish.
     #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
     async fn two_conn_ids_share_smallest_wins_through_the_handler() {
-        let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 40, "cols": 120 }))).await;
+        let (config, _tmp) = isolated_config();
+        let spawn =
+            handle_spawn(req("pty.spawn", json!({ "rows": 40, "cols": 120 })), config).await;
         let sid = spawn.result.as_ref().expect("spawned")["session_id"]
             .as_str()
             .expect("session_id")
@@ -451,6 +524,7 @@ mod tests {
     /// with a valid connection id — the existing "unknown session is an
     /// error, never a silent no-op" contract other pty.* handlers hold.
     #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
     async fn resize_unknown_session_is_still_an_error() {
         let resp = crate::gateway::caller_identity::CALLER_CONN_ID
             .scope(Some("conn-a".to_string()), async {
@@ -465,8 +539,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
     async fn spawn_response_matches_the_contract_key_for_key() {
-        let resp = handle_spawn(req("pty.spawn", json!({ "rows": 4, "cols": 12 }))).await;
+        let (config, _tmp) = isolated_config();
+        let resp = handle_spawn(req("pty.spawn", json!({ "rows": 4, "cols": 12 })), config).await;
         let value = resp.result.expect("spawned");
         let keys: std::collections::BTreeSet<&str> = value
             .as_object()
@@ -533,6 +609,7 @@ mod tests {
     /// hits EOF, so a short-lived probe could be reaped before this looks
     /// for it and the assertion would pass vacuously on a real bypass.
     #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
     async fn spawn_with_a_cwd_outside_every_root_creates_no_session() {
         // See the doc comment above for why this exact pair of labels was
         // chosen, and why a before/after id snapshot is not used instead.
@@ -554,16 +631,20 @@ mod tests {
         // is an *ancestor* of a root (jail.rs's module doc, "One direction,
         // not two"), and no configured or defaulted workspace root is the
         // filesystem root itself.
-        let resp = handle_spawn(req(
-            "pty.spawn",
-            json!({
-                "cwd": "/",
-                "command": probe_command,
-                "args": probe_args,
-                "rows": 24,
-                "cols": 80
-            }),
-        ))
+        let (config, _tmp) = isolated_config();
+        let resp = handle_spawn(
+            req(
+                "pty.spawn",
+                json!({
+                    "cwd": "/",
+                    "command": probe_command,
+                    "args": probe_args,
+                    "rows": 24,
+                    "cols": 80
+                }),
+            ),
+            config,
+        )
         .await;
 
         assert!(
@@ -640,23 +721,23 @@ mod tests {
     /// and this test would go green with the jail bypassed. The guard
     /// below turns that into a loud failure instead of a silent pass.
     ///
-    /// There *is* a config-injection point for `handle_spawn` — contrary
-    /// to what an earlier version of this comment claimed: `ALEPH_HOME`,
-    /// via this repo's `crate::utils::paths::AlephHomeEnvGuard` /
-    /// `IsolatedAlephHome`. It is deliberately not used here. Partially
-    /// isolating this one test in a parallel suite while its siblings
-    /// still read the real `ALEPH_HOME` is a documented trap in this
-    /// repo: the unisolated siblings would go on writing into a tree this
-    /// test does not know exists and is about to drop, which passes when
-    /// this test runs alone and fails intermittently under a full run —
-    /// trading the substring edge case above for a flake that is harder
-    /// to reproduce. So the only workspace root this test relies on is
-    /// whatever `workspace_roots()` resolves against the real on-disk
-    /// config — the exact function, and the exact config, `handle_spawn`
-    /// itself resolves against, derived here rather than hardcoded — with
-    /// the guard below covering the one case that makes this an
-    /// insufficient discriminator on its own.
+    /// Task 12 gave `handle_spawn` a real config-injection point: an
+    /// `Arc<RwLock<Config>>` parameter, read once inside the handler. This
+    /// test uses it via `isolated_config()`, deriving `expected` from the
+    /// exact same config handle passed to `handle_spawn` — not from
+    /// `Config::load()`/`ALEPH_HOME`, which is process-global and was
+    /// racing every sibling test in this binary that isolates its own
+    /// `ALEPH_HOME` (see `isolated_config`'s doc; that race was the "two
+    /// different resolved roots" flake Task 12 measured and fixed by
+    /// injecting config instead of loading it inside the handler). The
+    /// only workspace root this test relies on is whatever
+    /// `workspace_roots()` resolves against that one owned config — the
+    /// exact function, and the exact config, `handle_spawn` itself
+    /// resolves against — with the guard below covering the one case (an
+    /// owned tempdir root that happens to be a substring of `$HOME`) that
+    /// would make this an insufficient discriminator on its own.
     #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::parallel(pty_global_manager)]
     async fn spawn_with_no_cwd_actually_chdirs_the_child_into_the_first_root() {
         // The poll loop below drains its budget at ITERATIONS x
         // INTERVAL_MS; both platforms' child processes are bounded to a
@@ -667,11 +748,11 @@ mod tests {
         const POLL_INTERVAL_MS: u64 = 50;
         const CHILD_LIFETIME_SECS: u64 = POLL_ITERATIONS as u64 * POLL_INTERVAL_MS / 1000 * 6;
 
-        let defaults = crate::config::Config::load()
-            .unwrap_or_default()
-            .agents
-            .defaults;
-        let roots = pty::workspace_roots(&defaults);
+        let (config, _tmp) = isolated_config();
+        let roots = {
+            let cfg = config.read().await;
+            pty::workspace_roots(&cfg.agents.defaults)
+        };
         let root = roots
             .first()
             .cloned()
@@ -746,10 +827,13 @@ mod tests {
         };
         // Deliberately no `cwd` field at all — the omitted-cwd request the
         // jail must resolve to the first registered root.
-        let spawn = handle_spawn(req(
-            "pty.spawn",
-            json!({ "command": command, "args": args, "rows": 24, "cols": 240 }),
-        ))
+        let spawn = handle_spawn(
+            req(
+                "pty.spawn",
+                json!({ "command": command, "args": args, "rows": 24, "cols": 240 }),
+            ),
+            config,
+        )
         .await;
         let sid = spawn
             .result
@@ -792,6 +876,62 @@ mod tests {
             found,
             "an omitted cwd must chdir the child into the resolved first workspace root \
              {expected}, not the unjailed $HOME/USERPROFILE fallback; screen held: {last_seen:?}"
+        );
+    }
+
+    /// Every test in this module shares one process-global resource: the
+    /// `pty::manager()` singleton. `config::live_apply`'s
+    /// `disabling_the_terminal_live_kills_sessions_through_apply_live_sections`
+    /// calls `close_all()` on that same singleton, which kills sessions these
+    /// tests spawned and are still asserting about. The two sides are kept
+    /// apart by a `serial_test` key: that one test holds
+    /// `#[serial_test::serial(pty_global_manager)]`, every test here holds
+    /// `#[serial_test::parallel(pty_global_manager)]` (still parallel with
+    /// each other — the key only excludes the serial one).
+    ///
+    /// A named list would only describe the tests that existed the day it was
+    /// written, and the failure mode of forgetting the tag is a flake in
+    /// SOMEONE ELSE's test, not this one. So the requirement is derived from
+    /// the source: every test attribute in this module must be followed by the
+    /// tag. Comment lines are stripped first — a `//` mentioning the tag is
+    /// documentation, not an annotation.
+    #[test]
+    #[serial_test::parallel(pty_global_manager)]
+    fn every_test_here_is_tagged_against_the_global_manager_killer() {
+        const TAG: &str = "#[serial_test::parallel(pty_global_manager)]";
+        // `cfg_test_portion` / `strip_comment_lines` rather than a hand-rolled
+        // split and a `//` prefix filter: this repo already owns both cuts
+        // (`utils::source_scan`), and `no_module_hand_rolls_the_cfg_test_prefix_cut`
+        // fails by name for a second copy. `strip_comment_lines` is also a real
+        // lexer — it will not mistake this module's own prose about the tag for
+        // an annotation, which a `starts_with("//")` filter can only do by luck.
+        let tests = crate::utils::source_scan::cfg_test_portion(include_str!("pty.rs"));
+        let code = crate::utils::source_scan::strip_comment_lines(&tests);
+        let lines: Vec<&str> = code.lines().map(str::trim).collect();
+
+        let mut checked = 0usize;
+        for (i, line) in lines.iter().enumerate() {
+            if !(line.starts_with("#[tokio::test") || *line == "#[test]") {
+                continue;
+            }
+            checked += 1;
+            assert_eq!(
+                lines.get(i + 1).copied(),
+                Some(TAG),
+                "a test attribute in gateway::handlers::pty::tests is not followed by \n\
+                 `{TAG}`. Without it, live_apply's close_all test can kill this test's \n\
+                 session mid-assertion; measured 5 failures in 6 runs of \n\
+                 `cargo test -p alephcore --lib -- gateway::handlers::pty config::live_apply` \n\
+                 before the tags were added. Context around it: {:?}",
+                &lines[i.saturating_sub(1)..(i + 2).min(lines.len())]
+            );
+        }
+        assert!(
+            checked >= 12,
+            "the scanner found only {checked} test attributes in this module — it read {} \
+             lines and expected at least the 12 that existed when this census was written. \
+             A scanner that finds nothing passes vacuously.",
+            lines.len()
         );
     }
 }

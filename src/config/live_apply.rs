@@ -127,6 +127,21 @@ pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> Vec<&'static 
             // this function's return value (see `reload_impact::classify`'s
             // doc on the bare "policies" path).
             "policies.spend" => crate::spend::update_policy(cfg.policies.spend.clone()),
+            // `[policies.terminal]`'s handle is the process-global PTY
+            // manager singleton (`crate::gateway::pty::manager()`) — always
+            // present, unlike `route`/`spend`'s boot-installed `ArcSwap`s,
+            // so this arm always lands. Turning the switch off must also
+            // kill live sessions: a gate evaluated only at admission would
+            // leave a shell that is already open still open.
+            "policies.terminal" => {
+                if !cfg.policies.terminal.enabled {
+                    let killed = crate::gateway::pty::manager().close_all();
+                    if killed > 0 {
+                        tracing::warn!(killed, "terminal disabled; live PTY sessions terminated");
+                    }
+                }
+                true
+            }
             // Unreachable while the guard test below passes: a new entry in
             // LIVE_SECTIONS/LIVE_SUBSECTIONS without an arm here fails at
             // compile-review time via that test, not silently at runtime.
@@ -185,7 +200,13 @@ mod tests {
     /// created to close, reintroduced one const entry at a time.
     #[test]
     fn every_live_section_has_an_apply_arm() {
-        let known_arms = ["route", "execution", "behavior", "policies.spend"];
+        let known_arms = [
+            "route",
+            "execution",
+            "behavior",
+            "policies.spend",
+            "policies.terminal",
+        ];
         for target in LIVE_SECTIONS.iter().chain(LIVE_SUBSECTIONS.iter()) {
             assert!(
                 known_arms.contains(target),
@@ -289,6 +310,14 @@ mod tests {
     /// `dotted_prefix_matches`'s ancestor check this arm would never fire
     /// from that path — exactly the mismatch the controller ruling called
     /// out.
+    ///
+    /// `"policies.terminal"` also fires from this same coarse name — it is
+    /// the other member of `LIVE_SUBSECTIONS` and its handle (the
+    /// process-global PTY manager) is always present, so it always lands.
+    /// That is not a false positive: the sibling-does-not-earn-a-verdict
+    /// guarantee comes from `classify`/`classify_verified` matching the
+    /// *specific* target, not from this function only ever applying one
+    /// thing at a time — see `a_sibling_policies_subsection_does_not_earn_a_live_verdict`.
     /// ⚠️ Serialised with every other test that WRITES `GLOBAL_POLICY`.
     /// `apply_live_sections`'s spend arm calls `spend::update_policy`, which
     /// overwrites a process-wide `ArcSwap` shared by the whole `--lib` test
@@ -303,7 +332,7 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(
             apply_live_sections(&cfg, &["policies"]),
-            vec!["policies.spend"]
+            vec!["policies.spend", "policies.terminal"]
         );
     }
 
@@ -376,8 +405,10 @@ mod tests {
 
         // The single-patch caller's exact shape: `top_sections` carries only
         // the coarse top-level segment, never "policies.spend" itself.
+        // `"policies.terminal"` rides along too — same coarse name, its own
+        // always-present handle (see `policies_spend_arm_fires_from_the_coarse_top_level_name`'s doc).
         let applied = apply_live_sections(&cfg, &["policies"]);
-        assert_eq!(applied, vec!["policies.spend"]);
+        assert_eq!(applied, vec!["policies.spend", "policies.terminal"]);
         assert_eq!(
             classify_verified("policies.spend.per_user_usd", &applied),
             ReloadImpact::Live
@@ -392,7 +423,7 @@ mod tests {
         // restart and no new process. `check`'s very next call must see it.
         cfg.policies.spend.per_user_usd = Some(1.0);
         let applied = apply_live_sections(&cfg, &["policies"]);
-        assert_eq!(applied, vec!["policies.spend"]);
+        assert_eq!(applied, vec!["policies.spend", "policies.terminal"]);
         assert!(matches!(
             crate::spend::check(&principal, now_ms),
             crate::spend::Verdict::Denied { .. }
@@ -404,6 +435,58 @@ mod tests {
         assert_eq!(
             classify_verified("policies.spend.per_user_usd", &[]),
             ReloadImpact::Restart
+        );
+    }
+
+    /// The census above (`every_live_section_has_an_apply_arm`) only proves
+    /// the name is on both lists. `known_arms` is a hand-written third copy,
+    /// so a missing `match` arm still passes it — the call falls through to
+    /// `_ => false` and honestly downgrades. This asserts the wire itself: a
+    /// live patch that disables the terminal must reach `close_all`, and the
+    /// target must be reported as applied.
+    ///
+    /// Uses the process-global `pty::manager()` singleton deliberately, not
+    /// a fresh `PtyManager` — the arm under test hardcodes the call to
+    /// `crate::gateway::pty::manager()`, so a local instance would prove
+    /// nothing about the real wire.
+    ///
+    /// ⚠️ That deliberate choice is why the serial key below is mandatory,
+    /// not tidiness. `close_all` kills EVERY live session in the process,
+    /// including the ones `gateway::handlers::pty`'s tests spawn on the same
+    /// singleton and then assert about — and libtest runs this binary's
+    /// tests on parallel threads. Measured before the key was added:
+    /// `cargo test -p alephcore --lib -- gateway::handlers::pty
+    /// config::live_apply` failed 5 runs out of 6, with a DIFFERENT subset
+    /// of the handler tests red each time; the same handler module alone was
+    /// 6/6 green. A full `--lib` run happened not to show it (8/8 clean),
+    /// which is luck, not safety: the pair simply rarely overlaps among
+    /// 17k tests. The counterpart key lives on every test in
+    /// `gateway::handlers::pty::tests` as
+    /// `#[serial_test::parallel(pty_global_manager)]` — they stay parallel
+    /// with each other and only exclude this one — and a source-level census
+    /// in that module fails by name if a new test there forgets it.
+    #[test]
+    #[serial_test::serial(pty_global_manager)]
+    fn disabling_the_terminal_live_kills_sessions_through_apply_live_sections() {
+        use crate::gateway::pty::SpawnOptions;
+
+        let mgr = crate::gateway::pty::manager();
+        let sid = mgr
+            .spawn(&SpawnOptions::default())
+            .expect("spawn")
+            .session_id;
+
+        let mut cfg = Config::default();
+        cfg.policies.terminal.enabled = false;
+        let applied = apply_live_sections(&cfg, &["policies"]);
+
+        assert!(
+            applied.contains(&"policies.terminal"),
+            "a declared-live target that does not land is not live"
+        );
+        assert!(
+            mgr.list().iter().all(|s| s.session_id != sid || s.closed),
+            "the in-flight session must be gone, not merely reported gone"
         );
     }
 }
