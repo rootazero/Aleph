@@ -150,19 +150,25 @@ fn request_scope(request: &RunRequest) -> Option<crate::scope::ScopeAttribution>
 /// fail-closed `None`.
 ///
 /// The two strings ride inside [`crate::scope::FlowScope`], whose fields are
-/// private and whose only non-empty constructor takes an already-resolved
-/// `ScopeAttribution`. That is what makes the raw read a COMPILE error at the
-/// `FlowRequest` site rather than something a census has to notice: a pair
-/// lifted out of `request.metadata` is `(Option<String>, Option<String>)` and
-/// no longer fits the field, whichever way the keys are spelled. See that
-/// type's doc for what it deliberately does not prevent.
+/// private and whose only non-empty constructor takes a `ScopeAttribution`.
+/// That makes ONE spelling of the raw read a compile error at the
+/// `FlowRequest` site: a pair lifted out of `request.metadata` is
+/// `(Option<String>, Option<String>)` and does not fit the field. It does not
+/// make every spelling one. `ScopeAttribution::from_persisted` takes exactly
+/// that pair and yields the type this constructor accepts, so metadata still
+/// reaches the site in one public call — measured, compiling, with every
+/// lexical layer green. See that type's doc; the bound is stated in full in
+/// `flow_scope_census`'s module doc.
 ///
 /// A named function rather than two inline expressions: the property that must
 /// NOT change is that an off-roster speaker in a bound conversation is
 /// projected to the same pair the raw read produced, and a test that
 /// re-derived the projection to check that would be measuring its own copy.
-/// `flow_scope_census` keeps the site honest; the three tests named in that
-/// module keep this function honest.
+/// `flow_scope_census` keeps the site honest lexically;
+/// `tests::the_flow_request_projection_carries_the_room_upgrade` and
+/// `tests::the_projection_round_trips_through_the_dispatch_rebuild` keep this
+/// function honest behaviourally, and they are the only two that go red when
+/// the scope is re-resolved here under a different spelling.
 fn request_scope_strings(request: &RunRequest) -> crate::scope::FlowScope {
     crate::scope::FlowScope::resolved(request_scope(request).as_ref())
 }

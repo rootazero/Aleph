@@ -312,19 +312,40 @@ pub fn stamp_metadata(meta: &mut HashMap<String, String>, attr: &ScopeAttributio
 /// The census in `run_loop::flow_scope_census` catches that read when it is
 /// spelled with the key CONSTANTS, and — since this round — when it is spelled
 /// with their literal values. Both are lexical: they detect a spelling. This
-/// type removes the shape instead. The fields are private and the only way to
-/// mint a non-empty value is [`FlowScope::resolved`], which takes an
-/// already-resolved [`ScopeAttribution`]; handing the site a pair of strings
-/// lifted out of a metadata map no longer type-checks, whatever it is spelled
-/// like. 编译错误强于登记表.
+/// type removes one SHAPE instead: the fields are private, there is no
+/// `Default`, and the only way to mint a non-empty value is
+/// [`FlowScope::resolved`], which takes a [`ScopeAttribution`]. So a raw
+/// `(Option<String>, Option<String>)` written at the `FlowRequest` site is
+/// `E0308` (measured), and the struct literal does not compile outside this
+/// module. 编译错误强于登记表 — for that shape.
 ///
 /// # What it does NOT prevent
 ///
-/// A caller can still resolve an attribution the wrong way — `scope_from_metadata`
-/// on the raw map, skipping the room correction — and pass THAT here. That
-/// shape is not a type error and is not meant to be: it is what
-/// `flow_scope_census`'s `scope_from_metadata` call count owns, which is why
-/// the two layers are kept side by side rather than one replacing the other.
+/// **It does not constrain where the [`ScopeAttribution`] came from**, and an
+/// earlier version of this doc said it did ("a pair of strings lifted out of a
+/// metadata map no longer type-checks, whatever it is spelled like"). That
+/// sentence was false and a review measured it false. `ScopeAttribution` is
+/// `pub` with `pub` fields and is reachable three ways —
+/// [`ScopeAttribution::from_persisted`], whose signature is *exactly* the pair
+/// of `Option<&str>` a metadata map yields; [`ScopeAttribution::personal`];
+/// and a struct literal,
+/// which `tests/gateway_chat_room_author_across_spawn.rs` builds from outside
+/// the crate. One public call therefore bridges metadata straight to this
+/// type, it compiles, and every lexical layer in `flow_scope_census` stays
+/// green while it does.
+///
+/// The same is true of the older hole this section already named: a caller can
+/// resolve an attribution the wrong way — `scope_from_metadata` on the raw map,
+/// skipping the room correction — and pass THAT here. Neither is a type error
+/// and neither is meant to be.
+///
+/// What actually holds provenance is behavioural, not lexical and not typed:
+/// `run_loop::tests::the_flow_request_projection_carries_the_room_upgrade` and
+/// `::the_projection_round_trips_through_the_dispatch_rebuild`, which assert
+/// that a claimed session key reaches the harness as the ROOM. They are red for
+/// any second resolution however it is spelled, which no rule about a spelling
+/// can be. `flow_scope_census`'s module doc lists them as layer 4 and states
+/// this bound in full; do not trade them away as redundant with this type.
 ///
 /// [`FlowScope::unscoped`] is the empty pair (`None`, `None`) — legacy owner
 /// semantics, what every non-gateway dispatcher and every test fixture passes.
@@ -359,12 +380,20 @@ impl FlowScope {
     /// but only this says so at the boundary.
     ///
     /// `pub` rather than `pub(crate)` because integration tests build scoped
-    /// `FlowRequest`s from outside the crate, and widening it costs nothing
-    /// this type is defending: it takes an already-RESOLVED attribution, so
-    /// the shape it refuses — a pair of strings lifted out of a metadata map —
-    /// is still not expressible here. What must not spread is a SECOND way to
-    /// resolve one, and that is counted inside `run_loop` by
-    /// `flow_scope_census`, not held off by this signature.
+    /// `FlowRequest`s from outside the crate. Widening it costs nothing this
+    /// type is defending — but not for the reason first written here, which
+    /// was that "a pair of strings lifted out of a metadata map is still not
+    /// expressible". It is expressible, in one public call, because
+    /// [`ScopeAttribution::from_persisted`] takes precisely that pair; the
+    /// integration test that forced this widening builds a `ScopeAttribution`
+    /// by struct literal, which is the same point from the other side. The
+    /// widening is free because this signature never defended provenance, not
+    /// because the shape stays out of reach.
+    ///
+    /// What must not spread is a SECOND way to resolve one inside `run_loop`,
+    /// and that is held off by `flow_scope_census` — its `scope_from_metadata`
+    /// and `FlowScope::resolved` counts lexically, and its layer 4 (two
+    /// behavioural tests, named there) behaviourally. Not by this signature.
     #[must_use]
     pub fn resolved(attr: Option<&ScopeAttribution>) -> Self {
         Self {

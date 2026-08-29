@@ -35,15 +35,17 @@
 //! the values to `FORBIDDEN` cannot fix it: the scanner deletes them before
 //! the search runs.
 //!
-//! Three layers now, each answering a different question, none subsuming
+//! Four layers now, each answering a different question, none subsuming
 //! another:
 //!
-//! 1. **The type.** [`crate::scope::FlowScope`] has private fields and one
-//!    non-empty constructor taking an already-resolved `ScopeAttribution`, so
-//!    the `FlowRequest` site — where the defect actually lived — cannot be
-//!    handed a pair of strings at all. That is not a spelling rule; it is a
-//!    compile error. It is also the only layer that reaches beyond this
-//!    module.
+//! 1. **The type.** [`crate::scope::FlowScope`] has private fields, no
+//!    `Default`, and one non-empty constructor. So the two strings cannot be
+//!    written into the `FlowRequest` field directly: the raw pair at that site
+//!    is `E0308` (measured), and a struct literal does not compile outside
+//!    `crate::scope`. What it refuses is that SHAPE. It says nothing about
+//!    where the `ScopeAttribution` handed to `resolved` came from — see the
+//!    bounds below, because an earlier version of this list claimed it did.
+//!    It is also the only layer that reaches beyond this module.
 //! 2. **The negative census**, now run over BOTH views of each file: key
 //!    identifiers in `code_text`, and the key values as exact quoted literals
 //!    in [`crate::utils::source_scan::code_keeping_literals`]. This is what
@@ -52,12 +54,42 @@
 //! 3. **The call counts**: `scope_from_metadata` exactly once (a second answer
 //!    to "what scope is this run under", under a new name, naming no raw key),
 //!    `FlowScope::resolved` exactly once, `FlowScope::unscoped` never.
+//! 4. **Two behavioural tests**, in `run_loop::tests`:
+//!    `the_flow_request_projection_carries_the_room_upgrade` and
+//!    `the_projection_round_trips_through_the_dispatch_rebuild`. These are the
+//!    layer that owns PROVENANCE, and they are the strongest guard in this
+//!    package because they assert the property — a claimed key reaches the
+//!    harness as the room — rather than a spelling, so a second resolution is
+//!    red however it is written, `as` alias included. They are named here
+//!    because 1–3 are the layers a reader can see, and a defence nobody names
+//!    is one refactor away from being deleted as redundant with the layers
+//!    that are named.
 //!
-//! The bound, stated so nobody has to infer it: a raw read OUTSIDE this module
-//! is not covered by 2 or 3, and `BusyInputMode::for_shared_room`
-//! (`execution_engine/mod.rs`) is one — it runs on the admission path, before
-//! `request_scope` can have run, and answers a different question with a
-//! different predicate. See its doc.
+//! The bounds, stated so nobody has to infer them:
+//!
+//! - **Layer 1 constrains a shape, not a provenance, and one public call
+//!   bridges the gap.** [`crate::scope::ScopeAttribution`] is `pub` with `pub`
+//!   fields and is reachable three ways: `from_persisted`, which takes exactly
+//!   the pair of `Option<&str>` a metadata map yields; `personal`; and a struct
+//!   literal, which `tests/gateway_chat_room_author_across_spawn.rs` uses from
+//!   outside the crate. A review drove that: `FlowScope::resolved` fed from
+//!   `from_persisted` on the raw map, with the keys spelled by `concat!` so
+//!   neither census view sees them, **compiles and leaves all four tests below
+//!   GREEN** while layer 4's two go RED with `left: Personal(…) / right:
+//!   Project(…)`. Sealing `ScopeAttribution` is not on the table — it is `pub`
+//!   with `pub` fields and used repo-wide — so provenance is layer 4's, and
+//!   only layer 4's.
+//! - **Only two of the four tests in that block are layer 4.**
+//!   `an_off_roster_speaker_is_projected_exactly_as_the_raw_read_was` asserts
+//!   equality WITH the raw read, so the bypass above satisfies it rather than
+//!   tripping it, and `an_unstamped_turn_projects_no_strings` stays green
+//!   because `from_persisted` is fail-closed on the pair too. Both are
+//!   load-bearing for what they do say; neither is a provenance guard, and
+//!   counting them as one would restate the same overclaim one level down.
+//! - **A raw read OUTSIDE this module** is not covered by 2 or 3, and
+//!   `BusyInputMode::for_shared_room` (`execution_engine/mod.rs`) is one — it
+//!   runs on the admission path, before `request_scope` can have run, and
+//!   answers a different question with a different predicate. See its doc.
 
 #[cfg(test)]
 mod tests {
