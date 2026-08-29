@@ -84,12 +84,32 @@ impl RegisteredAgent {
 /// is handled by `service::SmartRouter`.
 #[async_trait::async_trait]
 pub trait AgentResolver: Send + Sync {
-    /// Register a remote agent with a trust level
+    /// Register a remote agent with a trust level.
+    ///
+    /// **Deprecated**: prefer [`register_with_token`] when the caller has an
+    /// outbound bearer token. This method always stores `None` for the token,
+    /// which silently downgrades authenticated agents to anonymous — the
+    /// caller sees `Ok(())` and may not realise the next outbound RPC will
+    /// be rejected with 401.
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use register_with_token so the outbound bearer token is preserved"
+    )]
     async fn register(
         &self,
         card: AgentCard,
         base_url: &str,
         trust_level: TrustLevel,
+    ) -> A2AResult<()>;
+
+    /// Register a remote agent, optionally attaching an outbound bearer
+    /// token that subsequent RPCs to this agent will use.
+    async fn register_with_token(
+        &self,
+        card: AgentCard,
+        base_url: &str,
+        trust_level: TrustLevel,
+        auth_token: Option<String>,
     ) -> A2AResult<()>;
 
     /// Unregister an agent by ID

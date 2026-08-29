@@ -128,11 +128,25 @@ fn slug_from_name(name: &str) -> String {
 
 #[async_trait::async_trait]
 impl AgentResolver for CardRegistry {
+    #[allow(deprecated)]
     async fn register(
         &self,
         card: AgentCard,
         base_url: &str,
         trust_level: TrustLevel,
+    ) -> A2AResult<()> {
+        // Deprecated: always passes `None` for the auth token. New callers
+        // should use `register_with_token` so an authenticated agent does not
+        // silently downgrade to anonymous outbound RPC.
+        self.register_with_token(card, base_url, trust_level, None).await
+    }
+
+    async fn register_with_token(
+        &self,
+        card: AgentCard,
+        base_url: &str,
+        trust_level: TrustLevel,
+        auth_token: Option<String>,
     ) -> A2AResult<()> {
         let mut agents = self.agents.write().await;
         // Remove existing with same ID (upsert semantics)
@@ -143,7 +157,7 @@ impl AgentResolver for CardRegistry {
             base_url.to_string(),
             Utc::now(),
             AgentHealth::Healthy,
-            None,
+            auth_token,
         ));
         Ok(())
     }
