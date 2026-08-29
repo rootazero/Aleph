@@ -6,6 +6,20 @@ use serde::{Deserialize, Serialize};
 /// Maximum allowed image file size in bytes (10 MB).
 pub const MAX_IMAGE_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
+/// Maximum size of a base64-encoded [`ImageInput::Base64::data`] string, derived
+/// from [`MAX_IMAGE_FILE_SIZE`] so that *no* base64 payload larger than this
+/// constant can decode to a value within the size cap.
+///
+/// Standard base64 alphabet (no line breaks, no whitespace): `N` decoded bytes
+/// expand to `((N + 2) / 3) * 4` encoded chars. We use the looser integer form
+/// `((N / 3) + 1) * 4` (one byte of slack) which is still a sound upper bound
+/// for the encoded length of `N` bytes.
+///
+/// The cap is checked **before** `base64::decode` runs, so a 1 GiB base64
+/// string is rejected before the decoder allocates the decoded buffer.
+#[allow(clippy::integer_division)] // intentional: integer floor division is part of the formula
+pub const MAX_BASE64_ENCODED_SIZE: usize = ((MAX_IMAGE_FILE_SIZE / 3) + 1) as usize * 4;
+
 // ---------------------------------------------------------------------------
 // Image Input
 // ---------------------------------------------------------------------------
