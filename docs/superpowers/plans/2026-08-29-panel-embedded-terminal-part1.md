@@ -3866,6 +3866,212 @@ is 0x0 and a zero-column PTY is not a thing."
 
 ---
 
+## Task 19: 帧自报几何（Task 15 审查 C1 的真修法）
+
+> **执行顺序：Task 11 落地之后、Task 17 之前。** 它改 `src/gateway/pty/session.rs`，而 Task 11
+> 的暂存范围覆盖整个 `src/gateway/pty/`——两个 agent 不能同时在那里。
+
+**Files:**
+- Modify: `shared/protocol/src/pty.rs`、`src/gateway/pty/session.rs`、
+  `interfaces/webchat/src/platform/wide/views/terminal/session.rs`
+
+**Interfaces:**
+- Consumes: `PtyScreenFrame`（Task 7）、`ClientScreen`（Task 15）
+- Produces: `PtyScreenFrame { session_id, seq, rows, cols, patch }`
+
+### 这个任务在修什么
+
+Task 15 的审查判了一个 Critical：**窗口变大之后，客户端底部若干行永远空白，而且永不自愈。**
+`ClientScreen::write_patch` 用 `self.grid.get_mut(row.row as usize)`，行号超出当前网格时**静默跳过**；
+`dims()` 仍报旧尺寸；而 `seq` 始终连续 ⇒ **不会 gap ⇒ 不会重新 attach**。
+
+⚠️ **别把 `ClientScreen::resize` 改成 public——那不是修法，是把缺陷换个位置。** controller 查实
+（2026-08-29）：
+
+- `handle_resize` 只返回 `{"ok": true}`，**不报生效尺寸**；
+- 而尺寸是 **smallest-wins**（Task 10）：一个客户端要 40x120、另一个挂着 24x80 时，PTY 就是
+  24x80。**它要到的和拿到的不是一回事**；
+- 更糟的是**被别人挤小的那一个**——它自己没调用过任何东西，没有任何响应会告诉它；
+- `PtyScreenFrame` 只有 `session_id` / `seq` / `patch`，**不带几何**。
+
+所以今天客户端学到真实尺寸的**唯一**途径是重新 attach。公开 `resize` 只会让 Task 17 把它
+**请求**的尺寸写进屏幕——一个恰好在共享场景下出错的第二真源，而共享正是 Task 10 存在的理由。
+
+**真修法：让帧自报它的几何。** 与 `seq` 同层、与 `PtyAttachResponse` 同形（那个结构早就把
+`rows`/`cols` 摆在 `patch` 旁边）。这样**每一个**附着的客户端都在下一帧学到新尺寸，包括从没调用过
+resize 的那个——与判据「一帧带着自己的归属到达」同形。
+
+- [ ] **Step 1: 写失败的测试**
+
+`interfaces/webchat/src/platform/wide/views/terminal/session.rs` 的 `mod tests`：
+
+```rust
+    /// A resize the client did not ask for still has to land. Sizing is
+    /// smallest-wins across clients, so a client can be shrunk by someone
+    /// else joining without ever calling `pty.resize` itself -- and a grow
+    /// leaves `seq` contiguous, so nothing ever gaps and nothing self-heals.
+    #[test]
+    fn a_frame_carrying_new_geometry_grows_the_screen_before_its_rows_land() {
+        let mut s = ClientScreen::new(24, 80, 5, SID);
+        let frame = PtyScreenFrame {
+            session_id: SID.to_string(),
+            seq: 6,
+            rows: 40,
+            cols: 100,
+            patch: PtyScreenPatch {
+                rows: vec![PtyRowPatch {
+                    row: 39,
+                    runs: vec![PtyStyleRun { text: "bottom".into(), ..Default::default() }],
+                }],
+                ..Default::default()
+            },
+        };
+        assert_eq!(s.apply(frame), ApplyOutcome::Applied);
+        assert_eq!(s.dims(), (40, 100));
+        // The ordering assertion: adopting AFTER write_patch leaves the grid
+        // 24 rows long, `get_mut(39)` returns None, and the row is dropped
+        // with no error anywhere.
+        assert_eq!(
+            s.row_text(39),
+            "bottom",
+            "the new geometry must be adopted before its rows are written"
+        );
+    }
+
+    /// Shrink is the other half and it is not symmetric: rows past the new
+    /// bottom must go away, or the renderer keeps painting content the
+    /// server no longer has.
+    #[test]
+    fn a_shrinking_frame_drops_the_rows_below_the_new_bottom() {
+        let mut s = ClientScreen::new(40, 100, 5, SID);
+        let grow = PtyScreenFrame {
+            session_id: SID.to_string(),
+            seq: 6,
+            rows: 40,
+            cols: 100,
+            patch: PtyScreenPatch {
+                rows: vec![PtyRowPatch {
+                    row: 39,
+                    runs: vec![PtyStyleRun { text: "gone".into(), ..Default::default() }],
+                }],
+                ..Default::default()
+            },
+        };
+        assert_eq!(s.apply(grow), ApplyOutcome::Applied);
+        assert_eq!(s.row_text(39), "gone");
+
+        let shrink = PtyScreenFrame {
+            session_id: SID.to_string(),
+            seq: 7,
+            rows: 24,
+            cols: 80,
+            patch: PtyScreenPatch::default(),
+        };
+        assert_eq!(s.apply(shrink), ApplyOutcome::Applied);
+        assert_eq!(s.dims(), (24, 80));
+        assert_eq!(s.row_text(39), "", "a row past the new bottom must not survive");
+    }
+```
+
+`shared/protocol/src/pty.rs` 的 `mod tests` —— Task 7 已有一条**键集相等**的对账测试
+（不是超集断言），它会因为这次新增而红。**那是它在正常工作**：更新期望键集，别放宽断言。
+
+- [ ] **Step 2: 跑它，确认失败**
+
+```bash
+cargo test -p aleph-panel --lib views::terminal::session
+cargo test -p aleph-protocol pty::
+```
+Expected: 两边都 FAIL。
+
+- [ ] **Step 3: 实现**
+
+**协议**（`shared/protocol/src/pty.rs`）—— `PtyScreenFrame` 加两个**必填**字段：
+
+```rust
+pub struct PtyScreenFrame {
+    pub session_id: String,
+    pub seq: u64,
+    /// The screen's dimensions as of this frame.
+    ///
+    /// Beside `seq` rather than inside `patch`, and matching
+    /// `PtyAttachResponse`'s shape, because geometry is a property of the
+    /// frame rather than of the content delta. Carried on EVERY frame, not
+    /// just the ones after a resize: sizing is smallest-wins across attached
+    /// clients, so a client can be resized by someone else joining without
+    /// having called anything, and there is no response it could read.
+    pub rows: u16,
+    pub cols: u16,
+    pub patch: PtyScreenPatch,
+}
+```
+
+⚠️ **不要加 `#[serde(default)]`。** 默认值 0 会是一句谎话，而这两个字段的消费者会拿它去 resize
+网格。Part 1 是这个协议的第一个发行版，生产端与消费端同批发布，所以必填是可以的——**响亮失败强于
+一个静默的 0**。
+
+**服务端**（`src/gateway/pty/session.rs::feed_and_take_frame`）—— 几何必须在**取 patch 的同一把
+锁里**读，否则会发出一份「patch 属于旧几何、dims 属于新几何」的撕裂帧：
+
+```rust
+        let (patch, rows, cols) = {
+            let mut screen = self.screen.lock().unwrap_or_else(|e| e.into_inner());
+            let patch = screen.take_patch()?;
+            let (rows, cols) = screen.grid.dims();
+            (patch, rows, cols)
+        };
+```
+
+紧挨着的 `attach_snapshot` 已经是这个写法（同一把锁里同时读 dims 和快照），照它。
+
+**客户端**（`ClientScreen::apply`）—— 在 `write_patch` **之前**采纳几何，且**只在真正应用的那条
+路径上**：
+
+```rust
+        self.seq = frame.seq;
+        self.resize(frame.rows, frame.cols);   // BEFORE write_patch
+        self.write_patch(&frame.patch);
+        ApplyOutcome::Applied
+```
+
+⚠️ **`Discarded` 与 `Gap` 两条臂不许采纳几何。** `Discarded` 的帧比我们手上的旧，它的几何也旧；
+`Gap` 会触发重新 attach，而 attach 响应本来就带 `rows`/`cols`。在这两条臂上采纳等于让一个被丢弃的
+帧改写当前状态。
+
+`ClientScreen::resize` **保持私有**——它现在有了一个真正的生产者（`apply`），不需要第二个。
+
+- [ ] **Step 4: 跑测试，确认通过**
+
+```bash
+cargo test -p aleph-protocol pty::
+cargo test -p alephcore --lib gateway::pty::
+cargo test -p aleph-panel --lib views::terminal
+just wasm
+```
+
+**并且做一次变异**：把 `self.resize(..)` 挪到 `write_patch(..)` **之后**，跑一遍，确认
+`a_frame_carrying_new_geometry_grows_the_screen_before_its_rows_land` **红**，再改回来。
+把 RED 输出贴进报告。顺序是这个修复的全部内容，而一条不能证伪顺序的测试证明不了顺序。
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add shared/protocol/src/pty.rs src/gateway/pty/session.rs interfaces/webchat/src/platform/wide/views/terminal/session.rs
+git commit -m "pty: carry the screen's geometry on every frame
+
+A client could not learn its own dimensions without re-attaching.
+pty.resize answers {ok: true} and nothing more, and sizing is
+smallest-wins across attached clients -- so the size a client asks for
+is routinely not the size the PTY got, and a client shrunk by someone
+else joining called nothing and had nothing to read.
+
+Growing was the silent case: write_patch skips a row index past the
+grid, dims stayed stale, and seq stayed contiguous, so no gap was ever
+reported and the blank rows never healed."
+```
+
+---
+
 ## Task 17: Panel —— 键盘映射 + 挂载 + 端到端
 
 **Files:**
