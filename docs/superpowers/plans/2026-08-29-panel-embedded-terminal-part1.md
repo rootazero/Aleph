@@ -3873,6 +3873,7 @@ is 0x0 and a zero-column PTY is not a thing."
 
 **Files:**
 - Modify: `shared/protocol/src/pty.rs`、`src/gateway/pty/session.rs`、
+  `src/gateway/pty/mod.rs`（唯一一条真走总线的测试，见下）、
   `interfaces/webchat/src/platform/wide/views/terminal/session.rs`
 
 **Interfaces:**
@@ -4006,6 +4007,42 @@ resize 的那个——与判据「一帧带着自己的归属到达」同形。
 `shared/protocol/src/pty.rs` 的 `mod tests` —— Task 7 已有一条**键集相等**的对账测试
 （不是超集断言），它会因为这次新增而红。**那是它在正常工作**：更新期望键集，别放宽断言。
 
+**还有第三个消费点，而且它是这次改动里最有价值的那条断言。**
+controller 派单前数过：`PtyScreenFrame` 全仓有三处非定义点——生产者
+（`pty/session.rs::feed_and_take_frame`）、客户端消费者（Panel 的 `session.rs`），
+以及 `src/gateway/pty/mod.rs` 里 Task 9 那条
+`a_write_reaches_a_real_subscriber_over_the_pty_screen_topic`。
+
+**它是仓里唯一一处 `PtyScreenFrame` 真的走一遍总线的地方**——真 spawn、真写入、
+真 flush loop、真订阅者、真 `from_value`。上面那两条客户端单测证明的是「`apply` 拿到
+几何之后做得对」；**没有任何一条证明服务端真的把几何放上了线**。一个把 `rows`/`cols`
+在锁外读、或者填错顺序（`(cols, rows)`）的实现，两条单测**全绿**。
+
+那条测试用 `SpawnOptions { rows: 10, cols: 40, .. }` spawn，所以断言是现成的：
+
+```rust
+        // Geometry on the wire. The client-side unit tests prove `apply`
+        // does the right thing WITH a frame's dimensions; only this one
+        // proves the server puts them there. An implementation that read
+        // dims outside the screen lock, or transposed them, passes every
+        // other test in this change.
+        assert_eq!(
+            found,
+            Some((10, 40)),
+            "the frame must carry the geometry it was spawned with, rows first"
+        );
+```
+
+把现有的 `let mut found = false;` / `found = true;` 改成携带几何的
+`Option<(u16, u16)>` 即可；循环的退出条件与轮询形状**一个字都不要动**
+（那是有意与 `a_child_write_reaches_the_server_held_screen` 保持同形的有界轮询，
+不是固定 sleep）。
+
+⚠️ 顺带一条**不要修**的：那个循环里的 `let Ok(frame) = .. else { continue; };`
+是 fail-soft 跳过，读起来像判据清单里「跳过一条坏记录要问跳过之后还有谁看得见它」
+的那一类。这里**不要**改成报错——一条解不出的帧在这个测试里的正确处置就是跳过，
+而失败信号由循环结束后的断言承担（找不到就是 `None`，会响亮地失败并打印它期望的值）。
+
 - [ ] **Step 2: 跑它，确认失败**
 
 ```bash
@@ -4079,6 +4116,9 @@ cargo test -p aleph-panel --lib views::terminal
 just wasm
 ```
 
+⚠️ 那条 wire 测试在 `gateway::pty::` 的过滤范围里，但它是 `#[tokio::test(flavor = "multi_thread")]`
+且要真起一个 PTY —— **确认它真的跑了**，别只看总数是绿的。
+
 **并且做一次变异**：把 `self.resize(..)` 挪到 `write_patch(..)` **之后**，跑一遍，确认
 `a_frame_carrying_new_geometry_grows_the_screen_before_its_rows_land` **红**，再改回来。
 把 RED 输出贴进报告。顺序是这个修复的全部内容，而一条不能证伪顺序的测试证明不了顺序。
@@ -4086,7 +4126,7 @@ just wasm
 - [ ] **Step 5: 提交**
 
 ```bash
-git add shared/protocol/src/pty.rs src/gateway/pty/session.rs interfaces/webchat/src/platform/wide/views/terminal/session.rs
+git add shared/protocol/src/pty.rs src/gateway/pty/session.rs src/gateway/pty/mod.rs interfaces/webchat/src/platform/wide/views/terminal/session.rs
 git commit -m "pty: carry the screen's geometry on every frame
 
 A client could not learn its own dimensions without re-attaching.
