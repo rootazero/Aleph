@@ -2300,8 +2300,20 @@ impl PtyManager {
 grep -n 'conn_id\|connection_id' src/gateway/protocol.rs src/gateway/server/handler.rs | head
 ```
 
-- 若 `JsonRpcRequest` 已有连接标识字段，直接用。
-- 若没有，**本 Task 的 handler 改造降级为**：`ResizeParams` 增一个必填的 `client_id: String`（由 Panel 生成的 uuid，随每次 `pty.attach`/`pty.resize` 带上），`release_conn` 由 `pty.close` 与会话断开时的既有清理路径调用。**在提交信息里写明这是降级路径以及为什么**，并把"绑真正的 WS 连接生命周期"记进 Part 2 的待办。
+**这个未知已由 controller 在派单前查实（2026-08-29），下面两个分支都不适用，走第三条**：
+
+`JsonRpcRequest` 只有 `jsonrpc` / `method` / `params` / `id` 四个字段，**不带连接标识**——所以原写在这里的降级分支（Panel 自造 `client_id: String`）会被触发。**但它是错的，不要走**：
+
+1. `client_id` 是**调用方自己挑的**标识。视口表按它键控，就等于让分级轴由被分级的一方决定（判据清单 §5.17）。
+2. 更实在的是**生命周期**：客户端断线时没有任何东西会释放它的视口条目，而 sizing 是 smallest-wins ⇒ **一个死掉的客户端会把共享 PTY 永久钉在它最后要过的那个尺寸上**，且没有任何界面能看见这条僵尸记录。「`pty.close` 时释放」补不上这个洞——断线不是 close。
+
+**第三条路，也是本仓已有的做法**：`conn_id` 一直存在于 WS 分发循环里（`server/handler.rs:606`，`format!("{peer_addr}")`），只是没有交给 handler。`caller_identity.rs` 已经有一组 task-local（`CALLER_ROLE` / `CALLER_USER` / `CALLER_IS_LOOPBACK`），在 `handler.rs:1976-1981` 恰好围着 `process_request` 建立作用域——`conn_id` 就在那个作用域的调用点上。
+
+- 在 `caller_identity.rs` 加第四个 task-local `CALLER_CONN_ID: Option<String>`，与既有三个**同处**建立作用域，从那个 `conn_id` 播种；配一个 `current_caller_conn_id()` 取值函数。
+- `handle_resize` 读它。拿不到（非网关调用者）时**拒绝**而不是编一个 id。
+- 视口释放挂进**既有的连接拆除块**（`handler.rs:1895-1950`），紧挨着 `subscription_manager.remove_connection(&conn_id)`——那个块已经在为 conns / reverse-RPC / node registry / presence / subscriptions 五个子系统做同样的事，视口是第六个，不是一个新机制。
+
+这样既不新增第二条身份通道，也让"断线即释放"成为结构性的而不是纪律性的。
 
 - [ ] **Step 4: 跑测试，确认通过**
 
