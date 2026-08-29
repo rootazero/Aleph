@@ -2566,10 +2566,10 @@ answers a different question is a lie rather than a default."
 
 ---
 
-## Task 12: 会话开关 `[gateway.terminal]`
+## Task 12: 会话开关 `[policies.terminal]`
 
 **Files:**
-- Modify: `src/config/types/` 下的 gateway 配置类型、`src/config/reload_impact.rs`、`src/config/live_apply.rs`、`src/gateway/handlers/pty.rs`、`src/gateway/pty/manager.rs`
+- Modify: `src/config/types/policies/mod.rs`（+ 新建 `src/config/types/policies/terminal.rs`）、`src/config/reload_impact.rs`、`src/config/live_apply.rs`、`src/gateway/handlers/pty.rs`、`src/gateway/pty/manager.rs`
 
 **Interfaces:**
 - Consumes: 既有 `Config`
@@ -2579,10 +2579,44 @@ answers a different question is a lie rather than a default."
 
 - [ ] **Step 1: 写失败的测试**
 
-先定位 gateway 配置类型：
+⚠️ **controller 在派单前查实（2026-08-29）：本任务原来写的是 `[gateway.terminal]`，那个位置
+结构上不可用。整份计划已改名为 `[policies.terminal]`——这不是换个名字，是换一个真源。**
+
+**为什么 `[gateway]` 不行：`Config` 里根本没有 `gateway` 字段，而且是有意的。**
+`src/config/dead_keys.rs:75` 逐字写着这件事：
+
+```
+path: "gateway",
+why: "read by GatewayConfig::load_default (src/gateway/config.rs) out of this same file;
+      `Config` has no `gateway` field by design",
+```
+
+`[gateway]` 由 `src/gateway/config.rs::GatewayConfig` **第二个解析根**读同一个文件
+（`Config` 是另一个根）。三个下游机件因此全部够不到它：
+
+1. `apply_live_sections(cfg: &Config, ..)` 的入参是 `Config` —— 它**读不到** `cfg.gateway.*`；
+2. `LIVE_SUBSECTIONS` 里的路径命名的是 `Config` 内的子树，`"gateway.terminal"` 命名的是**另一个根**里的东西；
+3. **最要命的一条**：`self_config` / `config.patch` 经 `patcher.rs` 把 `Config` 序列化成 JSON、
+   打补丁、再反序列化回 `Config`。一个 `gateway.*` 补丁于是被**静默丢弃并报成功**
+   （判据「一个报成功的 no-op」）。也就是说 Task 12 的整个「热开关」故事、以及 Task 13 要为它加的
+   那道闸，**守的是一条写不进去的路径**。
+
+三个机件各自都有代码、各自都有测试，而它们连成的那条线一格都不通——这一类只有把三段放在一起读
+才看得见。
+
+**为什么 `[policies.terminal]` 是对的位置，而不只是可用的位置**：
+`PoliciesConfig` 已经装着 `exec_tier` / `mode` / `spend` / `tool_permissions` / `guardian`
+——**它就是「什么被允许」的那个 section**，而终端开关正是这样一个谓词，不是传输设置
+（host / port / TLS / origins 才是 `[gateway]` 该管的）。`policies.spend` 还是
+`LIVE_SUBSECTIONS` 唯一的既有成员，形状逐条对应：父 section 不 live、子 section live。
+**而 Task 13 要加条目的那张表 `GATE_DECIDING_CONFIG_PATHS` 现有两项都在 `policies.` 下**
+——新条目落在它们旁边，不再需要为「它凭什么和那两个并列」另找说辞。
+
+先读现有的 policies 配置类型（新字段加在这里，新类型建议单独一个文件）：
 
 ```bash
-grep -rn 'pub struct GatewayConfig' -A 25 src/config/types/ | head -40
+grep -n 'pub struct PoliciesConfig' -A 40 src/config/types/policies/mod.rs
+ls src/config/types/policies/
 ```
 
 Add tests 到该文件的 `mod tests`：
@@ -2617,7 +2651,7 @@ Add to `src/config/reload_impact.rs` 的 `mod tests`：
     #[test]
     fn the_terminal_switch_is_declared_live() {
         assert!(
-            LIVE_SUBSECTIONS.contains(&"gateway.terminal"),
+            LIVE_SUBSECTIONS.contains(&"policies.terminal"),
             "turning the terminal off must not wait for a restart"
         );
     }
@@ -2700,11 +2734,11 @@ impl Default for TerminalConfig {
 
 `GatewayConfig` 加 `#[serde(default)] pub terminal: TerminalConfig,`。
 
-`reload_impact.rs`：`LIVE_SUBSECTIONS` 加 `"gateway.terminal"`，并在其上方的 doc 里加一段说明（照 `policies.spend` 那段的写法）：
+`reload_impact.rs`：`LIVE_SUBSECTIONS` 加 `"policies.terminal"`，并在其上方的 doc 里加一段说明（照 `policies.spend` 那段的写法）：
 
 ⚠️ **controller 在派单前查实（2026-08-29）：上面这段 doc 只覆盖三个字段中的一个，照抄就是把
 `LIVE_SECTIONS` 自己的 doc 警告过的那个失效，往下挪了一层。** 那段 doc 逐字写着：把父 section 声明
-成 live 会「为那些没有 live-apply 接线的字段一并广告『无需重启』」——而 `gateway.terminal` 有**三个**
+成 live 会「为那些没有 live-apply 接线的字段一并广告『无需重启』」——而 `policies.terminal` 有**三个**
 字段，`enabled` 之外的两个各有各的真相：
 
 | 字段 | 真实的 liveness | 必须做什么 |
@@ -2716,7 +2750,7 @@ impl Default for TerminalConfig {
 所以那段 doc 必须**逐字段说话**，而不是给整个 subsection 一句总括：
 
 ```rust
-/// - `gateway.terminal` — declared live because each of its three fields is
+/// - `policies.terminal` — declared live because each of its three fields is
 ///   either applied at apply time or applies to work started afterwards, and
 ///   NONE of them silently requires a restart:
 ///   * `enabled` — read fresh from the live config on every `pty.spawn`, and
@@ -2762,11 +2796,11 @@ sketch 里已经有了），而是断言**走 `apply_live_sections` 这条路会
         let sid = mgr.spawn(&SpawnOptions::default()).expect("spawn").session_id;
 
         let mut cfg = Config::default();
-        cfg.gateway.terminal.enabled = false;
-        let applied = apply_live_sections(&cfg, &["gateway"]);
+        cfg.policies.terminal.enabled = false;
+        let applied = apply_live_sections(&cfg, &["policies"]);
 
         assert!(
-            applied.contains(&"gateway.terminal"),
+            applied.contains(&"policies.terminal"),
             "a declared-live target that does not land is not live"
         );
         assert!(
@@ -2776,7 +2810,7 @@ sketch 里已经有了），而是断言**走 `apply_live_sections` 这条路会
     }
 ```
 
-⚠️ 注意 `top_sections` 传的是 `["gateway"]` 而**不是** `["gateway.terminal"]`——单条 patch 的
+⚠️ 注意 `top_sections` 传的是 `["policies"]` 而**不是** `["policies.terminal"]`——单条 patch 的
 调用方（`patcher.rs`）只知道它写的那条路径的**顶层** section，`dotted_prefix_matches` 就是为这个
 写的。用精确名字传进去会让这条测试走一条生产上不存在的路。
 
@@ -2786,14 +2820,14 @@ sketch 里已经有了），而是断言**走 `apply_live_sections` 这条路会
 `live_apply.rs::apply_live_sections` 加一臂：把新值应用到进程 —— 关闭时 `close_all`：
 
 ```rust
-        if *target == "gateway.terminal" {
-            if !cfg.gateway.terminal.enabled {
+        if *target == "policies.terminal" {
+            if !cfg.policies.terminal.enabled {
                 let killed = crate::gateway::pty::manager().close_all();
                 if killed > 0 {
                     tracing::warn!(killed, "terminal disabled; live PTY sessions terminated");
                 }
             }
-            applied.push("gateway.terminal");
+            applied.push("policies.terminal");
         }
 ```
 （具体写法以该函数既有分支的结构为准。）
@@ -2825,7 +2859,7 @@ sketch 里已经有了），而是断言**走 `apply_live_sections` 这条路会
 
 ```rust
     /// Override the scrollback ceiling. Called at spawn from
-    /// `[gateway.terminal] scrollback_lines`; without this the field would be
+    /// `[policies.terminal] scrollback_lines`; without this the field would be
     /// settable and inert.
     pub fn set_scrollback_limit(&mut self, lines: usize) {
         self.scrollback_limit = lines.max(1);
@@ -2882,16 +2916,16 @@ sketch 里已经有了），而是断言**走 `apply_live_sections` 这条路会
     }
 ```
 
-`handlers/pty.rs::handle_spawn` 改成调 `spawn_with_scrollback(&opts, cfg.gateway.terminal.scrollback_lines as usize)`，并用 `cfg.gateway.terminal.max_sessions` 替换 `manager.rs` 里写死的 `MAX_SESSIONS`（把该常量改成 `PtyManager` 的一个字段，`spawn` 时现读配置传入 —— 与开关同一条"现读不快照"纪律）。
+`handlers/pty.rs::handle_spawn` 改成调 `spawn_with_scrollback(&opts, cfg.policies.terminal.scrollback_lines as usize)`，并用 `cfg.policies.terminal.max_sessions` 替换 `manager.rs` 里写死的 `MAX_SESSIONS`（把该常量改成 `PtyManager` 的一个字段，`spawn` 时现读配置传入 —— 与开关同一条"现读不快照"纪律）。
 
 `handlers/pty.rs::handle_spawn` 最前面加闸（**现读，不快照**）：
 
 ```rust
-    if !crate::config::current().gateway.terminal.enabled {
+    if !crate::config::current().policies.terminal.enabled {
         return JsonRpcResponse::error(
             id,
             INVALID_PARAMS,
-            "the embedded terminal is disabled ([gateway.terminal] enabled = false)".to_string(),
+            "the embedded terminal is disabled ([policies.terminal] enabled = false)".to_string(),
         );
     }
 ```
@@ -2909,7 +2943,7 @@ Expected: 全 passed。
 
 ```bash
 git add src/config/ src/gateway/
-git commit -m "gateway: add the [gateway.terminal] session gate, live and default-on
+git commit -m "gateway: add the [policies.terminal] session gate, live and default-on
 
 Declared in LIVE_SUBSECTIONS with a real handle behind it: a security switch
 that waits for a restart is not a switch. Turning it off also kills live
@@ -2940,7 +2974,7 @@ Add to `src/tools/scoped/gate_chain.rs` 的 `mod tests`：
     fn writing_the_terminal_switch_trips_the_destructive_argument_filter() {
         let args = serde_json::json!({
             "action": "set",
-            "path": "gateway.terminal.enabled",
+            "path": "policies.terminal.enabled",
             "value": true
         });
         assert!(
@@ -2990,9 +3024,9 @@ Add to `src/tools/scoped/gate_chain.rs` 的 `mod tests`：
 
 **不要新建 `GateRule` 变体，也不要新建平行常量。** 改动是**一个常量多一个条目 + 那个常量的 doc 重写**：
 
-`src/config/types/policies/exec_tier.rs` 的 `GATE_DECIDING_CONFIG_PATHS`（现有两项：`policies.tool_permissions` / `policies.exec_tier`）加 `"gateway.terminal"`。链路是 `GATE_DECIDING_CONFIG_PATHS` → `self_config_touches_the_gate` → `ExecTier::floor_asks_for_arguments` → `gate_removal_floor` → `confirmation_rule` 第 2 位。`dot_paths_intersect` 是**按段**比较的，所以 `"gateway.terminal"` 覆盖 `gateway.terminal.enabled`，而**不会**误命中一个假想的 `gateway.terminal_legacy`。
+`src/config/types/policies/exec_tier.rs` 的 `GATE_DECIDING_CONFIG_PATHS`（现有两项：`policies.tool_permissions` / `policies.exec_tier`）加 `"policies.terminal"`。链路是 `GATE_DECIDING_CONFIG_PATHS` → `self_config_touches_the_gate` → `ExecTier::floor_asks_for_arguments` → `gate_removal_floor` → `confirmation_rule` 第 2 位。`dot_paths_intersect` 是**按段**比较的，所以 `"policies.terminal"` 覆盖 `policies.terminal.enabled`，而**不会**误命中一个假想的 `policies.terminal_legacy`。
 
-⚠️ **doc 必须一起重写，这不是润色。** 那个常量现在的 doc 写的是「The two config subtrees that decide whether the argument-level cards above are raised **at all**」——一条**精确的成员资格规则**，而 `gateway.terminal.enabled` **不满足它**：打开终端不会让任何一张卡不响，它是**开出一条新的执行面**。两者都该无档位地举卡，但理由不同。把新条目塞进去而不改 doc，就是让一个常量的 doc 不再描述它自己的内容——「同一事实的两份表述」里最便宜也最常见的那一种。新 doc 要写出**覆盖两类成员的那条规则**（大意：模型不许无卡写入的配置子树——写下去要么**退掉**一张参数级卡，要么**交出**一个新的执行面）。**名字保留**：改名会牵动几处 doc 链接而换不到任何行为，含义由 doc 承载。
+⚠️ **doc 必须一起重写，这不是润色。** 那个常量现在的 doc 写的是「The two config subtrees that decide whether the argument-level cards above are raised **at all**」——一条**精确的成员资格规则**，而 `policies.terminal.enabled` **不满足它**：打开终端不会让任何一张卡不响，它是**开出一条新的执行面**。两者都该无档位地举卡，但理由不同。把新条目塞进去而不改 doc，就是让一个常量的 doc 不再描述它自己的内容——「同一事实的两份表述」里最便宜也最常见的那一种。新 doc 要写出**覆盖两类成员的那条规则**（大意：模型不许无卡写入的配置子树——写下去要么**退掉**一张参数级卡，要么**交出**一个新的执行面）。**名字保留**：改名会牵动几处 doc 链接而换不到任何行为，含义由 doc 承载。
 
 ⚠️ **两步路已经查过是闭合的**：模型想先写 `policies.tool_permissions` 把 `self_config` 点名、再无卡打开终端——**第一步自己就命中这条规则**（`policies.tool_permissions` 本来就在表上）。
 
@@ -3002,7 +3036,7 @@ Add to `src/tools/scoped/gate_chain.rs` 的 `mod tests`：
 - **`full` 档下这张卡不响**——而一个跑在 `full` 上的 operator 正是最可能一句话就把终端打开的人；
 - 卡上会出现「始终允许」，**点一次就永久授权此后每一次对终端配置的 `self_config` 写入**。
 
-而 `GateRemoval` 的 doc **逐字描述的就是这个情形**：「This call can reach the configuration that decides whether the approval gates fire at all」。而 `[gateway.terminal] enabled = true` **确实**是这样一个配置——`handlers/pty.rs` 的模块 doc 写着「A PTY is a raw shell: the command policy does not see it and the exec tier does not gate it」，所以打开终端等于开出一条**命令策略看不见、exec 档位管不着**的执行路径。
+而 `GateRemoval` 的 doc **逐字描述的就是这个情形**：「This call can reach the configuration that decides whether the approval gates fire at all」。而 `[policies.terminal] enabled = true` **确实**是这样一个配置——`handlers/pty.rs` 的模块 doc 写着「A PTY is a raw shell: the command policy does not see it and the exec tier does not gate it」，所以打开终端等于开出一条**命令策略看不见、exec 档位管不着**的执行路径。
 
 **要求**：按上面的裁定实现（`GATE_DECIDING_CONFIG_PATHS` 加一项 + 重写该常量的 doc），并在报告里逐条回答：
 
@@ -3040,7 +3074,7 @@ Expected: FAIL。
 
 - [ ] **Step 3: 实现**
 
-`gate_chain.rs` 的破坏性参数判据里加 `gateway.terminal` 前缀（与既有 `policies.tool_permissions` 那条同处，**照它的写法**，不新造一个平行表）。
+`gate_chain.rs` 的破坏性参数判据里加 `policies.terminal` 前缀（与既有 `policies.tool_permissions` 那条同处，**照它的写法**，不新造一个平行表）。
 
 `manager.rs`：`SessionInfo` 加 `pub created_by: Option<String>`；`PtySession` 加同名字段；`spawn` 改名为内部 `spawn_as(&self, opts, created_by: Option<String>)`，并保留 `spawn(&self, opts)` 委托给 `spawn_as(opts, None)`（既有测试与调用点不改）。
 
@@ -3081,12 +3115,12 @@ Task 12 里那条 `the_configured_scrollback_reaches_the_session_grid` 测试同
 - **cwd jail 只管起点**。终端内部的 `cd` 不受约束 —— 命令粒度的闸在交互式字节流上不可表达（`vim` 里的回车不是命令）。
   它买到的是**"每个终端的起点可枚举、可审计"，不是"终端不能离开工作区"**。别把它当成隔离来引用。
 - **PTY 不经 `[sandbox.command_policy]` 也不经 exec tier**（`method_admin.rs` 的注释自陈 "strictly more dangerous"）。
-  会话粒度的开关 `[gateway.terminal] enabled` 是这一层唯一说得出口的谓词；关掉它会杀掉在飞的会话。
+  会话粒度的开关 `[policies.terminal] enabled` 是这一层唯一说得出口的谓词；关掉它会杀掉在飞的会话。
 - **终端历史住在服务器上**（每会话 `scrollback_lines` 行，默认 1000），因此对诊断与审计面可见。
 - **同一装机的所有 operator 共享 `["*"]` 作用域**，能互相看见并 attach 彼此的会话。这是单层信任模型的有意结果，不是疏漏。
 ```
 
-同时把这三句的**同义表述**同批加到 `[gateway.terminal]` 的 doc comment 与 `self_config` 的 `DESCRIPTION` —— 一句关于什么被闸住的话有三份拷贝，最贵的那份是发给模型的。
+同时把这三句的**同义表述**同批加到 `[policies.terminal]` 的 doc comment 与 `self_config` 的 `DESCRIPTION` —— 一句关于什么被闸住的话有三份拷贝，最贵的那份是发给模型的。
 
 - [ ] **Step 4: 跑测试，确认通过**
 
@@ -4091,7 +4125,7 @@ pub fn TerminalView() -> impl IntoView {
                     Err(e) => error.set(Some(format!("spawn decode failed: {e}"))),
                 },
                 // Covers both refusals that have a way out: the gate
-                // ([gateway.terminal] enabled = false) and the cwd jail. The
+                // ([policies.terminal] enabled = false) and the cwd jail. The
                 // server's message names the remedy; show it verbatim.
                 Err(e) => error.set(Some(e)),
             }
@@ -4198,7 +4232,7 @@ Task 10 的 smallest-wins 视口表所设想的形态，不是它的例外。
 **实现时必须遵守的三条**（都是仓库已经踩过的坑）：
 1. **`request_animation_frame` 回调里不许 `NodeRef::get_untracked()`** —— 回调晚一帧执行，那一帧足够组件卸载，`get_untracked` 会 unwrap 成整页崩溃。把测量与取 canvas 收进**一个**私有函数，只有一种拼法。
 2. **`<Show when=…>` 的守卫与 body 是两个反应式作用域** —— 别在 body 里 `expect("visible implies Some")`；用单次读 + `Option` 视图。
-3. **`Err` 不许读作"空屏"** —— `pty.spawn` / `pty.attach` 失败要显示拒绝原因（尤其 `[gateway.terminal] enabled = false` 与 cwd jail 的拒绝，两者都是**有出路**的，措辞要说出出路）。
+3. **`Err` 不许读作"空屏"** —— `pty.spawn` / `pty.attach` 失败要显示拒绝原因（尤其 `[policies.terminal] enabled = false` 与 cwd jail 的拒绝，两者都是**有出路**的，措辞要说出出路）。
 
 DPR：挂载与 resize 时设 `canvas.width = (css_w * dpr) as u32`、`canvas.height = (css_h * dpr) as u32`，`ctx.scale(dpr, dpr)`；再按 `render::viewport_cells` 算出 rows/cols 发 `pty.resize`。
 
@@ -4221,7 +4255,7 @@ cargo run --bin aleph-server &
 7. 跑 `yes | head -100000` → 页面不卡死，WS 不断（这是 16ms 合流的核心收益）。
 8. Ctrl-C 能打断 `sleep 100`。
 9. 开第二个标签页到 `/terminal` → 两个标签页看到同一块屏，任一处输入两边都看得见。
-10. `[gateway.terminal] enabled = false` 后 `config` 热应用 → 在飞会话被杀，新 spawn 被拒且拒绝语说得出怎么打开。
+10. `[policies.terminal] enabled = false` 后 `config` 热应用 → 在飞会话被杀，新 spawn 被拒且拒绝语说得出怎么打开。
 
 **每条不过就停下修**，不要攒到最后。
 
