@@ -2702,12 +2702,39 @@ impl Default for TerminalConfig {
 
 `reload_impact.rs`：`LIVE_SUBSECTIONS` 加 `"gateway.terminal"`，并在其上方的 doc 里加一段说明（照 `policies.spend` 那段的写法）：
 
+⚠️ **controller 在派单前查实（2026-08-29）：上面这段 doc 只覆盖三个字段中的一个，照抄就是把
+`LIVE_SECTIONS` 自己的 doc 警告过的那个失效，往下挪了一层。** 那段 doc 逐字写着：把父 section 声明
+成 live 会「为那些没有 live-apply 接线的字段一并广告『无需重启』」——而 `gateway.terminal` 有**三个**
+字段，`enabled` 之外的两个各有各的真相：
+
+| 字段 | 真实的 liveness | 必须做什么 |
+|---|---|---|
+| `enabled` | **真 live**：`close_all()` 在 apply 时就完成 | 照 sketch 实现 |
+| `max_sessions` | ⚠️ **目前是死的**：`MAX_SESSIONS` 是 `manager.rs:24` 的 `const`。加了配置字段却不改它，这个键**patch 了什么都不会发生** | 让 spawn 处**每次读**活配置，别留 `const`；否则把它排除出 liveness 声明 |
+| `scrollback_lines` | **只对新会话生效**：它喂 `Grid::scrollback_limit`，而那是 `Grid::new` 时定的。已在跑的会话保留旧值 | **不要**去改已有会话的环（那会在一次 config patch 上销毁用户的回滚历史）。照实写进 doc |
+
+所以那段 doc 必须**逐字段说话**，而不是给整个 subsection 一句总括：
+
 ```rust
-/// - `gateway.terminal` — the gate is read fresh from the live config on every
-///   `pty.spawn`, and turning `enabled` off runs `PtyManager::close_all`, so
-///   the change is complete at apply time. `[gateway]`'s other fields (host,
-///   port, TLS) need a restart, hence the parent stays out of `LIVE_SECTIONS`.
+/// - `gateway.terminal` — declared live because each of its three fields is
+///   either applied at apply time or applies to work started afterwards, and
+///   NONE of them silently requires a restart:
+///   * `enabled` — read fresh from the live config on every `pty.spawn`, and
+///     turning it off runs `PtyManager::close_all`, so the change is complete
+///     when the patch returns.
+///   * `max_sessions` — read fresh at spawn time (deliberately NOT a `const`;
+///     it was one until this task, which would have made the key inert while
+///     this list advertised it as live).
+///   * `scrollback_lines` — applies to sessions started after the patch.
+///     Sessions already running keep the ring they were built with, because
+///     rewriting a live ring would destroy scrollback the user can still see.
+///     No restart is required to get the new value — only a new terminal.
+///   `[gateway]`'s other fields (host, port, TLS) DO need a restart, hence the
+///   parent stays out of `LIVE_SECTIONS`.
 ```
+
+**判据（这一条比这个 Task 大）**：一句「无需重启」的声明，必须由被它覆盖的**每一个**字段兑现。
+先问**这句话是谁执行的**，再问**是不是每条路径、每个字段都会执行它**——第二问才是这类缺陷的家。
 
 `live_apply.rs::apply_live_sections` 加一臂：把新值应用到进程 —— 关闭时 `close_all`：
 
