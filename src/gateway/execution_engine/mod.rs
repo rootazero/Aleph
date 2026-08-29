@@ -585,10 +585,9 @@ mod shared_room_lane_tests {
     }
 
     /// A conversation-shaped key, the shape the channel inbound router mints.
-    /// Unless a test binds this peer to a room, `room_claiming` answers `None`
-    /// for it and only the stamped half of the predicate is live — which is
-    /// what keeps the four pre-existing cases below measuring what they always
-    /// measured.
+    ///
+    /// Raw: use [`unclaimed_key`] instead unless the case deliberately binds
+    /// this peer to a room, which exactly one below does.
     fn key(peer: &str) -> crate::routing::session_key::SessionKey {
         crate::routing::session_key::SessionKey::group(
             "main",
@@ -598,6 +597,36 @@ mod shared_room_lane_tests {
         )
     }
 
+    /// The same key, with the property the cases below silently depend on
+    /// asserted rather than assumed.
+    ///
+    /// `for_shared_room` reads the process-global `ProjectStore` since the
+    /// room claim was ORed into its predicate, so every case here now has a
+    /// second input none of them passes. The four that predate that change are
+    /// correct only while nothing in this test binary has claimed their key —
+    /// a correct-by-accident property, and the shape
+    /// 「一个进程全局的表被第二个实例写」 watches. Stating it costs one store
+    /// read on a path that is about to make the same read anyway, and turns "a
+    /// sibling claimed this key" from a silently wrong answer into a red that
+    /// names the key.
+    ///
+    /// Deliberately NOT `projects::roster::TEST_GUARD`: that lock guards the
+    /// roster projection, which these cases neither read nor write. Making
+    /// four tests take a guard they do not need would state the property in
+    /// the wrong place and serialise them for nothing.
+    fn unclaimed_key(peer: &str) -> crate::routing::session_key::SessionKey {
+        let k = key(peer);
+        assert!(
+            crate::projects::ProjectStore::shared()
+                .room_claiming(&k)
+                .is_none(),
+            "premise: `{peer}` must be a key no room has claimed, or this case \
+             is measuring the CLAIM half of `for_shared_room` instead of the \
+             stamped half it was written for"
+        );
+        k
+    }
+
     /// The rule itself: another member's run is not yours to steer or kill.
     #[test]
     fn a_room_mates_run_forces_queue_whatever_the_knob_says() {
@@ -605,7 +634,7 @@ mod shared_room_lane_tests {
         let running = turn(Some("project:p-1"), Some("u-alice"));
         for knob in [BusyInputMode::Steer, BusyInputMode::Interrupt] {
             assert_eq!(
-                knob.for_shared_room(&key("unclaimed-1"), &incoming, &running),
+                knob.for_shared_room(&unclaimed_key("unclaimed-1"), &incoming, &running),
                 BusyInputMode::Queue,
                 "{knob:?} must not reach across authors"
             );
@@ -621,11 +650,11 @@ mod shared_room_lane_tests {
     fn the_same_person_speaking_twice_in_a_room_still_steers() {
         let alice = turn(Some("project:p-1"), Some("u-alice"));
         assert_eq!(
-            BusyInputMode::Steer.for_shared_room(&key("unclaimed-2"), &alice, &alice),
+            BusyInputMode::Steer.for_shared_room(&unclaimed_key("unclaimed-2"), &alice, &alice),
             BusyInputMode::Steer
         );
         assert_eq!(
-            BusyInputMode::Interrupt.for_shared_room(&key("unclaimed-2"), &alice, &alice),
+            BusyInputMode::Interrupt.for_shared_room(&unclaimed_key("unclaimed-2"), &alice, &alice),
             BusyInputMode::Interrupt
         );
     }
@@ -641,6 +670,22 @@ mod shared_room_lane_tests {
     /// is a different question, and an off-roster speaker steering a member's
     /// turn is worse rather than better. If someone later reuses that gate
     /// here, this test is what goes red.
+    ///
+    /// # Why nothing here is torn down
+    ///
+    /// The project and the binding stay in `ProjectStore::shared()` for the
+    /// rest of the test binary, and that is a decision rather than an
+    /// oversight. Both identifiers are unique by construction, and nothing
+    /// reads that store in a way this leftover can move: no test in the crate
+    /// enumerates it (`projects::store`'s counting tests all build a
+    /// `fresh_store()`, and there are zero `ProjectStore::shared()` calls in
+    /// that module), and the only two production `list()` consumers
+    /// (`extension`) `filter_map` on `workspace_path`, which `create(…, None)`
+    /// leaves unset. A teardown would be a SECOND write to a global that
+    /// sibling cases read without holding this test's guard — the failure mode
+    /// 「一个进程全局的表被第二个实例写」 names, and this branch already
+    /// carries one flaky test. Leaving it is the smaller risk, and what makes
+    /// that true is the distinctness of these two names: keep them distinct.
     #[test]
     fn a_room_mate_in_a_bound_channel_conversation_still_cannot_steer() {
         let _guard = crate::projects::roster::TEST_GUARD
@@ -666,7 +711,7 @@ mod shared_room_lane_tests {
         let running = turn(Some("personal:u-alice"), Some("u-alice"));
 
         assert_eq!(
-            BusyInputMode::Steer.for_shared_room(&key("C-unbound"), &incoming, &running),
+            BusyInputMode::Steer.for_shared_room(&unclaimed_key("C-unbound"), &incoming, &running),
             BusyInputMode::Steer,
             "premise: on the stamped half alone this pair is invisible — both \
              turns read `personal:`. If this ever queues, the assertions below \
@@ -692,13 +737,13 @@ mod shared_room_lane_tests {
         let incoming = turn(Some("personal:u-alice"), Some("u-bob"));
         let running = turn(Some("personal:u-alice"), Some("u-alice"));
         assert_eq!(
-            BusyInputMode::Steer.for_shared_room(&key("unclaimed-3"), &incoming, &running),
+            BusyInputMode::Steer.for_shared_room(&unclaimed_key("unclaimed-3"), &incoming, &running),
             BusyInputMode::Steer
         );
         // An unstamped (pre-P1) pair likewise.
         let bare = turn(None, None);
         assert_eq!(
-            BusyInputMode::Interrupt.for_shared_room(&key("unclaimed-4"), &bare, &bare),
+            BusyInputMode::Interrupt.for_shared_room(&unclaimed_key("unclaimed-4"), &bare, &bare),
             BusyInputMode::Interrupt
         );
     }
@@ -709,11 +754,11 @@ mod shared_room_lane_tests {
         let anonymous = turn(Some("project:p-1"), None);
         let alice = turn(Some("project:p-1"), Some("u-alice"));
         assert_eq!(
-            BusyInputMode::Steer.for_shared_room(&key("unclaimed-5"), &anonymous, &alice),
+            BusyInputMode::Steer.for_shared_room(&unclaimed_key("unclaimed-5"), &anonymous, &alice),
             BusyInputMode::Queue
         );
         assert_eq!(
-            BusyInputMode::Steer.for_shared_room(&key("unclaimed-5"), &alice, &anonymous),
+            BusyInputMode::Steer.for_shared_room(&unclaimed_key("unclaimed-5"), &alice, &anonymous),
             BusyInputMode::Queue
         );
     }
