@@ -2917,7 +2917,39 @@ Add to `src/tools/scoped/gate_chain.rs` 的 `mod tests`：
 
 ⚠️ **controller 在派单前查实（2026-08-29）：先决定用哪条规则，`DestructiveArguments` 很可能是错的那一条。**
 
-`gate_chain.rs::is_floor()` 只对 **`ToolDeclared` 与 `GateRemoval`** 返回 `true`；`DestructiveArguments` 明确是 `false`。**floor 在这个子系统里同时意味着两件事**（那个函数的注释自己写着）：① 这条规则举的卡**不许提供持久授权**（"always allow"）；② 在 `effective_permission` 里它是 **rung 0**，一条显式的 `[policies.tool_permissions]` 条目**掀不翻它**——也就是**每一个档位都问，`full` 也问**。
+⚠️ **controller 在派单前把机制追到底了（2026-08-29），上一版写在这里的理由是错的，而结论是对的——所以这一段整个换掉，并且换成了一条比原来小得多的改动。**
+
+**错在哪：** 上一版写「`is_floor()` 返回 true 同时买到两件事：卡不许持久授权 + 在 `effective_permission` 里是 rung 0，显式条目掀不翻它」。`is_floor()` 自己的注释**恰恰在否认这句话**——它逐字写着 "⚠️ 'Floor' means two different things in this subsystem and they are not in conflict"，并且**同一个 `match` 里就坐着反例**：`PlanMode` 在 `is_floor()` 里是 `false`，在 `effective_permission` 里却正是 rung 0。两个轴是两个文件里的两套机件：
+
+- `effective_permission` 的 rung 0（`src/config/types/policies/exec_tier.rs:481`）键控在 **`tier.rule_for(facts) == Some(Deny)`** 上——它问的是「**exec 档位**拒绝了吗」，与 `gate_chain` **毫无关系**。
+- `is_floor()` 只买 ①（这张卡不许提供 "always allow"）。
+
+按上一版的理由做下去会得到一个**半截地板**：新变体 `is_floor()` 返回 true、拿到不许持久授权，却在链上排到第 3 位或更后 ⇒ **`full` 档下照旧不响**，而报告会写「已按 floor 实现」。这正是判据清单那条「**一个「地板」如果排在 explicit 条目之下，它就不是地板，是默认值**」。
+
+**真正买到「`full` 也问」的是链上的位置，不是那个谓词。** `confirmation_rule`（`gate_chain.rs:372`）是一条**有序**链，它的注释逐条写明了这一点：
+
+1. `ToolDeclared` —— 注释：「Read independently of the tier and of any explicit `allow`」
+2. `GateRemoval` —— `gate_removal_floor()`
+3. `DestructiveArguments` —— `tier_asks_for_arguments()`，**对被精确点名的工具让位**
+4/5. 之后才第一次去问 `permission_for(name)`
+
+**第 1、2 位在碰 `permission_for` 之前就 return 了**——这才是「每个档位都问、`full` 也问」的来源。第 3 位不是。
+
+**顺带纠正一句范围**：`GateRemoval` 也**不是**「显式条目掀不翻」。`gate_removal_floor` = `!explicitly_named(name) && ExecTier::floor_asks_for_arguments(name, input)`，所以一条**精确点名** `self_config` 的 `[policies.tool_permissions]` 条目确实能让它站下——这是有意的（那条条目是人写的，而**创建它的那次写入自己会经这条规则举卡**），也正是判据清单里「操作者显式点名了这个工具」必须精确匹配的那一条。
+
+---
+
+**因此本任务的裁定（controller，已核实机制、已核实两处 doc 原文）：**
+
+**不要新建 `GateRule` 变体，也不要新建平行常量。** 改动是**一个常量多一个条目 + 那个常量的 doc 重写**：
+
+`src/config/types/policies/exec_tier.rs` 的 `GATE_DECIDING_CONFIG_PATHS`（现有两项：`policies.tool_permissions` / `policies.exec_tier`）加 `"gateway.terminal"`。链路是 `GATE_DECIDING_CONFIG_PATHS` → `self_config_touches_the_gate` → `ExecTier::floor_asks_for_arguments` → `gate_removal_floor` → `confirmation_rule` 第 2 位。`dot_paths_intersect` 是**按段**比较的，所以 `"gateway.terminal"` 覆盖 `gateway.terminal.enabled`，而**不会**误命中一个假想的 `gateway.terminal_legacy`。
+
+⚠️ **doc 必须一起重写，这不是润色。** 那个常量现在的 doc 写的是「The two config subtrees that decide whether the argument-level cards above are raised **at all**」——一条**精确的成员资格规则**，而 `gateway.terminal.enabled` **不满足它**：打开终端不会让任何一张卡不响，它是**开出一条新的执行面**。两者都该无档位地举卡，但理由不同。把新条目塞进去而不改 doc，就是让一个常量的 doc 不再描述它自己的内容——「同一事实的两份表述」里最便宜也最常见的那一种。新 doc 要写出**覆盖两类成员的那条规则**（大意：模型不许无卡写入的配置子树——写下去要么**退掉**一张参数级卡，要么**交出**一个新的执行面）。**名字保留**：改名会牵动几处 doc 链接而换不到任何行为，含义由 doc 承载。
+
+⚠️ **两步路已经查过是闭合的**：模型想先写 `policies.tool_permissions` 把 `self_config` 点名、再无卡打开终端——**第一步自己就命中这条规则**（`policies.tool_permissions` 本来就在表上）。
+
+下面这段是上一版的论证，**结论仍然成立**（终端配置该走 `GateRemoval` 这一位，不该走 `DestructiveArguments`），保留它是因为它说清了为什么：
 
 用 `DestructiveArguments` 的后果因此有两个，都不是我们要的：
 - **`full` 档下这张卡不响**——而一个跑在 `full` 上的 operator 正是最可能一句话就把终端打开的人；
@@ -2925,9 +2957,14 @@ Add to `src/tools/scoped/gate_chain.rs` 的 `mod tests`：
 
 而 `GateRemoval` 的 doc **逐字描述的就是这个情形**：「This call can reach the configuration that decides whether the approval gates fire at all」。而 `[gateway.terminal] enabled = true` **确实**是这样一个配置——`handlers/pty.rs` 的模块 doc 写着「A PTY is a raw shell: the command policy does not see it and the exec tier does not gate it」，所以打开终端等于开出一条**命令策略看不见、exec 档位管不着**的执行路径。
 
-**要求**：在 `DestructiveArguments` 与 `GateRemoval` 之间做一次显式裁定，并把理由写进报告。**推荐 `GateRemoval`**，理由如上。若选它，则它的两条既有约束一并生效且必须遵守——**reason 不许指向某个可调设置**（因为没有哪个设置能关掉它），**卡不许提供持久授权**。若你在读完两个变体的 doc 后认为 `DestructiveArguments` 才对，那就用它，但要在报告里回答「`full` 档下这张卡还响吗」。
+**要求**：按上面的裁定实现（`GATE_DECIDING_CONFIG_PATHS` 加一项 + 重写该常量的 doc），并在报告里逐条回答：
 
-（controller 核实过的是**机制**——`is_floor` 的返回值与两段 doc 的原文；**没有**核实过设计意图，所以这是一次带论据的推荐，不是既成裁定。）
+1. **`full` 档下这张卡响吗？** 要有一条**真的把档位设成 `Full`** 的测试，而不是断言 `is_floor()` 返回什么——后者测的是那个谓词，不是链上的位置。
+2. **这张卡提供「始终允许」吗？** 必须不提供。
+3. **一条精确点名 `self_config` 的 `[policies.tool_permissions]` 条目会让它站下吗？** 会——这是有意的；确认它，别去"修"它。
+4. **重写后的 doc 说得出两个成员共同满足的那条规则吗？** 把新 doc 原文贴进报告。
+
+（controller 核实过的是**机制**：`confirmation_rule` 的链序与逐条注释、`is_floor` 的返回值与它自己那段「两个含义」的警告、`effective_permission` rung 0 的真实键控、`gate_removal_floor` 的两个合取项、`GATE_DECIDING_CONFIG_PATHS` 的现有成员与它的 doc 原文、`dot_paths_intersect` 的按段语义。**没有**核实的是那个常量的作者是否愿意让它容纳第二类成员——所以第 4 问的答案如果写不出来，**停下来上报**，别把 doc 写成一句含糊话把两类东西糊在一起。）
 
 Add to `src/gateway/pty/manager.rs` 的 `mod tests`：
 
