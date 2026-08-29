@@ -137,10 +137,17 @@ impl BuiltinToolRegistry {
                 }
                 _ => None,
             };
-            let resolve = plan_manager.as_ref().map(|pm| {
-                use crate::builtin_tools::team::PlanResolveTool;
-                PlanResolveTool::new(Arc::clone(pm), current_agent_id.clone())
-            });
+            let resolve = match (plan_manager.as_ref(), config.team_store.as_ref()) {
+                (Some(pm), Some(team_store)) => Some({
+                    use crate::builtin_tools::team::PlanResolveTool;
+                    PlanResolveTool::new(
+                        Arc::clone(pm),
+                        current_agent_id.clone(),
+                        Arc::clone(team_store),
+                    )
+                }),
+                _ => None,
+            };
 
             // Register parameter schemas
             {
@@ -191,8 +198,11 @@ impl BuiltinToolRegistry {
                     Arc::clone(team_store),
                     current.clone(),
                 );
-                let resolve =
-                    LifecycleResolveShutdownTool::new(Arc::clone(router), current.clone());
+                let resolve = LifecycleResolveShutdownTool::new(
+                    Arc::clone(router),
+                    current.clone(),
+                    Arc::clone(team_store),
+                );
                 (idle, request, resolve)
             };
 
@@ -316,7 +326,7 @@ impl BuiltinToolRegistry {
             let turn = config.session_coordinator.as_ref().map(|coord| {
                 crate::builtin_tools::team::SessionTurnTool::new(
                     Arc::clone(coord),
-                    current_agent_id,
+                    current_agent_id.clone(),
                 )
             });
             let read = match (config.session_store.as_ref(), config.team_store.as_ref()) {
@@ -324,6 +334,7 @@ impl BuiltinToolRegistry {
                     crate::builtin_tools::team::SessionReadTool::new(
                         Arc::clone(store),
                         Arc::clone(team_store),
+                        current_agent_id.clone(),
                     ),
                 ),
                 _ => None,

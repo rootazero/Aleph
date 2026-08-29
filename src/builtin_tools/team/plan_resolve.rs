@@ -40,6 +40,7 @@ pub struct PlanResolveOutput {
 pub struct PlanResolveTool {
     plan_manager: Arc<PlanManager>,
     current_agent_id: String,
+    team_store: Arc<dyn crate::teams::TeamStore>,
 }
 
 impl PlanResolveTool {
@@ -50,10 +51,15 @@ impl PlanResolveTool {
     }
 
     #[must_use]
-    pub const fn new(plan_manager: Arc<PlanManager>, current_agent_id: String) -> Self {
+    pub fn new(
+        plan_manager: Arc<PlanManager>,
+        current_agent_id: String,
+        team_store: Arc<dyn crate::teams::TeamStore>,
+    ) -> Self {
         Self {
             plan_manager,
             current_agent_id,
+            team_store,
         }
     }
 }

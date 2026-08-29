@@ -15,6 +15,40 @@ use tracing::{debug, info, warn};
 use super::args::{ContentFormat, PdfGenerateArgs, PdfGenerateOutput};
 use crate::builtin_tools::error::ToolError;
 
+/// Best-effort fsync of a file. Returns the error if the file is not open
+/// or the platform lacks `sync_all`, but a failure here does NOT undo the
+/// write — the temp → rename that follows is the atomicity boundary; the
+/// fsync just makes the durability window shorter.
+fn sync_all_best_effort(path: &Path) -> std::io::Result<()> {
+    let f = std::fs::File::open(path)?;
+    f.sync_all()
+}
+
+/// Sync analog of `crate::utils::atomic_write::atomic_write_bytes`. Used by
+/// the PDF native engine because `generate` is itself sync (it runs under
+/// `spawn_blocking` upstream in mod.rs), and the await cannot land here.
+fn atomic_write_bytes_sync(path: &Path, bytes: &[u8]) -> Result<(), ToolError> {
+    let tmp_path = path.with_extension("pdf.tmp");
+    if let Err(e) = std::fs::write(&tmp_path, bytes) {
+        return Err(ToolError::Execution(format!(
+            "Failed to write PDF temp file {}: {e}",
+            tmp_path.display()
+        )));
+    }
+    if let Err(e) = sync_all_best_effort(&tmp_path) {
+        tracing::warn!(error = %e, path = %tmp_path.display(), "PDF: fsync failed (continuing)");
+    }
+    if let Err(e) = std::fs::rename(&tmp_path, path) {
+        // Best-effort cleanup of the orphan temp file before propagating.
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(ToolError::Execution(format!(
+            "Failed to write PDF file {}: {e}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 /// Generate a PDF using the native printpdf engine
 ///
 /// Takes a reference to args and a pre-resolved output path.
@@ -264,12 +298,11 @@ pub fn generate(
 
     // Write the PDF bytes atomically: `std::fs::write` is non-atomic — a crash
     // mid-write leaves a truncated / zero-byte file at output_path and the
-    // caller cannot tell 'partial write' from 'no data'. `atomic_write_bytes`
-    // writes to a temp file and renames into place (and fsyncs), matching the
-    // canvas and bundled paths. `generate` is on `spawn_blocking` already, so
-    // the sync helper is the right shape here.
-    crate::utils::atomic_write::atomic_write_bytes(output_path, &pdf_bytes)
-        .map_err(|e| ToolError::Execution(format!("Failed to write PDF file: {e}")))?;
+    // caller cannot tell 'partial write' from 'no data'. The temp + rename +
+    // fsync path below mirrors the canvas / bundled paths' atomicity
+    // invariant. `generate` runs on the blocking pool (see mod.rs
+    // `spawn_blocking`), so a sync write is the right shape here.
+    atomic_write_bytes_sync(output_path, &pdf_bytes)?;
 
     info!(
         output = %output_path.display(),

@@ -317,7 +317,7 @@ pub async fn execute_organize(
             }
             Ok(true) => {}
             Err(e) => {
-                errors.push(format!("Failed to stat {category_dir}: {e}"));
+                errors.push(format!("Failed to stat {}: {e}", category_dir.display()));
                 continue;
             }
         }

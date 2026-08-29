@@ -18,7 +18,7 @@ pub(crate) fn acp_default_cwd() -> String {
 ///
 /// Used by every team tool that takes a `team_id` argument (snapshot,
 /// session_*, plan_resolve, lifecycle_resolve_shutdown, set_protocol,
-/> disband, status, team_digest, task_read_artifact). The gate that used to
+/// disband, status, team_digest, task_read_artifact). The gate that used to
 /// live only on `task_team_reachable` — ownership — is now applied here
 /// too: without it, any agent that knew a team's id could list its
 /// snapshots, read its sessions, set its protocol, and disband it. The

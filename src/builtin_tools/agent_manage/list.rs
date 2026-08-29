@@ -5,7 +5,7 @@ use std::fmt;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::error::Result;
 use crate::gateway::agent_env::AgentEnvStore;

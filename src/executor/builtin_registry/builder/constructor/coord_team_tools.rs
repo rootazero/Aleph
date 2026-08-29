@@ -182,12 +182,16 @@ impl BuiltinToolRegistry {
                 config.artifact_store.clone(),
             );
             let status = TeamStatusTool::new(Arc::clone(store), Arc::clone(coord_store));
-            let disband = TeamDisbandTool::new(Arc::clone(store)).with_cleanup_stores(
-                config.message_store.clone(),
-                config.session_store.clone(),
-                config.event_store.clone(),
+            let disband = TeamDisbandTool::new(Arc::clone(store), current_agent_id.clone())
+                .with_cleanup_stores(
+                    config.message_store.clone(),
+                    config.session_store.clone(),
+                    config.event_store.clone(),
+                );
+            let set_protocol = TeamSetProtocolTool::new(
+                Arc::clone(store),
+                current_agent_id.clone(),
             );
-            let set_protocol = TeamSetProtocolTool::new(Arc::clone(store));
             let member_add = TeamMemberAddTool::new(
                 Arc::clone(store),
                 Arc::clone(&agent_registry),

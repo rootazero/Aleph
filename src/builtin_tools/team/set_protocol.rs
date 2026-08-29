@@ -49,11 +49,21 @@ pub struct TeamSetProtocolOutput {
 #[derive(Clone)]
 pub struct TeamSetProtocolTool {
     store: Arc<dyn TeamStore>,
+    current_agent_id: String,
 }
 
 impl TeamSetProtocolTool {
-    pub fn new(store: Arc<dyn TeamStore>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<dyn TeamStore>, current_agent_id: String) -> Self {
+        Self {
+            store,
+            current_agent_id,
+        }
+    }
+
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        crate::builtin_tools::acting_agent::acting_agent_id(&self.current_agent_id)
     }
 }
 

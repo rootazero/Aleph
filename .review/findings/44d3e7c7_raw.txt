@@ -1,0 +1,151 @@
+Now I have a complete picture. Returning the JSON report:
+
+```json
+{
+  "module": "src/browser",
+  "files_reviewed": 18,
+  "findings": [
+    {
+      "file": "src/browser/chrome_mcp.rs",
+      "line": 384,
+      "severity": "high",
+      "category": "security",
+      "issue": "Linux `is_chrome_running` uses `pgrep -x chrome`, missing Chromium (`chromium`/`chromium-browser`), Brave (`brave`/`brave-browser`) and Edge — false negative causes Aleph to launch its own Chrome alongside the user's existing browser.",
+      "evidence": "#[cfg(all(unix, not(target_os = \"macos\")))]\nstd::process::Command::new(\"pgrep\").arg(\"-x\").arg(\"chrome\")",
+      "suggested_fix": "Iterate over CHROMIUM_NAMES from discovery.rs and probe each, or query a broader list (chrome|chromium|chromium-browser|brave-browser|msedge) with a single pgrep.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/browser/chrome_mcp.rs",
+      "line": 167,
+      "severity": "high",
+      "category": "security",
+      "issue": "`default_user_data_dir_for` falls back to `/tmp/.aleph` when no home resolves; `/tmp` is world-writable, so a local attacker can pre-create `/tmp/.aleph/browser/chrome-mcp/<profile>/user-data-dir` as a symlink to redirect Chrome's profile dir (TOCTOU).",
+      "evidence": "let root = crate::utils::paths::get_config_dir().unwrap_or_else(|_| std::path::PathBuf::from(\"/tmp/.aleph\"));",
+      "suggested_fix": "Refuse to launch when home resolution fails (return BrowserError), or use a directory under `/var/run/<uid>` / XDG_RUNTIME_DIR — never `/tmp` for security-sensitive state.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/browser/chrome_mcp.rs",
+      "line": 197,
+      "severity": "high",
+      "category": "concurrency",
+      "issue": "`Drop` sends SIGKILL to recorded PIDs without verifying the PID still refers to the Chrome Aleph launched — PIDs are reused, so a later SIGKILL may kill an unrelated process owned by the same user.",
+      "evidence": "for pid in pids { let rc = unsafe { libc::kill(pid as i32, libc::SIGKILL) }; }",
+      "suggested_fix": "Track PIDs alongside their launch time and only signal when the start time matches; or use a process-group kill (kill(-pid)) so child processes share the fate; or store the `Child` handle and use `start_kill` on shutdown.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/browser/chrome_mcp.rs",
+      "line": 60,
+      "severity": "low",
+      "category": "api_misuse",
+      "issue": "`looks_like_transport_error` calls `s.contains(n)` then `s.find(n)` — two linear scans per needle instead of one; trivially replaceable with a single find-iteration.",
+      "evidence": "if s.contains(n) { if let Some(idx) = s.find(n) { ... } }",
+      "suggested_fix": "Drop the `contains` call and pattern-match on `find` directly.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/browser/chrome_mcp_backend.rs",
+      "line": 284,
+      "severity": "medium",
+      "category": "security",
+      "issue": "`screenshot` fallback path detects error text by string-prefix on `error`/`failed:`/`permission denied`/`access denied`; the underlying MCP server contract isn't pinned by a test, so a server wording change silently regresses to base64-decode errors.",
+      "evidence": "if head_lower.starts_with(\"error\") || head_lower.starts_with(\"failed:\") || head_lower.starts_with(\"permission denied\") || head_lower.starts_with(\"access denied\")",
+      "suggested_fix": "Probe the JSON content type array shape first (image vs text) and only attempt base64 on confirmed image responses; treat empty text + no image as failure without heuristics.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/browser/chrome_mcp_backend.rs",
+      "line": 175,
+      "severity": "medium",
+      "category": "concurrency",
+      "issue": "`emulate` serializes `extra_http_headers` to a JSON string (`serde_json::to_string(headers)`) and passes it as `extraHttpHeaders` — wire contract with the MCP server is unverified by a test, mirroring the `wait_for` text-vs-list shape defect that broke the same backend.",
+      "evidence": "let encoded = serde_json::to_string(headers)... args.insert(\"extraHttpHeaders\".into(), json!(encoded));",
+      "suggested_fix": "Pin the wire shape with an integration test against a fake server (same approach as the wait_for/fill_form pinning tests) or check the MCP server's published schema explicitly.",
+      "confidence": "low"
+    },
+    {
+      "file": "src/browser/chrome_mcp_backend.rs",
+      "line": 384,
+      "severity": "medium",
+      "category": "concurrency",
+      "issue": "`wait_for` releases the per-profile serialization lock before issuing the MCP `wait_for` call so concurrent ops don't stall; a concurrent `select_page` on the same profile during the up-to-120s wait re-targets the wait at a different page (documented trade-off, but worth a re-target lock or wait-bound tab id).",
+      "evidence": "{ let _guard = self.profile_guard().await; self.select_page(tab_id).await?; } let outcome = self.call(\"wait_for\", wait_for_args(text, timeout_ms)).await;",
+      "suggested_fix": "Either accept the documented race or pass the tab id into the MCP `wait_for` call (if supported server-side) so the wait binds to the tab not the page-selection.",
+      "confidence": "low"
+    },
+    {
+      "file": "src/browser/playwright_cli_backend.rs",
+      "line": 322,
+      "severity": "medium",
+      "category": "resource_leak",
+      "issue": "`screenshot` writes its temp file to `std::env::temp_dir()` (`/tmp/aleph-ss-<uuid>.{png,jpg}`) — outside Aleph's `~/.aleph/data/browser` containment and the file_ops gate. A successful screenshot reads then `remove_file`s it, but if the process dies between `read` and `remove`, the temp file lingers indefinitely in `/tmp`.",
+      "evidence": "let mut path = std::env::temp_dir(); let fname = format!(\"aleph-ss-{}.{ext}\", uuid::Uuid::new_v4()); path.push(fname);",
+      "suggested_fix": "Write under `browser_state_dir(\"cli-screenshots\")` (consistent with `playwright_launch::output_dir_for` and `config_path_for`), or add a startup `sweep_tmp_aleph_ss_files` task.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/browser/manager.rs",
+      "line": 215,
+      "severity": "low",
+      "category": "concurrency",
+      "issue": "`spawn_idle_reaper`'s claim-or-skip check uses `existing.strong_count() > 0`, which is a non-atomic read against the same Arc the next line downgrades — under contention the count can go to zero between the check and the downgrade, causing a brief window where the slot is stolen from a manager that just dropped its last owner.",
+      "evidence": "match slot.as_ref() { Some(existing) if existing.strong_count() > 0 => { ... return; } Some(_) | None => { ... } }",
+      "suggested_fix": "Use `Arc::ptr_eq` against a stored sentinel or accept the race (acceptable since stealing a dying manager's slot is harmless — only flags it as a finding).",
+      "confidence": "low"
+    },
+    {
+      "file": "src/browser/chrome_mcp_backend.rs",
+      "line": 119,
+      "severity": "low",
+      "category": "api_misuse",
+      "issue": "`select_page` parses `tab_id` as `u32`; tab ids larger than u32::MAX (or with leading zeros) silently fail with a `TabNotFound`-shaped error that doesn't explain the actual reason (parse error vs. genuine absence).",
+      "evidence": "let page_id: u32 = tab_id.parse().map_err(|_| BrowserError::ActionFailed(format!(\"Invalid tab ID '{tab_id}': expected numeric page ID\")))?;",
+      "suggested_fix": "Use `str::parse::<u32>()` then map the parse error to a dedicated `InvalidTabId` variant or include the parse error in the message.",
+      "confidence": "low"
+    },
+    {
+      "file": "src/browser/chrome_mcp.rs",
+      "line": 240,
+      "severity": "low",
+      "category": "error_context",
+      "issue": "`ensure_chrome_running` failure path loses context — the error from the initial MCP connect (`tracing::info!` discards it) is followed by a fresh `AttachFailed`, so an operator cannot see what made the first connect fail (only that the retry path failed too).",
+      "evidence": "tracing::info!(\"Chrome DevTools MCP connection failed, attempting to launch Chrome: {e}\"); ... BrowserError::AttachFailed(format!(\"Failed to connect Chrome DevTools MCP after launching Chrome: {e}\"))",
+      "suggested_fix": "Chain the original error into the AttachFailed message (e.g. `format!(\"... after launching Chrome (initial connect: {initial_e}): {retry_e}\")`).",
+      "confidence": "low"
+    },
+    {
+      "file": "src/browser/network_policy.rs",
+      "line": 112,
+      "severity": "low",
+      "category": "clippy",
+      "issue": "Duplicated `const fn default_true() -> bool { true }` between `network_policy.rs` and `profile.rs` — same one-line constant declared twice.",
+      "evidence": "src/browser/network_policy.rs:112  const fn default_true() -> bool { true }  / src/browser/profile.rs:139  const fn default_true() -> bool { true }",
+      "suggested_fix": "Hoist into `src/utils/` (or `types.rs`) and import from both sites.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/browser/playwright_cli.rs",
+      "line": 239,
+      "severity": "low",
+      "category": "api_misuse",
+      "issue": "`spawn` reads the child's stdout/stderr via `child.wait_with_output()` under a tokio timeout — if the child fills its pipe buffers before being read, the process blocks on write and the timeout never trips because the read side never yields.",
+      "evidence": "let output_fut = child.wait_with_output(); let output = match tokio::time::timeout(timeout, output_fut).await { ... }",
+      "suggested_fix": "Spawn a background drain task that continuously reads stdout/stderr into bounded `Vec<u8>`s while `wait()` runs, so pipe pressure cannot deadlock the child.",
+      "confidence": "low"
+    },
+    {
+      "file": "src/browser/types.rs",
+      "line": 91,
+      "severity": "low",
+      "category": "dead_code",
+      "issue": "Inner `default_screenshot_format` free function is `pub(super)`-equivalent — only used by `impl Default for ScreenshotOpts`. Inline it into the Default impl or behind a single const.",
+      "evidence": "fn default_screenshot_format() -> String { \"png\".to_string() } impl Default for ScreenshotOpts { fn default() -> Self { Self { ..., format: default_screenshot_format(), } } }",
+      "suggested_fix": "Inline as `format: String::from(\"png\")` (or const `SCREENSHOT_DEFAULT_FORMAT: &str = \"png\"`); serde's `default = \"...\"` must point to a function but the Default impl can construct directly.",
+      "confidence": "low"
+    }
+  ],
+  "summary": "Browser module is generally high-quality with thoughtful invariants (DNS pinning via SSRF, post-navigation audit, secret egress boundary). The standout high-severity findings are platform-coverage and TOCTOU issues in `chrome_mcp.rs`: `is_chrome_running` only probes Chrome on Linux so existing Chromium/Brave/Edge sessions cause duplicate browser launches, and `/tmp/.aleph` fallback for `default_user_data_dir` is exploitable via symlink race. Medium findings center on unverified wire contracts (header serialization shape) and temp-file leakage outside Aleph's containment. Concurrency, error handling, and resource cleanup are otherwise solid."
+}
+```

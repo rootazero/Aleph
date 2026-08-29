@@ -429,15 +429,13 @@ pub async fn execute_copy(
         let from_canonical = from_canonical.clone();
         let to_canonical = to_canonical.clone();
         let denied_paths = denied_paths.to_vec();
-        let mut tally_local = CopyTally::default();
         let mut visited = std::collections::HashSet::new();
-        tokio::task::spawn_blocking(move || {
+        let tally_local: CopyTally = tokio::task::spawn_blocking(move || {
             copy_dir_recursive(
                 &from_canonical,
                 &to_canonical,
                 &denied_paths,
                 &mut visited,
-                &mut tally_local,
             )
         })
         .await
@@ -596,8 +594,8 @@ fn copy_dir_recursive(
     to: &Path,
     denied_paths: &[String],
     visited: &mut std::collections::HashSet<PathBuf>,
-    tally: &mut CopyTally,
-) -> Result<(), ToolError> {
+) -> Result<CopyTally, ToolError> {
+    let mut tally = CopyTally::default();
     fs::create_dir_all(to)
         .map_err(|e| ToolError::Execution(format!("Failed to create directory: {e}")))?;
 
@@ -661,14 +659,20 @@ fn copy_dir_recursive(
         }
 
         if from_path.is_dir() {
-            copy_dir_recursive(&from_path, &to_path, denied_paths, visited, tally)?;
+            // Reborrow `visited` for the recursive call so the cycle-check
+            // borrow above is released before we hand the reference down.
+            let sub_tally =
+                copy_dir_recursive(&from_path, &to_path, denied_paths, &mut *visited)?;
+            tally.bytes += sub_tally.bytes;
+            tally.protected += sub_tally.protected;
+            tally.unresolvable += sub_tally.unresolvable;
         } else {
             tally.bytes += fs::copy(&from_path, &to_path)
                 .map_err(|e| ToolError::Execution(format!("Failed to copy file: {e}")))?;
         }
     }
 
-    Ok(())
+    Ok(tally)
 }
 
 /// Recursively count a path plus every entry beneath it, so `delete` can report

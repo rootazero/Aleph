@@ -792,7 +792,7 @@ mod tests {
         // The DNS pin was removed (see network_policy's note): a control that
         // cannot fire on the reachable path is worse than none, because three
         // comments claimed it worked. This asserts it stays gone.
-        let args = chrome_launch_args(None, "default");
+        let args = chrome_launch_args(None, "default").unwrap();
         assert!(
             !args.iter().any(|a| a.contains("--host-resolver-rules")),
             "no --host-resolver-rules may reach Chrome — args = {args:?}"
@@ -807,7 +807,7 @@ mod tests {
             user_data_dir: Some("/tmp/aleph-profile".into()),
             ..Default::default()
         };
-        let args = chrome_launch_args(Some(&cfg), "default");
+        let args = chrome_launch_args(Some(&cfg), "default").unwrap();
         assert!(args.contains(&"--proxy-server=socks5://127.0.0.1:1080".to_string()));
         assert!(args.contains(&"--user-data-dir=/tmp/aleph-profile".to_string()));
         // Baseline flags still lead the argv.
@@ -825,7 +825,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let args = chrome_launch_args(Some(&cfg), "default");
+        let args = chrome_launch_args(Some(&cfg), "default").unwrap();
         let n = args.len();
         assert_eq!(args[n - 2], "--disable-gpu");
         assert_eq!(args[n - 1], "--proxy-server=http://override:1");

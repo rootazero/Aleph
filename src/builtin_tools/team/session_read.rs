@@ -84,14 +84,26 @@ impl From<CollaborativeSession> for SessionReadOutput {
 pub struct SessionReadTool {
     store: Arc<dyn SessionStore>,
     team_store: Arc<dyn crate::teams::TeamStore>,
+    current_agent_id: String,
 }
 
 impl SessionReadTool {
     pub fn new(
         store: Arc<dyn SessionStore>,
         team_store: Arc<dyn crate::teams::TeamStore>,
+        current_agent_id: String,
     ) -> Self {
-        Self { store, team_store }
+        Self {
+            store,
+            team_store,
+            current_agent_id,
+        }
+    }
+
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        crate::builtin_tools::acting_agent::acting_agent_id(&self.current_agent_id)
     }
 }
 

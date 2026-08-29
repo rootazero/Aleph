@@ -76,12 +76,18 @@ pub(super) fn encode_for_model(bytes: &[u8]) -> Option<EncodedImage> {
     limits.max_image_width = Some(MAX_DECODED_DIMENSION);
     limits.max_image_height = Some(MAX_DECODED_DIMENSION);
     limits.max_alloc = Some(MAX_DECODED_BYTES);
-    let decoded = ImageReader::from_memory(bytes)
-        .with_guessed_format()
-        .ok()?
-        .with_limits(limits)
-        .decode()
-        .ok()?;
+    // image 0.25 does not expose `ImageReader::from_memory`; construct one
+    // over a `Cursor<bytes>` and apply the limits via `ImageReader::limits`.
+    // The limits flow through to the underlying decoder (e.g. PngDecoder
+    // honours them via its own `with_limits`), so a crafted header that
+    // claims a 100k × 100k image returns `ImageError::Limits` instead of
+    // allocating the full buffer.
+    let mut reader = ImageReader::new(std::io::Cursor::new(bytes));
+    if sniffed == ImageFormat::Png {
+        reader.set_format(sniffed);
+    }
+    reader.limits(limits);
+    let decoded = reader.decode().ok()?;
 
     let (w, h) = (decoded.width(), decoded.height());
     let fitted = if w.max(h) > MAX_IMAGE_EDGE {

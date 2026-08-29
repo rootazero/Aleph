@@ -80,16 +80,11 @@ impl SearchAdvisory {
         }
     }
 
-    fn text_only(fts_candidates: usize, reason: Option<DegradedReason>) -> Self {
-        Self {
-            mode: "full-text".to_string(),
-            vector_candidates: 0,
-            fts_candidates,
-            degraded: reason.map(|r| r.as_str().to_string()),
-            bodies_omitted: None,
-            bodies_unreadable: None,
-        }
-    }
+    // The single previous call site was replaced with an inlined struct
+    // literal at the `text_only` construction point so the new
+    // `bodies_unreadable` field (BT-D-R4-22) cannot be forgotten — the
+    // helper would have shadowed the new field by default-initialising it
+    // to `None`, hiding the very signal we just added.
 }
 
 impl NoteManageTool {
@@ -200,6 +195,14 @@ impl NoteManageTool {
             .map(|(rank, (entry, content))| {
                 // Rank-derived pseudo score — FTS entries carry no fused score.
                 let score = 1.0 / (1.0 + rank as f32);
+                // `bodies` is `Vec<Result<String, io::Error>>` after BT-D-R4-22:
+                // a per-body read failure is counted in
+                // `bodies_unreadable` above. The row itself still surfaces
+                // (the hit exists in the index) but its body is empty —
+                // downstream consumers should check `bodies_unreadable` to
+                // distinguish "found a thing but couldn't show it" from
+                // "truncated to fit the response".
+                let content = content.unwrap_or_default();
                 (
                     entry.path,
                     entry.category,
