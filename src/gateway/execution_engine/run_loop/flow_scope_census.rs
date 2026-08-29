@@ -309,23 +309,37 @@ mod tests {
         );
     }
 
-    /// The layer the other two checks lean on: `FlowScope` must stay
-    /// unassemblable by hand.
+    /// Layer 1's two source-level premises: `FlowScope`'s fields stay private,
+    /// and it grows no `Default`.
     ///
-    /// This is the one guard here that is about a TYPE rather than about text
-    /// in this module, and it is the reason the census's own claim can now be
-    /// narrower than the invariant without leaving a hole at the `FlowRequest`
-    /// site. Make the two fields `pub` and every check above stays green while
+    /// Both are load-bearing and both were measured so. Make the two fields
+    /// `pub` and every check above stays green while
     /// `owner_user_id: request.metadata.get(…)` compiles again — the exact
-    /// build a review took end to end.
+    /// build a review took end to end. `#[derive(Default)]` is refused for the
+    /// same reason `unscoped` is counted above: it would be a second, unnamed
+    /// way to mint the empty pair, and no text search can find it.
     ///
     /// A source-level check because there is nothing to observe at runtime: a
     /// public field and a private one behave identically once something has
-    /// been built out of them. `#[derive(Default)]` is refused for the same
-    /// reason `unscoped` is counted below — it would be a second, unnamed way
-    /// to mint the empty pair.
+    /// been built out of them.
+    ///
+    /// # What it does NOT establish
+    ///
+    /// This test was called `…_stays_unassemblable_by_hand`, and that name was
+    /// read — including by the doc above it — as authority for more than these
+    /// two assertions cover. A `FlowScope` carrying any two chosen strings IS
+    /// assemblable by hand, in two public calls, because
+    /// `ScopeAttribution::from_persisted` takes exactly the pair of
+    /// `Option<&str>` a metadata map yields; a struct-literal
+    /// `ScopeAttribution` reaches the same constructor from outside the crate,
+    /// which `tests/gateway_chat_room_author_across_spawn.rs` does.
+    ///
+    /// What these two assertions pin is the SHAPE at the field: no raw pair
+    /// written straight into `FlowScope`, and no unnamed mint of the empty
+    /// one. Provenance is layer 4's — the two behavioural tests named in this
+    /// module's doc — and nothing here reaches it.
     #[test]
-    fn the_flow_request_scope_type_stays_unassemblable_by_hand() {
+    fn the_flow_request_scope_type_refuses_a_raw_pair_and_an_unnamed_empty() {
         let scope_mod = production_code_lines(include_str!("../../../scope/mod.rs"));
         let (before, after) = scope_mod.split_once("struct FlowScope {").expect(
             "`src/scope/mod.rs` must still declare `struct FlowScope` — it is what \
