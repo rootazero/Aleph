@@ -4664,7 +4664,27 @@ rg -n 'pty\.' --type rust -g '!*/tests*' src/gateway/method_census.rs
 rg -n 'pty' src/gateway/handlers/mod.rs
 ```
 
-`method_census` 里注册的 `pty.*` 方法数必须等于 `handlers/mod.rs` 里 `registry.register("pty...` 的行数（本计划后应为 6：spawn / input / resize / close / list / attach）。
+⚠️ **controller 2026-08-29 改写了这一条——原来那版会因为本计划自己的改动而失效，而且失效的方式
+是诱导你把一个数字改小。**
+
+原文要求「`handlers/mod.rs` 里 `registry.register("pty...` 的行数 == 6」。但 **Task 12 会把
+`pty.spawn` 那一行挪到 `src/bin/aleph-server/.../builder/handlers/` 的 `register_handler!`**
+（它需要注入 `Arc<RwLock<Config>>`，而 `registry.register` 只接受 `Fn(JsonRpcRequest)`）。
+于是那个 grep 会数出 **5**，而最顺手的「修法」是把 6 改成 5——**从此这条检查会静默接受一个
+真正丢失的注册**。一条把数目写在散文里的检查，就是一张会腐烂的名单。
+
+**改用仓库自己已经有的那个答案。** `src/gateway/method_census.rs` 里的扫描器是**源码级**的，
+`register(` 与 `register_handler!(` 两种形状它都认（`literal_after_paren` 专门剥掉宏多出来的
+receiver 实参），并且它自己就是双向的：census 里有而没注册、注册了而 census 里没有，两边都红。
+
+```bash
+cargo test -p alephcore --lib gateway::method_census
+cargo test -p alephcore --bins        # bin 里的注册只有这条编译得到
+rg -n 'register(_handler!)?\(.*"pty\.' src/gateway/handlers/mod.rs src/bin/    # 人眼过一遍：六个
+```
+
+**不要**再手写一个期望数目。要看的是那两条测试绿、以及 `rg` 列出来的六个名字与
+`method_census.rs` 里那六行**逐个对得上**。
 
 - [ ] **Step 4: 回写 spec**
 
