@@ -41,6 +41,36 @@ pub enum ApplyOutcome {
     WrongSession,
 }
 
+/// The result of [`ClientScreen::finish_attach`]: adopting a snapshot, then
+/// replaying whatever had buffered while the attach was in flight.
+///
+/// This is a separate type from [`ApplyOutcome`] rather than reusing it:
+/// `finish_attach` can never buffer (there is no attach nested inside an
+/// attach) or discard a live frame (buffered frames are filtered against the
+/// snapshot's `seq`, not reported one at a time) or see a foreign session
+/// (that filter already ran when the frame was buffered, in `apply`), so
+/// `Buffered`, `Discarded`, and `WrongSession` are not states this method can
+/// be in. A type that can only ever be constructed as one of two variants
+/// says that at the type level instead of by convention.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachOutcome {
+    /// The snapshot was adopted, and every frame buffered while the attach
+    /// was in flight — if any — replayed with `seq` advancing by exactly one
+    /// each time. There is nothing for the caller to do.
+    Resynced,
+    /// Replay hit a hole: a buffered frame's `seq` was more than one past
+    /// the last applied `seq`, meaning a frame between them was dropped by
+    /// the broadcast bus while this attach was in flight. Replay stops at
+    /// the hole rather than skipping over it — `seq` is left at the frame
+    /// just before it, not advanced past it — so the screen never reports
+    /// itself more current than it actually is. The rows only the missing
+    /// frame would have touched are wrong until the caller re-attaches;
+    /// the next live [`ClientScreen::apply`] call would also report this
+    /// same gap on its own, but the caller may prefer to re-attach
+    /// immediately rather than wait for one.
+    Gap { expected: u64, got: u64 },
+}
+
 pub struct ClientScreen {
     session_id: String,
     rows: u16,
@@ -61,8 +91,16 @@ impl ClientScreen {
     /// enforces it against every incoming frame — `pty.screen` is one topic
     /// shared by every session, so a screen that trusted its caller to
     /// pre-filter would read another session's `seq` as a gap in its own.
+    ///
+    /// `rows`/`cols` are clamped to at least 1, same as [`resize`](Self::resize) —
+    /// a screen with a zero dimension cannot address any row, and a caller
+    /// that has not learned real geometry yet (e.g. a placeholder before the
+    /// first `finish_attach`) should not be able to construct one by
+    /// accident.
     #[must_use]
     pub fn new(rows: u16, cols: u16, seq: u64, session_id: impl Into<String>) -> Self {
+        let rows = rows.max(1);
+        let cols = cols.max(1);
         Self {
             session_id: session_id.into(),
             rows,
@@ -117,24 +155,55 @@ impl ClientScreen {
         self.pending.get_or_insert_with(Vec::new);
     }
 
-    /// Adopt the snapshot, then replay every buffered frame newer than it.
+    /// Adopt the snapshot, then replay every buffered frame newer than it —
+    /// stopping at the first hole rather than skipping over it. See
+    /// [`AttachOutcome`] for what the caller should do with the result.
     ///
     /// A buffered frame at or below `resp.seq` is already represented in the
     /// snapshot (it was captured on the server after that frame was
     /// produced); replaying it would double-apply, so it is dropped here —
     /// same rule as [`ApplyOutcome::Discarded`], applied on the way out of
     /// the buffer instead of on the way in.
-    pub fn finish_attach(&mut self, resp: PtyAttachResponse) {
+    #[must_use]
+    pub fn finish_attach(&mut self, resp: PtyAttachResponse) -> AttachOutcome {
+        if resp.seq < self.seq {
+            // The snapshot predates what this screen already has. This
+            // should not happen in normal operation — `seq` is per-session
+            // and monotonic on the server, and only one attach is meant to
+            // be in flight at a time — but `resp` is wire input, not a local
+            // invariant, so it is guarded rather than trusted. Adopting it
+            // would move `seq` (and grid content) backward, which is exactly
+            // what the monotonic counter exists to prevent. The attach is
+            // still resolved — `pending` is cleared so buffered frames are
+            // not held forever — but they are dropped rather than replayed:
+            // once the snapshot they were meant to be ordered against is
+            // rejected, there is no `expected` left to replay them against.
+            self.pending = None;
+            return AttachOutcome::Resynced;
+        }
         self.resize(resp.rows, resp.cols);
         self.seq = resp.seq;
         self.write_patch(&resp.patch);
         let buffered = self.pending.take().unwrap_or_default();
         for frame in buffered {
-            if frame.seq > self.seq {
-                self.seq = frame.seq;
-                self.write_patch(&frame.patch);
+            if frame.seq <= self.seq {
+                // Already represented in the snapshot (or in an earlier
+                // replayed frame); drop and keep scanning — a hole can still
+                // exist later in the buffer.
+                continue;
             }
+            let expected = self.seq.saturating_add(1);
+            if frame.seq != expected {
+                // A hole: the broadcast bus dropped a frame while this
+                // attach was in flight. Stop here rather than skipping over
+                // it — `seq` stays at the last frame actually applied, so it
+                // never claims to be more current than it is.
+                return AttachOutcome::Gap { expected, got: frame.seq };
+            }
+            self.seq = frame.seq;
+            self.write_patch(&frame.patch);
         }
+        AttachOutcome::Resynced
     }
 
     /// Apply one server frame.
@@ -145,6 +214,14 @@ impl ClientScreen {
     /// another session's `seq` be read against this screen's counter,
     /// producing a spurious [`ApplyOutcome::Gap`] (or, worse, painting that
     /// session's content here if the sequence numbers happened to line up).
+    ///
+    /// `frame.patch.bell` is not read here and `ClientScreen` has no field
+    /// for it — a bell is an edge (the server takes it once and clears it,
+    /// see `perform.rs`'s `take_bell`), not a level this screen holds, and a
+    /// frame can be bell-only (no row/cursor/title change at all). A caller
+    /// that wants to react to it must read `frame.patch.bell` itself before
+    /// calling `apply`, which consumes `frame`; after this returns, the bit
+    /// is gone.
     pub fn apply(&mut self, frame: PtyScreenFrame) -> ApplyOutcome {
         if frame.session_id != self.session_id {
             return ApplyOutcome::WrongSession;
@@ -153,7 +230,7 @@ impl ClientScreen {
             buf.push(frame);
             return ApplyOutcome::Buffered;
         }
-        let expected = self.seq + 1;
+        let expected = self.seq.saturating_add(1);
         if frame.seq < expected {
             return ApplyOutcome::Discarded { seq: frame.seq };
         }
@@ -288,13 +365,14 @@ mod tests {
         s.begin_attach();
         let outcome = s.apply(frame_for("other-session", 1, 0, "intruder"));
         assert!(matches!(outcome, ApplyOutcome::WrongSession), "got {outcome:?}");
-        s.finish_attach(PtyAttachResponse {
+        let attach_outcome = s.finish_attach(PtyAttachResponse {
             seq: 0,
             rows: 4,
             cols: 20,
             patch: PtyScreenPatch::default(),
             scrollback_len: 0,
         });
+        assert!(matches!(attach_outcome, AttachOutcome::Resynced), "got {attach_outcome:?}");
         assert_eq!(s.row_text(0), "", "a different session's frame must not be replayed");
     }
 
@@ -306,7 +384,7 @@ mod tests {
         let mut s = ClientScreen::new(4, 20, 0, SID);
         s.begin_attach();
         assert!(matches!(s.apply(frame(6, 2, "late")), ApplyOutcome::Buffered));
-        s.finish_attach(PtyAttachResponse {
+        let outcome = s.finish_attach(PtyAttachResponse {
             seq: 5,
             rows: 4,
             cols: 20,
@@ -316,6 +394,7 @@ mod tests {
             },
             scrollback_len: 0,
         });
+        assert!(matches!(outcome, AttachOutcome::Resynced), "got {outcome:?}");
         assert_eq!(s.row_text(0), "snap");
         assert_eq!(s.row_text(2), "late", "in-flight frames must be replayed");
         assert_eq!(s.seq(), 6);
@@ -328,27 +407,106 @@ mod tests {
         let mut s = ClientScreen::new(4, 20, 0, SID);
         s.begin_attach();
         let _ = s.apply(frame(5, 3, "stale"));
-        s.finish_attach(PtyAttachResponse {
+        let outcome = s.finish_attach(PtyAttachResponse {
             seq: 5,
             rows: 4,
             cols: 20,
             patch: PtyScreenPatch::default(),
             scrollback_len: 0,
         });
+        assert!(matches!(outcome, AttachOutcome::Resynced), "got {outcome:?}");
         assert_eq!(s.row_text(3), "", "a frame already in the snapshot must be dropped");
     }
 
+    /// A hole *inside* the replay buffer — not between the snapshot and the
+    /// first buffered frame, but between two buffered frames — must be
+    /// caught too. Buffer `[101, 103]` with 102 dropped by the bounded
+    /// broadcast: skipping straight to 103 would leave `seq` contiguous
+    /// again with nothing to show a live frame ever gapped on, so whatever
+    /// only frame 102 touched would be wrong forever with no error anywhere.
     #[test]
-    fn a_resize_in_the_snapshot_is_adopted() {
+    fn a_hole_inside_the_replay_buffer_is_reported_and_does_not_advance_past_it() {
         let mut s = ClientScreen::new(4, 20, 0, SID);
         s.begin_attach();
-        s.finish_attach(PtyAttachResponse {
-            seq: 1,
-            rows: 10,
-            cols: 60,
+        assert!(matches!(s.apply(frame(101, 1, "a")), ApplyOutcome::Buffered));
+        // seq 102 was dropped by the broadcast bus before it ever arrived.
+        assert!(matches!(s.apply(frame(103, 2, "c")), ApplyOutcome::Buffered));
+        let outcome = s.finish_attach(PtyAttachResponse {
+            seq: 100,
+            rows: 4,
+            cols: 20,
             patch: PtyScreenPatch::default(),
             scrollback_len: 0,
         });
+        match outcome {
+            AttachOutcome::Gap { expected, got } => assert_eq!((expected, got), (102, 103)),
+            other => panic!("a hole in the replay buffer must be reported, got {other:?}"),
+        }
+        assert_eq!(s.row_text(1), "a", "the frame before the hole must still apply");
+        assert_eq!(s.row_text(2), "", "the frame after the hole must not be applied");
+        assert_eq!(s.seq(), 101, "seq must not advance past the hole");
+    }
+
+    #[test]
+    fn a_resize_in_the_snapshot_is_adopted_and_grown_rows_are_addressable() {
+        let mut s = ClientScreen::new(4, 20, 0, SID);
+        s.begin_attach();
+        let outcome = s.finish_attach(PtyAttachResponse {
+            seq: 1,
+            rows: 10,
+            cols: 60,
+            patch: PtyScreenPatch {
+                rows: vec![PtyRowPatch { row: 9, runs: vec![run("bottom")] }],
+                ..Default::default()
+            },
+            scrollback_len: 0,
+        });
+        assert!(matches!(outcome, AttachOutcome::Resynced), "got {outcome:?}");
         assert_eq!(s.dims(), (10, 60));
+        assert_eq!(
+            s.row_text(9),
+            "bottom",
+            "a row beyond the old geometry must be addressable and carry the snapshot's content"
+        );
+    }
+
+    /// A snapshot older than what this screen already has must not move
+    /// `seq` (or grid content) backward. This should not happen in normal
+    /// operation (only one attach in flight at a time, `seq` monotonic on
+    /// the server) but is wire input, not a local invariant.
+    #[test]
+    fn a_stale_snapshot_does_not_move_seq_backward() {
+        let mut s = ClientScreen::new(4, 20, 5, SID);
+        let outcome = s.finish_attach(PtyAttachResponse {
+            seq: 2,
+            rows: 4,
+            cols: 20,
+            patch: PtyScreenPatch {
+                rows: vec![PtyRowPatch { row: 0, runs: vec![run("old")] }],
+                ..Default::default()
+            },
+            scrollback_len: 0,
+        });
+        assert!(matches!(outcome, AttachOutcome::Resynced), "got {outcome:?}");
+        assert_eq!(s.seq(), 5, "seq must not regress to the stale snapshot's seq");
+        assert_eq!(s.row_text(0), "", "a stale snapshot's content must not overwrite current state");
+    }
+
+    /// `expected` must saturate rather than overflow when `seq` is already
+    /// at the top of its range — `seq` comes from the wire, not a value this
+    /// screen controls, so `u64::MAX` is a value to guard against, not one
+    /// to trust never arrives. A debug build panics on `u64::MAX + 1` and a
+    /// release build silently wraps to 0 (after which every future frame
+    /// would gap forever); the panic alone is enough to prove this test
+    /// would have caught the bug, since it happens computing `expected`
+    /// before `frame.seq` is even inspected.
+    #[test]
+    fn seq_at_the_maximum_does_not_overflow_on_the_next_apply() {
+        let mut s = ClientScreen::new(4, 20, u64::MAX, SID);
+        match s.apply(frame(u64::MAX - 1, 0, "x")) {
+            ApplyOutcome::Discarded { seq } => assert_eq!(seq, u64::MAX - 1),
+            other => panic!("must not panic or wrap, got {other:?}"),
+        }
+        assert_eq!(s.seq(), u64::MAX, "seq must not move for a discarded frame");
     }
 }
