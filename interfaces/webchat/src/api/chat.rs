@@ -16,6 +16,13 @@ use std::collections::VecDeque;
 /// consecutive updates of one session.
 const OWN_RUN_MEMORY: usize = 64;
 
+/// Total base64 attachment payload the Panel will put on the wire in one
+/// `chat.send`. Not a security boundary (the server enforces its own), but a
+/// UI guard against dropping a multi-megabyte JSON body into the Gateway
+/// from an accidental huge paste/drop, which stalls the Panel before the
+/// server can answer.
+const ATTACHMENT_TOTAL_CAP: usize = 10_000_000;
+
 thread_local! {
     /// Run ids this Panel started, oldest first.
     ///
@@ -256,6 +263,13 @@ impl ChatApi {
         dials: &shared_ui_logic::state::SendDials,
         voice_input: bool,
     ) -> Result<ChatSendResponse, String> {
+        let total_base64: usize = attachments.iter().map(|a| a.data_base64.len()).sum();
+        if total_base64 > ATTACHMENT_TOTAL_CAP {
+            return Err(format!(
+                "Attachments exceed the {ATTACHMENT_TOTAL_CAP} byte Panel limit; reduce file size"
+            ));
+        }
+
         let attachments_json: Vec<Value> = attachments
             .iter()
             .map(|a| {
