@@ -78,6 +78,15 @@ const MAX_EXEC_ACTIONS: usize = 50;
 /// `ask_user` and `task_wait` already carry, and
 /// `budget::tests::browser_exec_budget_outlives_its_own_wall_clock` keeps the
 /// two ordered.
+/// Wall-clock budget for one `browser_exec` procedure. Set higher
+/// than any single tool's entry in
+/// [`BUILTIN_TOOL_BUDGETS_MS`](crate::tools::budget::BUILTIN_TOOL_BUDGETS_MS)
+/// (no other tool there runs that long individually) so the procedure
+/// is bounded by its own per-action timeouts and this overall
+/// cap, not by the harness's per-tool wall-clock cap. The
+/// coupling is one-way — `MAX_EXEC_BUDGET_MS` MUST stay above
+/// the largest single tool in `BUILTIN_TOOL_BUDGETS_MS`, otherwise
+/// the procedure would be killed before its first action completed.
 pub(crate) const MAX_EXEC_BUDGET_MS: u64 = 600_000;
 
 /// Default per-wait timeout when a `wait` action omits `timeout_ms` — the
