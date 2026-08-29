@@ -4361,7 +4361,7 @@ reported and the blank rows never healed."
 
 **Files:**
 - Create: `interfaces/webchat/src/platform/wide/views/terminal/keymap.rs`
-- Modify: `interfaces/webchat/src/platform/wide/views/terminal/mod.rs`
+- Modify: `interfaces/webchat/src/platform/wide/views/terminal/mod.rs`、`interfaces/webchat/src/platform/wide/views/terminal/render.rs`（Task 16 复审 Minor 1：字号的第二份表述，见 Step 3 第 1 点）
 
 **Interfaces:**
 - Consumes: `ClientScreen`、`render`（Task 15–16）
@@ -4752,6 +4752,42 @@ Task 10 的 smallest-wins 视口表所设想的形态，不是它的例外。
 剩下三段按同样风格补：
 
 1. **重绘**：一个 `Effect` 读 `repaint_tick`，取 canvas、`render::measure`、`render::paint`。**取 canvas 与测量收进一个私有函数**，不要在 `request_animation_frame` 回调里 `get_untracked()`。
+
+   ⚠️ **在调 `measure` 之前，先修掉 `render.rs` 里那份重复的字号——你是第一个让它承重的调用者。**
+   Task 16 的复审（Minor 1，**非实现者的偏差，出自计划本身**）指出：`measure(ctx, font)` 从
+   font 串里解析出 px 来算行高，而 `paint` 自己拼
+   `format!("{style}{weight}14px 'JetBrains Mono', monospace")`——**字号有两份表述**。
+   今天两者相等纯属字面量恰好一致；而你这一步要做 DPR 缩放、并且是第一个真正传 font 串进去的人，
+   一旦那个串不是 14px，网格按测出来的尺寸排版、字形按 14px 画，**静默错位且没有任何报错**。
+
+   改成结构性的：让 `CellMetrics` 带着**它是在哪个字号下测出来的**，`paint` 从那里取，
+   于是「按没测过的字号画」不再是一种可写出来的代码：
+
+```rust
+   pub struct CellMetrics {
+       pub width: f64,
+       pub height: f64,
+       /// The font size, in CSS px, these metrics were measured at.
+       ///
+       /// Carried rather than re-stated because `paint` builds its own
+       /// `set_font` string per run (bold and italic vary per run) and would
+       /// otherwise be free to draw at a size the layout was not measured
+       /// for -- the grid advancing by one size while glyphs draw at
+       /// another, with nothing anywhere to report it.
+       pub font_px: f64,
+   }
+```
+
+   `measure` 把它**已经解析出来**的那个 px 存进去（现在算完行高就扔掉），`paint` 改用
+   `format!("{style}{weight}{}px 'JetBrains Mono', monospace", m.font_px)`。
+
+   字体族名仍是一份拷贝——**那个不要动**：`measure` 收的是完整 CSS font 串（调用者的事），
+   拆开它去比对族名会得到一个解析器，那才是真的第二个真源。
+
+   `render.rs` 三条既有测试构造 `CellMetrics { width: 8.0, height: 17.0 }`，同批补 `font_px: 14.0`
+   ——补 14 让它们**逐字节不变**（同 Task 19 的 `FIXTURE_DIMS` 判据：夹具补什么，决定了现存套件
+   会不会静默改变行为）。
+
 2. **resize**：`ResizeObserver`（或窗口 resize 事件）→ `render::viewport_cells` → `rpc_call("pty.resize", {session_id, rows, cols})`。挂载时也跑一次，替换上面写死的 `(24, 80)`。
 
    ⚠️ **这一步只负责「把我的视口告诉服务端」，不许顺手更新本地 `ClientScreen` 的尺寸。**
@@ -4812,7 +4848,7 @@ cargo run --bin aleph-server &
 
 ```bash
 kill %1
-git add interfaces/webchat/src/platform/wide/views/terminal/keymap.rs interfaces/webchat/src/platform/wide/views/terminal/mod.rs
+git add interfaces/webchat/src/platform/wide/views/terminal/keymap.rs interfaces/webchat/src/platform/wide/views/terminal/mod.rs interfaces/webchat/src/platform/wide/views/terminal/render.rs
 git commit -m "panel: keyboard encoding and the mounted terminal view
 
 encode_key returns None for keys it does not claim rather than the key's
