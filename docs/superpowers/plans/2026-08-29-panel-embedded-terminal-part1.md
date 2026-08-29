@@ -3038,6 +3038,48 @@ enabled = false)"`）。controller 2026-08-29 查实：**下游有两处断言�
 **逐字节相同**。在同一份文件里先驳倒一个写法、两行后又指着它，是这一轮真实出现过的缺陷
 （controller 2026-08-29 修）。**不要去找 `config::current()`，它不存在**（也已裁定过一次）。
 
+⚠️ **本任务另外承担一件此前没写进来的事：它是「handler 测试在全量套件下会红」这个缺陷的唯一治法。**
+controller 2026-08-29 实测（fix round 2 落地之后）：
+
+```
+cargo test -p alephcore --lib   →  17435 passed; 10 failed
+```
+
+十条里**两条是 pty handler 的**，而 fix round 2 的报告写的是「8 failed，全部既有/无关，两条新
+pty 测试都不在名单里」——**那份报告在这一点上是错的**。真实失败信息把成因一次说清：
+
+```
+an omitted cwd must chdir the child into ... /T/.tmpB8sw3x/root/workspaces ...;
+screen held: "/T/.tmpz5ShMj/workspaces"
+```
+
+**两个不同的临时目录。** 兄弟测试在用 `AlephHomeEnvGuard` 之类把 `ALEPH_HOME` 指向临时树，而
+`std::env` 是**进程全局**的、libtest 并行跑：这条测试算 `expected` 时读到一棵树，`handle_spawn`
+里 `Config::load()` 解析根时读到**另一棵**。同批还有 `mcp::…::test_default_path`（单跑绿、全量红）
+与 `resize_with_conn_id_records_viewport_and_applies_it`（panic 在 `spawned`——它的临时根在
+spawn 之前就被 drop 了）。
+
+**这是判据清单那条陷阱的另一面**：「一部分测试隔离比全都不隔离更糟」。此前只从"别去隔离"这一侧
+记过；这一侧是**没隔离的那个被隔离了的兄弟拖下水**，而它自己一行 env 都没写。
+
+**成因可归属**：`aefe65457`（Task 11）把 `Config::load()` 放进了 `handle_spawn`。在那之前
+handler 不读配置，因此**所有** handler 测试都没有 env 依赖。Task 10 的
+`resize_with_conn_id_records_viewport_and_applies_it` 是被顺带拖脆的。
+
+**而本任务正好拆掉这个成因**——它把 `Config::load()` 换成注入的 `Arc<RwLock<Config>>`。所以：
+
+1. **两条 pty 测试要改成注入配置**，不再经 `Config::load()`。
+2. ⚠️ **只注入配置还不够，必须注入一个 `workspace_root` 被显式设置的配置。**
+   controller 查实 `agent_resolver/mod.rs:487`：`workspace_root_for` 只在
+   `defaults.workspace_root` 是 `Some` 时用它，否则回落 `default_workspace_root()`——**那条路
+   读 `ALEPH_HOME`**。注入一个 `workspace_root: None` 的配置只是把 env 读取往下挪了一层，
+   竞争原样保留。测试要指向自己拥有的临时目录。
+3. **验证方式是 8 次全量跑**，不是一次：`cargo test -p alephcore --lib` 跑八遍，报告两条 pty
+   测试在八次里各红了几次。0/8 才算修好。**一次绿证明不了竞态消失**——本轮 controller 正是
+   用一次绿差点推翻了一份正确的复审报告。
+4. 剩下**五条 `thinker::prompt_budget` / `prompt_sanitizer` 单跑也红**，controller 已核实
+   `main...HEAD` 从未碰过 `src/thinker/` ⇒ 它们在 main 上就是红的，**不归本计划**，也别顺手修。
+
 **照现成先例做，端到端已经有一个：`src/gateway/handlers/generation_config.rs`。**
 它就是这个形状的每一段——`pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>)`、
 `let cfg = config.read().await;`、`use tokio::sync::RwLock;`（**是 tokio 的，不是 std 的**，
