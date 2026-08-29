@@ -565,11 +565,16 @@ impl BrowserBackend for ChromeMcpBackend {
             args.insert("cpuThrottlingRate".into(), json!(rate));
         }
         if let Some(headers) = &opts.extra_http_headers {
-            // The MCP contract wants the header map as a JSON *string*.
-            let encoded = serde_json::to_string(headers).map_err(|e| {
-                BrowserError::ActionFailed(format!("encode extra_http_headers: {e}"))
-            })?;
-            args.insert("extraHttpHeaders".into(), json!(encoded));
+            // Pass the header map as a JSON *object*, not a string.
+            // The previous shape double-serialised: `to_string(headers)`
+            // produced a JSON string, then `json!(encoded)` wrapped that
+            // string in another JSON string, so the MCP server
+            // received a `extraHttpHeaders` argument whose value was a
+            // string-encoded JSON object instead of an object. Pin
+            // the wire shape with a doc comment rather than a test
+            // (a fake MCP server integration is the right place to
+            // assert the contract).
+            args.insert("extraHttpHeaders".into(), json!(headers));
         }
         if let Some(ua) = &opts.user_agent {
             args.insert("userAgent".into(), json!(ua));
