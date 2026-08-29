@@ -2569,7 +2569,7 @@ answers a different question is a lie rather than a default."
 ## Task 12: 会话开关 `[policies.terminal]`
 
 **Files:**
-- Modify: `src/config/types/policies/mod.rs`（+ 新建 `src/config/types/policies/terminal.rs`）、`src/config/reload_impact.rs`、`src/config/live_apply.rs`、`src/gateway/handlers/pty.rs`、`src/gateway/pty/manager.rs`
+- Modify: `src/config/types/policies/mod.rs`（+ 新建 `src/config/types/policies/terminal.rs`）、`src/config/reload_impact.rs`、`src/config/live_apply.rs`、`src/gateway/handlers/pty.rs`、`src/gateway/pty/manager.rs`、`src/gateway/handlers/mod.rs`（摘掉 `pty.spawn` 那一行）、`src/bin/aleph-server/commands/start/builder/handlers/`（改用 `register_handler!` 注入 config）
 
 **Interfaces:**
 - Consumes: 既有 `Config`
@@ -2916,12 +2916,41 @@ sketch 里已经有了），而是断言**走 `apply_live_sections` 这条路会
     }
 ```
 
-`handlers/pty.rs::handle_spawn` 改成调 `spawn_with_scrollback(&opts, cfg.policies.terminal.scrollback_lines as usize)`，并用 `cfg.policies.terminal.max_sessions` 替换 `manager.rs` 里写死的 `MAX_SESSIONS`（把该常量改成 `PtyManager` 的一个字段，`spawn` 时现读配置传入 —— 与开关同一条"现读不快照"纪律）。
+`handlers/pty.rs::handle_spawn` 改成调 `spawn_with_scrollback(&opts, terminal.scrollback_lines as usize)`（`terminal` 即下面那次 `config.read()` 取到的快照 —— 一次 spawn 内读一次，跨 spawn 不缓存），并用 `terminal.max_sessions` 替换 `manager.rs` 里写死的 `MAX_SESSIONS`（把该常量改成 `PtyManager` 的一个字段，`spawn` 时现读配置传入 —— 与开关同一条"现读不快照"纪律）。
 
-`handlers/pty.rs::handle_spawn` 最前面加闸（**现读，不快照**）：
+⚠️ **`crate::config::current()` 不存在。** 上一版这里凭空写了它；仓库里读活配置有两种真实做法，
+本任务要用的是第一种：
+
+**用哪一种：handler 收 `config: Arc<RwLock<Config>>` 作为参数。** 这是本仓 handler 读活配置的
+既有形态（`handlers/route_config.rs::handle_get(request, config)` 等五个 handler 文件都是它）。
+`handle_spawn` 改成 `handle_spawn(request: JsonRpcRequest, config: Arc<RwLock<Config>>)`，
+读 `config.read().await.policies.terminal`。
+
+**代价是注册要搬家**：`registry.register` 只接受 `Fn(JsonRpcRequest)`，捕获依赖的那一层是
+`src/bin/aleph-server/commands/start/builder/handlers/` 里的 `register_handler!` 宏
+（它闭包捕获 `Arc` 再调 `$handler(req, ctx1)`，底下仍是同一个 `register`）。所以
+`pty.spawn` 那一行要从 `src/gateway/handlers/mod.rs:362` 挪到 bin 那侧、写成
+`register_handler!(server, "pty.spawn", pty::handle_spawn, config);`。
+
+⚠️ **搬走而忘了落地 = `pty.spawn` 从注册表里静默消失**（判据「注册不是派发」）。这条**有守卫**：
+`method_census.rs` 的扫描器是**源码级**的，`register(` 与 `register_handler!(` 两种形状它都认
+（见 `literal_after_paren` 专门剥掉 `register_handler!` 多出来的那个 receiver 实参），所以搬家
+之后 `pty.spawn` 仍在普查里，漏掉才会红。**但注意 `cargo test -p alephcore --lib` 看不见 bin 里
+的注册**——搬完必须跑 `cargo test -p alephcore --bins`。
+
+**不要用哪一种：进程级句柄（`policies.spend` 那套 `CapabilitySlot`）。** 它对 spend 是对的，
+对这个开关是**反的**：`TerminalConfig::default().enabled == true`，所以一个**从未被 boot 安装**
+的句柄读出来是 `enabled = true`——与「配置里就是开着」**逐字节相同**。失效场景是
+operator 写了 `enabled = false`、boot 漏装句柄、终端照常开着，零报错。`spend` 自己的 doc 逐字
+警告过这个形状（"That default is precisely the round-7 indistinguishable read: it is the right
+value to return and it says nothing about whether boot got here"），只是那里的默认值是「无限额」
+所以方向无害。`Arc<RwLock<Config>>` 没有这一问：拿不到 config 的 handler 根本不存在。
+
+`handlers/pty.rs::handle_spawn` 最前面加闸（**现读，不快照** —— 每次 spawn 都 `config.read()`）：
 
 ```rust
-    if !crate::config::current().policies.terminal.enabled {
+    let terminal = config.read().await.policies.terminal.clone();
+    if !terminal.enabled {
         return JsonRpcResponse::error(
             id,
             INVALID_PARAMS,
