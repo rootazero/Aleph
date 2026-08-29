@@ -242,7 +242,11 @@ async fn resolve(
     let proxy = candidates
         .into_iter()
         .nth(index)
-        .expect("rank_candidates returns an in-range index")
+        .ok_or_else(|| {
+            DesktopError::PlatformError(
+                "rank_candidates returned an out-of-range index".into(),
+            )
+        })?
         .proxy;
 
     // Re-read the matched element so the caller sees the element as it is now,

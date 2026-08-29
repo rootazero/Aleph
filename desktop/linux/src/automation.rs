@@ -106,17 +106,24 @@ impl AutomationCapability for LinuxAutomation {
             }
             ScriptLanguage::PowerShell => {
                 // Try pwsh first, fall back to powershell (older Ubuntu LTS).
+                // Only a spawn failure is a reason to try the next binary; a
+                // script that started but could not run must not be retried on
+                // another interpreter.
+                let mut last_err = None;
                 for bin in ["pwsh", "powershell"] {
                     let mut c = tokio::process::Command::new(bin);
                     c.args(["-NoProfile", "-Command", source]);
                     match spawn_background(c, log_path).await {
                         Ok(pid) => return Ok(pid),
-                        Err(_) => continue,
+                        Err(e) if is_spawn_failure(&e) => last_err = Some(e),
+                        Err(e) => return Err(e),
                     }
                 }
-                return Err(DesktopError::InputFailed(
-                    "PowerShell not found (install pwsh or powershell)".into(),
-                ));
+                return Err(last_err.unwrap_or_else(|| {
+                    DesktopError::InputFailed(
+                        "PowerShell not found (install pwsh or powershell)".into(),
+                    )
+                }));
             }
             ScriptLanguage::AppleScript | ScriptLanguage::Jxa => {
                 return Err(DesktopError::NotImplemented(format!(
