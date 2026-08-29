@@ -68,8 +68,10 @@ async fn the_speaker_survives_the_dispatch_spawn() {
     let emitter: Arc<dyn EventEmitter> = Arc::new(CollectingEventEmitter::new());
 
     let mut request = basic_request();
-    request.owner_user_id = Some("u-alice".to_string());
-    request.scope_id = Some(ScopeId::Project("p-standup".to_string()).render());
+    request.scope = alephcore::scope::FlowScope::resolved(Some(&ScopeAttribution {
+        owner_user_id: "u-alice".to_string(),
+        scope: ScopeId::Project("p-standup".to_string()),
+    }));
 
     // Reproduce what `run_loop::with_request_scope` establishes around the
     // dispatch call: the ROOM's attribution plus THIS turn's speaker.
@@ -139,8 +141,8 @@ async fn a_personal_session_gets_no_label_across_the_same_spawn() {
     let emitter: Arc<dyn EventEmitter> = Arc::new(CollectingEventEmitter::new());
 
     let mut request = basic_request();
-    request.owner_user_id = Some("u-alice".to_string());
-    request.scope_id = Some(ScopeId::Personal("u-alice".to_string()).render());
+    request.scope =
+        alephcore::scope::FlowScope::resolved(Some(&ScopeAttribution::personal("u-alice")));
 
     alephcore::scope::with_scope(
         Some(ScopeAttribution::personal("u-alice")),

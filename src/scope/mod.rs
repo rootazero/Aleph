@@ -357,8 +357,16 @@ impl FlowScope {
     /// `(Some(owner), None)` — `dispatch` re-runs [`scope_from_metadata`] on
     /// the rebuilt map and would reach the same dead task-local either way,
     /// but only this says so at the boundary.
+    ///
+    /// `pub` rather than `pub(crate)` because integration tests build scoped
+    /// `FlowRequest`s from outside the crate, and widening it costs nothing
+    /// this type is defending: it takes an already-RESOLVED attribution, so
+    /// the shape it refuses — a pair of strings lifted out of a metadata map —
+    /// is still not expressible here. What must not spread is a SECOND way to
+    /// resolve one, and that is counted inside `run_loop` by
+    /// `flow_scope_census`, not held off by this signature.
     #[must_use]
-    pub(crate) fn resolved(attr: Option<&ScopeAttribution>) -> Self {
+    pub fn resolved(attr: Option<&ScopeAttribution>) -> Self {
         Self {
             owner_user_id: attr.map(|a| a.owner_user_id.clone()),
             scope_id: attr.map(|a| a.scope.render()),
