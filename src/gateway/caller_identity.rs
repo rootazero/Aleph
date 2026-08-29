@@ -52,6 +52,25 @@ task_local! {
     /// dispatch loop. `None` outside a scope (cron, internal) and for walled
     /// connections. Loopback resolves to the implicit owner.
     pub static CALLER_USER: Option<String>;
+
+    /// The originating WebSocket connection's id (`"{peer_addr}"`, minted once
+    /// per socket in `server::handler::handle_connection`), scoped alongside
+    /// [`CALLER_ROLE`] in `dispatch_with_caller_context`. `None` outside a
+    /// scope (cron, internal) and for non-gateway callers.
+    ///
+    /// Exists for exactly one consumer so far: `pty.resize`, which must key
+    /// its per-connection viewport constraint (`PtyManager::note_viewport`)
+    /// on *something the caller does not get to pick* — unlike a
+    /// caller-supplied `client_id`, this cannot be forged to steal or
+    /// impersonate another connection's viewport slot. The same id is used
+    /// to release that constraint on disconnect (`PtyManager::release_conn`,
+    /// called from the connection-teardown block alongside the cleanup for
+    /// subscriptions / reverse-RPC / node registry / presence), which is the
+    /// other half of why this needs to be the real transport-level
+    /// connection id rather than an application-chosen string: a disconnect
+    /// is not a `pty.close`, and nothing else fires when a tab is closed or
+    /// a client crashes.
+    pub static CALLER_CONN_ID: Option<String>;
 }
 
 /// The originating connection's role for the current task, or `None` outside a
@@ -92,6 +111,15 @@ pub fn current_caller_is_loopback() -> bool {
 #[must_use]
 pub fn current_caller_user() -> Option<String> {
     CALLER_USER.try_with(|u| u.clone()).ok().flatten()
+}
+
+/// The originating WebSocket connection id for the current task, or `None`
+/// outside a [`CALLER_CONN_ID`] scope (non-gateway / internal callers, and
+/// any run whose work has crossed a `tokio::spawn` boundary — this task-local
+/// does not follow a spawned task, same as the other three in this module).
+#[must_use]
+pub fn current_caller_conn_id() -> Option<String> {
+    CALLER_CONN_ID.try_with(|c| c.clone()).ok().flatten()
 }
 
 /// Whether this connection may point a working directory at an arbitrary
@@ -177,6 +205,17 @@ mod tests {
             .await;
         assert_eq!(seen.as_deref(), Some("u-alice"));
         assert_eq!(current_caller_user(), None); // unset outside a scope
+    }
+
+    #[tokio::test]
+    async fn caller_conn_id_scope_round_trips() {
+        let seen = CALLER_CONN_ID
+            .scope(Some("127.0.0.1:5555".to_string()), async {
+                current_caller_conn_id()
+            })
+            .await;
+        assert_eq!(seen.as_deref(), Some("127.0.0.1:5555"));
+        assert_eq!(current_caller_conn_id(), None); // unset outside a scope
     }
 
     /// Cron, A2A and in-process tests carry no role at all and keep their

@@ -35,6 +35,12 @@ pub struct SessionInfo {
     pub shell: String,
     pub created_at: i64,
     pub closed: bool,
+    /// Number of connections currently holding a viewport constraint on this
+    /// session — the diagnostic surface for the smallest-wins sizing table
+    /// (`PtyManager::note_viewport`/`release_conn`). Not the same thing as
+    /// "how many clients are attached": a client that has only ever called
+    /// `pty.attach`/`pty.input` without resizing never appears here.
+    pub attached_count: usize,
 }
 
 /// Result of a successful `pty.spawn`.
@@ -49,6 +55,10 @@ struct Inner {
     sessions: HashMap<String, Arc<PtySession>>,
     /// Insertion order for FIFO eviction.
     order: VecDeque<String>,
+    /// `session_id -> (conn_id -> viewport)`. Present because a server-held
+    /// screen makes multi-client sharing free, and the moment a second client
+    /// attaches, something has to decide the one size the PTY gets.
+    viewports: HashMap<String, HashMap<String, (u16, u16)>>,
 }
 
 /// The global PTY session registry.
@@ -142,6 +152,7 @@ impl PtyManager {
         let session = {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             inner.order.retain(|i| i != session_id);
+            inner.viewports.remove(session_id);
             inner.sessions.remove(session_id)
         };
         match session {
@@ -158,6 +169,7 @@ impl PtyManager {
     pub fn remove(&self, session_id: &str) {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.order.retain(|i| i != session_id);
+        inner.viewports.remove(session_id);
         inner.sessions.remove(session_id);
     }
 
@@ -173,8 +185,71 @@ impl PtyManager {
                 shell: s.shell.clone(),
                 created_at: s.created_at,
                 closed: s.is_closed(),
+                attached_count: inner.viewports.get(&s.id).map_or(0, HashMap::len),
             })
             .collect()
+    }
+
+    /// Record a client's viewport and re-apply the smallest one.
+    pub fn note_viewport(&self, session_id: &str, conn_id: &str, rows: u16, cols: u16) {
+        {
+            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            inner
+                .viewports
+                .entry(session_id.to_string())
+                .or_default()
+                .insert(conn_id.to_string(), (rows.max(1), cols.max(1)));
+        }
+        self.apply_effective_size(session_id);
+    }
+
+    /// Drop every viewport constraint held by a departing connection.
+    ///
+    /// This is what makes "a client's constraint is released when it goes
+    /// away" structural rather than something every call site has to
+    /// remember: without it, a crashed tab (or one that simply never sends
+    /// `pty.close`) pins the shared PTY at whatever size it last requested,
+    /// forever, with no surface that shows the zombie row. Called from the
+    /// gateway's connection-teardown block, alongside the cleanup for the
+    /// other per-connection subsystems (subscriptions, reverse-RPC, presence).
+    pub fn release_conn(&self, conn_id: &str) {
+        let touched: Vec<String> = {
+            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            let mut touched = Vec::new();
+            for (sid, map) in &mut inner.viewports {
+                if map.remove(conn_id).is_some() {
+                    touched.push(sid.clone());
+                }
+            }
+            inner.viewports.retain(|_, m| !m.is_empty());
+            touched
+        };
+        for sid in touched {
+            self.apply_effective_size(&sid);
+        }
+    }
+
+    /// The size every attached client can display: the per-axis minimum.
+    /// `None` when the session has no recorded viewports (nobody has ever
+    /// called `pty.resize` on it, or the last client just released it) —
+    /// deliberately not a fallback size: `apply_effective_size` treats that
+    /// as "leave the PTY's current size alone" rather than resizing it to
+    /// some default, so an empty table can never shrink a still-open
+    /// terminal to a nonsense size.
+    #[must_use]
+    pub fn effective_size(&self, session_id: &str) -> Option<(u16, u16)> {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let map = inner.viewports.get(session_id)?;
+        map.values()
+            .copied()
+            .reduce(|(ar, ac), (br, bc)| (ar.min(br), ac.min(bc)))
+    }
+
+    fn apply_effective_size(&self, session_id: &str) {
+        let Some((rows, cols)) = self.effective_size(session_id) else {
+            return;
+        };
+        let _ = self.resize(session_id, rows, cols);
     }
 
     fn with_session<F, R>(&self, session_id: &str, f: F) -> Result<R, String>
@@ -263,5 +338,45 @@ mod tests {
         let mgr = PtyManager::new();
         assert!(mgr.resize("ghost", 24, 80).is_err());
         assert!(mgr.list().is_empty());
+    }
+
+    /// Two clients with different viewports share one PTY, which has exactly
+    /// one size. The smallest wins (tmux's convention for shared sessions):
+    /// deterministic, and it never thrashes between two live clients.
+    #[test]
+    fn the_smallest_attached_viewport_wins() {
+        let mgr = PtyManager::new();
+        let res = mgr
+            .spawn(&SpawnOptions {
+                rows: 40,
+                cols: 120,
+                ..Default::default()
+            })
+            .expect("spawn");
+        let sid = res.session_id;
+
+        mgr.note_viewport(&sid, "conn-a", 40, 120);
+        mgr.note_viewport(&sid, "conn-b", 24, 80);
+        assert_eq!(mgr.effective_size(&sid), Some((24, 80)));
+
+        // The constraint must be released when its client goes away —
+        // otherwise a crashed tab pins every other client to its size.
+        mgr.release_conn("conn-b");
+        assert_eq!(mgr.effective_size(&sid), Some((40, 120)));
+
+        mgr.close(&sid).expect("close");
+    }
+
+    #[test]
+    fn attached_count_is_visible_for_diagnosis() {
+        let mgr = PtyManager::new();
+        let sid = mgr
+            .spawn(&SpawnOptions::default())
+            .expect("spawn")
+            .session_id;
+        mgr.note_viewport(&sid, "conn-a", 24, 80);
+        mgr.note_viewport(&sid, "conn-b", 24, 80);
+        assert_eq!(mgr.list()[0].attached_count, 2);
+        mgr.close(&sid).expect("close");
     }
 }

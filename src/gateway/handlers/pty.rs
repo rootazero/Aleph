@@ -172,17 +172,52 @@ pub async fn handle_input(request: JsonRpcRequest) -> JsonRpcResponse {
     }
 }
 
-/// `pty.resize` — update a session's terminal dimensions.
+/// `pty.resize` — record this connection's terminal viewport and apply the
+/// smallest viewport across every client attached to the session.
+///
+/// A server-held screen makes multi-client sharing free, and the moment a
+/// second client attaches, something has to decide the one size the PTY
+/// actually gets — see [`PtyManager::note_viewport`]. The viewport is keyed
+/// on the real transport-level connection id
+/// ([`caller_identity::CALLER_CONN_ID`](crate::gateway::caller_identity::CALLER_CONN_ID)),
+/// never a caller-supplied one: `client_id` is a value the caller picks, and
+/// keying the constraint table on it would let the axis be chosen by the
+/// party being graded. A caller with no such id (no gateway dispatch scope —
+/// cron, internal, a bare test) is refused rather than silently attributed a
+/// made-up connection.
 pub async fn handle_resize(request: JsonRpcRequest) -> JsonRpcResponse {
     let id = request.id.clone();
     let params: ResizeParams = match parse(&request) {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    match pty::manager().resize(&params.session_id, params.rows, params.cols) {
-        Ok(()) => JsonRpcResponse::success(id, json!({ "ok": true })),
-        Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, e),
+
+    let Some(conn_id) = crate::gateway::caller_identity::current_caller_conn_id() else {
+        return JsonRpcResponse::error(
+            id,
+            INVALID_PARAMS,
+            "pty.resize requires a gateway connection",
+        );
+    };
+
+    // note_viewport itself has no notion of "unknown session" (it just
+    // records into a table keyed by session_id), so unknown-session-is-an-
+    // error — the contract every other pty.* handler holds — has to be
+    // checked here, before recording anything.
+    if !pty::manager()
+        .list()
+        .iter()
+        .any(|s| s.session_id == params.session_id)
+    {
+        return JsonRpcResponse::error(
+            id,
+            INVALID_PARAMS,
+            format!("no such session: {}", params.session_id),
+        );
     }
+
+    pty::manager().note_viewport(&params.session_id, &conn_id, params.rows, params.cols);
+    JsonRpcResponse::success(id, json!({ "ok": true }))
 }
 
 /// `pty.close` — terminate a session.
@@ -299,6 +334,113 @@ mod tests {
     async fn attach_on_an_unknown_session_is_an_error_not_an_empty_screen() {
         let resp = handle_attach(req("pty.attach", json!({ "session_id": "ghost" }))).await;
         assert!(resp.result.is_none(), "an unknown session must not read as a blank screen");
+        assert!(resp.error.is_some());
+    }
+
+    /// A caller with no gateway connection scope (cron, internal, a bare
+    /// test) must be refused, never attributed a made-up viewport owner —
+    /// see `caller_identity::CALLER_CONN_ID`'s module doc. This is exercised
+    /// with no `CALLER_CONN_ID` scope at all, matching how a non-gateway
+    /// caller actually looks.
+    #[tokio::test]
+    async fn resize_without_conn_id_is_refused_not_applied() {
+        let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 24, "cols": 80 }))).await;
+        let sid = spawn.result.as_ref().expect("spawned")["session_id"]
+            .as_str()
+            .expect("session_id")
+            .to_string();
+
+        let resp = handle_resize(req(
+            "pty.resize",
+            json!({ "session_id": sid, "rows": 10, "cols": 40 }),
+        ))
+        .await;
+        assert!(
+            resp.error.is_some(),
+            "resize without a connection id must be refused"
+        );
+
+        // Refusing must not have recorded a viewport under some fallback id.
+        assert_eq!(pty::manager().effective_size(&sid), None);
+
+        let _ = handle_close(req("pty.close", json!({ "session_id": sid }))).await;
+    }
+
+    /// The happy path: a real gateway connection resizes and its viewport is
+    /// recorded and applied (single attached client ⇒ its own request wins).
+    #[tokio::test]
+    async fn resize_with_conn_id_records_viewport_and_applies_it() {
+        let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 40, "cols": 120 }))).await;
+        let sid = spawn.result.as_ref().expect("spawned")["session_id"]
+            .as_str()
+            .expect("session_id")
+            .to_string();
+
+        let resp = crate::gateway::caller_identity::CALLER_CONN_ID
+            .scope(Some("conn-a".to_string()), async {
+                handle_resize(req(
+                    "pty.resize",
+                    json!({ "session_id": sid, "rows": 24, "cols": 80 }),
+                ))
+                .await
+            })
+            .await;
+        assert!(
+            resp.error.is_none(),
+            "resize with a connection id must succeed: {resp:?}"
+        );
+        assert_eq!(pty::manager().effective_size(&sid), Some((24, 80)));
+
+        let _ = handle_close(req("pty.close", json!({ "session_id": sid }))).await;
+    }
+
+    /// Two connections attached to the same session share one PTY size —
+    /// the smallest wins, and the JSON-RPC surface must produce the same
+    /// behavior `PtyManager::note_viewport`'s own unit tests establish.
+    #[tokio::test]
+    async fn two_conn_ids_share_smallest_wins_through_the_handler() {
+        let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 40, "cols": 120 }))).await;
+        let sid = spawn.result.as_ref().expect("spawned")["session_id"]
+            .as_str()
+            .expect("session_id")
+            .to_string();
+
+        let resize = |conn: &'static str, rows: u16, cols: u16, sid: String| async move {
+            crate::gateway::caller_identity::CALLER_CONN_ID
+                .scope(Some(conn.to_string()), async {
+                    handle_resize(req(
+                        "pty.resize",
+                        json!({ "session_id": sid, "rows": rows, "cols": cols }),
+                    ))
+                    .await
+                })
+                .await
+        };
+
+        let a = resize("conn-a", 40, 120, sid.clone()).await;
+        assert!(a.error.is_none());
+        let b = resize("conn-b", 24, 80, sid.clone()).await;
+        assert!(b.error.is_none());
+
+        assert_eq!(pty::manager().effective_size(&sid), Some((24, 80)));
+
+        let _ = handle_close(req("pty.close", json!({ "session_id": sid }))).await;
+    }
+
+    /// `pty.resize` on an unknown session id must still be an error, even
+    /// with a valid connection id — the existing "unknown session is an
+    /// error, never a silent no-op" contract other pty.* handlers hold.
+    #[tokio::test]
+    async fn resize_unknown_session_is_still_an_error() {
+        let resp = crate::gateway::caller_identity::CALLER_CONN_ID
+            .scope(Some("conn-a".to_string()), async {
+                handle_resize(req(
+                    "pty.resize",
+                    json!({ "session_id": "ghost", "rows": 10, "cols": 40 }),
+                ))
+                .await
+            })
+            .await;
         assert!(resp.error.is_some());
     }
 
