@@ -58,7 +58,7 @@ const BINARY_SNIFF_BYTES: usize = 8192;
 /// source/text files an agent actually reads and edits — it lets the tools
 /// degrade gracefully ("binary file, not displayable") instead of erroring
 /// out of `read_to_string` with an opaque message.
-pub(super) fn is_binary(bytes: &[u8]) -> bool {
+pub(crate) fn is_binary(bytes: &[u8]) -> bool {
     let window = bytes
         .get(..bytes.len().min(BINARY_SNIFF_BYTES))
         .expect("invariant: window end is clamped to bytes length");
@@ -71,12 +71,24 @@ pub(super) fn is_binary(bytes: &[u8]) -> bool {
 /// Shared by `file_read`'s window renderer and `file_edit`'s result snippet so
 /// the (identical) guard against minified single-line files — and the marker
 /// text — live in exactly one place.
-pub(super) fn clamp_line(line: &str) -> String {
+pub(crate) fn clamp_line(line: &str) -> String {
+    clamp_line_to(line, MAX_LINE_CHARS)
+}
+
+/// [`clamp_line`] with a caller-chosen budget.
+///
+/// The budget is a parameter rather than a second constant because the *logic*
+/// (char-boundary-safe cut, same truncation marker) is one thing while the
+/// right length is not: a `file_read` window is the content the model asked
+/// for, so it keeps 2 000 chars, whereas a `grep` line is a **locator** — the
+/// model follows it with a windowed read — so it keeps far fewer and a single
+/// minified bundle cannot flood the result. Two budgets, one implementation.
+pub(crate) fn clamp_line_to(line: &str, max_chars: usize) -> String {
     let char_count = line.chars().count();
-    if char_count <= MAX_LINE_CHARS {
+    if char_count <= max_chars {
         return line.to_string();
     }
-    let head: String = line.chars().take(MAX_LINE_CHARS).collect();
+    let head: String = line.chars().take(max_chars).collect();
     format!("{head}… [line truncated — {char_count} chars total]")
 }
 

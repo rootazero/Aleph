@@ -15,6 +15,7 @@ use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, Notify};
 
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
+use crate::tools::budget::REVERSE_RPC_MAX_TIMEOUT_MS;
 
 /// Association table: reverse RPC request id → the oneshot sender waiting for
 /// its response.
@@ -238,7 +239,12 @@ impl ReverseRpcChannel {
     /// Initiate a reverse RPC request on the connection and await the response.
     ///
     /// `timeout_ms` is the budget for the **entire call**, covering both "push
-    /// the frame onto the outbound queue" and "wait for the response".
+    /// the frame onto the outbound queue" and "wait for the response". It is
+    /// clamped to [`REVERSE_RPC_MAX_TIMEOUT_MS`] — a caller may ask for less,
+    /// never for more.
+    ///
+    /// The registered waiter is removed on **every** exit, the dropped-future
+    /// one included (see `WaiterGuard` below the impl).
     ///
     /// The outbound is a **bounded** mpsc (drained by the connection's writer
     /// task). If the peer TCP stops draining bytes (slow consumer / half-open
@@ -260,18 +266,32 @@ impl ReverseRpcChannel {
         params: Value,
         timeout_ms: u64,
     ) -> Result<JsonRpcResponse, ReverseRpcError> {
+        // See `REVERSE_RPC_MAX_TIMEOUT_MS`: an unbounded caller-supplied window
+        // is one the harness's per-tool clock preempts, discarding whatever the
+        // node had already produced in favour of an opaque overrun.
+        let timeout_ms = timeout_ms.min(REVERSE_RPC_MAX_TIMEOUT_MS);
         let (id, rx) = self.pending.register();
+        // Registering a waiter and removing it are two halves of one action,
+        // and until now only the *error* paths performed the second half. A
+        // DROPPED future performed neither: `RegistryToolAdapter::execute`
+        // drops exactly this future whenever the harness cancels a tool call,
+        // so every cancelled `node_invoke` leaked one `waiters` entry until the
+        // connection tore down. The guard makes cancellation a defined state
+        // rather than an assumption — which is also the precondition any
+        // race-and-drop wake edge (`SteerWatch::race`) would rest on.
+        let cleanup = WaiterGuard {
+            pending: Arc::clone(&self.pending),
+            id: Some(id.clone()),
+        };
         let req = JsonRpcRequest::with_id(method, Some(params), Value::String(id.clone()));
         // (B3-03) A serialization failure must cancel the registered waiter
         // before bubbling up — otherwise the id lingers in `waiters` until
-        // either (a) the per-id timeout (which never fires because we return
-        // early) or (b) `cancel_all` on disconnect.
+        // `cancel_all` on disconnect. `WaiterGuard` now does that for this and
+        // every other non-terminal exit, including the one no `match` arm can
+        // cover: the future being dropped.
         let frame = match serde_json::to_string(&req) {
             Ok(f) => f,
-            Err(e) => {
-                self.pending.cancel(&id);
-                return Err(ReverseRpcError::Serialize(e));
-            }
+            Err(e) => return Err(ReverseRpcError::Serialize(e)),
         };
 
         let budget = Duration::from_millis(timeout_ms);
@@ -290,10 +310,7 @@ impl ReverseRpcChannel {
 
         match tokio::time::timeout_at(outbound_deadline, self.outbound.send(frame)).await {
             // Receiver gone: the connection's writer task is finished.
-            Ok(Err(_)) => {
-                self.pending.cancel(&id);
-                return Err(ReverseRpcError::TransportClosed);
-            }
+            Ok(Err(_)) => return Err(ReverseRpcError::TransportClosed),
             // Never got the frame queued within the budget — a wedged peer
             // (writer stuck on a socket the peer stopped draining). Distinct from
             // a slow *response*: the frame did not even reach the wire. Ask the
@@ -301,7 +318,6 @@ impl ReverseRpcChannel {
             // rather than occupying a registry slot until (or past) the inbound
             // idle-watchdog, which never fires for a half-open write-wedge.
             Err(_) => {
-                self.pending.cancel(&id);
                 self.close_connection();
                 return Err(ReverseRpcError::OutboundWedged(timeout_ms));
             }
@@ -309,12 +325,47 @@ impl ReverseRpcChannel {
         }
 
         match tokio::time::timeout_at(response_deadline, rx).await {
-            Ok(Ok(resp)) => Ok(resp),
-            Ok(Err(_)) => Err(ReverseRpcError::Cancelled), // sender dropped
-            Err(_) => {
-                self.pending.cancel(&id);
-                Err(ReverseRpcError::Timeout(timeout_ms))
+            // Resolved: `PendingInvokes::resolve` already removed the entry, so
+            // disarm rather than cancel an id that may since have been reused.
+            Ok(Ok(resp)) => {
+                cleanup.disarm();
+                Ok(resp)
             }
+            // Sender dropped ⇒ the entry was removed by `resolve` or
+            // `cancel_all`; nothing left to clean up.
+            Ok(Err(_)) => {
+                cleanup.disarm();
+                Err(ReverseRpcError::Cancelled)
+            }
+            Err(_) => Err(ReverseRpcError::Timeout(timeout_ms)),
+        }
+    }
+}
+
+/// Removes a registered waiter unless the call reached a terminal state that
+/// already removed it.
+///
+/// The point is the path with no `match` arm at all: a future dropped
+/// mid-flight. See the comment at its construction site in
+/// [`ReverseRpcChannel::call`].
+struct WaiterGuard {
+    pending: Arc<PendingInvokes>,
+    id: Option<String>,
+}
+
+impl WaiterGuard {
+    /// The waiter is already gone (resolved, or dropped by `cancel_all`);
+    /// cancelling now could remove a *different* call's entry if the id space
+    /// ever wrapped.
+    fn disarm(mut self) {
+        self.id = None;
+    }
+}
+
+impl Drop for WaiterGuard {
+    fn drop(&mut self) {
+        if let Some(id) = self.id.take() {
+            self.pending.cancel(&id);
         }
     }
 }
@@ -324,6 +375,103 @@ mod tests {
     use super::*;
     use crate::gateway::protocol::JsonRpcResponse;
     use serde_json::json;
+
+    /// How many waiters the table is holding. Only the guard tests need this,
+    /// and only to observe leakage.
+    fn waiter_count(pending: &PendingInvokes) -> usize {
+        pending
+            .waiters
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
+    }
+
+    /// Dropping the `call` future must not leak its waiter.
+    ///
+    /// `RegistryToolAdapter::execute` drops exactly this future when the
+    /// harness cancels a tool call, and every error arm of `call` cleaned up
+    /// while the dropped-future path — which has no arm at all — did not. The
+    /// entry survived until `cancel_all` at connection teardown, so a session
+    /// that cancelled N node invokes carried N dead entries.
+    #[tokio::test]
+    async fn dropping_the_call_future_releases_its_waiter() {
+        // A live receiver that never replies, so `call` parks on the response.
+        let (out_tx, _out_rx) = mpsc::channel::<String>(8);
+        let channel = ReverseRpcChannel::new(out_tx);
+        let pending = channel.pending();
+
+        {
+            let fut = channel.call("tool.call", json!({}), 60_000);
+            tokio::pin!(fut);
+            // Poll once so the waiter is registered and the future is parked.
+            tokio::select! {
+                _ = &mut fut => panic!("the peer never replies; this must not resolve"),
+                () = tokio::time::sleep(Duration::from_millis(20)) => {}
+            }
+            assert_eq!(waiter_count(&pending), 1, "the call must have registered");
+            // `fut` drops here — the cancellation path.
+        }
+
+        assert_eq!(
+            waiter_count(&pending),
+            0,
+            "a dropped call future left its waiter behind; every harness-cancelled \
+             node_invoke leaks one entry until the connection tears down"
+        );
+    }
+
+    /// A resolved call leaves nothing behind either — the guard must not be
+    /// the only thing keeping the table clean, and it must not cancel an id
+    /// that `resolve` already removed.
+    #[tokio::test]
+    async fn a_resolved_call_leaves_no_waiter() {
+        let (out_tx, mut out_rx) = mpsc::channel::<String>(8);
+        let channel = ReverseRpcChannel::new(out_tx);
+        let pending = channel.pending();
+        let replier = Arc::clone(&pending);
+
+        tokio::spawn(async move {
+            let frame = out_rx.recv().await.expect("request frame");
+            let req: Value = serde_json::from_str(&frame).unwrap();
+            let id = req["id"].clone();
+            replier.resolve(
+                &id,
+                JsonRpcResponse::success(Some(id.clone()), json!({"ok": true})),
+            );
+        });
+
+        let resp = channel
+            .call("tool.call", json!({}), 5_000)
+            .await
+            .expect("the peer replied");
+        assert!(resp.is_success());
+        assert_eq!(waiter_count(&pending), 0);
+    }
+
+    /// A caller may ask for less than the ceiling, never for more.
+    ///
+    /// Observed through the error the timeout reports, which carries the
+    /// budget actually used: `ReverseRpcError::Timeout(ms)`. Asserted against
+    /// the constant rather than a literal, so the guard survives the value
+    /// moving.
+    #[tokio::test(start_paused = true)]
+    async fn a_caller_cannot_ask_for_more_than_the_ceiling() {
+        let (out_tx, _out_rx) = mpsc::channel::<String>(8);
+        let channel = ReverseRpcChannel::new(out_tx);
+
+        let err = channel
+            .call("tool.call", json!({}), REVERSE_RPC_MAX_TIMEOUT_MS * 4)
+            .await
+            .expect_err("the peer never replies");
+        match err {
+            ReverseRpcError::Timeout(ms) => assert_eq!(
+                ms, REVERSE_RPC_MAX_TIMEOUT_MS,
+                "an unbounded caller window is one the harness's per-tool clock \
+                 preempts, discarding the node's partial work"
+            ),
+            other => panic!("expected a response timeout, got {other:?}"),
+        }
+    }
 
     #[tokio::test]
     async fn register_then_resolve_delivers_response() {

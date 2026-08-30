@@ -245,7 +245,9 @@ pub async fn dreaming(server_url: &str, config: &CliConfig, json: bool) -> CliRe
         .call("dreaming.list_insights", Some(serde_json::json!({})))
         .await?;
 
-    let status: DreamSchedulingStatus = serde_json::from_value(result.clone()).unwrap_or_default();
+    let status: DreamSchedulingStatus = serde_json::from_value(result.clone()).map_err(|e| {
+        aleph_client::CliError::Other(format!("invalid dreaming.list_insights response: {e}"))
+    })?;
     let pairs = dreaming_pairs(&status);
     output::print_detail(&pairs, json, &result);
 

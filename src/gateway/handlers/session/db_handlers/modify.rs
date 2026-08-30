@@ -698,6 +698,52 @@ pub async fn handle_truncate_db(
         return visibility::not_found_response(request.id);
     }
 
+    // Retire the SSOT event log before the projection, exactly as
+    // `sessions.reset`, `sessions.delete`, `chat.clear` and `chat.rewind` do.
+    // `truncate_messages` touches `messages` / `messages_fts` /
+    // `transcript.jsonl` and nothing else, and the model's prompt is rebuilt
+    // from `session_events` — so on its own this verb removed the turn from
+    // every screen while the model went on replaying it. `/retry` was worse:
+    // it undoes, then re-sends, so the log grew [U, A, U] — the duplicated
+    // turn its own comment claims the undo prevents.
+    //
+    // The boundary is derived from the row that is about to be dropped, not
+    // from `keep_count`: `messages` is not a 1:1 image of the live event log
+    // (boot-time orphan notices and other writers append rows with no source
+    // event), so a count is an ordinal in the projection's index space, while
+    // `retire_live_events` wants a seq in the log's. Taking the MINIMUM source
+    // seq over every dropped row keeps the two halves describing the same cut
+    // even when the dropped range straddles rows that carry no seq.
+    let cut_seq = match manager.get_history(&key, None).await {
+        Ok(rows) => rows
+            .get(keep_count..)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|m| {
+                crate::session::projection::parse_source_seq(&m.id, &key.to_key_string())
+            })
+            .min(),
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Truncate failed: could not read history to place the cut: {e}"),
+            );
+        }
+    };
+    if let Some(seq) = cut_seq {
+        // Fail the RPC rather than truncating half of it: a projection cut with
+        // a surviving event log is precisely the state this handler shipped in,
+        // and it reads to the user as a successful undo.
+        if let Err(e) = crate::session::store::retire_live_events(&key, seq).await {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to retire session event log: {e}"),
+            );
+        }
+    }
+
     match manager.truncate_messages(&key, keep_count).await {
         Ok(result) => JsonRpcResponse::success(
             request.id,
@@ -1018,6 +1064,79 @@ mod tests {
             synthetic: false,
             author_user_id: None,
         }
+    }
+
+    /// `/undo` must actually undo. `truncate_messages` touches only the
+    /// projection (`messages` / `messages_fts` / `transcript.jsonl`); the
+    /// model's prompt is rebuilt from `session_events`, so this handler used to
+    /// remove the turn from every screen while the model went on replaying it,
+    /// and `/retry` (undo, then re-send) grew the log to [U, A, U] — the
+    /// duplicated turn its own comment claims the undo prevents.
+    ///
+    /// Four sibling verbs already retire the log first (`sessions.reset`,
+    /// `sessions.delete`, `chat.clear`, `chat.rewind`); this was the only one
+    /// that did not, and the criterion is stated verbatim 400 lines above it.
+    #[tokio::test]
+    async fn truncate_retires_the_event_log_not_just_the_projection() {
+        let events = crate::session::store::install_test_event_store();
+        let temp = tempdir().unwrap();
+        let manager = SessionManager::new(SessionManagerConfig {
+            db_path: temp.path().join("truncate_ssot.db"),
+            ..Default::default()
+        })
+        .unwrap();
+        let key = SessionKey::from_key_string("agent:trunctest:main").unwrap();
+        manager.get_or_create(&key).await.unwrap();
+        let key_str = key.to_key_string();
+
+        // Two turns, projected the way the projector does it: the row id
+        // carries the source seq, which is what places the cut in the log's
+        // index space.
+        for seq in 1..=4u64 {
+            events
+                .append(&key, seq, &user_event(&format!("line {seq}")), 0)
+                .await
+                .unwrap();
+            manager
+                .append_message(
+                    &key,
+                    crate::gateway::session_store::types::MessageRecord {
+                        id: crate::session::projection::row_id(&key_str, seq),
+                        role: if seq % 2 == 1 { "user" } else { "assistant" }.into(),
+                        content: format!("line {seq}"),
+                        timestamp: chrono::Utc::now().timestamp_millis(),
+                        metadata: None,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        tool_call_id: None,
+                        tool_name: None,
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(events.load_all_events(&key).await.unwrap().len(), 4);
+
+        let store: Arc<dyn SessionStore> = Arc::new(manager);
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "session.truncate".into(),
+            params: Some(json!({ "session_key": key_str, "keep_count": 2 })),
+            id: Some(json!(1)),
+        };
+        let response = handle_truncate_db(request, store.clone()).await;
+        assert!(response.error.is_none(), "{:?}", response.error);
+
+        let surviving = events.load_all_events(&key).await.unwrap();
+        assert_eq!(
+            surviving.len(),
+            2,
+            "the reverted turn is still in the event log, so the model replays \
+             a turn the user was told was undone (surviving seqs: {:?})",
+            surviving.iter().map(|e| e.seq).collect::<Vec<_>>()
+        );
+        // And the two halves must describe the SAME cut.
+        assert_eq!(store.get_history(&key, None).await.unwrap().len(), 2);
     }
 
     /// Deleting a conversation must also stop the autonomous chains keyed to

@@ -249,12 +249,29 @@ fn production_sources() -> Vec<(String, String)> {
                 walk(&path, out);
             } else if path.extension().is_some_and(|e| e == "rs") {
                 if let Ok(text) = std::fs::read_to_string(&path) {
-                    let stripped: String = text
-                        .replace('\r', "")
-                        .lines()
-                        .filter(|l| !l.trim_start().starts_with("//"))
-                        .collect::<Vec<_>>()
-                        .join("\n");
+                    // Cut at the `#[cfg(test)]` boundary FIRST, then strip
+                    // comment lines. Both halves matter and neither is
+                    // optional:
+                    //
+                    // ⚠️ This function is named `production_sources` and, until
+                    // 2026-08-29, read every test module in `src/` too. That is
+                    // not a wider net, it is a BLIND one: a source-level census
+                    // that reads test code takes the string literals inside
+                    // other tests' assertions as call sites. Two real
+                    // false hits existed — `live_apply.rs`'s own census builds
+                    // `format!("save_incremental(&[\"{section}\"])")` to search
+                    // for these very calls, and this file's own assertion text
+                    // contains the pattern — so one guard was reporting another
+                    // guard's search string as a config section that cannot be
+                    // written.
+                    //
+                    // `production_prefix` is the repo's single answer to "where
+                    // does test code begin"; re-deriving it here would be a
+                    // second one (see its own doc on why the two halves share
+                    // one walk).
+                    let stripped = crate::utils::source_scan::strip_comment_lines(
+                        &crate::utils::source_scan::production_prefix(&text.replace('\r', "")),
+                    );
                     out.push((path.display().to_string(), stripped));
                 }
             }
@@ -270,6 +287,11 @@ fn production_sources() -> Vec<(String, String)> {
 
 /// Every dot-path any `save_incremental` / `save_incremental_to_file` call in
 /// `src/` names.
+/// The harvest, plus the brace-shaped captures it deliberately skipped.
+///
+/// Returned rather than discarded so the caller can assert every skip is a
+/// `format!` template. A silent skip in a census is the census's own failure
+/// mode: it turns "I could not read this" into "there is nothing here".
 fn harvested_section_names() -> std::collections::BTreeSet<String> {
     let mut names = std::collections::BTreeSet::new();
     for (_, text) in production_sources() {

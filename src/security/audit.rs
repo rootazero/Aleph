@@ -411,6 +411,10 @@ mod tests {
             "src/builtin_tools/agent_manage/update.rs",
             "allowed_users rewritten (tool)",
         ),
+        // Added by 9d3bdc3a5 ("audit high-privilege mutations"), which wrote
+        // the calls but not the rows — the census went red at that commit and
+        // stayed red, which is the census working. Verbs below are the ones
+        // each `authority_change` actually records, not a summary of the file.
         (
             "src/gateway/handlers/cluster.rs",
             "cluster node device credential mint (enroll) / revoke (deregister)",

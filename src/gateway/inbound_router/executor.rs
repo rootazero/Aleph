@@ -116,7 +116,17 @@ impl InboundMessageRouter {
                     .behavior
                     .as_ref()
                     .map_or("typewriter", |b| b.output_mode.as_str());
-                ReplyEmitterConfig::from_output_mode(mode)
+                let mut config = ReplyEmitterConfig::from_output_mode(mode);
+                // Same config read, same derivation as the `metadata["locale"]`
+                // stamp below (`general.language` -> `Locale::from_config`), so
+                // the halt tag this emitter appends and the halt paragraph
+                // `run_loop::inner` renders from that stamp cannot disagree
+                // about which language this reply is in. Resolved here rather
+                // than from the request for the ordering reason `side_answer`
+                // documents: the `RunRequest` does not exist yet.
+                config.locale =
+                    crate::gateway::i18n::Locale::from_config(cfg.general.language.as_deref());
+                config
             }
             None => ReplyEmitterConfig::default(),
         };
@@ -517,6 +527,16 @@ impl InboundMessageRouter {
                 // corpse ticket wedging the lane (mirrors the engine's
                 // `RunSlot` session claim).
                 Some(ticket) => {
+                    // `attempt` is `FnMut` and `deliver_with_ticket` calls it
+                    // more than once — with the SAME `emitter`, whose
+                    // `run_complete_handled` latch takes the first terminal
+                    // frame and drops the rest. That is safe for exactly one
+                    // reason: the only outcome that loops is
+                    // `ExecutionError::AgentBusy`, which `execution_engine/gate.rs`
+                    // returns *before* dispatch, so a refused attempt produces
+                    // no `RunComplete` to spend the latch on. Any other outcome
+                    // returns immediately. If a second retryable error is ever
+                    // added here, check what it emits first.
                     let mut attempt = || {
                         execution_adapter.execute(request.clone(), agent.clone(), emitter.clone())
                     };

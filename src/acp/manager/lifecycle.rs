@@ -536,7 +536,18 @@ impl AcpAdapterManager {
             .get(&key)
             .map(|entry| entry.cancel.clone());
         if let Some(handle) = cancel_handle {
-            let _ = handle.send_cancel().await;
+            // Best-effort pre-fire so the harness can shut down its turn
+            // cleanly, but log if the cancel channel is already closed or
+            // the receiver has been dropped — the caller otherwise sees
+            // `Ok(())` while the agent keeps running, which is exactly
+            // the silent failure that makes "why won't it stop?" tickets
+            // undebuggable.
+            if let Err(e) = handle.send_cancel().await {
+                tracing::warn!(
+                    error = %e,
+                    "shutdown_named: pre-fire cancel failed; agent may not stop promptly"
+                );
+            }
         }
 
         // Now evict + kill. Drop the write lock before locking the inner
@@ -562,11 +573,19 @@ impl AcpAdapterManager {
             let mut sessions = self.sessions.write().await;
             sessions.drain().collect::<Vec<_>>()
         };
-        for (key, entry) in &entries {
+        for (key, _) in &entries {
             info!(harness_id = %key.harness_id, cwd = ?key.cwd, "Shutting down ACP session");
+        }
+        // Kill all sessions concurrently. A single wedged session
+        // (e.g. one whose child is stuck in uninterruptible IO) used
+        // to block every other session's teardown behind it because
+        // the kill loop was sequential. With `join_all` the wall-clock
+        // cost is bounded by the slowest session, not the sum.
+        futures::future::join_all(entries.iter().map(|(_, entry)| async move {
             let mut session = entry.session.lock().await;
             session.kill().await;
-        }
+        }))
+        .await;
         for (key, _) in entries {
             self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
                 harness_id: key.harness_id,

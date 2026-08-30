@@ -262,8 +262,9 @@ message. Nothing in `src/harness/` learns that plan mode exists.
 ```
 tier resolves to Plan          turn_permissions mints a PlanGate
         ↓                      (AtomicBool + the tier to restore to)
-model explores, writes the     file_read / file_ops list|search / ctx_search /
-plan to `scratchpad`           search / web_fetch / memory_* / ask_user / subagent
+model explores, writes the     file_read / grep / find / file_ops list|search /
+plan to `scratchpad`           ctx_search / search / web_fetch / memory_* /
+                               ask_user / subagent
         ↓                      everything else: PermissionDenied(GateRule::PlanMode)
 scratchpad(request_approval)   the persisted plan → clarification::ask → a person
         ↓  "approved"
@@ -1001,6 +1002,14 @@ replaced the single `rule_id != DECLARED_FLOOR_RULE` equality, pinned to
 `GateRule::is_floor` from both ends by
 `every_floor_variant_is_declared_a_floor_on_both_sides`.
 
+> **2026-08-30 update, left as a pointer rather than a rewrite**: this section is
+> a changelog entry for when the mechanism landed (round 11 / 2026-08-12) and
+> stays historical — the two paths it names above were the complete list *then*.
+> The list has since grown a third member, `policies.terminal` (see "内嵌终端"
+> below); the two names above are no longer complete. `GATE_DECIDING_CONFIG_PATHS`
+> (`config::types::policies::exec_tier`) is the current, authoritative list —
+> read that, not the two names in the paragraph above.
+
 ### The chain names every gate, and the trail hears it (2026-08-12)
 
 `GateRule` gained `OperatorRequired` and `HookRequested`: the two gates that
@@ -1014,6 +1023,31 @@ identity ledger's signed preimage is append-ordered, so a new optional field
 would invalidate every existing chain — see AGENT_IDENTITY.md.) An auditor
 reading an `ApprovalGranted` row can now tell a tier-raised card from a floor
 the operator could not have removed.
+
+---
+
+### 内嵌终端（`pty.*`）
+
+- **两面 operator-only**：RPC 面在 `method_admin::ADMIN_PREFIXES`，订阅面在 `event_scope::default_rules`。
+- **cwd jail 只管起点**。终端内部的 `cd` 不受约束 —— 命令粒度的闸在交互式字节流上不可表达（`vim` 里的回车不是命令）。
+  它买到的是**"每个终端的起点可枚举、可审计"，不是"终端不能离开工作区"**。别把它当成隔离来引用。
+- **PTY 不经 `[sandbox.command_policy]` 也不经 exec tier**（`method_admin.rs` 的注释自陈 "strictly more dangerous"）。
+  会话粒度的开关 `[policies.terminal] enabled` 是这一层唯一说得出口的谓词；关掉它会杀掉在飞的会话。
+- **终端历史住在服务器上**（每会话 `scrollback_lines` 行，默认 1000），因此对诊断与审计面可见。
+- **同一装机的所有 operator 共享 `["*"]` 作用域**，能互相看见并 attach 彼此的会话。这是单层信任模型的有意结果，不是疏漏。
+- **打开这道闸本身不举卡就是一次绕闸**：`[policies.terminal] enabled` 在
+  `config::types::policies::exec_tier::GATE_DECIDING_CONFIG_PATHS` 上，所以经 `self_config`
+  写它在**每个执行档位**——包括 `Full`——都停下来问。这张卡不提供"始终允许"，原因不是它例外，
+  恰恰相反：`GateRule::GateRemoval` **本来就在** `FLOOR_RULES` 上，`for_confirm_gate` 正是
+  因为这条地板判定才收回持久授权按钮——同一套地板机制覆盖名单上的每个成员，`policies.terminal`
+  不是特例（`is_floor()` 自己的注释警告过"地板"在这个子系统里有两层含义，此处说的是"这张卡不许
+  提供持久授权"那一层，不要在这句话之外再造第三种读法）。它上榜的理由属于该名单的两类之一：写它
+  不是**退掉**一张已有的卡，而是**交出**一个此前没有任何卡在看守的执行面（`pty.*` 本身不经
+  command policy、不经 exec tier）——这正是"写配置，再自由行动"能把两个各自合法的步骤拼成的
+  一步免卡动作，也是该常量存在的理由（名单里另一类成员的写法是退掉一张已有的卡，具体成员与理由
+  见 `GATE_DECIDING_CONFIG_PATHS` 自己的 doc，不在此重复——那份名单会变，这句话不该跟着腐烂）。
+  一条精确点名 `self_config` 的 `[policies.tool_permissions]` 条目仍能站下这张卡（那是人写的
+  决定，创建它的那次写入自己已经经过这条规则举过卡），这是有意的。
 
 ---
 
@@ -1067,6 +1101,50 @@ The secret pattern catalogs live in `src/secrets/leak_detector.rs` and
 `src/exec/secret_patterns.rs`; they are kept in sync (the private-key regex is
 `-----BEGIN[A-Z ]*PRIVATE KEY-----` in both, so bare PKCS#8 headers cannot slip
 one catalog but not the other).
+
+### The guardrail chain settles on "was it rewritten", not on "did anyone warn" (2026-08-28)
+
+**Location**: `src/guardrails/registry.rs` — `evaluate_input` / `evaluate_output`
+/ `evaluate_tool_call`, all three settling through `settle_chain`.
+
+A guardrail chain runs each registered guardrail in order, feeding the next one
+the **rewritten** payload, so a `Sanitize` followed by a `Block` cannot leak.
+Only `Block` short-circuits. `Warn` reasons accumulate (deduplicated). What the
+chain returns is then decided in exactly one place, and the predicate is
+**`rewritten`** — did any guardrail ask for a rewrite — not `warns.is_empty()`.
+
+The distinction is the whole contract. `warns.is_empty()` was the predicate for
+one commit, and under it a guardrail that rewrote the payload without *also*
+warning returned `Allow` and its rewrite was discarded: the original text went
+to the provider. That is not an edge case — it is the shape **every redaction
+guardrail has**. A PII scrubber does not warn; warning about a secret is one way
+to write it into the audit log. So for the class of guardrail this layer exists
+to serve, sanitization was a complete no-op, with no error and no log line, and
+the only observable difference was the secret on the wire.
+
+Two consequences follow, and both are load-bearing:
+
+- **A rewrite that does not parse back as JSON is surfaced, not swallowed.**
+  `evaluate_tool_call` must rebuild a `Value` from the guardrail's replacement
+  text. When that fails there is no payload left to continue the chain with, so
+  the chain ends there and returns the unparseable `Sanitize` **verbatim**.
+  `AgentHarness::apply_tool_call_guardrail` then fails its own reparse and
+  blocks the call — which is what its fail-closed arm is for. Downgrading the
+  failure to a warn and keeping the previous args instead hands the tool the
+  guardrail's **original, un-sanitized** arguments, and does so by making the
+  harness's fail-closed arm unreachable.
+- **The `source` string may not claim a warn that did not fire.** It is audit
+  copy: `guardrails (sanitized)` / `guardrails (sanitized; warn: …)` /
+  `guardrails (warn: …)`, chosen from the two facts rather than formatted from
+  one of them.
+
+The regression test is `all_three_chains_surface_a_warn_free_rewrite`, and it
+asserts the three surfaces **agree** rather than asserting any one surface's
+answer: the failure mode here was divergence — the tool-call twin had the
+correct predicate while its two siblings did not, twenty lines apart in the same
+file. `a_warn_only_chain_still_carries_its_reasons_unchanged` is the floor in
+the other direction, so "stop dropping the rewrite" cannot be over-corrected
+into "`Allow` unless rewritten", which would discard every warn reason instead.
 
 ### Asking a human FOR a secret is a third path, and masking is not its answer
 
@@ -2407,7 +2485,12 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
     directions, and the event-forward arm had four terms, none of them
     authentication. Combined with `pty.output` classifying as `Global`, an
     unauthenticated LAN socket received the operator's raw shell bytes while
-    `"pty."` had been in `ADMIN_PREFIXES` all along;
+    `"pty."` had been in `ADMIN_PREFIXES` all along. (`pty.output` no longer
+    exists: the embedded-terminal work replaced the raw-byte topic with the
+    row-diff `pty.screen`. The name is kept here because it is what the defect
+    happened to — grep `PTY_SCREEN_TOPIC` for the topic that carries terminal
+    output today, and note the shape is unchanged: it is still a topic whose
+    payload is the operator's shell.)
   - `partition_visible` had only the task-local way of naming an actor, which is
     dead inside a spawned run — so every tool reaching for it would have got a
     silent always-true. It now has an explicit-actor twin

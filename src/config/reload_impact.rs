@@ -77,10 +77,27 @@ pub(crate) const LIVE_SECTIONS: &[&str] = &["route", "behavior", "execution"];
 ///   on every call from a boot-installed `ArcSwap`
 ///   ([`crate::spend::current_policy`]); storing a patched policy into it
 ///   (`crate::spend::update_policy`) is what makes a ceiling change live,
-///   exactly like `route`'s `ArcSwap`. `[policies]`'s other six fields
+///   exactly like `route`'s `ArcSwap`. `[policies]`'s other fields
 ///   (`tool_permissions` and friends) have no such handle, hence the parent
-///   section itself stays out of [`LIVE_SECTIONS`].
-pub(crate) const LIVE_SUBSECTIONS: &[&str] = &["policies.spend"];
+///   section itself stays out of [`LIVE_SECTIONS`]. (Deliberately no count
+///   here: a number in a comment is a list that rots. `PoliciesConfig` has
+///   ten fields today; `terminal` is the only one this change added, so the
+///   previous "six" was already wrong before it arrived.)
+/// - `policies.terminal` — declared live because each of its three fields is
+///   either applied at apply time or applies to work started afterwards, and
+///   NONE of them silently requires a restart:
+///   * `enabled` — read fresh from the live config on every `pty.spawn`, and
+///     turning it off runs `PtyManager::close_all`, so the change is
+///     complete when the patch returns.
+///   * `max_sessions` — read fresh at spawn time (deliberately NOT a
+///     `const`; a bare constant would make the key inert while this list
+///     advertised it as live).
+///   * `scrollback_lines` — applies to sessions started after the patch.
+///     Sessions already running keep the ring they were built with, because
+///     rewriting a live ring would destroy scrollback the user can still
+///     see. No restart is required to get the new value — only a new
+///     terminal.
+pub(crate) const LIVE_SUBSECTIONS: &[&str] = &["policies.spend", "policies.terminal"];
 
 /// Legacy top-level sections that are parsed but inert (no runtime consumer).
 ///
@@ -284,6 +301,25 @@ mod tests {
         );
         assert_eq!(
             ReloadImpact::classify("policies.spend.total_usd"),
+            ReloadImpact::Live
+        );
+    }
+
+    /// A security switch that only takes effect after a restart is not a
+    /// switch. It is declared live, and the declaration is backed by a real
+    /// handle (the gate reads the live config at spawn time).
+    #[test]
+    fn the_terminal_switch_is_declared_live() {
+        assert!(
+            LIVE_SUBSECTIONS.contains(&"policies.terminal"),
+            "turning the terminal off must not wait for a restart"
+        );
+        assert_eq!(
+            ReloadImpact::classify("policies.terminal"),
+            ReloadImpact::Live
+        );
+        assert_eq!(
+            ReloadImpact::classify("policies.terminal.enabled"),
             ReloadImpact::Live
         );
     }

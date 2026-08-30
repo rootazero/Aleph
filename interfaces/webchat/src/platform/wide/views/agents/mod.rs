@@ -83,6 +83,7 @@ pub fn AgentsView() -> impl IntoView {
     let agents_list = RwSignal::new(Vec::<AgentSummary>::new());
     let is_loading = RwSignal::new(true);
     let delete_error = RwSignal::new(Option::<String>::None);
+    let load_error = RwSignal::new(Option::<String>::None);
 
     // Load agents list and find current agent
     let dash = state;
@@ -105,7 +106,11 @@ pub fn AgentsView() -> impl IntoView {
                     }
                 }
                 Err(e) => {
-                    web_sys::console::error_1(&format!("Failed to load agents: {e}").into());
+                    load_error.set(Some(
+                        crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    ));
                 }
             }
             is_loading.set(false);
@@ -137,6 +142,9 @@ pub fn AgentsView() -> impl IntoView {
 
     view! {
         <div class="px-6 pb-6 aleph-content-top max-w-6xl mx-auto">
+            {move || load_error.get().map(|e| view! {
+                <div class="mb-4 p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">{e}</div>
+            })}
             {move || {
                 if is_loading.get() {
                     return view! {

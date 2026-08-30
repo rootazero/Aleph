@@ -45,7 +45,23 @@ pub fn create_control_plane_router() -> Router {
         // compresses it.
         //
         // 304 revalidations carry no body, so nothing runs on a cache hit.
-        .layer(CompressionLayer::new())
+        .layer(response_compression_layer())
+}
+
+/// The one construction of the response compression layer.
+///
+/// Extracted so a test can exercise the layer without an embedded asset to
+/// hang it on. The pass-through claim below — a response that already carries
+/// `Content-Encoding` is not re-encoded — is a property of *this layer*, not
+/// of the Panel, but the only test that made it went through
+/// `create_control_plane_router()` and therefore needed `interfaces/webchat/
+/// dist/` to be populated by `just wasm`. On a bare checkout it returned early
+/// and passed, which is indistinguishable from having checked.
+///
+/// A second `CompressionLayer::new()` written inside the test would be a
+/// second answer to "how is this layer configured", so the test calls this.
+fn response_compression_layer() -> CompressionLayer {
+    CompressionLayer::new()
 }
 
 /// Does this request advertise brotli?
@@ -242,25 +258,142 @@ mod tests {
         // Just check that it compiles
     }
 
-    /// The one claim in this module that no other test can make: a response
-    /// that already carries `Content-Encoding: br` passes through
-    /// `CompressionLayer` untouched.
+    /// The compression layer does not re-encode a response that already
+    /// carries `Content-Encoding` — proved with no embedded asset in the path.
     ///
-    /// Every other test here calls `serve_static_or_index` DIRECTLY, so the
-    /// layer is never in the path — including the one whose message says "let
-    /// CompressionLayer decide". The whole reason the 22 MB wasm is cheap is
-    /// that the layer declines to re-encode it, and until now that rested on a
-    /// live measurement plus a reading of tower-http's source. A dependency
-    /// bump could reintroduce double-encoding with the suite green.
+    /// This is the claim the 22 MB wasm's cost rests on, and until now it was
+    /// only made by a test that skipped on any checkout without `just wasm`.
+    /// A tower-http bump could reintroduce double-encoding with the suite
+    /// green everywhere the Panel had not been built, which is most places.
     ///
-    /// So this one goes through `create_control_plane_router()`, which is the
-    /// only way the layer is exercised at all.
+    /// Two arms, because the positive one alone is satisfiable for the wrong
+    /// reason: tower-http's default predicate ALSO declines below 32 bytes and
+    /// on several content types, so a stub that tripped either would pass
+    /// while proving nothing about the header. The falsifier sends the same
+    /// body and the same content type with no `Content-Encoding` and requires
+    /// a smaller, gzipped body back. Only the pair makes the pass-through
+    /// attributable to the header rather than to the payload.
+    #[tokio::test]
+    async fn the_compression_layer_declines_an_already_encoded_response() {
+        use tower::ServiceExt;
+
+        /// Well above the layer's 32-byte floor and trivially compressible, so
+        /// a willing layer visibly shrinks it — which is what arm B checks.
+        const BODY: &[u8] = &[b'a'; 4096];
+        /// The wasm's own type: not on tower-http's excluded list, so the
+        /// layer's decision here is about the header and nothing else.
+        const MIME: &str = "application/wasm";
+
+        async fn already_encoded() -> Response {
+            (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, MIME),
+                    (header::CONTENT_ENCODING, "br"),
+                ],
+                BODY,
+            )
+                .into_response()
+        }
+        async fn identity() -> Response {
+            (StatusCode::OK, [(header::CONTENT_TYPE, MIME)], BODY).into_response()
+        }
+
+        let router = Router::new()
+            .route("/encoded", get(already_encoded))
+            .route("/identity", get(identity))
+            .layer(response_compression_layer());
+
+        let encodings = |resp: &Response| -> Vec<String> {
+            resp.headers()
+                .get_all(header::CONTENT_ENCODING)
+                .iter()
+                .filter_map(|v| v.to_str().ok().map(str::to_owned))
+                .collect()
+        };
+
+        // Arm A — the claim.
+        let request = axum::http::Request::builder()
+            .uri("/encoded")
+            .header(header::ACCEPT_ENCODING, "br, gzip")
+            .body(axum::body::Body::empty())
+            .expect("request");
+        let response = router.clone().oneshot(request).await.expect("route");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            encodings(&response),
+            vec!["br".to_string()],
+            "a response that already declared its encoding came back re-encoded; \
+             more than one value here is the wire signature of double-encoding"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        assert_eq!(
+            body.as_ref(),
+            BODY,
+            "the bytes were rewritten — passing the header through while \
+             re-encoding the body is the same bug wearing the right header"
+        );
+
+        // Arm B — the falsifier: same body, same type, no declared encoding.
+        let request = axum::http::Request::builder()
+            .uri("/identity")
+            .header(header::ACCEPT_ENCODING, "gzip")
+            .body(axum::body::Body::empty())
+            .expect("request");
+        let response = router.oneshot(request).await.expect("route");
+        assert_eq!(
+            encodings(&response),
+            vec!["gzip".to_string()],
+            "the layer declined this payload on its own merits, so arm A proves \
+             nothing about the header — raise the body size or change the mime"
+        );
+        let compressed = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        assert!(
+            compressed.len() < BODY.len(),
+            "arm B came back {} B for a {} B input: the layer announced gzip \
+             without shrinking anything",
+            compressed.len(),
+            BODY.len()
+        );
+    }
+
+    /// End to end: `serve_static_or_index` really sets `Content-Encoding: br`
+    /// for a committed sibling, and that response survives the layer.
+    ///
+    /// This is the WIRING half. The layer half — a response that already
+    /// carries `Content-Encoding` is not re-encoded — moved to
+    /// `the_compression_layer_declines_an_already_encoded_response` above,
+    /// which builds the same layer over a stub and therefore runs everywhere.
+    /// It had to move: this test discovers its asset from
+    /// `ControlPlaneAssets`, `interfaces/webchat/dist/` is gitignored and
+    /// produced by `just wasm`, and on a bare checkout — including this
+    /// crate's own CI job, which runs `cargo test` with no WASM toolchain —
+    /// the embed is empty and this returns early. A test that returns early
+    /// passes, and a pass that checked nothing is shaped exactly like a pass
+    /// that checked something. The claim that the 22 MB wasm is not
+    /// double-encoded was resting on that.
+    ///
+    /// What is left here still needs the asset and cannot be faked: only a
+    /// real embedded `.br` sibling proves `serve_static_or_index` picks it.
+    /// The guard for "dist should exist at all" is `check_panel_dist.mjs`; the
+    /// guard for "no eighth test takes this exit in silence" is
+    /// `every_dist_gated_skip_in_this_module_is_accounted_for`.
     #[tokio::test]
     async fn the_compression_layer_passes_through_a_precompressed_response() {
         use tower::ServiceExt;
 
+        let Some(name) = ControlPlaneAssets::iter()
+            .find(|n| ControlPlaneAssets::get(&format!("{n}.br")).is_some())
+        else {
+            return;
+        };
+
         let request = axum::http::Request::builder()
-            .uri("/aleph_panel_bg.wasm")
+            .uri(format!("/{name}"))
             .header(header::ACCEPT_ENCODING, "br, gzip")
             .body(axum::body::Body::empty())
             .expect("request");
@@ -572,6 +705,68 @@ mod tests {
             resp.headers().get(header::CONTENT_ENCODING).unwrap(),
             "br",
             "a nonzero weight, however low, is still acceptance"
+        );
+    }
+
+    /// How many tests in this module answer "the Panel was never built" with a
+    /// silent early return — pinned, because the number was previously carried
+    /// in a comment and had rotted.
+    ///
+    /// That comment read "its two siblings below" and named two of them. There
+    /// are six siblings, seven tests in all, and every one takes the same exit:
+    /// discover an asset from the embed, `else { return; }`. On a checkout
+    /// without `just wasm` the embed is empty, so all seven pass without
+    /// executing a single assertion — and a vacuous pass is byte-identical to
+    /// a real one in every report a reader will ever see.
+    ///
+    /// Seven is not itself a defect. Those tests hand `serve_static_or_index` a
+    /// real embedded asset, and there is no way to inject one into a
+    /// `RustEmbed`; the skip is the honest answer. What was a defect is that
+    /// the count lived in prose, so the module could grow an eighth and say
+    /// nothing. It is derived from the source now, and moving it costs an edit
+    /// plus a sentence naming the claim that just became machine-dependent.
+    ///
+    /// Before adding one, check the claim is not separable from the asset store
+    /// the way the compression layer's turned out to be — see
+    /// `the_compression_layer_declines_an_already_encoded_response`, which
+    /// makes that claim against the layer itself and runs everywhere.
+    const DIST_GATED_SKIPS: usize = 7;
+
+    #[test]
+    fn every_dist_gated_skip_in_this_module_is_accounted_for() {
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/gateway/control_plane/server.rs"
+        ))
+        .expect("read own source");
+
+        // Comments and string literals are both dropped by `code_text`, which
+        // matters twice: this guard's prose names the call it counts, and the
+        // needle below would otherwise count itself. The needle is spliced
+        // rather than written whole so the answer does not depend on whether
+        // some future scanner still blanks literals — a guard whose number
+        // flips with someone else's lexer is not a guard.
+        let needle = concat!("ControlPlaneAssets", "::iter");
+        let tests = crate::utils::source_scan::code_text(
+            &crate::utils::source_scan::cfg_test_portion(&src),
+        );
+        let found = tests.matches(needle).count();
+
+        // Self-guard: a scan that reads nothing certifies everything. If the
+        // module layout ever defeats `cfg_test_portion`, fail here rather than
+        // report a clean zero.
+        assert!(
+            found > 0,
+            "scanned this module's test section and found no asset discovery at \
+             all — the scan is no longer reading the code it exists to count"
+        );
+        assert_eq!(
+            found, DIST_GATED_SKIPS,
+            "the number of tests that skip when the Panel is not built changed. \
+             Raising it means one more claim here is only ever checked on a \
+             machine that ran `just wasm`; say which claim, and say why it \
+             cannot be made against the layer or the header parser directly. \
+             Lowering it is good and needs only the number."
         );
     }
 }

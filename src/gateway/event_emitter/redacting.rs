@@ -231,9 +231,22 @@ impl EventEmitter for RedactingEmitter {
                 max_attempts,
                 reason: self.mask(&reason),
             },
-            // `AgentTrace` is already masked upstream by
-            // `UnattendedRedactingSink` on the same run, so masking it again
-            // here would only cost a second regex pass over the same bytes.
+            // `AgentTrace` is already masked upstream: on an unattended run
+            // `UnattendedRedactingSink` wraps OUTSIDE `AgentTraceEmitSink`
+            // (`run_loop/inner.rs`), so every event reaching this emitter has
+            // already been through it. Masking again would only cost a second
+            // regex pass over the same bytes.
+            //
+            // ⚠️ This is a guarantee outsourced to another module, and it was
+            // FALSE until 2026-08-29: that sink covered three variants and
+            // forwarded the rest through an `other =>` wildcard, so
+            // `ToolCallStarted.call.input` — the same bytes its masked
+            // `ToolCallCompleted` twin carries — reached this arm in the clear
+            // and this comment vouched for it. What backs the exemption now is
+            // that the sink matches the enum exhaustively with no wildcard, and
+            // `the_agent_trace_exemption_is_backed_by_an_exhaustive_upstream_match`
+            // below reads that property off the sink's source rather than
+            // restating it here.
             //
             // The rest carry no free text: identifiers, counters, gauges, and
             // the `AskUser` question (authored by the model as a question to a
@@ -396,5 +409,67 @@ mod tests {
         outer.emit(event.clone()).await.unwrap();
         let events = inner.events().await;
         assert_eq!(format!("{:?}", events[0]), format!("{event:?}"));
+    }
+
+    /// The `AgentTrace` pass-through arm above is the one place this file
+    /// outsources its guarantee to another module. Check the property that
+    /// makes the outsourcing sound, instead of trusting the comment.
+    ///
+    /// The property is *exhaustiveness*, not "three named variants are
+    /// handled": `UnattendedRedactingSink` used to end in `other =>
+    /// self.inner.on_trace(other)`, written for `#[non_exhaustive]`
+    /// forward-compatibility, and that wildcard is exactly what let
+    /// `ToolCallStarted.call.input` — a credential the model had just echoed
+    /// into a tool argument — reach this emitter unmasked while the comment
+    /// said it could not. A wildcard reintroduced there turns this red.
+    #[test]
+    fn the_agent_trace_exemption_is_backed_by_an_exhaustive_upstream_match() {
+        use crate::utils::source_scan::{code_text, production_prefix};
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/gateway/execution_engine/unattended_redacting_sink.rs");
+        let src = code_text(&production_prefix(
+            &std::fs::read_to_string(&path).expect("unattended_redacting_sink.rs"),
+        ));
+
+        let start = src
+            .find("pub(crate) fn mask_trace_event")
+            .expect("mask_trace_event is what this arm relies on; it was renamed or removed");
+        // Brace-match the function body so the scan stops at the function's own
+        // syntactic end rather than after a fixed number of lines — a window
+        // sized in lines drifts onto the next declaration the first time
+        // something above it grows.
+        let open = src[start..].find('{').expect("fn body") + start;
+        let mut depth = 0usize;
+        let mut end = open;
+        for (i, c) in src[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = open + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[open..=end];
+
+        let arms = body.matches("LoopTraceEvent::").count();
+        assert!(
+            arms >= 19,
+            "found only {arms} LoopTraceEvent arms in mask_trace_event — the \
+             scan stopped matching, so its green would mean nothing"
+        );
+        for wildcard in ["_ =>", "other =>", "_event =>"] {
+            assert!(
+                !body.contains(wildcard),
+                "mask_trace_event has a `{wildcard}` catch-all, so a trace variant can \
+                 reach this emitter unmasked while the AgentTrace pass-through arm \
+                 above still claims it was masked upstream"
+            );
+        }
     }
 }

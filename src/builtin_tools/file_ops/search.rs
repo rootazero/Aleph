@@ -1,6 +1,6 @@
 //! Search operations for file system
 
-use std::fs;
+
 use std::path::Path;
 use tracing::{debug, info};
 
@@ -43,6 +43,7 @@ pub async fn execute_search(
     let mut files = Vec::new();
     let mut matched = 0usize;
     let mut skipped_generated = 0usize;
+    let mut skipped_stats = 0usize;
 
     for entry in glob::glob(&pattern_str)
         .map_err(|e| ToolError::InvalidArgs(format!("Invalid glob pattern: {e}")))?
@@ -61,7 +62,13 @@ pub async fn execute_search(
                 if check_and_resolve_path(&path, denied_paths, output_dir_override).is_err() {
                     continue;
                 }
-                if let Ok(metadata) = fs::metadata(&path) {
+                // Use `tokio::fs::metadata` so a slow filesystem does not stall the
+                // executor for every glob match. Count the match regardless
+                // of whether we can stat it (the path is reachable — the
+                // deny-list gate already passed) but only push to the
+                // per-file rows when the stat succeeds; record a per-file
+                // stat failure so the `search` count stays honest.
+                if let Ok(metadata) = tokio::fs::metadata(&path).await {
                     matched += 1;
                     if files.len() < cap {
                         files.push(FileInfo {
@@ -77,6 +84,14 @@ pub async fn execute_search(
                             mtime: None,
                         });
                     }
+                } else {
+                    // Stat failure is treated as "matched but not added to
+                    // the row list" — the same convention `stats` already
+                    // uses. The result `message` says so the operator can
+                    // tell a search that hit-but-couldn't-stat from one
+                    // that just didn't find anything.
+                    matched += 1;
+                    skipped_stats += 1;
                 }
             }
             Err(e) => {
@@ -86,15 +101,22 @@ pub async fn execute_search(
     }
 
     let count = files.len();
-    info!(pattern, count, matched, "Search completed");
+    info!(pattern, count, matched, skipped_stats, "Search completed");
+
+    let stats_note = if skipped_stats > 0 {
+        format!(" ({} match(es) could not be stat'd)", skipped_stats)
+    } else {
+        String::new()
+    };
 
     Ok(FileOpsOutput {
         success: true,
         operation: "search".to_string(),
         message: format!(
-            "Found {matched} files matching '{pattern}' in {}{}{}",
+            "Found {matched} files matching '{pattern}' in {}{}{}{}",
             canonical.display(),
             entry_cap_note(matched, count, cap),
+            stats_note,
             skipped_dirs_note(skipped_generated),
         ),
         files: Some(files),

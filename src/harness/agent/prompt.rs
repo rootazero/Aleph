@@ -235,6 +235,7 @@ pub(crate) fn build_prompt_with_transient_tail(
                 // visible tool/assistant trail.
                 messages.push(UnifiedMessage::user(INTERRUPTION_NOTE));
             }
+            // No prompt relevance — bookkeeping only.
             _ => {}
         }
     }

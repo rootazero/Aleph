@@ -254,19 +254,24 @@ pub fn JsonSchemaForm(
                 // nothing about where it comes from.
                 // Link text is the URL's host, not a translated phrase: it needs
                 // no locale file and it tells the user which console they are
-                // about to open.
-                let source_link = f.how_to_get_url.clone().map(|url| {
-                    let label = format!("{} ↗", link_host(&url));
-                    view! {
+                // about to open. The URL is sanitized before rendering so a
+                // compromised catalog cannot inject a javascript:/data: link.
+                let source_link = f.how_to_get_url.clone().and_then(|url| {
+                    let safe = crate::components::markdown::sanitize_link_url(&url);
+                    if safe.starts_with("#disallowed-") {
+                        return None;
+                    }
+                    let label = format!("{} ↗", link_host(&safe));
+                    Some(view! {
                         <a
-                            href=url
+                            href=safe
                             target="_blank"
                             rel="noopener noreferrer"
                             class="block text-xs text-primary hover:underline"
                         >
                             {label}
                         </a>
-                    }
+                    })
                 });
 
                 view! {

@@ -49,11 +49,21 @@ pub struct TeamSetProtocolOutput {
 #[derive(Clone)]
 pub struct TeamSetProtocolTool {
     store: Arc<dyn TeamStore>,
+    current_agent_id: String,
 }
 
 impl TeamSetProtocolTool {
-    pub fn new(store: Arc<dyn TeamStore>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<dyn TeamStore>, current_agent_id: String) -> Self {
+        Self {
+            store,
+            current_agent_id,
+        }
+    }
+
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        crate::builtin_tools::acting_agent::acting_agent_id(&self.current_agent_id)
     }
 }
 
@@ -71,6 +81,15 @@ impl AlephTool for TeamSetProtocolTool {
     type Output = TeamSetProtocolOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // BT-D-R4-23: gate before any store mutation — the protocol is
+        // injected verbatim into every member's launch context, so an
+        // attacker setting it on a team they don't belong to would
+        // hijack the next member launch. The shared team-auth helper
+        // also matches the NotFound-shaped refusal the rest of the
+        // team tools use, so probing for foreign team ids returns the
+        // same shape as a genuinely-missing team.
+        super::require_team_auth(&*self.store, &args.team_id, &self.actor()).await?;
+
         // Determine the resulting state before the write so the message is
         // accurate (the store normalizes whitespace-only input to "cleared").
         let will_be_set = args

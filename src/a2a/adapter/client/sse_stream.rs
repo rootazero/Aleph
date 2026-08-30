@@ -31,6 +31,14 @@ pub fn parse_sse_response(
     parse_sse_byte_stream(response.bytes_stream(), idle)
 }
 
+/// Hard upper bounds for the SSE parser's buffers.
+///
+/// SSE has no per-line / per-event length cap in the spec; without these
+/// limits a malicious or buggy peer can grow `line_buf` / `data_buf`
+/// without bound (no newline ever sent) and OOM the process.
+const MAX_LINE_BYTES: usize = 64 * 1024;
+const MAX_DATA_BYTES: usize = 1024 * 1024;
+
 /// Idle-timeout-wrapped SSE parser over a raw byte stream.
 ///
 /// Generic over the chunk type so tests can drive it with synthetic
@@ -101,6 +109,13 @@ where
                 let line = line_buf[..newline_pos].trim_end_matches('\r').to_string();
                 line_buf = line_buf[newline_pos + 1..].to_string();
 
+                if line.len() > MAX_LINE_BYTES {
+                    yield Err(A2AError::ParseError(format!(
+                        "SSE line exceeded {MAX_LINE_BYTES} bytes — refusing to buffer further"
+                    )));
+                    return;
+                }
+
                 if line.is_empty() {
                     // Empty line = end of event
                     if !data_buf.is_empty() {
@@ -117,12 +132,26 @@ where
                 } else if let Some(value) = line.strip_prefix("event:") {
                     event_type = value.trim().to_string();
                 } else if let Some(value) = line.strip_prefix("data:") {
+                    if data_buf.len() + value.trim().len() + 1 > MAX_DATA_BYTES {
+                        yield Err(A2AError::ParseError(format!(
+                            "SSE data buffer exceeded {MAX_DATA_BYTES} bytes — refusing to buffer further"
+                        )));
+                        return;
+                    }
                     if !data_buf.is_empty() {
                         data_buf.push('\n');
                     }
                     data_buf.push_str(value.trim());
                 }
                 // Ignore other fields (id:, retry:, comments)
+            }
+            // If a single chunk contained no newline but is itself too big,
+            // reject before the next iteration can grow `line_buf` further.
+            if line_buf.len() > MAX_LINE_BYTES {
+                yield Err(A2AError::ParseError(format!(
+                    "SSE line buffer exceeded {MAX_LINE_BYTES} bytes — refusing to buffer further"
+                )));
+                return;
             }
         }
 

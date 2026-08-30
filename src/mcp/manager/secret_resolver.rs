@@ -21,6 +21,12 @@ use crate::secrets::{render_with_secrets, AsyncSecretResolver};
 ///   secret is missing/errors — is **dropped** (the key is omitted, with a
 ///   warning). The server is never reached with an unresolved placeholder or a
 ///   leaked literal; fail-closed.
+/// - A *resolved* value that contains CR/LF/NUL is rejected (key dropped
+///   with a warning). CR/LF would fail HTTP `HeaderValue::from_str` at
+///   request time — failing fast at spawn time names the offending key
+///   for the operator. NUL would be silently truncated by the kernel
+///   for `cmd.env()` on Unix, leaving the spawned child with a
+///   half-secret; the truncated value is worse than missing.
 pub async fn resolve_secret_map(
     env: &HashMap<String, String>,
     resolver: Option<&dyn AsyncSecretResolver>,
@@ -35,6 +41,14 @@ pub async fn resolve_secret_map(
         match resolver {
             Some(r) => match render_with_secrets(value, r).await {
                 Ok((rendered, _injected)) => {
+                    if let Some(bad) = first_unsafe_byte(&rendered) {
+                        tracing::warn!(
+                            key = %key,
+                            byte = bad as u32,
+                            "resolved MCP secret contains CR/LF/NUL; omitting key"
+                        );
+                        continue;
+                    }
                     // rust-doctor-disable-next-line excessive-clone
                     out.insert(key.clone(), rendered);
                 }
@@ -51,6 +65,10 @@ pub async fn resolve_secret_map(
         }
     }
     out
+}
+
+fn first_unsafe_byte(s: &str) -> Option<u8> {
+    s.bytes().find(|b| matches!(b, b'\r' | b'\n' | 0))
 }
 
 #[cfg(test)]

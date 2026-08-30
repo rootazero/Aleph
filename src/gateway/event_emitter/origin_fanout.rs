@@ -24,8 +24,9 @@ use async_trait::async_trait;
 
 use super::types::{EventEmitError, StreamEvent};
 use super::EventEmitter;
-use crate::gateway::channel::{ChannelId, OutboundMessage};
+use crate::gateway::channel::{outbound_chunk_len, ChannelId, OutboundMessage};
 use crate::gateway::channel_registry::ChannelRegistry;
+use crate::gateway::formatter::MessageFormatter;
 
 /// Global channel-registry handle, injected once at gateway boot, so the Panel
 /// run path can fan a final reply back to an origin channel without threading
@@ -78,19 +79,50 @@ impl OriginFanoutEmitter {
         }
     }
 
-    /// Best-effort single-message delivery to the origin channel. A delivery
-    /// failure (channel offline, etc.) must never abort the run, so the error
-    /// is logged and swallowed.
+    /// Best-effort delivery to the origin channel. A delivery failure (channel
+    /// offline, etc.) must never abort the run, so the error is logged and
+    /// swallowed.
+    ///
+    /// Chunked against the channel's own declared cap, through the same
+    /// [`outbound_chunk_len`] / [`MessageFormatter::split`] pair the inbound
+    /// `ReplyEmitter` uses. This path sent the entire final response as one
+    /// unsplit frame — and it is the delivery path for cron ticks, goal/loop
+    /// continuations and resumed runs, so on a channel that both caps below
+    /// that length and does not split internally (Discord: 2000, no splitter)
+    /// every autonomous-run result over the cap came back `SendFailed`, which
+    /// the durable queue refuses. The whole answer vanished behind one `warn!`.
     async fn deliver_final(&self, text: &str) {
         if text.is_empty() {
             return;
         }
-        let msg = OutboundMessage::text(self.origin_conversation.clone(), text.to_string());
-        if let Err(e) = self.registry.send(&self.origin_channel, msg).await {
-            tracing::warn!(
-                channel = %self.origin_channel.as_str(),
-                "origin reply fan-out failed: {e}"
-            );
+        // A channel that has gone away answers `None`; `outbound_chunk_len`
+        // then supplies the conservative fallback rather than the send being
+        // skipped here — the registry's own error is the better report.
+        let declared = self
+            .registry
+            .get_capabilities(&self.origin_channel)
+            .await
+            .map_or(0, |caps| caps.max_message_length);
+        let chunks = MessageFormatter::split(text, outbound_chunk_len(declared));
+
+        for chunk in chunks {
+            let msg = OutboundMessage::text(self.origin_conversation.clone(), chunk);
+            if let Err(e) = self.registry.send(&self.origin_channel, msg).await {
+                let transient = crate::gateway::delivery_queue::should_enqueue(&e);
+                tracing::warn!(
+                    channel = %self.origin_channel.as_str(),
+                    transient,
+                    "origin reply fan-out failed: {e}"
+                );
+                // Same split as the ReplyEmitter's chokepoint, asked of the
+                // queue's own predicate: a transient failure means each
+                // remaining chunk is persisted for durable retry, so keep
+                // offering them; a terminal one means the tail would only add
+                // noise.
+                if !transient {
+                    break;
+                }
+            }
         }
     }
 }
@@ -202,6 +234,101 @@ mod tests {
                 "inner stream must receive the unaltered summary"
             ),
             other => panic!("expected RunComplete, got {other:?}"),
+        }
+    }
+
+    /// This path had no chunker at all — not even a wrong constant. It is the
+    /// delivery path for cron ticks, goal/loop continuations and resumed runs,
+    /// so on a channel that caps below the answer's length and does not split
+    /// internally (Discord: 2000, and its `Channel::send` builds one
+    /// `CreateMessage` with no split) every autonomous-run result over the cap
+    /// came back `SendFailed` — which the durable queue refuses — and vanished
+    /// behind a single `warn!`.
+    #[tokio::test]
+    async fn the_origin_fanout_chunks_against_the_channels_declared_cap() {
+        use crate::gateway::channel::{
+            Channel, ChannelCapabilities, ChannelInfo, ChannelResult, ChannelState, ChannelStatus,
+            MessageId, SendResult,
+        };
+
+        struct Capped {
+            info: ChannelInfo,
+            state: ChannelState,
+            seen: Arc<tokio::sync::Mutex<Vec<String>>>,
+        }
+
+        #[async_trait]
+        impl Channel for Capped {
+            fn info(&self) -> &ChannelInfo {
+                &self.info
+            }
+            fn state(&self) -> &ChannelState {
+                &self.state
+            }
+            async fn start(&mut self) -> ChannelResult<()> {
+                Ok(())
+            }
+            async fn stop(&mut self) -> ChannelResult<()> {
+                Ok(())
+            }
+            async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+                self.seen.lock().await.push(message.text.clone());
+                Ok(SendResult {
+                    message_id: MessageId::new("ok"),
+                    timestamp: chrono::Utc::now(),
+                })
+            }
+        }
+
+        let seen = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let registry = ChannelRegistry::new();
+        registry
+            .register(Box::new(Capped {
+                info: ChannelInfo {
+                    id: ChannelId::new("discordish"),
+                    name: "discordish".to_string(),
+                    channel_type: "test".to_string(),
+                    status: ChannelStatus::Connected,
+                    capabilities: ChannelCapabilities {
+                        max_message_length: 2000,
+                        ..ChannelCapabilities::default()
+                    },
+                },
+                state: ChannelState::new(8),
+                seen: seen.clone(),
+            }))
+            .await;
+
+        let fanout = OriginFanoutEmitter::new(
+            Arc::new(CollectingEventEmitter::new()),
+            Arc::new(registry),
+            "discordish",
+            "chat-cap",
+        );
+        fanout
+            .emit(StreamEvent::RunComplete {
+                run_id: "r-cap".to_string(),
+                seq: 0,
+                summary: RunSummary {
+                    final_response: Some("a".repeat(3000)),
+                    ..Default::default()
+                },
+                total_duration_ms: 0,
+            })
+            .await
+            .unwrap();
+
+        let seen = seen.lock().await;
+        assert!(
+            seen.len() >= 2,
+            "3000 chars must not reach a 2000-cap transport in one frame"
+        );
+        for (i, text) in seen.iter().enumerate() {
+            assert!(
+                text.len() <= 2000,
+                "fan-out chunk {i} is {} bytes, over the channel's declared cap",
+                text.len()
+            );
         }
     }
 

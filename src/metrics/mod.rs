@@ -85,10 +85,24 @@ pub(crate) const fn metrics_runtime_slot() -> &'static dyn SlotStatus {
 /// the compiled defaults. Idempotent: a later call (e.g. a config reload) is
 /// ignored, matching the write-once semantics of `defaults_override`.
 pub fn init_metrics_runtime(policy: &crate::config::MetricsPolicy) {
+    // Accept NaN/+Inf/-Inf → fall back to the default (the previous form
+    // already did). Accept negative → fall back too (a negative multiplier
+    // would never trip a "slow" warning and so silently disable the
+    // signal). For `0.0`, the bound check is intentionally strict: a zero
+    // multiplier collapses `warning_threshold_ms(target) → 0` so EVERY
+    // `StageTimer::drop` whose target is non-zero trips the slow warning,
+    // producing a flood of false positives that operators cannot silence
+    // without restarting. The previous `>= 0.0` accepted exactly `0.0`.
     let warning_multiplier =
-        if policy.warning_multiplier.is_finite() && policy.warning_multiplier >= 0.0 {
+        if policy.warning_multiplier.is_finite() && policy.warning_multiplier >= 1.0 {
             policy.warning_multiplier
         } else {
+            tracing::warn!(
+                supplied = policy.warning_multiplier,
+                fallback = DEFAULT_WARNING_MULTIPLIER,
+                "[policies.metrics] warning_multiplier must be a finite f64 \
+                 >= 1.0; falling back to the default"
+            );
             DEFAULT_WARNING_MULTIPLIER
         };
     if !METRICS_RUNTIME.install(MetricsRuntime {

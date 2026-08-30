@@ -403,13 +403,49 @@ pub struct ChannelCapabilities {
     pub read_receipts: bool,
     /// Supports rich text/markdown
     pub rich_text: bool,
-    /// Maximum message length (0 = unlimited)
+    /// Maximum message length the transport accepts, in **characters**
+    /// (0 = unknown / unlimited). Every adapter populates it from its vendor's
+    /// documented character limit (telegram 4096, discord 2000, irc 400, …).
+    ///
+    /// Read it through [`outbound_chunk_len`] rather than directly: that is the
+    /// one place that decides what to do with a `0`, and it is what the
+    /// outbound chunkers agree on.
     pub max_message_length: usize,
     /// Maximum attachment size in bytes (0 = unlimited)
     pub max_attachment_size: u64,
     /// Streaming protocol supported by this channel
     #[serde(default)]
     pub stream_protocol: StreamProtocol,
+}
+
+/// Chunk size for a channel that declares no cap
+/// ([`ChannelCapabilities::max_message_length`] `== 0`). Not a limit anyone
+/// asserts — just a bound so one enormous answer is never handed to a transport
+/// in a single frame.
+pub(crate) const DEFAULT_OUTBOUND_CHUNK_LEN: usize = 4000;
+
+/// How long one outbound message may be for a channel that declared
+/// `max_message_length`.
+///
+/// **The single answer for every outbound chunker.** Both the `ReplyEmitter`'s
+/// text chokepoint and the origin fan-out used to hold their own `4000` — a
+/// second answer to a question the capability already answers, and wrong for
+/// every channel with a smaller cap. Discord declares 2000 and its
+/// `Channel::send` does no splitting of its own, so an oversized frame came
+/// back as `SendFailed`, which the durable queue refuses: the whole answer was
+/// lost with one log line.
+///
+/// The cap is declared in characters and the splitter counts bytes. That is
+/// left as-is and stated rather than converted: bytes ≥ chars in UTF-8, so
+/// byte-splitting a character cap can only cut *earlier* than required. Erring
+/// the other way would put us back over the limit.
+#[must_use]
+pub(crate) const fn outbound_chunk_len(declared: usize) -> usize {
+    if declared == 0 {
+        DEFAULT_OUTBOUND_CHUNK_LEN
+    } else {
+        declared
+    }
 }
 
 /// Streaming protocol supported by a channel

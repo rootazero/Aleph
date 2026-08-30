@@ -178,6 +178,27 @@ impl AgentRouter {
         //    The session is only persisted to DB when the first message is sent.
         //    This ensures refresh/new-chat without conversation leaves no trace.
         //
+        //    This bump deliberately does NOT call
+        //    `continuation_lifecycle::terminate_session_continuations`, and the
+        //    absence is a decision rather than an oversight — writing it down
+        //    because a reader arriving from that module's "the single seam
+        //    every surface that retires a session must call BEFORE the bump"
+        //    will otherwise read this as the fourth unwired surface.
+        //
+        //    That seam's subject is RETIREMENT. `/new`, `sessions.new` and the
+        //    `session_new` tool close the predecessor; this mints a successor
+        //    and closes nothing — a keyless `chat.send` is "give me a fresh
+        //    conversation", not "end the one that was there". Retiring here
+        //    would stop a `/loop` running in the conversation the user still
+        //    has open in another tab, because they clicked New Chat.
+        //
+        //    What IS still open: a channel that re-resolves its key through
+        //    `get_current_epoch` (`inbound_router::agent_resolver`) follows this
+        //    bump, so a keyless request from one surface can move which epoch
+        //    another surface addresses, leaving the older epoch's loop/goal
+        //    reachable only by its full key string. Fixing that means changing
+        //    who shares a base pattern, not adding a retirement here.
+        //
         //    Race fix: hold an in-process mutex across the
         //    `get_current_epoch → with_epoch(epoch+1)` pair so two concurrent
         //    `/new` calls for the same base_pattern cannot both observe the

@@ -27,16 +27,31 @@ use leptos::task::spawn_local;
 /// Optimistic removal keeps the surface responsive; the authoritative refetch
 /// driven by the `approval.resolved` event lands right behind it. `reason` is
 /// the operator's free-text objection on a deny, relayed verbatim to the model.
-fn resolve(dashboard: DashboardState, id: String, decision: &'static str, reason: Option<String>) {
+fn resolve(
+    dashboard: DashboardState,
+    id: String,
+    decision: &'static str,
+    reason: Option<String>,
+    resolving: RwSignal<bool>,
+    error: RwSignal<Option<String>>,
+) {
+    resolving.set(true);
+    error.set(None);
     spawn_local(async move {
         match ExecApprovalApi::resolve(&dashboard, id.clone(), decision, reason).await {
-            Ok(()) => dashboard
-                .pending_approvals
-                .update(|l| l.retain(|x| x.id != id)),
-            Err(e) => web_sys::console::warn_1(
-                &format!("Failed to resolve approval ({decision}): {e:?}").into(),
-            ),
+            Ok(()) => {
+                dashboard
+                    .pending_approvals
+                    .update(|l| l.retain(|x| x.id != id));
+                error.set(None);
+            }
+            Err(e) => {
+                let msg = format!("Failed to resolve approval ({decision}): {e:?}");
+                web_sys::console::warn_1(&msg.clone().into());
+                error.set(Some(msg));
+            }
         }
+        resolving.set(false);
     });
 }
 
@@ -55,6 +70,8 @@ pub fn ApprovalCard(approval: PendingApprovalView) -> impl IntoView {
     let id_session = approval.id.clone();
     let id_always = approval.id.clone();
     let id_deny = approval.id.clone();
+    let resolving = RwSignal::new(false);
+    let resolve_error = RwSignal::new(Option::<String>::None);
     // Which tiers this card may offer is the SERVER's decision (it depends on
     // why the gate fired and who is being asked), carried on the record and
     // enforced when the answer comes back. Rendering a fixed three was the
@@ -99,6 +116,8 @@ pub fn ApprovalCard(approval: PendingApprovalView) -> impl IntoView {
             id_deny_reason.get_value(),
             "deny",
             Some(objection),
+            resolving,
+            resolve_error,
         );
     };
 
@@ -127,11 +146,15 @@ pub fn ApprovalCard(approval: PendingApprovalView) -> impl IntoView {
                     format!("{} {}s", t_string!(i18n, notifications.approval_expires), remaining())
                 }}
             </div>
+            {move || resolve_error.get().map(|e| view! {
+                <div class="text-xs text-danger mt-1.5 break-words">{e}</div>
+            })}
             <div class="flex gap-2 mt-2">
                 <button
                     type="button"
-                    class="flex-1 py-1.5 rounded bg-primary hover:bg-primary-hover text-white text-xs font-semibold transition-colors"
-                    on:click=move |_| resolve(dashboard, id_once.clone(), "allow-once", None)
+                    class="flex-1 py-1.5 rounded bg-primary hover:bg-primary-hover text-white text-xs font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled=move || resolving.get()
+                    on:click=move |_| resolve(dashboard, id_once.clone(), "allow-once", None, resolving, resolve_error)
                 >
                     {t!(i18n, notifications.approval_allow_once)}
                 </button>
@@ -141,8 +164,9 @@ pub fn ApprovalCard(approval: PendingApprovalView) -> impl IntoView {
                         view! {
                             <button
                                 type="button"
-                                class="flex-1 py-1.5 rounded bg-surface-raised hover:bg-surface-sunken text-text-primary text-xs border border-border transition-colors"
-                                on:click=move |_| resolve(dashboard, id_session.clone(), "allow-session", None)
+                                class="flex-1 py-1.5 rounded bg-surface-raised hover:bg-surface-sunken text-text-primary text-xs border border-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                disabled=move || resolving.get()
+                                on:click=move |_| resolve(dashboard, id_session.clone(), "allow-session", None, resolving, resolve_error)
                             >
                                 {t!(i18n, notifications.approval_allow_session)}
                             </button>
@@ -160,8 +184,9 @@ pub fn ApprovalCard(approval: PendingApprovalView) -> impl IntoView {
                             <button
                                 type="button"
                                 title=move || t_string!(i18n, notifications.approval_allow_always_hint).to_string()
-                                class="flex-1 py-1.5 rounded bg-surface-raised hover:bg-surface-sunken text-text-primary text-xs border border-border transition-colors"
-                                on:click=move |_| resolve(dashboard, id_always.clone(), "allow-always", None)
+                                class="flex-1 py-1.5 rounded bg-surface-raised hover:bg-surface-sunken text-text-primary text-xs border border-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                disabled=move || resolving.get()
+                                on:click=move |_| resolve(dashboard, id_always.clone(), "allow-always", None, resolving, resolve_error)
                             >
                                 {t!(i18n, notifications.approval_allow_always)}
                             </button>
@@ -170,8 +195,9 @@ pub fn ApprovalCard(approval: PendingApprovalView) -> impl IntoView {
                 </Show>
                 <button
                     type="button"
-                    class="flex-1 py-1.5 rounded bg-surface-sunken hover:bg-surface-raised text-text-secondary text-xs transition-colors"
-                    on:click=move |_| resolve(dashboard, id_deny.clone(), "deny", None)
+                    class="flex-1 py-1.5 rounded bg-surface-sunken hover:bg-surface-raised text-text-secondary text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled=move || resolving.get()
+                    on:click=move |_| resolve(dashboard, id_deny.clone(), "deny", None, resolving, resolve_error)
                 >
                     {t!(i18n, notifications.approval_deny)}
                 </button>
@@ -204,7 +230,7 @@ pub fn ApprovalCard(approval: PendingApprovalView) -> impl IntoView {
                                 type="button"
                                 class="px-3 py-1.5 rounded bg-surface-sunken hover:bg-surface-raised text-text-secondary
                                        text-xs font-semibold disabled:opacity-35 disabled:cursor-not-allowed transition-colors"
-                                disabled=move || deny_reason.get().trim().is_empty()
+                                disabled=move || resolving.get() || deny_reason.get().trim().is_empty()
                                 on:click=move |_| submit_deny_reason()
                             >
                                 {t!(i18n, notifications.approval_deny)}

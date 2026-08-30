@@ -52,7 +52,7 @@ pub struct SsrfConfig {
     pub redact_secrets_in_content: bool,
 }
 
-const fn default_true() -> bool {
+pub(super) const fn default_true() -> bool {
     true
 }
 

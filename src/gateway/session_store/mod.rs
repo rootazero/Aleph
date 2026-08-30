@@ -12,8 +12,8 @@ pub mod types;
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_store::error::SessionStoreError;
 use crate::gateway::session_store::types::{
-    CheckpointSummary, DeleteResult, MessageRecord, SearchHit, SessionFilter, SessionMetadata,
-    SessionPatch, SessionPreview, TruncateResult,
+    stamp_millis, CheckpointSummary, DeleteResult, HistoryPage, MessageRecord, SearchHit,
+    SessionFilter, SessionMetadata, SessionPatch, SessionPreview, TruncateResult,
 };
 use async_trait::async_trait;
 
@@ -42,26 +42,115 @@ pub trait SessionStore: Send + Sync {
         limit: Option<usize>,
     ) -> Result<Vec<MessageRecord>, SessionStoreError>;
 
-    /// History with an optional `before` cursor (unix seconds): only messages
-    /// whose timestamp is *strictly older* than `before` are returned; with a
-    /// `limit`, the most recent `limit` of those, oldest-first. This is what
-    /// powers `chat.history` cursor pagination — fetching successively older
-    /// pages by passing the oldest timestamp of the previous page as `before`.
+    /// A window of this session's transcript AND how long the whole transcript
+    /// is, from one read.
     ///
-    /// The default impl fetches the full history once and filters in memory; it
-    /// is correct for every store. SQL-backed stores override it to push the
-    /// `timestamp <` predicate into the query (see `SessionManager`). When
-    /// `before` is `None` the result is identical to [`get_history`].
+    /// `before` is a cursor: only messages *strictly older* than that instant
+    /// are admitted, and with a `limit` the most recent `limit` of those,
+    /// oldest-first. `None` admits everything, making the window identical to
+    /// [`get_history`].
+    ///
+    /// The cursor is an INSTANT, not a number. It used to be an `i64`
+    /// documented as unix seconds, and the store it is compared against holds
+    /// [`MessageRecord::timestamp`] in a mixed unit (see that field's doc):
+    /// seconds in some rows, milliseconds in others, sometimes both inside one
+    /// transcript. A millisecond row is ~1000x any seconds cursor, so it never
+    /// satisfied `timestamp < before` — a cursor page silently omitted the
+    /// majority of a real install's rows and returned nothing at all for its
+    /// largest sessions, which a client can only read as "you have reached the
+    /// beginning". A type the caller cannot spell in the wrong unit is the fix;
+    /// the comparison itself goes through [`stamp_millis`].
+    ///
+    /// **The transcript's order is the order its rows were recorded**, on every
+    /// backend: `messages.id` on SQLite (`INTEGER PRIMARY KEY AUTOINCREMENT`),
+    /// file position in `transcript.jsonl`. The stamp is data ABOUT a row, not
+    /// its position; it appears here as a predicate (`before`) and nowhere as a
+    /// rank.
+    ///
+    /// The two were one thing until they were not. SQLite ranked
+    /// `(stamp_millis_sql, id)` while the file store served and deleted by
+    /// position — spellings that agree only while `add_message_full` overwrites
+    /// every producer's stamp with the insert clock. Repairing that fidelity
+    /// bug made the two orders separable, and `/undo` (`truncate_messages`) and
+    /// `compact_session` choose their victims by this order: separable means
+    /// the two backends can destroy different rows of the same conversation,
+    /// each returning success.
+    ///
+    /// Recording order wins, for three reasons in descending weight:
+    ///
+    ///   * It is the only order both stores express NATIVELY and totally.
+    ///     Serving stamp order from the file store means sorting the transcript
+    ///     on every read — which relocates every legacy `timestamp: 0` row to
+    ///     the head of its conversation, and makes what is served differ from
+    ///     the bytes on disk.
+    ///   * It preserves causality. A reply is appended after the message it
+    ///     answers; an event clock can order them the other way (a channel
+    ///     message delayed in transit), and a transcript showing an answer
+    ///     above its question is wrong in a way no reader can repair.
+    ///   * Adopting it costs nothing. `session_projector` — the single append
+    ///     throat — stamps `SessionEventRecord::created_at_ms`, monotonic in
+    ///     `seq`, and `ProjectionReconciler` only fills the tail above
+    ///     `max(seq)`; the other two producers stamp `Utc::now()`. So on real
+    ///     data the two orders already coincide: this settles a rule, it does
+    ///     not repair a live symptom. `messages.source_seq` agrees with `id`
+    ///     wherever it is non-NULL, a third witness to the same order.
+    ///
+    /// Pinned by `no_message_query_orders_by_the_stamp` (source-level, the SQL
+    /// half) and `both_backends_serve_the_transcript_in_recording_order`
+    /// (runtime, both halves — the only check that can see the file store
+    /// start sorting).
+    ///
+    /// **There is deliberately no separate `history_len`.** There was, and its
+    /// only caller fetched the count and the window in two calls against a
+    /// store a live run appends to — so the two answers described two different
+    /// sessions and the client's `total - count` was wrong by whatever landed
+    /// in between. That was managed with a comment about which order made the
+    /// skew fall the safer way and a source-level guard pinning the order,
+    /// which a later edit could satisfy lexically while breaking semantically
+    /// (move the count into a helper, call the helper after the window). One
+    /// method has no order to get wrong, and a caller holding an
+    /// `Arc<dyn SessionStore>` has no second call to reach for. If you ever need
+    /// "how many are older than T", that is a different question and deserves
+    /// its own method rather than a parameter here.
+    ///
+    /// **The cursor has no in-repo client, and that is a reviewed decision
+    /// rather than an oversight.** `chat.history?before=…` has been on the wire
+    /// since v2026.04.02 and no Panel or CLI surface calls it: both answer "show
+    /// me earlier messages" by WIDENING the window instead — the Panel re-runs
+    /// its one hydration path (prepending a page would mis-key its `<For>` rows,
+    /// see `HISTORY_PAGE`), and the CLI footer says "raise --limit, or omit it".
+    /// An earlier round justified keeping the cursor with "this question has no
+    /// second answer in the repo"; that is false — those two ARE the second and
+    /// third answers — so do not lean on it when reopening the CUT. The leg that
+    /// does hold is the shape of removing it: `HistoryParams` does not deny
+    /// unknown fields, so a third-party caller still sending `before` would
+    /// silently receive the NEWEST window instead of an older page. Making that
+    /// fail loudly costs more code than deleting the cursor removes, and the
+    /// cursor is now correct and covered. Reviewed and kept, 2026-08-28.
+    ///
+    /// The default impl reads the transcript ONCE and answers both from it —
+    /// correct for every store, exactly consistent, and for the file backend
+    /// half the work it used to do (the count parsed the whole transcript, then
+    /// the window parsed it again). SQL-backed stores override it to push both
+    /// down, and must take their connection ONCE so the pair stays atomic.
     ///
     /// [`get_history`]: SessionStore::get_history
-    async fn get_history_before(
+    /// [`MessageRecord::timestamp`]: crate::gateway::session_store::types::MessageRecord::timestamp
+    /// [`stamp_millis`]: crate::gateway::session_store::types::stamp_millis
+    async fn history_page(
         &self,
         key: &SessionKey,
         limit: Option<usize>,
-        before: Option<i64>,
-    ) -> Result<Vec<MessageRecord>, SessionStoreError> {
+        before: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<HistoryPage, SessionStoreError> {
         let all = self.get_history(key, None).await?;
-        Ok(paginate_before(all, limit, before))
+        // Taken before the window consumes `all`; both describe the same read,
+        // which is the whole point of this method.
+        let total = all.len();
+        Ok(HistoryPage {
+            rows: paginate_before(all, limit, before),
+            total: Some(total),
+        })
     }
 
     async fn search_messages(
@@ -299,6 +388,27 @@ pub trait SessionStore: Send + Sync {
         &self,
         key: &SessionKey,
     ) -> Result<Option<String>, SessionStoreError>;
+    /// Delete `ephemeral` sessions that have been idle longer than
+    /// `session_expiry_secs`. Returns the number removed.
+    ///
+    /// **Both halves of the predicate are load-bearing**: a session is swept
+    /// only when its last activity AND its creation both predate the cutoff.
+    ///
+    /// `last_active_at` follows the MESSAGE, not the insert — it answers "when
+    /// did the newest thing in this conversation happen", which is what the
+    /// list's recency ordering and the client's `updated_at` need. That makes
+    /// it the right clock to measure idleness by and the wrong one to measure
+    /// idleness *from*: a conversation projected later than it happened (an
+    /// import, a backfill, a reconciler replaying an old event) lands with an
+    /// old `last_active_at` and is eligible for deletion the moment it is
+    /// written. A session cannot have been idle for longer than it has
+    /// existed, so `created_at` — which is stamped when the row is created and
+    /// by nothing else — is the floor.
+    ///
+    /// The file backend has compared the message clock since it was written, so
+    /// this hazard is as old as that backend; SQLite joined it when
+    /// `add_message_full` stopped stamping `Utc::now()` over the producer.
+    /// The floor closes it on both, and on `reap_task_sessions` below.
     async fn cleanup_expired(&self) -> Result<usize, SessionStoreError>;
 
     /// Hard-delete `task`-type sessions of the given `task_type` whose last
@@ -326,8 +436,21 @@ pub trait SessionStore: Send + Sync {
     /// event, so the Panel can restore the occupancy gauge on session reload
     /// without a live `run_complete` event.
     ///
-    /// Default: no-op (`Ok(())`). Only the SQLite-backed store overrides this;
-    /// file-backend and test stubs compile unchanged.
+    /// Default: no-op (`Ok(())`) — for TEST STUBS only. **Both production
+    /// backends override it**: SQLite with an `UPDATE ... WHERE id = (SELECT
+    /// MAX(id) ... role='assistant')`, the file backend with a locked rewrite
+    /// of `transcript.jsonl`.
+    ///
+    /// ⚠️ This sentence read "Only the SQLite-backed store overrides this;
+    /// file-backend and test stubs compile unchanged" until 2026-08-29, and it
+    /// was not describing a design — it was describing a gap, in the voice of a
+    /// decision. The file backend is the DEFAULT (`default_session_store_backend()`
+    /// returns `"file"`), so what the sentence actually meant was that every
+    /// assistant row in `chat.history` carried a null `run_id` and null
+    /// occupancy on a stock install, and the one thing that would have made a
+    /// reader look — the trait's own doc — told them it was on purpose. A
+    /// default arm that some implementors legitimately keep must say WHICH ones
+    /// and why, or it hands the next reader a ruling that was never made.
     async fn stamp_last_assistant_metadata(
         &self,
         _key: &SessionKey,
@@ -444,7 +567,7 @@ pub(crate) fn require_conversation_key(key: &SessionKey) -> Result<(), SessionSt
     }
 }
 
-/// Pure pagination core shared by [`SessionStore::get_history_before`]: given a
+/// Pure pagination core shared by [`SessionStore::history_page`]: given a
 /// chronological (oldest-first) message list, keep only messages strictly older
 /// than `before` (when set), then return the most recent `limit` of those still
 /// in oldest-first order.
@@ -454,10 +577,21 @@ pub(crate) fn require_conversation_key(key: &SessionKey) -> Result<(), SessionSt
 pub(crate) fn paginate_before(
     all: Vec<MessageRecord>,
     limit: Option<usize>,
-    before: Option<i64>,
+    before: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Vec<MessageRecord> {
     let mut filtered: Vec<MessageRecord> = match before {
-        Some(ts) => all.into_iter().filter(|m| m.timestamp < ts).collect(),
+        // Both sides through `stamp_millis`, never the raw field: the column
+        // holds two units and the raw comparison ranks every millisecond row
+        // as newer than every seconds row. `stamp_millis` is total, so no row
+        // can be dropped for being unreadable — the alternative, comparing
+        // `instant()`, would silently exclude a stamp no calendar can
+        // represent instead of just placing it.
+        Some(cut) => {
+            let cut = cut.timestamp_millis();
+            all.into_iter()
+                .filter(|m| stamp_millis(m.timestamp) < cut)
+                .collect()
+        }
         None => all,
     };
     if let Some(n) = limit {
@@ -491,6 +625,13 @@ mod paginate_before_tests {
         vec![rec("a", 10), rec("b", 20), rec("c", 30), rec("d", 40)]
     }
 
+    /// A cursor at `secs` past the epoch. The cursor is an instant now, so a
+    /// caller cannot hand it a number in the wrong unit — which is the whole
+    /// repair; these helpers just keep the existing cases readable.
+    fn at(secs: i64) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::from_timestamp(secs, 0).expect("representable")
+    }
+
     #[test]
     fn none_before_none_limit_is_identity() {
         let out = paginate_before(sample(), None, None);
@@ -501,7 +642,7 @@ mod paginate_before_tests {
     #[test]
     fn before_keeps_only_strictly_older() {
         // Cursor at 30 must exclude the message *at* 30 (strictly older).
-        let out = paginate_before(sample(), None, Some(30));
+        let out = paginate_before(sample(), None, Some(at(30)));
         let ids: Vec<&str> = out.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, ["a", "b"]);
     }
@@ -509,7 +650,7 @@ mod paginate_before_tests {
     #[test]
     fn before_with_limit_returns_most_recent_of_the_older_set() {
         // Older-than-40 set is [a,b,c]; the trailing 2 are [b,c], oldest-first.
-        let out = paginate_before(sample(), Some(2), Some(40));
+        let out = paginate_before(sample(), Some(2), Some(at(40)));
         let ids: Vec<&str> = out.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, ["b", "c"]);
     }
@@ -523,7 +664,68 @@ mod paginate_before_tests {
 
     #[test]
     fn cursor_older_than_everything_yields_empty() {
-        assert!(paginate_before(sample(), Some(10), Some(5)).is_empty());
+        assert!(paginate_before(sample(), Some(10), Some(at(5))).is_empty());
+    }
+
+    /// The case this function silently got wrong for its whole life.
+    ///
+    /// Values here are REAL epoch stamps, not the small round numbers the
+    /// cases above use: the seconds/milliseconds boundary is `1e11`, so a
+    /// toy value like `20_000` is unambiguously seconds no matter what it was
+    /// meant to represent, and a test written with toy "milliseconds" passes
+    /// or fails for reasons that have nothing to do with the property. (That
+    /// is not a weakness of the boundary — it is the constant's stated design:
+    /// no conversation Aleph could have recorded falls in the ambiguous gap.)
+    #[test]
+    fn a_millisecond_row_is_older_than_a_cursor_after_it() {
+        const BASE: i64 = 1_785_062_232; // 2026-07-26T10:37:12Z
+        let ms = vec![rec("a", (BASE + 10) * 1000), rec("b", (BASE + 20) * 1000)];
+        let out = paginate_before(ms, None, Some(at(BASE + 30)));
+        let ids: Vec<&str> = out.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["a", "b"],
+            "both rows are older than the cursor; the raw comparison kept none"
+        );
+    }
+
+    /// Two spellings inside ONE transcript — not hypothetical: two sessions on
+    /// the measured install carried both. The page must be ordered by real
+    /// time, not by which unit each row happens to use.
+    #[test]
+    fn a_transcript_with_both_units_pages_by_real_time() {
+        const BASE: i64 = 1_785_062_232;
+        let mixed = vec![
+            rec("t10s", BASE + 10),
+            rec("t20ms", (BASE + 20) * 1000),
+            rec("t30s", BASE + 30),
+            rec("t40ms", (BASE + 40) * 1000),
+        ];
+        let out = paginate_before(mixed, None, Some(at(BASE + 35)));
+        let ids: Vec<&str> = out.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["t10s", "t20ms", "t30s"],
+            "the millisecond rows must interleave with the seconds ones by \
+             instant; raw, `t20ms` and `t40ms` both rank above any cursor"
+        );
+    }
+
+    /// A stamp no calendar can represent still gets a position rather than
+    /// disappearing. `stamp_millis` is total for exactly this reason: comparing
+    /// `instant()` would have made an unreadable row invisible to every cursor
+    /// page, which is a second way to hide content while reporting success.
+    ///
+    /// `i64::MIN` specifically, because it is the value with no positive
+    /// counterpart — writing this case is what surfaced an `abs()` that
+    /// panicked in debug and wrapped in release.
+    #[test]
+    fn an_unrepresentable_stamp_is_placed_not_dropped() {
+        const BASE: i64 = 1_785_062_232;
+        let rows = vec![rec("min", i64::MIN), rec("a", BASE + 10)];
+        let out = paginate_before(rows, None, Some(at(BASE + 30)));
+        let ids: Vec<&str> = out.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["min", "a"], "i64::MIN ranks oldest, and is kept");
     }
 }
 
@@ -1007,5 +1209,680 @@ mod caller_census {
                  census together."
             );
         }
+    }
+}
+
+/// The `before` cursor against a transcript that mixes timestamp units.
+///
+/// FILE BACKEND ONLY, and that is a property of the stores rather than a gap in
+/// the coverage: `FileSessionStore::append_transcript` serializes the record it
+/// is given, so the unit is whichever PRODUCER wrote it — `MessageProjector`
+/// stamps `created_at_ms` (milliseconds) while direct writers such as
+/// `agent_instance` stamp `timestamp()` (seconds) — whereas the SQLite backend
+/// never stores a caller's stamp at all (`add_message_full` overwrites it with
+/// its own `now().timestamp()`), so its column cannot be made mixed and this
+/// case is unreachable there.
+///
+/// Measured on a real install, 2026-08-28: 1745 of 3030 rows were
+/// millisecond-stamped, the three largest sessions were entirely so, and two
+/// transcripts carried both spellings. Against the raw column a seconds cursor
+/// admits no millisecond row at all, so `chat.history?before=…` answered
+/// `{count: 0, messages: []}` — a success a client can only read as "you have
+/// reached the beginning of the conversation".
+#[cfg(test)]
+mod mixed_unit_cursor_tests {
+    use super::*;
+    use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+    use crate::sync_primitives::Arc;
+    use tempfile::TempDir;
+
+    /// 2026-07-26T10:37:12Z, the base both spellings are offset from.
+    const BASE: i64 = 1_785_062_232;
+
+    fn row(id: &str, ts: i64) -> MessageRecord {
+        MessageRecord {
+            id: id.to_string(),
+            role: "user".into(),
+            content: id.to_string(),
+            timestamp: ts,
+            metadata: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            tool_call_id: None,
+            tool_name: None,
+        }
+    }
+
+    async fn seeded(temp: &TempDir) -> (Arc<dyn SessionStore>, SessionKey) {
+        let store: Arc<dyn SessionStore> = Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: temp.path().to_path_buf(),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let key = SessionKey::main("mixed-units");
+        store.get_or_create(&key).await.unwrap();
+        // Chronological, alternating units — the shape a session gets when the
+        // projector and a direct writer both append to it.
+        for (id, ts) in [
+            ("t10s", BASE + 10),
+            ("t20ms", (BASE + 20) * 1000),
+            ("t30ms", (BASE + 30) * 1000),
+            ("t40s", BASE + 40),
+        ] {
+            store.append_message(&key, row(id, ts)).await.unwrap();
+        }
+        (store, key)
+    }
+
+    fn ids(rows: &[MessageRecord]) -> Vec<&str> {
+        rows.iter().map(|m| m.content.as_str()).collect()
+    }
+
+    fn at(secs: i64) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::from_timestamp(secs, 0).expect("representable")
+    }
+
+    /// The regression itself: a cursor placed between `t30ms` and `t40s` must
+    /// admit the two millisecond rows. Raw, it admitted only `t10s`.
+    #[tokio::test]
+    async fn a_cursor_admits_millisecond_rows_older_than_it() {
+        let temp = TempDir::new().unwrap();
+        let (store, key) = seeded(&temp).await;
+
+        let page = store
+            .history_page(&key, None, Some(at(BASE + 35)))
+            .await
+            .unwrap();
+        assert_eq!(
+            ids(&page.rows),
+            ["t10s", "t20ms", "t30ms"],
+            "a millisecond row is ~1000x any cursor when compared raw, so this \
+             page used to be just [t10s] — a short page reads as the start of \
+             the transcript"
+        );
+    }
+
+    /// And the window is still the TRAILING end of the cursor-filtered set, so
+    /// paging backwards walks the conversation rather than restarting it.
+    #[tokio::test]
+    async fn a_limit_windows_the_cursor_filtered_set() {
+        let temp = TempDir::new().unwrap();
+        let (store, key) = seeded(&temp).await;
+
+        let page = store
+            .history_page(&key, Some(2), Some(at(BASE + 35)))
+            .await
+            .unwrap();
+        assert_eq!(ids(&page.rows), ["t20ms", "t30ms"]);
+    }
+
+    /// A cursor older than everything still yields nothing — the repair widens
+    /// what the cursor can see, it does not stop the cursor from excluding.
+    #[tokio::test]
+    async fn a_cursor_before_the_conversation_yields_nothing() {
+        let temp = TempDir::new().unwrap();
+        let (store, key) = seeded(&temp).await;
+
+        let page = store
+            .history_page(&key, None, Some(at(BASE - 1)))
+            .await
+            .unwrap();
+        assert!(ids(&page.rows).is_empty());
+    }
+}
+
+/// [`HistoryPage::total`] answers the one question the window cannot.
+///
+/// `get_history(limit)` serves the TRAILING rows, so its length says nothing
+/// about whether anything was cut: a full page and a whole short transcript are
+/// both exactly `limit` long. Everything here is about that indistinguishability
+/// — run against BOTH backends, because the SQLite store answers with a
+/// `COUNT(*)` under the same lock as the window while the file store falls
+/// through to the trait's default impl and measures the read it just did, and a
+/// divergence between them is precisely the bug this method invites.
+#[cfg(test)]
+mod history_page_total_tests {
+    use super::*;
+    use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+    use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+    use crate::sync_primitives::Arc;
+    use tempfile::TempDir;
+
+    fn key() -> SessionKey {
+        SessionKey::main("history-len")
+    }
+
+    fn row(ts: i64) -> MessageRecord {
+        MessageRecord {
+            id: format!("m{ts}"),
+            role: "user".into(),
+            content: format!("message {ts}"),
+            timestamp: ts,
+            metadata: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            tool_call_id: None,
+            tool_name: None,
+        }
+    }
+
+    fn file_store(temp: &TempDir) -> Arc<dyn SessionStore> {
+        Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: temp.path().to_path_buf(),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+    }
+
+    fn sqlite_store(temp: &TempDir) -> Arc<dyn SessionStore> {
+        Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: temp.path().join("sessions.db"),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+    }
+
+    async fn seed(store: &Arc<dyn SessionStore>, n: i64) {
+        let k = key();
+        store.get_or_create(&k).await.unwrap();
+        for ts in 1..=n {
+            store.append_message(&k, row(ts)).await.unwrap();
+        }
+    }
+
+    async fn counts_the_whole_session_not_the_window(store: Arc<dyn SessionStore>) {
+        seed(&store, 5).await;
+
+        let windowed = store.get_history(&key(), Some(2)).await.unwrap();
+        assert_eq!(windowed.len(), 2, "the window is the trailing 2");
+        assert_eq!(
+            windowed.first().map(|m| m.content.as_str()),
+            Some("message 4"),
+            "and it is the trailing end — which is why the beginning needs \
+             announcing at all"
+        );
+        assert_eq!(
+            store
+                .history_page(&key(), None, None)
+                .await
+                .unwrap()
+                .total
+                .unwrap(),
+            5,
+            "total is the whole session, unaffected by the caller's limit"
+        );
+    }
+
+    /// The case a length-based guess gets wrong. With `limit == total` the
+    /// window is full AND complete, so `got.len() >= limit` claims there is
+    /// more above when there is nothing; only a separately-reported total can
+    /// tell those apart.
+    async fn a_full_window_that_is_also_the_whole_transcript(store: Arc<dyn SessionStore>) {
+        seed(&store, 3).await;
+
+        let windowed = store.get_history(&key(), Some(3)).await.unwrap();
+        assert_eq!(windowed.len(), 3);
+        assert_eq!(
+            store
+                .history_page(&key(), None, None)
+                .await
+                .unwrap()
+                .total
+                .unwrap(),
+            windowed.len(),
+            "equal means complete; the guess `len() >= limit` reads this exact \
+             shape as truncated"
+        );
+    }
+
+    async fn an_empty_session_counts_zero(store: Arc<dyn SessionStore>) {
+        store.get_or_create(&key()).await.unwrap();
+        assert_eq!(
+            store
+                .history_page(&key(), None, None)
+                .await
+                .unwrap()
+                .total
+                .unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn file_backend_history_page_total() {
+        let temp = TempDir::new().unwrap();
+        counts_the_whole_session_not_the_window(file_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        a_full_window_that_is_also_the_whole_transcript(file_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        an_empty_session_counts_zero(file_store(&temp)).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_backend_history_page_total() {
+        let temp = TempDir::new().unwrap();
+        counts_the_whole_session_not_the_window(sqlite_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        a_full_window_that_is_also_the_whole_transcript(sqlite_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        an_empty_session_counts_zero(sqlite_store(&temp)).await;
+    }
+}
+
+/// What a stored message's timestamp MEANS — when the message happened, not
+/// when its row was written.
+///
+/// Run against both backends because they used to answer differently and the
+/// difference was invisible: the file store serializes the producer's record
+/// verbatim, while `add_message_full` replaced the stamp with `now()`. On a
+/// live turn those two instants are milliseconds apart, so the substitution
+/// only showed up where an event is projected later than it occurred — a
+/// reconciler, a backfill, an import — and there it showed up as the whole
+/// conversation being dated by the moment it was re-read.
+#[cfg(test)]
+mod message_stamp_fidelity_tests {
+    use super::*;
+    use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+    use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+    use crate::sync_primitives::Arc;
+    use tempfile::TempDir;
+
+    /// 2020-06-01T00:00:00Z, in milliseconds — the unit `MessageProjector`
+    /// stamps (`created_at_ms`). Far enough in the past that "was this replaced
+    /// by the insert clock" is answerable without a tolerance.
+    const HAPPENED_AT_MS: i64 = 1_590_969_600_000;
+
+    fn key() -> SessionKey {
+        SessionKey::main("stamp-fidelity")
+    }
+
+    fn row(timestamp: i64) -> MessageRecord {
+        MessageRecord {
+            id: "m1".into(),
+            role: "user".into(),
+            content: "hello".into(),
+            timestamp,
+            metadata: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            tool_call_id: None,
+            tool_name: None,
+        }
+    }
+
+    fn file_store(temp: &TempDir) -> Arc<dyn SessionStore> {
+        Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: temp.path().to_path_buf(),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+    }
+
+    fn sqlite_store(temp: &TempDir) -> Arc<dyn SessionStore> {
+        Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: temp.path().join("sessions.db"),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+    }
+
+    async fn write_then_read(store: &Arc<dyn SessionStore>, msg: MessageRecord) -> MessageRecord {
+        store.get_or_create(&key()).await.unwrap();
+        store.append_message(&key(), msg).await.unwrap();
+        store
+            .get_history(&key(), None)
+            .await
+            .unwrap()
+            .pop()
+            .expect("the row that was just appended")
+    }
+
+    async fn a_producers_stamp_survives_the_write(store: Arc<dyn SessionStore>) {
+        let read = write_then_read(&store, row(HAPPENED_AT_MS)).await;
+        let at = read.instant().expect("a representable stamp");
+        assert_eq!(
+            at.timestamp_millis(),
+            HAPPENED_AT_MS,
+            "the store re-dated a message its producer had already dated. \
+             `append_message` is handed the instant the message occurred; an \
+             insert that stamps `now()` over it makes this backend disagree \
+             with the other one about the same conversation."
+        );
+    }
+
+    #[tokio::test]
+    async fn file_backend_keeps_the_producers_stamp() {
+        let temp = TempDir::new().unwrap();
+        a_producers_stamp_survives_the_write(file_store(&temp)).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_backend_keeps_the_producers_stamp() {
+        let temp = TempDir::new().unwrap();
+        a_producers_stamp_survives_the_write(sqlite_store(&temp)).await;
+    }
+
+    /// The two backends agree about one record — the property the fix is
+    /// actually about, and the one neither backend's own test can state.
+    #[tokio::test]
+    async fn both_backends_date_the_same_record_the_same_way() {
+        let ftemp = TempDir::new().unwrap();
+        let stemp = TempDir::new().unwrap();
+        let from_file = write_then_read(&file_store(&ftemp), row(HAPPENED_AT_MS)).await;
+        let from_sqlite = write_then_read(&sqlite_store(&stemp), row(HAPPENED_AT_MS)).await;
+        assert_eq!(
+            from_file.instant(),
+            from_sqlite.instant(),
+            "the same message, appended to the two backends, comes back with \
+             two different instants — which is what a user sees when a session \
+             moves between them"
+        );
+    }
+
+    /// Rows whose producer said nothing get the insert clock, on BOTH backends,
+    /// exactly as every row already did on SQLite.
+    ///
+    /// The file backend used to serialize the zero verbatim, so the same
+    /// undated record came back as "now" from one store and as 1970 from the
+    /// other — 56 years apart, from one `append_message` call. Saying nothing
+    /// is not saying 1970, and 1970 is not an inert placeholder: it is the head
+    /// of every ranking, so it leads the transcript a reader sees and sits at
+    /// the deleted end of every DELETE that ranks the column.
+    ///
+    /// No production producer leaves the field unset — all four stamp it — so
+    /// this settles a rule rather than a live symptom, and it settles it in one
+    /// place (`producer_instant`) rather than in two backends that had written
+    /// down opposite answers.
+    async fn an_undated_row_gets_the_insert_clock(store: Arc<dyn SessionStore>) {
+        let before = chrono::Utc::now().timestamp_millis();
+        let read = write_then_read(&store, row(0)).await;
+        let at = read
+            .instant()
+            .expect("a representable stamp")
+            .timestamp_millis();
+        assert!(
+            at >= before,
+            "a row nobody dated came back dated {at}, before this test started \
+             ({before}) — the zero was stored verbatim and the row now sorts to \
+             1970, which is the head of every DELETE-boundary query"
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_dates_an_unstamped_row_by_its_insert() {
+        let temp = TempDir::new().unwrap();
+        an_undated_row_gets_the_insert_clock(sqlite_store(&temp)).await;
+    }
+
+    #[tokio::test]
+    async fn file_backend_dates_an_unstamped_row_by_its_insert() {
+        let temp = TempDir::new().unwrap();
+        an_undated_row_gets_the_insert_clock(file_store(&temp)).await;
+    }
+
+    /// `sessions.last_active_at` follows the MESSAGE, not the insert — on both
+    /// backends.
+    ///
+    /// The column answers "when did the newest thing in this conversation
+    /// happen": it is what the session list sorts on, what a client renders as
+    /// `updated_at`, and what the two idle sweeps compare against to DELETE.
+    /// The file backend has always taken it from the message; SQLite stamped
+    /// `Utc::now()`, so an imported or backfilled conversation jumped to the
+    /// head of the session list on one backend and stayed in its own past on
+    /// the other — the same divergence as the row stamp itself, one field over.
+    ///
+    /// Asserted as a bound rather than an equality because `get_or_create`
+    /// stamps this field with its own clock at the start of every turn; what
+    /// must not happen is the APPEND re-dating the session to now.
+    async fn the_session_clock_follows_the_message(store: Arc<dyn SessionStore>) {
+        let happened_at = HAPPENED_AT_MS / 1000;
+        store.get_or_create(&key()).await.unwrap();
+        store
+            .append_message(&key(), row(HAPPENED_AT_MS))
+            .await
+            .unwrap();
+        let meta = store.get_metadata(&key()).await.unwrap().expect("session");
+        assert_eq!(
+            meta.last_active_at, happened_at,
+            "the session's activity clock reads {} — it was stamped by the \
+             insert rather than by the message it recorded, so an imported \
+             conversation sorts as if it had just happened",
+            meta.last_active_at
+        );
+    }
+
+    #[tokio::test]
+    async fn file_backend_session_clock_follows_the_message() {
+        let temp = TempDir::new().unwrap();
+        the_session_clock_follows_the_message(file_store(&temp)).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_session_clock_follows_the_message() {
+        let temp = TempDir::new().unwrap();
+        the_session_clock_follows_the_message(sqlite_store(&temp)).await;
+    }
+
+    /// A stamp arriving in SECONDS is persisted in milliseconds, on both
+    /// backends, without moving the instant it names.
+    ///
+    /// Both spellings are already in one transcript — the projector stamps
+    /// `created_at_ms`, `agent_instance` stamps `Utc::now().timestamp()` — and
+    /// the file store used to write each straight through. Normalizing at the
+    /// boundary is what SQLite already did, so from here neither store widens
+    /// the mixture. Existing rows are NOT migrated: `stamp_millis` is permanent
+    /// (see [`MessageRecord::timestamp`]), which is why this asserts about the
+    /// raw field rather than about a reader — every reader normalizes, so no
+    /// reader can tell the two spellings apart, and a test written through one
+    /// would pass on the unnormalized store too.
+    ///
+    /// [`MessageRecord::timestamp`]: crate::gateway::session_store::types::MessageRecord::timestamp
+    async fn a_seconds_stamp_is_persisted_in_milliseconds(store: Arc<dyn SessionStore>) {
+        let in_seconds = HAPPENED_AT_MS / 1000;
+        let read = write_then_read(&store, row(in_seconds)).await;
+
+        assert_eq!(
+            read.instant().map(|d| d.timestamp_millis()),
+            Some(HAPPENED_AT_MS),
+            "normalizing the unit moved the instant the row names"
+        );
+        assert!(
+            read.timestamp.abs() >= crate::gateway::session_store::types::SECONDS_MILLIS_BOUNDARY,
+            "the row was persisted as {} — a seconds stamp written through \
+             verbatim. Both backends normalize on the way in so that neither \
+             keeps adding to a column that already holds two units.",
+            read.timestamp
+        );
+    }
+
+    #[tokio::test]
+    async fn file_backend_persists_a_seconds_stamp_in_milliseconds() {
+        let temp = TempDir::new().unwrap();
+        a_seconds_stamp_is_persisted_in_milliseconds(file_store(&temp)).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_backend_persists_a_seconds_stamp_in_milliseconds() {
+        let temp = TempDir::new().unwrap();
+        a_seconds_stamp_is_persisted_in_milliseconds(sqlite_store(&temp)).await;
+    }
+
+    /// A stamp no calendar can represent must not reach the column either:
+    /// `truncate_messages` and `compact_session` pick the boundary of a DELETE
+    /// by ranking it, and one absurd magnitude drags a row to an extreme of
+    /// that ranking.
+    #[tokio::test]
+    async fn sqlite_refuses_to_store_an_unrepresentable_stamp() {
+        let before = chrono::Utc::now().timestamp_millis();
+        let temp = TempDir::new().unwrap();
+        let read = write_then_read(&sqlite_store(&temp), row(i64::MIN)).await;
+        let at = read
+            .instant()
+            .expect("fell back to a representable stamp")
+            .timestamp_millis();
+        assert!(at >= before, "stored an unrepresentable stamp: {at}");
+    }
+}
+
+/// The transcript's order, asserted against BOTH backends at once.
+///
+/// The property is not "this store sorts correctly" — either store alone can
+/// satisfy any order it likes and look right. It is that the two AGREE, and
+/// that neither can be edited into a second opinion about the same
+/// conversation. `no_message_query_orders_by_the_stamp` pins the SQL half at
+/// the source; nothing but a runtime test can see the file half start sorting,
+/// because there is no SQL there to scan.
+///
+/// See [`SessionStore::history_page`] for why recording order won.
+#[cfg(test)]
+mod transcript_order_tests {
+    use super::*;
+    use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+    use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+    use crate::sync_primitives::Arc;
+    use tempfile::TempDir;
+
+    /// Real epoch seconds, not 100/200/300: `stamp_millis` classifies by
+    /// magnitude, so toy numbers are a fixture that has never been on the
+    /// interesting side of the boundary this code reads.
+    const T_OLD: i64 = 1_700_000_100;
+    const T_MID: i64 = 1_700_000_200;
+    const T_NEW: i64 = 1_700_000_300;
+
+    /// Recorded `new, old, mid`; stamped so that the stamps claim
+    /// `old, mid, new`. Every position disagrees, which is the only arrangement
+    /// that can tell the two candidate orders apart — and no production
+    /// producer writes one, which is why it has to be built by hand.
+    const RECORDED: [(&str, i64); 3] = [("new", T_NEW), ("old", T_OLD), ("mid", T_MID)];
+
+    fn key() -> SessionKey {
+        SessionKey::main("transcript-order")
+    }
+
+    fn row(content: &str, timestamp: i64) -> MessageRecord {
+        MessageRecord {
+            id: content.into(),
+            role: "user".into(),
+            content: content.into(),
+            timestamp,
+            metadata: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            tool_call_id: None,
+            tool_name: None,
+        }
+    }
+
+    fn file_store(temp: &TempDir) -> Arc<dyn SessionStore> {
+        Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: temp.path().to_path_buf(),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+    }
+
+    fn sqlite_store(temp: &TempDir) -> Arc<dyn SessionStore> {
+        Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: temp.path().join("sessions.db"),
+                // High enough that nothing auto-compacts underneath the test.
+                max_messages: 100,
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+    }
+
+    async fn seeded(store: &Arc<dyn SessionStore>) {
+        store.get_or_create(&key()).await.unwrap();
+        for (content, at) in RECORDED {
+            store
+                .append_message(&key(), row(content, at))
+                .await
+                .unwrap();
+        }
+    }
+
+    async fn contents(store: &Arc<dyn SessionStore>) -> Vec<String> {
+        store
+            .get_history(&key(), None)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.content)
+            .collect()
+    }
+
+    fn recorded_order() -> Vec<String> {
+        RECORDED.iter().map(|(c, _)| (*c).to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn both_backends_serve_the_transcript_in_recording_order() {
+        let ftemp = TempDir::new().unwrap();
+        let stemp = TempDir::new().unwrap();
+        let file = file_store(&ftemp);
+        let sqlite = sqlite_store(&stemp);
+        seeded(&file).await;
+        seeded(&sqlite).await;
+
+        let from_file = contents(&file).await;
+        let from_sqlite = contents(&sqlite).await;
+
+        assert_eq!(
+            from_file, from_sqlite,
+            "the same three appends came back as {from_file:?} from the file \
+             store and {from_sqlite:?} from SQLite — one conversation, two \
+             orders, and the two DELETEs below choose their victims by it"
+        );
+        assert_eq!(
+            from_file,
+            recorded_order(),
+            "served {from_file:?}; the transcript's order is the order its rows \
+             were recorded. `old, mid, new` is a store ranking by the \
+             producers' stamps."
+        );
+    }
+
+    /// `/undo` keeps the head of that order — the file store's
+    /// `drain(keep_count..)` and SQLite's `OFFSET` naming the same rows.
+    #[tokio::test]
+    async fn both_backends_undo_the_same_rows() {
+        let ftemp = TempDir::new().unwrap();
+        let stemp = TempDir::new().unwrap();
+        let file = file_store(&ftemp);
+        let sqlite = sqlite_store(&stemp);
+        seeded(&file).await;
+        seeded(&sqlite).await;
+
+        let from_file = file.truncate_messages(&key(), 2).await.unwrap();
+        let from_sqlite = sqlite.truncate_messages(&key(), 2).await.unwrap();
+
+        assert_eq!(from_file.messages_removed, 1);
+        assert_eq!(from_sqlite.messages_removed, 1);
+
+        let kept_file = contents(&file).await;
+        let kept_sqlite = contents(&sqlite).await;
+        assert_eq!(
+            kept_file, kept_sqlite,
+            "`/undo` kept {kept_file:?} on the file store and {kept_sqlite:?} \
+             on SQLite. This is an irreversible delete: the two backends \
+             destroying different rows of the same conversation, both \
+             reporting success, is the failure this order was settled to \
+             prevent."
+        );
+        assert_eq!(kept_file, vec!["new".to_string(), "old".to_string()]);
     }
 }

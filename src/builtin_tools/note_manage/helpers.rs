@@ -53,10 +53,11 @@ impl NoteManageTool {
                 || id.contains('/')
                 || id.contains('\\')
                 || id.starts_with('.')
+                || id.contains('\0')
             {
                 return Err(AlephError::tool(format!(
                     "invalid agent_id `{id}`: must not be empty, start with '.', \
-                     or contain '..', '/', or '\\'"
+                     contain NUL, or contain '..', '/', or '\\'"
                 )));
             }
         }

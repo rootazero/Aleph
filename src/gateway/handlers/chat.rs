@@ -136,22 +136,37 @@ pub(crate) struct HistoryParams {
     pub before: Option<String>,
 }
 
-/// Parse the `chat.history` `before` cursor into Unix seconds.
+/// Parse the `chat.history` `before` cursor into the instant it names.
 ///
-/// Accepts a bare integer (Unix seconds) or an RFC 3339 timestamp. Returns
-/// `None` for empty / unparseable input so a malformed cursor degrades to an
-/// un-paginated (most-recent) fetch rather than erroring the request.
-fn parse_before(raw: &str) -> Option<i64> {
+/// Accepts an RFC 3339 timestamp — the spelling this very endpoint serves, so
+/// the natural client move of echoing back the oldest row's `timestamp` works
+/// — or a bare integer, which is resolved by the SAME seconds/milliseconds
+/// boundary the stored rows are. That second half matters because the store
+/// writes both units (see [`MessageRecord::timestamp`]); reading a bare number
+/// as seconds unconditionally would put a millisecond cursor in the year
+/// 58536, i.e. "everything is older than this".
+///
+/// An instant, not a number, because the value is about to be ranked against a
+/// mixed-unit column and there is no unit a bare `i64` could carry that would
+/// be right for both halves of it.
+///
+/// Returns `None` for empty / unparseable input so a malformed cursor degrades
+/// to an un-paginated (most-recent) fetch rather than erroring the request.
+///
+/// [`MessageRecord::timestamp`]: crate::gateway::session_store::types::MessageRecord::timestamp
+fn parse_before(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
     }
-    if let Ok(unix) = trimmed.parse::<i64>() {
-        return Some(unix);
+    if let Ok(n) = trimmed.parse::<i64>() {
+        return chrono::DateTime::from_timestamp_millis(
+            crate::gateway::session_store::types::stamp_millis(n),
+        );
     }
     chrono::DateTime::parse_from_rfc3339(trimmed)
         .ok()
-        .map(|dt| dt.timestamp())
+        .map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
 /// Parameters for chat.clear request
@@ -280,6 +295,38 @@ pub async fn handle_send(
     }
 }
 
+/// Drop every queued message belonging to one conversation: the addressed
+/// session and, when this key has one, its derived `/btw` side lane.
+///
+/// # Why both, and why this is a named function
+///
+/// A `/btw` side question is ticketed on a lane DERIVED from the addressed key
+/// (`busy_queue::register_run` → `btw::execution_session`), so purging the
+/// addressed key alone leaves a queued side question in a lane that key can
+/// never reach. `cancel_run` → `cancel_session` then cancels the *running*
+/// side run, and that release wakes the survivor into a full LLM turn AFTER
+/// the user pressed Stop — while the receipt says `dropped: 0`. To the person
+/// pressing Stop there is one conversation, and
+/// `inbound_router::command_handler::handle_stop` (the channel `/stop` face)
+/// has purged both lanes all along; `handle_abort` copied that block's
+/// ordering rule and not its both-lanes rule.
+///
+/// It takes a parsed [`SessionKey`], never the client's raw string: tickets
+/// are registered under `SessionKey::to_key_string()`, so any accepted form
+/// that does not round-trip byte-for-byte would purge a lane nothing ever
+/// registered on and still answer success. `side_session_of` returns `None`
+/// for an already-derived key, so this cannot mint a phantom lane.
+///
+/// It is a function rather than an inline expression so the guard test can
+/// exercise the real composition — an inline expression can only be *restated*
+/// by a test, which then passes whatever `handle_abort` does.
+fn purge_conversation_lanes(session: &SessionKey) -> usize {
+    crate::gateway::busy_queue::purge(&session.to_key_string())
+        + crate::gateway::btw::side_session_of(session).map_or(0, |side| {
+            crate::gateway::busy_queue::purge(&side.to_key_string())
+        })
+}
+
 /// Handle chat.abort RPC request
 ///
 /// Aborts an in-progress message generation.
@@ -305,16 +352,18 @@ pub async fn handle_abort(
     // parse can therefore never equal one that succeeded. This is
     // load-bearing, not just a comment: see
     // `visibility_guards::a_canonical_session_key_always_round_trips_so_a_malformed_one_cannot_collide`.
-    if let Some(ref key_str) = params.session_key {
-        if let Some(session_key) = SessionKey::from_key_string(key_str) {
-            let meta = match session_store.get_metadata(&session_key).await {
-                Ok(Some(m)) => m,
-                Ok(None) => return visibility::not_found_response(request.id),
-                Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
-            };
-            if !visibility::session_visible(&meta) {
-                return visibility::not_found_response(request.id); // same error as missing (GC 4)
-            }
+    let parsed_session_key = match params.session_key.as_deref() {
+        Some(key_str) => SessionKey::from_key_string(key_str),
+        None => None,
+    };
+    if let Some(ref session_key) = parsed_session_key {
+        let meta = match session_store.get_metadata(session_key).await {
+            Ok(Some(m)) => m,
+            Ok(None) => return visibility::not_found_response(request.id),
+            Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
+        };
+        if !visibility::session_visible(&meta) {
+            return visibility::not_found_response(request.id); // same error as missing (GC 4)
         }
     }
 
@@ -338,10 +387,11 @@ pub async fn handle_abort(
     // session slot, which wakes the lane's front waiter, which can be admitted
     // (and so leave the lane) before a later purge could mark it. Same ordering
     // rule as `/stop` in `inbound_router::command_handler::handle_stop`.
-    let dropped = params
-        .session_key
-        .as_deref()
-        .map_or(0, crate::gateway::busy_queue::purge);
+    //
+    // Both lanes and the parsed key: see `purge_conversation_lanes`.
+    let dropped = parsed_session_key
+        .as_ref()
+        .map_or(0, purge_conversation_lanes);
 
     // Cancel the run
     let cancelled = run_manager.cancel_run(&params.run_id).await;
@@ -468,13 +518,24 @@ pub async fn handle_history(
     // or unparseable, yielding the most-recent window).
     let before_ts = params.before.as_deref().and_then(parse_before);
 
-    // Get history from session manager, honoring the `before` cursor.
+    // ONE call for both answers. This used to be two — a `history_len` and
+    // then the window — against a store a live run appends to, so the count
+    // and the transcript described two different sessions and the client's
+    // `total - received` was wrong by whatever landed in between. It was
+    // managed with a comment arguing which ORDER made the skew fall the safer
+    // way plus a source-level guard pinning that order, and a guard on
+    // statement order is satisfiable lexically while being broken semantically
+    // (move the count into a helper, call the helper after the window). There
+    // is no order here to get wrong, and `SessionStore` no longer offers a
+    // second call to reach for.
     match session_manager
-        .get_history_before(&session_key, params.limit, before_ts)
+        .history_page(&session_key, params.limit, before_ts)
         .await
     {
-        Ok(messages) => {
-            let chat_messages: Vec<ChatMessage> = messages
+        Ok(page) => {
+            let total = page.total;
+            let chat_messages: Vec<ChatMessage> = page
+                .rows
                 .into_iter()
                 .map(|m| {
                     // Resolved before anything moves out of `m`: the accessor
@@ -566,6 +627,11 @@ pub async fn handle_history(
                     "session_key": params.session_key,
                     "messages": chat_messages,
                     "count": count,
+                    // Rows in the whole session; `count` is how many of them
+                    // this window carries. `null` = a core that predates the
+                    // field, or a count that could not be read — both mean
+                    // "no answer", not "nothing above".
+                    "total": total,
                     "active_run": active_run,
                     "pending": pending,
                     // A SIBLING of `active_run`, not a field inside it. That
@@ -822,6 +888,173 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// `handle_history` answers both of its questions — "here is a window" and
+    /// "here is how long the whole conversation is" — with ONE store call.
+    ///
+    /// It used to make two, and two reads of a store a live run is appending to
+    /// describe two different sessions: the client's `total - received` came
+    /// out wrong by whatever landed in between. That was managed by arguing
+    /// which ORDER made the skew fall the safer way, pinned by a guard that
+    /// asserted the count appeared earlier in this function than the window
+    /// did. The hole in it is that statement order is not the property: moving
+    /// the count into a helper and calling the helper after the window
+    /// satisfies the guard and breaks the thing it was protecting.
+    ///
+    /// So the property asserted here is arity, not order. One read has no order
+    /// to get wrong, and `SessionStore` deliberately exposes no second method
+    /// (`history_len` is gone) for a caller holding a trait object to reach
+    /// for — this is what remains to catch someone reintroducing one on the
+    /// concrete type or via a second `get_history`.
+    ///
+    /// `assert_eq!(reads, 1)` is its own self-check: it fails at zero (the
+    /// scanner stopped finding the call and would otherwise pass vacuously) as
+    /// well as at two.
+    ///
+    /// `\r` is stripped first: this repo is checked out CRLF on Windows, and a
+    /// scanner that anchors on `\n` finds nothing there while staying green.
+    #[test]
+    fn the_window_and_the_transcript_length_come_from_one_read() {
+        let src = include_str!("chat.rs").replace('\r', "");
+        let start = src
+            .find("pub async fn handle_history(")
+            .expect("handle_history moved; this guard no longer scans it");
+        // End at the function's closing brace in column 0 — the syntactic end
+        // of the unit being scanned, not a line count, so an edit inside the
+        // body cannot slide the window off it.
+        let body_end = src[start..]
+            .find("\n}\n")
+            .expect("handle_history has no column-0 closing brace");
+        // Comment lines are dropped before anything is matched: a scanner
+        // judges CODE, and the prose inside this very function names both
+        // `history_len` and `history_page` while explaining why there is now
+        // one read. (Caught by this guard failing on its own first run.)
+        let body: String = src[start..start + body_end]
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let body = body.as_str();
+
+        let reads = body.matches(".history_page(").count();
+        assert_eq!(
+            reads, 1,
+            "handle_history makes {reads} calls to `history_page`, not 1. The \
+             window and the transcript's length have to come from the same \
+             read: they are two answers about a session a live run is \
+             appending to, and two reads answer about two different sessions."
+        );
+
+        for second_read in ["history_len", "history_total", ".get_history("] {
+            assert!(
+                !body.contains(second_read),
+                "handle_history reads the transcript a second time via \
+                 `{second_read}`. Everything it needs comes back from the one \
+                 `history_page` call; a second read reintroduces the skew \
+                 between the count and the window that this shape removed."
+            );
+        }
+    }
+
+    /// End-to-end over the handler: `chat.history` must report how long the
+    /// whole transcript is, not just how long the slice it served is.
+    ///
+    /// Asserted through `handle_history` rather than on `history_len` alone,
+    /// because the failure this guards against is not a wrong count — it is
+    /// the field quietly not reaching the wire, which no store-level test can
+    /// see. A client that receives no `total` falls back to guessing from the
+    /// page length, and that guess cannot tell a truncated transcript from a
+    /// complete one of exactly `limit` rows.
+    #[tokio::test]
+    async fn history_reports_the_whole_transcript_alongside_the_window_it_serves() {
+        use crate::gateway::router::SessionKey;
+        use crate::gateway::session_store::file_backend::{
+            FileSessionStore, FileSessionStoreConfig,
+        };
+        use crate::gateway::session_store::types::MessageRecord;
+        use crate::sync_primitives::Arc;
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: temp.path().to_path_buf(),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let key = SessionKey::main("history-total");
+        store.get_or_create(&key).await.unwrap();
+        for ts in 1..=5i64 {
+            store
+                .append_message(
+                    &key,
+                    MessageRecord {
+                        id: format!("m{ts}"),
+                        role: "user".into(),
+                        content: format!("message {ts}"),
+                        timestamp: ts,
+                        metadata: None,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        tool_call_id: None,
+                        tool_name: None,
+                    },
+                )
+                .await
+                .unwrap();
+        }
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "chat.history".into(),
+            params: Some(json!({
+                "session_key": key.to_key_string(),
+                "limit": 2,
+            })),
+            id: Some(json!(1)),
+        };
+        let response = handle_history(request, store, None).await;
+        let result = response.result.expect("history succeeds");
+
+        assert_eq!(
+            result["count"], 2,
+            "the window is the limit the caller asked for"
+        );
+        assert_eq!(
+            result["total"], 5,
+            "and `total` is the session, not the window — this is the field a \
+             client needs to know its transcript has a beginning it was not sent"
+        );
+        let messages = result["messages"].as_array().expect("messages array");
+        assert_eq!(
+            messages[0]["content"], "message 4",
+            "the window kept is the TRAILING one, which is why the beginning \
+             is the part that goes missing"
+        );
+
+        // The reconciliation the clients cannot perform on themselves.
+        // `interfaces/cli` and `interfaces/tui` may not depend on `alephcore`,
+        // so their copy of these keys has nothing to disagree with — this
+        // crate depends on both sides and is the only place the shared
+        // contract can be held against a REAL response rather than against a
+        // literal written next to the assertion.
+        let window: aleph_protocol::session_thread::HistoryWindow =
+            serde_json::from_value(result.clone()).expect(
+                "the response must deserialize into the shape every thin \
+                 client reads it with; a rename here is this test going red, \
+                 not a CLI column quietly describing something else",
+            );
+        assert_eq!(window.count, 2);
+        assert_eq!(window.total, Some(5));
+        assert_eq!(
+            window.above(),
+            Some(3),
+            "three rows the caller was not sent — the number `aleph chat \
+             history --limit 2` has to print instead of calling the window the \
+             total"
+        );
+        assert_eq!(window.is_complete(), Some(false));
+    }
+
     /// The wire contract Panel Stop depends on. An older client that sends only
     /// `run_id` must still parse (the field is optional), and a client that
     /// scopes the stop must have its session key actually arrive — this is the
@@ -856,6 +1089,97 @@ mod tests {
             waiting.is_cancelled() && behind.is_cancelled(),
             "a purged ticket must read as cancelled to its own waiter, which is \
              what stops it being delivered once the cancel frees the slot"
+        );
+    }
+
+    /// Stop means the whole conversation, including the `/btw` side lane.
+    ///
+    /// The test above could not see this: it registers both tickets on ONE
+    /// invented key, so "purges the conversation" and "purges one key" are
+    /// indistinguishable to it. Here the second ticket is registered on the
+    /// key `busy_queue::register_run` actually derives for a side question —
+    /// the lane the addressed key cannot reach.
+    ///
+    /// Asserted at the consumer (the ticket reads cancelled to its own
+    /// waiter), because that is what stops it being delivered when
+    /// `cancel_session` frees the slot.
+    #[test]
+    fn an_abort_drops_the_side_question_lane_too_not_just_the_addressed_one() {
+        use crate::gateway::{btw, busy_queue};
+
+        let main =
+            SessionKey::from_key_string("agent:btw-abort-test:main").expect("canonical key parses");
+        let side = btw::side_session_of(&main).expect("a main key has a side lane");
+        assert_ne!(
+            side.to_key_string(),
+            main.to_key_string(),
+            "precondition: the side lane really is a different key, or this \
+             test would pass for the wrong reason"
+        );
+
+        let on_main = busy_queue::register(&main.to_key_string(), 8, "queued-main")
+            .expect("main lane has room");
+        let on_side = busy_queue::register(&side.to_key_string(), 8, "queued-btw")
+            .expect("side lane has room");
+
+        // The production function `handle_abort` calls — NOT a restatement of
+        // it. Restating the expression here would make this test pass for
+        // whatever `handle_abort` happens to do; calling it makes reverting
+        // the fix turn this test red.
+        let dropped = super::purge_conversation_lanes(&main);
+
+        assert_eq!(
+            dropped, 2,
+            "both lanes must be reported; a receipt of 1 (or 0) tells the user \
+             nothing was queued while a side question is still waiting"
+        );
+        assert!(
+            on_main.is_cancelled(),
+            "the addressed lane must still be purged"
+        );
+        assert!(
+            on_side.is_cancelled(),
+            "the /btw side lane survived Stop: cancel_session will cancel the \
+             running side run, and that release wakes this ticket into a full \
+             turn after the user pressed Stop"
+        );
+    }
+
+    /// The purge must be keyed on the parsed `SessionKey`, not on the raw
+    /// string the client sent: tickets are registered under
+    /// `to_key_string()`, so any accepted form that does not round-trip
+    /// byte-for-byte would purge an empty lane and still answer success.
+    #[test]
+    fn the_abort_purge_is_keyed_on_the_canonical_form_of_the_session_key() {
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/gateway/handlers/chat.rs"
+        ))
+        .expect("this file is readable from its own test");
+        let production = crate::utils::source_scan::production_prefix(&src);
+        let stripped = crate::utils::source_scan::strip_comment_lines(&production);
+        // Whitespace removed, because rustfmt decides where this expression
+        // wraps and that decision is not the property under test. A guard
+        // pinned to the incidental line breaks goes red on a reformat while
+        // the behaviour it names is untouched — and a reader then learns to
+        // ignore it.
+        let code: String = stripped.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            code.contains("parsed_session_key.as_ref().map_or(0,purge_conversation_lanes)"),
+            "handle_abort must purge from the parsed SessionKey via \
+             `purge_conversation_lanes`; purging `params.session_key` directly \
+             re-derives the lane key from the client's string instead of from \
+             the form tickets are stored under"
+        );
+        assert!(
+            code.contains("btw::side_session_of(session)"),
+            "purge_conversation_lanes must reach the /btw side lane, the way \
+             `inbound_router::command_handler::handle_stop` does"
+        );
+        assert!(
+            !code.contains("map_or(0,crate::gateway::busy_queue::purge)"),
+            "handle_abort must not purge the client's raw session_key string: \
+             that is the single-lane form this replaced"
         );
     }
 
@@ -926,13 +1250,23 @@ mod tests {
         assert_eq!(params.before, Some("2024-01-01T00:00:00Z".to_string()));
     }
 
+    /// Every spelling a client could plausibly send has to name the SAME
+    /// instant — including a bare millisecond number, because half the rows on
+    /// a real install are stamped that way and echoing one back is the obvious
+    /// thing for a script to do. Read as seconds, `1609459200000` is the year
+    /// 52975, i.e. a cursor that admits the entire transcript.
     #[test]
-    fn test_parse_before_unix_and_rfc3339_agree() {
-        // 2021-01-01T00:00:00Z == 1609459200 Unix seconds.
-        assert_eq!(parse_before("1609459200"), Some(1609459200));
-        assert_eq!(parse_before("2021-01-01T00:00:00Z"), Some(1609459200));
+    fn every_cursor_spelling_names_the_same_instant() {
+        // 2021-01-01T00:00:00Z == 1609459200 s == 1609459200000 ms.
+        let expected = chrono::DateTime::from_timestamp(1_609_459_200, 0);
+        assert_eq!(parse_before("1609459200"), expected);
+        assert_eq!(parse_before("2021-01-01T00:00:00Z"), expected);
+        assert_eq!(parse_before("1609459200000"), expected);
+        // The endpoint serves RFC 3339 with an offset; echoing that back must
+        // land on the same instant, not on a local-time reading of it.
+        assert_eq!(parse_before("2021-01-01T08:00:00+08:00"), expected);
         // Surrounding whitespace is tolerated.
-        assert_eq!(parse_before("  1609459200  "), Some(1609459200));
+        assert_eq!(parse_before("  1609459200  "), expected);
     }
 
     #[test]

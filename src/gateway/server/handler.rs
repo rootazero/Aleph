@@ -41,23 +41,50 @@ use super::per_client_buffer::PerClientBuffer;
 use super::{ConnectionState, GatewaySharedState};
 use crate::gateway::security::SecurityStore;
 
-/// Parse configured trusted-proxy IP strings into `IpAddr`, silently dropping
+/// Parse configured trusted-proxy IP strings into `IpAddr`, dropping
 /// unparseable entries (fail-safe: a garbage entry just isn't trusted).
+///
+/// The drop is deliberate; the *silence* was not. Only a bare `IpAddr` parses
+/// here — there is no CIDR support in this tree — so an operator who writes
+/// `trusted_ips = ["10.0.0.0/24"]` gets an EMPTY trusted set, and an empty set
+/// is byte-for-byte the same downstream state as "no reverse proxy is
+/// configured": every `X-Forwarded-For` is ignored, and every client behind
+/// that proxy collapses onto the proxy's own address for the per-IP cap and
+/// the rate limiter. A config value that silently resolves to "not trusted"
+/// has no symptom at all, so it says so instead.
 pub(super) fn parse_trusted_ips(raw: &[String]) -> Vec<IpAddr> {
     raw.iter()
-        .filter_map(|s| s.parse::<IpAddr>().ok())
+        .filter_map(|s| match s.parse::<IpAddr>() {
+            Ok(ip) => Some(ip),
+            Err(e) => {
+                warn!(
+                    entry = %s,
+                    "[gateway] trusted_ips entry is not a bare IP address and was dropped \
+                     ({e}); this list takes single addresses only (no CIDR ranges), so \
+                     nothing behind that proxy is trusted and its X-Forwarded-For headers \
+                     are ignored"
+                );
+                None
+            }
+        })
         .collect()
 }
 
-/// Whether to refuse this upgrade for insecure transport. A non-loopback client
+/// Whether to refuse this upgrade for insecure transport. A non-local client
 /// on an unencrypted leg is refused unless the operator set
-/// `allow_insecure_remote`. Loopback is always allowed.
+/// `allow_insecure_remote`. A genuinely local client is always allowed.
+///
+/// Takes `client_is_local` ([`crate::gateway::trusted_proxy::ResolvedClient::local`])
+/// rather than the resolved IP: behind a same-host reverse proxy the resolved
+/// IP can fall back to the proxy's own loopback address when no
+/// `X-Forwarded-For` arrives, and "I could not determine the real client" must
+/// not read as "the client is local".
 pub(super) fn refuse_insecure_remote(
-    client_ip: IpAddr,
+    client_is_local: bool,
     secure: bool,
     allow_insecure_remote: bool,
 ) -> bool {
-    !client_ip.is_loopback() && !secure && !allow_insecure_remote
+    !client_is_local && !secure && !allow_insecure_remote
 }
 
 /// Shared context for handling a WebSocket connection.
@@ -103,8 +130,19 @@ struct ConnectionContext {
     device_token_mgr: Option<Arc<crate::gateway::security::DeviceTokenManager>>,
     /// Resolved client IP (the trusted-proxy-forwarded client behind a
     /// reverse proxy, else the raw socket peer). Used for the per-IP
-    /// connection cap and rate-limit identity.
+    /// connection cap, the rate-limit identity and audit rows — i.e. for
+    /// *bucketing*. Never for authority: that is [`Self::client_is_local`].
     client_ip: IpAddr,
+    /// Whether this connection is genuinely local — loopback peer AND not a
+    /// trusted-proxy hop. Every loopback *privilege* (zero-config operator at
+    /// `connect`, per-IP cap exemption, rate-limit exemption, desktop lane
+    /// pool, "do not kick on token rotation") reads THIS, not
+    /// `client_ip.is_loopback()`: behind a same-host reverse proxy that emits
+    /// no `X-Forwarded-For`, the resolved IP falls back to the proxy's own
+    /// loopback address, which would turn "I could not determine the real
+    /// client" into full unauthenticated operator. See
+    /// [`crate::gateway::trusted_proxy::ResolvedClient::local`].
+    client_is_local: bool,
     /// Cluster node registry (shared Arc). The connect handler registers a
     /// `role:node` connection here and cleanup deregisters it.
     node_registry: Arc<crate::cluster::NodeRegistry>,
@@ -137,7 +175,14 @@ pub(super) async fn ws_upgrade_handler(
     headers: HeaderMap,
 ) -> axum::response::Response {
     // IP-keyed abuse protections (per-IP cap, rate limiting), the security
-    // audit log, AND the connect-auth loopback test all read `client_ip`.
+    // audit log read `client_ip`; every AUTHORITY decision — the per-IP cap, the
+    // insecure-transport gate, the connect-auth loopback grant, the initial
+    // `caller_role`, the rate-limit exemption and `SurfaceKind` — reads
+    // `client_is_local` instead. The split is the fix: one bit says WHICH BUCKET
+    // this connection belongs to, the other says WHETHER IT MAY. Before
+    // 2026-08-29 there was only `client_ip`, so a same-host reverse proxy that
+    // forgot `X-Forwarded-For` handed every internet client the loopback
+    // operator grant.
     // Behind a trusted proxy the transport peer is the proxy, so resolve the
     // real client from forwarding headers first (spoof-safe: untrusted peers'
     // headers are ignored). `secure` = native TLS OR the proxy's XFF-Proto.
@@ -148,13 +193,15 @@ pub(super) async fn ws_upgrade_handler(
         &state.trusted_proxy_ips,
     );
     let client_ip = resolved.ip;
+    let client_is_local = resolved.local;
     let secure = state.tls_enabled || resolved.secure;
 
-    // Insecure-transport guard: a non-loopback client on an unencrypted leg
+    // Insecure-transport guard: a non-local client on an unencrypted leg
     // is refused unless the operator opted into `allow_insecure_remote`.
-    // Loopback is always allowed. Must run before any auth/origin decision
-    // is made over what could be a plaintext, sniffable/tamperable leg.
-    if refuse_insecure_remote(client_ip, secure, state.allow_insecure_remote) {
+    // A genuinely local client is always allowed. Must run before any
+    // auth/origin decision is made over what could be a plaintext,
+    // sniffable/tamperable leg.
+    if refuse_insecure_remote(client_is_local, secure, state.allow_insecure_remote) {
         warn!(
             peer = %peer_addr, client = %client_ip,
             "rejected WebSocket upgrade: insecure transport to a remote client — \
@@ -208,7 +255,7 @@ pub(super) async fn ws_upgrade_handler(
         // carry their resolved `client_ip`, so the count isolates real clients
         // even when many share one reverse-proxy socket address.
         let per_ip_cap = state.max_connections_per_ip;
-        if per_ip_cap > 0 && !client_ip.is_loopback() {
+        if per_ip_cap > 0 && !client_is_local {
             let same_ip = conns.values().filter(|c| c.client_ip == client_ip).count();
             if same_ip >= per_ip_cap {
                 warn!(
@@ -229,7 +276,7 @@ pub(super) async fn ws_upgrade_handler(
     // on the reserved desktop semaphore pool; everyone else falls back to
     // the shared pool. See `ConnectionContext::channel_class` for the
     // accepted trade-off.
-    let channel_class = if client_ip.is_loopback() {
+    let channel_class = if client_is_local {
         ChannelClass::Desktop
     } else {
         ChannelClass::Bot
@@ -256,6 +303,7 @@ pub(super) async fn ws_upgrade_handler(
             security_store: state.security_store.clone(),
             device_token_mgr: state.device_token_mgr.clone(),
             client_ip,
+            client_is_local,
             node_registry: state.node_registry.clone(),
             exec_approval_manager: state.exec_approval_manager.clone(),
             audit_log: state.audit_log.clone(),
@@ -275,9 +323,9 @@ pub(super) async fn ws_upgrade_handler(
 /// both surface identical `events_overflow` diagnostics (with `advice:reconnect`)
 /// before the connection is closed with WS code 1008.
 fn overflow_warning_frame(dropped: u64, total_overflow: u64) -> String {
-    serde_json::json!({
-        "method": "event",
-        "params": {
+    serde_json::to_string(&aleph_protocol::JsonRpcRequest::notification(
+        "event",
+        Some(serde_json::json!({
             "topic": "connection.warning",
             "data": {
                 "reason": "events_overflow",
@@ -285,9 +333,9 @@ fn overflow_warning_frame(dropped: u64, total_overflow: u64) -> String {
                 "total_overflow": total_overflow,
                 "advice": "reconnect"
             }
-        }
-    })
-    .to_string()
+        })),
+    ))
+    .unwrap_or_else(|_| String::new())
 }
 
 /// Drain the global event bus into a single client's per-client buffer.
@@ -475,7 +523,14 @@ fn event_wire_form(
         obj.insert("params".to_string(), payload);
     }
     if event_obj.get("topic").is_some() && event_obj.get("method").is_none() {
-        serde_json::json!({ "method": "event", "params": event_obj }).to_string()
+        // The shared constructor, so this envelope carries `"jsonrpc": "2.0"`
+        // like every other notification on the wire — see
+        // `event_bus.rs::publish_frame` for what a hand-built one cost.
+        serde_json::to_string(&aleph_protocol::JsonRpcRequest::notification(
+            "event",
+            Some(event_obj),
+        ))
+        .unwrap_or_else(|_| String::new())
     } else if rewritten {
         event_obj.to_string()
     } else {
@@ -509,7 +564,7 @@ fn event_wire_form(
 /// when the connection registered no filter at all, and `event_admits` short-
 /// circuits on `SessionIdentity::Global` *before* it reads `caller_user`. A bare
 /// remote WebSocket that sent nothing therefore received every `Global` frame —
-/// including `pty.output`, whose RPC face has been in `ADMIN_PREFIXES` all along.
+/// including `pty.screen`, whose RPC face has been in `ADMIN_PREFIXES` all along.
 ///
 /// So: **an authorization predicate belongs on every direction a connection
 /// carries data, not on the one where the caller asks a question.** The event
@@ -524,8 +579,14 @@ fn event_wire_form(
 /// correctly-stamped `"member"` being refused every method and then
 /// flood-guard-kicked as an abuser stays green under any test that scopes
 /// task-locals below the wall.
+///
+/// A third consumer reads it with `method: ""`:
+/// `metrics_endpoint::count_authenticated`. "Does this connection hold
+/// authority" must have ONE derivation in the gateway, so the gauge moves when
+/// `restamp_live_connections` demotes someone, exactly as the two delivery
+/// planes do.
 #[must_use]
-fn wall_admits(role: Option<&str>, method: &str) -> bool {
+pub(super) fn wall_admits(role: Option<&str>, method: &str) -> bool {
     matches!(role, Some("operator" | "member")) || method == "connect"
 }
 
@@ -643,7 +704,10 @@ async fn handle_connection(
     // Initialize connection state
     {
         let mut conns = ctx.connections.write().await;
-        conns.insert(conn_id.clone(), ConnectionState::new(ctx.client_ip));
+        conns.insert(
+            conn_id.clone(),
+            ConnectionState::new(ctx.client_ip, ctx.client_is_local),
+        );
     }
 
     // Transport keep-alive: periodic Ping + inbound idle watchdog.
@@ -848,7 +912,7 @@ async fn handle_connection(
                                     // storm only exhausts the offending origin's
                                     // own window, which recovers as the window
                                     // slides.
-                                    if !ctx.client_ip.is_loopback() {
+                                    if !ctx.client_is_local {
                                     let rl_identity = ctx.client_ip.to_string();
                                     let rl_scope_raw = scope_for_method(&req.method);
                                     let rl_scope = if matches!(rl_scope_raw, RateLimitScope::Auth) {
@@ -900,7 +964,7 @@ async fn handle_connection(
                                     }
                                     .or_else(|| {
                                         Some(
-                                            if ctx.client_ip.is_loopback() {
+                                            if ctx.client_is_local {
                                                 "operator"
                                             } else {
                                                 "guest"
@@ -920,8 +984,7 @@ async fn handle_connection(
                                         conns.get(&conn_id).and_then(|s| s.caller_user.clone())
                                     }
                                     .or_else(|| {
-                                        ctx.client_ip
-                                            .is_loopback()
+                                        ctx.client_is_local
                                             .then(|| crate::gateway::security::store::OWNER_USER_ID.to_string())
                                     });
 
@@ -1086,10 +1149,10 @@ async fn handle_connection(
                                         }
 
                                         // Helper closure: standard lane dispatch (no idempotency)
-                                        let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass, caller_role: Option<String>, caller_user: Option<String>, caller_is_loopback: bool| async move {
+                                        let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass, caller_role: Option<String>, caller_user: Option<String>, caller_is_loopback: bool, caller_conn_id: Option<String>| async move {
                                             let lane_result = lm.acquire(&method, class).await;
                                             match lane_result {
-                                                Ok(_permit) => dispatch_with_caller_context(&text, &mc, caller_role, caller_user, caller_is_loopback).await,
+                                                Ok(_permit) => dispatch_with_caller_context(&text, &mc, caller_role, caller_user, caller_is_loopback, caller_conn_id).await,
                                                 Err(_) => serde_json::to_string(&JsonRpcResponse::error(
                                                     req_id,
                                                     INTERNAL_ERROR,
@@ -1136,7 +1199,7 @@ async fn handle_connection(
                                                         let lane_result = ctx.lane_manager.acquire(&req.method, ctx.channel_class).await;
                                                         match lane_result {
                                                             Ok(_permit) => {
-                                                                let resp = dispatch_with_caller_context(&text, &ctx.middleware_chain, caller_role.clone(), caller_user.clone(), ctx.client_ip.is_loopback()).await;
+                                                                let resp = dispatch_with_caller_context(&text, &ctx.middleware_chain, caller_role.clone(), caller_user.clone(), ctx.client_is_local, Some(conn_id.clone())).await;
                                                                 if let Ok(parsed) = serde_json::from_str::<JsonRpcResponse>(&resp) {
                                                                     if parsed.is_success() {
                                                                         if let Some(result) = parsed.result {
@@ -1165,11 +1228,11 @@ async fn handle_connection(
                                                 }
                                             } else {
                                                 // Query lane — skip idempotency
-                                                do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), caller_user.clone(), ctx.client_ip.is_loopback()).await
+                                                do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), caller_user.clone(), ctx.client_is_local, Some(conn_id.clone())).await
                                             }
                                         } else {
                                             // No idempotency key — standard lane dispatch
-                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), caller_user.clone(), ctx.client_ip.is_loopback()).await
+                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), caller_user.clone(), ctx.client_is_local, Some(conn_id.clone())).await
                                         };
                                         // --- End idempotency + lane block ---
 
@@ -1205,7 +1268,7 @@ async fn handle_connection(
 
                                                     let auth_outcome = if let Some(mgr) = ctx.device_token_mgr.as_ref() {
                                                         crate::gateway::handlers::connect::resolve_connect_auth(
-                                                            ctx.client_ip.is_loopback(),
+                                                            ctx.client_is_local,
                                                             presented_token,
                                                             device_token,
                                                             bootstrap_ticket,
@@ -1222,7 +1285,7 @@ async fn handle_connection(
                                                         // Device-token manager not wired: fall back to
                                                         // the legacy shared-token-only behavior.
                                                         let authorized = crate::gateway::handlers::connect::connect_authorized(
-                                                            ctx.client_ip.is_loopback(),
+                                                            ctx.client_is_local,
                                                             presented_token,
                                                             |t| {
                                                                 crate::gateway::security::SharedTokenManager::global()
@@ -1271,7 +1334,7 @@ async fn handle_connection(
                                                     // zero-config operator and never audited.
                                                     if crate::gateway::handlers::connect::should_audit_connect_failure(
                                                         authorized,
-                                                        ctx.client_ip.is_loopback(),
+                                                        ctx.client_is_local,
                                                     ) {
                                                         if let Some(log) = ctx.audit_log.as_ref() {
                                                             log.log(crate::security::audit::AuditEntry::auth_failure(
@@ -1290,7 +1353,7 @@ async fn handle_connection(
                                                     // in the response overlay below.
                                                     let (resolved_user, resolved_role) = resolve_stamped_identity(
                                                         authorized,
-                                                        ctx.client_ip.is_loopback(),
+                                                        ctx.client_is_local,
                                                         authed_device_id.as_deref(),
                                                         ctx.security_store.as_deref(),
                                                     );
@@ -1324,7 +1387,7 @@ async fn handle_connection(
                                                                 .and_then(|p| p.get("channel_kind"))
                                                                 .and_then(|v| v.as_str());
                                                             let kind = match crate::gateway::surface::SurfaceKind::from_opt_str(declared) {
-                                                                crate::gateway::surface::SurfaceKind::Unknown if ctx.client_ip.is_loopback() => {
+                                                                crate::gateway::surface::SurfaceKind::Unknown if ctx.client_is_local => {
                                                                     crate::gateway::surface::SurfaceKind::Desktop
                                                                 }
                                                                 other => other,
@@ -1607,7 +1670,7 @@ async fn handle_connection(
                         // Token rotation kick: close remote (token-authorized)
                         // sessions so they re-authenticate; never forward this
                         // frame to clients verbatim, and never close loopback.
-                        if rotated_should_close_remote(&event_json, ctx.client_ip.is_loopback()) {
+                        if rotated_should_close_remote(&event_json, ctx.client_is_local) {
                             info!("token rotated — closing remote session {}", conn_id);
                             let _ = write
                                 .send(WsMessage::Close(Some(CloseFrame {
@@ -1916,6 +1979,28 @@ async fn handle_connection(
     // fleet feed instead of polling `environments.list`. Capture identity BEFORE
     // deregister (which removes it); the `if deregister` guard skips emission for
     // a stale old connection whose node_id was already reclaimed by a reconnect.
+    //
+    // ⚠️ KNOWN GAP (2026-08-29) — that guard is false in a SECOND case nobody
+    // wrote down, and this publish is `node.disconnected`'s only producer
+    // repo-wide. `NodeRegistry::forget` (the operator-deregister path, reached
+    // from `cluster.deregister` and the `node_manage` tool) empties BOTH
+    // `nodes_by_id` and `nodes_by_conn` before it calls `close_connection()`,
+    // so by the time this cleanup runs `node_identity_by_conn` is already
+    // `None` and `deregister` already returns false — i.e. an explicit
+    // deregister emits nothing and skips the `touch_device` last-seen stamp.
+    // A second operator's Panel keeps rendering the node "online" until a full
+    // page reload, after which it vanishes entirely, so the transition is
+    // never observable as an event. `registry.rs`'s own test comments that
+    // "a stale conn cleanup after forget is a harmless no-op" — harmless only
+    // if you do not know the event lives inside the guard.
+    //
+    // This arm is NOT the place to fix it: after `forget` there is nothing
+    // here left to read. The publish belongs in `cluster::deregister_node`
+    // (already the single shared source for the RPC and tool faces), fired
+    // when it evicts a live session, with `forget` returning the evicted
+    // session's `device_name` so no second lookup is needed. Leave this arm
+    // as-is for the wedge/ordinary-drop path — its guard then correctly
+    // suppresses the duplicate.
     let node_ident = ctx.node_registry.node_identity_by_conn(&conn_id);
     if ctx.node_registry.deregister(&conn_id) {
         if let Some((node_id, name)) = node_ident {
@@ -1949,6 +2034,13 @@ async fn handle_connection(
     // Remove subscriptions for this connection
     ctx.subscription_manager.remove_connection(&conn_id).await;
 
+    // Release any PTY viewport constraints this connection held, so a
+    // crashed/closed tab does not permanently pin a shared terminal's size
+    // (`caller_identity::CALLER_CONN_ID` / `PtyManager::note_viewport`). This
+    // is the sixth per-connection subsystem cleaned up here, alongside conns
+    // / reverse-RPC / node registry / presence / subscriptions above.
+    crate::gateway::pty::manager().release_conn(&conn_id);
+
     info!("Connection closed: {}", conn_id);
     Ok(())
 }
@@ -1958,16 +2050,18 @@ async fn handle_connection(
 /// truth shared by both dispatch stations (`do_lane_dispatch`'s closure and
 /// the idempotency `Proceed` arm) so the two call sites cannot drift apart —
 /// see `src/gateway/CLAUDE.md`'s note that `CALLER_ROLE`/`CALLER_USER`/
-/// `CALLER_IS_LOOPBACK` must be scoped around `process_request` at both
-/// sites. `scope::with_scope` is the outermost (4th) layer: a `caller_user`
-/// seeds a personal-scope attribution, observable via `scope::current_scope`
-/// for the lifetime of this dispatch (spec P1 §5).
+/// `CALLER_IS_LOOPBACK`/`CALLER_CONN_ID` must be scoped around
+/// `process_request` at both sites. `scope::with_scope` is the outermost
+/// (4th) layer: a `caller_user` seeds a personal-scope attribution,
+/// observable via `scope::current_scope` for the lifetime of this dispatch
+/// (spec P1 §5).
 async fn dispatch_with_caller_context(
     text: &str,
     mc: &MiddlewareChain,
     caller_role: Option<String>,
     caller_user: Option<String>,
     caller_is_loopback: bool,
+    caller_conn_id: Option<String>,
 ) -> String {
     crate::scope::with_scope(
         caller_user
@@ -1977,8 +2071,11 @@ async fn dispatch_with_caller_context(
             caller_user,
             crate::gateway::caller_identity::CALLER_ROLE.scope(
                 caller_role,
-                crate::gateway::caller_identity::CALLER_IS_LOOPBACK
-                    .scope(caller_is_loopback, process_request(text, mc)),
+                crate::gateway::caller_identity::CALLER_IS_LOOPBACK.scope(
+                    caller_is_loopback,
+                    crate::gateway::caller_identity::CALLER_CONN_ID
+                        .scope(caller_conn_id, process_request(text, mc)),
+                ),
             ),
         ),
     )
@@ -2399,7 +2496,7 @@ mod tests {
         assert!(guard.can_receive("surface.approval", &scope));
         assert!(!guard.can_receive("config.changed", &scope));
         assert!(!guard.can_receive("pairing.requested", &scope));
-        assert!(!guard.can_receive("pty.output", &scope));
+        assert!(!guard.can_receive("pty.screen", &scope));
         // `approval.requested` deliberately passes THIS table since 2026-08-08
         // — a member must be able to answer the gate blocking their own run.
         // The per-session decision is made in `event_visibility`, pinned there.
@@ -2508,8 +2605,9 @@ mod tests {
         // `ConnectionState::new` stamps `caller_role: "guest"`.
         assert!(
             !wall_admits(Some("guest"), ""),
-            "an unauthorized socket must receive no event frame; `pty.output` \
-             is Global-classified and carries the operator's raw shell bytes"
+            "an unauthorized socket must receive no event frame; `pty.screen` \
+             is Global-classified and carries the operator's live terminal \
+             content"
         );
         // …and the same is true for a role word nobody stamps.
         assert!(!wall_admits(Some("bogus"), ""));
@@ -2811,20 +2909,41 @@ mod tests {
 
     #[test]
     fn insecure_remote_gate_truth_table() {
-        use std::net::IpAddr;
-        let lo: IpAddr = "127.0.0.1".parse().unwrap();
-        let remote: IpAddr = "203.0.113.9".parse().unwrap();
+        const LOCAL: bool = true;
+        const REMOTE: bool = false;
 
-        // Loopback is always allowed, secure or not, regardless of the flag.
-        assert!(!super::refuse_insecure_remote(lo, false, false));
-        assert!(!super::refuse_insecure_remote(lo, false, true));
+        // A genuinely local client is always allowed, secure or not.
+        assert!(!super::refuse_insecure_remote(LOCAL, false, false));
+        assert!(!super::refuse_insecure_remote(LOCAL, false, true));
 
         // Remote + insecure + not allowed ⇒ refuse.
-        assert!(super::refuse_insecure_remote(remote, false, false));
+        assert!(super::refuse_insecure_remote(REMOTE, false, false));
         // Remote + secure ⇒ allow.
-        assert!(!super::refuse_insecure_remote(remote, true, false));
+        assert!(!super::refuse_insecure_remote(REMOTE, true, false));
         // Remote + insecure + explicitly allowed ⇒ allow.
-        assert!(!super::refuse_insecure_remote(remote, false, true));
+        assert!(!super::refuse_insecure_remote(REMOTE, false, true));
+    }
+
+    /// The gate must key on the trusted-proxy-aware `local` bit, not on
+    /// `ip.is_loopback()`. A same-host proxy that forwards without
+    /// `X-Forwarded-For` resolves `ip` back to its own loopback address; if
+    /// the gate read that, an internet client on a plaintext leg would be
+    /// admitted as "loopback" and then go on to collect every other loopback
+    /// privilege in this file.
+    #[test]
+    fn the_insecure_transport_gate_reads_the_local_bit_not_the_resolved_ip() {
+        use crate::gateway::trusted_proxy::resolve_client;
+        use axum::http::HeaderMap;
+        use std::net::IpAddr;
+
+        let proxy: IpAddr = "127.0.0.1".parse().unwrap();
+        let resolved = resolve_client(proxy, &HeaderMap::new(), true, &[proxy]);
+        assert!(
+            resolved.ip.is_loopback(),
+            "precondition: with no XFF the resolved IP really is loopback — \
+             that is what made reading it wrong"
+        );
+        assert!(super::refuse_insecure_remote(resolved.local, false, false));
     }
 
     // ── P1 scope attribution around dispatch (dispatch_with_caller_context) ──
@@ -2861,6 +2980,7 @@ mod tests {
             Some("member".to_string()),
             Some("u-alice".to_string()),
             false,
+            None,
         )
         .await;
         assert!(
@@ -2888,10 +3008,48 @@ mod tests {
         let text = r#"{"jsonrpc":"2.0","id":1,"method":"probe.scope","params":{}}"#;
 
         let resp =
-            dispatch_with_caller_context(text, &mc, Some("operator".to_string()), None, true).await;
+            dispatch_with_caller_context(text, &mc, Some("operator".to_string()), None, true, None)
+                .await;
         assert!(
             resp.contains("\"owner_user_id\":null"),
             "no caller_user must mean no scope attribution: {resp}"
+        );
+    }
+
+    /// `pty.resize` refuses to guess a connection identity — it reads
+    /// `CALLER_CONN_ID`, which only `dispatch_with_caller_context` scopes.
+    /// This proves that scope actually carries the real connection id from
+    /// the dispatch boundary down into `process_request`'s handler dispatch,
+    /// the same way `both_dispatch_stations_seed_scope` proves it for
+    /// `CALLER_USER`.
+    #[tokio::test]
+    async fn dispatch_with_caller_context_seeds_conn_id() {
+        use crate::gateway::handlers::HandlerRegistry;
+        use crate::gateway::rate_limiter::RateLimitConfig;
+
+        let mut registry = HandlerRegistry::new();
+        registry.register("probe.conn_id", |req| async move {
+            let conn_id = crate::gateway::caller_identity::current_caller_conn_id();
+            JsonRpcResponse::success(req.id, serde_json::json!({ "conn_id": conn_id }))
+        });
+        let mc = MiddlewareChain::new(
+            Arc::new(registry),
+            Arc::new(RateLimiter::new(RateLimitConfig::default())),
+        );
+        let text = r#"{"jsonrpc":"2.0","id":1,"method":"probe.conn_id","params":{}}"#;
+
+        let resp = dispatch_with_caller_context(
+            text,
+            &mc,
+            Some("operator".to_string()),
+            None,
+            true,
+            Some("127.0.0.1:9999".to_string()),
+        )
+        .await;
+        assert!(
+            resp.contains("\"conn_id\":\"127.0.0.1:9999\""),
+            "conn id must be observable inside process_request's dispatch: {resp}"
         );
     }
 

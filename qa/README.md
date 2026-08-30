@@ -26,9 +26,44 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/browser_managed/run.sh existing # the OTHER driver (Chrome DevTools MCP)
 ./qa/browser_managed/run.sh exec-offload # browser_exec's spill, inside a real turn
 
+./qa/file_search/run.sh floor   # deny_read_globs from a CONFIG FILE binds grep/find,
+                                # and no_ignore=true does not lift it
+./qa/file_search/run.sh page    # the window reports the whole; pages are disjoint
+./qa/file_search/run.sh reach   # a real turn's grep output reaches the model
+./qa/file_search/run.sh steer   # shell `grep -r` is steered to the builtin; a
+                                # bounded `grep` and `rg` are not. Every arm
+                                # proves it searched before it claims it was
+                                # not steered — `rg` is absent on some machines
+                                # and the driver reports SKIP, not PASS.
+
 ./qa/announce/run.sh outlive     # a background bash job outlives its run -> a fresh run is driven
 ./qa/announce/run.sh collected   # the model collected it itself -> no turn is spent
 ./qa/announce/run.sh midrun      # the run is still alive -> absorbed as steering, ONE run
+
+./qa/run_halt/run.sh crash    # a failed run's receipt: `failed`, and the work it did
+./qa/run_halt/run.sh cap      # a capped run: the umbrella token AND the cap in `terminate_detail`
+./qa/run_halt/run.sh receipt  # the same crash through real `aleph ask`, once per LC_ALL
+./qa/run_halt/run.sh panel    # boot + hold; the halt badge is a LIVE projection, so the
+                              # browser has to be attached BEFORE the run ends
+                              # ⚠️ `crash` reports 4 failures today — a real defect it
+                              # found (one terminal frame per retry attempt, last one
+                              # zeroed). See the header of its run.sh.
+./qa/session_order/run.sh        # the transcript's order and `session.truncate`, on BOTH
+                                 # backends. Drives one conversation into a file-backed
+                                 # server and a sqlite-backed one (separate scratch
+                                 # ALEPH_HOMEs), stops each, rewrites its stamps
+                                 # DESCENDING — the shape an import or a reconciler
+                                 # produces, and the only shape that tells "recording
+                                 # order" and "stamp order" apart — restarts, and asserts
+                                 # the served order did not move, that `session.truncate`
+                                 # reached the database (it answered INTERNAL_ERROR to
+                                 # every call ever made on sqlite: two transactions, the
+                                 # first shadowed rather than committed), that it kept the
+                                 # HEAD, and that both backends destroyed the same rows.
+                                 # Unit tests build both stores in one process and cannot
+                                 # see the config key that picks one — which is how
+                                 # `default_session_store_backend()` came to return "file"
+                                 # under a doc saying `"sqlite" (default)`.
 
 ./qa/leftovers/run.sh            # converged tool DESCRIPTIONs + relocated-ALEPH_HOME hooks + [agents.defaults] roots
 

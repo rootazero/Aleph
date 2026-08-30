@@ -15,7 +15,9 @@ use leptos::prelude::*;
 #[component]
 #[must_use]
 pub fn TokenWall() -> impl IntoView {
-    let state = expect_context::<DashboardState>();
+    let Some(state) = use_context::<DashboardState>() else {
+        return ().into_any();
+    };
     let i18n = use_i18n();
     let token = RwSignal::new(String::new());
 
@@ -65,5 +67,5 @@ pub fn TokenWall() -> impl IntoView {
                 </div>
             </div>
         </Show>
-    }
+    }.into_any()
 }

@@ -389,6 +389,16 @@ pub fn hoist_inline_images(value: &mut serde_json::Value) -> Vec<ToolImage> {
 /// pathologically deep JSON (e.g. a page that smuggled a nested document into
 /// an `evaluate` result).
 const MAX_HOIST_DEPTH: usize = 16;
+/// Minimum head length kept by [`truncate_with_budget`] even when the
+/// computed char budget rounds to 0. Without this floor, a budget that is
+/// fully consumed by the footer (or any degenerate input) collapses the
+/// body to a header that lies about how much was actually dropped — the
+/// caller sees a `[output truncated, ~N tokens omitted]` marker on text
+/// that was preserved verbatim. One MAX_LINE_CHARS-equivalent headroom is
+/// enough to keep the model from drawing the wrong conclusion; the body
+/// is still bounded by the real budget when the budget is non-degenerate.
+const MIN_BODY_HEAD_CHARS: usize =
+    crate::tool_output::distill::MIN_BODY_HEAD_CHARS;
 
 /// Walk the whole result tree, applying both extractors at every object node.
 ///
@@ -625,6 +635,10 @@ pub fn truncate_with_budget(text: &str, budget_tokens: usize) -> String {
     if target_chars >= total_chars {
         return text.to_string();
     }
+    // Reserve a minimum head so a degenerate budget (footer alone eats the
+    // budget, or `chars_for_token_budget` rounds to 0) does not silently
+    // collapse the body to a header that lies about what was kept.
+    let target_chars = target_chars.max(MIN_BODY_HEAD_CHARS);
     let head_chars = target_chars.saturating_mul(7) / 10;
     let tail_chars = target_chars.saturating_sub(head_chars);
 

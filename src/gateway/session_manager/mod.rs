@@ -385,6 +385,14 @@ impl SessionManager {
             // `gateway::visibility::effective_owner` (adoption-by-absence).
             ("sessions", "owner_user_id", "TEXT"),
             ("sessions", "scope_id", "TEXT"),
+            // `SessionMetadata.last_message_preview` had a writer only in the
+            // FILE backend (`FileSessionStore::append_message`), no column
+            // here, and two readers that surface it regardless of backend
+            // (`sessions.preview` and the `sessions` tool row). So a
+            // `session_store_backend = "sqlite"` install rendered a null
+            // preview for every conversation forever — indistinguishable from
+            // "this conversation has no messages yet".
+            ("sessions", "last_message_preview", "TEXT"),
             ("messages", "input_tokens", "INTEGER DEFAULT 0"),
             ("messages", "output_tokens", "INTEGER DEFAULT 0"),
             ("messages", "tool_call_id", "TEXT"),

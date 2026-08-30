@@ -28,8 +28,11 @@ pub struct GeneralConfig {
     /// these providers are tried in order. Names must match keys in [providers].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fallback_providers: Vec<String>,
-    /// Session store backend: "file" (the default -- see
-    /// `default_session_store_backend` directly below) or "sqlite".
+    /// Session store backend: `"file"` (default, see
+    /// [`default_session_store_backend`]) or `"sqlite"`. The doc used to name
+    /// `"sqlite"` as the default while the function two lines down returned
+    /// `"file"`, which made every reasoning about an accidental reset of this
+    /// key read as a no-op.
     #[serde(default = "default_session_store_backend")]
     pub session_store_backend: String,
 }

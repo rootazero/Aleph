@@ -134,9 +134,16 @@ where
             // can reconcile them.
             let declared = super::BusyInputMode::from_metadata(&request.metadata);
             let busy_mode = match sibling.as_ref() {
-                Some(s) => {
-                    declared.for_shared_room(&request.session_key, &request.metadata, &s.metadata)
-                }
+                // The room question has one answer in the process
+                // (`run_loop::request_is_in_a_room`), which consults the
+                // gateway's own claim rather than the producer's raw stamp —
+                // reading the raw stamp here made the rule a no-op on every
+                // producer that needs `request_scope`'s correction.
+                Some(s) => declared.for_shared_room(
+                    super::run_loop::request_is_in_a_room(request),
+                    &request.metadata,
+                    &s.metadata,
+                ),
                 None => declared,
             };
             match busy_mode {
@@ -249,6 +256,31 @@ where
                         None => false,
                     };
                     if injected {
+                        // An inline fold IS the turn: `execute()` returns
+                        // `Ok(())` on `HandledInline`, so `run_loop::inner` —
+                        // the only other place these resolvers run — is never
+                        // reached. Each of them persists a request-carried pick
+                        // onto the session as a side effect (stamp-on-carry), so
+                        // skipping them drops a `{mode|thinking|memory}` choice
+                        // that rode this message while the request still reports
+                        // success, and the NEXT ordinary turn resolves from the
+                        // session's stale stamp. Nothing errors; the knob simply
+                        // appears not to stick. The values are unused here — a
+                        // fold builds no prompt and no tool surface.
+                        //
+                        // The tier is not merely stamped: a differing tier
+                        // already deferred the whole request in
+                        // `try_inject_steering`, because folding it would run
+                        // this text under the sibling's permissions.
+                        //
+                        // Same contract, same reasoning, and the same census
+                        // (`slash_command.rs::every_stamp_on_carry_resolver_runs_on_the_fast_path`)
+                        // as the slash-command fast path — the other surface that
+                        // completes a turn without reaching the loop.
+                        let _ = self.resolve_turn_permissions(request, agent.as_ref()).await;
+                        let _ = self.resolve_turn_mode(request).await;
+                        let _ = self.resolve_turn_think_level(request).await;
+                        let _ = self.resolve_turn_memory_mode(request).await;
                         return Ok(GateOutcome::HandledInline);
                     }
                     return Err(ExecutionError::AgentBusy(agent.id().to_string()));

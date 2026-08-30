@@ -20,6 +20,7 @@ use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
 use crate::sync_primitives::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use tokio_util::sync::CancellationToken;
 
 /// Strategy used during compaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +36,39 @@ pub enum CompactStrategy {
     CacheReuse,
     /// Compaction was skipped entirely.
     Skipped { reason: String },
+}
+
+/// What one bounded summarizer round-trip produced.
+///
+/// Three states, not two, because `Cancelled` must not be handled like
+/// `Failed`: the failure arms fall through to deterministic truncation, which
+/// splices a degraded summary AND caches it. Doing that for a turn the user
+/// stopped is how a cancellation leaves a permanent mark on the session's
+/// compaction state.
+enum SummarizerOutcome {
+    Summary(String),
+    Failed,
+    Cancelled,
+}
+
+impl From<Option<String>> for SummarizerOutcome {
+    fn from(v: Option<String>) -> Self {
+        match v {
+            Some(s) => Self::Summary(s),
+            None => Self::Failed,
+        }
+    }
+}
+
+/// The result a cancelled compaction reports: nothing moved, nothing cached.
+fn cancelled_result(tokens_before: usize) -> CompactResult {
+    CompactResult {
+        tokens_before,
+        tokens_after: tokens_before,
+        strategy_used: CompactStrategy::Skipped {
+            reason: "cancelled".to_string(),
+        },
+    }
 }
 
 /// Result of a compaction attempt.
@@ -222,6 +256,9 @@ pub struct ContextCompactor {
     /// hash-validated against the rebuilt history each turn, so a stale
     /// carry-over simply misses and falls through to a full recompaction.
     carryover_key: Option<String>,
+    /// This run's cancellation token, so a summarizer round-trip nobody will
+    /// read can be abandoned (see [`Self::with_cancel`]).
+    cancel: Option<CancellationToken>,
 }
 
 impl ContextCompactor {
@@ -236,6 +273,56 @@ impl ContextCompactor {
             cache: Mutex::new(None),
             monitor_scope: None,
             carryover_key: None,
+            cancel: None,
+        }
+    }
+
+    /// Race every summarizer round-trip against this run's cancellation token.
+    ///
+    /// The harness already threads `parent_cancel` into every LLM call it makes
+    /// itself — `race_llm_call`, `stream_llm_call`, `RescueHost::call_llm`
+    /// (whose contract is literally "raced against cancellation") — but the
+    /// compaction step is awaited directly, bounded only by
+    /// `CompactorConfig::timeout` (15 s by default). So pressing stop during
+    /// step 2c burned up to fifteen seconds on a summary nobody would read, and
+    /// the reactive rescue path can spend the same fifteen again.
+    ///
+    /// Abandoning the call is the smaller half. The larger one is that a
+    /// compaction which runs to completion **commits**: it splices the summary
+    /// and writes it into the fingerprint cache, which is seeded into the
+    /// process-wide cross-run carry-over. A cancelled turn therefore left a
+    /// permanent mark on that session's compaction state. Cancellation now
+    /// returns `Skipped { reason: "cancelled" }` before either happens.
+    ///
+    /// Taken as a builder rather than a per-call argument because the compactor
+    /// is constructed **once per run** (`harness_bridge::runner_impl`, beside
+    /// `with_cache_carryover`), so the token's lifetime is exactly the lifetime
+    /// of the work it bounds — the pairing that a shared, longer-lived
+    /// compactor would get wrong.
+    #[must_use]
+    pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
+    /// One summarizer round-trip, bounded by both the configured timeout and
+    /// this run's cancellation token.
+    ///
+    /// The three call sites (window, extend-merge, slice) all go through here
+    /// so the cancellation contract cannot hold on two of them and not the
+    /// third — the shape that produced this gap in the first place.
+    async fn summarize_bounded(&self, stage: &'static str, prompt: &str) -> SummarizerOutcome {
+        let call = async {
+            let llm_result = tokio::time::timeout(self.config.timeout, self.call_llm(prompt)).await;
+            accept_summary(stage, self.config.timeout, llm_result)
+        };
+        let Some(cancel) = self.cancel.as_ref() else {
+            return SummarizerOutcome::from(call.await);
+        };
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => SummarizerOutcome::Cancelled,
+            out = call => SummarizerOutcome::from(out),
         }
     }
 
@@ -563,8 +650,13 @@ impl ContextCompactor {
         // entire window into an empty "[Context Summary]" — permanent context
         // loss reported as a successful LlmSummary. Stripping first routes the
         // degenerate case to the deterministic-truncation fallback below.
-        let llm_result = tokio::time::timeout(self.config.timeout, self.call_llm(&prompt)).await;
-        let summary = accept_summary("window", self.config.timeout, llm_result);
+        let summary = match self.summarize_bounded("window", &prompt).await {
+            SummarizerOutcome::Summary(s) => Some(s),
+            SummarizerOutcome::Failed => None,
+            // Return BEFORE the splice and before `store_cache`: a stopped turn
+            // must leave this session's compaction state exactly as it found it.
+            SummarizerOutcome::Cancelled => return Ok(cancelled_result(tokens_before)),
+        };
 
         // The user's own turns come back verbatim above whichever summary the
         // window collapses into (B13) — computed once here because both arms
@@ -615,7 +707,29 @@ impl ContextCompactor {
                     let summary_msg = UnifiedMessage::user(summary_text.clone());
 
                     splice_preserved(messages, window_start..window_end, preserved, summary_msg);
-                    self.store_cache(window_start, window_end, window_hash, summary_text);
+                    // Spliced for THIS turn, deliberately not cached.
+                    //
+                    // `cache`'s own doc calls itself "the fingerprint cache of
+                    // the last SUCCESSFUL compaction", and `store_cache` writes
+                    // through to `COMPACTION_CARRYOVER`, a process-wide slot
+                    // that `with_cache_carryover` seeds into every later run on
+                    // this session key. Caching a truncation therefore turned
+                    // one transient 502 (or one 15 s timeout) into a permanent
+                    // verdict: the harness rebuilds `messages` from an
+                    // append-only log, so `hash_window` matches forever, and
+                    // every later turn takes `reapply_cached` and re-splices
+                    // the degraded text without ever retrying the summarizer —
+                    // silently, since `CacheReuse` is excluded from the
+                    // degradation warning. The original turns are still in the
+                    // session log, so what was discarded was recoverable.
+                    //
+                    // This is the same permanence `SummarizerOutcome::Cancelled`
+                    // was split out to avoid; that split fixed the stopped-turn
+                    // arm and left the failed-turn arm, which latches on its
+                    // own. Not caching costs one summarizer attempt per
+                    // high-pressure turn while the summarizer is down — a call
+                    // that failed, against context that cannot be recovered any
+                    // other way — and self-heals the moment it comes back.
 
                     Ok(CompactResult {
                         tokens_before,
@@ -853,8 +967,13 @@ impl ContextCompactor {
             None => build_window_summary_prompt(&transcript, token_budget, focus.as_deref()),
         };
 
-        let llm_result = tokio::time::timeout(self.config.timeout, self.call_llm(&prompt)).await;
-        let merged = accept_summary("merge", self.config.timeout, llm_result);
+        let merged = match self.summarize_bounded("merge", &prompt).await {
+            SummarizerOutcome::Summary(s) => Some(s),
+            SummarizerOutcome::Failed => None,
+            // Same contract as the window path: the extend-merge arm also
+            // splices and caches, so a cancelled turn must commit neither.
+            SummarizerOutcome::Cancelled => return Ok(cancelled_result(tokens_before)),
+        };
         let (body, strategy) = match merged {
             Some(s) => (s, CompactStrategy::LlmSummary),
             None if self.config.fallback_to_truncation => {
@@ -899,7 +1018,17 @@ impl ContextCompactor {
             merged_preserved,
             UnifiedMessage::user(summary_text.clone()),
         );
-        self.store_cache(c.start, cut_end, extended_hash, summary_text);
+        // Advance the cover only on a real merge — same reason the window path
+        // does not cache its truncation. The sibling arm above ("merge failed
+        // and truncation is disabled") already states the rule: *the cache
+        // stays on its old, still-valid cover, so the next turn retries the
+        // merge*. The truncation arm is that same failure wearing a fallback,
+        // so caching under `extended_hash` would replay the gutted gap on every
+        // later rebuild and — via `store_cache`'s write-through to the
+        // process-global carry-over — on every later run too.
+        if matches!(strategy, CompactStrategy::LlmSummary) {
+            self.store_cache(c.start, cut_end, extended_hash, summary_text);
+        }
 
         Ok(CompactResult {
             tokens_before,
@@ -943,13 +1072,22 @@ impl ContextCompactor {
             instructions,
         );
 
-        let llm_result = tokio::time::timeout(self.config.timeout, self.call_llm(&prompt)).await;
-
         // Strip before the emptiness check: an analysis-only response (no
         // <summary> block) strips to an empty string, which must fall back to
         // deterministic truncation rather than seed a child session with "".
-        let stripped = accept_summary("slice", self.config.timeout, llm_result);
-        Ok(stripped.unwrap_or_else(|| deterministic_truncation(messages)))
+        //
+        // A cancelled slice falls back to truncation rather than erroring: this
+        // function's two callers (the session-split child seed and manual
+        // `/compact`) must return *something* — an `Err` here would leave the
+        // split child with no seed at all. Truncation is deterministic and
+        // commits nothing to the cache, so the stopped turn still leaves no
+        // trace beyond the drain its caller was already performing.
+        Ok(match self.summarize_bounded("slice", &prompt).await {
+            SummarizerOutcome::Summary(s) => s,
+            SummarizerOutcome::Failed | SummarizerOutcome::Cancelled => {
+                deterministic_truncation(messages)
+            }
+        })
     }
 
     /// Side-channel LLM call for summarization. Routes to the cheap-tier
@@ -1082,6 +1220,7 @@ fn carried_artifacts(window: &[UnifiedMessage]) -> Vec<UnifiedMessage> {
     [
         super::plan_carry::plan_carry_message(window),
         super::file_carry::file_carry_message(window),
+        super::image_carry::image_carry_message(window),
     ]
     .into_iter()
     .flatten()
@@ -1289,6 +1428,49 @@ fn accept_summary(
 
 /// Deterministic truncation: keep only the first line of each message.
 pub(crate) fn deterministic_truncation(messages: &[UnifiedMessage]) -> String {
+    /// First line, then capped — because the first line is not a bound.
+    ///
+    /// "Keep one line" reduces nothing on the content type that dominates a
+    /// long agent context: [`UnifiedMessage::text_content`] renders a
+    /// `ContentBlock::Json` through serde_json's compact formatter, which
+    /// emits no newlines at all (interior ones are escaped), and every
+    /// `ToolResult` `build_prompt` constructs is exactly one such block. So
+    /// `lines().next()` returned an 8 KB payload verbatim and uncapped, while
+    /// deleting the assistant prose around it.
+    ///
+    /// [`cap_transcript_text`] is the same cap the summarizer's *input* path
+    /// already applies to every message ([`serialize_transcript`]); the two
+    /// paths disagreeing on whether a message has a size was the asymmetry.
+    ///
+    /// ## Where this runs — it is not only the summarizer-failed path
+    ///
+    /// An earlier version of this doc said the fallback "runs precisely when
+    /// the summarizer failed, i.e. when losing the prose costs most". That
+    /// sentence was true of the call site it was written next to and false of
+    /// the function. Four reachings, three distinct triggers:
+    ///
+    /// * **Summarizer failed or timed out** — `compact_inner`'s window arm and
+    ///   `reapply_cached`'s merge arm, both gated on `fallback_to_truncation`.
+    ///   This is the case the sentence described.
+    /// * **The turn was cancelled** — `summarize_slice` folds
+    ///   `SummarizerOutcome::Cancelled` into the same arm on purpose, because
+    ///   its two callers (the session-split child seed and manual `/compact`)
+    ///   must return *something*.
+    /// * **No summarizer provider is wired at all** — [`super::manual::compact_session`]
+    ///   calls this directly on its `None` arm. Nothing failed there: the
+    ///   truncation *is* the product of a user-typed `/compact`, not a
+    ///   degradation from a better answer that did not arrive.
+    ///
+    /// The cap is wanted in all three, but for different reasons, and only the
+    /// third is user-visible as itself. On that path the 2000-char ceiling is
+    /// what a `/compact` on a provider-less deployment actually returns — and
+    /// it is also what makes `manual`'s `tokens_after < tokens_before` refusal
+    /// (a summary no smaller than what it replaces is pure loss) reachable at
+    /// all on a span of long single-line turns.
+    fn head(text: &str) -> std::borrow::Cow<'_, str> {
+        cap_transcript_text(text.lines().next().unwrap_or(""))
+    }
+
     let mut lines = Vec::with_capacity(messages.len());
     for msg in messages {
         let role = match msg {
@@ -1296,14 +1478,12 @@ pub(crate) fn deterministic_truncation(messages: &[UnifiedMessage]) -> String {
             UnifiedMessage::Assistant { .. } => "assistant",
             UnifiedMessage::ToolResult { tool_name, .. } => {
                 let text = msg.text_content();
-                let first_line = text.lines().next().unwrap_or("");
-                lines.push(format!("tool_result({tool_name}): {first_line}"));
+                lines.push(format!("tool_result({tool_name}): {}", head(&text)));
                 continue;
             }
         };
         let text = msg.text_content();
-        let first_line = text.lines().next().unwrap_or("");
-        lines.push(format!("{role}: {first_line}"));
+        lines.push(format!("{role}: {}", head(&text)));
     }
     lines.join("\n")
 }
@@ -1331,6 +1511,122 @@ mod tests {
             }
         }
         msgs
+    }
+
+    /// The truncation fallback must bound a JSON tool result.
+    ///
+    /// The unit has to match the shape of the content: a `ContentBlock::Json`
+    /// renders through serde_json's compact formatter and contains no
+    /// newlines, so "keep the first line" kept the entire payload — on exactly
+    /// the message type that dominates a long agent context, and on exactly
+    /// the path taken when the summarizer has already failed.
+    ///
+    /// Written over a payload with NO newline at all, because a fixture whose
+    /// JSON happened to be pretty-printed would pass against the old code too.
+    #[test]
+    fn the_truncation_fallback_bounds_a_single_line_json_tool_result() {
+        let payload = serde_json::json!({ "body": "x".repeat(50_000) });
+        let rendered = payload.to_string();
+        assert!(
+            !rendered.contains('\n'),
+            "fixture must be single-line or it cannot exercise the bug"
+        );
+
+        let out = deterministic_truncation(&[UnifiedMessage::tool_result_json(
+            "call-1", "file_read", payload, false,
+        )]);
+
+        assert!(
+            out.chars().count() < TRANSCRIPT_MSG_MAX_CHARS + 200,
+            "fallback kept {} chars of a 50 KB single-line payload",
+            out.chars().count()
+        );
+        assert!(out.starts_with("tool_result(file_read): "));
+    }
+
+    /// A cancelled compaction must change nothing — not the messages, and not
+    /// the cache the next turn (and every later run) reads.
+    ///
+    /// The harness races every LLM call it makes itself against the run's
+    /// cancellation token; the compaction step was awaited directly, bounded
+    /// only by the 15 s summarizer timeout. Waiting that out is the visible
+    /// half ("stop sometimes takes ten seconds"). The invisible half is that
+    /// the compaction then *committed*: it spliced its summary and wrote it
+    /// into the fingerprint cache, which `with_cache_carryover` seeds into
+    /// every later run on that session key. So a stopped turn left a permanent
+    /// mark on a conversation's compaction state.
+    ///
+    /// Asserted on the two EFFECTS rather than on "the token was consulted": a
+    /// version that raced the token and then fell through to the truncation
+    /// fallback would consult it and still commit, which is most of the damage.
+    #[tokio::test]
+    async fn a_cancelled_compaction_neither_splices_nor_caches() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel();
+
+        let compactor = ContextCompactor::new(
+            Arc::new(MockProvider::new("Summary of earlier conversation.")),
+            CompactorConfig {
+                fresh_tail: 2,
+                ..Default::default()
+            },
+        )
+        .with_cancel(cancel);
+
+        let original = make_messages(12);
+        let mut messages = original.clone();
+        let result = compactor
+            .compact(&mut messages, 2, 0, None)
+            .await
+            .expect("a cancelled compaction reports, it does not error");
+
+        assert!(
+            matches!(&result.strategy_used, CompactStrategy::Skipped { reason } if reason == "cancelled"),
+            "a cancelled compaction must say so, not report a summary or a \
+             truncation: {:?}",
+            result.strategy_used
+        );
+        assert_eq!(
+            messages.len(),
+            original.len(),
+            "a cancelled compaction must not splice"
+        );
+        assert!(
+            messages
+                .iter()
+                .all(|m| !m.text_content().starts_with(SUMMARY_MARKER)),
+            "a cancelled compaction must not leave a summary behind"
+        );
+        assert!(
+            compactor
+                .cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_none(),
+            "a cancelled compaction must not write the fingerprint cache — that \
+             entry is seeded into every later run on this session key"
+        );
+    }
+
+    /// The same call with no token wired is byte-identical to before: the
+    /// subagent spawner and every test construct a compactor without one, and
+    /// `None` must mean "no cancellation", never "cancelled".
+    #[tokio::test]
+    async fn a_compactor_without_a_token_still_compacts() {
+        let compactor = ContextCompactor::new(
+            Arc::new(MockProvider::new("Summary of earlier conversation.")),
+            CompactorConfig {
+                fresh_tail: 2,
+                ..Default::default()
+            },
+        );
+        let mut messages = make_messages(12);
+        let result = compactor.compact(&mut messages, 2, 0, None).await.unwrap();
+        assert!(
+            matches!(result.strategy_used, CompactStrategy::LlmSummary),
+            "an unwired compactor must behave exactly as it did before: {:?}",
+            result.strategy_used
+        );
     }
 
     /// The single `[Context Summary]` a compaction inserts. Since B13 the
@@ -1738,6 +2034,65 @@ mod tests {
         assert!(summary_text(&messages).starts_with("[Context Summary]"));
     }
 
+    /// A truncation fallback serves this turn and commits to nothing.
+    ///
+    /// `store_cache` writes through to `COMPACTION_CARRYOVER`, a process-wide
+    /// per-session slot that seeds every later run, and the harness rebuilds
+    /// `messages` from an append-only log — so a cached truncation matches its
+    /// own fingerprint forever and no later turn ever retries the summarizer.
+    /// One transient 502 therefore became this conversation's permanent
+    /// compaction state, silently: `CacheReuse` is excluded from the
+    /// degradation warning. `SummarizerOutcome::Cancelled` was split out of
+    /// `Failed` to stop exactly this permanence on the stopped-turn arm; this
+    /// asserts the failed-turn arm no longer latches either.
+    ///
+    /// Asserted on both slots, because they fail differently: the local one
+    /// keeps a broken run broken, the carry-over keeps every FUTURE run broken.
+    #[tokio::test]
+    async fn a_truncation_fallback_is_not_written_to_the_cache_or_the_carryover() {
+        let key = "compaction-degradation-does-not-latch";
+        carryover_remove(&COMPACTION_CARRYOVER, key);
+
+        let provider =
+            Arc::new(MockProvider::new("ignored").with_error(MockError::Provider("fail".into())));
+        let compactor = ContextCompactor::new(
+            provider,
+            CompactorConfig {
+                fallback_to_truncation: true,
+                ..Default::default()
+            },
+        )
+        .with_cache_carryover(key);
+
+        let mut messages = make_messages(12);
+        let result = compactor.compact(&mut messages, 6, 0, None).await.unwrap();
+
+        assert_eq!(
+            result.strategy_used,
+            CompactStrategy::DeterministicTruncation,
+            "fixture must reach the fallback or it proves nothing"
+        );
+        assert!(
+            summary_text(&messages).starts_with("[Context Summary]"),
+            "the degraded summary must still serve THIS turn"
+        );
+        assert!(
+            compactor
+                .cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_none(),
+            "a failed summarization must not become this run's cached cover"
+        );
+        assert!(
+            carryover_get(&COMPACTION_CARRYOVER, key).is_none(),
+            "a failed summarization must not be seeded into every later run on \
+             this session key — the original turns are still in the session log"
+        );
+
+        carryover_remove(&COMPACTION_CARRYOVER, key);
+    }
+
     #[tokio::test]
     async fn truncation_fallback_carries_a_prior_summary_body_forward() {
         // CTX-02 regression: when the LLM call fails over a window that
@@ -1768,17 +2123,20 @@ mod tests {
             summary.contains("ORIGINAL_GOAL_MARKER") && summary.contains("step two"),
             "prior summary body must survive the truncation fallback verbatim; got:\n{summary}"
         );
-        // The stored cache entry is what every future rebuild reapplies — it
-        // must carry the full body too, not the gutted marker line.
-        let cached = compactor
-            .cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .expect("fallback compaction stores a cache entry");
+        // This used to read the stored cache entry and assert the body was not
+        // gutted there either. The fallback no longer stores one at all (see
+        // `a_truncation_fallback_is_not_written_to_the_cache_or_the_carryover`),
+        // which subsumes that check: there is no cover for a later rebuild to
+        // reapply, so the next turn re-derives from the session log and retries
+        // the summarizer. The spliced-summary assertion above is what carries
+        // this test's own property.
         assert!(
-            cached.summary.contains("ORIGINAL_GOAL_MARKER"),
-            "cache must not retain a gutted summary"
+            compactor
+                .cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_none(),
+            "a failed summarization must not become a cached cover"
         );
     }
 
@@ -1887,18 +2245,21 @@ mod tests {
             !summary_text(&messages).contains(sentinel),
             "summary must not swallow the transient recall tail"
         );
-        // …nor the fingerprint-cache entry `store_cache` retained (the cache
-        // re-injects its summary into future turns via `reapply_cached`, so
-        // transient content here would outlive the turn that pushed it).
-        let cached = compactor
-            .cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .expect("a successful compaction stores a cache entry");
+        // (3) …and nothing survives the turn as a cover for `reapply_cached`.
+        // This used to assert that the entry `store_cache` retained did not
+        // contain the sentinel; the fallback path now writes no entry at all
+        // (see `a_truncation_fallback_is_not_written_to_the_cache_or_the_carryover`),
+        // which is the stronger form of the same statement — transient content
+        // cannot outlive this turn through a cover that does not exist.
+        // Assertions (1) and (2) are what still prove the window boundary,
+        // which is this test's actual subject.
         assert!(
-            !cached.summary.contains(sentinel),
-            "store_cache must never retain transient recall content"
+            compactor
+                .cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_none(),
+            "the truncation fallback must leave no cover for a future turn"
         );
     }
 
@@ -2758,6 +3119,60 @@ mod tests {
             user_turn < summary && summary < plan && plan < files,
             "order must match every other drain: user turns, summary, then carriers \
              (got user={user_turn} summary={summary} plan={plan} files={files})"
+        );
+    }
+
+    /// The image the preflight stage deliberately protects must survive the
+    /// drain that runs immediately after it on the same vector.
+    ///
+    /// `HistoricalImageStrippingStage` keeps the newest screenshot and replaces
+    /// the older ones with placeholders; compaction then drains a head-anchored
+    /// window containing it, and nothing carried it out —
+    /// `preserved_user_messages` is text-only by contract and `text_content`
+    /// skips images. So a desktop run compacted *because of* its screenshots
+    /// and lost every one of them, and the stripping stage's own test stayed
+    /// green because it only ever measured its own stage.
+    ///
+    /// Asserted on the pixels reaching the post-compaction vector rather than
+    /// on `image_carry_message` being called: a carrier wired into four of the
+    /// five drain sites would satisfy the latter.
+    #[tokio::test]
+    async fn the_live_screenshot_survives_a_compaction() {
+        let compactor = ContextCompactor::new(
+            Arc::new(MockProvider::new("Summary of earlier conversation.")),
+            CompactorConfig::default(),
+        );
+
+        let mut messages = vec![UnifiedMessage::User {
+            content: vec![
+                ContentBlock::Text {
+                    text: "here is the screen".to_string(),
+                    cache_control: None,
+                },
+                ContentBlock::Image {
+                    data: "LIVE_PIXELS".to_string(),
+                    mime_type: "image/png".to_string(),
+                },
+            ],
+        }];
+        for i in 0..14 {
+            messages.push(UnifiedMessage::assistant(format!("step {i}")));
+        }
+
+        let result = compactor.compact(&mut messages, 6, 0, None).await.unwrap();
+        assert_eq!(
+            result.strategy_used,
+            CompactStrategy::LlmSummary,
+            "fixture must take a real drain path or it proves nothing"
+        );
+
+        let survived = messages
+            .iter()
+            .flat_map(UnifiedMessage::content_blocks)
+            .any(|b| matches!(b, ContentBlock::Image { data, .. } if data == "LIVE_PIXELS"));
+        assert!(
+            survived,
+            "compaction deleted the screen the model is about to act on"
         );
     }
 

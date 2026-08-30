@@ -380,8 +380,52 @@ impl SessionKey {
         cloned
     }
 
+    /// The one sentence all three "start a new conversation" faces say when
+    /// [`rolls_to_new_epoch`](Self::rolls_to_new_epoch) is false.
+    ///
+    /// Lives beside the predicate rather than being written out per face: the
+    /// refusal and the reason for it are the same fact, and three copies of a
+    /// sentence is how the tool ends up describing a rule the RPC no longer
+    /// enforces. Not routed through `gateway::i18n` — that module's `Msg` set
+    /// is the localized *outcome* vocabulary, and this file (`src/routing/`)
+    /// is below the gateway; the channel face already sends its
+    /// unknown-command refusal as plain English for the same reason.
+    pub const NEW_SESSION_UNSUPPORTED: &'static str =
+        "Starting a new conversation is not supported for this session type — \
+         only direct and main sessions carry an epoch that can be rolled.";
+
+    /// Whether this key can actually be rolled to a fresh conversation by
+    /// [`with_next_epoch`](Self::with_next_epoch).
+    ///
+    /// Only `Main` and `DirectMessage` carry an epoch; for every other variant
+    /// the bump is a clone and the "new" key IS the old one. Every face of the
+    /// "start a new conversation" verb has to ask this BEFORE it runs the
+    /// destructive half (terminate continuations, then close the session):
+    /// closing and re-opening one key is a destructive no-op reported to the
+    /// user as a fresh conversation — the transcript is still replayed, the
+    /// running loop is dead, and the live row is stamped `status: "closed"`
+    /// forever.
+    ///
+    /// The match is EXHAUSTIVE on purpose. `with_epoch` / `with_next_epoch`
+    /// both end in `_ => {}`, and that catch-all is precisely what let two of
+    /// the three faces ship without this check: a new variant would inherit
+    /// "silently does nothing" from them, and here it is a compile error
+    /// instead.
+    #[must_use]
+    pub const fn rolls_to_new_epoch(&self) -> bool {
+        match self {
+            Self::Main { .. } | Self::DirectMessage { .. } => true,
+            Self::Group { .. }
+            | Self::Task { .. }
+            | Self::Subagent { .. }
+            | Self::Ephemeral { .. } => false,
+        }
+    }
+
     /// Return a clone with epoch incremented by 1.
     /// For non-epoch types (Group, Task, Subagent, Ephemeral), returns clone unchanged.
+    /// Ask [`rolls_to_new_epoch`](Self::rolls_to_new_epoch) first if a clone
+    /// would be a silent no-op for your caller.
     #[must_use]
     pub fn with_next_epoch(&self) -> Self {
         let mut cloned = self.clone();
@@ -416,6 +460,41 @@ impl SessionKey {
             // Non-epoch types: base_key_pattern == to_key_string
             _ => self.to_key_string(),
         }
+    }
+
+    /// Parse the epoch segment that follows `base_pattern` inside `candidate`.
+    ///
+    /// Returns `Some(n)` only when `candidate` is exactly `base_pattern`
+    /// followed by a **separator** and an `s{n}` segment; `None` for the
+    /// epoch-0 base itself and for any unrelated sibling.
+    ///
+    /// # Why `separators` is a parameter and not a constant
+    ///
+    /// The two backends read the same fact out of two different alphabets. A
+    /// canonical key string always joins with `:`; a *directory name* has been
+    /// through `sanitize_key_for_dir`, which maps `:`→`_` on Windows, so the
+    /// file backend must accept `_` as well. Widening the SQL side to `_` too
+    /// would be a regression: a sibling session whose `main_key` legitimately
+    /// contains `_` (base `agent:main:main`, sibling `agent:main:main_s5`)
+    /// would be misread as epoch 5 of the base.
+    ///
+    /// # Why a separator is REQUIRED
+    ///
+    /// Without it `agent:main:dm:1234:s2` is a string-prefix match for the
+    /// base `agent:main:dm:123`, and peer `123` inherits peer `1234`'s epoch —
+    /// routing every one of its inbound messages into a session it has never
+    /// spoken in. That is the concrete failure this function exists to make
+    /// impossible for both backends at once, rather than for whichever one
+    /// happened to be audited.
+    #[must_use]
+    pub fn epoch_after_base(
+        base_pattern: &str,
+        candidate: &str,
+        separators: &[char],
+    ) -> Option<u32> {
+        let rest = candidate.strip_prefix(base_pattern)?;
+        let epoch_seg = separators.iter().find_map(|sep| rest.strip_prefix(*sep))?;
+        epoch_seg.strip_prefix('s')?.parse::<u32>().ok()
     }
 
     /// Serialize to string key for storage/lookup
@@ -679,7 +758,7 @@ impl SessionKey {
             Some(&["peer", ref rest @ ..]) if !rest.is_empty() => Some(Self::DirectMessage {
                 agent_id,
                 channel: String::new(),
-                peer_id: rest.join(":"),
+                peer_id: sanitize_component(&rest.join(":")),
                 dm_scope: DmScope::PerPeer,
                 epoch: 0,
             }),
@@ -1293,5 +1372,82 @@ mod tests {
         assert!(!SessionKey::task("a", "team_chat", "team-1").is_interactive());
         assert!(!SessionKey::ephemeral("a").is_interactive());
         assert!(!SessionKey::subagent(SessionKey::main("a"), "sub-1").is_interactive());
+    }
+}
+
+#[cfg(test)]
+mod epoch_rollover_guards {
+    use super::*;
+
+    /// One key of every variant, so the assertions below cannot silently stop
+    /// covering one. `rolls_to_new_epoch`'s exhaustive match makes adding a
+    /// variant a compile error there; this list makes it a *visible* omission
+    /// here too.
+    fn one_of_every_variant() -> Vec<SessionKey> {
+        vec![
+            SessionKey::main("main"),
+            SessionKey::dm("main", "telegram", "123", DmScope::PerPeer),
+            SessionKey::group("main", "telegram", PeerKind::Group, "-100"),
+            SessionKey::task("main", "cron", "daily"),
+            SessionKey::subagent(SessionKey::main("main"), "sub-1"),
+            SessionKey::ephemeral("main"),
+        ]
+    }
+
+    /// The predicate every "start a new conversation" face gates on must agree
+    /// with what the bump actually does — DERIVED from `with_next_epoch`, not
+    /// restated as a list of variant names, so the two cannot drift.
+    #[test]
+    fn rolls_to_new_epoch_agrees_with_what_the_bump_actually_does() {
+        for key in one_of_every_variant() {
+            let bumped = key.with_next_epoch();
+            assert_eq!(
+                key.rolls_to_new_epoch(),
+                bumped != key,
+                "`rolls_to_new_epoch` disagrees with `with_next_epoch` for {}: \
+                 a face that trusts the predicate will either refuse a real \
+                 rollover or run the destructive half on a key that does not move",
+                key.to_key_string()
+            );
+        }
+    }
+
+    /// The sibling-prefix hazard, stated once for the parser both backends now
+    /// share: peer `123` must not inherit peer `1234`'s epoch.
+    #[test]
+    fn epoch_after_base_requires_a_separator_and_rejects_prefix_siblings() {
+        let base = "agent:main:dm:123";
+        assert_eq!(
+            SessionKey::epoch_after_base(base, "agent:main:dm:1234:s2", &[':']),
+            None,
+            "a longer peer id is a string prefix of this base — matching it \
+             routes peer 123's messages into peer 1234's epoch"
+        );
+        assert_eq!(
+            SessionKey::epoch_after_base(base, "agent:main:dm:123", &[':']),
+            None,
+            "the base itself carries no epoch segment"
+        );
+        assert_eq!(
+            SessionKey::epoch_after_base(base, "agent:main:dm:123:s7", &[':']),
+            Some(7)
+        );
+        // The sanitized (directory-name) alphabet, and only there.
+        assert_eq!(
+            SessionKey::epoch_after_base("agent_main_main", "agent_main_main_s5", &[':', '_']),
+            Some(5)
+        );
+        // …and even there the separator is REQUIRED: a sibling directory that
+        // merely shares the prefix is not epoch 5 of this base.
+        assert_eq!(
+            SessionKey::epoch_after_base("agent_main_main", "agent_main_mains5", &[':', '_']),
+            None
+        );
+        assert_eq!(
+            SessionKey::epoch_after_base("agent:main:main", "agent:main:main_s5", &[':']),
+            None,
+            "`_` is not a separator for canonical key strings: `main_s5` is a \
+             different main_key, not epoch 5 of `main`"
+        );
     }
 }

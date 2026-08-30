@@ -1,0 +1,197 @@
+{
+  "module": "src/builtin_tools/{agent_manage,hub,media_tools,note_manage,pdf_generate,pim,skill_reader,generation}",
+  "files_reviewed": 48,
+  "findings": [
+    {
+      "file": "src/builtin_tools/agent_manage/list.rs",
+      "line": 131,
+      "severity": "high",
+      "category": "error_handling",
+      "issue": "Wildcard match arm silently converts DB errors into 'default agent', masking store failures as unbound channels.",
+      "evidence": "match self.workspace_mgr.get_active_agent(channel) { Ok(Some(id)) => Some(id), _ => Some(self.registry.default_agent_id().to_string()), }",
+      "suggested_fix": "Distinguish Ok(None) (truly unbound → use default) from Err(...) (store failure → propagate as AlephError::Store so the caller sees the failure, not a phantom default).",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/agent_manage/delete.rs",
+      "line": 167,
+      "severity": "high",
+      "category": "error_handling",
+      "issue": "Channel-binding cleanup error is logged with warn! and swallowed; on failure, channels keep pointing at the now-deleted agent (ghost-agent routing).",
+      "evidence": "if let Err(e) = self.workspace_mgr.clear_bindings_for_agent(&args.agent_id) { warn!(agent_id = %args.agent_id, error = %e, \"Failed to clear channel bindings for deleted agent\"); }",
+      "suggested_fix": "Surface the failure to the caller (return a degraded AgentDeleteOutput, or hard-error the delete) so the operator can re-run / manually clear, instead of a silent ghost-agent state.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/agent_manage/list.rs",
+      "line": 117,
+      "severity": "medium",
+      "category": "error_handling",
+      "issue": "bindings_by_agent() Result is silently defaulted on Err, hiding store failures from the LLM that uses 'bound_channels' for routing decisions.",
+      "evidence": "let bindings = self.workspace_mgr.bindings_by_agent().unwrap_or_default();",
+      "suggested_fix": "At minimum log the error (warn!); better: propagate via AlephError::Store so the channel binding surface is observably broken rather than reporting 'no bindings'.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/agent_manage/create.rs",
+      "line": 116,
+      "severity": "medium",
+      "category": "error_handling",
+      "issue": "unwrap_or_default on IDENTITY.md read silently treats PermissionDenied / corrupt-UTF8 reads as 'empty file', then overwrites the original with a partial reconstruction.",
+      "evidence": "let existing = std::fs::read_to_string(identity_path).unwrap_or_default();",
+      "suggested_fix": "Distinguish NotFound (truly empty) from other IO errors (propagate). Use map_err and let permission errors surface instead of silently appending to a file the caller cannot read.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/hub/install_run.rs",
+      "line": 276,
+      "severity": "medium",
+      "category": "error_handling",
+      "issue": "Provenance/audit-trail write has no error handling — a silent failure here means the install is on disk but the audit ledger says it never happened.",
+      "evidence": "crate::hub::origin::record_install(&self.cache, entry, spec, &outcome).await;",
+      "suggested_fix": "Wrap in if let Err(e) = ... { tracing::warn!(...); } at minimum, or surface as a verification report field so the model can flag a missing audit.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/hub/install_run.rs",
+      "line": 246,
+      "severity": "low",
+      "category": "dead_code",
+      "issue": "Dead-branch defensive code: `None => continue` cannot fire because Null/Array/Object are already handled above and value_to_string returns Some for every other Value variant.",
+      "evidence": "_ => match value_to_string(raw) { Some(v) => v, None => continue, }",
+      "suggested_fix": "Replace with an unreachable!() or document why the branch is defensive; the current shape reads as 'silent skip on unknown type'.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/media_tools/extract.rs",
+      "line": 120,
+      "severity": "medium",
+      "category": "error_handling",
+      "issue": "serde_json serialization failure is silently converted to Value::Null, hiding malformed-output bugs and producing an empty `data` field on the wire.",
+      "evidence": "let data = serde_json::to_value(&output).unwrap_or_default();",
+      "suggested_fix": "Surface as ToolError::Execution so the LLM sees the bug rather than getting a null payload that looks like 'no extractable content'.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/media_tools/transcribe.rs",
+      "line": 121,
+      "severity": "medium",
+      "category": "error_handling",
+      "issue": "Same silent-swallow serialization pattern as document_extract: Value::Null on failure masks provider-output bugs.",
+      "evidence": "let data = serde_json::to_value(&output).unwrap_or_default();",
+      "suggested_fix": "Same as document_extract: return ToolError::Execution on serialization failure.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/note_manage/read.rs",
+      "line": 175,
+      "severity": "high",
+      "category": "error_handling",
+      "issue": "Per-note body read errors are silently dropped to empty string; the note still counts as a hit (fts_candidates) but renders as an empty body, corrupting the 'what did query find' signal the model relies on.",
+      "evidence": "async move { tokio::fs::read_to_string(&path).await.unwrap_or_default() }",
+      "suggested_fix": "Surface the read failure (or attach a 'body unreadable' marker per-row) and decrement fts_candidates or emit a bodies_omitted count so the advisory reflects reality.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/note_manage/lifecycle.rs",
+      "line": 96,
+      "severity": "high",
+      "category": "error_handling",
+      "issue": "Store lookup error silently defaults the new note_path to `format!(\"other/{safe_new}\")`, which is wrong on store failure AND on a successful rename into a non-'other' category — destination receipt then points to a nonexistent path.",
+      "evidence": ".find_by_filename(&safe_new, agent_id).await.unwrap_or_default();  let note_path = new_paths.first().cloned().unwrap_or_else(|| format!(\"other/{safe_new}\"));",
+      "suggested_fix": "Propagate the store error via AlephError::tool; on Ok(empty) distinguish 'rename did not register yet' (retry) from 'wrong category guess' (refuse to fabricate a path).",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/note_manage/helpers.rs",
+      "line": 51,
+      "severity": "medium",
+      "category": "security",
+      "issue": "agent_id traversal guard rejects '..', '/', '\\\\', leading '.', but NOT null bytes — on Linux EINVAL from Path join; on Windows the path is silently truncated, which could land a note in an unintended vault directory.",
+      "evidence": "if id.is_empty() || id.contains(\"..\") || id.contains('/') || id.contains('\\\\') || id.starts_with('.') { ... }",
+      "suggested_fix": "Add `|| id.contains('\\0')` to the rejection set; consider also adding Windows-reserved-name / colon checks for cross-platform safety.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/pdf_generate/native_engine.rs",
+      "line": 266,
+      "severity": "high",
+      "category": "resource_leak",
+      "issue": "PDF write is non-atomic, non-fsynced std::fs::write — a crash mid-write leaves a truncated/zero-byte file at output_path with no way for the caller to tell 'partial write' from 'no data'.",
+      "evidence": "std::fs::write(output_path, &pdf_bytes).map_err(|e| ToolError::Execution(format!(\"Failed to write PDF file: {e}\")))?;",
+      "suggested_fix": "Write to a sibling tempfile, fsync, then atomic-rename onto output_path; call File::sync_all() before close so the bytes hit disk before the rename.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/pdf_generate/native_engine.rs",
+      "line": 22,
+      "severity": "high",
+      "category": "api_misuse",
+      "issue": "pub fn generate(...) is sync CPU+IO (markdown parse, font file read, PDF build, std::fs::write) called directly from async fn call() in mod.rs — blocks the tokio executor thread on every PDF.",
+      "evidence": "RenderEngine::Native => native_engine::generate(&args, &output_path), // called from async fn call",
+      "suggested_fix": "Wrap the body in tokio::task::spawn_blocking and await the JoinHandle; keep the public signature async so the executor is not starved during long renders.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/pdf_generate/native_engine.rs",
+      "line": 452,
+      "severity": "low",
+      "category": "magic_value",
+      "issue": "Magic constant `0.4` in wrap_text (units_per_mm) controls CJK-vs-Latin width estimation; no derivation or reference, and the comment ('Approximate') leaves the calibration unknowable.",
+      "evidence": "let units_per_mm = 0.4 / (font_size / 12.0);",
+      "suggested_fix": "Either derive from a documented monospace font metric (e.g. reference char width at 12pt) or expose as a named const with the empirical origin documented; ideally a constant per font rather than global.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/pdf_generate/native_engine.rs",
+      "line": 257,
+      "severity": "low",
+      "category": "error_handling",
+      "issue": "printpdf's warnings buffer (&mut Vec::new()) is discarded — any font-substitution or layout warnings emitted during save are silently lost.",
+      "evidence": ".save(&PdfSaveOptions::default(), &mut Vec::new());",
+      "suggested_fix": "Pass a named Vec, log non-empty contents at debug!, and surface font-substitution warnings in the tool output for CJK-fallback visibility.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/pim/mod.rs",
+      "line": 427,
+      "severity": "low",
+      "category": "api_misuse",
+      "issue": "mail_search limit is clamped at the I/O boundary (clamp(1, 200)) but the underlying provider call still receives a potentially-huge filtered set before clamping — the clamp is at the tool boundary, not where the native bridge enumerates.",
+      "evidence": "let limit = args.limit.unwrap_or(20).clamp(1, 200); pim.mail_search(query, args.folder.as_deref(), limit)",
+      "suggested_fix": "Document the contract that the provider respects the limit, or push the clamp into the bridge wrapper so a custom backend can't bypass it.",
+      "confidence": "low"
+    },
+    {
+      "file": "src/builtin_tools/generation/audio_generate.rs",
+      "line": 80,
+      "severity": "low",
+      "category": "api_misuse",
+      "issue": "Arc<std::sync::RwLock<...>> held briefly inside an async fn; the lock IS dropped before .await, so it does not block across await — but std::sync RwLock contention under concurrent tool calls will block the executor thread.",
+      "evidence": "let reg = self.registry.read().unwrap_or_else(|e| e.into_inner()); ... provider.generate(request).await ...",
+      "suggested_fix": "Switch to tokio::sync::RwLock (re-exported as AsyncRwLock) for read-heavy concurrent access; the brief-lock pattern is otherwise correct.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/generation/image_generate.rs",
+      "line": 95,
+      "severity": "low",
+      "category": "api_misuse",
+      "issue": "Same std::sync::RwLock-in-async pattern as audio_generate; safe under the brief-lock discipline but inconsistent with speech_generate which already notes 'lock must be dropped before any .await'.",
+      "evidence": "let registry = self.registry.read().unwrap_or_else(|e| e.into_inner());",
+      "suggested_fix": "Use AsyncRwLock from sync_primitives for uniform async-friendly locking; add a #[allow(clippy::await_holding_lock)] only if a sync lock is justified.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/note_manage/write.rs",
+      "line": 60,
+      "severity": "low",
+      "category": "resource_leak",
+      "issue": "MAX_NOTE_BODY_CHARS = 1 MiB caps create content, but `append` accepts an unbounded `facts: Vec<String>` — a steered model can append millions of small facts and exhaust disk without any single body exceeding the cap.",
+      "evidence": "let new_facts = args.facts.clone().unwrap_or_default();",
+      "suggested_fix": "Apply a per-call cap on total facts bytes (mirror MAX_NOTE_BODY_CHARS for the append payload) and an upper bound on facts.len().",
+      "confidence": "medium"
+    }
+  ],
+  "summary": "High-signal findings concentrate on silent error-swallowing patterns: channel-binding cleanup in agent_delete (ghost-agent routing), store-Err masked as 'unbound channel' in agent_list, per-note read failures silently counted as empty hits in note_manage query, and rename's wrong-default fallback. pdf_generate's native engine has two notable issues — non-atomic, non-fsynced std::fs::write (partial-write on crash) and a sync CPU+IO function called from async context (executor blocking). Defensive gaps include agent_id validation rejecting '..' but not NUL bytes, and hub install's audit-trail write with no error handling. skill_reader path-traversal protection is solid (multi-layer canonicalize + is_path_within); generation tools' std::sync::RwLock use is technically correct under brief-lock discipline but inconsistent with the project's AsyncRwLock export."
+}

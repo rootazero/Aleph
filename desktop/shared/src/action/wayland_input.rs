@@ -421,8 +421,10 @@ pub(crate) fn drag(
     // drag-and-drop at all. This rail used to teleport and say so in a comment
     // ("drag is atomic"), which described the implementation rather than what
     // the applications do with it. See `super::drag_path`.
-    for (x, y) in super::drag_path(start_x, start_y, end_x, end_y, duration_ms).0 {
+    let (path, step_delay) = super::drag_path(start_x, start_y, end_x, end_y, duration_ms);
+    for (x, y) in path {
         run_ydotool(&mousemove_args(x, y))?;
+        std::thread::sleep(step_delay);
     }
     run_ydotool(&click_args(MouseButton::Left, PressAction::Release))?;
     tracing::info!(

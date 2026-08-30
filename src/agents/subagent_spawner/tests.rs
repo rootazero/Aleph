@@ -277,6 +277,7 @@ mod tests {
             None,
             "child-agent",
             &ephemeral_for("child-agent", None),
+            CancellationToken::new(),
         );
         assert!(
             budget.is_none() && compactor.is_none() && preflight.is_none(),
@@ -294,8 +295,14 @@ mod tests {
             max_splits: 3,
         };
         let child_id = ephemeral_for("child-agent", None);
-        let (budget, compactor, preflight) =
-            super::super::build_context_triple(Some(&cfg), &llm, None, "child-agent", &child_id);
+        let (budget, compactor, preflight) = super::super::build_context_triple(
+            Some(&cfg),
+            &llm,
+            None,
+            "child-agent",
+            &child_id,
+            CancellationToken::new(),
+        );
         assert!(
             budget.is_some() && compactor.is_some() && preflight.is_some(),
             "a configured child must get budget AND compactor AND preflight — \
@@ -345,6 +352,7 @@ mod tests {
             Some(&cheap),
             "child-agent",
             &child_id,
+            CancellationToken::new(),
         );
         assert_eq!(
             with_cheap.as_ref().map(|c| c.summarizer_name()),
@@ -356,8 +364,14 @@ mod tests {
 
         // No cheap tier resolved upstream → fall back to the child's own LLM,
         // exactly as before this was threaded.
-        let (_, without, _) =
-            super::super::build_context_triple(Some(&cfg), &llm, None, "child-agent", &child_id);
+        let (_, without, _) = super::super::build_context_triple(
+            Some(&cfg),
+            &llm,
+            None,
+            "child-agent",
+            &child_id,
+            CancellationToken::new(),
+        );
         assert_eq!(
             without.as_ref().map(|c| c.summarizer_name()),
             Some(llm.name()),

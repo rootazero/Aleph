@@ -42,8 +42,12 @@ fn get_patterns() -> &'static PiiPatterns {
         // `[_\-\s]?` (not just `[_-]?`) lets the alternation also match
         // `api key=...` with a literal space, so vendor terminology like
         // `Authorization: api key <value>` is caught.
+        //
+        // The value arm matches double- or single-quoted strings (including any
+        // spaces inside the quotes) so a value like `password = "my secret phrase"`
+        // is fully redacted, not just the first word.
         generic_secret: Regex::new(
-            r#"(?i)(password|passwd|pwd|secret|token|api[_\-\s]?key|access[_\-\s]?token|authorization)(\s*[:=]\s*)("?)([^\s",}]+)"#,
+            r#"(?i)(password|passwd|pwd|secret|token|api[_\-\s]?key|access[_\-\s]?token|authorization)(\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s",}]+)"#,
         )
         .expect("static PII regex is valid"),
         china_mobile: Regex::new(r"\b1[3-9]\d{9}\b").expect("static PII regex is valid"),
@@ -73,10 +77,11 @@ pub fn scrub_pii(text: &str) -> String {
         .api_key
         .replace_all(&scrubbed, "[REDACTED]")
         .to_string();
-    // Generic credential assignments (keeps the key, redacts the value).
+    // Generic credential assignments (keeps the key and separator, redacts the
+    // whole value — including any surrounding quotes and spaces inside quotes).
     scrubbed = patterns
         .generic_secret
-        .replace_all(&scrubbed, "${1}${2}${3}[REDACTED]")
+        .replace_all(&scrubbed, "${1}${2}[REDACTED]")
         .to_string();
     scrubbed = patterns
         .china_id
@@ -165,5 +170,16 @@ mod tests {
         assert!(scrubbed.starts_with("secret"));
         assert!(scrubbed.contains("[REDACTED]"));
         assert!(!scrubbed.contains("topsecretvalue"));
+    }
+
+    #[test]
+    fn test_generic_secret_redacts_quoted_multi_word_value() {
+        let scrubbed = scrub_pii("password = \"my secret phrase\"");
+        assert!(scrubbed.contains("password = [REDACTED]"), "got: {scrubbed}");
+        assert!(!scrubbed.contains("my secret phrase"), "got: {scrubbed}");
+
+        let scrubbed = scrub_pii("api_key='another secret value'");
+        assert!(scrubbed.contains("api_key=[REDACTED]"), "got: {scrubbed}");
+        assert!(!scrubbed.contains("another secret value"), "got: {scrubbed}");
     }
 }

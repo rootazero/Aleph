@@ -5,7 +5,7 @@
 //! the chat module (`pub(super)`).
 
 use super::reasoning::ReasoningPanel;
-use super::state::{ChatMessage, ChatPhase, ChatState, QueuedPrompt};
+use super::state::{ChatMessage, ChatPhase, ChatState, QueuedPrompt, HISTORY_PAGE};
 use super::timeline::{self, TimelineRow};
 use super::PlanArchiveCell;
 use crate::components::markdown::TypewriterRenderer;
@@ -142,6 +142,77 @@ pub(crate) fn MessageList() -> impl IntoView {
     ) {
         dir.ensure_loaded(dash);
     }
+
+    // ---- "Load earlier messages" -------------------------------------------
+    //
+    // `chat.history` serves the TRAILING `history_limit` rows, so a transcript
+    // longer than the window opens without its beginning. Before this control
+    // existed the window was a hard-coded 50 with no way to widen it, and the
+    // missing rows were reported nowhere — the conversation simply appeared to
+    // start in the middle.
+    //
+    // Contexts are captured HERE, at render time, rather than looked up inside
+    // the click handler: `use_context` resolves against the reactive owner, and
+    // by the time a click runs, that lookup is no longer guaranteed to be the
+    // one this component was mounted under. `use_context` (not `expect_`) for
+    // the same reason the directory lookup above uses it — a storybook or test
+    // mount without a socket must still render the list.
+    let dash_ctx = use_context::<crate::context::DashboardState>();
+    let sessions_ctx = use_context::<crate::state::sessions::SessionMap>();
+    let workspace_ctx = use_context::<WorkspaceState>();
+    let loading_earlier = RwSignal::new(false);
+    // Write-only latch: it is what lets "you have reached the beginning" appear
+    // only for someone who actually asked for more, instead of under every
+    // short conversation that never had anything above it.
+    let asked_for_earlier = RwSignal::new(false);
+    let on_load_earlier = move |_| {
+        if loading_earlier.get_untracked() {
+            return;
+        }
+        let (Some(dash), Some(sessions), Some(key)) =
+            (dash_ctx, sessions_ctx, chat.session_key.get_untracked())
+        else {
+            return;
+        };
+        let locale = i18n.get_locale_untracked();
+        // Widen the window, then re-run the ONE hydration path. Deliberately not
+        // a backwards page through the server's `before` cursor: hydration
+        // replays assistant runs (appending, and expanding one row into many
+        // narration/tool rows) and keys untraced rows by their index in the
+        // page, so a prepended second page would both mis-order the transcript
+        // and mint duplicate `<For>` keys. See `HISTORY_PAGE`.
+        //
+        // How far to widen: when the server reported how many rows are above,
+        // take ALL of them — one press reaches the beginning, and the label
+        // said what that would cost before it was pressed. A fixed page would
+        // make a long transcript a staircase of identical presses with no way
+        // to see how many remain. Only when the depth is unknown (a core that
+        // does not report `total`) does the step fall back to one page.
+        let step = chat
+            .history_above
+            .get_untracked()
+            .filter(|n| *n > 0)
+            .unwrap_or(HISTORY_PAGE);
+        chat.history_limit.update(|n| *n += step);
+        loading_earlier.set(true);
+        asked_for_earlier.set(true);
+        leptos::task::spawn_local(async move {
+            // `hydrate_session_history` re-derives `history_has_more` from the
+            // page it gets back, so reaching the start needs no read here —
+            // which is what keeps this continuation write-only past the await
+            // (see `crate::disposed_reads`).
+            crate::components::chat_sidebar::hydrate_and_follow(
+                dash,
+                chat,
+                workspace_ctx,
+                sessions,
+                key,
+                locale,
+            )
+            .await;
+            loading_earlier.set(false);
+        });
+    };
 
     // Memoized timeline: the flat message vector folded into day-separated
     // render rows. Recomputes only when `messages` changes (not on every
@@ -305,6 +376,50 @@ pub(crate) fn MessageList() -> impl IntoView {
                                  pb-[calc(var(--composer-clearance,150px)+1rem)] space-y-2"
                             )
                         }>
+                            // Top of the transcript: the window's upper edge.
+                            // Renders above the first row so "there is more
+                            // above this" sits where the missing content would
+                            // have been.
+                            <Show when=move || chat.history_has_more.get()>
+                                <div class="flex justify-center pb-2">
+                                    <button
+                                        class="px-3 py-1 rounded-full text-xs border border-border
+                                               bg-surface-raised text-text-secondary
+                                               hover:text-text-primary hover:bg-surface-sunken
+                                               disabled:opacity-60 transition-colors"
+                                        disabled=move || loading_earlier.get()
+                                        on:click=on_load_earlier
+                                    >
+                                        {move || if loading_earlier.get() {
+                                            t_string!(i18n, chat.loading_earlier).to_string()
+                                        } else {
+                                            // Name the number when the server
+                                            // gave one: this press fetches
+                                            // exactly that many, and a control
+                                            // that says how deep the rest goes
+                                            // is the difference between an exit
+                                            // and a staircase. Unknown depth
+                                            // keeps the unquantified wording,
+                                            // which is honest about the one
+                                            // page it will actually add.
+                                            match chat.history_above.get() {
+                                                Some(n) if n > 0 => t_string!(
+                                                    i18n,
+                                                    chat.load_earlier_n,
+                                                    count = n as i64
+                                                )
+                                                .to_string(),
+                                                _ => t_string!(i18n, chat.load_earlier).to_string(),
+                                            }
+                                        }}
+                                    </button>
+                                </div>
+                            </Show>
+                            <Show when=move || asked_for_earlier.get() && !chat.history_has_more.get()>
+                                <div class="flex justify-center pb-2 text-[11px] text-text-tertiary">
+                                    {move || t_string!(i18n, chat.history_start).to_string()}
+                                </div>
+                            </Show>
                             <For
                                 each=move || rows.get()
                                 key=timeline::row_key
@@ -762,6 +877,7 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
     let message_run_id =
         message.with_untracked(|m| m.as_ref().map(|m| run_id_from_message_id(&m.id)));
     let run_for_cost = message_run_id.clone().unwrap_or_default();
+    let run_for_halt = message_run_id.clone().unwrap_or_default();
 
     // Reactive: a message that streams into an assistant final-answer bubble
     // can gain tool calls after this row first mounts (the pre-Task-4 code
@@ -870,28 +986,48 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
         // that keeps re-creating its prefix is paying 1.25x for history it
         // already sent. Shown cumulatively as well as per-run, because the
         // first run of any session necessarily reads 0%.
+        //
+        // The hover text is localised, which it had not been: a `title=` whose
+        // value arrives through a `let` was invisible to the English census
+        // until that census learned to follow one binding hop
+        // (`i18n_census::painted_identifiers`). `cache` is the *second* hop —
+        // it reaches the screen inside `cost_title`'s own interpolation — and
+        // is still outside what that scan can see; it is localised here because
+        // a half-translated hover is worse than an untranslated one.
         let cache = match (cost.prefix_reuse(), chat.session_prefix_reuse()) {
-            (Some(run), Some(session)) => format!(
-                " · cache {} read / {} created · prefix reuse {:.0}% (session {:.0}%)",
-                cost.cache_read_tokens,
-                cost.cache_creation_tokens,
-                run * 100.0,
-                session * 100.0
-            ),
+            (Some(run), Some(session)) => t_string!(
+                i18n,
+                chat.cost_cache_fragment,
+                read = cost.cache_read_tokens.to_string(),
+                created = cost.cache_creation_tokens.to_string(),
+                run = format!("{:.0}", run * 100.0),
+                session = format!("{:.0}", session * 100.0),
+            )
+            .to_string(),
             _ => String::new(),
         };
-        let title = format!(
-            "input {} · output {} · total {} tokens{}{}",
-            cost.input_tokens,
-            cost.output_tokens,
-            cost.total_tokens,
-            cache,
-            if cost.is_exact() {
-                String::new()
-            } else {
-                format!(" · cost {}", cost.status.as_deref().unwrap_or("unknown"))
-            }
-        );
+        let status = if cost.is_exact() {
+            String::new()
+        } else {
+            // Core's own `cost_status` token passes through verbatim — it is a
+            // wire value, not copy, the same rule `RunHalt::label`'s
+            // fall-through applies. Only the client's own "core said nothing"
+            // word is ours to translate.
+            let raw = cost.status.clone().unwrap_or_else(|| {
+                t_string!(i18n, chat.cost_status_unknown).to_string()
+            });
+            t_string!(i18n, chat.cost_status_fragment, status = raw).to_string()
+        };
+        let title = t_string!(
+            i18n,
+            chat.cost_title,
+            input = cost.input_tokens.to_string(),
+            output = cost.output_tokens.to_string(),
+            total = cost.total_tokens.to_string(),
+            cache = cache,
+            status = status,
+        )
+        .to_string();
         // Read-only meta line: the full token/cost breakdown it used to
         // open lived in the right pane's inspector, which no longer exists.
         // The `title` hover still carries the exact figures.
@@ -901,6 +1037,29 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
                  title=title>
                 {money}
                 {tokens.map(|t| view! { <span class="opacity-70">{t}</span> })}
+            </div>
+        })
+    };
+
+    // Why this run stopped, when it did not stop cleanly. Sits beside
+    // `cost_view` because it answers the other half of "what happened here" and
+    // shares its lifetime exactly (same frame, same map key, same snapshot).
+    // Reactive for the same reason: the terminal summary lands after the bubble
+    // mounts. Renders nothing on the clean path — `parse_run_halt` returns
+    // `None` for `"completed"`, for a core that never sent the field, and for a
+    // failure core declined to characterise.
+    let halt_view = move || {
+        if is_user() {
+            return None;
+        }
+        let halt = chat.run_halts.with(|m| m.get(&run_for_halt).cloned())?;
+        let label = halt.label(i18n.get_locale());
+        Some(view! {
+            <div class="mt-1 text-[10px] leading-tight font-mono text-warning \
+                        flex items-center gap-1 tabular-nums"
+                 title=format!("terminate_reason: {}", halt.reason)>
+                <span>"\u{26a0}\u{fe0f}"</span>
+                <span>{label}</span>
             </div>
         })
     };
@@ -1015,7 +1174,7 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
             {if is_team_msg {
                 // Layout A: avatar disc outside bubble + name above (Telegram-style).
                 view! {
-                    <div class="flex gap-2 items-start">
+                    <div class="flex gap-2 items-start w-full min-w-0">
                         // Avatar disc on first message of a run; spacer on repeat.
                         {if team_show_header {
                             view! {
@@ -1027,7 +1186,14 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
                         } else {
                             view! { <div class="w-7 shrink-0"></div> }.into_any()
                         }}
-                        <div class="flex flex-col min-w-0">
+                        // `flex-1` for the same reason the single-agent
+                        // wrapper below carries `w-full`: `bubble_class` sizes
+                        // the assistant bubble with `w-full`, a PERCENTAGE of
+                        // this box, and a flex item defaults to shrink-to-fit —
+                        // so without it the percentage resolved against the
+                        // bubble's own content width and a short team answer
+                        // rendered 72px wide instead of filling the column.
+                        <div class="flex flex-col min-w-0 flex-1">
                             {team_show_header.then(|| view! {
                                 <div class="text-[11px] font-semibold mb-0.5 ml-0.5"
                                      style=format!("color:{}", team_color)>
@@ -1044,6 +1210,7 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
                                 {error_view}
                                 {model_view}
                                 {cost_view}
+                                {halt_view}
                             </div>
                         </div>
                     </div>
@@ -1054,8 +1221,22 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
                 // second child (the author label) on a `is_user` bubble —
                 // `author_label()` is unconditionally `None` for assistant
                 // rows, so this is a no-op wrapper there.
+                //
+                // `w-full min-w-0` is LOAD-BEARING, not cosmetic. Every width in
+                // `bubble_class` is a PERCENTAGE of this wrapper (`max-w-[80%]`
+                // for the user chip, `w-full` for the assistant answer). A flex
+                // item defaults to `flex: 0 1 auto`, so without `w-full` this
+                // wrapper is shrink-to-fit — its width IS the bubble's own
+                // max-content width, and the percentage then resolves against
+                // the very box it is supposed to constrain. Measured at an
+                // 800px column: the user bubble came out 428px = 80% of its own
+                // 535px natural width, wrapping a one-line message into two
+                // short lines, and a short assistant answer collapsed to 72px
+                // instead of spanning the column. `min-w-0` keeps the escape
+                // hatch `bubble_class` documents (wide children scroll
+                // internally instead of spilling past the right edge).
                 view! {
-                    <div class="flex flex-col items-end gap-0.5">
+                    <div class="flex flex-col items-end gap-0.5 w-full min-w-0">
                         {move || author_label().map(|name| view! {
                             <span class="text-[11px] text-text-tertiary mr-1">{name}</span>
                         })}
@@ -1081,6 +1262,7 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
                             {error_view}
                             {model_view}
                             {cost_view}
+                            {halt_view}
                         </div>
                     </div>
                 }.into_any()
@@ -1420,5 +1602,83 @@ mod run_id_tests {
         assert_eq!(run_id_from_message_id("intermediate-r1-3"), "r1");
         assert_eq!(run_id_from_message_id("intermediate-run-x-7"), "run-x");
         assert_eq!(run_id_from_message_id("user-0"), "user-0");
+    }
+}
+
+#[cfg(test)]
+mod bubble_width_tests {
+    /// Every wrapper between a message row and its bubble must declare a
+    /// definite width.
+    ///
+    /// `bubble_class` sizes both bubbles as a PERCENTAGE of their parent —
+    /// `max-w-[80%]` for the user chip, `w-full` for the assistant answer. A
+    /// flex item defaults to `flex: 0 1 auto`, i.e. shrink-to-fit, so a wrapper
+    /// that declares no width of its own takes the width of its content — and
+    /// the percentage then resolves against the very box it is meant to
+    /// constrain. Measured in Chrome against this crate's compiled stylesheet
+    /// at an 800px column, with the wrappers left indefinite:
+    ///
+    /// - a one-line user message came back 428px — exactly 80% of its own
+    ///   535px natural width — and wrapped into two short lines;
+    /// - a short assistant answer came back 72px instead of spanning 800px;
+    /// - a short team answer came back 72px instead of 768px.
+    ///
+    /// None of that is visible to a type checker, nor to a rendering test that
+    /// asserts on text: the markup is well-formed and every character is
+    /// present, only the line breaks are wrong. Hence a source-level rule.
+    ///
+    /// Stated as a RULE over "wrappers that enclose `class=bubble_class`",
+    /// deliberately not as a list of the two known wrappers: a third layout
+    /// added later inherits the check instead of having to be told about it.
+    #[test]
+    fn every_wrapper_around_a_bubble_declares_a_definite_width() {
+        // `production_lines` (not a hand-rolled cut at the first `#[cfg(test)]`)
+        // is this crate's one answer to "which lines are production" — it walks
+        // gated ITEMS, so it cannot be fooled by the class strings quoted in
+        // this module's own doc comments. `no_guard_in_this_crate_hand_rolls_
+        // the_cfg_test_cut` enforces that; it caught the first draft of this
+        // guard doing exactly that.
+        let src = include_str!("messages.rs");
+        let production = crate::i18n_census::production_lines(src);
+
+        // Walk the markup tracking the most recent `<div class="flex flex-col
+        // …">` opener; when a `class=bubble_class` is reached, that opener is
+        // the box its percentage widths resolve against.
+        let mut current_wrapper: Option<(usize, String)> = None;
+        let mut checked = 0usize;
+        for (line_no, line) in production {
+            let trimmed = line.trim().to_string();
+            if trimmed.starts_with("<div class=\"flex flex-col") {
+                current_wrapper = Some((line_no, trimmed.clone()));
+            }
+            if trimmed.starts_with("<div class=bubble_class") {
+                let (wrapper_line, wrapper) = current_wrapper.clone().unwrap_or_else(|| {
+                    panic!(
+                        "messages.rs:{line_no}: a bubble with no enclosing \
+                         flex-column wrapper — this guard can no longer tell \
+                         what its percentage widths resolve against"
+                    )
+                });
+                assert!(
+                    wrapper.contains("w-full") || wrapper.contains("flex-1"),
+                    "messages.rs:{wrapper_line}: this wrapper encloses a \
+                     `bubble_class` bubble but declares no definite width, so \
+                     `max-w-[80%]` / `w-full` inside it resolve against its own \
+                     shrink-to-fit content width. Add `w-full` (or `flex-1`). \
+                     Wrapper was: {wrapper}"
+                );
+                checked += 1;
+            }
+        }
+
+        // Self-protection: "found nothing to check" and "everything passed"
+        // are the same colour without this. Both layouts — single-agent and
+        // team — route their bubble through `bubble_class`.
+        assert!(
+            checked >= 2,
+            "expected at least the single-agent and team bubbles to be \
+             checked, saw {checked} — the markup this guard scans has moved \
+             and it is now reporting green on nothing"
+        );
     }
 }

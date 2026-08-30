@@ -201,6 +201,22 @@ impl ToolCatalog {
         n
     }
 
+    /// Set the active flag on a registered tool by name.
+    ///
+    /// Returns true if a tool with that name was found and updated. Inactive
+    /// tools are excluded from every `list_*` / `find_best_match` query path
+    /// (the `.filter(|t| t.is_active)` chain in `query.rs`), so an operator
+    /// can hot-pause a tool — including its descendants' routing — without
+    /// un-registering it. The health cache is invalidated so any prompt
+    /// cache that referenced the tool rebuilds without it.
+    pub async fn set_inactive(&self, name: &str, active: bool) -> bool {
+        let changed = self.state.set_active(name, active).await;
+        if changed {
+            self.health.invalidate_all();
+        }
+        changed
+    }
+
     // =========================================================================
     // Query Methods
     // =========================================================================

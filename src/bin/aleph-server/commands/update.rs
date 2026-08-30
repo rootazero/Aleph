@@ -20,13 +20,29 @@ use std::time::Duration;
 /// `SHA256SUMS.txt` carries one `<sha256>  <filename>` line per asset.
 /// The file is fetched alongside the installer and the installer's
 /// hash is matched against the line for its filename before execution.
-/// When the asset is missing (404), we log a warning and proceed —
-/// the verification is opt-in until the release process publishes the
-/// file. To enforce fail-closed once a stable process is in place,
-/// flip `SOFT_FAIL_ON_MISSING_CHECKSUMS` to `false`.
+/// When the SHA256SUMS manifest is missing (404 / network error), the
+/// installer is not executed unless the operator explicitly opts in via
+/// the `ALEPH_UPDATE_SOFT_FAIL=1` environment variable.
+///
+/// Rationale: a soft-fail default means a single DNS hijack / MITM against
+/// GitHub's release endpoint can replace the binary with arbitrary code
+/// that the user immediately runs with their privileges. The original
+/// `true` default existed only because the release process did not yet
+/// publish `SHA256SUMS.txt` for every release; that process is now
+/// stable enough to require explicit opt-in for the unsafe path.
 const SHA256SUMS_URL: &str =
     "https://github.com/rootazero/Aleph/releases/latest/download/SHA256SUMS.txt";
-const SOFT_FAIL_ON_MISSING_CHECKSUMS: bool = true;
+const SOFT_FAIL_ON_MISSING_CHECKSUMS: bool = false;
+
+fn soft_fail_enabled() -> bool {
+    if SOFT_FAIL_ON_MISSING_CHECKSUMS {
+        return true;
+    }
+    matches!(
+        std::env::var("ALEPH_UPDATE_SOFT_FAIL").ok().as_deref(),
+        Some("1") | Some("true") | Some("yes")
+    )
+}
 
 /// Human-facing releases page (shown on lookup failure).
 const RELEASES_PAGE: &str = "https://github.com/rootazero/Aleph/releases/latest";
@@ -113,7 +129,7 @@ fn is_newer(latest: &str, current: &str) -> bool {
 ///      and match it against the line for the installer's filename.
 ///      Mismatch is a hard failure (no execute).
 ///   4. If SHA256SUMS is not yet published (404), behaviour is governed
-///      by [`SOFT_FAIL_ON_MISSING_CHECKSUMS`]: today we warn + proceed
+///      by [`soft_fail_enabled`]: today we warn + proceed
 ///      for backward compatibility with pre-checksums releases; flip
 ///      to false once the release process always publishes SHA256SUMS.
 ///   5. Write the verified bytes to a temp file and execute that file
@@ -159,10 +175,11 @@ fn run_installer() -> Result<(), Box<dyn Error>> {
         Err(e) => {
             // Network error on the checksums fetch is treated like a
             // soft-fail for now; the installer itself still went over
-            // HTTPS. If we want strict mode here too, flip to hard-fail.
-            if !SOFT_FAIL_ON_MISSING_CHECKSUMS {
+            // HTTPS. To enforce hard-fail, set `SOFT_FAIL_ON_MISSING_CHECKSUMS=false`
+            // and do NOT export `ALEPH_UPDATE_SOFT_FAIL`.
+            if !soft_fail_enabled() {
                 return Err(format!(
-                    "failed to fetch SHA256SUMS and SOFT_FAIL_ON_MISSING_CHECKSUMS=false: {e}"
+                    "failed to fetch SHA256SUMS and soft-fail disabled: {e}"
                 )
                 .into());
             }
@@ -198,10 +215,10 @@ fn run_installer() -> Result<(), Box<dyn Error>> {
             &actual[..16],
             installer_bytes.len()
         );
-    } else if !SOFT_FAIL_ON_MISSING_CHECKSUMS {
+    } else if !soft_fail_enabled() {
         return Err(
-            "SHA256SUMS.txt not published for this release and SOFT_FAIL_ON_MISSING_CHECKSUMS=false; \
-             refusing to install without integrity check"
+            "SHA256SUMS.txt not published for this release and soft-fail disabled; \
+             refusing to install without integrity check (set ALEPH_UPDATE_SOFT_FAIL=1 to override)"
                 .into(),
         );
     } else {

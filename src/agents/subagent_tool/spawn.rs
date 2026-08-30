@@ -209,7 +209,25 @@ impl SubagentTool {
         // `run_loop`'s `with_request_scope` / `orchestrator::dispatch`'s
         // re-establishment at their own spawn boundaries.
         let carried = CarriedAttribution::capture();
-        tokio::spawn(async move {
+        // Outer AssertUnwindSafe so a panic in `tracker.mark_completed`
+        // / `record_settled` / the announce broadcast does not unwind
+        // the whole tokio task. The inner AssertUnwindSafe +
+        // catch_unwind only protects `runtime.run(...)` itself; the
+        // bookkeeping around it can still panic on a poisoned mutex,
+        // a record-store I/O error, or a future inside
+        // `carried.reestablish`. Without this outer wrapper the spawned
+        // task unwinds, `mark_completed` never runs, and durable
+        // recovery has no record of why the child disappeared.
+        //
+        // We cannot `await` the JoinHandle here because `spawn_background`
+        // is a sync function, so the panic recovery is delegated to
+        // tokio's runtime-level panic handler (which logs and continues)
+        // rather than a per-task recovery arm. The panic is therefore
+        // observable in the daemon logs as a tokio task panic with the
+        // `child_request_id` in scope; recovery operators rely on
+        // `tracker.list_for_scope` to surface any child left in
+        // `running` across restarts.
+        tokio::spawn(AssertUnwindSafe(async move {
             let _cancel_guard = CancelGuard::new(bridge_cancel.clone());
             let runtime_config = AgentRuntimeConfig {
                 agent_def,
@@ -386,7 +404,7 @@ impl SubagentTool {
                     )
                     .await;
             }
-        });
+        }));
 
         request_id
     }

@@ -5,6 +5,7 @@
 
 use std::time::{Duration, Instant};
 
+use aleph_protocol::terminate::{self, UiLocale};
 use aleph_protocol::{
     peer_message_is_renderable, summarize_tool_input, AgentTracePresentationPreset,
     AgentTraceToolResult, AskUserQuestion, StreamEvent,
@@ -48,6 +49,20 @@ fn run_scoped_id(event: &StreamEvent) -> Option<&str> {
             let id = other.run_id();
             (!id.is_empty()).then_some(id)
         }
+    }
+}
+
+/// The system line a non-clean run leaves in the transcript.
+///
+/// Both halves move together on purpose. `terminate::label` is localised, so
+/// leaving the English lead-in in place would render "Run stopped: 已达迭代上限"
+/// — a sentence in neither language. The lead-in is this surface's own copy
+/// (the TUI has no message catalogue) while the label is the shared table's.
+pub(super) fn halt_notice(token: &str, locale: UiLocale) -> String {
+    let label = terminate::label(token, locale);
+    match locale {
+        UiLocale::En => format!("Run stopped: {label}"),
+        UiLocale::Zh => format!("运行已停止：{label}"),
     }
 }
 
@@ -503,24 +518,18 @@ impl AppState {
                 }
                 self.mark_current_assistant_complete();
 
-                // Surface non-clean terminations (a hit cap / exhausted budget)
-                // so a truncated answer doesn't read as a clean finish.
-                // `terminate_detail` carries the granular cap inside the budget
-                // umbrella; fall back to the reason token when absent.
-                if let Some(reason) = summary.terminate_reason.as_deref() {
-                    if reason != "completed" {
-                        let raw = summary.terminate_detail.as_deref().unwrap_or(reason);
-                        let label = match raw {
-                            "hit_max_iterations" => "hit max iterations",
-                            "context_budget_exhausted" => "context budget exhausted",
-                            "max_output_tokens_exhausted" => "max output tokens reached",
-                            "budget_exhausted_partial_result" => {
-                                "budget exhausted (partial result)"
-                            }
-                            other => other,
-                        };
-                        self.add_system_message(format!("Run stopped: {label}"));
-                    }
+                // Surface non-clean terminations (a hit cap / a crash) so a
+                // truncated answer doesn't read as a clean finish. Both the
+                // detail-beats-reason precedence and the words come from
+                // `aleph_protocol::terminate`, the one table `aleph exec` and
+                // `aleph watch` read as well — this arm used to carry a private
+                // four-label match, which is how three surfaces ended up
+                // covering three different subsets of the same enum.
+                if let Some(token) = terminate::effective_token(
+                    summary.terminate_reason.as_deref(),
+                    summary.terminate_detail.as_deref(),
+                ) {
+                    self.add_system_message(halt_notice(token, UiLocale::from_env()));
                 }
 
                 Action::ScrollToBottomIfAutoScroll

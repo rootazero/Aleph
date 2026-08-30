@@ -91,8 +91,11 @@ fn decide(hr: &HookResult) -> StopDecision {
 }
 
 /// Truncate at a char boundary within `cap` BYTES — the cap is an environment
-/// variable size limit, which is measured in bytes, not characters.
-fn truncate_chars(s: &str, cap: usize) -> &str {
+/// variable size limit, which is measured in bytes, not characters. Renamed
+/// from the legacy `truncate_chars` (2026-08-29): the name had drifted from
+/// `truncate_bytes` semantics and risked reintroducing the UTF-8 cap×3 bug
+/// the byte-cap env-truncate commit (7f2298813) fixed.
+fn truncate_bytes_within(s: &str, cap: usize) -> &str {
     crate::utils::text_format::truncate_bytes(s, cap)
 }
 
@@ -161,7 +164,7 @@ impl ExtensionStopHookVerifier {
         if let Some(text) = ctx.final_text {
             hctx = hctx.with_env(
                 "LAST_ASSISTANT_MESSAGE",
-                truncate_chars(text, LAST_MESSAGE_ENV_CAP).to_string(),
+                truncate_bytes_within(text, LAST_MESSAGE_ENV_CAP).to_string(),
             );
         }
 
@@ -310,12 +313,12 @@ mod tests {
     }
 
     #[test]
-    fn truncate_chars_is_boundary_safe() {
+    fn truncate_bytes_within_is_boundary_safe() {
         let s = "日本語テキスト"; // 3-byte chars
-        let t = truncate_chars(s, 7);
+        let t = truncate_bytes_within(s, 7);
         assert!(t.len() <= 7);
         assert!(s.starts_with(t));
-        assert_eq!(truncate_chars("short", 100), "short");
+        assert_eq!(truncate_bytes_within("short", 100), "short");
     }
 
     #[cfg(unix)]

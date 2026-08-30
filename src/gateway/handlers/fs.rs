@@ -98,25 +98,67 @@ fn resolve_roots(cfg: &Config) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Check that `candidate` (already canonical) is inside at least one
-/// allowed root. Returns the canonical path on success.
+/// Check that `candidate` canonicalises inside at least one allowed root AND
+/// is not a protected credential location. Returns the canonical path on
+/// success.
 ///
 /// The returned `PathBuf` is the **canonical** form and stays that way — the
-/// `starts_with` above compares it against roots that are canonical too, and
+/// `starts_with` below compares it against roots that are canonical too, and
 /// [`display_string`] is only reversible for short drive-letter paths, so
 /// simplifying one side and not the other turns an allow into a deny. Only the
 /// strings that leave this process are rendered.
+///
+/// # Why the credential denylist runs here and not at each handler
+///
+/// `allowed_roots` defaults to `["~"]`, so scope containment alone admits
+/// `~/.ssh/id_ed25519`, `<config_dir>/secrets.vault` and the device-pairing
+/// databases under `<config_dir>/data` — the exact set
+/// [`get_denied_paths`] exists to refuse, and which the model's own
+/// `file_read` refuses by name. `fs.*` is member-open (see
+/// `method_admin.rs`), so this was a third file-reading face binding neither
+/// that list nor the operator's `[sandbox] deny_read_globs`.
+///
+/// It is enforced in this function rather than at the three call sites
+/// because every handler in this module already funnels through it, so a
+/// future sibling handler inherits the refusal instead of having to remember
+/// it. The refusal reuses the OUT_OF_SCOPE shape so it is indistinguishable
+/// from an out-of-roots refusal on the wire — a denial that names what it
+/// found is an oracle for whether a credential file exists.
 fn validate_in_scope(candidate: &Path, roots: &[PathBuf]) -> Result<PathBuf, String> {
     let canon = std::fs::canonicalize(candidate)
         .map_err(|e| format!("cannot canonicalise '{}': {e}", display_string(candidate)))?;
-    if roots.iter().any(|r| canon.starts_with(r)) {
-        Ok(canon)
-    } else {
-        Err(format!(
+    if !roots.iter().any(|r| canon.starts_with(r)) {
+        return Err(format!(
             "path '{}' is outside the configured projects.allowed_roots",
             display_string(&canon)
-        ))
+        ));
     }
+    refuse_if_denied(&canon)?;
+    Ok(canon)
+}
+
+/// The credential-denylist half of [`validate_in_scope`], split out because
+/// `fs.create_dir` must also apply it to a path that does not exist yet (and
+/// therefore cannot be canonicalised).
+///
+/// Single source: [`crate::builtin_tools::file_ops::path_is_denied`] over
+/// [`crate::builtin_tools::file_ops::get_denied_paths`] — the same pair the
+/// file tools call. Copying the list here would be a second answer to "what is
+/// a credential store", which is precisely how this face came to disagree with
+/// the tool face.
+fn refuse_if_denied(path: &Path) -> Result<(), String> {
+    if crate::builtin_tools::file_ops::path_is_denied(
+        path,
+        &crate::builtin_tools::file_ops::get_denied_paths(),
+    ) {
+        // Same wording shape as the out-of-roots refusal on purpose: see the
+        // no-oracle note on `validate_in_scope`.
+        return Err(format!(
+            "path '{}' is outside the configured projects.allowed_roots",
+            display_string(path)
+        ));
+    }
+    Ok(())
 }
 
 // ─── fs.allowed_roots ────────────────────────────────────────────────────────
@@ -335,6 +377,15 @@ pub async fn handle_create_dir(request: JsonRpcRequest, config: SharedConfig) ->
     };
 
     let target = parent_canon.join(trimmed);
+    // The parent check above cannot see this: with `allowed_roots = ["~"]` the
+    // parent `~` is legitimately in scope while `~/.ssh` is a denied leaf. The
+    // target does not exist yet, so it cannot be canonicalised — but it is
+    // built by joining onto an already-canonical parent, and `name` is
+    // separator-free and not `.`/`..` (checked above), so it is canonical by
+    // construction.
+    if let Err(msg) = refuse_if_denied(&target) {
+        return JsonRpcResponse::error(request.id, OUT_OF_SCOPE, &msg);
+    }
     if target.exists() {
         return JsonRpcResponse::error(
             request.id,
@@ -691,5 +742,130 @@ mod tests {
         // All-ASCII content decodes 1:1, so the capped byte slice maps to
         // exactly READ_FILE_CAP chars.
         assert_eq!(result["content"].as_str().unwrap().len(), READ_FILE_CAP);
+    }
+
+    // ─── credential denylist parity with the tool face ───────────────────
+    //
+    // These two are the pair: the behavioural one proves the refusal actually
+    // happens, the source-level one proves a future sibling handler cannot
+    // reach the filesystem without it.
+
+    /// Derived from `get_denied_paths()` itself, not from a list restated
+    /// here: every entry that exists on this machine is exercised against the
+    /// RPC face with `allowed_roots` set to that entry's own parent — i.e.
+    /// scope containment says yes and only the denylist can say no. Goes red
+    /// the day someone adds a denylist entry `fs.*` does not honour.
+    ///
+    /// `allowed_roots` defaults to `["~"]`, so on a stock install every
+    /// `~/.*` credential store below is genuinely in scope.
+    #[tokio::test]
+    async fn every_credential_denylist_entry_is_refused_by_the_rpc_face() {
+        use crate::builtin_tools::file_ops::get_denied_paths;
+
+        let mut checked = 0usize;
+        for entry in get_denied_paths() {
+            // Pattern entries (`[sandbox] deny_read_globs`) name no single
+            // path to materialise; the literal entries are what this asserts.
+            if entry.contains('*') || entry.contains('%') {
+                continue;
+            }
+            let expanded = match entry.strip_prefix("~/") {
+                Some(rest) => match dirs::home_dir() {
+                    Some(h) => h.join(rest),
+                    None => continue,
+                },
+                None => PathBuf::from(&entry),
+            };
+            // Only entries that exist can be canonicalised — and a refusal we
+            // got because the path is missing would prove nothing.
+            let Ok(canon) = std::fs::canonicalize(&expanded) else {
+                continue;
+            };
+            let Some(parent) = canon.parent().map(Path::to_path_buf) else {
+                continue;
+            };
+            let cfg = cfg_with_roots(vec![parent.to_string_lossy().to_string()]);
+            let target = canon.to_string_lossy().to_string();
+
+            let resp = if canon.is_dir() {
+                handle_list_dir(req("fs.list_dir", json!({ "path": &target })), cfg).await
+            } else {
+                handle_read_file(req("fs.read_file", json!({ "path": &target })), cfg).await
+            };
+
+            assert!(
+                resp.result.is_none(),
+                "fs.* returned contents for the denied credential location \
+                 '{entry}' — `file_read` refuses it by name, so the RPC face \
+                 is the wider one"
+            );
+            let code = resp.error.as_ref().map(|e| e.code);
+            assert_eq!(
+                code,
+                Some(OUT_OF_SCOPE),
+                "'{entry}' must be refused with the same code as an \
+                 out-of-roots path, so the wire cannot be used as an oracle \
+                 for which credential files exist"
+            );
+            checked += 1;
+        }
+
+        assert!(
+            checked > 0,
+            "this test proved nothing: no denylist entry existed on this \
+             machine, so the loop never reached an assertion"
+        );
+    }
+
+    /// The chokepoint property, asserted on the source: no handler in this
+    /// module may touch the filesystem without going through
+    /// `validate_in_scope`, and `validate_in_scope` must consult the
+    /// credential denylist. Enumerating today's three handlers would say
+    /// nothing about the fourth.
+    #[test]
+    fn the_scope_check_is_the_only_way_to_the_filesystem_and_it_consults_the_denylist() {
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/gateway/handlers/fs.rs"
+        ))
+        .expect("this file is readable from its own test");
+        let production = crate::utils::source_scan::production_prefix(&src);
+        let code = crate::utils::source_scan::strip_comment_lines(&production);
+
+        assert!(
+            code.contains("refuse_if_denied(&canon)?"),
+            "validate_in_scope must run the canonical path through the shared \
+             credential denylist; without that line `allowed_roots = [\"~\"]` \
+             admits ~/.ssh, secrets.vault and the device-pairing databases"
+        );
+        assert!(
+            code.contains("file_ops::path_is_denied")
+                && code.contains("file_ops::get_denied_paths"),
+            "the denylist must be the file tools' own single source, not a \
+             second copy of what counts as a credential store"
+        );
+
+        // Every filesystem verb this module reaches for must be preceded, in
+        // its own function, by the scope check.
+        for verb in [
+            "tokio::fs::read(",
+            "tokio::fs::read_dir(",
+            "tokio::fs::create_dir_all(",
+        ] {
+            let Some(pos) = code.find(verb) else {
+                panic!(
+                    "{verb} vanished from fs.rs — this guard now scans for a \
+                     shape that no longer exists and would pass over anything"
+                );
+            };
+            let before = &code[..pos];
+            let fn_start = before.rfind("pub async fn ").unwrap_or(0);
+            assert!(
+                before[fn_start..].contains("validate_in_scope("),
+                "{verb} is reached by a handler that never called \
+                 validate_in_scope — that handler binds neither allowed_roots \
+                 nor the credential denylist"
+            );
+        }
     }
 }

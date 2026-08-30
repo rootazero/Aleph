@@ -1,16 +1,19 @@
 //! Trace API — wraps trace.list / trace.get RPC methods.
 
 use crate::context::DashboardState;
-use aleph_protocol::{AgentTraceReplay, AgentTraceReplayListItem};
+use aleph_protocol::AgentTraceReplay;
 
 pub struct TraceApi;
 
 impl TraceApi {
-    /// Fetch the list of available trace replays.
-    pub async fn list(state: &DashboardState) -> Result<Vec<AgentTraceReplayListItem>, String> {
-        let result = state.rpc_call("trace.list", serde_json::json!({})).await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse trace list: {e}"))
-    }
+    // `TraceApi::list` was CUT on 2026-08-29. `trace.list` is admin-gated and
+    // exists for the two operator debugging surfaces (`aleph trace list`, the
+    // TUI's `/replay list`); the Panel calls `get` and `by_runs` only, and a
+    // repo-wide grep found zero call sites for `list`. It also carried the
+    // CLI's parse bug verbatim — a zero-consumer wrapper around a broken
+    // contract is the R10 case exactly: cutting it is cheaper than repairing
+    // a caller that does not exist. Re-add it against `AgentTraceListPage` on
+    // the day a Panel view actually needs the listing.
 
     /// Fetch a full trace replay for a given task.
     pub async fn get(state: &DashboardState, task_id: &str) -> Result<AgentTraceReplay, String> {

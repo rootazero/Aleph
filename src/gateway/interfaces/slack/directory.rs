@@ -341,33 +341,35 @@ impl ConversationDirectory {
                 query.push(("cursor", c.clone()));
             }
 
-            let resp: serde_json::Value = self
+            // Bind before `.json()` consumes it: the status and `Retry-After`
+            // are the second carrier of "this is a tier limit", and this face
+            // used to read neither.
+            let raw = self
                 .client
                 .get(format!("{}/{method}", self.base()))
                 .header("Authorization", format!("Bearer {}", self.bot_token))
                 .query(&query)
                 .send()
                 .await
-                .map_err(|e| ChannelError::ReceiveFailed(format!("{method} request failed: {e}")))?
-                .json()
-                .await
-                .map_err(|e| {
-                    ChannelError::ReceiveFailed(format!("{method} response parse failed: {e}"))
-                })?;
+                .map_err(|e| ChannelError::ReceiveFailed(format!("{method} request failed: {e}")))?;
+            let status = raw.status();
+            let retry_after = super::errors::retry_after_secs(raw.headers());
+            let resp: serde_json::Value = raw.json().await.map_err(|e| {
+                ChannelError::ReceiveFailed(format!("{method} response parse failed: {e}"))
+            })?;
 
             if resp["ok"].as_bool() != Some(true) {
                 let err = resp["error"].as_str().unwrap_or("unknown error");
-                // Slack's error strings are the actionable part — a
-                // `missing_scope` here is a workspace-admin fix, not a retry.
-                return Err(match err {
-                    "ratelimited" => ChannelError::RateLimited {
-                        retry_after_secs: 30,
-                    },
-                    "invalid_auth" | "not_authed" | "account_inactive" => {
-                        ChannelError::AuthFailed(format!("Slack {method}: {err}"))
-                    }
-                    _ => ChannelError::ReceiveFailed(format!("Slack {method} failed: {err}")),
-                });
+                // Classified by the adapter's single source so this face and
+                // the send face cannot answer the same Slack error string with
+                // two different delivery semantics again.
+                return Err(super::errors::classify_slack_error(
+                    method,
+                    Some(status),
+                    err,
+                    retry_after,
+                    super::errors::SlackFallback::Receive,
+                ));
             }
 
             if let Some(items) = resp.get(key).and_then(serde_json::Value::as_array) {

@@ -28,6 +28,7 @@ use aleph_protocol::{AgentTraceEvent, StreamEvent};
 use tokio::sync::mpsc;
 
 use crate::output::{exec_echo, markdown, stream_md::MarkdownStream, Spinner};
+use aleph_client::CliResult;
 
 /// How long to wait for the `RunComplete` receipt after the final response
 /// chunk. The drain emits it immediately after the run settles, so this only
@@ -62,7 +63,7 @@ pub struct FollowOutcome {
 pub async fn follow_run(
     events: &mut mpsc::Receiver<StreamEvent>,
     opts: &FollowOptions,
-) -> FollowOutcome {
+) -> CliResult<FollowOutcome> {
     let mut streamed_raw = String::new();
     let mut fallback: Option<String> = None;
     let mut tool_count = 0usize;
@@ -241,7 +242,7 @@ pub async fn follow_run(
                 if !opts.json {
                     eprintln!("Error: {error}");
                 }
-                break;
+                return Err(aleph_client::CliError::Other(error));
             }
             StreamEvent::AskUser {
                 question,
@@ -303,7 +304,7 @@ pub async fn follow_run(
     }
 
     let final_text = exec_echo::resolve_final_text(&streamed_raw, fallback.as_deref()).to_string();
-    FollowOutcome { final_text }
+    Ok(FollowOutcome { final_text })
 }
 
 /// Print one rendered Markdown block to stdout, blank-line separated from

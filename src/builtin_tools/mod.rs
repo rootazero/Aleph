@@ -51,6 +51,7 @@ pub mod desktop;
 pub mod doctor;
 pub mod error;
 pub mod file_ops;
+pub mod file_search;
 pub mod flag_user_correction;
 pub mod gateway_route;
 pub mod generation;
@@ -196,6 +197,7 @@ pub use file_ops::{
     ApplyPatchArgs, ApplyPatchOutput, ApplyPatchTool, FileEditTool, FileOpsArgs, FileOpsTool,
     FileReadTool, FileWriteTool,
 };
+pub use file_search::{FindArgs, FindOutput, FindTool, GrepArgs, GrepOutput, GrepTool};
 pub use flag_user_correction::{
     FlagUserCorrectionArgs, FlagUserCorrectionOutput, FlagUserCorrectionTool,
 };

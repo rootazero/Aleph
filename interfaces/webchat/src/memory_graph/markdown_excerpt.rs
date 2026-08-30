@@ -10,11 +10,27 @@ use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
 const MAX_LEN: usize = 180;
 
+/// Input cap before parsing. `render_excerpt` only emits 180 chars, so
+/// parsing multi-megabyte notes is pure layout cost. Anything longer is
+/// truncated to this prefix and then processed normally.
+const MAX_INPUT_LEN: usize = 4096;
+
 /// Render `src` (raw Markdown) into a 180-char whitelisted HTML string.
 /// Truncates with an ellipsis if the source is longer.
 #[must_use]
 pub fn render_excerpt(src: &str) -> String {
-    let parser = Parser::new(src);
+    let src = if src.chars().count() > MAX_INPUT_LEN {
+        let mut truncated: String = src.chars().take(MAX_INPUT_LEN).collect();
+        truncated.push('\u{2026}');
+        // Leak the owned string back into a local borrow; this function is
+        // not hot enough for the extra allocation to matter, and it keeps the
+        // parser path uniform.
+        std::borrow::Cow::Owned(truncated)
+    } else {
+        std::borrow::Cow::Borrowed(src)
+    };
+
+    let parser = Parser::new(&src);
     let mut out = String::with_capacity(src.len().min(MAX_LEN * 2));
     let mut chars_used = 0_usize;
     // pulldown splits "[[x]]" into several Text events at the bracket

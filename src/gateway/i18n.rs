@@ -43,6 +43,26 @@ impl Locale {
     }
 }
 
+/// The terminal clients' locale, for the one table both sides render from.
+///
+/// [`aleph_protocol::terminate`] answers "what do I call this halt" for every
+/// surface that renders a `terminate_reason`, and deliberately resolves its own
+/// locale from POSIX environment variables — because its readers are `aleph-cli`
+/// and `aleph-tui`, which cannot read the server's `config.toml` and may be
+/// pointed at another machine entirely. The server-side channel notice reads the
+/// same table but is **not** a terminal client: it is emitted by this process,
+/// beside a halt paragraph this module already renders from
+/// `[general] language`. This conversion is the seam between those two answers,
+/// and it exists so the seam is one line rather than a second locale resolver.
+impl From<Locale> for aleph_protocol::terminate::UiLocale {
+    fn from(locale: Locale) -> Self {
+        match locale {
+            Locale::En => Self::En,
+            Locale::Zh => Self::Zh,
+        }
+    }
+}
+
 /// The process-wide UI locale, installed once at server boot.
 ///
 /// # Why a process global rather than a parameter
@@ -704,15 +724,31 @@ pub fn render_loop_halt(
              Trim the conversation history or start a new session."
         ),
 
-        // Completed and Cancelled should never reach here — callers gate on
-        // `is_hit_limit()`. Fall back to a generic so we never panic in prod.
+        // Completed, Cancelled and Failed should never reach here — callers
+        // gate on `is_hit_limit()`, which is false for all three. Fall back to
+        // a generic so we never panic in prod.
         // (`TerminateReason` is `#[non_exhaustive]` for downstream crates but
         // exhaustive within this crate — a new variant added in dispatch.rs
         // will force this match to be updated.)
-        (TerminateReason::Completed | TerminateReason::Cancelled, Locale::Zh) => {
+        //
+        // `Failed` gets no message of its own, deliberately. This function has
+        // exactly one caller, on the flow's SUCCESS arm
+        // (`helpers::run_dispatch_and_drain_classified`, after
+        // `handle.completion` yielded `Ok(Ok(outcome))`), while `Failed` is
+        // only ever written when the run returned `Err`. Prose written for it
+        // here could not be reached by anyone — which is the exact shape of
+        // the `ReactiveCompactExhausted` message below, whose bilingual advice
+        // no user ever saw. The failure's real text rides the `RunError` frame.
+        (
+            TerminateReason::Completed | TerminateReason::Cancelled | TerminateReason::Failed,
+            Locale::Zh,
+        ) => {
             format!("抱歉，会话提前结束（{iterations} 次迭代，{tool_calls} 次工具调用）。")
         }
-        (TerminateReason::Completed | TerminateReason::Cancelled, Locale::En) => format!(
+        (
+            TerminateReason::Completed | TerminateReason::Cancelled | TerminateReason::Failed,
+            Locale::En,
+        ) => format!(
             "Sorry, the session ended early ({iterations} iterations, \
              {tool_calls} tool calls)."
         ),
@@ -820,6 +856,26 @@ mod tests {
         assert!(msg.contains("200 iterations"), "{msg}");
         assert!(msg.contains("42 tool calls"), "{msg}");
         assert!(msg.contains("max_iterations"), "{msg}");
+    }
+
+    /// `Failed` deliberately has no message of its own: this function is
+    /// only ever called on the flow's SUCCESS arm, and `Failed` is only ever
+    /// written on the failure arm, so any prose written for it would be
+    /// unreachable — the same shape as `ReactiveCompactExhausted`'s advice,
+    /// which no user saw for as long as it existed.
+    ///
+    /// Pinned so that a future editor who adds one has to decide deliberately
+    /// rather than discover the arm and fill it in.
+    #[test]
+    fn render_loop_halt_gives_a_failed_run_the_generic_early_end() {
+        for locale in [Locale::En, Locale::Zh] {
+            assert_eq!(
+                render_loop_halt(&TerminateReason::Failed, 3, 5, locale),
+                render_loop_halt(&TerminateReason::Completed, 3, 5, locale),
+                "Failed shares the unreachable-arm text; see this test's doc"
+            );
+        }
+        assert!(!TerminateReason::Failed.is_hit_limit());
     }
 
     #[test]

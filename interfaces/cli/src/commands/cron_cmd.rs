@@ -4,29 +4,27 @@
 //! every business rule (schedule validation, `ScheduleKind` tagging, persistence);
 //! the CLI just transports flags into JSON and renders responses.
 
-use serde::Deserialize;
 use serde_json::{json, Value};
+
+use aleph_protocol::cron::{CronJobRow, CronListResponse};
 
 use crate::output;
 use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 
-/// Deserialized from JSON-RPC response
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct CronJob {
-    id: String,
-    schedule: String,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    last_run: Option<String>,
-    #[serde(default)]
-    next_run: Option<String>,
-    #[serde(default)]
-    enabled: bool,
-}
-
-/// List all cron jobs
+/// List all cron jobs.
+///
+/// Parses [`CronListResponse`] — the type the server CONSTRUCTS — instead of a
+/// private struct guessing at the shape. The guess this replaced declared a
+/// required `schedule: String`, a key `cron.list` has never sent, so
+/// `from_value` errored for every non-empty job list, `.unwrap_or_default()`
+/// turned that into an empty `Vec`, and this command reported
+/// "No cron jobs configured" with exit code 0 on a server running jobs. Its
+/// `description` / `last_run` / `next_run` columns were dead for the same
+/// reason.
+///
+/// A decode failure is now propagated rather than folded into emptiness:
+/// "I could not read the answer" and "there are no jobs" are two different
+/// facts and only one of them is this command's to report.
 pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url, config).await?;
 
@@ -35,23 +33,24 @@ pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult
     if json {
         output::print_json(&result);
     } else {
-        let jobs: Vec<CronJob> =
-            serde_json::from_value(result.get("jobs").cloned().unwrap_or(result.clone()))
-                .unwrap_or_default();
+        let response: CronListResponse = serde_json::from_value(result.clone())
+            .map_err(|e| CliError::Other(format!("cron.list returned an unreadable shape: {e}")))?;
 
-        if jobs.is_empty() {
+        if response.jobs.is_empty() {
             println!("No cron jobs configured");
         } else {
-            let headers = &["ID", "Schedule", "Description", "Last Run", "Next Run"];
-            let rows: Vec<Vec<String>> = jobs
+            let headers = &["ID", "NAME", "SCHEDULE", "STATE", "NEXT RUN", "LAST RUN"];
+            let rows: Vec<Vec<String>> = response
+                .jobs
                 .iter()
                 .map(|j| {
                     vec![
                         j.id.clone(),
-                        j.schedule.clone(),
-                        j.description.clone().unwrap_or_else(|| "-".to_string()),
-                        j.last_run.clone().unwrap_or_else(|| "-".to_string()),
-                        j.next_run.clone().unwrap_or_else(|| "-".to_string()),
+                        j.name.clone(),
+                        j.schedule_summary(),
+                        job_state(j),
+                        render_epoch_ms(j.next_run_at),
+                        render_epoch_ms(j.last_run_at),
                     ]
                 })
                 .collect();
@@ -62,6 +61,31 @@ pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult
 
     client.close().await?;
     Ok(())
+}
+
+/// The one word that answers "will this job fire again?".
+///
+/// `enabled` alone cannot: a permanently-failed job is *parked* — switch still
+/// on, nothing scheduled — so a column that shows only the switch shows a dead
+/// job as healthy. That is why `parked` is computed server-side, and it reached
+/// no client until this row type existed.
+fn job_state(job: &CronJobRow) -> String {
+    if !job.enabled {
+        "disabled".to_string()
+    } else if job.parked {
+        "parked".to_string()
+    } else {
+        "enabled".to_string()
+    }
+}
+
+/// Render an epoch-**milliseconds** timestamp, or `-` when there is none.
+fn render_epoch_ms(ms: Option<i64>) -> String {
+    match ms {
+        Some(ms) => chrono::DateTime::from_timestamp_millis(ms)
+            .map_or_else(|| ms.to_string(), |dt| dt.to_rfc3339()),
+        None => "-".to_string(),
+    }
 }
 
 /// Show cron scheduler status

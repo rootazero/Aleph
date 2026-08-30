@@ -137,10 +137,17 @@ impl BuiltinToolRegistry {
                 }
                 _ => None,
             };
-            let resolve = plan_manager.as_ref().map(|pm| {
-                use crate::builtin_tools::team::PlanResolveTool;
-                PlanResolveTool::new(Arc::clone(pm), current_agent_id.clone())
-            });
+            let resolve = match (plan_manager.as_ref(), config.team_store.as_ref()) {
+                (Some(pm), Some(team_store)) => Some({
+                    use crate::builtin_tools::team::PlanResolveTool;
+                    PlanResolveTool::new(
+                        Arc::clone(pm),
+                        current_agent_id.clone(),
+                        Arc::clone(team_store),
+                    )
+                }),
+                _ => None,
+            };
 
             // Register parameter schemas
             {
@@ -191,8 +198,11 @@ impl BuiltinToolRegistry {
                     Arc::clone(team_store),
                     current.clone(),
                 );
-                let resolve =
-                    LifecycleResolveShutdownTool::new(Arc::clone(router), current.clone());
+                let resolve = LifecycleResolveShutdownTool::new(
+                    Arc::clone(router),
+                    current.clone(),
+                    Arc::clone(team_store),
+                );
                 (idle, request, resolve)
             };
 
@@ -300,22 +310,35 @@ impl BuiltinToolRegistry {
         let (session_collaborate_tool, session_turn_tool, session_read_tool) = {
             let current_agent_id = current_agent_id.clone();
 
-            let collaborate = config.session_coordinator.as_ref().map(|coord| {
-                crate::builtin_tools::team::SessionCollaborateTool::new(
+            let collaborate = match (
+                config.session_coordinator.as_ref(),
+                config.team_store.as_ref(),
+            ) {
+                (Some(coord), Some(team_store)) => Some(
+                    crate::builtin_tools::team::SessionCollaborateTool::new(
+                        Arc::clone(coord),
+                        current_agent_id.clone(),
+                        Arc::clone(team_store),
+                    ),
+                ),
+                _ => None,
+            };
+            let turn = config.session_coordinator.as_ref().map(|coord| {
+                crate::builtin_tools::team::SessionTurnTool::new(
                     Arc::clone(coord),
                     current_agent_id.clone(),
                 )
             });
-            let turn = config.session_coordinator.as_ref().map(|coord| {
-                crate::builtin_tools::team::SessionTurnTool::new(
-                    Arc::clone(coord),
-                    current_agent_id,
-                )
-            });
-            let read = config
-                .session_store
-                .as_ref()
-                .map(|store| crate::builtin_tools::team::SessionReadTool::new(Arc::clone(store)));
+            let read = match (config.session_store.as_ref(), config.team_store.as_ref()) {
+                (Some(store), Some(team_store)) => Some(
+                    crate::builtin_tools::team::SessionReadTool::new(
+                        Arc::clone(store),
+                        Arc::clone(team_store),
+                        current_agent_id.clone(),
+                    ),
+                ),
+                _ => None,
+            };
 
             // Register parameter schemas
             {
@@ -357,6 +380,10 @@ impl BuiltinToolRegistry {
         // Google Meet tool — wraps the optional out-of-core transport bridge.
         let google_meet_tool = crate::builtin_tools::google_meet::GoogleMeetTool::new(
             config.google_meet_bridge.clone(),
+            config
+                .ssrf_policy
+                .clone()
+                .unwrap_or_default(),
         );
 
         let skill_system = crate::skill::shared_skill_system().clone();

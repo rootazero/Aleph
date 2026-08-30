@@ -305,27 +305,22 @@ impl BrowserBackend for ChromeMcpBackend {
             ));
         }
         // BROWSER-R4-11: detect text-shaped errors before trying to
-        // base64-decode the text as PNG. An MCP error string like
-        // "Error: page not loaded" or "Permission denied for screenshot"
-        // would otherwise fail with "base64 decode: Invalid byte ..."
-        // and surface no diagnostic of the underlying reason. Cheap to
-        // detect (only the first 32 chars matter); restores the error
-        // the MCP server actually emitted.
-        let head = text.trim_start();
-        let head_lower = head.to_ascii_lowercase();
-        if head_lower.starts_with("error")
-            || head_lower.starts_with("failed:")
-            || head_lower.starts_with("permission denied")
-            || head_lower.starts_with("access denied")
-        {
-            return Err(BrowserError::ActionFailed(format!(
+        // base64-decode the text as PNG. The previous shape sniffed for
+        // "error" / "failed:" / "permission denied" / "access denied"
+        // prefixes — a string-prefix heuristic on a wire contract that
+        // is otherwise pinned by JSON shape, and a wording change in
+        // the MCP server would silently re-decode an error string as
+        // base64 (producing a confusing "Invalid byte" failure with no
+        // diagnostic of the underlying reason). Instead, try the
+        // base64 decode and treat a decode failure as the actual
+        // server-side error message. This is robust to wording changes
+        // and surfaces what the server actually said.
+        match base64::engine::general_purpose::STANDARD.decode(text.trim()) {
+            Ok(png_bytes) => Ok(ScreenshotOutput { png_bytes }),
+            Err(_) => Err(BrowserError::ActionFailed(format!(
                 "screenshot failed: {text}"
-            )));
+            ))),
         }
-        let png_bytes = base64::engine::general_purpose::STANDARD
-            .decode(&text)
-            .map_err(|e| BrowserError::ScreenshotFailed(format!("base64 decode: {e}")))?;
-        Ok(ScreenshotOutput { png_bytes })
     }
 
     async fn snapshot(&self, tab_id: &str) -> Result<SnapshotOutput, BrowserError> {
@@ -570,11 +565,16 @@ impl BrowserBackend for ChromeMcpBackend {
             args.insert("cpuThrottlingRate".into(), json!(rate));
         }
         if let Some(headers) = &opts.extra_http_headers {
-            // The MCP contract wants the header map as a JSON *string*.
-            let encoded = serde_json::to_string(headers).map_err(|e| {
-                BrowserError::ActionFailed(format!("encode extra_http_headers: {e}"))
-            })?;
-            args.insert("extraHttpHeaders".into(), json!(encoded));
+            // Pass the header map as a JSON *object*, not a string.
+            // The previous shape double-serialised: `to_string(headers)`
+            // produced a JSON string, then `json!(encoded)` wrapped that
+            // string in another JSON string, so the MCP server
+            // received a `extraHttpHeaders` argument whose value was a
+            // string-encoded JSON object instead of an object. Pin
+            // the wire shape with a doc comment rather than a test
+            // (a fake MCP server integration is the right place to
+            // assert the contract).
+            args.insert("extraHttpHeaders".into(), json!(headers));
         }
         if let Some(ua) = &opts.user_agent {
             args.insert("userAgent".into(), json!(ua));

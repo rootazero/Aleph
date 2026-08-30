@@ -22,7 +22,10 @@ pub(super) fn ProviderDetailPanel(
 ) -> impl IntoView {
     let i18n = use_i18n();
     let preset = RERANK_PRESETS.iter().find(|p| p.key == provider_key);
-    let preset_name = preset.map(|p| p.name).unwrap_or("Custom").to_string();
+    let preset_name = preset.map_or_else(
+        || t_string!(i18n, settings.reranking.preset_custom).to_string(),
+        |p| p.name.to_string(),
+    );
     let preset_key = provider_key.clone();
     let provider_key_for_badge = provider_key.clone();
     let provider_key_for_test = provider_key.clone();

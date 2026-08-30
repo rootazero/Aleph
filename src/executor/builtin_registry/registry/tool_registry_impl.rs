@@ -73,6 +73,8 @@ impl ToolRegistry for BuiltinToolRegistry {
             "web_fetch" => Box::pin(async move { self.web_fetch_tool.call_json(arguments).await }),
             "file_ops" => Box::pin(async move { self.file_ops_tool.call_json(arguments).await }),
             "file_read" => Box::pin(async move { self.file_read_tool.call_json(arguments).await }),
+            "grep" => Box::pin(async move { self.grep_tool.call_json(arguments).await }),
+            "find" => Box::pin(async move { self.find_tool.call_json(arguments).await }),
             "file_write" => {
                 Box::pin(async move { self.file_write_tool.call_json(arguments).await })
             }
@@ -1357,7 +1359,9 @@ impl ToolRegistry for BuiltinToolRegistry {
 
             // Media send tool — no dependencies, always available
             "media_send" => Box::pin(async move {
-                crate::builtin_tools::media_send::MediaSendTool::new()
+                crate::builtin_tools::media_send::MediaSendTool::new(
+                    crate::security::ssrf::SsrfPolicy::default(),
+                )
                     .call_json(arguments)
                     .await
             }),

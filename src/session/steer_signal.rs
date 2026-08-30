@@ -8,12 +8,29 @@
 //! milliseconds away — except when the turn's Act phase is sitting inside a
 //! tool that is deliberately asleep:
 //!
-//! | park site | ceiling | seam |
-//! |---|---|---|
-//! | `subagent{action:"wait"}` | 600 s | arm in its existing `select!` |
-//! | `bash{process_action:"wait"}` | 170 s | arm at the call site, re-poll on wake |
-//! | `browser{action:"wait_for"}` | 120 s | [`SteerWatch::race`] — one opaque call |
-//! | `desktop{wait_visual}` | 60 s | arm on the inter-poll sleep |
+//! | park site | ceiling | seam | wired? |
+//! |---|---|---|---|
+//! | `subagent{action:"wait"}` | 600 s | arm in its existing `select!` | yes |
+//! | `bash{process_action:"wait"}` | 170 s | arm at the call site, re-poll on wake | yes |
+//! | `browser{action:"wait_for"}` | 120 s | [`SteerWatch::race`] — one opaque call | yes |
+//! | `desktop{wait_visual}` | 60 s | arm on the inter-poll sleep | yes |
+//! | `node_invoke` / `node_invoke_many` / `node_file` | 240 s | [`SteerWatch::race`] | **NO** |
+//!
+//! ⚠️ The last row is a KNOWN GAP, recorded here rather than left to be
+//! rediscovered. This table used to name exactly four park sites and the wiring
+//! followed the table, so a fifth *family* of parking tools — the cluster
+//! reverse-RPC ones — was structurally invisible to it: each awaits
+//! `ReverseRpcChannel::call` with a model-supplied `timeout_ms` (default 120 s,
+//! clamped at `cluster::reverse_rpc::REVERSE_RPC_MAX_TIMEOUT_MS` = 240 s) and
+//! has no steer arm. Their cancel half IS wired
+//! (`RegistryToolAdapter::execute`'s `select!` drops the whole future), which is
+//! precisely the asymmetry this module was written to close.
+//!
+//! The drop-safety argument that `SteerWatch::race` owes at those three sites is
+//! now TRUE rather than assumed: `ReverseRpcChannel::call` grew a `WaiterGuard`,
+//! so dropping the future releases its pending-invoke entry instead of leaking
+//! it until connection teardown. What remains is three one-line wraps in
+//! `builtin_tools/node_{invoke,invoke_many,file}.rs`.
 //!
 //! Two seams, and which one a park gets is not taste. **Where we own the loop,
 //! hook the loop** — nothing in flight is abandoned to get out, and the

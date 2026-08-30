@@ -208,18 +208,18 @@ impl CanvasStore {
         match tokio::fs::read(&path).await {
             Ok(bytes) => Ok((mime.to_string(), bytes)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // Distinguish "canvas missing" from "asset missing in a
-                // present canvas" so a caller that pasted the wrong canvas
-                // id is told which one was wrong. The asset id is already
-                // verified to the canonical shape, so the parent directory's
-                // existence is the only meaningful signal left.
-                let canvas_dir = self.assets_dir(id);
-                match tokio::fs::metadata(&canvas_dir).await {
-                    Ok(_) => Err(CanvasError::NotFound(format!(
-                        "asset {asset_id} in canvas {id}"
-                    ))),
-                    Err(_) => Err(CanvasError::NotFound(format!("canvas {id}"))),
-                }
+                // Collapse to a single NotFound: the previous shape did a
+                // second `tokio::fs::metadata(&canvas_dir)` to
+                // distinguish "canvas missing" from "asset missing in a
+                // present canvas", but that second syscall was
+                // outside the per-canvas read lock so a concurrent
+                // delete could land between the two checks and flip
+                // the diagnostic. The caller already has the canvas
+                // id (it was a parameter); telling it which one was
+                // wrong is not worth a TOCTOU surface.
+                Err(CanvasError::NotFound(format!(
+                    "canvas {id} or asset {asset_id} not found"
+                )))
             }
             Err(e) => Err(CanvasError::Internal(format!(
                 "failed to read asset {asset_id}: {e}"

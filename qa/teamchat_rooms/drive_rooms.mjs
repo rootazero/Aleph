@@ -615,6 +615,29 @@ async function main() {
   check(Boolean(escape.error), "workspace: a path that leaves the root is refused", JSON.stringify(escape.result));
 
   // Memory — a note written by a room run lands in the room's partition.
+  //
+  // ⚠️ What this proves, and what it does NOT. It proves the partition is
+  // composed correctly end to end on the `chat.send` path, with two real
+  // principals and a live run — which no unit test can do.
+  //
+  // It does NOT cover §3.17② (`request_scope_strings`, the FlowRequest
+  // literal's uncorrected scope read). That defect needs a producer that
+  // stamps `personal:<speaker>` onto a session key a room has ALREADY
+  // claimed. `chat.send` is not one: `handlers::agent::resolve_attribution`
+  // reads the scope off the persisted session row, so the metadata arriving
+  // at `request_scope_strings` is already corrected and the correction is a
+  // no-op here. `request_scope_strings`' own doc says so — "the Panel path
+  // ... looks fine" — and so does the guard's: "at runtime a corrected read
+  // and an uncorrected one are the same two strings ... all of the fixtures".
+  //
+  // Measured, not reasoned: on 2026-08-29 the correction was reverted to the
+  // raw metadata read and this fixture ran 46/46 green. Do not read a pass
+  // here as coverage of that fix; its guard is source-level on purpose.
+  //
+  // To actually reach it, a run must arrive from `inbound_router/executor.rs`
+  // (channel inbound, which stamps from `pairing_store::sender_user`) or from
+  // cron, ON a room-claimed session key. That is a channel fixture crossed
+  // with this one, and it is the open item — not this phase.
   const beforeNote = requests().length;
   await conns.alice.ok("chat.send", {
     message: "QA-NOTE record that for the room",

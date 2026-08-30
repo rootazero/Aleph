@@ -1253,13 +1253,18 @@ impl McpServerConnection {
                 .collect::<Vec<_>>()
                 .join("\n");
 
-            let kind = crate::mcp::classify_mcp_error(&error_text);
+            // A tool's `isError: true` verdict is the tool's answer to the
+            // call. The classifier (`classify_mcp_error`) is tuned for
+            // transport-level messages ("connection reset", "401",
+            // "session expired"); applying it to a tool verdict produces
+            // misleading recovery hints ("the MCP session expired — it
+            // will reconnect on the next health probe" for a tool that
+            // merely returned the substring "session expired"). Surface
+            // the tool's text verbatim and let the transport classifier
+            // do its job on the transport-error path further down.
             return Err(AlephError::IoError(format!(
-                "Tool '{}{}{}{}",
-                tool_name,
-                TOOL_ERROR_MARKER,
-                error_text,
-                kind.guidance_suffix()
+                "Tool '{}{}{}",
+                tool_name, TOOL_ERROR_MARKER, error_text
             )));
         }
 

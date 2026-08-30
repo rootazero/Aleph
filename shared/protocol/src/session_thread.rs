@@ -37,6 +37,61 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The two numbers `chat.history` reports about the slice it just served.
+///
+/// `messages` is the TRAILING `limit` rows, so at exactly `limit` rows a full
+/// page and a complete short conversation are byte-for-byte identical: nothing
+/// in the page itself can say whether a beginning was cut off. `count` alone
+/// therefore cannot answer "is this all of it", and every client that tried
+/// answered it by guessing from the length it received — a client inventing an
+/// answer the server never gave.
+///
+/// Shared for the reason the module header gives: `interfaces/cli` and
+/// `interfaces/tui` cannot depend on `alephcore`, so each one hand-wrote these
+/// keys. `aleph chat history --limit 20` read `count` and printed it under the
+/// word **Total**, so a 102-row conversation reported "Total: 20 messages" —
+/// not a missing value that reads as missing, but a wrong one that reads as
+/// fact. A rename on the server is now a deserialization failure here rather
+/// than a column that quietly starts describing something else.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryWindow {
+    /// Rows in THIS response. Required: if the server ever renames it, callers
+    /// should fail loudly rather than fall back to zero and render an empty
+    /// transcript as an empty conversation.
+    pub count: usize,
+
+    /// Rows in the whole session, or `None` when the server gave no answer — a
+    /// core older than the field, or a count that could not be read.
+    ///
+    /// `None` must never be rounded to zero or to `count`. Both of those say
+    /// "the transcript is complete", which is the single answer that is wrong
+    /// in the direction that HIDES content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<usize>,
+}
+
+impl HistoryWindow {
+    /// Rows above this window, when the server said how many there are.
+    ///
+    /// `saturating_sub` because `total` and the window are two reads of a store
+    /// a live run may be appending to. The handler counts FIRST precisely so
+    /// the skew falls on this side: a row that lands in between makes `count`
+    /// the larger, and "nothing above" is the honest reading of that. The
+    /// other order over-reports, which renders as a "load earlier" control over
+    /// a conversation that has nothing earlier.
+    #[must_use]
+    pub fn above(&self) -> Option<usize> {
+        self.total.map(|t| t.saturating_sub(self.count))
+    }
+
+    /// Whether this response carries the whole conversation. `None` when the
+    /// server did not say — which is not `Some(true)`.
+    #[must_use]
+    pub fn is_complete(&self) -> Option<bool> {
+        self.above().map(|above| above == 0)
+    }
+}
+
 /// Parameters for `agent.run` as a thin client sends them.
 ///
 /// A deliberate **subset** of the server's `AgentRunParams`: exactly the fields
@@ -460,5 +515,65 @@ mod tests {
         }
         let back: SessionSnapshot = serde_json::from_value(v).expect("round trip");
         assert_eq!(back, snap);
+    }
+}
+
+#[cfg(test)]
+mod history_window_tests {
+    use super::HistoryWindow;
+
+    #[test]
+    fn a_window_smaller_than_the_session_reports_what_is_above() {
+        let w: HistoryWindow = serde_json::from_value(serde_json::json!({
+            "count": 20, "total": 102
+        }))
+        .unwrap();
+        assert_eq!(w.above(), Some(82));
+        assert_eq!(w.is_complete(), Some(false));
+    }
+
+    /// The shape the guess gets wrong: a page that is full AND complete.
+    #[test]
+    fn a_full_page_that_is_the_whole_session_is_complete() {
+        let w = HistoryWindow { count: 200, total: Some(200) };
+        assert_eq!(w.above(), Some(0));
+        assert_eq!(w.is_complete(), Some(true));
+    }
+
+    /// No answer is not "nothing above". Absent, `null`, and a shape change all
+    /// have to land on `None`, because the caller's fallback for `None` differs
+    /// from its behaviour for `Some(0)`.
+    #[test]
+    fn a_missing_total_is_unknown_not_zero() {
+        for payload in [
+            serde_json::json!({ "count": 20 }),
+            serde_json::json!({ "count": 20, "total": null }),
+        ] {
+            let w: HistoryWindow = serde_json::from_value(payload).unwrap();
+            assert_eq!(w.total, None);
+            assert_eq!(w.above(), None);
+            assert_eq!(w.is_complete(), None);
+        }
+        assert!(
+            serde_json::from_value::<HistoryWindow>(serde_json::json!({ "count": 20, "total": "many" }))
+                .is_err(),
+            "a shape change must fail loudly here rather than decay to a number"
+        );
+    }
+
+    /// `count` carries no default: a server-side rename has to fail, not read
+    /// as an empty transcript.
+    #[test]
+    fn a_renamed_count_fails_rather_than_reading_as_empty() {
+        assert!(serde_json::from_value::<HistoryWindow>(serde_json::json!({ "total": 5 })).is_err());
+    }
+
+    /// Two reads of a growing store: the window can come back LONGER than the
+    /// count taken just before it. Saturating, not wrapping.
+    #[test]
+    fn a_window_longer_than_the_count_reads_as_nothing_above() {
+        let w = HistoryWindow { count: 5, total: Some(4) };
+        assert_eq!(w.above(), Some(0));
+        assert_eq!(w.is_complete(), Some(true));
     }
 }

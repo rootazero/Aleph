@@ -21,6 +21,8 @@ pub mod btw;
 pub mod canvas;
 pub mod channel_pairing;
 pub mod channels;
+pub mod commands;
+pub mod cron;
 pub mod desktop_bridge;
 pub mod dreaming;
 pub mod events;
@@ -33,6 +35,7 @@ pub mod plan;
 pub mod plugins;
 pub mod projects;
 pub mod providers;
+pub mod pty;
 pub mod queue;
 pub mod receipt;
 pub mod scope;
@@ -40,6 +43,7 @@ pub mod session_thread;
 pub mod spend;
 pub mod subagent_tree;
 pub mod team_topic;
+pub mod terminate;
 pub mod thinking;
 pub mod tool_permissions;
 pub mod trace_presentation;
@@ -74,5 +78,6 @@ pub use trace_presentation::{
     AgentTracePresentationOptions, AgentTracePresentationPreset, AgentTracePresentationStatus,
 };
 pub use trace_replay::{
-    AgentTraceReplay, AgentTraceReplayEntry, AgentTraceReplayListItem, AgentTraceTaskSummary,
+    AgentTraceListCursor, AgentTraceListPage, AgentTraceListRow, AgentTraceReplay,
+    AgentTraceReplayEntry, AgentTraceTaskSummary,
 };

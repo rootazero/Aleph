@@ -65,6 +65,13 @@ pub fn route(url: &Url) -> bool {
     if is_internal(url) {
         return true;
     }
+    // Reject dangerous pseudo-schemes outright. `javascript:` and `data:`
+    // URLs must never be handed to the OS handler or allowed to execute in
+    // the webview. `data:` is intentionally not treated as internal above.
+    if matches!(url.scheme(), "javascript" | "data") {
+        tracing::warn!("blocked external navigation to {} URL", url.scheme());
+        return false;
+    }
     open_external(url.as_str());
     false
 }
@@ -90,8 +97,9 @@ const ARTIFACT_PATH_PREFIX: &str = "/artifact/";
 pub fn is_internal(url: &Url) -> bool {
     match url.scheme() {
         // Splash + bundled assets (`tauri://localhost`), and in-page schemes
-        // the Panel may render documents from.
-        "tauri" | "about" | "data" | "blob" => true,
+        // the Panel may render documents from. `data:` is NOT internal: an
+        // attacker-supplied data URL would execute in the shell webview.
+        "tauri" | "about" | "blob" => true,
         "http" | "https" if url.path().starts_with(ARTIFACT_PATH_PREFIX) => false,
         "http" | "https" => match url.host_str() {
             Some(host) => {
@@ -234,6 +242,21 @@ mod tests {
         // during tests. The external (cancel) decision is covered by the
         // `is_internal` cases above — `route` simply negates it.
         assert!(route(&Url::parse("http://127.0.0.1:18790/chat").unwrap()));
+    }
+
+    #[test]
+    #[serial(remote_origin)]
+    fn route_rejects_dangerous_pseudo_schemes() {
+        // `javascript:` and `data:` must be canceled without being handed to
+        // the OS handler. They are not internal and they are not external.
+        assert!(!route(&Url::parse("javascript:alert(1)").unwrap()));
+        assert!(!route(&Url::parse("data:text/html,<script>alert(1)</script>").unwrap()));
+    }
+
+    #[test]
+    #[serial(remote_origin)]
+    fn data_urls_are_not_internal() {
+        assert!(!is_internal(&Url::parse("data:text/html,hello").unwrap()));
     }
 
     #[test]

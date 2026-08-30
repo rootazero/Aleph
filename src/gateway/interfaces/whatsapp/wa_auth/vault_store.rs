@@ -60,27 +60,29 @@ impl WaAuthManager {
         let bytes =
             bincode::serialize(data).map_err(|e| WaAuthError::Serialization(e.to_string()))?;
 
-        let entry = if let Some(ref crypto) = self.crypto {
-            let encrypted = crypto
-                .encrypt(&String::from_utf8_lossy(&bytes))
-                .map_err(|e| WaAuthError::Serialization(format!("Encryption failed: {e}")))?;
-            crate::secrets::types::EncryptedEntry {
-                ciphertext: encrypted.ciphertext,
-                nonce: encrypted.nonce,
-                salt: encrypted.salt,
-                created_at: chrono::Utc::now().timestamp(),
-                updated_at: chrono::Utc::now().timestamp(),
-                metadata: crate::secrets::types::EntryMetadata::default(),
-            }
-        } else {
-            crate::secrets::types::EncryptedEntry {
-                ciphertext: bytes,
-                nonce: [0u8; 12],
-                salt: [0u8; 32],
-                created_at: chrono::Utc::now().timestamp(),
-                updated_at: chrono::Utc::now().timestamp(),
-                metadata: crate::secrets::types::EntryMetadata::default(),
-            }
+        // Fail closed: WhatsApp auth credentials include Signal session state
+        // and signed pre-keys. Writing them as plaintext bincode to the vault
+        // would silently expose them to any attacker who can read the file.
+        // The previous `nonce = [0u8; 12]` plaintext fallback is removed; the
+        // shared-token manager must be installed before WhatsApp auth can be
+        // persisted.
+        let crypto = self.crypto.as_ref().ok_or_else(|| {
+            WaAuthError::Serialization(
+                "Cannot persist WhatsApp auth: no shared-token manager is installed, \
+                 refusing to store plaintext credentials in the vault"
+                    .into(),
+            )
+        })?;
+        let encrypted = crypto
+            .encrypt(&String::from_utf8_lossy(&bytes))
+            .map_err(|e| WaAuthError::Serialization(format!("Encryption failed: {e}")))?;
+        let entry = crate::secrets::types::EncryptedEntry {
+            ciphertext: encrypted.ciphertext,
+            nonce: encrypted.nonce,
+            salt: encrypted.salt,
+            created_at: chrono::Utc::now().timestamp(),
+            updated_at: chrono::Utc::now().timestamp(),
+            metadata: crate::secrets::types::EntryMetadata::default(),
         };
 
         let mut vault = self.vault.lock().unwrap_or_else(|e| e.into_inner());
@@ -98,23 +100,27 @@ impl WaAuthManager {
             _ => WaAuthError::Vault(e.to_string()),
         })?;
 
-        let bytes = if entry.nonce != [0u8; 12] {
-            if let Some(ref crypto) = self.crypto {
-                let decrypted = crypto
-                    .decrypt(&entry.ciphertext, &entry.nonce, &entry.salt)
-                    .map_err(|e| WaAuthError::Serialization(format!("Decryption failed: {e}")))?;
-                decrypted.into_bytes()
-            } else {
-                return Err(WaAuthError::Serialization(
-                    "Encrypted auth data found but no crypto engine available".to_string(),
-                ));
-            }
-        } else {
-            entry.ciphertext.clone()
-        };
+        // All persisted entries are encrypted by `save()`. A legacy entry
+        // whose `nonce == [0u8; 12]` predates the fail-closed migration and
+        // is refused rather than silently deserialised as plaintext.
+        if entry.nonce == [0u8; 12] {
+            return Err(WaAuthError::Serialization(
+                "WhatsApp auth entry is in the legacy plaintext format; \
+                 please re-authenticate after upgrading to rebuild the encrypted entry"
+                    .into(),
+            ));
+        }
+        let crypto = self.crypto.as_ref().ok_or_else(|| {
+            WaAuthError::Serialization(
+                "Encrypted WhatsApp auth data found but no crypto engine available".into(),
+            )
+        })?;
+        let decrypted = crypto
+            .decrypt(&entry.ciphertext, &entry.nonce, &entry.salt)
+            .map_err(|e| WaAuthError::Serialization(format!("Decryption failed: {e}")))?;
 
-        let data: WaAuthData =
-            bincode::deserialize(&bytes).map_err(|e| WaAuthError::Serialization(e.to_string()))?;
+        let data: WaAuthData = bincode::deserialize(&decrypted.into_bytes())
+            .map_err(|e| WaAuthError::Serialization(e.to_string()))?;
         Ok(data)
     }
 
@@ -148,7 +154,8 @@ mod tests {
     fn test_auth_roundtrip() {
         let dir = TempDir::new().unwrap();
         let vault = SecretVault::open(dir.path().join("test.vault")).unwrap();
-        let auth = WaAuthManager::with_vault(vault, "test_account");
+        let crypto = crate::secrets::crypto::SecretsCrypto::new("test-master-key");
+        let auth = WaAuthManager::with_vault_and_crypto(vault, "test_account", Some(crypto));
 
         let data = WaAuthData {
             creds_blob: vec![1, 2, 3],
@@ -166,7 +173,24 @@ mod tests {
     fn test_auth_not_found() {
         let dir = TempDir::new().unwrap();
         let vault = SecretVault::open(dir.path().join("test.vault")).unwrap();
-        let auth = WaAuthManager::with_vault(vault, "missing_account");
+        let crypto = crate::secrets::crypto::SecretsCrypto::new("test-master-key");
+        let auth = WaAuthManager::with_vault_and_crypto(vault, "missing_account", Some(crypto));
         assert!(matches!(auth.load(), Err(WaAuthError::NotFound(_))));
+    }
+
+    #[test]
+    fn test_auth_save_fails_closed_without_crypto() {
+        // The shared-token manager may not be installed at boot or in test
+        // binaries. save() must refuse rather than persist plaintext.
+        let dir = TempDir::new().unwrap();
+        let vault = SecretVault::open(dir.path().join("test.vault")).unwrap();
+        let auth = WaAuthManager::with_vault(vault, "no_crypto_account");
+        let data = WaAuthData {
+            creds_blob: vec![1],
+            keys_blob: vec![2],
+            app_state_sync: vec![3],
+        };
+        let err = auth.save(&data).expect_err("save must fail without crypto");
+        assert!(matches!(err, WaAuthError::Serialization(_)));
     }
 }

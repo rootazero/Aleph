@@ -270,6 +270,32 @@ pub enum SessionIdentity {
         /// predicate above can no longer admit.
         affected_user: Option<String>,
     },
+    /// A `pty.screen` / `pty.exit` frame: attributable to the session's
+    /// `created_by` stamp, resolved through
+    /// [`crate::gateway::pty::PtyManager::owner_of`] rather than from the
+    /// payload — `PtyScreenFrame` publishes at 60 Hz and its own wire-key
+    /// test pins the exact set, so the owner is deliberately NOT one of
+    /// them. This is the delivery-side half of the ownership rule
+    /// `handlers::pty::require_owned` and `handle_list`'s filter enforce on
+    /// the RPC side; all three consume the one predicate
+    /// ([`crate::gateway::pty::owner_admits`]) so a hole in one face cannot
+    /// exist without holing the others (§0's "一个动词有 N 个面时，谁能看要
+    /// 在每个面用同一个推导").
+    ///
+    /// `owner_of` deliberately answers for a session that is already gone
+    /// (see its own doc and `OWNER_RETENTION`): `pty.exit` is published one
+    /// line before `PtyManager::remove`, and delivery is asynchronous, so a
+    /// lookup keyed on live sessions alone would deny a client the one frame
+    /// telling it its own shell died.
+    ///
+    /// This narrows WITHIN the operators the `pty.` prefix rule in
+    /// [`crate::gateway::event_scope::EventScopeGuard`] already admits —
+    /// exactly the second-filter-term shape `approval.*` uses
+    /// ([`Self::BySessionKeyOrAdmin`]'s sibling family), except there is no
+    /// admin carve-out here: an operator who did not create a shell has no
+    /// standing claim on another operator's raw terminal, unlike an
+    /// approval card written for them to act on.
+    ByPtySession(String),
     /// Unattributable to any one session — org-level infrastructure, or
     /// already covered by a different gate (see module doc).
     Global,
@@ -337,19 +363,39 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         return SessionIdentity::ByTeamId(team_id.to_string());
     }
     match topic {
-        // The two clarification frames are `…OrAdmin`, not plain
-        // `BySessionKey`, because the OTHER TWO FACES of the same verb already
-        // are: `clarification.pending` returns every item to an unrestricted
-        // caller (`visible_owner_filter() == None`) and `clarification.resolve`
-        // accepts any session `visibility::session_visible` admits — which is
-        // every session, for an operator. Leaving the event face narrower made
-        // an operator's pending LIST show questions whose CARDS never arrived,
-        // and left them holding resolve authority over a question they were
-        // never shown. Same divergence, same fix, and the same direction the
-        // twin `approval.*` family took on 2026-08-08.
+        // The two clarification frames are plain `BySessionKey`: they must
+        // admit exactly whom their two RPC faces admit, and those faces are
+        // OWNER-keyed — `clarification.pending` filters every item through
+        // `visibility::session_visible` and `clarification.resolve` refuses a
+        // session that same predicate rejects.
+        //
+        // ⚠️ This arm was `…OrAdmin` from 2026-08-08 to 2026-08-29, on the
+        // stated premise that `session_visible` "is every session, for an
+        // operator". It is not. `handlers::connect::resolve_connection_identity`
+        // gives a loopback or admin connection `CALLER_USER =
+        // Some(OWNER_USER_ID)`, never `None`, so `visible_owner_filter()` is
+        // `Some(..)` for an operator and `session_visible` compares OWNERSHIP
+        // for them exactly as for anyone else. The `is_none()` arm those two
+        // handlers widen on is reachable only from an UNSCOPED internal caller
+        // (cron / A2A / in-process test). The premise was written down three
+        // times — here, in `every_frame_variant_is_classified`'s `expected()`,
+        // and in the pin test's own assertion message — and was false in all
+        // three, so the widening pushed a member's question CARD to an operator
+        // who then got `session not found` from both `clarification.pending`
+        // and `clarification.resolve`.
+        //
+        // The twin `approval.*` family stays `…OrAdmin`, and that is not an
+        // inconsistency: ITS RPC faces really are role-keyed (`exec_approvals`
+        // and `exec_grants` both ask `caller_identity::caller_is_member`). An
+        // approval is an AUTHORIZATION question an operator can answer on
+        // someone else's behalf; a clarification is a CONTENT question only the
+        // asker can answer. Different question, different predicate — and the
+        // pin below now DERIVES the expected verdict from the RPC predicate
+        // instead of restating it, so this arm cannot drift from those faces
+        // again without a red test.
         "stream.ask_user" | "stream.clarification_ended" => {
             match str_field(data, "session_key").filter(|k| !k.is_empty()) {
-                Some(k) => SessionIdentity::BySessionKeyOrAdmin(k),
+                Some(k) => SessionIdentity::BySessionKey(k),
                 // Fail closed: a frame with no session names nobody, and the
                 // widest possible delivery is the wrong answer to "who owns
                 // this".
@@ -433,6 +479,29 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         "voice.transcribe.delta" => match str_field(data, "owner_user_id") {
             Some(owner) if !owner.is_empty() => SessionIdentity::ByUserId(owner),
             _ => SessionIdentity::Unattributed,
+        },
+
+        // A raw shell, admin-gated at the RPC face (`pty.` in
+        // `method_admin::ADMIN_PREFIXES`) and at the role face
+        // (`EventScopeGuard`'s `pty.` rule) — this arm is the third, and the
+        // one that narrows WITHIN the operators those two already admit, the
+        // same way `handlers::pty::require_owned`/`handle_list` narrow the
+        // RPC face. See `SessionIdentity::ByPtySession`'s doc for why the
+        // owner is resolved through `PtyManager::owner_of` rather than read
+        // off the payload (`session_id` is the only field either frame
+        // carries that names anything).
+        //
+        // ⚠️ Raw-string producer, same as `voice.transcribe.delta` above:
+        // `every_frame_variant_is_classified` cannot see it, so this arm owes
+        // the SOURCE-level pin
+        // `every_pty_topic_the_center_publishes_is_owner_scoped`.
+        "pty.screen" | "pty.exit" => match str_field(data, "session_id") {
+            Some(id) => SessionIdentity::ByPtySession(id),
+            // Malformed — neither frame is ever built without this field in
+            // production. `OperatorOnly` rather than `Global`: there is no
+            // owner to compare against, and the safe read of "we could not
+            // tell whose this is" is the operator's, not everyone's.
+            None => SessionIdentity::OperatorOnly,
         },
 
         // Host telemetry. The two producers this arm was written for —
@@ -818,6 +887,16 @@ impl EventVisibilityIndex {
                 };
                 self.team_admits(&team_id, caller, teams).await
             }
+            // Only delegation, same reason as the canvas arm below: this is
+            // the delivery-side face of `handlers::pty::require_owned` /
+            // `handle_list`'s filter, and it must resolve the SAME predicate
+            // rather than re-derive ownership here. `owner_of` answers for a
+            // session that is already gone — see `SessionIdentity::ByPtySession`'s
+            // doc — so there is no store round-trip and no "unresolvable"
+            // case to fail closed on the way `ByRunId` does.
+            SessionIdentity::ByPtySession(session_id) => crate::gateway::pty::manager()
+                .owner_of(&session_id)
+                .admits(caller_user),
             // Only delegation, by ruling: this is the third face of the
             // canvas verb, and it must resolve the SAME predicate as the RPC
             // and tool faces rather than re-derive membership here. The
@@ -2182,6 +2261,168 @@ mod tests {
         }
     }
 
+    /// SOURCE-level pin, the constant-topic sibling of the voice test above:
+    /// `pty.screen` / `pty.exit` are published through
+    /// `aleph_protocol::pty::PTY_SCREEN_TOPIC` / `PTY_EXIT_TOPIC` rather than
+    /// string literals, so `topic_event_literals` — which deliberately skips
+    /// a composed first argument (see its own doc) — cannot scrape them.
+    /// This scans for the constant names directly, for the same reason the
+    /// voice pin reads the producer's own source: renaming or dropping the
+    /// classification arm must fail here, not silently re-broadcast a raw
+    /// shell to every connection.
+    ///
+    /// Deliberately NOT anchored to `TopicEvent::new(` on the same line —
+    /// `session.rs`'s call wraps the constant onto its own line once rustfmt
+    /// widens it, which is exactly the brittleness `source_census`'s module
+    /// doc records breaking the old literal-scraper. Each producer file is
+    /// asserted to contain BOTH the call shape and the constant name, which
+    /// is loose enough to survive reformatting and specific enough that
+    /// deleting the call (not just moving it) still fails the assertion.
+    #[test]
+    fn every_pty_topic_the_center_publishes_is_owner_scoped() {
+        const MANAGER: &str = include_str!("pty/manager.rs");
+        const SESSION: &str = include_str!("pty/session.rs");
+
+        for (file, src, const_name) in [
+            ("pty/manager.rs", MANAGER, "PTY_SCREEN_TOPIC"),
+            ("pty/session.rs", SESSION, "PTY_EXIT_TOPIC"),
+        ] {
+            let production = source_census::production_prefix(src);
+            assert!(
+                production.contains("TopicEvent::new("),
+                "{file} no longer publishes any TopicEvent — this pin has \
+                 quietly become vacuous"
+            );
+            assert!(
+                production.contains(const_name),
+                "{file} no longer references aleph_protocol::pty::{const_name} \
+                 — either it stopped publishing that topic, or it started \
+                 publishing a bare string literal that this scan and \
+                 `session_identity_of`'s pty arm could silently disagree about"
+            );
+        }
+
+        for topic in [
+            aleph_protocol::pty::PTY_SCREEN_TOPIC,
+            aleph_protocol::pty::PTY_EXIT_TOPIC,
+        ] {
+            let named = serde_json::json!({ "session_id": "s-owner-scoped" });
+            assert_eq!(
+                session_identity_of(topic, Some(&named)),
+                SessionIdentity::ByPtySession("s-owner-scoped".to_string()),
+                "`{topic}` carries a live shell's screen/status and must be \
+                 owner-scoped through PtyManager::owner_of, not broadcast"
+            );
+            // A malformed frame (no `session_id`) must not fall to `Global`
+            // either — see the arm's own doc for why `OperatorOnly` and not
+            // a broadcast is the safe read of "we could not tell whose this
+            // is".
+            assert_ne!(
+                session_identity_of(topic, None),
+                SessionIdentity::Global,
+                "`{topic}` without a session id must not fall through to Global"
+            );
+        }
+    }
+
+    /// `pty.screen` / `pty.exit`'s full delivery chain (`event_admits_for`,
+    /// not classification alone), through the REAL global `PtyManager` —
+    /// `ByPtySession` resolves via `pty::manager()`, so nothing shorter than
+    /// the actual singleton exercises the wire this test is for.
+    ///
+    /// Covers the property `handlers::pty`'s own tests cannot: F2 named FOUR
+    /// facts that only matter together, and the addressed-method tests only
+    /// cover the first two (the RPC methods, `pty.list`'s filter). This is
+    /// the third — a second operator must not receive the FIRST operator's
+    /// live screen frames either, which is the one a client-side `WrongSession`
+    /// filter cannot be trusted for (the frames already arrived; see
+    /// `handlers::pty`'s module doc).
+    #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
+    async fn pty_frames_reach_only_the_owner_and_outlive_the_session() {
+        let (store, _temp) = test_store();
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+        let index = EventVisibilityIndex::new();
+
+        let spawn = crate::gateway::pty::manager()
+            .spawn(&crate::gateway::pty::SpawnOptions {
+                created_by: Some("u-alice".to_string()),
+                ..Default::default()
+            })
+            .expect("spawn");
+        let sid = spawn.session_id.clone();
+
+        for topic in [
+            aleph_protocol::pty::PTY_SCREEN_TOPIC,
+            aleph_protocol::pty::PTY_EXIT_TOPIC,
+        ] {
+            let data = serde_json::json!({ "session_id": sid });
+            assert!(
+                index
+                    .event_admits_for(
+                        topic,
+                        Some(&data),
+                        Some("u-alice"),
+                        Some("operator"),
+                        &store,
+                        None
+                    )
+                    .await,
+                "the creator must receive their own `{topic}` frames"
+            );
+            assert!(
+                !index
+                    .event_admits_for(
+                        topic,
+                        Some(&data),
+                        Some("u-bob"),
+                        Some("operator"),
+                        &store,
+                        None
+                    )
+                    .await,
+                "a second OPERATOR must not receive another operator's \
+                 `{topic}` — role admits the topic prefix, ownership is a \
+                 separate filter term and this arm has no admin carve-out"
+            );
+        }
+
+        // `pty.exit` fires one line before `remove` and delivery is async —
+        // the owner must still be admitted for a session already gone.
+        crate::gateway::pty::manager().remove(&sid);
+        let data = serde_json::json!({ "session_id": sid });
+        assert!(
+            index
+                .event_admits_for(
+                    aleph_protocol::pty::PTY_EXIT_TOPIC,
+                    Some(&data),
+                    Some("u-alice"),
+                    Some("operator"),
+                    &store,
+                    None
+                )
+                .await,
+            "the owner must still receive pty.exit for their own session \
+             after PtyManager::remove — see OWNER_RETENTION's doc"
+        );
+
+        // An id nothing ever spawned is Unknown: fails closed for a scoped
+        // caller, matching `SessionOwner::Unknown::admits`.
+        let unknown = serde_json::json!({ "session_id": "never-existed" });
+        assert!(
+            !index
+                .event_admits_for(
+                    aleph_protocol::pty::PTY_SCREEN_TOPIC,
+                    Some(&unknown),
+                    Some("u-alice"),
+                    Some("operator"),
+                    &store,
+                    None
+                )
+                .await
+        );
+    }
+
     /// The `host.` namespace stays operator-only even with zero producers.
     ///
     /// This test used to read the topic literal out of each of the two host
@@ -2192,33 +2433,89 @@ mod tests {
     /// than being retired: it no longer names a producer, it asserts the
     /// **policy** that survives them.
     ///
-    /// The clarification event face must admit exactly who its RPC faces admit.
+    /// The clarification event face must admit exactly whom its RPC faces admit
+    /// — and this pin DERIVES the expected verdict from the RPC predicate
+    /// rather than restating it as a literal `SessionIdentity`.
     ///
-    /// The same verb has three faces: `clarification.pending` (an unrestricted
-    /// caller sees every item), `clarification.resolve` (accepts any session
-    /// `visibility::session_visible` admits, which for an operator is all of
-    /// them), and these two frames. While they were plain `BySessionKey` the
-    /// three disagreed: an operator's pending LIST showed questions whose CARDS
-    /// were never delivered, and they held resolve authority over a question
-    /// they had not been shown. Same divergence and same fix as the twin
-    /// `approval.*` family took on 2026-08-08.
+    /// That distinction is the whole point. The previous version of this test
+    /// asserted the literal `BySessionKeyOrAdmin` and explained itself with
+    /// "`clarification.pending` already lists it to both, and
+    /// `clarification.resolve` already accepts it from both" — a sentence about
+    /// ANOTHER MODULE'S behaviour, restated here by hand, that was false.
+    /// `resolve_connection_identity` scopes an operator's connection with
+    /// `CALLER_USER = Some(OWNER_USER_ID)` (loopback and every admin-bound
+    /// device alike), so `visible_owner_filter()` is `Some(..)` for them and
+    /// both RPC faces compare ownership. A restated fact has no compiler; three
+    /// copies of it drifted together and the event face shipped one rung wider
+    /// than the two verbs it was pinned to.
     ///
-    /// The empty-key arm is not a leftover: a frame that names no session names
-    /// nobody, and `Global` there would make a malformed payload the widest
-    /// possible delivery.
-    #[test]
-    fn the_clarification_frames_admit_the_same_callers_their_rpc_faces_do() {
+    /// So: build a session owned by someone else, put the caller in an
+    /// OPERATOR's real task-local shoes, and require the two faces to return
+    /// the same boolean. Whichever way a future change moves the policy, it can
+    /// only move both faces at once.
+    ///
+    /// The empty-key arm stays a literal: a frame that names no session names
+    /// nobody, there is no RPC verdict to derive it from, and `Global` there
+    /// would make a malformed payload the widest possible delivery.
+    #[tokio::test]
+    async fn the_clarification_frames_admit_the_same_callers_their_rpc_faces_do() {
+        use crate::gateway::security::store::OWNER_USER_ID;
+
+        let (store, _temp) = test_store();
+        let key = SessionKey::main("conv-clarify-owned-by-a-member");
+        stamp_owner(&store, &key, "u-alice").await;
+        let meta = store.get_metadata(&key).await.unwrap().unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+        let index = EventVisibilityIndex::new();
+
+        // The RPC half, evaluated exactly as `clarification.pending` /
+        // `clarification.resolve` evaluate it — through the ONE predicate they
+        // both call, with the actor an operator connection actually carries.
+        let rpc_admits =
+            crate::gateway::visibility::session_visible_to(&meta, OWNER_USER_ID);
+
         for topic in ["stream.ask_user", "stream.clarification_ended"] {
-            assert_eq!(
-                session_identity_of(
+            let payload = serde_json::json!({ "session_key": key.to_key_string() });
+            let event_admits = index
+                .event_admits_for(
                     topic,
-                    Some(&serde_json::json!({ "session_key": "agent:main:main" }))
-                ),
-                SessionIdentity::BySessionKeyOrAdmin("agent:main:main".to_string()),
-                "`{topic}` must reach the session owner AND an operator — \
-                 `clarification.pending` already lists it to both, and \
-                 `clarification.resolve` already accepts it from both."
+                    Some(&payload),
+                    Some(OWNER_USER_ID),
+                    Some("operator"),
+                    &store,
+                    None,
+                )
+                .await;
+            assert_eq!(
+                event_admits, rpc_admits,
+                "`{topic}` must admit an operator exactly when \
+                 `visibility::session_visible_to` does — the event face said \
+                 {event_admits}, the RPC faces say {rpc_admits}. Move both or \
+                 neither."
             );
+
+            // The owner of the session is admitted on both faces; this arm
+            // proves the equality above is not vacuously `false == false`.
+            assert!(
+                index
+                    .event_admits_for(
+                        topic,
+                        Some(&payload),
+                        Some("u-alice"),
+                        Some("member"),
+                        &store,
+                        None,
+                    )
+                    .await,
+                "`{topic}` must always reach the asker — a parked tool whose \
+                 card nobody receives is a 600s stall"
+            );
+            assert!(
+                crate::gateway::visibility::session_visible_to(&meta, "u-alice"),
+                "self-guard: the RPC predicate must admit the owner, else the \
+                 assertion above is comparing two unrelated falsehoods"
+            );
+
             assert_eq!(
                 session_identity_of(topic, Some(&serde_json::json!({ "session_key": "" }))),
                 SessionIdentity::OperatorOnly,
@@ -2406,14 +2703,15 @@ mod tests {
             "self-guard: expected at least the four historical approval topics,              scanned {topics:?} — a scan that finds nothing passes every              assertion below vacuously"
         );
 
-        let arm = crate::utils::source_scan::production_prefix(include_str!(
-            "event_visibility.rs"
-        ));
+        let arm = crate::utils::source_scan::production_prefix(include_str!("event_visibility.rs"));
         for topic in &topics {
             // Classification, not just spelling: a real session key must reach
             // its owner, and a blank one must stay with the operator.
             assert_eq!(
-                session_identity_of(topic, Some(&serde_json::json!({"session_key": "agent:main:s1"}))),
+                session_identity_of(
+                    topic,
+                    Some(&serde_json::json!({"session_key": "agent:main:s1"}))
+                ),
                 SessionIdentity::BySessionKeyOrAdmin("agent:main:s1".to_string()),
                 "{topic} must be owner-scoped, not Global"
             );
@@ -2452,12 +2750,14 @@ mod tests {
                 | GatewayEventFrame::RunRetrying { run_id, .. } => {
                     SessionIdentity::ByRunId(run_id.clone())
                 }
-                // The clarification pair is admin-inclusive because its two RPC
-                // faces already are — see
-                // `the_clarification_frames_admit_the_same_callers_their_rpc_faces_do`.
+                // The clarification pair is owner-scoped because its two RPC
+                // faces are — see
+                // `the_clarification_frames_admit_the_same_callers_their_rpc_faces_do`,
+                // which DERIVES that verdict from the RPC predicate rather than
+                // restating it.
                 GatewayEventFrame::AskUser { session_key, .. }
                 | GatewayEventFrame::ClarificationEnded { session_key, .. } => {
-                    SessionIdentity::BySessionKeyOrAdmin(session_key.clone())
+                    SessionIdentity::BySessionKey(session_key.clone())
                 }
                 // Carries session_key directly — routed by session, not run
                 // (see the frame's own doc comment).

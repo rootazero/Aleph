@@ -11,6 +11,7 @@ use leptos_router::NavigateOptions;
 
 use crate::api::agents::AgentsApi;
 use crate::context::DashboardState;
+use crate::i18n::{t_string, use_i18n};
 use crate::platform::phone::shell::PhoneShell;
 use crate::views::agents::channels::ChannelsTab;
 use crate::views::agents::files::FilesTab;
@@ -24,6 +25,7 @@ use super::{parse_detail_path, AgentDetailTab, PhoneAgentsState, DETAIL_TABS};
 #[must_use]
 pub fn PhoneAgentDetail() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let st = expect_context::<PhoneAgentsState>();
     let location = use_location();
     let navigate = use_navigate();
@@ -48,7 +50,11 @@ pub fn PhoneAgentDetail() -> impl IntoView {
                 };
                 // Resolve the summary (emoji/name/default) from the loaded list.
                 let Some(agent) = st.agents.get().into_iter().find(|a| a.id == agent_id) else {
-                    let label = if st.loaded.get() { "Agent not found" } else { "Loading…" };
+                    let label = if st.loaded.get() {
+                        t_string!(i18n, agents.not_found)
+                    } else {
+                        t_string!(i18n, common.loading)
+                    };
                     return view! { <div class="list-header">{label}</div> }.into_any();
                 };
                 let emoji = agent.emoji.clone().unwrap_or_default();

@@ -88,6 +88,20 @@ impl BuiltinToolRegistry {
         } else {
             FileReadTool::new()
         };
+        // Same `ToolContext` handle as the file tools: a relative `path` must
+        // land in the same place for `grep`/`find` as it does for `file_read`,
+        // or a located line number would point into a different tree than the
+        // read that follows it.
+        let grep_tool = if let Some(ref tc) = config.tool_context {
+            crate::builtin_tools::GrepTool::new().with_tool_context(Arc::clone(tc))
+        } else {
+            crate::builtin_tools::GrepTool::new()
+        };
+        let find_tool = if let Some(ref tc) = config.tool_context {
+            crate::builtin_tools::FindTool::new().with_tool_context(Arc::clone(tc))
+        } else {
+            crate::builtin_tools::FindTool::new()
+        };
         let file_write_tool = if let Some(ref tc) = config.tool_context {
             FileWriteTool::new().with_tool_context(Arc::clone(tc))
         } else {
@@ -815,7 +829,7 @@ impl BuiltinToolRegistry {
             use crate::tools::AlephTool;
             let gateway_route_meta =
                 crate::builtin_tools::gateway_route::GatewayRouteTool::default();
-            let google_meet_meta = crate::builtin_tools::google_meet::GoogleMeetTool::new(None);
+            let google_meet_meta = crate::builtin_tools::google_meet::GoogleMeetTool::new(None, crate::security::ssrf::SsrfPolicy::default());
             let select_model_meta = crate::builtin_tools::SelectModelTool;
             let doctor_meta = crate::builtin_tools::DoctorTool::default();
             let extra_defs = [
@@ -1116,6 +1130,8 @@ impl BuiltinToolRegistry {
             search_tool,
             web_fetch_tool,
             file_ops_tool,
+            grep_tool,
+            find_tool,
             file_read_tool,
             file_write_tool,
             file_edit_tool,

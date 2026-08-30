@@ -62,12 +62,38 @@ pub struct FileContent {
 }
 
 impl FileContent {
-    /// Validate that exactly one of `bytes` or `uri` is set
+    /// Maximum size of inline base64-encoded `bytes` payload.
+    ///
+    /// The A2A spec does not bound `FileContent.bytes`. Without a cap, a
+    /// single peer can OOM the process by sending a multi-hundred-MB
+    /// base64 blob that survives `serde_json::from_value` and lands in the
+    /// heap. 16 MiB of base64 is ~12 MiB of decoded bytes, comfortably
+    /// above any legitimate inline attachment while still bounded.
+    pub const MAX_BYTES_LEN: usize = 16 * 1024 * 1024;
+
+    /// Maximum length of `uri` reference (defensive — URIs should be short).
+    pub const MAX_URI_LEN: usize = 4 * 1024;
+
+    /// Validate that exactly one of `bytes` or `uri` is set, and that the
+    /// payload does not exceed the inline-size cap.
     pub const fn validate(&self) -> Result<(), &'static str> {
         match (&self.bytes, &self.uri) {
             (None, None) => Err("FileContent must have either bytes or uri"),
             (Some(_), Some(_)) => Err("FileContent cannot have both bytes and uri"),
-            _ => Ok(()),
+            (Some(b), None) => {
+                if b.len() > Self::MAX_BYTES_LEN {
+                    Err("FileContent.bytes exceeds 16 MiB cap")
+                } else {
+                    Ok(())
+                }
+            }
+            (None, Some(u)) => {
+                if u.len() > Self::MAX_URI_LEN {
+                    Err("FileContent.uri exceeds 4 KiB cap")
+                } else {
+                    Ok(())
+                }
+            }
         }
     }
 }

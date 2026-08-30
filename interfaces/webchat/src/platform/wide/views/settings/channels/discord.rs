@@ -934,10 +934,21 @@ fn PermissionAuditSection(
                                     };
                                     let perm_name = perm.name.clone();
                                     let perm_desc = perm.description.clone();
+                                    // `settings.channels.perm_status_*` had been
+                                    // translated in both locales since this page
+                                    // was written and had no reader — a key with
+                                    // no reader and a hard-coded literal beside
+                                    // it are the two halves of one defect.
                                     let status_label = match perm.status {
-                                        PermissionStatus::Granted => "Granted",
-                                        PermissionStatus::Partial => "Partial",
-                                        PermissionStatus::Missing => "Missing",
+                                        PermissionStatus::Granted => {
+                                            t_string!(i18n, settings.channels.perm_status_granted)
+                                        }
+                                        PermissionStatus::Partial => {
+                                            t_string!(i18n, settings.channels.perm_status_partial)
+                                        }
+                                        PermissionStatus::Missing => {
+                                            t_string!(i18n, settings.channels.perm_status_missing)
+                                        }
                                     };
 
                                     view! {
@@ -980,9 +991,10 @@ fn PermissionAuditSection(
                                                 </h3>
                                                 <ul class="space-y-1 text-xs text-warning">
                                                     {missing.iter().map(|p| {
-                                                        let suggestion = format!(
-                                                            "Grant '{}' permission in Server Settings > Roles",
-                                                            p.name
+                                                        let suggestion = t_string!(
+                                                            i18n,
+                                                            settings.channels.perm_grant_hint,
+                                                            name = p.name.clone()
                                                         );
                                                         view! {
                                                             <li class="flex items-start gap-2">

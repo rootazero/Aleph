@@ -11,6 +11,48 @@ pub(crate) fn acp_default_cwd() -> String {
         .unwrap_or_else(|| ".".to_string())
 }
 
+/// Verify the calling agent has authority on `team_id` — i.e. is the team's
+/// leader OR a member. Returns `Ok(())` on success; on failure returns an
+/// error with the SAME shape as "team does not exist" so a non-member
+/// cannot enumerate team ids by probing.
+///
+/// Used by every team tool that takes a `team_id` argument (snapshot,
+/// session_*, plan_resolve, lifecycle_resolve_shutdown, set_protocol,
+/// disband, status, team_digest, task_read_artifact). The gate that used to
+/// live only on `task_team_reachable` — ownership — is now applied here
+/// too: without it, any agent that knew a team's id could list its
+/// snapshots, read its sessions, set its protocol, and disband it. The
+/// cost is one `get_team` + one `get_members` call per authorization,
+/// both of which the underlying tool would make anyway.
+///
+/// Fail-closed: a store error is a denial, never a pass.
+pub(crate) async fn require_team_auth(
+    store: &dyn crate::teams::TeamStore,
+    team_id: &str,
+    caller: &str,
+) -> Result<(), crate::error::AlephError> {
+    let team = store.get_team(team_id).await.map_err(|e| {
+        crate::error::AlephError::other(format!("team auth: failed to load '{team_id}': {e}"))
+    })?;
+    let team = team.ok_or_else(|| {
+        crate::error::AlephError::NotFound(format!("team `{team_id}` not found"))
+    })?;
+    if team.leader_id == caller {
+        return Ok(());
+    }
+    let members = store.get_members(team_id).await.map_err(|e| {
+        crate::error::AlephError::other(format!(
+            "team auth: failed to load members of '{team_id}': {e}"
+        ))
+    })?;
+    if members.iter().any(|m| m.agent_id == caller) {
+        return Ok(());
+    }
+    Err(crate::error::AlephError::NotFound(format!(
+        "team `{team_id}` not found"
+    )))
+}
+
 pub mod acp_member;
 mod create;
 mod delegate;

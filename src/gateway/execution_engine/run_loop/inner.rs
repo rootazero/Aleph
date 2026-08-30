@@ -1439,6 +1439,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 cancel_token.clone(),
                 locale,
                 &occupancy_out,
+                // Whether THIS attempt still has a successor. It gates whether a
+                // transient failure gets to broadcast a terminal frame: the last
+                // attempt's failure is the run's answer, an earlier one's is not.
+                // Read here rather than inside the helper because the retry
+                // budget is this loop's, and a helper that guessed it would be a
+                // second answer to "how many attempts are there".
+                attempt < MAX_FALLBACK_ATTEMPTS,
             )
             .await;
 

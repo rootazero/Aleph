@@ -7,24 +7,12 @@
 
 use crate::api::{RateLimit, RouteConfigApi, RouteConfigUpdate, RouteProviderInfo};
 use crate::context::DashboardState;
+use crate::components::route_labels::{lb_label, mode_label, LB_KEYS, MODE_KEYS};
 use crate::i18n::{t, t_string};
 use crate::platform::phone::shell::PhoneShell;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use std::collections::BTreeMap;
-
-/// The three selectable mode keys — copied verbatim from route.rs.
-const MODE_KEYS: &[&str] = &["auto", "always_local", "always_cloud"];
-
-/// Load-balancing strategy keys — copied verbatim from route.rs.
-const LB_KEYS: &[&str] = &[
-    "ordered",
-    "round_robin",
-    "least_busy",
-    "latency_aware",
-    "usage_based",
-    "cost_aware",
-];
 
 /// Parse a number-input string into an optional ceiling — copied verbatim from route.rs.
 fn parse_limit(raw: &str) -> Option<u32> {
@@ -163,11 +151,7 @@ pub fn PhoneModelRoute() -> impl IntoView {
                     <div class="list">
                         {MODE_KEYS.iter().map(|key| {
                             let key = *key;
-                            let label = match key {
-                                "auto" => "Auto",
-                                "always_local" => "Always Local",
-                                _ => "Always Cloud",
-                            };
+                            let label = move || mode_label(i18n, key);
                             view! {
                                 <div
                                     class="cell"
@@ -190,14 +174,7 @@ pub fn PhoneModelRoute() -> impl IntoView {
                     <div class="list">
                         {LB_KEYS.iter().map(|key| {
                             let key = *key;
-                            let label = match key {
-                                "ordered" => "Ordered",
-                                "round_robin" => "Round Robin",
-                                "least_busy" => "Least Busy",
-                                "latency_aware" => "Latency Aware",
-                                "usage_based" => "Usage Based",
-                                _ => "Cost Aware",
-                            };
+                            let label = move || lb_label(i18n, key);
                             view! {
                                 <div
                                     class="cell"

@@ -73,10 +73,15 @@ impl SessionManager {
         key_str: &str,
         limit: usize,
     ) -> Result<String, rusqlite::Error> {
+        // `id` — the order rows were recorded, which is the transcript's order
+        // everywhere (`SessionStore::history_page`). It is also total, so the
+        // tie-break this query needed when it ranked the stamps is gone with
+        // the ranking: two rows can share a stamp, and which of them landed in
+        // the derived title was once left to the query planner.
         let mut stmt = conn.prepare(
             "SELECT role, content FROM messages
              WHERE session_key = ?
-             ORDER BY timestamp DESC
+             ORDER BY id DESC
              LIMIT ?",
         )?;
         let rows = stmt
@@ -103,29 +108,47 @@ impl SessionManager {
             .lock()
             .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
+        // MAX over every epoch this base has, not "the row created last".
+        //
+        // Two things were wrong with the previous
+        // `LIKE '<base>%' ORDER BY created_at DESC LIMIT 1` + `rsplit(':')`:
+        //
+        // 1. The pattern was not anchored on a separator, so any base that is
+        //    a string PREFIX of this one matched. With `dm_scope = per_peer`,
+        //    peer `123`'s base `agent:main:dm:123` matched peer `1234`'s
+        //    `agent:main:dm:1234:s2`, and `123`'s inbound messages were routed
+        //    into an epoch it had never spoken in — a blank session, with its
+        //    real conversation left unreachable.
+        // 2. Newest-CREATED is not highest-epoch. Any path that materialises an
+        //    older epoch's row later (import, reconcile, backfill) moved the
+        //    answer backwards.
+        //
+        // The file backend already got both of these right; the parse is now
+        // literally the same function
+        // ([`SessionKey::epoch_after_base`]), so the two backends can no
+        // longer answer this differently. LIKE stays only as a prefilter — its
+        // `_`/`%` wildcards can only WIDEN the candidate set, and every
+        // candidate is re-checked in Rust.
         let like_pattern = format!("{base_key_pattern}%");
-        let latest_key: Option<String> = conn
-            .query_row(
-                "SELECT key FROM sessions WHERE key LIKE ? ORDER BY created_at DESC LIMIT 1",
-                params![&like_pattern],
-                |row| row.get(0),
-            )
-            .optional()
+        let mut stmt = conn
+            .prepare("SELECT key FROM sessions WHERE key LIKE ?")
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![&like_pattern], |row| row.get::<_, String>(0))
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-        match latest_key {
-            Some(key_str) => {
-                if let Some(suffix) = key_str.rsplit(':').next() {
-                    if let Some(n_str) = suffix.strip_prefix('s') {
-                        if let Ok(n) = n_str.parse::<u32>() {
-                            return Ok(n);
-                        }
-                    }
-                }
-                Ok(0)
+        let mut max_epoch = 0u32;
+        for row in rows {
+            let key_str = row.map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+            // `:` only. A canonical key string always joins with `:`, and
+            // accepting `_` here would misread a sibling whose `main_key`
+            // legitimately contains one (`agent:main:main_s5`) as epoch 5 of
+            // `agent:main:main`.
+            if let Some(n) = SessionKey::epoch_after_base(base_key_pattern, &key_str, &[':']) {
+                max_epoch = max_epoch.max(n);
             }
-            None => Ok(0),
         }
+        Ok(max_epoch)
     }
 
     /// Get the topic string from a session's metadata
@@ -172,9 +195,14 @@ impl SessionManager {
             .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
         let keys: Vec<String> = {
+            // `created_at` as well as `last_active_at`: nothing can have been
+            // idle for longer than it has existed. See
+            // `SessionStore::cleanup_expired`.
             let mut stmt = conn
                 .prepare(
-                    "SELECT key FROM sessions WHERE last_active_at < ? AND session_type = 'ephemeral'",
+                    "SELECT key FROM sessions
+                     WHERE last_active_at < ?1 AND created_at < ?1
+                       AND session_type = 'ephemeral'",
                 )
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 

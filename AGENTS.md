@@ -131,4 +131,11 @@ interfaces/webchat   # Web chat interface
 
 ---
 
+## 工具
+
+搜索用 grep/find 内置工具，多 OR 词用一次 multi_grep，必须走 bash 时用 rg
+定位后用 read 的 offset/limit 只读命中附近，工作区外已知文件直接 read
+
+---
+
 *Last updated: 2026-04-22*

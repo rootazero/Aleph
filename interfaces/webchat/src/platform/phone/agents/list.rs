@@ -139,7 +139,11 @@ pub fn PhoneAgentsList() -> impl IntoView {
             // ── Agent list ──
             {move || {
                 if !st.loaded.get() {
-                    let label = if dashboard.is_connected.get() { "Loading…" } else { "Connecting…" };
+                    let label = if dashboard.is_connected.get() {
+                        t_string!(i18n, common.loading)
+                    } else {
+                        t_string!(i18n, common.connecting)
+                    };
                     return view! { <div class="list-header">{label}</div> }.into_any();
                 }
                 if let Some(err) = st.error.get() {

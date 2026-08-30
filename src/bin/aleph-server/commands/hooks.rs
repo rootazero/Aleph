@@ -122,11 +122,31 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
     Ok(())
 }
 
+/// Shell metacharacters that, when present in a hook command, indicate
+/// the user is composing a shell pipeline / substitution / chain rather
+/// than invoking a single binary. The `test` subcommand rejects these
+/// unless `ALEPH_HOOK_ALLOW_SHELL_METACHARS=1` is set — a malicious plugin
+/// should not be able to deliver a `; rm -rf ~` payload that gets
+/// approved on first prompt.
+const SHELL_METACHARS: &[char] = &[';', '&', '|', '$', '`', '>', '<', '\n', '\r'];
+
 /// Run a hook command with a synthetic event payload piped to stdin — the
 /// SAME serializer production uses (`event_payload_json`), so a hook that
 /// reads stdin (`jq -r '.tool_name'`) behaves identically here and at
 /// runtime instead of hanging on the CLI's inherited stdin.
 fn run_command_with_payload(command: &str, event: &str) -> CmdResult {
+    if !matches!(
+        std::env::var("ALEPH_HOOK_ALLOW_SHELL_METACHARS").ok().as_deref(),
+        Some("1") | Some("true") | Some("yes")
+    ) && command.chars().any(|c| SHELL_METACHARS.contains(&c))
+    {
+        return Err(format!(
+            "hook command contains shell metacharacters; \
+             refusing to invoke 'sh -c' / 'cmd /C' on it. \
+             Set ALEPH_HOOK_ALLOW_SHELL_METACHARS=1 to override."
+        )
+        .into());
+    }
     let payload = synthetic_payload(event);
     println!("(stdin payload: {payload})");
 

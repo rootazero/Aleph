@@ -29,7 +29,7 @@ fn terminate_reason_to_raw(tr: &Option<TerminateReason>) -> String {
 /// counts and discriminants only, zero interpretation; never reads judgment
 /// signals from `LoopTraceTurnMetrics` (not present on `SessionCompleted`).
 #[must_use]
-pub fn outcome_from_session_completed(
+pub(crate) fn outcome_from_session_completed(
     iterations: usize,
     tool_calls_made: usize,
     terminate_reason: &Option<TerminateReason>,

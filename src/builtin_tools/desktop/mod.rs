@@ -218,9 +218,17 @@ impl DesktopTool {
         if self.run_boundary_crossed() {
             listener.reset();
             // A previous run may have died holding a modifier or mid-drag; the
-            // new run must not inherit its stuck inputs.
+            // new run must not inherit its stuck inputs. Use the *captured*
+            // session id (the run that just ended / is being reset), not
+            // `current_session_id()` — by the time the boundary check fires,
+            // the new run's session is the current one, and clearing its
+            // inputs would not free the stuck inputs from the run that
+            // actually held them.
             if let Some(screen) = platform.screen() {
-                held_inputs::release_all(&held_inputs::current_session_id(), screen).await;
+                let prior_session = crate::tools::turn_context::current_turn_context()
+                    .map(|t| t.session_key.to_key_string())
+                    .unwrap_or_default();
+                held_inputs::release_all(&prior_session, screen).await;
             }
         }
 

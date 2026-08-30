@@ -53,7 +53,7 @@ use crate::gateway::visibility;
 use crate::resilience::StateDatabase;
 use crate::security::audit::{AuditEntry, SecurityAuditLog};
 use crate::sync_primitives::Arc;
-use aleph_protocol::{AgentTraceReplay, AgentTraceReplayEntry, AgentTraceTaskSummary};
+use aleph_protocol::{AgentTraceListCursor, AgentTraceListPage, AgentTraceListRow, AgentTraceReplay, AgentTraceReplayEntry, AgentTraceTaskSummary};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -149,7 +149,7 @@ pub async fn handle_by_runs(
     }
 
     let owned_runs: HashSet<String> = match sessions
-        .get_history_before(&session_key, Some(MAX_HISTORY_SCAN), None)
+        .get_history(&session_key, Some(MAX_HISTORY_SCAN))
         .await
     {
         Ok(messages) => messages
@@ -245,10 +245,24 @@ async fn caller_could_reach(
 struct TraceListParams {
     #[serde(default)]
     limit: Option<usize>,
-    /// Cursor: return tasks whose `last_timestamp` is strictly less than this
-    /// value. Use the `next_cursor` from the previous response.
+    /// Cursor: return tasks ordered strictly before
+    /// `(timestamp, task_id)` in the `(last_timestamp DESC, task_id DESC)`
+    /// ordering. `Some(None)` is the start of the list; `None` falls back
+    /// to the legacy single-timestamp cursor (`before_timestamp`) for
+    /// backward compatibility with older callers.
+    #[serde(default)]
+    before: Option<Option<TraceCursor>>,
+    /// Legacy single-timestamp cursor. Used only when `before` is absent;
+    /// the compound `before` supersedes it because the timestamp alone
+    /// drops rows that share a second with the previous page.
     #[serde(default)]
     before_timestamp: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TraceCursor {
+    last_timestamp: i64,
+    task_id: String,
 }
 
 const DEFAULT_LIMIT: usize = 50;
@@ -274,9 +288,28 @@ pub async fn handle_list(
     };
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
 
-    match db
-        .list_trace_tasks_paged(limit, params.before_timestamp)
-        .await
+    // Prefer the compound cursor (`before`) over the legacy single-timestamp
+    // form (`before_timestamp`). The compound form is required for correctness
+    // when tasks share an epoch-second timestamp; the legacy form silently
+    // drops such rows. We surface a deprecation note in the response so
+    // operators can spot any client still using the old key.
+    let cursor = match params.before {
+        Some(Some(c)) => Some((c.last_timestamp, c.task_id)),
+        Some(None) => None,
+        None => {
+            if params.before_timestamp.is_some() {
+                tracing::warn!(
+                    "trace.list: client supplied legacy single-timestamp cursor; \
+                     switch to `before: {{ last_timestamp, task_id }}` to avoid \
+                     silently dropping rows on timestamp collisions"
+                );
+            }
+            params
+                .before_timestamp
+                .map(|ts| (ts, "\u{10ffff}".to_string()))
+        }
+    };
+    match db.list_trace_tasks_paged(limit, cursor).await
     {
         Ok(tasks) => {
             // An unscoped caller (cron / in-process) resolves to `None` here
@@ -317,32 +350,50 @@ pub async fn handle_list(
 
             // Cursor exhaustion: if fewer than `limit` rows returned, there's
             // no next page. Otherwise, the next page starts strictly before
-            // the smallest last_timestamp in this page.
+            // the last entry in (last_timestamp DESC, task_id DESC) order.
+            // The compound cursor is required: a single-timestamp cursor
+            // drops rows whose `last_timestamp` collides with the previous
+            // page's last entry (see `list_trace_tasks_paged`).
             let exhausted = tasks.len() < limit;
             let next_cursor = if exhausted {
-                Value::Null
+                None
             } else {
-                tasks
-                    .last()
-                    .map_or(Value::Null, |t| json!(t.last_timestamp))
-            };
-            let traces: Vec<Value> = tasks
-                .into_iter()
-                .map(|t| {
-                    json!({
-                        "task_id": t.task_id,
-                        "event_count": t.event_count,
-                        "last_timestamp": t.last_timestamp
-                    })
+                tasks.last().map(|t| AgentTraceListCursor {
+                    last_timestamp: t.last_timestamp,
+                    task_id: t.task_id.clone(),
                 })
-                .collect();
-            JsonRpcResponse::success(
-                request.id,
-                json!({
-                    "traces": traces,
-                    "next_cursor": next_cursor,
-                }),
-            )
+            };
+            // CONSTRUCTED from the contract type, never hand-written as
+            // `json!`. Parsing against a contract can only prove the response
+            // is a SUPERSET of it; constructing from one makes both halves of
+            // the mismatch — a missing field and an extra one — unrepresentable.
+            // See `AgentTraceListRow`'s doc for the three clients this broke.
+            let page = AgentTraceListPage {
+                traces: tasks
+                    .into_iter()
+                    .map(|t| AgentTraceListRow {
+                        task_id: t.task_id,
+                        // Same defensive word `handle_get` uses when the parent
+                        // row is gone; the FK makes that unreachable in a
+                        // healthy database.
+                        status: t
+                            .status
+                            .map_or_else(|| "unknown".to_string(), |s| s.to_lowercase()),
+                        started_at: t.started_at,
+                        last_timestamp: t.last_timestamp,
+                        event_count: usize::try_from(t.event_count).unwrap_or(0),
+                        prompt_preview: t.prompt_preview.unwrap_or_default(),
+                    })
+                    .collect(),
+                next_cursor,
+            };
+            match serde_json::to_value(&page) {
+                Ok(v) => JsonRpcResponse::success(request.id, v),
+                Err(e) => {
+                    tracing::error!(error = %e, "trace.list: serialize failed");
+                    JsonRpcResponse::error(request.id, INTERNAL_ERROR, "Failed to list traces")
+                }
+            }
         }
         Err(e) => {
             tracing::error!("Failed to list traces: {}", e);
@@ -930,6 +981,86 @@ mod tests {
         assert!(
             rx.try_recv().is_err(),
             "a roster member reading the room's own run is not a cross-user read"
+        );
+    }
+
+    /// The `trace.list` wire shape must be EXACTLY `AgentTraceListPage` — no
+    /// missing key, and no extra one.
+    ///
+    /// ⚠️ Both halves are load-bearing and only one of them is what a
+    /// "does it parse?" test proves. `serde` ignores unknown keys, so parsing a
+    /// live response into the contract type can only ever show the response is
+    /// a SUPERSET of the contract; it is structurally blind to over-sending,
+    /// which is how `workspace.get` shipped four fields with neither a writer
+    /// nor a reader. So the expected key set here is DERIVED from the contract
+    /// type itself and compared for EQUALITY — a field added to the response by
+    /// hand reds this test, and so does a field renamed out from under a
+    /// client.
+    ///
+    /// The last two assertions are the other half of the 2026-08-29 fix: the
+    /// three facts `status` / `started_at` / `prompt_preview` are not padding,
+    /// they are read from the `agent_tasks` parent through the LEFT JOIN. If
+    /// that join is ever dropped, every row degrades to `"unknown"` + `""` —
+    /// a column of dashes that reads as "no value yet" rather than as a broken
+    /// query, which is precisely the failure mode this family keeps repeating.
+    #[tokio::test]
+    async fn the_trace_list_response_has_exactly_the_contract_keys() {
+        use std::collections::BTreeSet;
+
+        fn keys(v: &Value) -> BTreeSet<String> {
+            v.as_object()
+                .expect("object")
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        }
+
+        let db = Arc::new(StateDatabase::in_memory().unwrap());
+        let temp = TempDir::new().unwrap();
+        let sessions = session_store(&temp);
+        let key = SessionKey::main("conv-contract");
+        seed_session(&sessions, &key, "u-alice", &["run-contract"]).await;
+        seed_run_in(&db, "run-contract", &key, &["t0", "t1"]).await;
+
+        let result = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_list(req(json!({})), db, sessions, None),
+            )
+            .await
+            .result
+            .expect("success");
+
+        // (1) It parses — the client half.
+        let page: AgentTraceListPage =
+            serde_json::from_value(result.clone()).expect("the response IS the contract type");
+        assert_eq!(page.traces.len(), 1, "self-guard: one seeded run");
+
+        // (2) It over-sends nothing — the half `from_value` cannot see.
+        //     Expected keys derived from the type, never listed by hand.
+        let expected = serde_json::to_value(&page).expect("re-serialize");
+        assert_eq!(
+            keys(&result),
+            keys(&expected),
+            "envelope keys must equal AgentTraceListPage's exactly"
+        );
+        assert_eq!(
+            keys(&result["traces"][0]),
+            keys(&expected["traces"][0]),
+            "row keys must equal AgentTraceListRow's exactly"
+        );
+
+        // (3) The parent-row facts really arrive.
+        let row = &page.traces[0];
+        assert_eq!(row.event_count, 2);
+        assert_ne!(
+            row.status, "unknown",
+            "the agent_tasks LEFT JOIN must reach the parent row — `unknown` \
+             here means every STATUS cell in `aleph trace list` is a dash"
+        );
+        assert!(
+            !row.prompt_preview.is_empty(),
+            "prompt_preview must come from agent_tasks.task_prompt"
         );
     }
 

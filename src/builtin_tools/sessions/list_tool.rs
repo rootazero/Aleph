@@ -70,9 +70,9 @@ pub struct SessionListRow {
     /// Preview of the last message content (first N chars, updated on append).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_message_preview: Option<String>,
-    /// Cumulative runtime in milliseconds (updated on session close).
-    #[serde(default)]
-    pub runtime_ms: i64,
+    // `runtime_ms` was CUT with the `SessionMetadata` field behind it: it had
+    // no writer anywhere in the tree, and with no `skip_serializing_if` every
+    // row handed the model `"runtime_ms": 0` for a six-hour conversation.
     /// Estimated cost in USD (updated on session close / usage update).
     #[serde(default)]
     pub estimated_cost_usd: f64,
@@ -170,7 +170,6 @@ impl SessionsListTool {
             topic,
             derived_title: meta.derived_title.clone(),
             last_message_preview: meta.last_message_preview.clone(),
-            runtime_ms: meta.runtime_ms,
             estimated_cost_usd: meta.estimated_cost_usd,
             checkpoints: meta.checkpoints.clone(),
         }
@@ -298,32 +297,39 @@ impl AlephTool for SessionsListTool {
         let limit = args.limit.unwrap_or(50) as usize;
         rows.truncate(limit);
 
-        // 6. Optionally fetch messages
+        // 6. Optionally fetch messages. Run all the per-session
+        // `get_history` calls concurrently — the previous shape awaited
+        // them in a `for` loop, which serialised N round-trips and
+        // made `message_limit > 0` disproportionately slow for the
+        // model. A single bad session still does not fail the
+        // listing (the per-row error is logged at debug).
         let message_limit = args.message_limit.unwrap_or(0).min(20) as usize;
         if message_limit > 0 {
-            for row in &mut rows {
-                // Parse the legacy session key format for message retrieval
-                if let Some(legacy_key) =
-                    crate::gateway::router::SessionKey::from_key_string(&row.key)
-                {
-                    match self
-                        .context
-                        .session_store()
-                        .get_history(&legacy_key, Some(message_limit))
+            let session_store = self.context.session_store();
+            let history_futures = rows.iter().map(|row| {
+                let legacy_key =
+                    crate::gateway::router::SessionKey::from_key_string(&row.key);
+                async move {
+                    let key = legacy_key?;
+                    match session_store
+                        .get_history(&key, Some(message_limit))
                         .await
                     {
-                        Ok(messages) => {
-                            row.messages = Some(messages);
-                        }
+                        Ok(messages) => Some(messages),
                         Err(e) => {
                             debug!(
                                 session_key = %row.key,
                                 error = %e,
                                 "Failed to fetch messages for session"
                             );
+                            None
                         }
                     }
                 }
+            });
+            let histories = futures::future::join_all(history_futures).await;
+            for (row, history) in rows.iter_mut().zip(histories.into_iter()) {
+                row.messages = history;
             }
         }
 

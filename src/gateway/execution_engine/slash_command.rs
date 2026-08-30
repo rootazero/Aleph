@@ -447,13 +447,24 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             side_question: _,
         } = self.resolve_turn_permissions(request, agent).await;
         // The permissions resolver above persists a request-carried tier onto
-        // the session as a side effect (stamp-on-carry). The mode and
-        // think-level twins carry the same contract, and a fast-path dispatch
-        // is the turn: run their resolvers too (values unused here — the fast
-        // path builds no tool surface and no prompt) so a mode/thinking pick
-        // riding a slash message is not silently dropped.
+        // the session as a side effect (stamp-on-carry). Its twins carry the
+        // same contract, and a fast-path dispatch IS the turn: run every one of
+        // them too (values unused here — the fast path builds no tool surface
+        // and no prompt) so a knob riding a slash message is not silently
+        // dropped.
+        //
+        // "Every one of them" is load-bearing and was once "the mode and
+        // think-level twins" — a count, written when there were three. The
+        // memory twin landed as a fourth and inherited nothing: a client that
+        // sent `{memory: "off"}` alongside a slash command had that pick
+        // dropped on the floor, and the *next* ordinary turn resolved from the
+        // session's stale stamp. Nothing errored; the knob simply appeared not
+        // to stick. `every_stamp_on_carry_resolver_runs_on_the_fast_path`
+        // derives the set from the modules that stamp rather than from this
+        // list, so a fifth twin is a red test and not a rediscovery.
         let _ = self.resolve_turn_mode(request).await;
         let _ = self.resolve_turn_think_level(request).await;
+        let _ = self.resolve_turn_memory_mode(request).await;
         let caller_role = request.metadata.get("caller_role").map(String::as_str);
         let caller_is_operator = crate::tools::turn_context::role_is_operator(caller_role);
 
@@ -950,6 +961,148 @@ mod arg_mapping_tests {
             "these start a run without resolving slash input first, so any \
              slash command they carry is folded into a running sibling as \
              plain text and never executes: {offenders:?}"
+        );
+    }
+
+    /// Every session knob that stamps a request-carried pick onto the session
+    /// must have its resolver run on **every** surface that completes a turn.
+    ///
+    /// A fast-path dispatch **is** the turn. It builds no prompt and no tool
+    /// surface, so it needs none of the resolved *values* — but the resolvers
+    /// are not pure: each one persists a request-carried choice so it outlives
+    /// the turn that carried it. Skip one and the pick is dropped on the floor
+    /// while the request itself succeeds; the *next* ordinary turn then
+    /// resolves from the session's stale stamp. There is no error, no log, and
+    /// no failing assertion anywhere — the knob just appears not to stick.
+    ///
+    /// That is exactly how the memory twin shipped broken: the comment at the
+    /// call site named "the mode and think-level twins", which was true on the
+    /// day it was written and stopped being true when a fourth twin landed.
+    ///
+    /// So this derives the set from the modules that actually stamp — a
+    /// `turn_*.rs` sibling containing a `persist_session_*` function — rather
+    /// than from any list a person maintains. A fifth twin turns this red on
+    /// the commit that adds it, which is the only moment the omission is cheap.
+    ///
+    /// # And the surfaces are derived too
+    ///
+    /// This used to read exactly one file, `slash_command.rs`, which made it
+    /// structurally blind to the OTHER early return: `gate.rs`'s mid-loop-steer
+    /// arm answers `GateOutcome::HandledInline`, `execute()` returns `Ok(())`,
+    /// and `run_loop::inner` — where the four resolvers otherwise live — is
+    /// never reached. Every knob riding a message that got folded into a running
+    /// sibling was therefore dropped, silently, for as long as the session had a
+    /// run in flight.
+    ///
+    /// The surface set is now "every production caller of
+    /// `resolve_turn_permissions`", because resolving this turn's tier is what
+    /// makes something a turn. A new surface that resolves permissions without
+    /// its twins is red on the commit that adds it.
+    #[test]
+    fn every_stamp_on_carry_resolver_runs_on_the_fast_path() {
+        use crate::utils::source_scan::code_text;
+
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway/execution_engine");
+
+        // The twins: `turn_*.rs` modules that persist a carried pick. Read off
+        // the filesystem, so membership is a property of the code and not of
+        // this test.
+        let mut twins: Vec<(String, String)> = Vec::new();
+        for entry in std::fs::read_dir(&dir)
+            .expect("execution_engine dir")
+            .flatten()
+        {
+            let path = entry.path();
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            if !name.starts_with("turn_") || !name.ends_with(".rs") {
+                continue;
+            }
+            let body = code_text(&std::fs::read_to_string(&path).expect("turn module"));
+            if !body.contains("async fn persist_session_") {
+                // Not a stamp-on-carry twin. `turn_model` is the standing
+                // example: the model pin's writer is the `select_model` tool,
+                // and its `turn_*` module only rehydrates an already-persisted
+                // pin — nothing is carried, so nothing can be dropped.
+                continue;
+            }
+            let resolver = body
+                .split("async fn resolve_turn_")
+                .nth(1)
+                .and_then(|rest| rest.split(['(', '<']).next())
+                .map(|n| format!("resolve_turn_{}", n.trim()))
+                .unwrap_or_else(|| {
+                    panic!("{name} stamps but declares no resolve_turn_* entry point")
+                });
+            twins.push((name, resolver));
+        }
+
+        assert!(
+            twins.len() >= 4,
+            "expected at least the four known stamp-on-carry twins \
+             (permissions / thinking / mode / memory); found {twins:?} — the \
+             scan stopped matching, so its green would mean nothing"
+        );
+
+        // The surfaces: every production file under `execution_engine/` that
+        // resolves this turn's tier. Resolving the tier is what makes something
+        // a turn, so this is the set that owes the other resolvers — derived,
+        // not a list of file names someone remembered to extend.
+        let mut surfaces: Vec<(String, String)> = Vec::new();
+        let mut stack = vec![dir.clone()];
+        while let Some(current) = stack.pop() {
+            for entry in std::fs::read_dir(&current)
+                .expect("execution_engine dir")
+                .flatten()
+            {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                let body = code_text(&std::fs::read_to_string(&path).expect("engine module"));
+                if !body.contains("self.resolve_turn_permissions(") {
+                    continue;
+                }
+                let name = path
+                    .strip_prefix(&dir)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .to_string();
+                surfaces.push((name, body));
+            }
+        }
+
+        assert!(
+            surfaces.len() >= 3,
+            "expected at least the three turn surfaces (the slash fast path, \
+             the mid-loop-steer inline fold, and the run loop); found {:?} — \
+             the scan stopped matching, so its green would mean nothing",
+            surfaces.iter().map(|(n, _)| n).collect::<Vec<_>>()
+        );
+
+        let mut missing: Vec<String> = Vec::new();
+        for (surface, body) in &surfaces {
+            for (module, resolver) in &twins {
+                if !body.contains(&format!("self.{resolver}(")) {
+                    missing.push(format!("{surface} is missing {module}'s {resolver}"));
+                }
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "these knobs stamp a request-carried pick onto the session, but a \
+             surface that completes a turn never runs their resolver — a pick \
+             riding that message is silently dropped and the next turn reads \
+             the stale stamp: {missing:?}"
         );
     }
 

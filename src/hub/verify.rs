@@ -91,11 +91,13 @@ pub fn verdict_with_health(
 /// attack/failure surface we want to gate against: an attacker who can write to
 /// the target slot can drop a symlink and have verify report "present"; a
 /// half-finished install can leave an empty directory that also passes
-/// `exists()`. `symlink_metadata` resolves symlinks — the *target* of the
-/// symlink is what gets classified, and a symlink whose target is missing
-/// errors out. The existing install flow stages-then-renames atomically so a
-/// real plugin is always a directory; rejecting the other shapes keeps verify
-/// honest.
+/// `exists()`. `symlink_metadata` is used deliberately here because it does
+/// NOT follow symlinks — `metadata` would dereference the link and report on
+/// the target instead, defeating the `file_type().is_symlink()` rejection
+/// below. A dangling symlink still classifies cleanly as a symlink via this
+/// call (no `NotFound` error, since we stat the link itself, not its target).
+/// The existing install flow stages-then-renames atomically so a real plugin
+/// is always a directory; rejecting the other shapes keeps verify honest.
 fn verify_on_disk_path(path: &str, label: &str) -> VerifyReport {
     let p = std::path::Path::new(path);
     let meta = match std::fs::symlink_metadata(p) {
@@ -154,7 +156,10 @@ pub async fn verify_install(
                         // Unhealthy/Restarting/Dead/Stopped. Treating Degraded
                         // as "not running" caused verify_install to mis-report a
                         // recoverable post-install blip as a hard failure (see
-                        // review/hub-statics).
+                        // review/hub-statics). Variants are enumerated
+                        // explicitly so a future addition to HealthStatus fails
+                        // to compile here instead of silently being classified
+                        // as "not running".
                         let (running, observation) = match info.health {
                             crate::mcp::manager::HealthStatus::Healthy => {
                                 (true, HealthObservation::Healthy)
@@ -162,7 +167,28 @@ pub async fn verify_install(
                             crate::mcp::manager::HealthStatus::Degraded { .. } => {
                                 (true, HealthObservation::Degraded)
                             }
-                            _ => (false, HealthObservation::Unknown),
+                            // Circuit breaker open: server won't reliably
+                            // answer MCP requests, even though the manager
+                            // still holds the entry. Fail closed so the
+                            // post-install probe reflects what the user sees.
+                            crate::mcp::manager::HealthStatus::Unhealthy => {
+                                (false, HealthObservation::Unknown)
+                            }
+                            // Mid-restart: transient. Fail closed; the next
+                            // reconcile sweep will re-verify once the new
+                            // process settles.
+                            crate::mcp::manager::HealthStatus::Restarting { .. } => {
+                                (false, HealthObservation::Unknown)
+                            }
+                            // Max restarts exceeded; manager has given up.
+                            crate::mcp::manager::HealthStatus::Dead => {
+                                (false, HealthObservation::Unknown)
+                            }
+                            // Operator explicitly halted. Not running, by
+                            // intent.
+                            crate::mcp::manager::HealthStatus::Stopped => {
+                                (false, HealthObservation::Unknown)
+                            }
                         };
                         let other =
                             info.resource_count + info.resource_template_count + info.prompt_count;

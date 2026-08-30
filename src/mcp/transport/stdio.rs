@@ -169,20 +169,6 @@ impl StdioTransport {
             cmd.env(key, value);
         }
 
-        for (var_name, _) in std::env::vars() {
-            if crate::security::secret_env::is_secret_env(&var_name) {
-                cmd.env_remove(&var_name);
-            }
-        }
-
-        // A short breadcrumb so an operator can diagnose a server that fails
-        // to start because its runtime couldn't read a secret from the
-        // inherited environment. Per-key logging is too noisy; a single
-        // summary line is enough.
-        let stripped_secrets = std::env::vars()
-            .filter(|(k, _)| crate::security::secret_env::is_secret_env(k))
-            .count();
-
         // Strip inherited interpreter/loader hijack vars (LD_PRELOAD,
         // NODE_OPTIONS, PYTHONSTARTUP, BASH_ENV, etc.) regardless of who set
         // them. The forward-pass above only filters keys the operator
@@ -190,22 +176,35 @@ impl StdioTransport {
         // daemon's environment (development shell, shared host, supply-chain
         // compromise) would otherwise have their loader fire inside every
         // spawned MCP server subprocess.
+        //
+        // Single pass: walk `std::env::vars()` once and apply both
+        // predicates (`is_secret_env` for inherited-secret stripping,
+        // `is_unsafe_env_key` for case-insensitive interpreter/loader
+        // hijack defense). Replaces the prior two-pass scheme which
+        // re-iterated `std::env::vars()` and ran an O(m) per-row
+        // `stripped_unsafe.iter().any(...)` check inside the second pass.
+        let mut stripped_secrets: usize = 0;
+        for (var_name, _) in std::env::vars() {
+            let is_secret = crate::security::secret_env::is_secret_env(&var_name);
+            let is_unsafe = is_unsafe_env_key(&var_name);
+            if is_secret {
+                cmd.env_remove(&var_name);
+                stripped_secrets += 1;
+            }
+            if is_unsafe {
+                cmd.env_remove(&var_name);
+            }
+        }
+
+        // Also strip the canonical-unsafe keys in their declared spelling so
+        // the breadcrumb below reports the canonical name even when the
+        // inherited spelling differs in case (`Ld_Preload` vs
+        // `LD_PRELOAD`). No-op when the canonical key is already gone.
         let mut stripped_unsafe: Vec<&'static str> = Vec::new();
         for var_name in UNSAFE_ENV_KEYS {
             if std::env::var(var_name).is_ok() {
                 cmd.env_remove(var_name);
                 stripped_unsafe.push(*var_name);
-            }
-        }
-        // Also strip any inherited unsafe key by uppercased match (e.g.
-        // `Ld_Preload`) since `is_unsafe_env_key` is case-insensitive.
-        for (var_name, _) in std::env::vars() {
-            if is_unsafe_env_key(&var_name)
-                && !stripped_unsafe
-                    .iter()
-                    .any(|k| k.eq_ignore_ascii_case(&var_name))
-            {
-                cmd.env_remove(&var_name);
             }
         }
 

@@ -3,6 +3,8 @@
 use super::plan::{PlanUpdate, PlanView};
 use crate::api::sessions::SessionKnobs;
 use crate::api::teams::CoordTaskDto;
+use crate::i18n::{td_string, Locale};
+use aleph_protocol::session_thread::HistoryWindow;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 use shared_ui_logic::state::{merge_recalled_draft, remember_own_message_id};
@@ -122,6 +124,77 @@ pub struct ModelInfo {
     pub is_fallback: bool,
     #[serde(default)]
     pub original_model: Option<String>,
+}
+
+/// Why a run stopped, when it stopped for a reason worth saying out loud.
+///
+/// Projected from `run_complete`'s `summary.terminate_reason` — core decides
+/// (`TerminateReason::as_static_str`), the panel renders (R4).
+///
+/// The clean case is deliberately **absent** rather than
+/// `Some("completed")`: a badge on every finished run is noise, and the four
+/// surfaces that already read this field
+/// (`reply_emitter::streaming::cap_notice_for`, the TUI run footer,
+/// `aleph exec`, `aleph watch`) all suppress it the same way. Until this type
+/// existed the panel read the field at all — a capped or crashed run rendered
+/// here exactly like a clean one.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunHalt {
+    /// Stable token from `TerminateReason::as_static_str()`.
+    pub reason: String,
+    /// Granular cap label under the `budget_exhausted_partial_result`
+    /// umbrella (`summary.terminate_detail`). Preferred over `reason` when
+    /// present — the precedence is `aleph_protocol::terminate::effective_token`,
+    /// which every terminal surface now reads as well.
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+impl RunHalt {
+    /// The words on screen.
+    ///
+    /// Takes a `Locale` rather than the context for the same reason
+    /// `cluster::last_seen_label` does: this is a pure function with host unit
+    /// tests, and `td_string!` resolves against a locale value, so both
+    /// languages are assertable without standing up a reactive owner.
+    ///
+    /// An unrecognised token falls through **verbatim and untranslated**: a
+    /// core newer than this panel must still say something true, and the raw
+    /// token is truer than either a guess or silence. That fall-through is the
+    /// one place this function cannot localise, by construction — the string is
+    /// the server's, and it is the same fall-through the TUI and
+    /// `cap_notice_for` apply.
+    #[must_use]
+    pub fn label(&self, locale: Locale) -> String {
+        let raw = self.detail.as_deref().unwrap_or(&self.reason);
+        match raw {
+            "hit_max_iterations" => td_string!(locale, chat.halt_hit_max_iterations).to_string(),
+            "context_budget_exhausted" => {
+                td_string!(locale, chat.halt_context_budget_exhausted).to_string()
+            }
+            "max_output_tokens_exhausted" => {
+                td_string!(locale, chat.halt_max_output_tokens_exhausted).to_string()
+            }
+            "budget_exhausted_partial_result" => {
+                td_string!(locale, chat.halt_budget_exhausted_partial_result).to_string()
+            }
+            "consecutive_failure_cap" => {
+                td_string!(locale, chat.halt_consecutive_failure_cap).to_string()
+            }
+            "empty_response_exhausted" => td_string!(locale, chat.halt_empty_response_exhausted).to_string(),
+            "reactive_compact_exhausted" => {
+                td_string!(locale, chat.halt_reactive_compact_exhausted).to_string()
+            }
+            "stall_timeout" => td_string!(locale, chat.halt_stall_timeout).to_string(),
+            "turn_timeout" => td_string!(locale, chat.halt_turn_timeout).to_string(),
+            "verifier_veto" => td_string!(locale, chat.halt_verifier_veto).to_string(),
+            "stop_hook_halt" => td_string!(locale, chat.halt_stop_hook_halt).to_string(),
+            "cancelled" => td_string!(locale, chat.halt_cancelled).to_string(),
+            "failed" => td_string!(locale, chat.halt_failed).to_string(),
+            "diminishing_returns" => td_string!(locale, chat.halt_diminishing_returns).to_string(),
+            other => other.to_string(),
+        }
+    }
 }
 
 /// What a completed run cost, projected from `run_complete`'s summary. Core
@@ -414,11 +487,105 @@ pub enum ArchiveGate {
     Completed,
 }
 
+/// Transcript rows the first hydration of a conversation asks for.
+///
+/// The predecessor was 50, hard-coded at the single call site, with no way to
+/// ask for more — so every conversation longer than 50 rows opened missing its
+/// beginning, permanently and with nothing on screen saying so. 50 is a handful
+/// of turns here because `messages` holds one row per assistant step, not one
+/// per turn: a six-turn agentic session on this machine had 88 rows.
+pub const DEFAULT_HISTORY_LIMIT: usize = 200;
+
+/// How much one "load earlier" press adds to [`DEFAULT_HISTORY_LIMIT`].
+///
+/// Re-fetching a larger window (rather than paging backwards with the server's
+/// `before` cursor) is deliberate: hydration REPLAYS assistant runs through
+/// `replay_run`, which appends to `messages` and expands one row into many
+/// narration/tool rows, and it keys untraced rows by their index in the page
+/// (`hist-{i}`). Prepending a second page would therefore both mis-order the
+/// transcript and mint duplicate keys. Re-hydrating reuses that one tested
+/// path and cannot drift from it.
+pub const HISTORY_PAGE: usize = 200;
+
+/// What a just-fetched transcript window implies about what sits above it:
+/// `(show the control, how many rows are up there)`.
+///
+/// Two inputs answer the same question with different authority, and the order
+/// matters. `total` is the server counting its own rows — when it is present
+/// the gap is arithmetic and exact. `received >= limit` is the client guessing
+/// from the size of what it got, and it is wrong in one specific place: a
+/// transcript that is exactly `limit` rows long comes back full and complete,
+/// and the guess calls it truncated. So the guess is the FALLBACK, reached only
+/// when the server declined to answer (a core older than the field, or a count
+/// that failed) — never a cross-check on an answer that was given.
+///
+/// The arithmetic half is [`HistoryWindow::above`], shared with the CLI rather
+/// than spelled a second time here: "how many rows are above this window" is
+/// one question, and two copies of it is how the two surfaces would come to
+/// disagree about the same response.
+///
+/// Its `saturating_sub` is load-bearing because the server takes the two
+/// numbers in two reads — and it counts FIRST, deliberately, so the skew falls
+/// this way: a message appended in between lands in the window, `received`
+/// comes back the larger, and "nothing above" is the honest reading. Counting
+/// after the window would over-report instead, which on a conversation shorter
+/// than the limit renders a "load earlier" control over a transcript with
+/// nothing earlier.
+#[must_use]
+pub fn history_window_gap(
+    received: usize,
+    limit: usize,
+    total: Option<usize>,
+) -> (bool, Option<usize>) {
+    let window = HistoryWindow {
+        count: received,
+        total,
+    };
+    match window.above() {
+        Some(above) => (above > 0, Some(above)),
+        None => (received >= limit, None),
+    }
+}
+
 /// Reactive state container provided via Leptos context.
 #[derive(Clone, Copy)]
 pub struct ChatState {
     /// All messages in the current session.
     pub messages: RwSignal<Vec<ChatMessage>>,
+    /// How many transcript rows the next hydration asks `chat.history` for.
+    ///
+    /// Lives here rather than as a parameter because all five hydration entry
+    /// points (`hydrate_and_follow` and its callers) write into this one
+    /// singleton anyway, and a parameter would have to be threaded through
+    /// every one of them to be raised from a single button.
+    ///
+    /// `chat.history` returns the TRAILING `limit` rows (`paginate_before`
+    /// keeps the most recent), so a limit smaller than the transcript drops
+    /// the OLDEST messages — silently, before this existed. Raising it and
+    /// re-hydrating is what "load earlier" does.
+    pub history_limit: RwSignal<usize>,
+    /// Whether rows exist above the window the last hydration rendered — the
+    /// gate on the "load earlier" control.
+    pub history_has_more: RwSignal<bool>,
+    /// HOW MANY rows are above the window, when the server said so.
+    ///
+    /// `chat.history` reports `total` (the whole session) alongside the
+    /// trailing page it serves, so this is `total - received`. `None` means the
+    /// server gave no answer — a core that predates the field, or a count that
+    /// failed to read — and it must be read as "unknown", never as zero.
+    ///
+    /// It is what makes the control an exit rather than a staircase: knowing
+    /// the number, one press fetches the entire remainder and the label can say
+    /// what that costs before it is paid. Not knowing it, the control degrades
+    /// to `HISTORY_PAGE` at a time — the behaviour it had when the length of
+    /// the page was the only evidence available.
+    ///
+    /// That older evidence — "the page came back full" — is still the fallback
+    /// for `history_has_more`, and it is wrong in one specific place: a
+    /// transcript that is exactly `history_limit` rows long looks truncated to
+    /// it. A server that reports `total` has no such blind spot, which is the
+    /// point of asking rather than guessing.
+    pub history_above: RwSignal<Option<usize>>,
     /// Current phase of the UI.
     pub phase: RwSignal<ChatPhase>,
     /// Active `run_id` (Some while agent is running).
@@ -555,6 +722,10 @@ pub struct ChatState {
     /// run's cost is looked up from whichever bubble ended up carrying its final
     /// answer. Session-scoped → rides along in [`SessionSnapshot`].
     pub run_costs: RwSignal<std::collections::HashMap<String, RunCost>>,
+    /// Why each completed run stopped, when it did not stop cleanly. Keyed and
+    /// scoped exactly like [`Self::run_costs`] — same producer frame, same
+    /// per-conversation lifetime, same snapshot.
+    pub run_halts: RwSignal<std::collections::HashMap<String, RunHalt>>,
     /// Per-session execution tier override (`"ask"` | `"auto"` | `"full"`).
     /// `None` = follow the global tier. Mirrors what core persists under
     /// `SessionIdentityMeta.custom["exec_tier"]`; the composer's tier pill owns
@@ -664,6 +835,9 @@ impl ChatState {
     pub fn new() -> Self {
         Self {
             messages: RwSignal::new(Vec::new()),
+            history_limit: RwSignal::new(DEFAULT_HISTORY_LIMIT),
+            history_has_more: RwSignal::new(false),
+            history_above: RwSignal::new(None),
             phase: RwSignal::new(ChatPhase::Idle),
             active_run_id: RwSignal::new(None),
             session_key: RwSignal::new(None),
@@ -688,6 +862,7 @@ impl ChatState {
             selected_model: RwSignal::new(None),
             pending_model_override: RwSignal::new(None),
             run_costs: RwSignal::new(std::collections::HashMap::new()),
+            run_halts: RwSignal::new(std::collections::HashMap::new()),
             session_exec_tier: RwSignal::new(None),
             session_mode: RwSignal::new(None),
             session_think_level: RwSignal::new(None),
@@ -1450,6 +1625,21 @@ impl ChatState {
         });
     }
 
+    /// Record why a run stopped. `None` (a clean `completed`, or a core that
+    /// predates the field) *removes* any prior entry rather than leaving it:
+    /// run ids are reused on nothing, but a replay of the same run must not be
+    /// able to leave a stale badge behind.
+    pub fn set_run_halt(&self, run_id: &str, halt: Option<RunHalt>) {
+        self.run_halts.update(|m| match halt {
+            Some(h) => {
+                m.insert(run_id.to_string(), h);
+            }
+            None => {
+                m.remove(run_id);
+            }
+        });
+    }
+
     /// Prefix reuse across every priced run of *this* conversation.
     ///
     /// A single run's figure is noisy — the first run of a session writes the
@@ -1602,6 +1792,7 @@ impl ChatState {
         self.context_usage.set(None);
         self.live_cache_pct.set(None);
         self.run_costs.set(std::collections::HashMap::new());
+        self.run_halts.set(std::collections::HashMap::new());
         // A fresh conversation carries no dials of its own — every one of them
         // follows the install default until the user picks otherwise.
         self.apply_session_knobs(SessionKnobs::default());
@@ -1634,6 +1825,13 @@ impl ChatState {
     /// Clear session state but keep `agent_id` (for new chat within same agent).
     pub fn clear_session(&self) {
         self.messages.set(Vec::new());
+        // Back to one page. Without this a session opened after a long one
+        // inherits its raised limit, which is merely wasteful — but it also
+        // inherits a stale `history_has_more`, which is a visible lie (a "load
+        // earlier" control over a three-message conversation).
+        self.history_limit.set(DEFAULT_HISTORY_LIMIT);
+        self.history_has_more.set(false);
+        self.history_above.set(None);
         self.phase.set(ChatPhase::Idle);
         self.active_run_id.set(None);
         self.session_key.set(None);
@@ -1655,6 +1853,7 @@ impl ChatState {
         self.context_usage.set(None);
         self.live_cache_pct.set(None);
         self.run_costs.set(std::collections::HashMap::new());
+        self.run_halts.set(std::collections::HashMap::new());
         self.apply_session_knobs(SessionKnobs::default());
         // agent_id is intentionally preserved
     }
@@ -1734,6 +1933,7 @@ impl ChatState {
             sends: self.sends.get_untracked(),
             context_usage: self.context_usage.get_untracked(),
             run_costs: self.run_costs.get_untracked(),
+            run_halts: self.run_halts.get_untracked(),
             knobs: self.session_knobs(),
             plan: self.plan.get_untracked(),
         }
@@ -1766,6 +1966,7 @@ impl ChatState {
             self.pending_model_override.set(None);
         }
         self.run_costs.set(snap.run_costs);
+        self.run_halts.set(snap.run_halts);
         self.apply_session_knobs(snap.knobs);
         self.next_msg_id.set(snap.next_msg_id);
         self.sends.set(snap.sends);
@@ -1823,6 +2024,8 @@ pub struct SessionSnapshot {
     pub context_usage: Option<ContextUsage>,
     /// Per-run cost, so the meta line survives a tab swap.
     pub run_costs: std::collections::HashMap<String, RunCost>,
+    /// Per-run halt reason, for the same reason and by the same route.
+    pub run_halts: std::collections::HashMap<String, RunHalt>,
     /// This conversation's dials, so a tab swap restores the tier / mode /
     /// depth / memory setting the server is actually enforcing rather than the
     /// install defaults. One field, so a new dial cannot be captured on the way
@@ -2438,6 +2641,51 @@ mod step_tests {
                 .collect(),
             complete,
         }
+    }
+
+    /// The halt reason rides the snapshot for the same reason the cost does:
+    /// switching tabs and switching back must not turn a capped run into one
+    /// that looks like it finished cleanly.
+    #[test]
+    fn a_halt_reason_survives_a_tab_swap_and_can_be_taken_back() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.set_run_halt(
+            "r1",
+            Some(RunHalt {
+                reason: "hit_max_iterations".into(),
+                detail: None,
+            }),
+        );
+
+        let snap = chat.capture_snapshot();
+        chat.run_halts.set(std::collections::HashMap::new());
+        chat.restore_from(snap);
+        assert_eq!(
+            chat.run_halts
+                .get_untracked()
+                .get("r1")
+                .map(|h| h.label(Locale::en))
+                .as_deref(),
+            Some("hit max iterations")
+        );
+
+        // `None` removes rather than leaves: a replay of the same run that now
+        // reports a clean finish must not keep the old badge on screen.
+        chat.set_run_halt("r1", None);
+        assert!(chat.run_halts.get_untracked().is_empty());
+
+        // A fresh tab shows nothing.
+        chat.set_run_halt(
+            "r2",
+            Some(RunHalt {
+                reason: "failed".into(),
+                detail: None,
+            }),
+        );
+        chat.restore_from(SessionSnapshot::default());
+        assert!(chat.run_halts.get_untracked().is_empty());
     }
 
     #[test]
@@ -3155,5 +3403,165 @@ mod run_cost_tests {
         let c = cost(None, "unknown", 0);
         assert!(c.cost_label().is_none());
         assert!(c.tokens_label().is_none());
+    }
+}
+
+/// `history_window_gap` decides whether the transcript is missing a beginning,
+/// and how much of one.
+///
+/// The interesting cases are all about which of its two inputs wins. The
+/// server's `total` is a count; the page length is a guess; and the guess is
+/// wrong in a way that is invisible unless it is named — hence a test for the
+/// exact shape where they disagree.
+#[cfg(test)]
+mod history_window_gap_tests {
+    use super::history_window_gap;
+
+    #[test]
+    fn a_reported_total_larger_than_the_page_is_the_gap() {
+        assert_eq!(history_window_gap(200, 200, Some(1_047)), (true, Some(847)));
+    }
+
+    /// The one shape where the two inputs disagree, and the whole reason the
+    /// server was asked at all: 200 rows fetched with a limit of 200, and the
+    /// session holds exactly 200. The page is full AND complete. The guess
+    /// (`received >= limit`) calls that truncated and offers a press that can
+    /// only find nothing; the count calls it finished.
+    #[test]
+    fn a_full_page_that_is_also_the_whole_transcript_is_finished_not_truncated() {
+        assert_eq!(history_window_gap(200, 200, Some(200)), (false, Some(0)));
+        // Byte-for-byte the same window, no answer from the server: now the
+        // guess is all there is, and it says the opposite.
+        assert_eq!(history_window_gap(200, 200, None), (true, None));
+    }
+
+    #[test]
+    fn without_a_total_the_depth_stays_unknown_so_the_control_steps_one_page() {
+        // `None` for the gap is not zero — it is what makes the press add
+        // `HISTORY_PAGE` and the label stay unquantified.
+        assert_eq!(history_window_gap(200, 200, None), (true, None));
+        // A short page is complete under either rule.
+        assert_eq!(history_window_gap(37, 200, None), (false, None));
+    }
+
+    #[test]
+    fn a_message_appended_between_the_two_server_reads_reads_as_nothing_above() {
+        // `total` and the window are two reads; the window can come back
+        // longer. Saturating, not wrapping: the honest answer is "nothing
+        // above", not `usize::MAX`.
+        assert_eq!(history_window_gap(5, 200, Some(4)), (false, Some(0)));
+    }
+
+    #[test]
+    fn an_empty_session_offers_nothing_to_load() {
+        assert_eq!(history_window_gap(0, 200, Some(0)), (false, Some(0)));
+        assert_eq!(history_window_gap(0, 200, None), (false, None));
+    }
+}
+
+/// The two copies of the halt vocabulary, held against each other.
+///
+/// `RunHalt::label` and `aleph_protocol::terminate::label` answer the same
+/// question for different readers — a browser whose language is a UI setting,
+/// and a terminal whose language is `LC_MESSAGES`. Both copies are deliberate
+/// (see the protocol module's doc for why this crate does not simply call it),
+/// and "deliberate" is exactly the condition under which two tables drift
+/// without anyone noticing: each has its own tests, each stays green, and the
+/// only place the disagreement shows is a screenshot next to a terminal.
+#[cfg(test)]
+mod halt_vocabulary_is_shared_tests {
+    use super::RunHalt;
+    use crate::i18n::Locale;
+    use aleph_protocol::terminate::{self, UiLocale};
+
+    fn halt(token: &str) -> RunHalt {
+        RunHalt {
+            reason: token.to_string(),
+            detail: None,
+        }
+    }
+
+    /// Every token the shared table has words for renders the same bytes here.
+    ///
+    /// Walks [`terminate::labelled_tokens`] rather than restating it, so a
+    /// fourteenth row reddens this on the commit that adds it — which is the
+    /// whole point: the panel is the copy that has to be edited by hand.
+    ///
+    /// One row is skipped, and only one: `CLEAN_TOKEN`. The panel never prints
+    /// a word for a clean run (`parse_run_halt` returns `None` for it), so a
+    /// `chat.halt_completed` key would be a key with no reader — the other half
+    /// of the very defect this crate's English sweep was about.
+    #[test]
+    fn the_panel_says_the_same_words_as_the_terminal_clients() {
+        let mut checked = 0usize;
+        for token in terminate::labelled_tokens() {
+            if token == terminate::CLEAN_TOKEN {
+                continue;
+            }
+            for (panel, shared) in [(Locale::en, UiLocale::En), (Locale::zh, UiLocale::Zh)] {
+                assert_eq!(
+                    halt(token).label(panel),
+                    terminate::label(token, shared),
+                    "the panel and aleph_protocol::terminate disagree about {token:?} \
+                     in {panel:?}; both are hand-written and this is where they drift",
+                );
+            }
+            checked += 1;
+        }
+        assert!(
+            checked >= 13,
+            "only {checked} tokens compared — the shared table shrank, or \
+             `labelled_tokens` stopped yielding",
+        );
+    }
+
+    /// Neither table has a row the other lacks.
+    ///
+    /// Read off `locales/en.json` rather than off the `match` above, because the
+    /// two failure modes are different and only this one sees both: a `match`
+    /// arm with no key does not compile, but a **key with no arm** compiles
+    /// fine and is dead weight in both locale files, and a **token with no key**
+    /// falls through to the raw wire string on screen while every test here
+    /// stays green.
+    ///
+    /// The `halt_` prefix plus the exact token is what makes this decidable at
+    /// all; the keys were renamed to that shape (`halt_budget_partial` ->
+    /// `halt_budget_exhausted_partial_result`) in the same change that wrote
+    /// this guard, because a key whose name only resembles its token can be
+    /// compared by a human and by nothing else.
+    #[test]
+    fn every_halt_key_has_a_token_and_every_token_has_a_key() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut keyed: Vec<String> = Vec::new();
+        for locale_file in ["en.json", "zh.json"] {
+            let path = root.join("locales").join(locale_file);
+            let src = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let mut here: Vec<String> = src
+                .lines()
+                .filter_map(|l| l.trim().strip_prefix("\"halt_"))
+                .filter_map(|l| l.split('"').next())
+                .map(str::to_string)
+                .collect();
+            here.sort();
+            if keyed.is_empty() {
+                keyed = here;
+            } else {
+                assert_eq!(keyed, here, "the two locale files carry different halt keys");
+            }
+        }
+        assert!(!keyed.is_empty(), "no halt keys found — did the scan break?");
+
+        let mut expected: Vec<String> = terminate::labelled_tokens()
+            .filter(|t| *t != terminate::CLEAN_TOKEN)
+            .map(str::to_string)
+            .collect();
+        expected.sort();
+        assert_eq!(
+            keyed, expected,
+            "left = chat.halt_* keys in locales/, right = tokens the shared \
+             table has words for. A key on the left only is dead weight; a \
+             token on the right only renders as a raw wire string on screen.",
+        );
     }
 }

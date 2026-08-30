@@ -1,0 +1,107 @@
+{
+  "module": "src/builtin_tools/desktop",
+  "files_reviewed": 23,
+  "findings": [
+    {
+      "file": "src/builtin_tools/desktop/native.rs",
+      "line": 1684,
+      "severity": "high",
+      "category": "api_misuse",
+      "issue": "screen_record duration validation guards only `!is_finite()`; a negative but finite `duration` (e.g. -1.0) passes through and is then converted via `Duration::from_secs_f64` inside the limb, which panics on negative input — killing the worker.",
+      "evidence": "`let duration_secs = match args.duration { Some(v) if !v.is_finite() => return Ok(Some(invalid_args(...))); Some(v) => v, None => 5.0 };` — followed by `let config = ... ScreenRecordConfig { duration_secs, ... }` and `screen.screen_record(config).await`. Same guard pattern in `desktop/shared/src/perception/screen_record.rs:537,830,936` and `desktop/macos/src/lib.rs:275,304` consumes it via `Duration::from_secs_f64`, which docs say panics on negative.",
+      "suggested_fix": "Extend the guard to `!v.is_finite() || v < 0.0` (and ideally `v == 0.0`) before handing `duration_secs` to the limb, or saturate at `0.0` in the tool layer as `desktop/windows/src/media.rs:78-82` and `desktop/linux/src/media.rs:553` already do on the platform side.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/desktop/mod.rs",
+      "line": 220,
+      "severity": "medium",
+      "category": "concurrency",
+      "issue": "`run_boundary_crossed` clears held desktop inputs only for the *current* session (`held_inputs::release_all(&held_inputs::current_session_id(), screen)`). A previous run that died with a stuck key on a *different* session_id keeps its input held forever — only an Escape press drains the whole ledger. The cross-session `release_all_sessions` exists but is wired only to the Escape path.",
+      "evidence": "In `mod.rs::DesktopTool::check_escape`: run-boundary arm calls `held_inputs::release_all(&held_inputs::current_session_id(), screen).await`; Escape arm calls `held_inputs::release_all_sessions(screen).await`. Session id is `turn_context::current_turn_context().session_key.to_key_string()` — a new run is not guaranteed to share it with the dead one.",
+      "suggested_fix": "Either call `release_all_sessions` on the run-boundary arm too, or, less invasive, expire ledger entries older than a TTL on boundary.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/desktop/mod.rs",
+      "line": 463,
+      "severity": "medium",
+      "category": "error_context",
+      "issue": "`check_blocked_app` falls back to the frontmost-app check on `resolve_rail` Err. When the actual failure is \"app not found / ambiguous\", and the *frontmost* app happens to be a password manager, the model is told \"computer use is blocked in credential vaults — ask the user\" instead of the real rail-resolution message. Dispatch will refuse with the better message, but the guard runs first and shadows it.",
+      "evidence": "`let target = match rail { Ok(native::Rail::Targeted(pid)) => { ... apps.iter().find(|a| a.pid == Some(pid))? } Ok(native::Rail::Global) | Err(_) => apps.iter().find(|a| a.is_active)? }; safety::blocked_app_reason(&target.name, &target.bundle_id).map(...)` — the `Err(_) =>` arm intentionally conservatively assumes the global tap. Comment in code acknowledges the choice but does not address the shadowing.",
+      "suggested_fix": "On `Err(_)` from `resolve_rail`, return early `None` so the dispatch refusal surfaces; only fall back to frontmost on `Ok(Rail::Global)`.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/desktop/native.rs",
+      "line": 945,
+      "severity": "medium",
+      "category": "error_context",
+      "issue": "The `observe:\"screenshot\"` path calls `call_via_platform` recursively for a post-action screenshot, but only checks `if let Ok(Some(shot))` — the inner screenshot's `data` is silently dropped on any failure (budget, error, no platform). The outer mutating action still reports `success:true`, with `post_screenshot` simply absent and no `message` warning. A model that asked for an `observe` screenshot gets no signal that the observation never happened.",
+      "evidence": "`if args.observe.as_deref() == Some(\"screenshot\") { ... let mut shot_args = ...; if let Ok(Some(shot)) = self.call_via_platform(platform, &shot_args).await { if let (Some(obj), Some(shot_data)) = (... output.data.as_mut()..., shot.data) { obj.insert(\"post_screenshot\".into(), shot_data); } } }` — no `else` arm, no log, no message.",
+      "suggested_fix": "Add an `else` arm that inserts a `post_screenshot_failed` field with the inner error message (or at minimum logs `tracing::warn!`), so a missing screenshot is not silently indistinguishable from one that took.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/desktop/native.rs",
+      "line": 1307,
+      "severity": "low",
+      "category": "api_misuse",
+      "issue": "Production `.expect(\"invariant: main_key has exactly one element after split\")` in the `key_combo` arm. Upstream `keys.is_empty()` guard makes the invariant true today, but any future refactor that breaks it panics the worker (no structured refusal).",
+      "evidence": "`let key = main_key.first().expect(\"invariant: main_key has exactly one element after split\");`",
+      "suggested_fix": "Replace with `let Some(key) = main_key.first() else { return Ok(Some(DesktopOutput { success:false, message:Some(\"internal: key_combo produced an empty main key\".into()), .. })); };` — fail-closed structured error instead of panic.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/desktop/set_of_marks.rs",
+      "line": 155,
+      "severity": "low",
+      "category": "api_misuse",
+      "issue": "`draw_digit` panics with `.expect(\"invariant: digit is derived from ASCII 0-9\")` if the digit is out of range. The caller (`draw_label`) sources digits from `n.to_string().bytes().map(|b| (b - b'0') as usize)`, so a future change that lets user input flow in (e.g. an element index from a non-numeric source) would panic the worker.",
+      "evidence": "`let glyph = GLYPHS.get(digit).expect(\"invariant: digit is derived from ASCII 0-9\");`",
+      "suggested_fix": "Return a `Result<(), ()>` from `draw_digit`; on out-of-range draw the badge background only and skip the glyph.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/desktop/session_lock.rs",
+      "line": 172,
+      "severity": "low",
+      "category": "concurrency",
+      "issue": "`ComputerUseLock::release()` does synchronous `std::fs::remove_file` and `read_to_string` from `Drop`, which fires when `SessionLockGuard` drops at the end of an async tool call. The lock file is small and writes are short, but it is blocking I/O on the tokio worker thread — a violation of the codebase's own `use tokio::sync::Mutex` / \"never hold std Mutex across .await\" rule, just for the inverse case.",
+      "evidence": "`impl Drop for ComputerUseLock { fn drop(&mut self) { if self.held { if let Err(e) = self.release() { ... } } } }` calls `fs::remove_file` and `fs::read_to_string` synchronously. The `Drop` fires when the outer `SessionLockGuard` drops, which is at the end of an async `call()` body.",
+      "suggested_fix": "Move release to an explicit `async fn release_async` invoked from a tokio context, with `Drop` only setting a `dirty` flag.",
+      "confidence": "low"
+    },
+    {
+      "file": "src/builtin_tools/desktop/element_ref.rs",
+      "line": 127,
+      "severity": "low",
+      "category": "magic_value",
+      "issue": "`next_id` is `wrapping_add(1).max(1)` so after 4_294_967_295 issued snapshots per process it wraps to 0, then `max(1)` lifts it to 1 — colliding with whatever snapshot id is currently active in any live lane. The `s{08x}` format is 8 hex digits so the per-process lifetime number is bounded by `2^32` snapshots (each AX snapshot has a `max_elements ≤ 500` cost) and collision is practically unreachable, but the guard is fragile: a single stray `issue` in a test that bypasses the wrapper could push the counter and never reset it.",
+      "evidence": "`store.next_id = store.next_id.wrapping_add(1).max(1);`",
+      "suggested_fix": "Document the 2^32 cap explicitly, or reset `next_id` to 1 when evicting a lane whose id equals `next_id - 1` to make wraparound observable.",
+      "confidence": "low"
+    },
+    {
+      "file": "src/builtin_tools/desktop/gui_locate.rs",
+      "line": 230,
+      "severity": "low",
+      "category": "clippy",
+      "issue": "`walk_ax` allocates a fresh `serde_json::Map` via `affordance_fields(node)` for every AX-node match. `success_output_ax` then calls `affordance_fields(node)` a *second* time on the best match to splice into the output. Two Maps per hot match on a 10k-node Chromium tree is wasted allocation.",
+      "evidence": "`out.push(AxMatch { ... affordances: affordance_fields(node), });` in `walk_ax`, followed by `map.extend(m.affordances.clone());` and `map.extend(best.affordances.clone());` in `success_output_ax`. The Map is then `clone()`-extended, not moved.",
+      "suggested_fix": "Compute `affordance_fields` once and move it into the output by reference, or build the final JSON inline during the walk.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/desktop/verify_state.rs",
+      "line": 431,
+      "severity": "low",
+      "category": "error_context",
+      "issue": "`fold` reports only the *first* encountered `UnknownReason` when multiple predicates carry distinct unknown reasons (e.g. one `target_missing`, one `observation_unavailable`). The model sees one reason and may act on it while the other predicate had a different cause worth knowing.",
+      "evidence": "`PredStatus::Unknown(r) => unknown = unknown.or(Some(r)),` — first-write wins; later Unknown reasons are dropped.",
+      "suggested_fix": "Surface all distinct unknown reasons as an array on the overall status, or pick the most-actionable one (`target_missing` over `observation_unavailable`).",
+      "confidence": "low"
+    }
+  ],
+  "summary": "High-signal review of the 23-file desktop platform-execution layer. The most actionable finding is a worker-crash bug: `screen_record` accepts a negative `duration` because its `!is_finite()` guard misses the negative-finite case, and the limb-side `Duration::from_secs_f64` panics on negative input. Two medium-severity design issues: (a) the run-boundary cleanup of held keyboard/mouse inputs only releases the *current* session's ledger, so stuck inputs from a dead run on a different session id persist until Escape; (b) `check_blocked_app` falls back to the frontmost-app check on `resolve_rail` Err, which can shadow the real rail-resolution error with a misleading 'credential vault' refusal when the frontmost app happens to be a password manager. Several low-severity items: `.expect()` on invariants in production code paths (`native.rs:1307`, `set_of_marks.rs:155,217`), blocking `std::fs` in `SessionLockGuard`'s Drop on the tokio runtime, a fragile 2^32 snapshot-id wraparound in `element_ref.rs`, redundant `affordance_fields` allocations in `gui_locate.rs`, and a silent failure in the `observe:\"screenshot\"` recursive path that drops the inner screenshot's error. No IPC boundary violations (R1) found — `core` calls are mediated entirely through `DesktopPlatform`/`ScreenCapability` traits. No command-injection vectors found. Locking discipline (poison-safe `unwrap_or_else(|e| e.into_inner())`, no std Mutex across `.await`) holds consistently. Hard-blocks (password fields, blocked apps, lock screen shortcuts, rm -rf /, fork bombs, curl|bash) are well covered by `safety.rs` + `focus_gate.rs`."
+}

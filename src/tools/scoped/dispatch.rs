@@ -321,6 +321,16 @@ impl ScopedToolService {
             pre_hook_contexts.push(steer);
         }
 
+        // Second steer at the same seam, same contract: a shell command that
+        // duplicates `grep` / `find` / `file_read` gets told which builtin does
+        // the same job without pouring an ignored tree into the context. Also
+        // advisory — `bash` remains the right answer for everything that is not
+        // a search or a read, and `rg` remains the sanctioned shell fallback
+        // for the searches that genuinely have to run there.
+        if let Some(steer) = super::search_steer::shell_search_steer(name, &effective_input) {
+            pre_hook_contexts.push(steer);
+        }
+
         // Route to subagent tool if name matches; otherwise route into the
         // inner LoopToolRegistry. Both paths share the retry/Layer 2/sanitize
         // pipeline below.
@@ -667,15 +677,27 @@ impl ScopedToolService {
                     Ok(output) => Ok(self.apply_layer_two(name, output, deadline).await),
                     // Attribute anything that came back after the run was
                     // stopped to the stop, whatever the tool said. The tool
-                    // layer's own cancel arm reports a generic execution error,
-                    // and so does a tool that happened to fail in the same
-                    // instant — and `Execution` is a verdict on the call, which
-                    // put the call into the harness's cross-batch memo and
-                    // banned an identical re-issue for the rest of the run.
-                    // Pressing stop once must not ban what was stopped.
-                    Err(_) if cancel.is_cancelled() => Err(ToolError::Cancelled {
-                        name: name.to_string(),
-                    }),
+                    // The tool adapters that detect mid-execution cancel (`RegistryToolAdapter`,
+                    // `McpRegistryTool`) both surface the sentinel as
+                    // `ToolResult::Error { error: "... cancelled", retryable: false }`
+                    // — see `tools/adapters/registry_adapter.rs:481` and
+                    // `tools/adapters/mcp_adapter.rs:141`. The string ends
+                    // with the literal token ` cancelled`. That is the
+                    // ONLY case in which the harness may safely rewrite the
+                    // call's outcome to `Cancelled`: any other cause
+                    // (network blip, exit-1, validation failure) carrying
+                    // `cancel.is_cancelled() == true` means cancel fired in
+                    // the same instant the tool genuinely failed, and the
+                    // real verdict is the tool's — not the run's. Rewriting
+                    // the real verdict to `Cancelled` would (a) ban the call
+                    // for the rest of the run in the cross-batch memo and
+                    // (b) hand the model an empty persistence hint.
+                    Err(ToolError::Execution { name: n, cause })
+                        if cancel.is_cancelled() && cause.trim_end().ends_with("cancelled") =>
+                    {
+                        Err(ToolError::Cancelled { name: n })
+                    }
+                    Err(err) if cancel.is_cancelled() => Err(Self::sanitize_tool_error(name, err)),
                     Err(err) => Err(Self::sanitize_tool_error(name, err)),
                 }
             }

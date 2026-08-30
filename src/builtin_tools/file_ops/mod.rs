@@ -10,14 +10,18 @@ mod edit_match;
 mod image_read;
 mod ops;
 mod path_utils;
-pub(crate) use path_utils::{check_and_resolve_path, get_denied_paths, path_is_denied};
+pub(crate) use path_utils::{
+    check_and_resolve_path, get_denied_paths, is_blocked_proc_path, path_is_denied,
+};
 pub(crate) mod read;
 mod read_cache;
 mod search;
 mod stats;
 mod text;
+pub(crate) use text::{clamp_line_to, is_binary};
 mod tool;
 mod types;
+pub(crate) use types::SKIPPED_DIRS;
 pub(crate) mod write;
 
 // Re-export public API

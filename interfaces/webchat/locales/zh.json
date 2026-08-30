@@ -8,7 +8,8 @@
     "extensions": "Aleph Hub",
     "settings": "设置",
     "canvas": "画布",
-    "projects": "项目"
+    "projects": "项目",
+    "terminal": "终端"
   },
   "session": {
     "healthy": "正常",
@@ -278,6 +279,10 @@
     "team_create_failed": "创建团队失败：",
     "search_placeholder": "搜索对话...",
     "no_conversations": "暂无对话",
+    "history_title": "历史",
+    "history_load_failed": "无法加载会话",
+    "untitled_conversation": "未命名",
+    "message_count": "{{ count }} 条消息",
     "new_chat": "新对话",
     "new_group_chat": "新群聊",
     "confirm_delete": "确认删除？",
@@ -384,7 +389,30 @@
     "doctor_repair_prompt": "运行 doctor 工具诊断系统健康状况。对可机械修复的问题（repairable=true）调用 doctor(fix=true) 修复；对不可机械修复的问题，按其 fix_hint 用 self_config / vault_store 等对应工具修复；全部处理后再次运行 doctor 验证，并简要报告修复结果。",
     "doctor_detect_prompt": "运行 doctor 工具只读诊断系统健康状况（fix=false，不要修复任何东西）。如实汇报发现的问题及其严重度。",
     "doctor_command_desc": "只读检测系统健康，发现问题后可按 f 维修",
-    "voice_idle_hint": "点击进入语音模式 · 长按说话转文字"
+    "voice_idle_hint": "点击进入语音模式 · 长按说话转文字",
+    "load_earlier": "载入更早的消息",
+    "load_earlier_n_one": "载入更早的 {{ count }} 条消息",
+    "load_earlier_n_other": "载入更早的 {{ count }} 条消息",
+    "loading_earlier": "正在载入更早的消息…",
+    "history_start": "对话开头",
+    "halt_hit_max_iterations": "已达迭代上限",
+    "halt_context_budget_exhausted": "上下文预算耗尽",
+    "halt_max_output_tokens_exhausted": "输出 token 上限耗尽",
+    "halt_budget_exhausted_partial_result": "预算耗尽（保留了部分结果）",
+    "halt_consecutive_failure_cap": "连续工具调用失败",
+    "halt_empty_response_exhausted": "模型连续返回空响应",
+    "halt_reactive_compact_exhausted": "上下文超窗，自动压缩未能恢复",
+    "halt_stall_timeout": "长时间无进展，已熔断",
+    "halt_turn_timeout": "单轮超时",
+    "halt_verifier_veto": "被验证器否决",
+    "halt_stop_hook_halt": "被 Stop hook 拦截",
+    "halt_cancelled": "已取消",
+    "halt_failed": "运行失败",
+    "halt_diminishing_returns": "进展递减",
+    "cost_title": "输入 {{ input }} · 输出 {{ output }} · 共 {{ total }} tokens{{ cache }}{{ status }}",
+    "cost_cache_fragment": " · 缓存读取 {{ read }} / 写入 {{ created }} · 前缀复用 {{ run }}%（会话 {{ session }}%）",
+    "cost_status_fragment": " · 成本 {{ status }}",
+    "cost_status_unknown": "未知"
   },
   "canvas": {
     "title": "画布",
@@ -873,6 +901,12 @@
       "reembed_desc": "切换嵌入提供商后，用当前提供商重新嵌入所有现有数据。",
       "migrate": "迁移到当前提供商",
       "migrating": "迁移中...",
+      "phase_facts": "正在处理事实…",
+      "phase_memories": "正在处理记忆…",
+      "phase_preparing": "准备中…",
+      "result_facts": "事实：已迁移 {{ done }}/{{ total }}",
+      "result_errors_suffix": "，{{ count }} 个错误",
+      "error_details": "错误详情：",
       "id_name_required": "ID 和名称不能为空"
     },
     "reranking": {
@@ -881,6 +915,7 @@
       "loading": "加载重排序提供商...",
       "providers_section": "重排序提供商",
       "add_custom": "+ 添加自定义提供商",
+      "preset_custom": "自定义",
       "select_to_configure": "选择提供商以配置",
       "select_or_add": "或添加自定义重排序提供商",
       "active": "活跃",
@@ -1695,6 +1730,7 @@
       "pairing_placeholder": "例如 XPL3A7",
       "perm_all_granted": "所有权限已授予",
       "perm_fix_suggestions": "修复建议",
+      "perm_grant_hint": "在服务器设置 > 身份组中授予“{{ name }}”权限",
       "perm_missing": "权限缺失",
       "perm_no_data": "无可用权限数据",
       "perm_not_audited": "未审计",
@@ -1847,6 +1883,9 @@
       "local_providers": "本地供应商",
       "cloud_providers": "云供应商",
       "connection": "连接",
+      "core": "核心",
+      "core_remote": "远程",
+      "core_local": "本地",
       "catalog_unavailable": "未能读取提供商目录。"
     },
     "fetch": {
@@ -1983,6 +2022,7 @@
   },
   "agents": {
     "cannot_delete_default": "不能删除默认智能体",
+    "not_found": "未找到该智能体",
     "channels": {
       "title": "频道绑定",
       "bound": "已绑定",

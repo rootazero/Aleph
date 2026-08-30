@@ -29,15 +29,37 @@ impl Default for MacOSSystem {
 #[async_trait]
 impl SystemCapability for MacOSSystem {
     async fn launch_app(&self, app_name: &str) -> Result<()> {
-        workspace::launch_app(app_name)
+        let app_name = app_name.to_string();
+        tokio::task::spawn_blocking(move || workspace::launch_app(&app_name))
+            .await
+            .map_err(|e| {
+                aleph_desktop::DesktopError::InputFailed(format!(
+                    "launch_app task join error: {e}"
+                ))
+            })?
     }
 
     async fn quit_app(&self, app_name: &str) -> Result<()> {
-        workspace::quit_app(app_name)
+        let app_name = app_name.to_string();
+        tokio::task::spawn_blocking(move || workspace::quit_app(&app_name))
+            .await
+            .map_err(|e| {
+                aleph_desktop::DesktopError::InputFailed(format!(
+                    "quit_app task join error: {e}"
+                ))
+            })?
     }
 
     async fn list_running_apps(&self) -> Result<Vec<AppInfo>> {
-        workspace::list_running_apps()
+        // `NSWorkspace`/`NSRunningApplication` are synchronous AppKit APIs; keep
+        // them off the async runtime's worker thread.
+        tokio::task::spawn_blocking(workspace::list_running_apps)
+            .await
+            .map_err(|e| {
+                aleph_desktop::DesktopError::InputFailed(format!(
+                    "list_running_apps task join error: {e}"
+                ))
+            })?
     }
 
     async fn list_installed_apps(&self) -> Result<Vec<InstalledApp>> {
@@ -57,11 +79,24 @@ impl SystemCapability for MacOSSystem {
     }
 
     async fn clipboard_read(&self) -> Result<ClipboardContent> {
-        aleph_desktop::macos::clipboard::read()
+        tokio::task::spawn_blocking(aleph_desktop::macos::clipboard::read)
+            .await
+            .map_err(|e| {
+                aleph_desktop::DesktopError::InputFailed(format!(
+                    "clipboard_read task join error: {e}"
+                ))
+            })?
     }
 
     async fn clipboard_write(&self, text: &str) -> Result<()> {
-        aleph_desktop::macos::clipboard::write_text(text)
+        let text = text.to_string();
+        tokio::task::spawn_blocking(move || aleph_desktop::macos::clipboard::write_text(&text))
+            .await
+            .map_err(|e| {
+                aleph_desktop::DesktopError::InputFailed(format!(
+                    "clipboard_write task join error: {e}"
+                ))
+            })?
     }
 
     async fn system_info(&self) -> Result<SystemInfo> {

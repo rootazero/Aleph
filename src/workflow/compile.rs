@@ -14,6 +14,7 @@
 //! Tasks are created in topological order so each `blocked_by` references an
 //! already-minted task id.
 
+use futures::future::join_all;
 use serde_json::json;
 use tracing::warn;
 
@@ -22,6 +23,7 @@ use crate::agents::swarm::tasks::{
     CoordTaskId, CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, NewCoordTask, Priority,
 };
 use crate::error::Result;
+use crate::json_canvas_io::sanitise_name;
 use crate::strategy::{render_workflow_global_frame, Strategy};
 use crate::teams::dispatcher::{MANAGED_BY_DISPATCHER, MANAGED_BY_KEY};
 use crate::workflow::clarify::{ClarifyContext, ClarifyTaskMeta, CLARIFY_META_KEY, CLARIFY_OWNER};
@@ -495,7 +497,12 @@ pub async fn materialize(
         let created = match store
             .create_task(NewCoordTask {
                 team_id: Some(team_id.to_string()),
-                subject: format!("{}:{}", def.name, step.id),
+                // Sanitise both parts so a `my:workflow` name or `step:1` id
+                // can't produce a subject with multiple colons (downstream
+                // tooling treats the FIRST `:` as the name/step boundary). The
+                // raw name/id live in the persisted manifest unchanged — this
+                // is a display-subject invariant only.
+                subject: format!("{}:{}", sanitise_name(&def.name), sanitise_name(&step.id)),
                 description: rendered,
                 owner: Some(owner),
                 priority: Priority::Normal,
@@ -563,7 +570,14 @@ async fn cancel_partial(store: &dyn CoordTaskStore, ids: &[CoordTaskId]) {
             }
         }
     }
-    for id in ids {
+    // Concurrent status updates: the per-task write is independent (no shared
+    // metadata between these rows), so the N sequential round-trips collapse
+    // to one wall-clock round-trip via `join_all`. We are already on the
+    // error path of `materialise` and these are best-effort cancellations, so
+    // concurrent execution costs nothing and lets the dispatcher observe a
+    // fully-cancelled partial run in a single window instead of a sweep that
+    // may straddle a follow-up user prompt.
+    join_all(ids.iter().map(|id| async move {
         if let Err(e) = store
             .update_task(
                 id,
@@ -576,7 +590,8 @@ async fn cancel_partial(store: &dyn CoordTaskStore, ids: &[CoordTaskId]) {
         {
             warn!(task = %id, error = %e, "cancel_partial: status cancel failed");
         }
-    }
+    }))
+    .await;
 }
 
 /// Epoch seconds, the unit [`WORKFLOW_NOTIFIED_KEY`] is stored in.

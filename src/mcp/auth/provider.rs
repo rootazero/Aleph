@@ -76,25 +76,34 @@ impl OAuthProvider {
     /// * `server_name` - Name for identifying this server
     /// * `server_url` - The MCP server URL (for discovering OAuth endpoints)
     /// * `callback_url` - URL for receiving authorization code callback
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying reqwest client builder fails
+    /// (e.g. invalid TLS config, invalid redirect policy). Callers should
+    /// fall back to an unauthenticated connection in that case — a
+    /// builder failure is not a reason to panic the daemon on the
+    /// remote-MCP connect path.
     pub fn new(
         storage: Arc<OAuthStorage>,
         server_name: impl Into<String>,
         server_url: impl Into<String>,
         callback_url: impl Into<String>,
-    ) -> Self {
-        Self {
-            // Bound every OAuth round-trip (metadata discovery, token exchange,
-            // refresh). reqwest's default client has NO timeout, so a hung
-            // endpoint would block the caller indefinitely.
-            client: Client::builder()
-                .timeout(Duration::from_secs(30))
-                .build()
-                .expect("reqwest client with 30s timeout must build"),
+    ) -> Result<Self> {
+        // Bound every OAuth round-trip (metadata discovery, token exchange,
+        // refresh). reqwest's default client has NO timeout, so a hung
+        // endpoint would block the caller indefinitely.
+        let client = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| AlephError::config(format!("OAuth HTTP client build failed: {e}")))?;
+        Ok(Self {
+            client,
             storage,
             server_name: server_name.into(),
             server_url: server_url.into(),
             callback_url: callback_url.into(),
-        }
+        })
     }
 
     /// Pre-flight SSRF check for any URL an OAuth request is about to be
@@ -820,7 +829,8 @@ mod tests {
             "srv",
             "https://mcp.example.com",
             "http://127.0.0.1:8899/callback",
-        );
+        )
+        .expect("OAuthProvider::new in test");
 
         let same_issuer = OAuthServerMetadata {
             issuer: Some(ISSUER.to_string()),
@@ -937,7 +947,8 @@ mod tests {
             "test-server",
             "https://example.com",
             "http://localhost:8080/callback",
-        );
+        )
+        .expect("OAuthProvider::new in test");
 
         // Create metadata (not actually used since token is valid)
         let metadata = OAuthServerMetadata {
@@ -975,7 +986,8 @@ mod tests {
             "test-server",
             "https://example.com",
             "http://localhost:8080/callback",
-        );
+        )
+        .expect("OAuthProvider::new in test");
 
         let metadata = OAuthServerMetadata {
             issuer: Some("https://example.com".to_string()),
@@ -1021,7 +1033,8 @@ mod tests {
             "test-server",
             "https://example.com",
             "http://localhost:8080/callback",
-        );
+        )
+        .expect("OAuthProvider::new in test");
 
         let metadata = OAuthServerMetadata {
             issuer: Some("https://example.com".to_string()),

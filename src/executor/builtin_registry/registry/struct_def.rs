@@ -33,6 +33,10 @@ pub struct BuiltinToolRegistry {
     pub(crate) web_fetch_tool: crate::builtin_tools::WebFetchTool,
     /// File operations tool instance
     pub(crate) file_ops_tool: crate::builtin_tools::FileOpsTool,
+    /// Repository-aware content search instance
+    pub(crate) grep_tool: crate::builtin_tools::GrepTool,
+    /// Repository-aware file discovery instance
+    pub(crate) find_tool: crate::builtin_tools::FindTool,
     /// File read tool instance
     pub(crate) file_read_tool: crate::builtin_tools::FileReadTool,
     /// File write tool instance

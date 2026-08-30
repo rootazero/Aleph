@@ -1,0 +1,217 @@
+{
+  "module": "src/builtin_tools/{sessions,task_manage,team,voice_tools,web_fetch}",
+  "files_reviewed": 51,
+  "findings": [
+    {
+      "file": "src/builtin_tools/team/snapshot.rs",
+      "line": 153,
+      "severity": "high",
+      "category": "security",
+      "issue": "No authorization check on any snapshot operation — any caller can list, get, restore, or delete any team's snapshots.",
+      "evidence": "fn call(&self, args: Self::Args) -> Result<Self::Output> { ... match args.action { SnapshotAction::Create => { ... } ... } } — no leader/team-membership gate before capture_snapshot / restore_snapshot / delete",
+      "suggested_fix": "Add a leader-only / team-membership gate mirroring `task_team_reachable` before each action arm; refuses must read like a missing snapshot for foreign teams.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/team/plan_resolve.rs",
+      "line": 78,
+      "severity": "high",
+      "category": "security",
+      "issue": "No authorization check — any caller can approve or reject any team's submitted plans via plan_manager.approve_plan / reject_plan.",
+      "evidence": "let leader_id = if actor.is_empty() { \"leader\" } else { &actor }; — no team-leader resolution or comparison; literal \"leader\" used when actor is empty.",
+      "suggested_fix": "Resolve team.leader_id via TeamStore and compare against self.actor(); refuse non-leaders with a same-shape not-found error.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/team/lifecycle_resolve_shutdown.rs",
+      "line": 79,
+      "severity": "high",
+      "category": "security",
+      "issue": "No authorization check — any caller can approve or reject any worker's shutdown request.",
+      "evidence": "let leader_id = if actor.is_empty() { \"leader\".to_string() } else { actor }; — same pattern as plan_resolve, no team-leader resolution.",
+      "suggested_fix": "Resolve the team's leader via TeamStore and require caller == leader; otherwise refuse.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/team/set_protocol.rs",
+      "line": 80,
+      "severity": "high",
+      "category": "security",
+      "issue": "No authorization check — any caller can set or clear any team's operating protocol, which is injected verbatim into every member's launch context.",
+      "evidence": "self.store.set_protocol(&args.team_id, args.protocol.clone()).await? — no leader/team-membership check before the write.",
+      "suggested_fix": "Resolve team and require leader == actor; refuse foreign team ids with not-found shape.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/team/session_read.rs",
+      "line": 110,
+      "severity": "high",
+      "category": "security",
+      "issue": "No authorization check — any caller can read any team's full collaborative session transcript (multi-turn agent-to-agent content).",
+      "evidence": "let session = self.store.get_session(&args.session_id).await?... — no team membership check; transcript is rendered verbatim into the tool output.",
+      "suggested_fix": "Resolve session.team_id, then check team membership / participation before returning the transcript.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/team/session_turn.rs",
+      "line": 80,
+      "severity": "high",
+      "category": "security",
+      "issue": "No authorization check — any caller can submit a turn, conclude, or cancel any team's collaborative session.",
+      "evidence": "match args.mode.as_str() { \"respond\" => self.coordinator.submit_turn(...).await, \"conclude\" => self.coordinator.finalize(...), \"cancel\" => self.coordinator.cancel(...) } — no participant/leader gate.",
+      "suggested_fix": "For respond/conclude require the caller to be a session participant; for cancel require leader or participant.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/team/session_collaborate.rs",
+      "line": 90,
+      "severity": "high",
+      "category": "security",
+      "issue": "No authorization check — any caller can start a multi-turn collaborative session on any team with arbitrary participants.",
+      "evidence": "let session = self.coordinator.start_session(input, &self.actor()).await — no leader/team-membership gate; participants are caller-controlled.",
+      "suggested_fix": "Require caller to be the team's leader (or a member) before starting; validate participant list against team membership.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/team/status.rs",
+      "line": 78,
+      "severity": "medium",
+      "category": "security",
+      "issue": "No authorization check — any caller can read any team's full state (members, task ids/subjects, statuses, results, protocol).",
+      "evidence": "let team = self.store.get_team(&args.team_id).await?... — no membership check; output includes task subjects and result strings verbatim.",
+      "suggested_fix": "Apply the same ownership pattern used by `task_team_reachable` — refuse foreign team ids with the same not-found shape.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/team/team_digest.rs",
+      "line": 130,
+      "severity": "medium",
+      "category": "security",
+      "issue": "No authorization check — any caller can read any team's event log (subjects, decisions, attachments, agent ids).",
+      "evidence": "let events = self.event_store.get_events(&args.team_id, Some(since), Some(now)).await? — no membership check before fetching and rendering events.",
+      "suggested_fix": "Resolve team and require the caller be a member before reading events.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/team/usage.rs",
+      "line": 116,
+      "severity": "medium",
+      "category": "security",
+      "issue": "Validates team existence but no membership/authz check — any caller can read any team's token usage breakdown.",
+      "evidence": "let _team = self.team_store.get_team(&args.team_id).await?... — only existence is checked; the agent_ids list and per-agent usage rollups are returned regardless of caller identity.",
+      "suggested_fix": "Require caller membership in the team before returning per-agent breakdown; refuse foreign teams with not-found shape.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/voice_tools/voice_mode_set.rs",
+      "line": 95,
+      "severity": "medium",
+      "category": "security",
+      "issue": "No authorization check — any caller can toggle voice mode (and reset failure counters) on any channel via LLM-supplied channel_id.",
+      "evidence": "self.channel_registry.update_voice_state(&channel_id, |state| { state.enabled = enabled; ... state.consecutive_failures = 0; }).await — no actor-vs-channel ownership check.",
+      "suggested_fix": "Constrain channel_id to one the calling agent owns / is permitted to manage, or require channel-scoped permission.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/web_fetch/mod.rs",
+      "line": 158,
+      "severity": "high",
+      "category": "security",
+      "issue": "DNS rebinding TOCTOU window in the fetch provider path: validate_url_async pins a SocketAddr, but the pin is discarded and the operator-hosted provider performs its own DNS resolution inside the protected network.",
+      "evidence": "match validate_url_async(&args.url, &self.ssrf_policy).await { Ok((_url, _pinned)) => { warn!(...\"fetch provider path does not thread the validated DNS pin; provider performs its own resolution (SSRF host-policy gate enforced, IP-pin TOCTOU window remains)\") } ... for provider in &self.fetch_providers { match provider.fetch(&args.url).await { ... } }",
+      "suggested_fix": "Extend the FetchProvider trait to accept a pre-resolved SocketAddr (or pin via a Host header override / custom resolver) so the provider cannot connect to a different IP than the one the SSRF gate validated.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/web_fetch/cache.rs",
+      "line": 113,
+      "severity": "medium",
+      "category": "concurrency",
+      "issue": "Mutex poison recovery `unwrap_or_else(|e| e.into_inner())` silently serves the cache after a previous holder panicked — possibly inconsistent state.",
+      "evidence": "let mut guard = URL_CACHE.lock().unwrap_or_else(|e| e.into_inner()); — both cache_lookup and cache_store recover from poisoning without logging or clearing.",
+      "suggested_fix": "Log the poisoning event and clear the cache on recovery (or restart the cache) so post-panic inconsistencies cannot be served.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/team/disband.rs",
+      "line": 99,
+      "severity": "medium",
+      "category": "security",
+      "issue": "Disband relies only on requires_confirmation (UX safeguard) — no team-leadership check, so any agent can trigger a disband that cancels sessions and expires messages for any team once a human clicks Confirm.",
+      "evidence": "fn requires_confirmation(&self) -> bool { true } followed by self.store.disband_team(&args.team_id).await? with no team-leader resolution.",
+      "suggested_fix": "Resolve team.leader_id and refuse non-leaders before any state mutation; requires_confirmation stays as a second safeguard.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/team/task_read_artifact.rs",
+      "line": 67,
+      "severity": "medium",
+      "category": "security",
+      "issue": "No ownership gate when listing artifacts by task_id — an agent that knows another team's task_id can list all artifacts under it (task_id is LLM-supplied).",
+      "evidence": "let artifacts = self.store.get_artifacts_for_task(&args.task_id).await?... — direct list path has no team-membership check; the single-artifact path only verifies artifact.task_id == args.task_id.",
+      "suggested_fix": "Resolve task.team_id via the coord store (when wired) and apply task_team_reachable before returning artifacts.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/team/session_turn.rs",
+      "line": 88,
+      "severity": "low",
+      "category": "error_handling",
+      "issue": "\"conclude\" mode accepts an empty outcome when neither conclusion nor content is provided.",
+      "evidence": "let conclusion = args.conclusion.unwrap_or(args.content); — no emptiness check; an empty SessionOutcome is forwarded to coordinator.finalize.",
+      "suggested_fix": "Require at least one of conclusion/content in conclude mode; refuse with a tool error otherwise.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/sessions/send_tool.rs",
+      "line": 363,
+      "severity": "low",
+      "category": "magic_value",
+      "issue": "Fire-and-forget default timeout of 300s is a magic literal not exposed as a constant (sibling tools use named constants).",
+      "evidence": "timeout_secs: if args.timeout_seconds > 0 { Some(u64::from(args.timeout_seconds)) } else { Some(300) // Default 5 min for fire-and-forget",
+      "suggested_fix": "Extract to a named const (e.g. DEFAULT_FIRE_AND_FORGET_TIMEOUT_SECS) alongside MAX_CROSS_SESSION_MESSAGE_CHARS for parity.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/voice_tools/local_voice.rs",
+      "line": 73,
+      "severity": "low",
+      "category": "magic_value",
+      "issue": "Reachability probe timeout of 3 seconds is an undocumented magic literal.",
+      "evidence": ".timeout(std::time::Duration::from_secs(3));",
+      "suggested_fix": "Lift to a named const (e.g. LOCAL_VOICE_PROBE_TIMEOUT_SECS) with a docstring explaining the trade-off.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/voice_tools/local_voice.rs",
+      "line": 72,
+      "severity": "low",
+      "category": "api_misuse",
+      "issue": "A fresh reqwest::Client is constructed on every probe call — no connection-pool reuse across calls.",
+      "evidence": "let mut req = reqwest::Client::new().get(...).timeout(...)",
+      "suggested_fix": "Hold a single reqwest::Client inside LocalVoiceTool (constructed once) and clone per call.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/team/delegate.rs",
+      "line": 248,
+      "severity": "low",
+      "category": "error_context",
+      "issue": "Drop fence uses `let _ = store.release_lock(&task_id, &agent_id).await;` — failure swallowed silently so a stuck lock from a dropped leader run is invisible to operators (zombie reclaimer is the silent backstop).",
+      "evidence": "let _ = store.release_lock(&task_id, &agent_id).await; — no logging on Err despite the rest of the function logging release failures.",
+      "suggested_fix": "Mirror the warning-logging shape used a few lines above (`tracing::warn!(... \"could not release leftover lock\")`) so post-drop lock leaks are diagnosable.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/sessions/list_tool.rs",
+      "line": 280,
+      "severity": "low",
+      "category": "api_misuse",
+      "issue": "Per-session get_history is awaited sequentially inside a for-loop, so message_limit > 0 serializes N round-trips.",
+      "evidence": "for row in &mut rows { if let Some(legacy_key) = ... { match self.context.session_store().get_history(&legacy_key, Some(message_limit)).await { ... } } }",
+      "suggested_fix": "Use futures::stream / try_join_all / buffer_unordered to fetch histories concurrently; cap concurrency to a small bounded value.",
+      "confidence": "medium"
+    }
+  ],
+  "summary": "Two systemic gaps dominate: (1) the team tools module is missing authorization gates on most surfaces — snapshot CRUD, plan resolve, lifecycle resolve, set_protocol, all session_* tools, status, digest, and usage all accept any caller_id with only team existence validation, while member/lifecycle_idle correctly check leader; (2) web_fetch's fetch-provider path has an acknowledged DNS-rebinding TOCTOU window because the validated SocketAddr pin is discarded. Voice_mode_set has the same auth gap for channels. Other findings are minor (mutex poison recovery, magic numbers, swallowed Drop-fence errors, sequential network calls in list sessions)."
+}

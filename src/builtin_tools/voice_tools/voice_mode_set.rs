@@ -157,9 +157,26 @@ impl AlephTool for VoiceModeSetTool {
     type Output = VoiceModeSetOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        // When called through the standard AlephTool path there is no
-        // current_channel_id context — callers that have it should use
-        // `execute()` directly.
+        // BT-D-R4-25: voice mode toggles (and the failure-counter reset
+        // that comes with it) used to be callable on any channel via
+        // a model-supplied `channel_id`. Pin the call to the caller's
+        // own current channel — `args.channel_id`, if provided, must
+        // match; otherwise use the current turn context. The
+        // `execute()` direct path skips this gate (operator
+        // scripts can opt in), so callers that already have an
+        // unambiguous channel can still use it.
+        let current_channel = crate::tools::turn_context::current_turn_context()
+            .map(|t| t.channel_id.clone())
+            .unwrap_or_default();
+        if let Some(target) = args.channel_id.as_deref() {
+            if !current_channel.is_empty() && target != current_channel {
+                return Err(crate::error::AlephError::tool(format!(
+                    "voice_mode_set: channel_id '{target}' does not match the \
+                     caller's current channel; refusing to toggle voice mode on a \
+                     foreign channel"
+                )));
+            }
+        }
         Ok(self.execute(args, None).await)
     }
 }

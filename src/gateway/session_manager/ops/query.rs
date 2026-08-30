@@ -2,7 +2,7 @@ use rusqlite::{params, OptionalExtension};
 
 use super::{
     map_session_metadata, SessionIdentityMeta, SessionManager, SessionManagerError,
-    SessionMetadata, SessionSearchResult, SessionState,
+    SessionMetadata, SessionSearchResult, SessionState, SESSION_COLUMNS,
 };
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_store::types::{MessageRecord, SessionPreview};
@@ -18,12 +18,7 @@ impl SessionManager {
             .lock()
             .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
-        let sql = "SELECT key, agent_id, session_type, created_at, last_active_at,
-                          message_count, total_tokens, auto_reset_at, state, metadata,
-                          label, input_tokens, output_tokens, model, model_provider,
-                          parent_session_key, compaction_count, derived_title,
-                        estimated_cost_usd, owner_user_id, scope_id
-                   FROM sessions";
+        let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions");
 
         let sessions = if let Some(id) = agent_id {
             let mut stmt = conn
@@ -137,12 +132,7 @@ impl SessionManager {
 
         let meta = conn
             .query_row(
-                "SELECT key, agent_id, session_type, created_at, last_active_at,
-                        message_count, total_tokens, auto_reset_at, state, metadata,
-                        label, input_tokens, output_tokens, model, model_provider,
-                        parent_session_key, compaction_count, derived_title,
-                        estimated_cost_usd, owner_user_id, scope_id
-                 FROM sessions WHERE key = ?",
+                &format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE key = ?"),
                 params![&key_str],
                 map_session_metadata,
             )
@@ -151,14 +141,19 @@ impl SessionManager {
 
         let mut messages = Vec::new();
         if message_limit > 0 {
+            // `id` — the order rows were recorded, which is the transcript's
+            // order everywhere (`SessionStore::history_page`). The same
+            // spelling `history_sql` uses, and for the same reason: two
+            // spellings of "the trailing N rows" that order differently is a
+            // divergence between two views of one conversation.
             let mut stmt = conn
                 .prepare(
                     "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
                      tool_call_id, tool_name FROM ( \
                         SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
                         tool_call_id, tool_name \
-                        FROM messages WHERE session_key = ? ORDER BY timestamp DESC, id DESC LIMIT ? \
-                    ) ORDER BY timestamp ASC, id ASC",
+                        FROM messages WHERE session_key = ? ORDER BY id DESC LIMIT ? \
+                    ) ORDER BY id ASC",
                 )
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
             messages = stmt
@@ -283,12 +278,7 @@ impl SessionManager {
 
         let mut stmt = conn
             .prepare(
-                "SELECT key, agent_id, session_type, created_at, last_active_at,
-                        message_count, total_tokens, auto_reset_at, state, metadata,
-                        label, input_tokens, output_tokens, model, model_provider,
-                        parent_session_key, compaction_count, derived_title,
-                        estimated_cost_usd, owner_user_id, scope_id
-                 FROM sessions WHERE state = ? ORDER BY last_active_at DESC",
+                &format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE state = ? ORDER BY last_active_at DESC"),
             )
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 

@@ -64,11 +64,26 @@ pub struct TeamStatusOutput {
 pub struct TeamStatusTool {
     store: Arc<dyn TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
+    current_agent_id: String,
 }
 
 impl TeamStatusTool {
-    pub fn new(store: Arc<dyn TeamStore>, coord_store: Arc<dyn CoordTaskStore>) -> Self {
-        Self { store, coord_store }
+    pub fn new(
+        store: Arc<dyn TeamStore>,
+        coord_store: Arc<dyn CoordTaskStore>,
+        current_agent_id: String,
+    ) -> Self {
+        Self {
+            store,
+            coord_store,
+            current_agent_id,
+        }
+    }
+
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        crate::builtin_tools::acting_agent::acting_agent_id(&self.current_agent_id)
     }
 }
 
@@ -84,6 +99,9 @@ impl AlephTool for TeamStatusTool {
     type Output = TeamStatusOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // BT-D-R4-23: gate before any read so a non-member cannot enumerate
+        // member ids / task subjects / result strings for a foreign team.
+        super::require_team_auth(&*self.store, &args.team_id, &self.actor()).await?;
         let team = self
             .store
             .get_team(&args.team_id)

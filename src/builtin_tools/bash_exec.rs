@@ -152,9 +152,19 @@ read it back in the next script, or just put everything into one cmd.
 
 A command you already ran this session comes back with an `advisory` field
 flagging the repeat; a re-run returns the same result, so prefer BACKGROUND
-MODE's `wait`/`poll` for things that change over time. And reach for the
-purpose-built tools over shelling out: `file_read` / `file_edit` / `search`
-beat `cat`/`sed`/`grep`/`find` and don't spend a shell turn.
+MODE's `wait`/`poll` for things that change over time.
+
+SEARCH AND READ DO NOT BELONG HERE. `grep` and `find` beat `grep -r` / `rg` /
+`find` / `ls -R`: they obey .gitignore, skip `.git` and binaries, cap and page
+their output, and take several terms as ONE call via regex alternation
+(`grep{pattern: "foo|bar|baz"}`). A shell search does none of that — one
+recursive run pours every hit under node_modules/, target/ and dist/ straight
+into the context window. Likewise `file_read` beats `cat`/`sed -n`/`head`,
+including for a file outside the workspace whose path you already know, and
+`file_edit` beats a `sed -i`. If a search genuinely has to run in the shell,
+use `rg` rather than `grep` — it honours ignore files and skips binaries, so
+its output is roughly an order of magnitude smaller — and bound it with a
+`| head -n` or a `-m` cap.
 
 `working_dir` (optional) resolves inside the session workspace; paths
 outside the workspace are denied by the sandbox. If omitted the call lands

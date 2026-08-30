@@ -115,9 +115,24 @@ pub struct DeadLetterEntry {
     /// `unknown_outcome` | `payload_too_large`.
     pub reason: String,
     /// `true` when a redrive provably cannot double-send this message. `false`
-    /// means the outcome of the last attempt is unknown — `redrive` will not
-    /// touch it, and resending is a judgement call for the user.
+    /// means the outcome of the last attempt is unknown.
+    ///
+    /// This is the DUPLICATION question only. It is not the same as "will
+    /// `redrive` move it" — see [`Self::redrivable`], which is the predicate
+    /// `redrive` actually consults. The two used to be one field, and the
+    /// consequence was that `payload_too_large` (written before any transport
+    /// call, so provably never sent) was reported to the user as "the outcome
+    /// of the last attempt is unknown".
     pub replay_safe: bool,
+    /// `true` when `action=redrive` will actually move this record.
+    ///
+    /// Strictly narrower than [`Self::replay_safe`]: an over-cap payload was
+    /// never sent (so replaying it duplicates nothing) but a redrive re-inserts
+    /// it without re-running the cap check, so the queue refuses it. The
+    /// operator's remedy differs — raise `max_payload_bytes`, rather than
+    /// decide whether a duplicate is acceptable — which is exactly why one
+    /// boolean could not carry both.
+    pub redrivable: bool,
     /// Seconds since the message was first queued.
     pub age_secs: i64,
 }
@@ -161,6 +176,17 @@ pub struct ChannelOutboxOutput {
     /// `redrive`: left behind because replaying them could double-send.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skipped_not_replay_safe: Option<u64>,
+    /// `redrive`: left behind because the payload exceeds the queue's size cap.
+    ///
+    /// Counted apart from [`Self::skipped_not_replay_safe`] because the remedy
+    /// is different (raise the cap, not "decide about a duplicate"). Without
+    /// this field the tool reported those rows nowhere at all: the store had
+    /// just started subtracting them OUT of `skipped_unsafe`, so `moved +
+    /// skipped_queue_full + skipped_not_replay_safe` silently stopped adding
+    /// up to the number of dead letters — a queue that quietly loses rows in
+    /// the arithmetic the user is being shown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped_over_cap: Option<u64>,
 }
 
 impl ChannelOutboxOutput {
@@ -178,6 +204,7 @@ impl ChannelOutboxOutput {
             redriven: None,
             skipped_queue_full: None,
             skipped_not_replay_safe: None,
+            skipped_over_cap: None,
         }
     }
 }
@@ -241,6 +268,7 @@ impl ChannelOutboxTool {
                 last_error: dl.last_error,
                 reason: dl.reason.as_str().to_string(),
                 replay_safe: dl.reason.replay_safe(),
+                redrivable: dl.reason.redrivable(),
                 age_secs: (now - dl.created_at).max(0),
             })
             .collect();
@@ -264,17 +292,26 @@ impl ChannelOutboxTool {
                 false,
             );
         };
+        // Every bucket the store distinguishes is reported. The three refusals
+        // have three different remedies, and a message that folds them tells
+        // the user to do the wrong thing about two of them.
         let mut out = ChannelOutboxOutput::blank(
             format!(
-                "Requeued {} message(s) for delivery; {} left (live queue full), \
-                 {} left (outcome unknown — resending could duplicate).",
-                outcome.moved, outcome.skipped_capacity, outcome.skipped_unsafe
+                "Requeued {} message(s) for delivery; {} left (live queue full — \
+                 retry later), {} left (outcome unknown — resending could \
+                 duplicate), {} left (payload over the queue's size cap — raise \
+                 max_payload_bytes).",
+                outcome.moved,
+                outcome.skipped_capacity,
+                outcome.skipped_unsafe,
+                outcome.skipped_over_cap
             ),
             true,
         );
         out.redriven = Some(outcome.moved);
         out.skipped_queue_full = Some(outcome.skipped_capacity);
         out.skipped_not_replay_safe = Some(outcome.skipped_unsafe);
+        out.skipped_over_cap = Some(outcome.skipped_over_cap);
         out
     }
 }
@@ -293,11 +330,10 @@ impl AlephTool for ChannelOutboxTool {
         "action=dead_letters: the given-up messages themselves — recipient, text ",
         "preview, attempts, last error, and why retrying stopped.\n",
         "action=redrive: put them back in the queue for another delivery pass.\n\n",
-        "Redrive only replays failures that provably never reached the ",
-        "recipient. Entries with replay_safe=false (reason 'ambiguous' or ",
-        "'unknown_outcome') may already have been delivered, so they are left ",
-        "alone and reported as skipped_not_replay_safe — tell the user and let ",
-        "them decide rather than resending silently."
+        "Redrive moves only redrivable=true entries. replay_safe=false may ",
+        "already have been sent — skipped_not_replay_safe; ask the user. ",
+        "'payload_too_large' never left the process but a replay re-hits the ",
+        "cap — skipped_over_cap; raise max_payload_bytes."
     );
 
     type Args = ChannelOutboxArgs;

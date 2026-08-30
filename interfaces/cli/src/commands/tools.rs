@@ -5,28 +5,23 @@
 //! `tools.invoke` for direct execution and a client-side filter over
 //! `commands.list` for `describe`.
 
-use serde::Deserialize;
 use serde_json::Value;
 
 use crate::output;
 use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
+use aleph_protocol::commands::{CommandListResponse, CommandMatch, CommandTreeNode};
 
-#[derive(Deserialize)]
-struct Command {
-    key: String,
-    description: String,
-    #[serde(default)]
-    source_type: String,
-    #[serde(default)]
-    command_type: String,
-}
-
-#[derive(Deserialize)]
-struct CommandsResponse {
-    commands: Vec<Command>,
-}
-
-/// Run commands list
+/// `aleph tools` / `aleph tools list` — render the `commands.list` tree.
+///
+/// Reads [`CommandListResponse`], the type the server constructs. The private
+/// struct this replaced required `key` and `description`; the wire has always
+/// carried `name` and `hint`, so `client.call::<_, _>` failed deserialization
+/// and this command died with `Invalid response: missing field 'key'` against
+/// every healthy server.
+///
+/// The tree is also rendered as a tree now: namespaced tools (`session_new`,
+/// `cron_manage`, … — the majority of the catalogue) are `children` of a
+/// namespace node, and the flat loop this replaced never descended into them.
 pub async fn run(
     server_url: &str,
     config: &CliConfig,
@@ -36,70 +31,104 @@ pub async fn run(
     let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     if json {
-        let result: serde_json::Value = client.call("commands.list", None::<()>).await?;
+        let result: Value = client.call("commands.list", None::<()>).await?;
         output::print_json(&result);
         client.close().await?;
         return Ok(());
     }
 
-    let response: CommandsResponse = client.call("commands.list", None::<()>).await?;
+    let response: CommandListResponse = client.call("commands.list", None::<()>).await?;
+    client.close().await?;
 
     println!("=== Available Commands ===");
     println!();
 
-    let mut commands = response.commands;
-
-    // Filter by category if specified
-    if let Some(cat) = category {
-        commands.retain(|c| {
-            c.source_type.contains(cat) || c.key.contains(cat) || c.command_type.contains(cat)
-        });
-    }
-
-    // Group by source type
-    let mut sources: std::collections::HashMap<String, Vec<&Command>> =
-        std::collections::HashMap::new();
-    for cmd in &commands {
-        let src = if cmd.source_type.is_empty() {
-            "other".to_string()
-        } else {
-            cmd.source_type.clone()
-        };
-        sources.entry(src).or_default().push(cmd);
-    }
-
-    let mut src_names: Vec<_> = sources.keys().cloned().collect();
-    src_names.sort();
-
-    for src in src_names {
-        println!("[{src}]");
-        if let Some(cmds) = sources.get(&src) {
-            for cmd in cmds {
-                print!("  • {}", cmd.key);
-                // Truncate long descriptions (char-safe — descriptions may be
-                // CJK, so byte slicing could split a UTF-8 scalar and panic).
-                let desc = if cmd.description.chars().count() > 50 {
-                    let head: String = cmd.description.chars().take(47).collect();
-                    format!("{head}...")
-                } else {
-                    cmd.description.clone()
-                };
-                print!(" - {desc}");
-                println!();
+    let mut shown = 0usize;
+    for node in &response.commands {
+        if node.is_namespace {
+            let children: Vec<_> = node
+                .children
+                .iter()
+                .filter(|c| matches_category(category, &c.source_type, &c.internal_id))
+                .collect();
+            if children.is_empty() {
+                continue;
             }
+            println!("[{}] {}", node.name, node.hint);
+            for child in children {
+                println!(
+                    "  • {}_{}{} - {}",
+                    node.name,
+                    child.name,
+                    child
+                        .param_hint
+                        .as_deref()
+                        .map(|p| format!(" {p}"))
+                        .unwrap_or_default(),
+                    truncate(&child.hint)
+                );
+                shown += 1;
+            }
+            println!();
+        } else {
+            let source = node.source_type.as_deref().unwrap_or_default();
+            if !matches_category(category, source, &node.name) {
+                continue;
+            }
+            let label = if source.is_empty() { "other" } else { source };
+            println!(
+                "[{label}] • {}{} - {}",
+                node.name,
+                node.param_hint
+                    .as_deref()
+                    .map(|p| format!(" {p}"))
+                    .unwrap_or_default(),
+                truncate(&node.hint)
+            );
+            shown += 1;
         }
-        println!();
     }
 
-    println!("Total: {} commands", commands.len());
+    println!();
+    println!("Total: {shown} commands");
 
-    client.close().await?;
     Ok(())
 }
 
-/// `aleph tools describe <name>` — pull `commands.list` and emit the entry
-/// matching `name`. We do the filter client-side so the server doesn't need a
-/// new RPC (R4: I/O-only interface).
+/// `--category` filter. `None` means "no filter" — deliberately not "match the
+/// empty string", which would have been an accidental match-everything on some
+/// fields and match-nothing on others.
+fn matches_category(category: Option<&str>, source_type: &str, id: &str) -> bool {
+    match category {
+        None => true,
+        Some(cat) => source_type.contains(cat) || id.contains(cat),
+    }
+}
+
+/// Char-safe truncation — hints may be CJK, so byte slicing could split a
+/// UTF-8 scalar and panic.
+fn truncate(text: &str) -> String {
+    if text.chars().count() > 50 {
+        let head: String = text.chars().take(47).collect();
+        format!("{head}...")
+    } else {
+        text.to_string()
+    }
+}
+
+/// `aleph tools describe <name>` — pull `commands.list` and print the entry
+/// matching `name`. Filtered client-side so the server needs no new RPC
+/// (R4: I/O-only interface).
+///
+/// The lookup this replaced compared `item["key"]` against `name`. No node has
+/// ever carried a `key`, so the comparison was false for every entry and the
+/// command answered `tool 'X' not found in commands.list` for every tool that
+/// exists — a fabricated fact about the server, emitted ahead of the `--json`
+/// branch so that escape hatch was dead too.
+///
+/// Resolution now goes through [`CommandTreeNode::find`], which also descends
+/// into namespaces: `session_new` is the child `new` of the `session` node, so
+/// a lookup that scans only the roots misses most of the catalogue.
 pub async fn describe(
     server_url: &str,
     config: &CliConfig,
@@ -107,61 +136,39 @@ pub async fn describe(
     json: bool,
 ) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url, config).await?;
-    let raw: Value = client.call("commands.list", None::<()>).await?;
+    let response: CommandListResponse = client.call("commands.list", None::<()>).await?;
     client.close().await?;
 
-    let entry = raw
-        .get("commands")
-        .and_then(|v| v.as_array())
-        .and_then(|arr| {
-            arr.iter()
-                .find(|item| item.get("key").and_then(|k| k.as_str()) == Some(name))
-        });
-
-    let entry = match entry {
-        Some(v) => v,
-        None => {
-            return Err(CliError::Other(format!(
-                "tool '{name}' not found in commands.list"
-            )));
-        }
+    let Some(found) = CommandTreeNode::find(&response.commands, name) else {
+        return Err(CliError::Other(format!(
+            "tool '{name}' not found in commands.list"
+        )));
     };
 
     if json {
-        output::print_json(entry);
+        // Re-serialize the matched node so `--json` carries the same shape the
+        // server sent, children included.
+        let value = match found {
+            CommandMatch::Top(node) => serde_json::to_value(node),
+            CommandMatch::Child { child, .. } => serde_json::to_value(child),
+        }
+        .map_err(|e| CliError::Other(format!("could not render the matched node: {e}")))?;
+        output::print_json(&value);
     } else {
         println!("name        : {name}");
-        if let Some(desc) = entry.get("description").and_then(|v| v.as_str()) {
-            println!("description : {desc}");
+        println!("description : {}", found.hint());
+        if let Some(id) = found.internal_id() {
+            println!("tool id     : {id}");
         }
-        if let Some(t) = entry.get("source_type").and_then(|v| v.as_str()) {
-            if !t.is_empty() {
-                println!("source      : {t}");
-            }
+        let source = found.source_type();
+        if !source.is_empty() {
+            println!("source      : {source}");
         }
-        if let Some(t) = entry.get("command_type").and_then(|v| v.as_str()) {
-            if !t.is_empty() {
-                println!("kind        : {t}");
-            }
+        if let Some(p) = found.param_hint() {
+            println!("parameters  : {p}");
         }
-        // Dump remaining metadata verbatim so users see new fields without
-        // requiring a CLI release every time the server adds one.
-        if let Value::Object(obj) = entry {
-            let extras: Vec<(&String, &Value)> = obj
-                .iter()
-                .filter(|(k, _)| {
-                    !matches!(
-                        k.as_str(),
-                        "key" | "description" | "source_type" | "command_type"
-                    )
-                })
-                .collect();
-            if !extras.is_empty() {
-                println!("--- extra metadata ---");
-                for (k, v) in extras {
-                    println!("{k}: {v}");
-                }
-            }
+        if let CommandMatch::Child { namespace, .. } = found {
+            println!("namespace   : {namespace}");
         }
     }
     Ok(())

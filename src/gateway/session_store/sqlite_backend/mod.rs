@@ -2,11 +2,12 @@ use async_trait::async_trait;
 use rusqlite::{params, OptionalExtension};
 
 use crate::gateway::router::SessionKey;
+use crate::gateway::session_manager::ops::{map_session_metadata, NewMessage, SESSION_COLUMNS};
 use crate::gateway::session_manager::{SessionManager, SessionManagerConfig, SessionState};
 use crate::gateway::session_store::error::SessionStoreError;
 use crate::gateway::session_store::types::{
-    CheckpointSummary, DeleteResult, MessageRecord, SearchHit, SessionFilter, SessionMetadata,
-    SessionPatch, SessionPreview, TruncateResult,
+    CheckpointSummary, DeleteResult, HistoryPage, MessageRecord, SearchHit, SessionFilter,
+    SessionMetadata, SessionPatch, SessionPreview, TruncateResult,
 };
 use crate::gateway::session_store::SessionStore;
 
@@ -40,52 +41,11 @@ fn search_result_to_hit(r: crate::gateway::session_manager::SessionSearchResult)
     }
 }
 
-fn map_session_metadata(
-    row: &rusqlite::Row,
-) -> Result<crate::gateway::session_store::types::SessionMetadata, rusqlite::Error> {
-    let state_str: Option<String> = row.get(8)?;
-    let state = state_str
-        .and_then(|s| serde_json::from_str(&format!("\"{s}\"")).ok())
-        .unwrap_or_default();
-    let metadata_json: Option<String> = row.get(9)?;
-    let (topic, status, identity_meta) =
-        crate::gateway::session_store::types::SessionMetadata::parse_legacy_metadata_json(
-            metadata_json.as_deref(),
-        );
-    Ok(crate::gateway::session_store::types::SessionMetadata {
-        key: row.get(0)?,
-        agent_id: row.get(1)?,
-        session_type: row.get(2)?,
-        created_at: row.get(3)?,
-        last_active_at: row.get(4)?,
-        message_count: row.get(5)?,
-        total_tokens: row.get(6)?,
-        auto_reset_at: row.get(7)?,
-        state: Some(state),
-        topic,
-        status,
-        identity_meta,
-        label: row.get(10)?,
-        // Legacy rows: ALTER TABLE ADD COLUMN without DEFAULT leaves NULL for
-        // pre-migration data. Coerce to 0 so historical sessions load instead
-        // of panicking on `Invalid column type Null at index: 11`.
-        input_tokens: row.get::<_, Option<i64>>(11)?.unwrap_or(0),
-        output_tokens: row.get::<_, Option<i64>>(12)?.unwrap_or(0),
-        model: row.get(13)?,
-        model_provider: row.get(14)?,
-        parent_session_key: row.get(15)?,
-        compaction_count: row.get(16)?,
-        derived_title: row.get(17).ok(),
-        // Column added later; `.ok()` + default keeps a pre-migration row (or a
-        // NULL) reading as 0.0 rather than panicking.
-        estimated_cost_usd: row.get::<_, Option<f64>>(18).ok().flatten().unwrap_or(0.0),
-        // P1 columns; `.ok()` keeps a pre-migration row reading as `None`
-        // (legacy, adoption-by-absence) rather than panicking.
-        owner_user_id: row.get(19).ok(),
-        scope_id: row.get(20).ok(),
-        ..Default::default()
-    })
-}
+// `map_session_metadata` lived here as a byte-identical second copy of the one
+// in `session_manager::ops` — same positional decode, same column order, two
+// editors. It is imported from there now: a positional mapper and its
+// `SELECT` list are one contract (`SESSION_COLUMNS`), and two of each is two
+// places to forget a column.
 
 #[async_trait]
 impl SessionStore for SessionManager {
@@ -105,12 +65,7 @@ impl SessionStore for SessionManager {
 
         let meta = conn
             .query_row(
-                "SELECT key, agent_id, session_type, created_at, last_active_at,
-                        message_count, total_tokens, auto_reset_at, state, metadata,
-                        label, input_tokens, output_tokens, model, model_provider,
-                        parent_session_key, compaction_count, derived_title,
-                        estimated_cost_usd, owner_user_id, scope_id
-                 FROM sessions WHERE key = ?",
+                &format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE key = ?"),
                 params![&key_str],
                 map_session_metadata,
             )
@@ -175,14 +130,21 @@ impl SessionStore for SessionManager {
                 .and_then(|seq| i64::try_from(seq).ok());
         self.add_message_full(
             key,
-            &msg.role,
-            &msg.content,
-            metadata_str.as_deref(),
-            msg.input_tokens,
-            msg.output_tokens,
-            msg.tool_call_id.as_deref(),
-            msg.tool_name.as_deref(),
-            source_seq,
+            NewMessage {
+                role: &msg.role,
+                content: &msg.content,
+                metadata: metadata_str.as_deref(),
+                input_tokens: msg.input_tokens,
+                output_tokens: msg.output_tokens,
+                tool_call_id: msg.tool_call_id.as_deref(),
+                tool_name: msg.tool_name.as_deref(),
+                source_seq,
+                // The producer's own stamp, forwarded rather than dropped. This
+                // insert used to replace it with `now()`, so a SQLite install
+                // dated every message by when its row was written while the file
+                // backend dated the same conversation by when it happened.
+                occurred_at: Some(msg.timestamp),
+            },
         )
         .await
         .map_err(map_err)?;
@@ -197,16 +159,17 @@ impl SessionStore for SessionManager {
         self.get_history(key, limit).await.map_err(map_err)
     }
 
-    async fn get_history_before(
+    async fn history_page(
         &self,
         key: &SessionKey,
         limit: Option<usize>,
-        before: Option<i64>,
-    ) -> Result<Vec<MessageRecord>, SessionStoreError> {
-        // Push the cursor into SQL rather than filtering in memory.
-        self.get_history_before(key, limit, before)
-            .await
-            .map_err(map_err)
+        before: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<HistoryPage, SessionStoreError> {
+        // Pushes both down: the cursor into the WHERE clause rather than an
+        // in-memory filter, and the length into a `COUNT(*)` rather than the
+        // default impl's "read everything and measure it" — and takes the
+        // connection once so the two answers describe the same session.
+        self.history_page(key, limit, before).await.map_err(map_err)
     }
 
     async fn search_messages(
@@ -242,89 +205,71 @@ impl SessionStore for SessionManager {
             return Ok(TruncateResult::default());
         }
 
-        // Find the id of the keep_count-th message in chronological order
-        // (i.e. the last message we want to keep). When keep_count == 0 we
-        // delete all messages for the session, mirroring reset_session.
-        let threshold_id: Option<i64> = if keep_count == 0 {
-            None
-        } else {
-            conn.query_row(
-                "SELECT id FROM messages WHERE session_key = ?
-                 ORDER BY timestamp ASC, id ASC LIMIT 1 OFFSET ?",
-                params![&key_str, (keep_count - 1) as i64],
-                |row| row.get(0),
-            )
-            .ok()
-        };
+        // The rows `/undo` drops, named by the SAME ranking that decides which
+        // ones are "the tail": everything past the oldest `keep_count` in
+        // reader order.
+        //
+        // Not a threshold id plus `id > threshold`. That spelling asks the
+        // ranking for a boundary and then applies it in a DIFFERENT order —
+        // `id` is insert order — so the two agree only while the column is the
+        // insert clock, which it no longer is (`add_message_full` keeps the
+        // producer's stamp). One out-of-order projection is then enough for the
+        // two to name different sets, and this is an irreversible delete.
+        //
+        // Ordered by `id` — the order the rows were recorded, which is the
+        // transcript's order on both backends (`SessionStore::history_page`).
+        // The file store's `/undo` is `drain(keep_count..)` on the transcript
+        // as it sits on disk; this is the same cut, expressed in SQL.
+        //
+        // `keep_count == 0` needs no special case here — `OFFSET 0` names every
+        // row, which is the "delete all messages, mirroring reset_session"
+        // behaviour it used to be spelled out for. `LIMIT -1` is SQLite's "no
+        // limit"; `OFFSET` requires a `LIMIT` beside it.
+        let doomed = "SELECT id FROM messages WHERE session_key = ?1
+             ORDER BY id ASC LIMIT -1 OFFSET ?2";
+        let keep = keep_count as i64;
 
         // Sum the tokens we are about to drop (best-effort; saturates on err).
-        let tokens_removed: i64 = match threshold_id {
-            Some(threshold) => conn
-                .query_row(
+        let tokens_removed: i64 = conn
+            .query_row(
+                &format!(
                     "SELECT COALESCE(SUM(input_tokens + output_tokens), 0)
-                     FROM messages WHERE session_key = ? AND id > ?",
-                    params![&key_str, threshold],
-                    |row| row.get::<_, i64>(0),
-                )
-                .unwrap_or(0),
-            None => conn
-                .query_row(
-                    "SELECT COALESCE(SUM(input_tokens + output_tokens), 0)
-                     FROM messages WHERE session_key = ?",
-                    params![&key_str],
-                    |row| row.get::<_, i64>(0),
-                )
-                .unwrap_or(0),
-        };
-
-        // Sync FTS index inside the same transaction as the source delete so a
-        // crash / FTS error rolls back the source rows (the FTS would
-        // otherwise over-count messages the source delete already removed).
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
-        match threshold_id {
-            Some(threshold) => {
-                tx.execute(
-                    "DELETE FROM messages_fts WHERE rowid IN (
-                        SELECT id FROM messages WHERE session_key = ? AND id > ?
-                    )",
-                    params![&key_str, threshold],
-                )
-                .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
-            }
-            None => {
-                tx.execute(
-                    "DELETE FROM messages_fts WHERE rowid IN (
-                        SELECT id FROM messages WHERE session_key = ?
-                    )",
-                    params![&key_str],
-                )
-                .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
-            }
-        }
+                     FROM messages WHERE id IN ({doomed})"
+                ),
+                params![&key_str, keep],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0);
 
         // **Audit fix**: FTS delete + source delete + count update are wrapped in
         // a single transaction so a failure in any step rolls back the others
-        // (see `delete_messages_from_seq` for the full rationale).
+        // (see `delete_messages_from_seq` for the full rationale). The FTS index
+        // belongs INSIDE it too — it would otherwise over-count messages the
+        // source delete already removed.
+        //
+        // ONE transaction. There were two `unchecked_transaction()` calls here,
+        // the FTS one shadowed rather than committed: a shadowed binding is not
+        // dropped, it lives to the end of the scope, so the second `BEGIN` ran
+        // inside the first and SQLite refused it — `cannot start a transaction
+        // within a transaction`. Every `session.truncate` on this backend
+        // returned that as an INTERNAL_ERROR, so `/undo` had never once
+        // succeeded against SQLite.
         let tx = conn
             .unchecked_transaction()
             .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
 
-        let deleted = match threshold_id {
-            Some(threshold) => tx
-                .execute(
-                    "DELETE FROM messages WHERE session_key = ? AND id > ?",
-                    params![&key_str, threshold],
-                )
-                .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?,
-            None => tx
-                .execute(
-                    "DELETE FROM messages WHERE session_key = ?",
-                    params![&key_str],
-                )
-                .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?,
-        };
+        tx.execute(
+            &format!("DELETE FROM messages_fts WHERE rowid IN ({doomed})"),
+            params![&key_str, keep],
+        )
+        .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
+
+        let deleted = tx
+            .execute(
+                &format!("DELETE FROM messages WHERE session_key = ?1 AND id IN ({doomed})"),
+                params![&key_str, keep],
+            )
+            .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
 
         let new_count: i64 = tx
             .query_row(

@@ -9,16 +9,54 @@ pub struct MessageRecord {
     /// When the message was recorded — **in an ambiguous unit**. Read it with
     /// [`MessageRecord::instant`], never directly.
     ///
-    /// The store's trait documents unix seconds and the SQLite backend writes
-    /// seconds, but the file backend writes `Utc::now().timestamp_millis()` for
-    /// a message (while writing plain `timestamp()` for the session's own
-    /// `created_at` / `last_active_at` in the very same file). Both spellings
-    /// therefore exist on disk right now, including inside a single deployment.
+    /// The store's trait documents unix seconds. What actually reaches disk
+    /// depends on the backend, and the difference is not that one of them
+    /// "writes milliseconds" — it is WHO decides:
     ///
-    /// The unit cannot simply be corrected at the source: the value doubles as
-    /// the `before` pagination cursor, and every session already on disk would
-    /// have to be migrated with it. So the resolution lives here, at the type,
-    /// where both readers and the cursor see the same interpretation.
+    /// - The **file** backend used to preserve whatever the producer put here,
+    ///   verbatim. There are two kinds of producer: [`MessageProjector`] stamps
+    ///   `created_at_ms` (milliseconds) and direct writers such as
+    ///   `agent_instance` stamp `timestamp()` (seconds). That is why both
+    ///   spellings appear inside a SINGLE transcript — measured on a real
+    ///   install, 2026-08-28: 1745 of 3030 rows in milliseconds, and two
+    ///   sessions carrying both.
+    /// - The **SQLite** backend keeps the producer's stamp too, normalized to
+    ///   milliseconds on the way in. It used to overwrite the stamp with its
+    ///   own `now().timestamp()` — recording INSERT time rather than event
+    ///   time, and making its column uniformly seconds.
+    ///
+    /// **Both** backends now normalize to milliseconds at the boundary, so
+    /// every row written from 2026-08-28 on is in one unit and neither store
+    /// widens the mixture any further. Rows written before that are NOT
+    /// migrated, on either side, which is why [`stamp_millis`] is permanent
+    /// rather than transitional: the install that never runs a migration is
+    /// exactly the install that still holds the old rows, so no reader could
+    /// ever be given the right to stop normalizing — the only thing a migration
+    /// could have bought.
+    ///
+    /// The value is NOT the transcript's order. That is the order the rows were
+    /// recorded — `messages.id`, file position — see
+    /// [`SessionStore::history_page`]. This is data about a row; it is compared
+    /// (the `before` cursor) and rendered, never ranked.
+    ///
+    /// A row nobody dated gets the insert clock on both backends rather than
+    /// 1970 — see [`producer_instant`], which is where "the producer did not
+    /// say when" is decided, once, for both.
+    ///
+    /// The unit could not simply be corrected for the rows already written:
+    /// the value doubles as the `before` pagination cursor, and every session
+    /// on disk would have to be migrated with it. So the resolution lives here,
+    /// at the type,
+    /// where both readers and the cursor see the same interpretation — via
+    /// [`stamp_millis`], which is the crate's single application of the
+    /// boundary. That last clause used to be a promise the cursor did not
+    /// keep: it compared the raw column against a seconds number, so no
+    /// millisecond row was ever "strictly older" than any cursor and
+    /// `chat.history?before=…` answered `{count: 0}` — which a client can only
+    /// read as "you have reached the beginning".
+    ///
+    /// [`MessageProjector`]: crate::gateway::session_projector
+    /// [`SessionStore::history_page`]: crate::gateway::session_store::SessionStore::history_page
     pub timestamp: i64,
     pub metadata: Option<Value>,
     /// Tokens the LLM call that produced this message was billed for. Zero on
@@ -38,6 +76,48 @@ pub struct MessageRecord {
     pub tool_name: Option<String>,
 }
 
+/// A window of a session's transcript together with how long the whole
+/// transcript is — the two answers a reader needs, from ONE read.
+///
+/// They are returned together because they used to be fetched apart, and
+/// "apart" is not a style choice: `messages` is appended to by a live run, so
+/// two reads see two different sessions and the client's `total - count`
+/// arithmetic is wrong by whatever landed between them. The gateway handler
+/// carried a comment arguing which ORDER made the skew fall the safer way, and
+/// a source-level guard to keep that order — a discipline that a future edit
+/// could satisfy lexically while breaking semantically (move the count into a
+/// helper, call the helper after the window). One call has no order to get
+/// wrong.
+///
+/// It is also the read the file backend was doing twice: its length fell
+/// through to the trait default, which parses the entire transcript to take its
+/// `.len()`, and then the window parsed it again. Every Panel attach paid for
+/// both. Counting the file's lines instead would have been the cheap escape and
+/// the wrong one — `read_transcript` skips blank and unparseable lines, so a
+/// line count over-reports and renders a "load 1 earlier message" control over
+/// a transcript with nothing earlier.
+#[derive(Debug, Clone)]
+pub struct HistoryPage {
+    /// The rows asked for: the trailing `limit` of those a `before` cursor
+    /// admits, oldest-first.
+    pub rows: Vec<MessageRecord>,
+    /// How many rows the whole session holds, ignoring the window — or `None`
+    /// when that could not be read.
+    ///
+    /// `Option`, never folded into `rows.len()`. A window serves the TRAILING
+    /// `limit`, so at exactly `limit` rows a full page and a complete short
+    /// conversation are byte-for-byte identical; a reader that guesses from the
+    /// length it received is inventing an answer, and it is wrong precisely
+    /// when the transcript is `limit` rows to the row. Reporting a failed count
+    /// as the window length would tell every client the transcript is complete
+    /// — the one answer wrong in the direction that HIDES content.
+    ///
+    /// This is the whole session, NOT the part a `before` cursor would admit. A
+    /// caller paginating with a cursor wants "how far back does this go", which
+    /// is this.
+    pub total: Option<usize>,
+}
+
 /// Above this a raw [`MessageRecord::timestamp`] is read as milliseconds,
 /// below it as seconds.
 ///
@@ -53,19 +133,92 @@ pub struct MessageRecord {
 /// definition of the same rule.
 pub(crate) const SECONDS_MILLIS_BOUNDARY: i64 = 100_000_000_000;
 
+/// One raw [`MessageRecord::timestamp`]-shaped value, in milliseconds.
+///
+/// The single place [`SECONDS_MILLIS_BOUNDARY`] is applied. Total — every
+/// `i64` has an answer — because its second caller is a *comparison*, and a
+/// comparison that can decline to answer either drops the row it could not
+/// read or keeps it on every page.
+///
+/// A free function rather than only a method on the record, because the
+/// `before` pagination cursor has to resolve the SAME way as the rows it is
+/// ranked against and it arrives as a bare number with no record around it.
+/// That was the gap: [`MessageRecord::timestamp`]'s own doc uses the cursor's
+/// existence to argue the stored unit must not be migrated, and promises in
+/// return that "the resolution lives here, at the type, where both readers and
+/// the cursor see the same interpretation" — while the cursor compared raw
+/// values. On a real install (2026-08-28, 327 sessions / 3030 rows) 58% of
+/// rows are millisecond-stamped and two sessions carry both spellings, so a
+/// seconds cursor silently excluded the majority of the transcript and
+/// `chat.history?before=…` answered `{count: 0}` — "you have reached the
+/// beginning" — for the largest sessions on disk.
+///
+/// Milliseconds, not seconds, so nothing is truncated on the way through: a
+/// millisecond row keeps its precision and a seconds row is exact either way.
+/// The `* 1000` cannot overflow — this branch is only reached for
+/// `|raw| < 1e11`, i.e. at most `1e14`.
+#[must_use]
+pub(crate) fn stamp_millis(raw: i64) -> i64 {
+    // `checked_abs`, not `abs`: `i64::MIN` has no positive counterpart, so
+    // `abs()` panics on it in a debug build and wraps back to `i64::MIN` in a
+    // release one — a stored stamp that crashed one profile and silently took
+    // the *seconds* branch in the other. `None` means "larger in magnitude
+    // than anything", which is the milliseconds branch, and
+    // `from_timestamp_millis` then correctly reports it as unrepresentable.
+    // (This predates the cursor work; it was reachable from any reader through
+    // `instant()`, and only surfaced because a test finally passed `i64::MIN`.)
+    if raw
+        .checked_abs()
+        .is_none_or(|a| a >= SECONDS_MILLIS_BOUNDARY)
+    {
+        raw
+    } else {
+        raw * 1000
+    }
+}
+
+/// The instant an INCOMING row's producer named — `None` when it named none.
+///
+/// The twin of [`stamp_millis`], which answers the same question for a row
+/// already on disk; this one answers it at the boundary, once, for both
+/// backends. It exists because the two of them used to answer it apart and
+/// differently: `add_message_full` narrowed `0` and unrepresentable magnitudes
+/// to the insert clock while `append_transcript` serialized them verbatim, so
+/// one undated record came back as "now" from SQLite and as 1970 from the file
+/// store. Both spellings had a written reason and the reasons contradicted
+/// each other, which is the shape of a rule with two owners.
+///
+/// Three inputs mean the same thing — "the producer did not say when":
+/// `None` (a caller with no record to speak for, e.g. the `add_message`
+/// convenience), `0` (a producer that left the field at its zero value), and a
+/// magnitude no calendar can represent.
+///
+/// Saying nothing is not the same as saying 1970, and the caller must not
+/// store it as such: a 1970 row leads every ranking, so it heads the
+/// transcript a reader sees and sits at the deleted end of every DELETE that
+/// ranks this column (`truncate_messages`, `compact_session`). Callers resolve
+/// `None` to the insert clock — the one true statement available about a row
+/// nobody dated, and exactly what every such row already got from SQLite.
+#[must_use]
+pub(crate) fn producer_instant(raw: Option<i64>) -> Option<chrono::DateTime<chrono::Utc>> {
+    raw.filter(|r| *r != 0)
+        .map(stamp_millis)
+        .and_then(chrono::DateTime::from_timestamp_millis)
+}
+
 impl MessageRecord {
     /// The instant this message was recorded, resolving the store's mixed
     /// units. `None` for a value no calendar can represent.
     ///
     /// Every reader goes through this. Formatting the raw field directly is the
     /// bug that was independently repeated at five call sites.
+    ///
+    /// Expressed via [`stamp_millis`] so the boundary has exactly one
+    /// application in the crate; the two used to be spelled separately, and the
+    /// cursor's copy was the one that was never written.
     #[must_use]
     pub fn instant(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        if self.timestamp.abs() >= SECONDS_MILLIS_BOUNDARY {
-            chrono::DateTime::from_timestamp_millis(self.timestamp)
-        } else {
-            chrono::DateTime::from_timestamp(self.timestamp, 0)
-        }
+        chrono::DateTime::from_timestamp_millis(stamp_millis(self.timestamp))
     }
 
     /// The recorded instant as RFC 3339, or an empty string when the stored
@@ -127,9 +280,15 @@ pub struct SessionMetadata {
     /// Preview of the last message content (first N chars, updated on append).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_message_preview: Option<String>,
-    /// Cumulative runtime in milliseconds (updated on session close).
-    #[serde(default)]
-    pub runtime_ms: i64,
+    // `runtime_ms` was CUT here. It was documented "updated on session close"
+    // and had ZERO writers repo-wide: no column, no assignment, no setter —
+    // only a `Default` and two renderers (`sessions.preview` and the `sessions`
+    // tool row), so every session reported `"runtime_ms": 0` to the model and
+    // to RPC clients as a fact about how long it had run. Its twin
+    // `estimated_cost_usd` below got a column and a writer in the same audit;
+    // this one did not, and a `#[serde(default)]` scalar with two readers is
+    // invisible to every lint. Connecting it would be a new capability (a
+    // duration accumulated off `SessionEvent::AssistantRunMeta`), not a wire.
     /// Estimated cost in USD (updated on session close / usage update).
     #[serde(default)]
     pub estimated_cost_usd: f64,
@@ -255,12 +414,57 @@ mod tests {
         );
     }
 
+    /// The property the `before` cursor is built on, stated on its own: two
+    /// rows of the SAME conversation written in different units must ORDER
+    /// correctly against each other and against a cursor.
+    ///
+    /// Comparing the raw fields does not — a millisecond stamp is ~1000x a
+    /// seconds one, so every millisecond row ranks as newer than every seconds
+    /// row regardless of when it happened, and newer than any seconds cursor.
+    /// This is not hypothetical: a real install had 58% of its rows in
+    /// milliseconds, and two sessions carried both spellings inside a single
+    /// transcript.
+    #[test]
+    fn mixed_units_order_against_each_other_and_a_cursor() {
+        // 2026-07-26T10:37:12Z (seconds) is EARLIER than
+        // 2026-07-26T10:37:13Z (milliseconds).
+        let older_secs = 1_785_062_232_i64;
+        let newer_millis = 1_785_062_233_000_i64;
+
+        // Raw, they compare backwards — the bug.
+        assert!(
+            older_secs < newer_millis,
+            "raw comparison happens to agree here only because the older row \
+             is the seconds one; reverse the roles and it flips"
+        );
+        let newer_secs = 1_785_062_233_i64;
+        let older_millis = 1_785_062_232_000_i64;
+        assert!(
+            older_millis > newer_secs,
+            "raw: the OLDER message ranks as newer, which is what made a \
+             seconds cursor exclude every millisecond row"
+        );
+
+        // Normalized, both pairs order by real time.
+        assert!(stamp_millis(older_secs) < stamp_millis(newer_millis));
+        assert!(stamp_millis(older_millis) < stamp_millis(newer_secs));
+
+        // And the two spellings of one instant collapse to one number, which
+        // is what lets `instant()` be expressed through this.
+        assert_eq!(stamp_millis(1_785_062_232), stamp_millis(1_785_062_232_000));
+    }
+
     #[test]
     fn an_unrepresentable_timestamp_yields_no_caption() {
         // Never panic and never print a fabricated date: a missing caption
         // reads as missing, an invented one reads as fact.
         assert_eq!(record_at(i64::MAX).instant(), None);
         assert_eq!(record_at(i64::MAX).rfc3339(), "");
+        // `i64::MIN` is the one value with no positive counterpart. `abs()`
+        // panicked on it in debug and wrapped in release, so this reader used
+        // to behave differently per profile on the same stored byte.
+        assert_eq!(record_at(i64::MIN).instant(), None);
+        assert_eq!(record_at(i64::MIN).rfc3339(), "");
         assert_eq!(record_at(0).rfc3339(), "1970-01-01T00:00:00+00:00");
     }
 

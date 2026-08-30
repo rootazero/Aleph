@@ -25,6 +25,7 @@ mod dispatch;
 mod gate_chain;
 mod ledger;
 mod progressive_disclosure;
+mod search_steer;
 mod traits;
 
 // The sub-agent allowlist wrapper refuses calls *above* this chokepoint; its
@@ -368,12 +369,24 @@ impl ToolService for ScopedToolService {
         // on the deterministic failure. Both are scoped here — the immediate
         // caller of every tool's `execute` — so they stay visible without
         // crossing a `tokio::spawn`.
-        // Compute before the `async move` below consumes `self`: the resolved
-        // tier this dispatch runs under (`None` = no tier in play, e.g. a bare
-        // test service — and the lift reads that as fail-closed).
-        let tier_at_dispatch = self.effective_exec_tier();
+        //
+        // The exec tier is read INSIDE the inner async block, not snapshotted
+        // before the move. A `PlanGate::release()` that fires during a
+        // scratchpad chain should be visible to `lift_ask_under_full_tier`
+        // during the SAME dispatch, not the next one — snapshotted tiers
+        // would silently keep a Plan decision in place for the current call
+        // after the gate had already flipped. Reading the gate's atomic
+        // `Acquire` here costs nothing (one `Relaxed`/`Acquire` load) and
+        // keeps the lift's verdict aligned with the live tier.
+        //
+        // We need to clone the bits of `self` that the tier-read uses BEFORE
+        // `self` is consumed by the inner `async move` — `effective_exec_tier`
+        // would otherwise read self after self was moved.
+        let exec_tier_fallback = self.exec_tier;
+        let turn_for_scope = self.turn_context.clone();
+        let turn_for_tier = self.turn_context.clone();
         let fut = async move {
-            match self.turn_context.clone() {
+            match turn_for_scope.clone() {
                 Some(turn) => {
                     let session = turn.session_key.clone();
                     crate::sandbox::context::SESSION_ID
@@ -390,19 +403,21 @@ impl ToolService for ScopedToolService {
 
         // Publish the turn's resolved exec tier alongside its routing context
         // (`TURN_EXEC_TIER`, consumed by `approval::lift_ask_under_full_tier`).
-        // The tier is read BEFORE the move above consumes `self`; an unset
-        // tier scopes nothing, which is the lift's fail-closed `None`.
-        let fut = {
-            let tier = tier_at_dispatch;
-            async move {
-                match tier {
-                    Some(t) => {
-                        crate::tools::turn_context::TURN_EXEC_TIER
-                            .scope(t, fut)
-                            .await
-                    }
-                    None => fut.await,
+        // The tier is read INSIDE the scope future, so a `PlanGate` flip made
+        // during the inner dispatch is reflected in the tier the lift reads.
+        let fut = async move {
+            let tier = turn_for_tier
+                .as_ref()
+                .and_then(|t| t.plan_gate.as_ref())
+                .map(|g| g.tier())
+                .or(exec_tier_fallback);
+            match tier {
+                Some(t) => {
+                    crate::tools::turn_context::TURN_EXEC_TIER
+                        .scope(t, fut)
+                        .await
                 }
+                None => fut.await,
             }
         };
 

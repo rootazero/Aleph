@@ -10,6 +10,7 @@ use crate::tasks::cron::{
     CronJob, CronJobView, FailureAlertConfig, JobChain, ScheduleKind, SessionTarget,
     SharedCronService,
 };
+use aleph_protocol::cron::CronJobRow;
 
 // ============================================================================
 // Helper functions
@@ -87,36 +88,73 @@ fn parse_chain(
     }
 }
 
-/// Serialize a `CronJobView` to JSON (includes all new fields)
+/// The serialized token of a unit enum, taken from its own `Serialize` impl.
+///
+/// Not `Display`: `RunStatus` carries both, and two hand-maintained spellings
+/// of one fact drift. serde's is the one that has always been on the wire.
+fn wire_tag<T: serde::Serialize>(value: T) -> Option<String> {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+}
+
+/// Project a `CronJobView` onto the wire row every client parses.
+///
+/// **Constructs** [`CronJobRow`] rather than hand-writing a `json!` map, which
+/// is the whole point: a hand-written map is a contract with no compiler behind
+/// it, and the CLI spent its whole life parsing this response against a
+/// `schedule` key that has never existed here — `serde_json::from_value`
+/// returned `Err` for every non-empty job list and `aleph cron list` answered
+/// "No cron jobs configured" on a server with jobs. Building the shared type
+/// means a rename is a compile error on this side and a loud parse error on the
+/// other, and over-sending a field with no reader is not expressible.
+///
+/// `parked` joins the wire here. `CronJobView` has computed it since the field
+/// was introduced — precisely so a surface would stop showing a permanently
+/// failed job as healthy — but it was never emitted, so no RPC client could ask
+/// the question the field exists to answer.
 fn job_view_to_json(view: &CronJobView) -> Value {
-    json!({
-        "id": view.id,
-        "name": view.name,
-        "enabled": view.enabled,
-        "schedule_kind": view.schedule_kind,
-        "agent_id": view.agent_id,
-        "source_channel_id": view.source_channel_id,
-        "prompt": view.prompt,
-        "timezone": view.timezone,
-        "tags": view.tags,
-        "session_target": view.session_target,
-        "created_at": view.created_at,
-        "updated_at": view.updated_at,
-        // State fields
-        "next_run_at": view.state.next_run_at_ms,
-        "running_at_ms": view.state.running_at_ms,
-        "last_run_at": view.state.last_run_at_ms,
-        "last_run_status": view.state.last_run_status,
-        "last_error": view.state.last_error,
-        "last_error_reason": view.state.last_error_reason,
-        "last_duration_ms": view.state.last_duration_ms,
-        "consecutive_errors": view.state.consecutive_errors,
-        "last_delivery_status": view.state.last_delivery_status,
-        // Config fields
-        "failure_alert": view.failure_alert,
-        "chain": view.chain,
-        "timeout_ms": view.timeout_ms,
-    })
+    let row = CronJobRow {
+        id: view.id.clone(),
+        name: view.name.clone(),
+        enabled: view.enabled,
+        parked: view.parked,
+        schedule_kind: serde_json::to_value(&view.schedule_kind).unwrap_or(Value::Null),
+        agent_id: view.agent_id.clone(),
+        source_channel_id: view.source_channel_id.clone(),
+        prompt: view.prompt.clone(),
+        timezone: view.timezone.clone(),
+        tags: view.tags.clone(),
+        session_target: match view.session_target {
+            SessionTarget::Main => "main".to_string(),
+            SessionTarget::Isolated => "isolated".to_string(),
+        },
+        created_at: view.created_at,
+        updated_at: view.updated_at,
+        next_run_at: view.state.next_run_at_ms,
+        running_at_ms: view.state.running_at_ms,
+        last_run_at: view.state.last_run_at_ms,
+        last_run_status: view.state.last_run_status.and_then(wire_tag),
+        last_error: view.state.last_error.clone(),
+        last_error_reason: view
+            .state
+            .last_error_reason
+            .as_ref()
+            .and_then(|r| serde_json::to_value(r).ok()),
+        last_duration_ms: view.state.last_duration_ms,
+        consecutive_errors: view.state.consecutive_errors,
+        last_delivery_status: view.state.last_delivery_status.and_then(wire_tag),
+        failure_alert: view
+            .failure_alert
+            .as_ref()
+            .and_then(|c| serde_json::to_value(c).ok()),
+        chain: view
+            .chain
+            .as_ref()
+            .and_then(|c| serde_json::to_value(c).ok()),
+        timeout_ms: view.timeout_ms,
+    };
+    serde_json::to_value(row).unwrap_or(Value::Null)
 }
 
 // ============================================================================
@@ -1008,6 +1046,90 @@ mod tests {
             error_of(handle_run(request("cron.run", json!({ "job_id": id })), cron).await);
         assert_eq!(code, INVALID_PARAMS, "message was: {message}");
         assert!(message.contains("enable it first"), "{message}");
+    }
+
+    /// What `cron.list` emits must be EXACTLY the shared row — no key more, no
+    /// key less.
+    ///
+    /// Equality, not containment. A superset assertion is what parsing already
+    /// gives you and it is structurally blind in the direction that hurt here:
+    /// this handler hand-wrote a `json!` map for its whole life, the CLI parsed
+    /// it against a `schedule` key that was never in it, and every CLI-side
+    /// test was green because it only ever read literals it had just written.
+    /// Deriving the expected key set from `CronJobRow` itself means the two
+    /// sides cannot drift without one of them failing to compile.
+    #[test]
+    fn cron_list_row_key_set_is_exactly_the_contract() {
+        let mut job = CronJob::new(
+            "daily brief",
+            "main",
+            "summarise",
+            ScheduleKind::Cron {
+                expr: "0 0 8 * * *".to_string(),
+                tz: Some("UTC".to_string()),
+                stagger_ms: None,
+            },
+        );
+        job.state.next_run_at_ms = Some(1_700_000_000_000);
+        let view = CronJobView::from(&job);
+
+        let emitted = job_view_to_json(&view);
+        let emitted_keys: std::collections::BTreeSet<&String> = emitted
+            .as_object()
+            .expect("cron.list row must be a JSON object")
+            .keys()
+            .collect();
+
+        // The expectation is DERIVED: serialize the contract type itself
+        // rather than restating its field names here, so this guard cannot go
+        // stale while claiming to be current.
+        let contract = serde_json::to_value(
+            serde_json::from_value::<CronJobRow>(emitted.clone())
+                .expect("the emitted row must parse as CronJobRow"),
+        )
+        .expect("serialize contract row");
+        let contract_keys: std::collections::BTreeSet<&String> = contract
+            .as_object()
+            .expect("contract row is an object")
+            .keys()
+            .collect();
+
+        assert_eq!(
+            emitted_keys, contract_keys,
+            "cron.list row drifted from aleph_protocol::cron::CronJobRow"
+        );
+    }
+
+    /// `parked` must reach the wire.
+    ///
+    /// The field has been computed by `CronJobView` since it was added —
+    /// specifically so a surface would stop rendering a permanently-failed job
+    /// as healthy — and it was emitted by nothing, so no RPC client could ask
+    /// the question it exists to answer.
+    #[test]
+    fn a_parked_job_says_so_on_the_wire() {
+        let mut job = CronJob::new(
+            "dead job",
+            "main",
+            "x",
+            ScheduleKind::Cron {
+                expr: "0 0 8 * * *".to_string(),
+                tz: None,
+                stagger_ms: None,
+            },
+        );
+        // Enabled, but nothing scheduled: it will never fire again.
+        job.enabled = true;
+        job.state.next_run_at_ms = None;
+
+        let emitted = job_view_to_json(&CronJobView::from(&job));
+        assert_eq!(
+            emitted["parked"],
+            serde_json::json!(true),
+            "an enabled job with no next run is parked, and a client that only \
+             sees `enabled` reports it as healthy"
+        );
+        assert_eq!(emitted["enabled"], serde_json::json!(true));
     }
 
     /// The old Panel spelling (`after_n` / `cooldown` / `kind` / `channel`)

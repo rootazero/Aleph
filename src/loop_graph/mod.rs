@@ -38,7 +38,7 @@ pub use templates::AUDIT_NODE_BODY;
 pub use types::{EdgeKind, GraphEdge, GraphNode, NodeKind, Origin};
 
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Ordering};
 
 /// Process-global graph store. Initialized once at daemon boot
 /// (`constructor.rs`); `None` until then so tests / early-boot read as
@@ -200,7 +200,7 @@ pub fn spawn_event_persister(
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    lag_counter.fetch_add(n, std::sync::atomic::Ordering::AcqRel);
+                    lag_counter.fetch_add(n, Ordering::AcqRel);
                     tracing::warn!(dropped = n,
                         "loop_graph: audit persister lagged — events dropped (audit may lose, never block)");
                 }

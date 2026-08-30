@@ -113,7 +113,17 @@ pub async fn task_team_reachable(
     let Some(store) = store else { return true };
     match team_id {
         None => team_visible(None, None),
-        Some(id) => matches!(store.get_team(id).await, Ok(Some(_))),
+        // Fetch the team, then check ownership/scope visibility. Just
+        // checking existence would admit any team the caller can name by
+        // id, which inverts the gate into a permission grant — see the
+        // module-level docs for the prior `task_review` regression in the
+        // same shape. Fail closed on store error (a locked SQLite is a
+        // denial, never a pass).
+        Some(id) => match store.get_team(id).await {
+            Ok(Some(t)) => team_visible(t.owner_user_id.as_deref(), t.scope_id.as_deref()),
+            Ok(None) => false,
+            Err(_) => false,
+        },
     }
 }
 

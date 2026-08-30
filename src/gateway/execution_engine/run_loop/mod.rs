@@ -102,10 +102,32 @@ use super::engine::ExecutionEngine;
 /// `chat.send`, which lands there. `handlers::agent::resolve_attribution`'s
 /// `None` arm carries the other half of this argument, and
 /// `the_two_room_claim_twins_agree_on_which_project_governs` pins the pair.
-fn request_scope(request: &RunRequest) -> Option<crate::scope::ScopeAttribution> {
-    let stamped = crate::scope::scope_from_metadata(&request.metadata);
-    let Some((pid, source)) =
-        crate::projects::ProjectStore::shared().room_claiming(&request.session_key)
+pub(super) fn request_scope(request: &RunRequest) -> Option<crate::scope::ScopeAttribution> {
+    scope_for_session(&request.metadata, &request.session_key)
+}
+
+/// [`request_scope`] with the session named explicitly.
+///
+/// The room lookup keys on a session, and for one caller that session is **not**
+/// `request.session_key`: `/btw promote` runs with the key already redirected
+/// onto the side thread, then creates the row for `main`. Correcting with the
+/// request's own key there would ask whether the *side thread* is a room — it
+/// never is — and file `main`'s row under the raw producer stamp, permanently
+/// (`stamp_attribution` is create-only and `attribution_backfill` only fills
+/// NULLs). Separating the parameter is what lets that caller ask the question
+/// about the session it is actually creating.
+///
+/// Takes the metadata map rather than an already-parsed attribution so that no
+/// caller has to touch `scope_from_metadata` itself — a raw read is exactly what
+/// `no_reader_under_execution_engine_takes_the_uncorrected_scope_stamp` forbids,
+/// and an entry point that requires one would have to exempt every caller from
+/// its own guard.
+pub(super) fn scope_for_session(
+    metadata: &std::collections::HashMap<String, String>,
+    session_key: &crate::routing::session_key::SessionKey,
+) -> Option<crate::scope::ScopeAttribution> {
+    let stamped = crate::scope::scope_from_metadata(metadata);
+    let Some((pid, source)) = crate::projects::ProjectStore::shared().room_claiming(session_key)
     else {
         return stamped;
     };
@@ -121,6 +143,38 @@ fn request_scope(request: &RunRequest) -> Option<crate::scope::ScopeAttribution>
     }
     attr.scope = target;
     Some(attr)
+}
+
+/// Whether this turn is happening inside a project room.
+///
+/// The shared-room busy-lane rule ([`super::BusyInputMode::for_shared_room`])
+/// needs this and used to answer it by parsing `SCOPE_META_KEY` out of the
+/// incoming metadata — i.e. from the producer's raw stamp, which for the six
+/// producers that need [`request_scope`]'s correction says `personal:<speaker>`
+/// about a session a room has already claimed. The rule then read "not a room"
+/// and let one member's message steer another member's in-flight run: the exact
+/// thing it exists to forbid, silently, and only on the channel/cron/A2A paths.
+///
+/// The room half is asked of [`crate::projects::ProjectStore::room_claiming`]
+/// directly rather than read off [`request_scope`]'s verdict, because
+/// `request_scope` applies arm 2's roster gate and that gate answers a
+/// *different* question: whether to hand an off-roster speaker the room's DATA
+/// scope. Here an off-roster speaker steering a member's in-flight turn is
+/// WORSE, not better, so the predicate is "is this session claimed by a room",
+/// full stop. `request_scope` is still ORed in for the other direction — a
+/// project-scoped session no room has claimed keeps the protection it has
+/// today — so this can only add cases, never remove one.
+pub(super) fn request_is_in_a_room(request: &RunRequest) -> bool {
+    if crate::projects::ProjectStore::shared()
+        .room_claiming(&request.session_key)
+        .is_some()
+    {
+        return true;
+    }
+    matches!(
+        request_scope(request).map(|a| a.scope),
+        Some(crate::scope::ScopeId::Project(_))
+    )
 }
 
 /// The two strings [`crate::orchestrator::FlowRequest`] carries for this run's

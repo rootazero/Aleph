@@ -290,6 +290,7 @@ async fn launch_llm_repair(server_url: &str, brief: &str, config: &CliConfig) ->
 
     let mut response_text = String::new();
     let mut agent_trace_seen = false;
+    let mut run_error: Option<String> = None;
     let verbose = std::env::var("ALEPH_VERBOSE").is_ok();
 
     while let Some(event) = events.recv().await {
@@ -340,6 +341,7 @@ async fn launch_llm_repair(server_url: &str, brief: &str, config: &CliConfig) ->
             }
             StreamEvent::RunError { error, .. } => {
                 eprintln!("Repair run error: {error}");
+                run_error = Some(error);
                 break;
             }
             _ => {}
@@ -351,6 +353,9 @@ async fn launch_llm_repair(server_url: &str, brief: &str, config: &CliConfig) ->
     }
 
     client.close().await?;
+    if let Some(error) = run_error {
+        return Err(CliError::Other(error));
+    }
     Ok(())
 }
 

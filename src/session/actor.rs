@@ -141,24 +141,25 @@ impl SessionActor {
                                         );
                                     }
                                 }
-                                // Broadcast send: a `SendError` here means either (a) zero receivers
-                                // (legitimate after every subscriber has
-                                // detached) or (b) the buffer is full
-                                // (BROADCAST_BUFFER = 256 — a slow subscriber
-                                // would silently drop events). Distinguish the
-                                // two cases at the trace level so a lagging
-                                // subscriber shows up in logs rather than as
-                                // a silently missing row in the live view.
-                                if self.broadcaster.send(record).is_err()
-                                    && self.broadcaster.receiver_count() > 0
-                                {
-                                    tracing::warn!(
+                                // Broadcast send. A `SendError` here means
+                                // *zero receivers* — tokio's
+                                // `broadcast::Sender::send` ONLY fails when
+                                // `rx_cnt == 0`; a full
+                                // `BROADCAST_BUFFER` (=256) does NOT error
+                                // and instead lets the lagging receiver
+                                // observe `RecvError::Lagged` on its next
+                                // `recv()` (which is exactly where it can
+                                // tell — the producer side cannot, which is
+                                // why there is no separate "lagger" warn
+                                // here). The previous `&& receiver_count >
+                                // 0` guard was dead because `Err` ⇔ `rx_cnt
+                                // == 0`; an audit caught it.
+                                if let Err(_record) = self.broadcaster.send(record) {
+                                    tracing::debug!(
                                         id = ?self.id,
                                         seq,
-                                        "SessionActor broadcast buffer full — \
-                                         at least one subscriber is lagging; \
-                                         they will see RecvError::Lagged and \
-                                         should call get_events() to recover."
+                                        "SessionActor broadcast had no receivers; \
+                                         event is durable in the SSOT log only"
                                     );
                                 }
                                 let _ = reply.send(Ok(seq));

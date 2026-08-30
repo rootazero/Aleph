@@ -127,6 +127,21 @@ pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> Vec<&'static 
             // this function's return value (see `reload_impact::classify`'s
             // doc on the bare "policies" path).
             "policies.spend" => crate::spend::update_policy(cfg.policies.spend.clone()),
+            // `[policies.terminal]`'s handle is the process-global PTY
+            // manager singleton (`crate::gateway::pty::manager()`) — always
+            // present, unlike `route`/`spend`'s boot-installed `ArcSwap`s,
+            // so this arm always lands. Turning the switch off must also
+            // kill live sessions: a gate evaluated only at admission would
+            // leave a shell that is already open still open.
+            "policies.terminal" => {
+                if !cfg.policies.terminal.enabled {
+                    let killed = crate::gateway::pty::manager().close_all();
+                    if killed > 0 {
+                        tracing::warn!(killed, "terminal disabled; live PTY sessions terminated");
+                    }
+                }
+                true
+            }
             // Unreachable while the guard test below passes: a new entry in
             // LIVE_SECTIONS/LIVE_SUBSECTIONS without an arm here fails at
             // compile-review time via that test, not silently at runtime.
@@ -185,7 +200,13 @@ mod tests {
     /// created to close, reintroduced one const entry at a time.
     #[test]
     fn every_live_section_has_an_apply_arm() {
-        let known_arms = ["route", "execution", "behavior", "policies.spend"];
+        let known_arms = [
+            "route",
+            "execution",
+            "behavior",
+            "policies.spend",
+            "policies.terminal",
+        ];
         for target in LIVE_SECTIONS.iter().chain(LIVE_SUBSECTIONS.iter()) {
             assert!(
                 known_arms.contains(target),
@@ -289,6 +310,14 @@ mod tests {
     /// `dotted_prefix_matches`'s ancestor check this arm would never fire
     /// from that path — exactly the mismatch the controller ruling called
     /// out.
+    ///
+    /// `"policies.terminal"` also fires from this same coarse name — it is
+    /// the other member of `LIVE_SUBSECTIONS` and its handle (the
+    /// process-global PTY manager) is always present, so it always lands.
+    /// That is not a false positive: the sibling-does-not-earn-a-verdict
+    /// guarantee comes from `classify`/`classify_verified` matching the
+    /// *specific* target, not from this function only ever applying one
+    /// thing at a time — see `a_sibling_policies_subsection_does_not_earn_a_live_verdict`.
     /// ⚠️ Serialised with every other test that WRITES `GLOBAL_POLICY`.
     /// `apply_live_sections`'s spend arm calls `spend::update_policy`, which
     /// overwrites a process-wide `ArcSwap` shared by the whole `--lib` test
@@ -303,7 +332,7 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(
             apply_live_sections(&cfg, &["policies"]),
-            vec!["policies.spend"]
+            vec!["policies.spend", "policies.terminal"]
         );
     }
 
@@ -376,8 +405,10 @@ mod tests {
 
         // The single-patch caller's exact shape: `top_sections` carries only
         // the coarse top-level segment, never "policies.spend" itself.
+        // `"policies.terminal"` rides along too — same coarse name, its own
+        // always-present handle (see `policies_spend_arm_fires_from_the_coarse_top_level_name`'s doc).
         let applied = apply_live_sections(&cfg, &["policies"]);
-        assert_eq!(applied, vec!["policies.spend"]);
+        assert_eq!(applied, vec!["policies.spend", "policies.terminal"]);
         assert_eq!(
             classify_verified("policies.spend.per_user_usd", &applied),
             ReloadImpact::Live
@@ -392,7 +423,7 @@ mod tests {
         // restart and no new process. `check`'s very next call must see it.
         cfg.policies.spend.per_user_usd = Some(1.0);
         let applied = apply_live_sections(&cfg, &["policies"]);
-        assert_eq!(applied, vec!["policies.spend"]);
+        assert_eq!(applied, vec!["policies.spend", "policies.terminal"]);
         assert!(matches!(
             crate::spend::check(&principal, now_ms),
             crate::spend::Verdict::Denied { .. }
@@ -404,6 +435,209 @@ mod tests {
         assert_eq!(
             classify_verified("policies.spend.per_user_usd", &[]),
             ReloadImpact::Restart
+        );
+    }
+
+    /// Every dedicated `*_config.update` handler that persists a wholly-live
+    /// section must also run the declaration table.
+    ///
+    /// `every_live_section_has_an_apply_arm` above proves the *arm* exists. It
+    /// cannot prove that every write surface reaches it, and the dedicated
+    /// handlers under `gateway/handlers/` are all outside `ConfigPatcher` — the
+    /// chokepoint `reload_impact::LIVE_SECTIONS`'s doc assumes is the only
+    /// caller. `execution_config::handle_update` sat in that gap: it wrote
+    /// `max_runs_global` to disk, answered `{"success": true}`, and the running
+    /// `ConcurrencyLimiter` kept admitting at the boot-time cap for the rest of
+    /// the process, while the *same* change made through `config.patch` applied
+    /// instantly and reported `Live`.
+    ///
+    /// The section list is read from `LIVE_SECTIONS`, and the handler set is
+    /// read off the filesystem, so a fourth live section — or a fourth
+    /// dedicated handler — is covered without editing this test. That is the
+    /// whole point: an enumerated version of this test would have been written
+    /// listing the handlers that existed on the day it was written, which is
+    /// the same shape as the bug.
+    ///
+    /// # The exemptions falsify themselves
+    ///
+    /// Two handlers legitimately do not call the executor today, and each
+    /// exemption below asserts the *reason* still holds rather than the name.
+    /// A list that only named files would rot into a licence: the day someone
+    /// converges `route_config` onto this function, or gives `behavior` a real
+    /// runtime handle, the exemption must go — and it goes red instead of
+    /// quietly vouching for a handler that has become non-compliant.
+    #[test]
+    fn every_dedicated_config_handler_that_saves_a_live_section_calls_apply_live_sections() {
+        // `strip_comment_lines`, NOT `code_text`: the thing being searched for
+        // IS a string literal (`save_incremental(&["execution"])`), and
+        // `code_text` deletes literal payloads by design. Comments are still
+        // stripped so a doc comment naming the call cannot vouch for a handler
+        // that does not make it, and `production_prefix` drops each file's own
+        // test module for the same reason.
+        use crate::utils::source_scan::{production_prefix, strip_comment_lines};
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let handlers = root.join("src/gateway/handlers");
+
+        // Read this module's own production half so the exemption checks below
+        // cannot be satisfied by a string sitting in this very test.
+        let live_apply_src = strip_comment_lines(&production_prefix(
+            &std::fs::read_to_string(root.join("src/config/live_apply.rs"))
+                .expect("live_apply.rs"),
+        ));
+
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        let mut stack = vec![handlers.clone()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("handlers dir").flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                    files.push(path);
+                }
+            }
+        }
+        assert!(
+            files.len() > 20,
+            "only {} handler files found — the walk stopped matching, so this \
+             test's green would mean nothing",
+            files.len()
+        );
+
+        let mut checked = 0usize;
+        let mut missing: Vec<String> = Vec::new();
+        for path in &files {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string();
+            let src = strip_comment_lines(&production_prefix(
+                &std::fs::read_to_string(path).expect("handler source"),
+            ));
+
+            for section in LIVE_SECTIONS {
+                let save = format!("save_incremental(&[\"{section}\"])");
+                let Some(at) = src.find(&save) else { continue };
+                checked += 1;
+
+                // The enclosing item: everything from the last top-level `fn`
+                // header before the write to the next one. Bounded by the
+                // file's own syntax rather than by a line count, which drifts
+                // onto a neighbouring declaration the first time something
+                // above it grows.
+                let start = ["\npub async fn ", "\npub fn ", "\nasync fn ", "\nfn "]
+                    .iter()
+                    .filter_map(|kw| src[..at].rfind(kw))
+                    .max()
+                    .unwrap_or(0);
+                let end = ["\npub async fn ", "\npub fn ", "\nasync fn ", "\nfn "]
+                    .iter()
+                    .filter_map(|kw| src[at..].find(kw).map(|i| at + i))
+                    .min()
+                    .unwrap_or(src.len());
+                let body = &src[start..end];
+
+                if body.contains("apply_live_sections") {
+                    continue;
+                }
+
+                // Exemption 1: `route_config` hot-applies by hand. That is the
+                // shape `reload_impact`'s doc warns against, not a second
+                // correct answer — but it does poke the runtime, so it is not
+                // the silent no-op this test hunts. Asserting the hand-inlined
+                // call is still there means this exemption dies the moment
+                // route_config either converges onto the executor (remove the
+                // exemption) or loses its hot-apply (the real defect).
+                if name == "route_config.rs" {
+                    assert!(
+                        body.contains("try_global_route_handle"),
+                        "route_config.rs is exempted here only because it hot-applies \
+                         `route` by hand; that call is gone, so the section is now \
+                         persisted with no runtime poke at all"
+                    );
+                    continue;
+                }
+
+                // Exemption 2: `behavior` has no handle to poke — its arm in
+                // this file is the literal `true`, because every reader
+                // re-reads `output_mode` from the shared `Config`. Derived from
+                // that arm's source, so giving `behavior` a real handle turns
+                // this red and forces `behavior_config` to be wired.
+                if name == "behavior_config.rs"
+                    && live_apply_src.contains("\"behavior\" => true,")
+                {
+                    continue;
+                }
+
+                missing.push(format!("{name} saves [{section}]"));
+            }
+        }
+
+        assert!(
+            checked >= 3,
+            "expected a write site for each of the three live sections \
+             ({LIVE_SECTIONS:?}); found {checked} — the scan stopped matching"
+        );
+        assert!(
+            missing.is_empty(),
+            "these handlers persist a section declared live but never run \
+             `apply_live_sections`, so the change lands on disk while the \
+             running process keeps its boot-time values under a success \
+             response: {missing:?}"
+        );
+    }
+
+    /// The census above (`every_live_section_has_an_apply_arm`) only proves
+    /// the name is on both lists. `known_arms` is a hand-written third copy,
+    /// so a missing `match` arm still passes it — the call falls through to
+    /// `_ => false` and honestly downgrades. This asserts the wire itself: a
+    /// live patch that disables the terminal must reach `close_all`, and the
+    /// target must be reported as applied.
+    ///
+    /// Uses the process-global `pty::manager()` singleton deliberately, not
+    /// a fresh `PtyManager` — the arm under test hardcodes the call to
+    /// `crate::gateway::pty::manager()`, so a local instance would prove
+    /// nothing about the real wire.
+    ///
+    /// ⚠️ That deliberate choice is why the serial key below is mandatory,
+    /// not tidiness. `close_all` kills EVERY live session in the process,
+    /// including the ones `gateway::handlers::pty`'s tests spawn on the same
+    /// singleton and then assert about — and libtest runs this binary's
+    /// tests on parallel threads. Measured before the key was added:
+    /// `cargo test -p alephcore --lib -- gateway::handlers::pty
+    /// config::live_apply` failed 5 runs out of 6, with a DIFFERENT subset
+    /// of the handler tests red each time; the same handler module alone was
+    /// 6/6 green. A full `--lib` run happened not to show it (8/8 clean),
+    /// which is luck, not safety: the pair simply rarely overlaps among
+    /// 17k tests. The counterpart key lives on every test in
+    /// `gateway::handlers::pty::tests` as
+    /// `#[serial_test::parallel(pty_global_manager)]` — they stay parallel
+    /// with each other and only exclude this one — and a source-level census
+    /// in that module fails by name if a new test there forgets it.
+    #[test]
+    #[serial_test::serial(pty_global_manager)]
+    fn disabling_the_terminal_live_kills_sessions_through_apply_live_sections() {
+        use crate::gateway::pty::SpawnOptions;
+
+        let mgr = crate::gateway::pty::manager();
+        let sid = mgr
+            .spawn(&SpawnOptions::default())
+            .expect("spawn")
+            .session_id;
+
+        let mut cfg = Config::default();
+        cfg.policies.terminal.enabled = false;
+        let applied = apply_live_sections(&cfg, &["policies"]);
+
+        assert!(
+            applied.contains(&"policies.terminal"),
+            "a declared-live target that does not land is not live"
+        );
+        assert!(
+            mgr.list().iter().all(|s| s.session_id != sid || s.closed),
+            "the in-flight session must be gone, not merely reported gone"
         );
     }
 }

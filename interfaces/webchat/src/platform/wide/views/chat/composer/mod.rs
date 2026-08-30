@@ -109,10 +109,21 @@ pub(crate) fn InputArea() -> impl IntoView {
     // Composer height → `--composer-clearance` on <html>, so the scroll
     // content + jump pill always clear the floating bar (queue bar /
     // attachments / multiline growth included). Mirrors the ResizeObserver
-    // pattern in the galaxy canvas gl engine; the chat view is kept alive
-    // by MainContent, so the leaked closure is one-per-app, not per-visit.
+    // pattern in the galaxy canvas gl engine.
+    //
+    // The observer and its closure are kept alive in a LocalStorage slot so
+    // they can be disconnected on cleanup instead of leaking via `cb.forget()`.
+    let resize_handle: StoredValue<
+        Option<(web_sys::ResizeObserver, Closure<dyn FnMut(js_sys::Array)>)>,
+        LocalStorage,
+    > = StoredValue::new_local(None);
+
     Effect::new(move |_| {
         let Some(el) = stack_ref.get() else { return };
+        // Disconnect any previous observer before installing a new one.
+        if let Some((old, _)) = resize_handle.try_update_value(|opt| opt.take()).flatten() {
+            old.disconnect();
+        }
         let cb: Closure<dyn FnMut(js_sys::Array)> = Closure::new(move |entries: js_sys::Array| {
             if let Ok(entry) = entries.get(0).dyn_into::<web_sys::ResizeObserverEntry>() {
                 let h = entry.content_rect().height();
@@ -129,8 +140,14 @@ pub(crate) fn InputArea() -> impl IntoView {
         });
         if let Ok(observer) = web_sys::ResizeObserver::new(cb.as_ref().unchecked_ref()) {
             observer.observe(&el);
+            resize_handle.set_value(Some((observer, cb)));
         }
-        cb.forget();
+    });
+
+    on_cleanup(move || {
+        if let Some((obs, _cb)) = resize_handle.try_update_value(|opt| opt.take()).flatten() {
+            obs.disconnect();
+        }
     });
 
     // Auto-grow the composer textarea to fit its content. We track the

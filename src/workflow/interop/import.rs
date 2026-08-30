@@ -199,12 +199,19 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
     // skeleton with every string body blanked out (delimiters preserved).
     let skeleton = strip_string_literals(src);
     let mut dropped = Vec::new();
+    // Imperative-construct detection matches MACHINE FORMATS (R8): a call
+    // signature (`pipeline(`, `workflow(`) — the paren is the structural
+    // marker, so identifiers like `pipeline_var` do not trip the needle.
+    // A bare-word needle like `"budget"` would match natural-language use
+    // (`// tune the budget`, a `BUDGET_LIMIT` const) without a structural
+    // signature, violating R8; control-flow intent is already covered by the
+    // `for` / `while` / `if` / `switch` keywords below, so no information is
+    // lost by omitting it.
     for (needle, label) in [
         (
             "pipeline(",
             "pipeline(...) — runtime item list not statically known",
         ),
-        ("budget", "budget-driven control flow"),
         ("workflow(", "nested workflow() call"),
     ] {
         if skeleton.contains(needle) {

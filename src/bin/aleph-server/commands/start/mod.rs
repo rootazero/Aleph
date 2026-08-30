@@ -32,9 +32,9 @@ use builder::{
     register_extensions_install_handlers, register_fs_handlers, register_graph_handlers,
     register_group_chat_handlers, register_heartbeat_handlers, register_identity_handlers,
     register_mcp_config_handlers, register_mcp_handlers, register_memory_handlers,
-    register_oauth_handlers, register_projects_handlers, register_session_handlers,
-    register_teams_handlers, register_voice_capability_handlers, register_workspace_handlers,
-    setup_config_watcher, start_webchat_server,
+    register_oauth_handlers, register_projects_handlers, register_pty_handlers,
+    register_session_handlers, register_teams_handlers, register_voice_capability_handlers,
+    register_workspace_handlers, setup_config_watcher, start_webchat_server,
 };
 
 mod orchestrator_init;
@@ -1762,10 +1762,34 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // P1 fix: close the open-auth gap on `/v1/*`. Snapshot the current
     // bearer token from SharedTokenManager so the OpenAI-compat handler
     // can reject mismatched bearers with 401 before they reach the
-    // per-agent busy-lock or upstream LLM. Token rotation requires a
-    // server restart — acceptable trade-off for single-user self-hosted
-    // deployments.
-    server.openai_api_token = auth_bundle.auth_ctx.shared_token_mgr.get_current_token();
+    // per-agent busy-lock or upstream LLM.
+    //
+    // ⚠️ KNOWN GAP — the trade-off recorded here until 2026-08-29 read "token
+    // rotation requires a server restart — acceptable trade-off for
+    // single-user self-hosted deployments", and it stated only the harmless
+    // half. Being a snapshot has TWO directions, and the one that was never
+    // written down is the expensive one:
+    //   · the operator's NEW token 401s on `/v1/*` until restart (the half the
+    //     old note described — annoying, reads as "the OpenAI API broke");
+    //   · the LEAKED OLD token keeps running full agent turns through
+    //     `ExecutionAdapter` on `/v1/chat/completions` until restart — i.e.
+    //     `gateway.token.rotate`, which `handlers/gateway_token.rs` and
+    //     `SECURITY.md` both describe without qualification as the "revoke all
+    // Snapshot removed: `OpenAiApiState::api_token` is now a closure that
+    // reads `SharedTokenManager::get_current_token()` at request time, so a
+    // `gateway.token.rotate` immediately revokes the previous bearer for
+    // `/v1/*` routes (previously the snapshot was taken at boot and the
+    // rotated-out token remained valid indefinitely). The `openai_api_token`
+    // field on `GatewayServer` is kept around only as a debug-time sanity
+    // check; the auth path does not read it.
+    tracing::debug!(
+        current_token_present = auth_bundle
+            .auth_ctx
+            .shared_token_mgr
+            .get_current_token()
+            .is_some(),
+        "OpenAI compat routes now read bearer from SharedTokenManager closure"
+    );
 
     // Spec C: mount /v1/admin IPC router for CLI subcommands routed via
     // LockOrIpc when this server holds the singleton lock. Bearer auth is
@@ -1830,6 +1854,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let app_config_for_channels = app_config.clone();
     let app_config_for_reload = app_config.clone();
     let app_config_for_oauth = app_config.clone();
+    let app_config_for_pty = app_config.clone();
     // Clone here so `app_config` remains available for downstream wiring
     // (e.g. the task reaper that reads `tasks_reaper` after handlers are
     // registered). `register_config_handlers` owns it via `Arc`, so the
@@ -1905,6 +1930,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         args.daemon,
     );
     register_daemon_handlers(&mut server, start_time, args.daemon);
+    // `pty.spawn` needs the live config to read `[policies.terminal]` (the
+    // session gate, and the scrollback/session-cap values) — its siblings
+    // are already registered stateless in `HandlerRegistry::new()`. See
+    // `register_pty_handlers`'s doc for why it alone is wired here.
+    register_pty_handlers(&mut server, &app_config_for_pty);
 
     // OAuth state: restore from vault if chatgpt provider exists
     let oauth_vault = auth_bundle.auth_ctx.shared_token_mgr.clone();
@@ -2382,6 +2412,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     handle.store(Some(Arc::new(alephcore::builtin_tools::A2AToolDeps {
                         sub_agent: a2a_sub_agent.clone(),
                         card_registry: card_registry.clone(),
+                        // Share the same SSRF policy the webhook target
+                        // is gated by so the operator's `[ssrf]` config
+                        // reaches the tool face (not a per-tool default).
+                        ssrf_policy: webhook_ssrf_policy.clone(),
                     })));
                     tracing::info!("A2A outbound tools wired (a2a_delegate, a2a_agents)");
                 } else {

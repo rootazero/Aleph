@@ -126,6 +126,36 @@ impl<T: AlephTool> AlephToolDyn for T { ... }
 | `file_mkdir` | Create directory | `path` |
 | `file_chmod` | Change permissions | `path`, `mode` |
 
+### Tree Search
+
+**Location**: `src/builtin_tools/file_search/` — `walk.rs` (the one answer to
+"which files does this repository consider its own", plus the denylist floor a
+byte-reading face must bind), `scan.rs` (pure line matching), `grep.rs`,
+`find.rs`.
+
+| Tool | Description | Args |
+|------|-------------|------|
+| `grep` | Content search across a tree. `.gitignore`-aware, skips `.git` and binaries, capped and pageable. Match lines are 240-char **locators** — follow one with `file_read{offset,limit}` | `pattern`, `path?`, `glob?`, `ignore_case?`, `literal?`, `context?`, `limit?`, `offset?`, `files_only?`, `no_ignore?` |
+| `find` | File discovery by glob. Same walk, paths only, sorted and pageable | `pattern`, `path?`, `limit?`, `offset?`, `no_ignore?` |
+
+Three things about this pair are load-bearing:
+
+- **`pattern` is a regex, so several terms are ONE call** (`foo|bar|baz`).
+  There is deliberately no `multi_grep`; a second verb would buy per-pattern
+  grouping at the price of a second registration surface, ~700 B of description
+  billed on every request, and one action answering to two names.
+- **They replace `bash`.** A `grep -r` does not read `.gitignore`, so one
+  recursive run pours every hit under `node_modules/`, `target/` and `dist/`
+  into the context window. `bash`'s own DESCRIPTION says so, and
+  `tools/scoped/search_steer.rs` repeats it at call time as a non-blocking
+  `<system-reminder>` when a shell command duplicates one of them. `rg` and
+  `fd` are never steered — they are the sanctioned shell fallback.
+- **`file_ops{operation:"search"}` is a different face, not a duplicate.** That
+  one is file *management* (returns size/type/extension, feeds
+  `organize`/`batch_move`/`stats` over any directory); `find` is code
+  *navigation*. What they must not fork on — "which files exist" — is answered
+  once, by `walk`.
+
 ### Code Execution
 
 | Tool | Description | Args |
@@ -413,12 +443,34 @@ impl AlephTool for MyTool {
 
 ### Step 3: Register Tool
 
-```rust
-// In builtin_tools/mod.rs
-pub fn register_builtins(server: &mut ToolServer) {
-    server.register(MyTool::new());
-}
-```
+Registration is **not one place**, and the gap between "the model is told about
+this tool" and "a call reaches it" has shipped as a bug four times
+(`select_model`, `doctor`, `config_audit`, `plugin_manage` — the last one found
+by a real-machine fixture, not by the 16k-test suite, because every in-process
+test asked a *registration* surface whether the tool existed and every one of
+them correctly said yes).
+
+The sites, in the order a new tool needs them:
+
+| # | File | What it buys |
+|---|------|--------------|
+| 1 | `executor/builtin_registry/definitions.rs` — `BUILTIN_TOOL_DEFINITIONS` | catalog row; the description starts being billed on every request |
+| 2 | `definitions.rs` — `create_tool_boxed` | construction for `AlephToolServer` |
+| 3 | `registry/tool_registry_impl.rs` — `execute_tool` match arm | **dispatch**; without it every call answers `Unknown tool` |
+| 4 | `registry/struct_def.rs` | the instance field |
+| 5 | `builder/constructor/mod.rs` | construction + struct init (pass the shared `ToolContext` handle if the tool resolves paths) |
+| 6 | `builder/core_tools.rs` — `reg(...)` | registry-map row (`agent_init` completes the model's list from here) |
+| 7 | `builtin_registry/groups.rs` | Panel display category |
+| 8 | `config/types/tools.rs` — `default_core_tools()` | schema-resident vs collapsed behind a `get_tool_schema` round-trip |
+| 9 | `tools/adapters/registry_adapter.rs` — `READ_ONLY_TOOLS` | read-only ⇒ idempotent ⇒ auto-retry ⇒ callable under the `Ask` / `Plan` tiers |
+| 10 | `tools/fallback_registry.rs` — `ToolFamily::from_name` | which alternatives are suggested when it fails |
+
+1–3 and 6 are enforced: `builtin_registry/dispatchable.rs` recovers both the
+advertised set and the dispatchable set **from the source text** (not from a
+list someone maintains) and fails naming the tool that is in one and not the
+other. 4–5 are compile errors. 7–10 are silent if missed — a Panel row that
+renders as a generic gear, a tool that costs a round-trip to call, a pure read
+that the `Ask` tier stops to ask about.
 
 ---
 

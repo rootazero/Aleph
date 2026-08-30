@@ -30,6 +30,23 @@ pub(in crate::commands::start) fn register_daemon_handlers(
     }
 }
 
+// ─── register_pty_handlers ────────────────────────────────────────────────
+
+/// Registers `pty.spawn` — the one `pty.*` method that needs the live
+/// config (`[policies.terminal]`'s gate and scrollback/session-cap values).
+/// Its siblings (`pty.input`/`resize`/`close`/`list`/`attach`) stay
+/// stateless and are registered in `HandlerRegistry::new()`
+/// (`gateway::handlers::mod`) — see that registration site's comment for why
+/// `pty.spawn` alone was moved out here.
+pub(in crate::commands::start) fn register_pty_handlers(
+    server: &mut GatewayServer,
+    config: &Arc<tokio::sync::RwLock<alephcore::Config>>,
+) {
+    use alephcore::gateway::handlers::pty;
+
+    register_handler!(server, "pty.spawn", pty::handle_spawn, config);
+}
+
 // ─── register_oauth_handlers ─────────────────────────────────────────────────
 
 pub(in crate::commands::start) fn register_oauth_handlers(

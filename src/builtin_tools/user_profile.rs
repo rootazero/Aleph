@@ -135,8 +135,12 @@ fn redact_profile_pii(input: &str) -> String {
                 continue;
             }
         }
-        // IPv4 (any private range): four 1-3-digit dotted groups. SSRF
-        // surface; avoid letting the profile echo an internal address.
+        // IPv4 (any shape, 0..=255 per octet): four 1-3-digit dotted
+        // groups. SSRF surface — avoid letting the profile echo an
+        // internal address. The previous comment claimed "any private
+        // range" but the implementation redacted every well-formed
+        // IPv4 shape; `scan_ipv4` now enforces 0..=255 per octet so
+        // `999.999.999.999` no longer matches.
         if c.is_ascii_digit() {
             if let Some(end) = scan_ipv4(&chars, i) {
                 out.push_str("[REDACTED:ip]");
@@ -263,10 +267,16 @@ fn scan_ssn(chars: &[char], start: usize) -> Option<usize> {
 }
 
 fn scan_ipv4(chars: &[char], start: usize) -> Option<usize> {
-    // Match d{1,3}.d{1,3}.d{1,3}.d{1,3}.
+    // Match d{1,3}.d{1,3}.d{1,3}.d{1,3}, with each octet constrained
+    // to 0..=255. The previous shape only enforced `group_len <= 3`,
+    // so a 4-group string like `999.999.999.999` matched — the
+    // redaction comment claimed "any private range" but the
+    // implementation redacted every dotted-quad. Narrow to a real
+    // IPv4 octet range so the doc and the code agree.
     let mut i = start;
     let mut octets = 0usize;
     let mut group_len = 0usize;
+    let mut group_value: u32 = 0;
     while i < chars.len() && octets < 4 {
         let c = chars[i];
         if c.is_ascii_digit() {
@@ -274,16 +284,21 @@ fn scan_ipv4(chars: &[char], start: usize) -> Option<usize> {
             if group_len > 3 {
                 return None;
             }
+            group_value = group_value * 10 + u32::from(c as u8 - b'0');
             i += 1;
         } else if c == '.' && group_len > 0 && octets < 3 {
+            if group_value > 255 {
+                return None;
+            }
             i += 1;
             octets += 1;
             group_len = 0;
+            group_value = 0;
         } else {
             break;
         }
     }
-    if octets == 3 && group_len > 0 {
+    if octets == 3 && group_len > 0 && group_value <= 255 {
         Some(i) // after the fourth group
     } else {
         None

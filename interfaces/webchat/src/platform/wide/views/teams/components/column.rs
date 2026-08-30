@@ -106,18 +106,20 @@ pub fn KanbanColumn(
             </div>
             <div class="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
                 {move || {
-                    let list = tasks.get();
-                    if list.is_empty() {
+                    if tasks.get().is_empty() {
                         view! {
                             <div class="text-xs text-text-tertiary text-center py-6">
                                 {empty_label.clone()}
                             </div>
                         }.into_any()
                     } else {
-                        list.into_iter()
-                            .map(|task| view! { <TaskCard task=task on_click=on_card_click /> })
-                            .collect_view()
-                            .into_any()
+                        view! {
+                            <For
+                                each=move || tasks.get()
+                                key=|t: &CoordTaskDto| t.id.clone()
+                                children=move |task| view! { <TaskCard task=task on_click=on_card_click /> }
+                            />
+                        }.into_any()
                     }
                 }}
             </div>

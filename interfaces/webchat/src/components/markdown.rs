@@ -183,7 +183,7 @@ fn html_escape(s: &str) -> String {
 /// Allow only a small set of link schemes. Reject `javascript:` and other
 /// pseudo-URL schemes to prevent XSS when the rendered HTML is assigned to
 /// innerHTML.
-fn sanitize_link_url(url: &str) -> String {
+pub(crate) fn sanitize_link_url(url: &str) -> String {
     let trimmed = url.trim();
     // Protocol-relative URLs (`//evil.com/x`) contain no colon, so a
     // `split_once(':')` check alone lets them through — yet a browser still

@@ -10,8 +10,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicU64;
 use tracing::{debug, warn};
+
+use crate::sync_primitives::{AtomicU64, Ordering as AtomicOrdering};
 
 /// Monotonic sequence for unique `persist()` temp-file names. Static `AtomicU64`
 /// must use `std::sync::atomic` (loom's `new` is not `const fn`).
@@ -337,7 +338,7 @@ impl CapabilityLedger {
         // own locks, so a fixed temp name would let concurrent persists clobber
         // one another's temp file (one rename consumes it, the other ENOENTs).
         // A pid+sequence suffix keeps each writer's temp private.
-        let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let seq = TMP_SEQ.fetch_add(1, AtomicOrdering::Relaxed);
         let tmp_path =
             self.persist_path
                 .with_extension(format!("json.tmp.{}.{}", std::process::id(), seq));

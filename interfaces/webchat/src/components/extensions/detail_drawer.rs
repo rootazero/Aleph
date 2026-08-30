@@ -11,12 +11,17 @@ use crate::views::extensions::StoreState;
 #[component]
 #[must_use]
 pub fn ExtensionDetailDrawer() -> impl IntoView {
-    let state = expect_context::<DashboardState>();
-    let store = expect_context::<StoreState>();
+    let Some(state) = use_context::<DashboardState>() else {
+        return ().into_any();
+    };
+    let Some(store) = use_context::<StoreState>() else {
+        return ().into_any();
+    };
     let i18n = use_i18n();
 
     let disclosure = RwSignal::new(Option::<DisclosurePayload>::None);
     let disc_loading = RwSignal::new(false);
+    let disc_error = RwSignal::new(Option::<String>::None);
     let post_install = RwSignal::new(Option::<String>::None);
 
     // Lazy-load disclosure when an entry is selected.
@@ -24,8 +29,10 @@ pub fn ExtensionDetailDrawer() -> impl IntoView {
         if let Some(entry) = store.selected.get() {
             disclosure.set(None);
             post_install.set(None);
+            disc_error.set(None);
             disc_loading.set(true);
             let id = entry.id.clone();
+            let i18n = i18n;
             spawn_local(async move {
                 match ExtensionsApi::disclosure(&state, id).await {
                     Ok((d, _findings, pi)) => {
@@ -33,7 +40,12 @@ pub fn ExtensionDetailDrawer() -> impl IntoView {
                         post_install.set(pi);
                         disc_loading.set(false);
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        disc_error.set(Some(crate::components::admin_refusal::settings_load_error(
+                            i18n,
+                            &e,
+                            |e| e.to_string(),
+                        )));
                         disc_loading.set(false);
                     }
                 }
@@ -46,7 +58,9 @@ pub fn ExtensionDetailDrawer() -> impl IntoView {
     view! {
         <Show when=move || store.selected.get().is_some()>
             {move || {
-                let entry = store.selected.get().unwrap();
+                let Some(entry) = store.selected.get() else {
+                    return ().into_any();
+                };
                 let badge_cls = format!("px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase whitespace-nowrap flex-shrink-0 {}", kind_badge_class(&entry.kind));
                 let kind_text = kind_label(i18n, &entry.kind);
                 let trust_text = trust_label(i18n, &entry.trust_tier);
@@ -88,6 +102,8 @@ pub fn ExtensionDetailDrawer() -> impl IntoView {
                                     <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider mb-1">{t!(i18n, extensions.what_it_reaches)}</h3>
                                     {move || if disc_loading.get() {
                                         view! { <p class="text-text-tertiary italic">{t!(i18n, extensions.loading_perms)}</p> }.into_any()
+                                    } else if let Some(e) = disc_error.get() {
+                                        view! { <p class="text-xs text-danger break-words">{e}</p> }.into_any()
                                     } else if let Some(d) = disclosure.get() {
                                         view! {
                                             <div class="space-y-2">
@@ -119,12 +135,18 @@ pub fn ExtensionDetailDrawer() -> impl IntoView {
                                     let install_entry = entry.clone();
                                     view! { <button class="flex-1 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover text-sm whitespace-nowrap" on:click=move |_| { store.start_install(install_entry.clone()); store.selected.set(None); }>{t!(i18n, extensions.install)}</button> }
                                 }}
-                                {entry.repo_url.clone().map(|url| view! { <a class="px-4 py-2 bg-surface-sunken text-text-secondary rounded-lg text-sm" href=url target="_blank" rel="noopener">{t!(i18n, extensions.docs)}</a> })}
+                                {entry.repo_url.clone().and_then(|url| {
+                                    let safe = crate::components::markdown::sanitize_link_url(&url);
+                                    if safe.starts_with("#disallowed-") {
+                                        return None;
+                                    }
+                                    Some(view! { <a class="px-4 py-2 bg-surface-sunken text-text-secondary rounded-lg text-sm" href=safe target="_blank" rel="noopener">{t!(i18n, extensions.docs)}</a> })
+                                })}
                             </footer>
                         </aside>
                     </div>
-                }
+                }.into_any()
             }}
         </Show>
-    }
+    }.into_any()
 }

@@ -284,11 +284,32 @@ impl ProcessRegistry {
                 }
             }
             if global_running >= MAX_RUNNING_GLOBAL {
+                // The cap is enforced; the operator learns about it only
+                // through the model surface. Log a structured metric so a
+                // fleet-wide ceiling trip is observable in production logs
+                // (the previous shape returned the rejection with no
+                // operator-visible signal until the model surfaced the
+                // failure to the user).
+                tracing::warn!(
+                    metric = "registry.rejected",
+                    global = global_running,
+                    per_session = per_session_running,
+                    limit = MAX_RUNNING_GLOBAL,
+                    "process_registry: global running cap reached"
+                );
                 return RegisterOutcome::TooManyRunning {
                     limit: MAX_RUNNING_GLOBAL,
                 };
             }
             if per_session_running >= MAX_RUNNING_PER_SESSION {
+                tracing::warn!(
+                    metric = "registry.rejected",
+                    global = global_running,
+                    per_session = per_session_running,
+                    limit = MAX_RUNNING_PER_SESSION,
+                    session = ?session_label,
+                    "process_registry: per-session running cap reached"
+                );
                 return RegisterOutcome::TooManyRunning {
                     limit: MAX_RUNNING_PER_SESSION,
                 };

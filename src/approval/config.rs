@@ -435,13 +435,33 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
         // `context` is built by `audit_identity` from a raw user-supplied target
         // (e.g. clipboard text, keystrokes) and was previously logged verbatim.
         // See APPROVAL-R3-001.
+        //
+        // The decision itself carries a `prompt` string for `Ask` variants
+        // that embeds `prompt_target` (the raw user target). Logging `?decision`
+        // would expose that target alongside any secrets it contains. Render
+        // an explicit summary that routes the prompt through `SecretMasker`
+        // and truncates.
         let masker = crate::exec::masker::SecretMasker::new();
+        let decision_summary = match decision {
+            ApprovalDecision::Allow => "Allow".to_string(),
+            ApprovalDecision::Deny { reason } => {
+                format!("Deny {{ reason: {} }}", masker.mask(reason))
+            }
+            ApprovalDecision::Ask { prompt } => {
+                let mut masked = masker.mask(prompt);
+                if masked.len() > 256 {
+                    masked.truncate(256);
+                    masked.push('…');
+                }
+                format!("Ask {{ prompt: {masked} }}")
+            }
+        };
         info!(
             action = ?request.action_type,
             target = %redact_target(&request.target),
             agent = %request.agent_id,
             context = %masker.mask(&request.context),
-            decision = ?decision,
+            decision = %decision_summary,
             "Approval decision recorded"
         );
     }

@@ -93,8 +93,24 @@ pub struct ConnectionState {
 
 impl ConnectionState {
     /// Create a new connection state for a connection from `client_ip`
-    /// (the resolved real client IP — see [`ConnectionState::client_ip`]).
-    pub(crate) fn new(client_ip: std::net::IpAddr) -> Self {
+    /// (the resolved real client IP — see [`ConnectionState::client_ip`]),
+    /// with `client_is_local` supplied by the caller.
+    ///
+    /// ⚠️ `client_is_local` is a PARAMETER and must stay one. It used to be
+    /// re-derived here as `client_ip.is_loopback()`, which is the predicate the
+    /// trusted-proxy fix replaced at every other authority site on 2026-08-29 —
+    /// and this one was missed, which is the whole shape of that bug rather
+    /// than a second instance of it. Behind a same-host reverse proxy that emits
+    /// no `X-Forwarded-For`, `resolve_client` reports the proxy's own loopback
+    /// address as `ip` while setting `local: false`; re-deriving the bit from
+    /// `ip` here stamps `caller_role = "operator"` on a remote connection before
+    /// any handshake has happened. `client_ip` answers "which bucket does this
+    /// belong to" (rate limiting, audit). It never answers "may this do that".
+    ///
+    /// Taking it as an argument is what makes the difference enforceable: a
+    /// future call site cannot forget the distinction, because there is nothing
+    /// to forget — the compiler asks for the bit.
+    pub(crate) fn new(client_ip: std::net::IpAddr, client_is_local: bool) -> Self {
         Self {
             first_message: true,
             subscriptions: vec![],
@@ -102,9 +118,10 @@ impl ConnectionState {
             permissions: vec![],
             client_ip,
             channel_kind: None,
-            // Loopback (local desktop App) is the implicit operator; remote
-            // connections start at chat tier until an operator elevates them.
-            caller_role: if client_ip.is_loopback() {
+            // Local (the desktop App over loopback, not merely an address that
+            // looks like loopback) is the implicit operator; every remote
+            // connection starts at guest until the handshake elevates it.
+            caller_role: if client_is_local {
                 "operator".to_string()
             } else {
                 "guest".to_string()
@@ -393,11 +410,14 @@ pub struct GatewayServer {
     /// agent registry + session + tool + provider + sandbox are assembled.
     /// Task 10 (Gateway `run_agent_loop` replacement) consumes this.
     pub orchestrator: Option<Arc<crate::orchestrator::Orchestrator>>,
-    /// Bearer token snapshot for OpenAI-compatible `/v1/*` routes.
-    /// Sourced from `SharedTokenManager` at boot. Some → handler rejects
-    /// mismatched bearers with 401; None → dev-open (any bearer accepted).
-    /// Token rotation requires a server restart.
-    pub openai_api_token: Option<String>,
+    // Note: the OpenAI-compat bearer token used to live here as an
+    // `Option<String>` snapshot taken from `SharedTokenManager` at boot.
+    // That snapshot was frozen for the lifetime of the server, so a
+    // `gateway.token.rotate` would not revoke the previously issued
+    // token for `/v1/*`. The auth path now reads the *current* token
+    // through the `api_token` closure injected into `OpenAiApiState`
+    // at boot, which captures `SharedTokenManager` directly. Do not
+    // reintroduce a snapshot here.
     /// Admin IPC router (Spec C). Mounted under `/v1/admin` when set.
     /// `None` means CLI subcommands routed via `LockOrIpc` will receive
     /// 404 from the server side — the CLI is expected to take the local
@@ -495,7 +515,6 @@ impl GatewayServer {
             openai_provider_configs: Vec::new(),
             embedding_provider: None,
             orchestrator: None,
-            openai_api_token: None,
             admin_router: None,
             reconciler_handle: None,
             webhook_mounts: Arc::new(crate::gateway::webhook_receiver::WebhookMountTable::new()),
@@ -554,7 +573,6 @@ impl GatewayServer {
             openai_provider_configs: Vec::new(),
             embedding_provider: None,
             orchestrator: None,
-            openai_api_token: None,
             admin_router: None,
             reconciler_handle: None,
             webhook_mounts: Arc::new(crate::gateway::webhook_receiver::WebhookMountTable::new()),
@@ -747,7 +765,7 @@ impl GatewayServer {
             MiddlewareChain::new(self.handlers.clone(), self.rate_limiter.clone());
 
         // Wire the embedded-PTY subsystem to this server's event bus so live
-        // terminal output is broadcast on the `pty.output` / `pty.exit` topics
+        // terminal output is broadcast on the `pty.screen` / `pty.exit` topics
         // through the normal subscription path (single fixed port, no second
         // socket). Idempotent — safe if `build_router` runs more than once.
         crate::gateway::pty::attach_event_bus(self.event_bus.clone());
@@ -804,11 +822,18 @@ impl GatewayServer {
         // OpenAI-compatible API routes (/v1/models, /v1/health, /v1/chat/completions)
         let openai_state = Arc::new(OpenAiApiState {
             server_id: format!("aleph-{}", self.addr),
-            // Bearer-token snapshot from SharedTokenManager. `None` leaves the
-            // endpoint open (dev mode); `Some(token)` rejects mismatched
-            // bearers with 401 in completions/mod.rs before reaching the
-            // per-agent busy-lock or the LLM.
-            api_token: self.openai_api_token.clone(),
+            // Live read of the current bearer token from SharedTokenManager.
+            // Using a closure (rather than a snapshot `Option<String>`)
+            // means `SharedTokenManager::rotate` immediately revokes the
+            // previously issued token — previously the snapshot was taken
+            // at boot and `/v1/*` would accept the rotated-out token
+            // indefinitely.
+            api_token: {
+                let mgr = self.shared_token_mgr.clone();
+                Arc::new(move || {
+                    mgr.as_ref().and_then(|m| m.get_current_token())
+                }) as Arc<dyn Fn() -> Option<String> + Send + Sync>
+            },
             execution_adapter: self.execution_adapter.clone(),
             provider_map: self.openai_provider_map.clone(),
             agent_registry: self.openai_agent_registry.clone(),
@@ -924,6 +949,43 @@ impl GatewayServer {
                 let pruned = ig.prune();
                 if pruned > 0 {
                     debug!("Pruned {} expired idempotency entries", pruned);
+                }
+            }
+        });
+
+        // Background: prune settled request-lifecycle entries every 60s.
+        //
+        // `MetricsService::call` inserts one `RequestStateData` per JSON-RPC
+        // request and only ever transitions it to a terminal state — nothing
+        // removes it. `cleanup` was written, tested and then never called from
+        // production, so the map grew one entry per RPC for the whole process
+        // lifetime while both of its siblings above were pruned. A single
+        // `voice.stream.audio` mic session is ~5 req/s, so this was tens of MB
+        // a day of monotonic heap growth in a daemon designed to run for weeks,
+        // with no error and no gauge that would show it.
+        //
+        // The handle is resolved on every tick, not captured here: the
+        // registry is installed by `MiddlewareChain::new` inside
+        // `build_router`, and this function is not ordered against it. A
+        // captured `Option` would freeze whatever was true at spawn time and
+        // could silently prune nothing forever.
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                let Some(reg) = crate::gateway::middleware::request_state::get_global_registry()
+                else {
+                    continue; // chain not built yet — nothing has been inserted either
+                };
+                // Retention comparable to the idempotency window above. This
+                // only removes entries that already reached a terminal state,
+                // and `remove` deliberately does not decrement terminal
+                // counters — so `snapshot().completed` / `.failed` stay
+                // cumulative-since-boot, which is what the `/metrics` counters
+                // promise. Pruning must not, and does not, walk them back.
+                let pruned = reg.cleanup(300_000);
+                if pruned > 0 {
+                    debug!("Pruned {} settled request-state entries", pruned);
                 }
             }
         });
@@ -1210,6 +1272,62 @@ mod tests {
     use super::super::protocol::{JsonRpcResponse, PARSE_ERROR};
     use super::*;
     use axum::http::StatusCode;
+
+    /// Every unbounded per-request map the middleware chain writes into needs
+    /// a pruner here, or it grows for the whole process lifetime.
+    ///
+    /// Stated as "the state registry must be pruned" rather than "there are
+    /// three spawns", because the failure this guards was not a deleted arm —
+    /// it was an arm nobody ever wrote, while `RequestStateRegistry::cleanup`
+    /// sat next to its own passing unit tests. `#[must_use]` cannot fire for a
+    /// function with no callers, and dead-code lints do not fire for a `pub`
+    /// one that its tests call.
+    #[test]
+    fn every_registry_the_chain_inserts_into_has_a_background_pruner() {
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/gateway/server/mod.rs"
+        ))
+        .expect("this file is readable from its own test");
+        let production = crate::utils::source_scan::production_prefix(&src);
+        let code = crate::utils::source_scan::strip_comment_lines(&production);
+
+        let start = code
+            .find("fn spawn_background_tasks(")
+            .expect("spawn_background_tasks still exists");
+        // Bounded by the next item at the same level; the heartbeat spawn is
+        // the last arm, so scanning to the end of the impl is enough.
+        let body = &code[start..];
+
+        for (what, needle) in [
+            ("rate limiter", "prune_stale("),
+            ("idempotency guard", ".prune()"),
+            ("request-state registry", ".cleanup("),
+        ] {
+            assert!(
+                body.contains(needle),
+                "spawn_background_tasks never prunes the {what}: `{needle}` \
+                 does not appear in its body. An unbounded map written once \
+                 per request grows for the process lifetime with no error and \
+                 no gauge"
+            );
+        }
+        // The registry handle must be resolved INSIDE the tick loop. It is
+        // installed by `MiddlewareChain::new` in `build_router`, which is not
+        // ordered against this function, so a handle captured at spawn time
+        // can be `None` forever — a pruner that prunes nothing looks exactly
+        // like the bug it was written to fix.
+        let cleanup_at = body.find(".cleanup(").expect("checked above");
+        let arm_start = body[..cleanup_at]
+            .rfind("tokio::spawn(")
+            .expect("the pruner lives in a spawned task");
+        assert!(
+            body[arm_start..cleanup_at].contains("get_global_registry()"),
+            "the request-state pruner must resolve its registry handle inside \
+             its own spawned task, on each tick — not capture it before the \
+             middleware chain that installs it has been built"
+        );
+    }
 
     #[tokio::test]
     async fn test_process_valid_request() {
@@ -1574,15 +1692,49 @@ mod channel_kind_tests {
     use super::*;
     use crate::gateway::surface::SurfaceKind;
 
+    /// A connection whose ADDRESS is loopback but which is not local must not
+    /// start as an operator.
+    ///
+    /// That pair is not hypothetical and it is not rare: it is what
+    /// `trusted_proxy::resolve_client` produces for every client behind a
+    /// same-host reverse proxy that does not send `X-Forwarded-For` — `ip`
+    /// falls back to the proxy's own address (loopback) while `local` is
+    /// false, because the hop is known to be a proxy. Deriving `caller_role`
+    /// from the address rather than from the bit handed every internet client
+    /// the zero-config operator grant, before any handshake.
+    ///
+    /// The guard is written on the PAIR rather than on either field alone,
+    /// because either field alone reads as fine: a loopback address is normal,
+    /// and `local: false` is normal. Only together do they name the bug.
+    #[test]
+    fn a_loopback_address_that_is_not_local_starts_as_guest() {
+        let proxied = ConnectionState::new("127.0.0.1".parse().unwrap(), false);
+        assert_eq!(
+            proxied.caller_role, "guest",
+            "a client reached through a trusted proxy hop must start at the \
+             login wall — its address is the proxy's, not its own"
+        );
+
+        // The control: without it the assertion above is also satisfied by a
+        // constructor that returns "guest" for everyone, which would silently
+        // lock the desktop App out of its own machine.
+        let desktop = ConnectionState::new("127.0.0.1".parse().unwrap(), true);
+        assert_eq!(
+            desktop.caller_role, "operator",
+            "the local desktop App over loopback is the implicit operator — \
+             the zero-config grant this repo's trust model is built on"
+        );
+    }
+
     #[test]
     fn new_connection_has_no_channel_kind() {
-        let cs = ConnectionState::new("127.0.0.1".parse().unwrap());
+        let cs = ConnectionState::new("127.0.0.1".parse().unwrap(), true);
         assert_eq!(cs.channel_kind, None);
     }
 
     #[test]
     fn channel_kind_is_settable() {
-        let mut cs = ConnectionState::new("127.0.0.1".parse().unwrap());
+        let mut cs = ConnectionState::new("127.0.0.1".parse().unwrap(), true);
         cs.channel_kind = Some(SurfaceKind::Desktop);
         assert_eq!(cs.channel_kind, Some(SurfaceKind::Desktop));
     }
@@ -1593,7 +1745,7 @@ mod device_invalidation_tests {
     use super::*;
 
     fn authorized(conn: &str, device_id: Option<&str>) -> (String, ConnectionState) {
-        let mut cs = ConnectionState::new("10.0.0.9".parse().unwrap());
+        let mut cs = ConnectionState::new("10.0.0.9".parse().unwrap(), false);
         cs.caller_role = "operator".to_string();
         cs.caller_user = Some(format!("u-{conn}"));
         cs.permissions = vec!["*".to_string()];

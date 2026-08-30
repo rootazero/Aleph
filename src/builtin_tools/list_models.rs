@@ -558,20 +558,22 @@ impl crate::tools::AlephTool for ListModelsTool {
         // can offer "switch to MoA preset X" with select_model "moa:X".
         let moa_presets: Vec<MoaPresetSummary> = crate::providers::moa::get_moa_config()
             .map(|cfg| {
-                let mut names: Vec<&String> = cfg
+                // Iterate entries directly so the invariant that "name
+                // came from the iterator" is held in the loop itself
+                // rather than via an `expect` on a second `HashMap::get`
+                // call. A rehash between the two lookups (e.g. if the
+                // map ever became a `DashMap` or similar) would defeat
+                // the type-system guarantee and the `expect` would be a
+                // silent panicking spot.
+                let mut entries: Vec<(&String, &crate::config::types::moa::MoaPreset)> = cfg
                     .presets
                     .iter()
                     .filter(|(_, p)| p.enabled)
-                    .map(|(n, _)| n)
                     .collect();
-                names.sort();
-                names
+                entries.sort_by(|a, b| a.0.cmp(b.0));
+                entries
                     .into_iter()
-                    .map(|name| {
-                        let p = cfg
-                            .presets
-                            .get(name)
-                            .expect("invariant: name came from presets iterator");
+                    .map(|(name, p)| {
                         MoaPresetSummary {
                             name: name.clone(),
                             advisors: p

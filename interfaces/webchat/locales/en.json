@@ -8,7 +8,8 @@
     "extensions": "Aleph Hub",
     "settings": "Settings",
     "canvas": "Canvas",
-    "projects": "Projects"
+    "projects": "Projects",
+    "terminal": "Terminal"
   },
   "session": {
     "healthy": "Healthy",
@@ -278,6 +279,10 @@
     "team_create_failed": "Failed to create team: ",
     "search_placeholder": "Search chats...",
     "no_conversations": "No conversations yet",
+    "history_title": "History",
+    "history_load_failed": "Couldn't load conversations",
+    "untitled_conversation": "Untitled",
+    "message_count": "{{ count }} messages",
     "new_chat": "New Chat",
     "new_group_chat": "New group chat",
     "confirm_delete": "Confirm delete?",
@@ -384,7 +389,30 @@
     "doctor_repair_prompt": "Run the doctor tool to diagnose system health. For anything mechanically repairable (repairable=true), call doctor(fix=true) to fix it; for the rest, follow each finding's fix_hint and use the tool it names (self_config / vault_store / …). When everything has been handled, run doctor again to verify and report briefly what was fixed.",
     "doctor_detect_prompt": "Run the doctor tool as a read-only health check (fix=false — do not repair anything). Report the problems you find and how severe each one is, faithfully.",
     "doctor_command_desc": "Read-only health check; press f to repair what it finds",
-    "voice_idle_hint": "Tap for voice mode · hold to dictate"
+    "voice_idle_hint": "Tap for voice mode · hold to dictate",
+    "load_earlier": "Load earlier messages",
+    "load_earlier_n_one": "Load {{ count }} earlier message",
+    "load_earlier_n_other": "Load {{ count }} earlier messages",
+    "loading_earlier": "Loading earlier messages…",
+    "history_start": "Beginning of the conversation",
+    "halt_hit_max_iterations": "hit max iterations",
+    "halt_context_budget_exhausted": "context budget exhausted",
+    "halt_max_output_tokens_exhausted": "max output tokens reached",
+    "halt_budget_exhausted_partial_result": "budget exhausted (partial result)",
+    "halt_consecutive_failure_cap": "repeated tool failures",
+    "halt_empty_response_exhausted": "empty model responses",
+    "halt_reactive_compact_exhausted": "context overflow, compaction failed",
+    "halt_stall_timeout": "stalled",
+    "halt_turn_timeout": "turn timed out",
+    "halt_verifier_veto": "verifier blocked",
+    "halt_stop_hook_halt": "halted by stop hook",
+    "halt_cancelled": "cancelled",
+    "halt_failed": "failed",
+    "halt_diminishing_returns": "no further progress",
+    "cost_title": "input {{ input }} · output {{ output }} · total {{ total }} tokens{{ cache }}{{ status }}",
+    "cost_cache_fragment": " · cache {{ read }} read / {{ created }} created · prefix reuse {{ run }}% (session {{ session }}%)",
+    "cost_status_fragment": " · cost {{ status }}",
+    "cost_status_unknown": "unknown"
   },
   "canvas": {
     "title": "Canvas",
@@ -873,6 +901,12 @@
       "reembed_desc": "Re-embed all existing data with the current provider after switching embedding providers.",
       "migrate": "Migrate to Current Provider",
       "migrating": "Migrating...",
+      "phase_facts": "Processing facts...",
+      "phase_memories": "Processing memories...",
+      "phase_preparing": "Preparing...",
+      "result_facts": "Facts: {{ done }}/{{ total }} migrated",
+      "result_errors_suffix": ", {{ count }} errors",
+      "error_details": "Error details:",
       "id_name_required": "ID and Name are required"
     },
     "reranking": {
@@ -881,6 +915,7 @@
       "loading": "Loading reranking providers...",
       "providers_section": "Reranking Providers",
       "add_custom": "+ Add Custom Provider",
+      "preset_custom": "Custom",
       "select_to_configure": "Select a provider to configure",
       "select_or_add": "or add a custom reranking provider",
       "active": "Active",
@@ -1695,6 +1730,7 @@
       "pairing_placeholder": "e.g. XPL3A7",
       "perm_all_granted": "All permissions granted",
       "perm_fix_suggestions": "Fix Suggestions",
+      "perm_grant_hint": "Grant '{{ name }}' permission in Server Settings > Roles",
       "perm_missing": "Missing permissions",
       "perm_no_data": "No permission data available",
       "perm_not_audited": "Not audited",
@@ -1847,6 +1883,9 @@
       "local_providers": "Local providers",
       "cloud_providers": "Cloud providers",
       "connection": "Connection",
+      "core": "Core",
+      "core_remote": "remote",
+      "core_local": "local",
       "catalog_unavailable": "Couldn't load the provider catalogue."
     },
     "fetch": {
@@ -1983,6 +2022,7 @@
   },
   "agents": {
     "cannot_delete_default": "Cannot delete default agent",
+    "not_found": "Agent not found",
     "channels": {
       "title": "Channel Binding",
       "bound": "BOUND",

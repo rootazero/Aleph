@@ -622,14 +622,18 @@ pub(super) async fn build_steering_rescue_request(
 /// [`crate::session::steer_signal`], which those parks select on alongside
 /// their cancel token. The message is answered either way; the edge is what
 /// decides whether that happens now or ten minutes from now.
-pub(super) async fn try_inject_steering(
-    enabled: bool,
-    max_pending: usize,
-    sibling: &BusySibling,
-    orchestrator: &OnceLock<Arc<Orchestrator>>,
-    request: &RunRequest,
-    new_run_id: &str,
-) -> bool {
+/// Every reason a fold must be refused before anything is read or written —
+/// the whole "may this message be folded into that run at all" question, in one
+/// place and pure, so each clause can be asserted on its own.
+///
+/// The clauses that compare against the sibling all say the same thing in
+/// different words: the sibling is already committed to a model, a working
+/// directory and an execution tier for its whole run, and every one of those is
+/// resolved AFTER the admission gate. Folding a message that asked for a
+/// different one applies the text and silently drops the directive while
+/// answering success. Deferring instead sends it back through the lane, which
+/// redelivers it as a fresh run through the whole pipeline — never a drop.
+fn fold_is_admissible(enabled: bool, request: &RunRequest, sibling: &BusySibling) -> bool {
     if !enabled {
         return false;
     }
@@ -644,30 +648,56 @@ pub(super) async fn try_inject_steering(
     }
 
     // A steering event carries TEXT AND NOTHING ELSE. Anything else the request
-    // is asking for has to be deferred to the FIFO busy queue, which redelivers
-    // it as a fresh run through the full pipeline. Never dropped — deferred.
+    // is asking for has to be deferred to the FIFO busy queue.
     if carries_more_than_text(request) {
         return false;
     }
 
-    // The sibling is already committed to its model for this run; a steer cannot
-    // change it. Folding in a message that asked for a different one would apply
-    // the text and silently drop the directive — the composer's model pill would
-    // read `opus` while the answer came from `sonnet`, with no banner and no
-    // error. Defer instead, so the request gets the model it asked for.
+    // The composer's model pill would read `opus` while the answer came from
+    // `sonnet`, with no banner and no error.
     if request.model_override != sibling.model_override {
         return false;
     }
 
-    // Same argument, same shape, for the working directory: the sibling's cwd,
-    // project-local skill/AGENTS.md discovery and default shell root were all
-    // resolved from ITS `workspace_override` at run start. Equal values are the
-    // common case (a room stamps the same path on every turn) and lose nothing
-    // in a fold; a DIFFERENT one — a channel turn landing on a session a
-    // project-room turn is still running, or the reverse — would silently
-    // execute in the other directory, which is the same class of lie as the
-    // model pill and one with file-writing consequences.
+    // Same shape for the working directory: the sibling's cwd, project-local
+    // skill/AGENTS.md discovery and default shell root were all resolved from
+    // ITS `workspace_override` at run start. Equal values are the common case (a
+    // room stamps the same path on every turn) and lose nothing in a fold; a
+    // DIFFERENT one — a channel turn landing on a session a project-room turn is
+    // still running, or the reverse — would silently execute in the other
+    // directory, with file-writing consequences.
     if request.workspace_override != sibling.workspace_override {
+        return false;
+    }
+
+    // Same shape again, and this one is a permission boundary rather than a
+    // preference: a user who flips the composer's tier pill from `auto` to
+    // `plan` and sends while a run is in flight had their text executed at
+    // `auto` — mutating tools running that `plan` refuses, with no approval card
+    // anywhere and `persist_session_exec_tier` never reached.
+    //
+    // Compared, not presence-checked: `session_dials_for_send` puts `exec_tier`
+    // on EVERY Panel send (`composer_dials.rs`), so listing the key in
+    // `carries_more_than_text` would switch mid-loop steering off for every
+    // Panel conversation — the trap `workspace_override`'s clause above already
+    // records. Equal (or equally absent) values lose nothing in a fold.
+    let tier_key = crate::config::types::policies::EXEC_TIER_SESSION_KEY;
+    if request.metadata.get(tier_key) != sibling.metadata.get(tier_key) {
+        return false;
+    }
+
+    true
+}
+
+pub(super) async fn try_inject_steering(
+    enabled: bool,
+    max_pending: usize,
+    sibling: &BusySibling,
+    orchestrator: &OnceLock<Arc<Orchestrator>>,
+    request: &RunRequest,
+    new_run_id: &str,
+) -> bool {
+    if !fold_is_admissible(enabled, request, sibling) {
         return false;
     }
 
@@ -861,6 +891,65 @@ mod tests {
 
     use crate::gateway::channel::Attachment;
     use crate::sync_primitives::{AtomicU32, AtomicU64};
+
+    fn sibling_matching(request: &RunRequest) -> BusySibling {
+        BusySibling {
+            run_id: "r-old".to_string(),
+            metadata: request.metadata.clone(),
+            model_override: request.model_override.clone(),
+            workspace_override: request.workspace_override.clone(),
+            admitted_at: std::time::Instant::now(),
+        }
+    }
+
+    /// A steer that asks for a DIFFERENT execution tier must be deferred, not
+    /// folded — the tier is a permission boundary, and it is resolved after the
+    /// gate, so a fold runs the message under the sibling's tier.
+    ///
+    /// The pill rides every Panel send, so the same predicate must NOT defer on
+    /// mere presence: both halves are asserted here because a fix that defers on
+    /// presence would turn mid-loop steering off for every Panel conversation
+    /// and still pass the interesting half.
+    #[test]
+    fn a_steer_that_changes_the_execution_tier_is_deferred_not_folded() {
+        let tier_key = crate::config::types::policies::EXEC_TIER_SESSION_KEY;
+
+        // No tier anywhere (a channel turn): admissible.
+        let plain = run_request("s1", "keep going");
+        assert!(
+            fold_is_admissible(true, &plain, &sibling_matching(&plain)),
+            "an ordinary text steer with no dials must still fold"
+        );
+
+        // The Panel case: the pill rides every send and nothing changed.
+        let mut same = run_request("s1", "keep going");
+        same.metadata
+            .insert(tier_key.to_string(), "auto".to_string());
+        assert!(
+            fold_is_admissible(true, &same, &sibling_matching(&same)),
+            "exec_tier rides EVERY Panel send, so an unchanged pill must not \
+             disable mid-loop steering"
+        );
+
+        // The pill was flipped mid-run.
+        let mut flipped = run_request("s1", "keep going");
+        flipped
+            .metadata
+            .insert(tier_key.to_string(), "plan".to_string());
+        assert!(
+            !fold_is_admissible(true, &flipped, &sibling_matching(&same)),
+            "a message asking for `plan` folded into an `auto` sibling executes \
+             at `auto`: mutating tools run without the approval `plan` requires, \
+             and the pick is never stamped onto the session"
+        );
+
+        // And the reverse direction — a request with no tier folded into a
+        // sibling that has one is the same divergence seen from the other side.
+        assert!(
+            !fold_is_admissible(true, &plain, &sibling_matching(&same)),
+            "an untiered request must not inherit the sibling's tier by folding"
+        );
+    }
 
     fn run_request(session: &str, input: &str) -> RunRequest {
         RunRequest {

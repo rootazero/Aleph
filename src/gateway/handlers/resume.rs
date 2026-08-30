@@ -91,6 +91,10 @@ impl ResumeOutcome {
                 "abandoned": report.abandoned,
                 "skipped": report.skipped,
                 "busy": report.busy,
+                // Omitting this was half of the same defect as `status_of`'s:
+                // even a `--json` caller could not tell "handed back to its own
+                // scheduler" from "the re-trigger errored".
+                "delegated": report.delegated,
             }),
             Self::InvalidKey => json!({ "status": "invalid_session_key" }),
             Self::NotFound => json!({ "status": "not_found" }),
@@ -116,6 +120,21 @@ fn status_of(report: &ResumeReport) -> &'static str {
     // resumed.
     if report.busy > 0 {
         "already_resuming"
+    } else if report.delegated > 0 {
+        // A cron / heartbeat / team session: `resume_from_markers` deliberately
+        // hands recovery back to the scheduler that owns it and closes the
+        // dangling marker on the way out (`has_own_scheduler`). It produces
+        // neither `resumed` nor `abandoned`, so without this arm it fell
+        // through to `not_resumed` — whose own wording sends the operator to
+        // look for a warning in the log that was never written, and whose
+        // second `resume` then answers `already_finished` because the marker
+        // this pass correctly closed is gone. Two disjoint outcomes were
+        // fanning into one word.
+        //
+        // Position among the counters is not load-bearing (this face resumes
+        // exactly one session, so exactly one of them can be non-zero); it sits
+        // here to read in the same order as `resume_from_markers` classifies.
+        "delegated"
     } else if report.resumed > 0 {
         "resumed"
     } else if report.abandoned > 0 {
@@ -316,6 +335,64 @@ mod tests {
             busy: 0,
             delegated: 0,
         }
+    }
+
+    /// A cron / heartbeat / team session is handed back to the scheduler that
+    /// owns it (`has_own_scheduler`), which increments only `delegated` — a
+    /// counter `status_of` did not read, so this fell through to `not_resumed`
+    /// ("could not re-trigger it, check the server log") for an outcome that is
+    /// correct and logs no warning. This helper could not even express the
+    /// input, which is why no test could fail.
+    #[test]
+    fn a_session_handed_back_to_its_own_scheduler_is_delegated_not_not_resumed() {
+        let delegated = ResumeReport {
+            scanned: 1,
+            delegated: 1,
+            ..report(0, 0, 0, 0)
+        };
+        assert_eq!(status_of(&delegated), "delegated");
+
+        // The arm it used to fall into must still mean what it says: scanned,
+        // interrupted, and nothing happened for a reason that WAS logged.
+        assert_eq!(status_of(&report(1, 0, 0, 0)), "not_resumed");
+    }
+
+    /// Every counter the report carries must reach the wire, or a `--json`
+    /// caller cannot re-derive the status word. Derived from the struct: adding
+    /// a counter without rendering it reddens here.
+    #[test]
+    fn to_json_renders_every_counter_the_report_carries() {
+        let r = ResumeReport {
+            scanned: 1,
+            resumed: 2,
+            abandoned: 3,
+            skipped: 4,
+            busy: 5,
+            delegated: 6,
+        };
+        let body = ResumeOutcome::Done {
+            status: "delegated",
+            report: r,
+        }
+        .to_json("agent:main:cron:daily");
+        let obj = body.as_object().expect("object");
+        // `status` + `session_key` + one key per counter. The count is derived
+        // from a destructure so a new field cannot be forgotten silently.
+        let ResumeReport {
+            scanned,
+            resumed,
+            abandoned,
+            skipped,
+            busy,
+            delegated,
+        } = ResumeReport::default();
+        let counters = [scanned, resumed, abandoned, skipped, busy, delegated].len();
+        assert_eq!(
+            obj.len(),
+            counters + 2,
+            "a counter on `ResumeReport` is not reaching the wire: {obj:?}"
+        );
+        assert_eq!(obj["delegated"], serde_json::json!(6));
     }
 
     #[test]

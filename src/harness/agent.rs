@@ -882,10 +882,8 @@ impl AgentHarness {
                 Ok(())
             }
             Err(e) => {
-                let error_class = e.class();
                 tracing::warn!(
                     ?current_session,
-                    ?error_class,
                     error = %e,
                     "harness session ended in error",
                 );
@@ -893,19 +891,19 @@ impl AgentHarness {
                 // `HarnessError::Cancelled` — the cooperative abort token — is;
                 // a provider auth failure, a session-store write error, an
                 // output-guardrail block and an exhausted reactive compaction
-                // are failures. The previous shape computed `error_class` and
-                // then fanned all four of its variants into `Cancelled`, so
-                // every trace surface rendered a dead run as
-                // `AgentTracePresentationStatus::Info` labelled "cancelled" —
-                // softer than a `HitLimit` cap, and indistinguishable from the
-                // user pressing stop. The session log has always told the two
-                // apart (`RunOutcome::Errored` vs `Cancelled`, set in
+                // are failures. The session log has always told the two apart
+                // (`RunOutcome::Errored` vs `Cancelled`, set in
                 // `harness_bridge::runner_impl` right before this event is
                 // emitted); this makes the trace projection agree with the log
-                // instead of contradicting it. `error_class` stays a log field:
-                // all four of its classes mean "this run failed" to a trace
-                // reader, and a match that fans four arms into one value is a
-                // classification that was never made.
+                // instead of contradicting it. The previous shape also computed
+                // `error_class` and then fanned all four of its variants into
+                // `Cancelled`, which collapsed every failure into the
+                // "cancelled" label on the trace surface — softer than a
+                // `HitLimit` cap, and indistinguishable from the user pressing
+                // stop. `HarnessError::class()` still classifies the value for
+                // any downstream consumer that wants the four-way split; here
+                // we only project two outcomes (cancelled vs failed) so the
+                // trace surface agrees with the session log.
                 let session_outcome = if matches!(e, HarnessError::Cancelled) {
                     crate::harness::trace::LoopTraceSessionOutcome::Cancelled
                 } else {

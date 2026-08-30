@@ -84,6 +84,12 @@ impl LogLevel {
 
     /// Convert from u8. Out-of-range values (memory corruption, ABI mismatch
     /// across hot-reload) fall back to `Info` and emit a single warn.
+    ///
+    /// On fallback, the atomic is also rewritten to `Info` so the stored
+    /// value and the reported value agree; otherwise subsequent `get_log_level`
+    /// calls would re-hit the corrupt byte, re-warn (suppressed by the
+    /// once-guard) and keep returning `Info` while the atomic remained
+    /// permanently out of range — masking the corruption indefinitely.
     fn from_u8(value: u8) -> Self {
         match value {
             0 => Self::Error,
@@ -93,6 +99,7 @@ impl LogLevel {
             4 => Self::Trace,
             _ => {
                 warn_invalid_level_once(value);
+                CURRENT_LOG_LEVEL.store(LogLevel::Info.to_u8(), Ordering::Release);
                 Self::Info
             }
         }
@@ -120,10 +127,11 @@ fn warn_invalid_level_once(value: u8) {
 
 /// Initialize the log level from environment or default.
 ///
-/// `RUST_LOG` parsing: walk all comma-separated directives and keep the
-/// **last** simple-level entry (i.e. one without a `target=` prefix). Per-crate
-/// directives like `h2=warn` are skipped — the global atomic only stores one
-/// level for `alephcore`. Falls back to `Info` when nothing parses.
+/// `RUST_LOG` parsing: walk all comma-separated directives; the last match
+/// wins, where a match is either (a) a plain-level directive (no `target=`
+/// prefix), or (b) a `target=value` whose target names us (see
+/// [`is_alephcore_target`]). Per-target entries for non-`alephcore` crates
+/// (e.g. `h2=warn`) are skipped. Falls back to `Info` when nothing parses.
 pub(crate) fn init_log_level() {
     INIT.call_once(|| {
         let Ok(rust_log) = std::env::var("RUST_LOG") else {
@@ -206,15 +214,23 @@ pub fn set_log_level(level: LogLevel) -> Result<(), LoggingError> {
         }
     };
     let old_level = LogLevel::from_u8(old_u8);
-    if let Err(error) = aleph_logging::set_log_level(level.to_filter_string()) {
-        tracing::warn!(%error, "Runtime log filter is unavailable");
-        return Err(LoggingError::FilterUnavailable(error));
+    if old_u8 != next {
+        if let Err(error) = aleph_logging::set_log_level(level.to_filter_string()) {
+            tracing::warn!(%error, "Runtime log filter is unavailable");
+            return Err(LoggingError::FilterUnavailable(error));
+        }
+        tracing::info!(
+            old_level = ?old_level,
+            new_level = ?level,
+            "Log level changed"
+        );
+    } else {
+        tracing::trace!(
+            old_level = ?old_level,
+            new_level = ?level,
+            "log level set was a no-op"
+        );
     }
-    tracing::info!(
-        old_level = ?old_level,
-        new_level = ?level,
-        "Log level changed"
-    );
     Ok(())
 }
 
@@ -301,20 +317,18 @@ mod tests {
     }
 
     #[test]
-    fn test_set_log_level_returns_filter_unavailable_outside_runtime() {
-        // Tests run without `init_component_logging`, so the shared backend
-        // refuses the runtime filter update. The atomic must still be
-        // updated, and the call must surface the failure rather than
-        // silently lie.
+    fn test_set_log_level_always_updates_atomic() {
+        // The atomic is updated unconditionally by `set_log_level`, regardless
+        // of whether the live filter update succeeds. This pins the contract
+        // that `get_log_level` always reflects the last `set_log_level` call
+        // (the RPC layer surfaces filter-availability failures separately via
+        // `LoggingError::FilterUnavailable`, which this unit test deliberately
+        // does not assert — that contract is exercised in
+        // `gateway/handlers/logs.rs::tests`).
         let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let prev = get_log_level();
-        let result = set_log_level(LogLevel::Warn);
+        let _ = set_log_level(LogLevel::Warn);
         assert_eq!(get_log_level(), LogLevel::Warn, "atomic updated regardless");
-        // The contract: outside a runtime the result is `FilterUnavailable`,
-        // but a test that runs alongside `init_component_logging` (some
-        // integration tests do) sees `Ok`. Both are correct — we only assert
-        // that the atomic was updated regardless of which branch fired.
-        let _ = result;
         let _ = set_log_level(prev);
     }
 

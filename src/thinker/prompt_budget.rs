@@ -188,13 +188,19 @@ pub fn truncate_with_head_tail(
     }
 
     let reserved_marker = format!("\n\n[... {total_chars} chars truncated ...]\n\n");
+    // The marker is currently ASCII so byte length == char length, but the
+    // budget math below operates in chars — measure in chars explicitly so
+    // a non-ASCII marker edit (e.g. a CJK translation) cannot silently
+    // under-budget the head/tail split. The downstream safety-net (re-take
+    // to `max_chars` chars) still protects the final string.
+    let reserved_chars = reserved_marker.chars().count();
 
     // Too small for head+tail+marker: just take the head (char-accurate).
-    if max_chars <= reserved_marker.len() {
+    if max_chars <= reserved_chars {
         return take_chars(content, max_chars);
     }
 
-    let usable = max_chars - reserved_marker.len();
+    let usable = max_chars - reserved_chars;
     let sum = head_ratio + tail_ratio;
     let head_chars = if sum == 0.0 {
         usable / 2
@@ -207,6 +213,23 @@ pub fn truncate_with_head_tail(
         .saturating_sub(head_chars)
         .saturating_sub(tail_chars);
     let marker = format!("\n\n[... {truncated_count} chars truncated ...]\n\n");
+    // One-directional on purpose. `reserved_chars` is measured against
+    // `total_chars` while the marker that actually ships carries
+    // `truncated_count`, which is `total_chars` minus the head and the tail —
+    // so the shipped marker is routinely one decimal digit *shorter* than the
+    // reservation, and an `==` here fires on ordinary input rather than on
+    // drift (it did, for every caller, from the commit that added it).
+    //
+    // What the reservation has to buy is that the split cannot *under*-budget:
+    // if a future marker could grow past what was reserved, `usable` would be
+    // too large, the head and tail would overfill, and the safety net below
+    // would clip the tail the caller asked to keep. That is the `<=`.
+    debug_assert!(
+        marker.chars().count() <= reserved_chars,
+        "the shipped marker ({} chars) outgrew its reservation ({reserved_chars} chars); \
+         the head/tail split was computed against the smaller shape and will overfill",
+        marker.chars().count(),
+    );
 
     // Char-accurate offsets: the first `head_chars` characters and the last
     // `tail_chars` characters. Since head_chars + tail_chars == usable <

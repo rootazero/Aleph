@@ -50,6 +50,23 @@ pub struct ReplyEmitter {
     /// receipt is not the run's answer, and marking it would put a "here is
     /// your side answer" badge on a run that produced none.
     pub(crate) answering: AtomicBool,
+
+    /// A media send failed in a way the durable delivery queue accepts, so a
+    /// queued row for this run may reference the cached files **by path**.
+    ///
+    /// Read by [`ReplyEmitter::deliver_run_media`] to withhold
+    /// `MediaCache::cleanup_session`. It is a latch rather than a return value
+    /// because media leaves this emitter from four drain sites and only the
+    /// last of them is followed by the cleanup: a transient failure at any of
+    /// the earlier three would otherwise have its files deleted by a later,
+    /// empty `deliver_run_media`. Setting it inside `send_media_standalone`
+    /// means the three call sites that do not know this problem exists inherit
+    /// the answer.
+    ///
+    /// One-way: `MediaCache::cleanup_stale()` at boot is the backstop, so the
+    /// worst case is temp files that outlive the run, not a queued row pointing
+    /// at a file that is already gone.
+    pub(crate) media_may_be_queued: AtomicBool,
     pub(crate) run_id: String,
 
     /// Cancellation token to stop the persistent typing indicator task
@@ -118,6 +135,7 @@ impl ReplyEmitter {
             has_sent: AtomicBool::new(false),
             run_complete_handled: AtomicBool::new(false),
             answering: AtomicBool::new(false),
+            media_may_be_queued: AtomicBool::new(false),
             run_id,
             typing_cancel: CancellationToken::new(),
             generation_registry: None,
@@ -158,6 +176,7 @@ impl ReplyEmitter {
             has_sent: AtomicBool::new(false),
             run_complete_handled: AtomicBool::new(false),
             answering: AtomicBool::new(false),
+            media_may_be_queued: AtomicBool::new(false),
             run_id,
             typing_cancel: CancellationToken::new(),
             generation_registry: None,
@@ -186,8 +205,11 @@ impl ReplyEmitter {
         &self.route
     }
 
-    /// Overflow threshold in characters. Returns 0 when overflow detection
-    /// is disabled (channel has no `max_message_length` or streaming is off).
+    /// Overflow threshold in characters. Returns 0 only when the channel
+    /// declared no `max_message_length` — the "or streaming is off" this doc
+    /// used to claim was an artefact of the cap being copied solely inside
+    /// `apply_channel_capabilities`' `EditBased` arm; it is copied on every
+    /// protocol now, and the caller is inside the streaming edit loop anyway.
     /// Subtracts a safety margin (~300) for HTML tag overhead.
     pub(crate) const fn overflow_threshold(&self) -> usize {
         let max = self.config.max_message_length;

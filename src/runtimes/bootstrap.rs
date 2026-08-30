@@ -1,7 +1,8 @@
 //! Runtime install dispatcher driven by `super::specs::SPECS`.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+
+use crate::sync_primitives::Mutex;
 
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
@@ -411,6 +412,11 @@ async fn run_via_parent(parent: &str, subcommand: &[&str]) -> Result<CmdOutcome,
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The guard type, not just the `Mutex`: `super::*` re-exports what this
+    // file imports, and it imports only `Mutex`. Without this the lib TEST
+    // target does not compile — which `cargo check` cannot tell you, because it
+    // does not build `#[cfg(test)]`.
+    use crate::sync_primitives::MutexGuard;
 
     #[test]
     fn test_has_spec_known() {
@@ -446,7 +452,7 @@ mod tests {
     /// resource's.
     static PATH_ENV: Mutex<()> = Mutex::new(());
 
-    fn lock_path_env() -> std::sync::MutexGuard<'static, ()> {
+    fn lock_path_env() -> MutexGuard<'static, ()> {
         PATH_ENV.lock().unwrap_or_else(|e| e.into_inner())
     }
 

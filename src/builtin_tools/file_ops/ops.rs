@@ -42,18 +42,31 @@ pub async fn execute_list(
     // the entire listing through `?`. `search` and `stats` already skip such
     // entries and keep walking; the count is reported below so a short listing
     // is never silent.
+    //
+    // Walk via `tokio::fs` so a directory with many entries (e.g.
+    // `node_modules/`, a build cache) does not stall a tokio worker — the
+    // previous `std::fs::read_dir` + `entry.metadata()` pair blocked the
+    // executor thread for the duration of every syscall.
     let mut skipped = 0usize;
-    for entry in fs::read_dir(&canonical)
-        .map_err(|e| ToolError::Execution(format!("Failed to read directory: {e}")))?
-    {
-        let Ok(entry) = entry else {
-            skipped += 1;
-            continue;
+    let mut rd = tokio::fs::read_dir(&canonical)
+        .await
+        .map_err(|e| ToolError::Execution(format!("Failed to read directory: {e}")))?;
+    loop {
+        let entry = match rd.next_entry().await {
+            Ok(Some(entry)) => entry,
+            Ok(None) => break,
+            Err(_) => {
+                skipped += 1;
+                continue;
+            }
         };
 
-        let Ok(metadata) = entry.metadata() else {
-            skipped += 1;
-            continue;
+        let metadata = match entry.metadata().await {
+            Ok(m) => m,
+            Err(_) => {
+                skipped += 1;
+                continue;
+            }
         };
 
         let entry_path = entry.path();
@@ -119,22 +132,18 @@ pub(super) async fn read_file_bytes(
 ) -> Result<(PathBuf, u64, Vec<u8>), ToolError> {
     let canonical = check_and_resolve_path(path, denied_paths, output_dir_override)?;
 
-    if !canonical.exists() {
-        return Err(ToolError::Execution(format!(
-            "File not found: {}",
-            path.display()
-        )));
-    }
-
-    if !canonical.is_file() {
+    // `tokio::fs::metadata` so a multi-second stat on a slow / network
+    // filesystem does not stall the executor thread; the previous
+    // `canonical.exists()` + `is_file()` pair both made a blocking stat.
+    let metadata = tokio::fs::metadata(&canonical)
+        .await
+        .map_err(|e| ToolError::Execution(format!("File not found: {}: {e}", path.display())))?;
+    if !metadata.is_file() {
         return Err(ToolError::InvalidArgs(format!(
             "Not a file: {}",
             path.display()
         )));
     }
-
-    let metadata = fs::metadata(&canonical)
-        .map_err(|e| ToolError::Execution(format!("Failed to get metadata: {e}")))?;
     let size = metadata.len();
 
     if size > max_read_size {
@@ -143,7 +152,8 @@ pub(super) async fn read_file_bytes(
         )));
     }
 
-    let bytes = fs::read(&canonical)
+    let bytes = tokio::fs::read(&canonical)
+        .await
         .map_err(|e| ToolError::Execution(format!("Failed to read file: {e}")))?;
 
     info!(path = %canonical.display(), size, "Read file");
@@ -313,18 +323,30 @@ pub async fn execute_move(
         }
     }
 
-    // Create parent directories if needed
+    // Create parent directories if needed. `tokio::fs::try_exists` + async
+    // `create_dir_all` so the parent-mkdir does not stall a worker on a slow
+    // filesystem; the previous `std::fs` pair blocked the executor for the
+    // duration of every syscall.
     if create_parents {
         if let Some(parent) = to_canonical.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).map_err(|e| {
-                    ToolError::Execution(format!("Failed to create directories: {e}"))
-                })?;
+            match tokio::fs::try_exists(parent).await {
+                Ok(false) => {
+                    tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                        ToolError::Execution(format!("Failed to create directories: {e}"))
+                    })?;
+                }
+                Ok(true) => {}
+                Err(e) => {
+                    return Err(ToolError::Execution(format!(
+                        "Failed to stat destination parent: {e}"
+                    )));
+                }
             }
         }
     }
 
-    fs::rename(&from_canonical, &to_canonical)
+    tokio::fs::rename(&from_canonical, &to_canonical)
+        .await
         .map_err(|e| ToolError::Execution(format!("Failed to move: {e}")))?;
 
     info!(from = %from_canonical.display(), to = %to_canonical.display(), "Moved");
@@ -367,33 +389,58 @@ pub async fn execute_copy(
         )));
     }
 
-    // Create parent directories if needed
+    // Create parent directories if needed. `tokio::fs::try_exists` +
+    // async `create_dir_all` so the parent-mkdir does not stall a worker on a
+    // slow filesystem.
     if create_parents {
         if let Some(parent) = to_canonical.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).map_err(|e| {
-                    ToolError::Execution(format!("Failed to create directories: {e}"))
-                })?;
+            match tokio::fs::try_exists(parent).await {
+                Ok(false) => {
+                    tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                        ToolError::Execution(format!("Failed to create directories: {e}"))
+                    })?;
+                }
+                Ok(true) => {}
+                Err(e) => {
+                    return Err(ToolError::Execution(format!(
+                        "Failed to stat destination parent: {e}"
+                    )));
+                }
             }
         }
     }
 
     let mut tally = CopyTally::default();
-    if from_canonical.is_file() {
-        tally.bytes = fs::copy(&from_canonical, &to_canonical)
+    if tokio::fs::metadata(&from_canonical)
+        .await
+        .map_err(|e| ToolError::Execution(format!("Failed to stat source: {e}")))?
+        .is_file()
+    {
+        // File copy is small enough to do inline with `tokio::fs::copy`.
+        tally.bytes = tokio::fs::copy(&from_canonical, &to_canonical)
+            .await
             .map_err(|e| ToolError::Execution(format!("Failed to copy: {e}")))?;
     } else {
-        // Directory copy - recursive. `denied_paths` are threaded through so a
-        // symlink whose canonical target is a protected credential store is
-        // skipped rather than followed and copied out.
+        // Directory copy is recursive — the tree walk calls into many blocking
+        // syscalls (`read_dir`, `canonicalize`, `copy`, `create_dir_all`) on a
+        // tree whose depth and breadth are caller-controlled. Run the whole
+        // walk on the blocking pool so a multi-thousand-entry tree does not
+        // monopolize a tokio worker.
+        let from_canonical = from_canonical.clone();
+        let to_canonical = to_canonical.clone();
+        let denied_paths = denied_paths.to_vec();
         let mut visited = std::collections::HashSet::new();
-        copy_dir_recursive(
-            &from_canonical,
-            &to_canonical,
-            denied_paths,
-            &mut visited,
-            &mut tally,
-        )?;
+        let tally_local: CopyTally = tokio::task::spawn_blocking(move || {
+            copy_dir_recursive(
+                &from_canonical,
+                &to_canonical,
+                &denied_paths,
+                &mut visited,
+            )
+        })
+        .await
+        .map_err(|e| ToolError::Execution(format!("Copy task join failed: {e}")))??;
+        tally = tally_local;
     }
     let bytes = tally.bytes;
 
@@ -547,8 +594,8 @@ fn copy_dir_recursive(
     to: &Path,
     denied_paths: &[String],
     visited: &mut std::collections::HashSet<PathBuf>,
-    tally: &mut CopyTally,
-) -> Result<(), ToolError> {
+) -> Result<CopyTally, ToolError> {
+    let mut tally = CopyTally::default();
     fs::create_dir_all(to)
         .map_err(|e| ToolError::Execution(format!("Failed to create directory: {e}")))?;
 
@@ -612,14 +659,20 @@ fn copy_dir_recursive(
         }
 
         if from_path.is_dir() {
-            copy_dir_recursive(&from_path, &to_path, denied_paths, visited, tally)?;
+            // Reborrow `visited` for the recursive call so the cycle-check
+            // borrow above is released before we hand the reference down.
+            let sub_tally =
+                copy_dir_recursive(&from_path, &to_path, denied_paths, &mut *visited)?;
+            tally.bytes += sub_tally.bytes;
+            tally.protected += sub_tally.protected;
+            tally.unresolvable += sub_tally.unresolvable;
         } else {
             tally.bytes += fs::copy(&from_path, &to_path)
                 .map_err(|e| ToolError::Execution(format!("Failed to copy file: {e}")))?;
         }
     }
 
-    Ok(())
+    Ok(tally)
 }
 
 /// Recursively count a path plus every entry beneath it, so `delete` can report
@@ -682,19 +735,41 @@ pub async fn execute_delete(
 
     let items_deleted = if is_symlink {
         // Unlink the symlink itself — never touch its target.
-        fs::remove_file(&canonical)
-            .map_err(|e| ToolError::Execution(format!("Failed to delete symlink: {e}")))?;
+        let canonical = canonical.clone();
+        let deleted = tokio::task::spawn_blocking(move || {
+            std::fs::remove_file(&canonical)
+                .map_err(|e| ToolError::Execution(format!("Failed to delete symlink: {e}")))
+        })
+        .await
+        .map_err(|e| ToolError::Execution(format!("Delete task join failed: {e}")))??;
+        let _ = deleted;
         1
     } else if is_dir {
         // Count the whole tree before removal so the reported figure is the
-        // true total, not just the directory's top-level entries.
-        let count = count_path_entries(&canonical);
-        fs::remove_dir_all(&canonical)
-            .map_err(|e| ToolError::Execution(format!("Failed to delete directory: {e}")))?;
+        // true total, not just the directory's top-level entries. Both the
+        // recursive count and `remove_dir_all` are blocking syscalls — run
+        // them on the blocking pool so a deep tree does not monopolize a
+        // tokio worker.
+        let canonical_for_blocking = canonical.clone();
+        let (count, deleted) = tokio::task::spawn_blocking(move || {
+            let count = count_path_entries(&canonical_for_blocking);
+            std::fs::remove_dir_all(&canonical_for_blocking)
+                .map_err(|e| ToolError::Execution(format!("Failed to delete directory: {e}")))?;
+            Ok::<(usize, ()), ToolError>((count, ()))
+        })
+        .await
+        .map_err(|e| ToolError::Execution(format!("Delete task join failed: {e}")))??;
+        let _ = deleted;
         count
     } else {
-        fs::remove_file(&canonical)
-            .map_err(|e| ToolError::Execution(format!("Failed to delete file: {e}")))?;
+        let canonical = canonical.clone();
+        let deleted = tokio::task::spawn_blocking(move || {
+            std::fs::remove_file(&canonical)
+                .map_err(|e| ToolError::Execution(format!("Failed to delete file: {e}")))
+        })
+        .await
+        .map_err(|e| ToolError::Execution(format!("Delete task join failed: {e}")))??;
+        let _ = deleted;
         1
     };
 
@@ -725,30 +800,42 @@ pub async fn execute_mkdir(
     // `execute_delete`).
     let _guard = lock_path(&canonical).await;
 
-    if canonical.exists() {
-        if canonical.is_dir() {
-            return Ok(FileOpsOutput {
-                success: true,
-                operation: "mkdir".to_string(),
-                message: format!("Directory already exists: {}", canonical.display()),
-                files: None,
-                bytes_written: None,
-                items_affected: Some(0),
-                summary: None,
-            });
-        } else {
+    // Async stat so a slow filesystem does not stall the executor. The two
+    // branches (exists-dir / exists-not-dir / missing) match the prior sync
+    // shape exactly.
+    match tokio::fs::metadata(&canonical).await {
+        Ok(md) => {
+            if md.is_dir() {
+                return Ok(FileOpsOutput {
+                    success: true,
+                    operation: "mkdir".to_string(),
+                    message: format!("Directory already exists: {}", canonical.display()),
+                    files: None,
+                    bytes_written: None,
+                    items_affected: Some(0),
+                    summary: None,
+                });
+            }
             return Err(ToolError::InvalidArgs(format!(
                 "Path exists but is not a directory: {}",
                 path.display()
             )));
         }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(ToolError::Execution(format!(
+                "Failed to stat destination: {e}"
+            )));
+        }
     }
 
     if create_parents {
-        fs::create_dir_all(&canonical)
+        tokio::fs::create_dir_all(&canonical)
+            .await
             .map_err(|e| ToolError::Execution(format!("Failed to create directories: {e}")))?;
     } else {
-        fs::create_dir(&canonical)
+        tokio::fs::create_dir(&canonical)
+            .await
             .map_err(|e| ToolError::Execution(format!("Failed to create directory: {e}")))?;
     }
 

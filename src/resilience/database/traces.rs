@@ -95,6 +95,24 @@ fn task_trace_from_row(row: &rusqlite::Row) -> rusqlite::Result<TaskTrace> {
     })
 }
 
+/// The `trace.list` projection, shared verbatim by both branches of
+/// [`StateDatabase::list_trace_tasks_paged`].
+///
+/// Positional decoding is a contract without a compiler: the two SELECTs and
+/// one `row_map` are three hand-written statements of one column order, and
+/// adding a column to two of them is a RUNTIME error in the third. One
+/// constant, interpolated, makes that impossible. (This repo has taken that
+/// hit before — see the criteria list's "一个 `from_row` 配 N 个 `SELECT`".)
+///
+/// `substr(..., 1, 200)` counts CHARACTERS in SQLite, so the preview cannot
+/// split a multi-byte codepoint the way a byte slice would.
+const TRACE_LIST_COLUMNS: &str = "tr.task_id, \
+     COUNT(*) AS event_count, \
+     MAX(tr.timestamp) AS last_timestamp, \
+     t.status, \
+     t.started_at, \
+     substr(t.task_prompt, 1, 200)";
+
 impl StateDatabase {
     // =========================================================================
     // Task Traces CRUD
@@ -283,82 +301,84 @@ impl StateDatabase {
         })
         .await
     }
-
-    /// List all distinct task IDs that have traces
-    pub async fn list_trace_tasks(&self) -> Result<Vec<TaskTraceInfo>, AlephError> {
-        self.with_conn(move |conn| {
-            let mut stmt = conn
-                .prepare(
-                    r#"
-                    SELECT task_id, COUNT(*) as event_count, MAX(timestamp) as last_timestamp
-                    FROM task_traces
-                    GROUP BY task_id
-                    ORDER BY last_timestamp DESC
-                    "#,
-                )
-                .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
-
-            let tasks = stmt
-                .query_map([], |row| {
-                    Ok(TaskTraceInfo {
-                        task_id: row.get(0)?,
-                        event_count: row.get(1)?,
-                        last_timestamp: row.get(2)?,
-                    })
-                })
-                .map_err(|e| AlephError::config(format!("Failed to query traces: {e}")))?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| AlephError::config(format!("Failed to collect traces: {e}")))?;
-
-            Ok(tasks)
-        })
-        .await
-    }
-
-    /// Paginated sibling of `list_trace_tasks`. Returns at most `limit`
-    /// (clamped to 1..200) trace-task summaries whose `last_timestamp` is
-    /// strictly less than `before_timestamp` (when set), ordered DESC.
+    /// Returns at most `limit`
+    /// (clamped to 1..200) trace-task summaries ordered by
+    /// `(last_timestamp DESC, task_id DESC)` so each page is a strict prefix
+    /// of the deterministic ordering.
+    ///
+    /// `before` is the optional cursor: `(last_timestamp, task_id)` of the
+    /// last entry of the previous page (or `None` for the first page).
+    /// Tie-break on `task_id` is required because `TaskTrace::new` stamps
+    /// timestamp as epoch SECONDS — rapid inserts collide, and a strict
+    /// `HAVING MAX(timestamp) < ?` cursor would silently drop every task
+    /// whose `last_timestamp` equals the previous page's last entry.
     ///
     /// Keeps each page O(limit) regardless of total trace volume, so
     /// callers can paginate without scanning the whole table on every
-    /// request. The existing `list_trace_tasks` is preserved for callers
-    /// that want everything in one shot.
+    /// request.
+    ///
+    /// The unpaginated sibling `list_trace_tasks` was removed on 2026-08-29:
+    /// zero callers repo-wide, so R10 says CUT rather than reconnect. Its doc
+    /// claimed it was "preserved for callers that want everything in one shot"
+    /// — a promise to a caller that never arrived, and the second SELECT that
+    /// would have had to learn about the `agent_tasks` join below.
+    ///
+    /// The rows carry `status` / `started_at` / `prompt_preview` from the
+    /// `agent_tasks` parent since the same date. They are not new facts: the FK
+    /// `task_traces.task_id -> agent_tasks(id) ON DELETE RESTRICT` guarantees
+    /// the parent exists, and `trace.list`'s three clients had all been written
+    /// as though those fields were already on the wire.
     pub async fn list_trace_tasks_paged(
         &self,
         limit: usize,
-        before_timestamp: Option<i64>,
+        before: Option<(i64, String)>,
     ) -> Result<Vec<TaskTraceInfo>, AlephError> {
         let clamped_limit = limit.clamp(1, 200) as i64;
         self.with_conn(move |conn| {
+            // Column order is the ONE contract shared by both branches below;
+            // they interpolate `TRACE_LIST_COLUMNS` rather than each spelling
+            // out a SELECT list, so adding a column cannot leave one branch
+            // decoding by a stale index.
             let row_map = |row: &rusqlite::Row<'_>| {
                 Ok(TaskTraceInfo {
                     task_id: row.get(0)?,
                     event_count: row.get(1)?,
                     last_timestamp: row.get(2)?,
+                    status: row.get(3)?,
+                    started_at: row.get(4)?,
+                    prompt_preview: row.get(5)?,
                 })
             };
 
             let collect_err =
                 |e: rusqlite::Error| AlephError::config(format!("Failed to collect paged traces: {e}"));
 
-            match before_timestamp {
-                Some(ts) => {
+            // Cursor rows are those ordered STRICTLY before `(ts, task_id)`
+            // in the `(last_timestamp DESC, task_id DESC)` ordering. With that
+            // ordering, "strictly before" means:
+            //   last_timestamp < cursor_ts
+            //     OR (last_timestamp = cursor_ts AND task_id < cursor_task_id)
+            // The cursor's own row is excluded (it was on the previous page).
+            match before {
+                Some((ts, task_id)) => {
                     let mut stmt = conn
-                        .prepare(
+                        .prepare(&format!(
                             r#"
-                            SELECT task_id, COUNT(*) as event_count, MAX(timestamp) as last_timestamp
-                            FROM task_traces
-                            GROUP BY task_id
-                            HAVING MAX(timestamp) < ?1
-                            ORDER BY last_timestamp DESC
-                            LIMIT ?2
-                            "#,
-                        )
+                            SELECT {TRACE_LIST_COLUMNS}
+                            FROM task_traces tr
+                            LEFT JOIN agent_tasks t ON t.id = tr.task_id
+                            GROUP BY tr.task_id
+                            HAVING MAX(tr.timestamp) < ?1
+                                OR (MAX(tr.timestamp) = ?1 AND tr.task_id < ?2)
+                            ORDER BY last_timestamp DESC, tr.task_id DESC
+                            LIMIT ?3
+                            "#
+                        ))
                         .map_err(|e| {
                             AlephError::config(format!("Failed to prepare paged query: {e}"))
                         })?;
                     let rows = stmt
-                        .query_map(params![ts, clamped_limit], row_map)
+                        .query_map(params![ts, task_id, clamped_limit], row_map)
                         .map_err(|e| {
                             AlephError::config(format!("Failed to query paged traces: {e}"))
                         })?;
@@ -367,15 +387,16 @@ impl StateDatabase {
                 }
                 None => {
                     let mut stmt = conn
-                        .prepare(
+                        .prepare(&format!(
                             r#"
-                            SELECT task_id, COUNT(*) as event_count, MAX(timestamp) as last_timestamp
-                            FROM task_traces
-                            GROUP BY task_id
-                            ORDER BY last_timestamp DESC
+                            SELECT {TRACE_LIST_COLUMNS}
+                            FROM task_traces tr
+                            LEFT JOIN agent_tasks t ON t.id = tr.task_id
+                            GROUP BY tr.task_id
+                            ORDER BY last_timestamp DESC, tr.task_id DESC
                             LIMIT ?1
-                            "#,
-                        )
+                            "#
+                        ))
                         .map_err(|e| {
                             AlephError::config(format!("Failed to prepare paged query: {e}"))
                         })?;
@@ -708,10 +729,8 @@ mod tests {
     #[tokio::test]
     async fn list_paged_cursor_advances_without_overlap() {
         let db = StateDatabase::in_memory().unwrap();
-        // Timestamps in TaskTrace::new() come from chrono::Utc::now().timestamp()
-        // — Unix epoch SECONDS — so rapid inserts collide. We need strictly
-        // differing timestamps because the cursor uses HAVING MAX(timestamp) < ?.
-        // Build TaskTrace by hand with explicit increasing timestamps.
+        // Build TaskTrace by hand with explicit increasing timestamps so the
+        // (timestamp DESC, task_id DESC) ordering is deterministic.
         let base_ts = chrono::Utc::now().timestamp();
         for i in 0..4i64 {
             let tid = format!("task-{i}");
@@ -734,9 +753,13 @@ mod tests {
 
         let page_a = db.list_trace_tasks_paged(2, None).await.unwrap();
         assert_eq!(page_a.len(), 2);
-        let cursor = page_a.last().unwrap().last_timestamp;
+        let cursor_ts = page_a.last().unwrap().last_timestamp;
+        let cursor_tid = page_a.last().unwrap().task_id.clone();
 
-        let page_b = db.list_trace_tasks_paged(2, Some(cursor)).await.unwrap();
+        let page_b = db
+            .list_trace_tasks_paged(2, Some((cursor_ts, cursor_tid)))
+            .await
+            .unwrap();
         assert!(!page_b.is_empty());
         for r in &page_b {
             assert!(
@@ -745,6 +768,61 @@ mod tests {
                 r.task_id
             );
         }
+    }
+
+    /// The cursor must NOT drop rows whose `last_timestamp` collides with
+    /// the previous page's last entry. Compound `(timestamp, task_id)` cursor
+    /// is the fix.
+    #[tokio::test]
+    async fn list_paged_does_not_drop_rows_on_timestamp_collision() {
+        let db = StateDatabase::in_memory().unwrap();
+        let pinned_ts = chrono::Utc::now().timestamp();
+        let ids: Vec<String> = (0..5).map(|i| format!("task-{i}")).collect();
+        for tid in &ids {
+            db.insert_agent_task(&AgentTask::new(tid, "s", "coder", "x", RiskLevel::Low))
+                .await
+                .unwrap();
+            let trace = TaskTrace {
+                id: 0,
+                task_id: tid.clone(),
+                step_index: 0,
+                event: AgentTraceEvent::TextEmitted {
+                    iteration: 0,
+                    stream: AgentTraceTextKind::Final,
+                    text: "x".into(),
+                },
+                timestamp: pinned_ts,
+            };
+            db.insert_trace(&trace).await.unwrap();
+        }
+
+        // Paginate with limit=2 across all 5 colliding tasks. Visit them all.
+        let mut seen: Vec<String> = Vec::new();
+        let mut cursor: Option<(i64, String)> = None;
+        loop {
+            let page = db.list_trace_tasks_paged(2, cursor).await.unwrap();
+            if page.is_empty() {
+                break;
+            }
+            let last = page.last().unwrap();
+            cursor = Some((last.last_timestamp, last.task_id.clone()));
+            for info in &page {
+                assert!(
+                    !seen.contains(&info.task_id),
+                    "duplicate task_id {} across pages",
+                    info.task_id
+                );
+                seen.push(info.task_id.clone());
+            }
+            if page.len() < 2 {
+                break;
+            }
+        }
+        assert_eq!(
+            seen.len(),
+            ids.len(),
+            "all 5 colliding tasks must be visited; got {seen:?}"
+        );
     }
 
     // -------------------------------------------------------------------------

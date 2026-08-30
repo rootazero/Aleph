@@ -14,7 +14,9 @@ pub fn TrustModal(
     #[prop(into)] on_continue: Callback<()>,
     #[prop(into)] on_cancel: Callback<()>,
 ) -> impl IntoView {
-    let store = expect_context::<StoreState>();
+    let Some(store) = use_context::<StoreState>() else {
+        return ().into_any();
+    };
     let i18n = use_i18n();
     // Ack checkbox state — reset whenever a new disclosure arrives.
     let ack = RwSignal::new(false);
@@ -26,7 +28,9 @@ pub fn TrustModal(
     view! {
         <Show when=move || store.disclosure.get().is_some()>
             {move || {
-                let d = store.disclosure.get().unwrap();
+                let Some(d) = store.disclosure.get() else {
+                    return ().into_any();
+                };
                 let secrets_count = d.secrets.len();
                 view! {
                     <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -98,8 +102,8 @@ pub fn TrustModal(
                             </footer>
                         </div>
                     </div>
-                }
+                }.into_any()
             }}
         </Show>
-    }
+    }.into_any()
 }

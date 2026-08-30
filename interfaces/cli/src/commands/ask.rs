@@ -84,7 +84,7 @@ pub async fn run(
             run_id,
         },
     )
-    .await;
+    .await?;
 
     if let Some(path) = output_last_message {
         if let Err(e) = tokio::fs::write(path, &outcome.final_text).await {

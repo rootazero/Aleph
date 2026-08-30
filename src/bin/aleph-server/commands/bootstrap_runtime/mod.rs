@@ -8,10 +8,9 @@
 //! check (Task 25).
 
 use std::io::Write;
-use std::sync::Arc;
 
-use alephcore::runtimes::{self, ensure_capability, find_spec, CapabilityLedger, CapabilityStatus};
-use tokio::sync::RwLock;
+use alephcore::runtimes::{self, ensure_capability, find_spec, CapabilityLedger};
+use alephcore::sync_primitives::{Arc, AsyncRwLock as RwLock};
 
 use crate::cli::BootstrapRuntimeArgs;
 
@@ -81,7 +80,10 @@ pub async fn run(args: BootstrapRuntimeArgs) -> i32 {
     for (idx, cap) in targets.iter().enumerate() {
         if args.force {
             let mut g = ledger.write().await;
-            g.update_status(cap, CapabilityStatus::Missing);
+            // `mark_missing` clears bin_path/version in addition to flipping
+            // status, so a subsequent refresh or probe doesn't carry stale
+            // values into the next probe's view.
+            g.mark_missing(cap);
         }
         printer.step_start(idx + 1, targets.len(), cap);
         match ensure_capability(cap, &ledger).await {

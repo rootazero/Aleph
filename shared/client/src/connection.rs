@@ -40,6 +40,142 @@ type WsWriter = Arc<
 /// and short enough that a retry cadence stays a retry cadence.
 const RECONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// What one inbound WebSocket text frame turned out to be.
+///
+/// Split out of [`AlephClient::handle_message`] because that function's `write`
+/// argument is an `Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, _>>>`
+/// — a value nothing can construct without a live socket — so the *parse*, the
+/// half that carried the defect below, was unreachable from any test in this
+/// repo for as long as it lived inside it.
+#[derive(Debug)]
+enum Inbound {
+    /// A reply to a request this client sent.
+    Response {
+        id: String,
+        result: Result<Value, JsonRpcError>,
+    },
+    /// A server-initiated request that expects a reply.
+    ServerRequest { method: String, id: Value },
+    /// A gateway stream event, ready for the caller's receiver.
+    Event(Box<StreamEvent>),
+    /// The envelope parsed but the payload is not a [`StreamEvent`].
+    ///
+    /// `loud` separates a broken contract from a frame family this client
+    /// simply does not consume: every `stream.*` method promises a
+    /// `StreamEvent` (`gateway::events::frame_census` asserts that pairing on
+    /// the server side), while `{"method":"event",…}` topic frames are for the
+    /// Panel and are expected to land here.
+    UnhandledNotification {
+        method: String,
+        loud: bool,
+        reason: String,
+    },
+    /// Not a JSON-RPC frame this client understands.
+    Unrecognized,
+}
+
+/// Classify one inbound text frame. Pure: no I/O, no shared state, one parse.
+///
+/// ## Why this does not go through `JsonRpcRequest` / `JsonRpcResponse`
+///
+/// It used to, and that was a total, silent outage of the event plane for every
+/// client built on this crate.
+///
+/// Both of those structs carry a required `jsonrpc: String`. The gateway's
+/// event wire form did not send one: `event_bus.rs::publish_frame` hand-built
+/// `{"method": "stream.X", "params": {…}}` and `handler.rs::event_wire_form`
+/// forwards those bytes verbatim. So `serde_json::from_str::<JsonRpcRequest>`
+/// failed with `missing field 'jsonrpc'` on **every** frame, and the caller
+/// logged one `debug!` line and moved on. The CLI (`aleph watch`, `aleph ask`)
+/// and the whole TUI share this file, so neither had ever received a single
+/// `stream.*` frame from a real gateway — `aleph ask` parked forever on a run
+/// that had already finished and printed nothing at all, `aleph watch` printed
+/// its banner and nothing else. Measured side by side on one socket, a bare
+/// `python websockets` client received every frame.
+///
+/// Two things were wrong and both are now fixed, because either one alone
+/// leaves the class open:
+///
+/// 1. the server now builds that envelope with
+///    `aleph_protocol::JsonRpcRequest::notification`, so what goes out is a
+///    conformant JSON-RPC 2.0 notification and the two halves of the contract
+///    are one type rather than two hand-written shapes; and
+/// 2. this reads the three fields it actually needs off a `Value`, so the next
+///    producer that forgets the version tag costs a warning line instead of
+///    the entire event stream.
+///
+/// The guard against a repeat is `envelope_without_the_version_tag_still_yields_the_event`
+/// below, next to the reconciliation test that feeds this function the exact
+/// bytes the shared constructor emits.
+fn classify_frame(text: &str) -> Inbound {
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return Inbound::Unrecognized;
+    };
+    // A JSON-RPC notification carries no id, and a response to a request this
+    // client never sent is indistinguishable from one it did — so `null` is
+    // "absent", not "an id whose value is null".
+    let id = value.get("id").filter(|v| !v.is_null());
+
+    // `method` is read first because it is the field only one of the two shapes
+    // has. Branching on `id` first would classify a server-initiated *request*
+    // (which has both) as a response, and answer it by resolving a pending
+    // entry that does not exist — silently, since the map lookup simply misses.
+    if let Some(method) = value.get("method").and_then(Value::as_str) {
+        if let Some(id) = id {
+            return Inbound::ServerRequest {
+                method: method.to_string(),
+                id: id.clone(),
+            };
+        }
+        let Some(params) = value.get("params") else {
+            return Inbound::UnhandledNotification {
+                method: method.to_string(),
+                loud: method.starts_with(STREAM_METHOD_PREFIX),
+                reason: "notification carried no params".to_string(),
+            };
+        };
+        return match serde_json::from_value::<StreamEvent>(params.clone()) {
+            Ok(event) => Inbound::Event(Box::new(event)),
+            Err(e) => Inbound::UnhandledNotification {
+                method: method.to_string(),
+                loud: method.starts_with(STREAM_METHOD_PREFIX),
+                reason: e.to_string(),
+            },
+        };
+    }
+
+    if let Some(id) = id {
+        let id = match id {
+            Value::String(s) => s.clone(),
+            Value::Number(n) => n.to_string(),
+            // An id that is neither is not an id this client ever minted
+            // (`next_id` produces decimal strings), so nothing is waiting on it.
+            _ => return Inbound::Unrecognized,
+        };
+        let result = match (value.get("error"), value.get("result")) {
+            (Some(error), _) => Err(serde_json::from_value::<JsonRpcError>(error.clone())
+                .unwrap_or_else(|e| JsonRpcError {
+                    code: aleph_protocol::jsonrpc::INVALID_REQUEST,
+                    message: format!("Invalid Request: malformed error object: {e}"),
+                    data: Some(error.clone()),
+                })),
+            (None, Some(result)) => Ok(result.clone()),
+            (None, None) => Err(JsonRpcError {
+                code: aleph_protocol::jsonrpc::INVALID_REQUEST,
+                message: "Invalid Request: missing both result and error".into(),
+                data: None,
+            }),
+        };
+        return Inbound::Response { id, result };
+    }
+
+    Inbound::Unrecognized
+}
+
+/// Method prefix every gateway stream frame carries
+/// (`GatewayEventFrame::stream_method`).
+const STREAM_METHOD_PREFIX: &str = "stream.";
+
 /// WebSocket client for Aleph Gateway
 pub struct AlephClient {
     /// WebSocket write half
@@ -189,7 +325,7 @@ impl AlephClient {
         // dropping their senders tells them so now.
         read_pending.write().await.clear();
 
-        tokio::spawn(Self::read_loop(
+        let read_handle = tokio::spawn(Self::read_loop(
             read,
             read_pending,
             self.event_tx.clone(),
@@ -199,11 +335,28 @@ impl AlephClient {
             my_generation,
         ));
 
-        self.set_role(self.handshake(config).await?);
-        self.connected
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        info!("Reconnected to {}", self.url);
-        Ok(())
+        match self.handshake(config).await {
+            Ok(role) => {
+                self.set_role(role);
+                self.connected
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                info!("Reconnected to {}", self.url);
+                Ok(())
+            }
+            Err(e) => {
+                // The handshake failed (auth refused, timeout, malformed
+                // response). The socket is not usable and `connected` stays
+                // false, but the read loop we spawned is still parked on the
+                // read half. Without aborting it, every failed reconnect leaves
+                // a task behind that may outlive the client and accumulate
+                // under repeated attempts. Send a close frame as a courtesy so
+                // the gateway can tear its side down promptly.
+                read_handle.abort();
+                let mut write = self.write.lock().await;
+                let _ = write.send(Message::Close(None)).await;
+                Err(e)
+            }
+        }
     }
 
     /// Open the socket and spawn the read loop, without handshaking.
@@ -334,85 +487,52 @@ impl AlephClient {
         let preview_end = text.char_indices().nth(500).map_or(text.len(), |(i, _)| i);
         debug!("Received raw message: {}", &text[..preview_end]);
 
-        // Try to parse as response first (response to our request)
-        // Only treat as response if id is a valid string or number (not null)
-        if let Ok(response) = serde_json::from_str::<JsonRpcResponse>(text) {
-            debug!("Parsed as JsonRpcResponse with id: {:?}", response.id);
-            let id = match &response.id {
-                Value::String(s) => s.clone(),
-                Value::Number(n) => n.to_string(),
-                Value::Null => {
-                    // id is null, this is a notification, not a response
-                    debug!("Response has null id, treating as notification");
-                    // Fall through to try parsing as request
-                    String::new()
-                }
-                _ => return,
-            };
-
-            // Only process as response if we have a valid id
-            if !id.is_empty() {
+        match classify_frame(text) {
+            Inbound::Response { id, result } => {
                 let mut pending_guard = pending.write().await;
                 let maybe_req = pending_guard.remove(&id);
                 drop(pending_guard);
                 if let Some(req) = maybe_req {
-                    let result = if let Some(error) = response.error {
-                        Err(error)
-                    } else if let Some(value) = response.result {
-                        Ok(value)
-                    } else {
-                        Err(JsonRpcError {
-                            code: -32600,
-                            message: "Invalid Request: missing both result and error".into(),
-                            data: None,
-                        })
-                    };
                     let _ = req.tx.send(result);
                 }
-                return;
             }
-        } else {
-            debug!("Message is not a JsonRpcResponse, trying JsonRpcRequest");
-        }
-
-        // Try to parse as request (from Server)
-        if let Ok(request) = serde_json::from_str::<JsonRpcRequest>(text) {
-            // Check if this is a request (has non-null id) or notification (no id or null id)
-            let id = match &request.id {
-                Some(Value::Null) | None => None, // null/no id means notification
-                Some(id) => Some(id.clone()),     // non-null id means request
-            };
-
-            if let Some(id) = id {
-                // This is a request from Server that needs a response
-                debug!(method = %request.method, "Received request from Server");
-                Self::handle_server_request(&request, id, write).await;
-                return;
+            Inbound::ServerRequest { method, id } => {
+                debug!(method = %method, "Received request from Server");
+                Self::handle_server_request(&method, id, write).await;
             }
-
-            // This is a notification (no response expected)
-            if let Some(params) = request.params {
-                debug!(method = %request.method, "Received notification");
-                match serde_json::from_value::<StreamEvent>(params.clone()) {
-                    Ok(event) => {
-                        debug!("Parsed event: {:?}", event);
-                        let _ = event_tx.send(event).await;
-                    }
-                    Err(e) => {
-                        debug!("Failed to parse event: {} - params: {}", e, params);
-                    }
+            Inbound::Event(event) => {
+                debug!("Parsed event: {:?}", event);
+                let _ = event_tx.send(*event).await;
+            }
+            Inbound::UnhandledNotification {
+                method,
+                loud,
+                reason,
+            } => {
+                if loud {
+                    // A `stream.*` method that does not decode is a broken
+                    // cross-crate contract, not a frame family this client
+                    // declines to consume — see `classify_frame`'s note on why
+                    // that distinction is the whole point of this arm.
+                    warn!(
+                        method = %method,
+                        error = %reason,
+                        "dropped a stream frame this client could not decode"
+                    );
+                } else {
+                    debug!(method = %method, error = %reason, "ignoring notification");
                 }
             }
-        } else {
-            debug!("Message is not a JsonRpcRequest either, ignoring");
+            Inbound::Unrecognized => {
+                debug!("Message is not a JSON-RPC frame, ignoring");
+            }
         }
     }
 
     /// Handle a request from Server
-    async fn handle_server_request(request: &JsonRpcRequest, id: Value, write: &WsWriter) {
-        warn!(method = %request.method, "Unknown method from Server");
-        let rpc_response =
-            JsonRpcResponse::error(id, JsonRpcError::method_not_found(&request.method));
+    async fn handle_server_request(method: &str, id: Value, write: &WsWriter) {
+        warn!(method = %method, "Unknown method from Server");
+        let rpc_response = JsonRpcResponse::error(id, JsonRpcError::method_not_found(method));
 
         // Send response
         let json = match serde_json::to_string(&rpc_response) {
@@ -950,5 +1070,190 @@ mod tests {
             .expect("the live connection must still serve calls");
         assert_eq!(answered["ok"], true);
         assert!(client.is_connected());
+    }
+}
+
+/// The wire contract this client is the consuming half of.
+///
+/// These are the tests that did not exist while `aleph ask` and the TUI were
+/// blind to every event a real gateway sent: the parse lived inside
+/// `handle_message`, whose `write` argument cannot be built without a socket,
+/// so the only coverage of the event path went through a fake server in the
+/// module above — and a fake server sends what the code expects, which is
+/// precisely the shape the real one did not.
+#[cfg(test)]
+mod wire_contract {
+    use super::{classify_frame, Inbound};
+    use aleph_protocol::{JsonRpcRequest, StreamEvent};
+    use serde_json::json;
+
+    fn run_accepted_params() -> serde_json::Value {
+        json!({
+            "type": "run_accepted",
+            "run_id": "run-1",
+            "session_key": "default",
+            "accepted_at": "2026-08-29T00:00:00Z",
+        })
+    }
+
+    /// Reconciliation: the bytes the gateway emits are built by
+    /// `JsonRpcRequest::notification` (`event_bus.rs::publish_frame`), and this
+    /// feeds *that constructor's* output to the classifier rather than a
+    /// hand-written string. The two halves of the envelope contract live in one
+    /// type; a change to it moves both sides at once instead of stranding one.
+    #[test]
+    fn the_shared_notification_constructor_yields_an_event() {
+        let text = serde_json::to_string(&JsonRpcRequest::notification(
+            "stream.run_accepted",
+            Some(run_accepted_params()),
+        ))
+        .unwrap();
+
+        match classify_frame(&text) {
+            Inbound::Event(event) => match *event {
+                StreamEvent::RunAccepted { run_id, .. } => assert_eq!(run_id, "run-1"),
+                other => panic!("wrong variant: {other:?}"),
+            },
+            other => panic!("the gateway's own envelope must classify as an event: {other:?}"),
+        }
+    }
+
+    /// The regression itself, kept as its own claim.
+    ///
+    /// `serde_json::from_str::<JsonRpcRequest>` on this exact string fails with
+    /// `missing field 'jsonrpc'`, and that failure used to discard the frame
+    /// behind one `debug!` line — for `stream.*`, which is to say for the whole
+    /// event plane of every client built on this crate. Server conformance is
+    /// fixed too, but a client that needs the version tag to route a frame is a
+    /// client one careless producer away from going deaf again.
+    #[test]
+    fn envelope_without_the_version_tag_still_yields_the_event() {
+        let text = json!({
+            "method": "stream.run_accepted",
+            "params": run_accepted_params(),
+        })
+        .to_string();
+
+        assert!(
+            serde_json::from_str::<JsonRpcRequest>(&text).is_err(),
+            "this test is only meaningful while the strict parse still rejects \
+             these bytes — if it stops, this is asserting nothing"
+        );
+        assert!(
+            matches!(classify_frame(&text), Inbound::Event(_)),
+            "a notification missing only the version tag must still route"
+        );
+    }
+
+    /// A server-initiated request carries BOTH `method` and `id`. Reading `id`
+    /// first would file it as a response to a request this client never sent,
+    /// which misses the pending map in silence and leaves the server waiting
+    /// for a reply that never comes.
+    #[test]
+    fn a_server_request_is_not_read_as_a_response() {
+        let text = json!({
+            "jsonrpc": "2.0",
+            "method": "sampling/createMessage",
+            "id": "srv-1",
+            "params": {},
+        })
+        .to_string();
+
+        match classify_frame(&text) {
+            Inbound::ServerRequest { method, id } => {
+                assert_eq!(method, "sampling/createMessage");
+                assert_eq!(id, json!("srv-1"));
+            }
+            other => panic!("expected a server request: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_result_response_routes_by_id() {
+        let text = json!({"jsonrpc": "2.0", "id": "7", "result": {"ok": true}}).to_string();
+        match classify_frame(&text) {
+            Inbound::Response { id, result } => {
+                assert_eq!(id, "7");
+                assert_eq!(result.unwrap()["ok"], true);
+            }
+            other => panic!("expected a response: {other:?}"),
+        }
+    }
+
+    /// Numeric ids are stringified the same way [`super::AlephClient::next_id`]
+    /// mints them, or the reply lands on nothing.
+    #[test]
+    fn a_numeric_id_matches_the_string_key_the_client_registered() {
+        let text = json!({"jsonrpc": "2.0", "id": 7, "error": {"code": -32601, "message": "nope"}})
+            .to_string();
+        match classify_frame(&text) {
+            Inbound::Response { id, result } => {
+                assert_eq!(id, "7");
+                assert_eq!(result.unwrap_err().code, -32601);
+            }
+            other => panic!("expected a response: {other:?}"),
+        }
+    }
+
+    /// A response carrying neither half still has to resolve its caller —
+    /// dropping it parks that call until the 30s timeout.
+    #[test]
+    fn a_response_with_neither_result_nor_error_still_resolves_its_caller() {
+        let text = json!({"jsonrpc": "2.0", "id": "9"}).to_string();
+        match classify_frame(&text) {
+            Inbound::Response { result, .. } => {
+                assert!(result.is_err(), "the caller must be told, not left waiting");
+            }
+            other => panic!("expected a response: {other:?}"),
+        }
+    }
+
+    /// `stream.*` promises a `StreamEvent` — the server-side census
+    /// (`gateway::events::frame_census`) exists to keep that promise — so one
+    /// that fails to decode is a broken contract and must be audible. The
+    /// `debug!` this replaced is why `stream.clarification_ended` reached the
+    /// Panel for months while the TUI rendered a card for a question that had
+    /// already ended.
+    #[test]
+    fn an_undecodable_stream_frame_is_loud() {
+        let text = json!({
+            "jsonrpc": "2.0",
+            "method": "stream.something_new",
+            "params": {"type": "something_new"},
+        })
+        .to_string();
+
+        match classify_frame(&text) {
+            Inbound::UnhandledNotification { loud, method, .. } => {
+                assert!(loud, "a stream frame this client cannot decode is a defect");
+                assert_eq!(method, "stream.something_new");
+            }
+            other => panic!("expected an unhandled notification: {other:?}"),
+        }
+    }
+
+    /// …and the topic-event family is not. Those are the Panel's
+    /// (`{"method":"event","params":{"topic":…,"data":…}}`); warning on each
+    /// would bury the arm above in noise on every connection.
+    #[test]
+    fn a_topic_event_notification_is_quiet() {
+        let text = json!({
+            "method": "event",
+            "params": {"topic": "connection.warning", "data": {"reason": "events_overflow"}},
+        })
+        .to_string();
+
+        match classify_frame(&text) {
+            Inbound::UnhandledNotification { loud, .. } => {
+                assert!(!loud, "topic events are not this client's to decode")
+            }
+            other => panic!("expected an unhandled notification: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_non_json_frame_is_ignored_rather_than_panicking() {
+        assert!(matches!(classify_frame("not json"), Inbound::Unrecognized));
+        assert!(matches!(classify_frame("[]"), Inbound::Unrecognized));
     }
 }

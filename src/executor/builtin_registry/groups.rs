@@ -28,6 +28,8 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         name: "文件与代码",
         tools: &[
             "file_ops",
+            "grep",
+            "find",
             "file_read",
             "file_write",
             "file_edit",

@@ -269,6 +269,31 @@ impl InboundMessageRouter {
     ) -> Result<(), RoutingError> {
         let old_key = &ctx.session_key;
 
+        // Refuse a key that cannot actually roll, BEFORE anything destructive
+        // and before the "New session started" reply.
+        //
+        // `with_epoch` is a no-op for Group / Task / Subagent / Ephemeral, and
+        // a `/new` typed in a GROUP chat lands here with a `SessionKey::Group`
+        // (`agent_resolver::resolve_session_key_with_agent`). Without this the
+        // sequence below terminated the running loop, blocked the goal, deleted
+        // the `/btw` side session and stamped the still-live row
+        // `status: "closed"` — then created "the new session", which is the
+        // same row, and told the user a fresh conversation had started while
+        // the model still replayed every word of the old one.
+        //
+        // Same predicate as the `session_new` tool and the `sessions.new` RPC:
+        // one answer to "can this key roll", asked of the key type.
+        if !old_key.rolls_to_new_epoch() {
+            let reply = OutboundMessage::text(
+                msg.conversation_id.as_str(),
+                SessionKey::NEW_SESSION_UNSUPPORTED,
+            );
+            if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
+                error!("[Router] Failed to send /new refusal: {}", e);
+            }
+            return Ok(());
+        }
+
         // Resolve the actual current epoch from DB (old_key may already have it
         // from routing, but query to be safe in case the epoch was advanced externally)
         let current_epoch = if let Some(ref sm) = self.session_store {

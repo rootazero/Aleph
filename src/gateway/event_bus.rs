@@ -387,11 +387,18 @@ impl GatewayEventBus {
         debug!("Publishing typed event: {}", preview);
         let frame_value = serde_json::to_value(frame)?;
         let wire_json = if let Some(method) = frame.stream_method() {
-            // Streaming events → JSON-RPC notification format
-            serde_json::json!({
-                "method": method,
-                "params": frame_value,
-            })
+            // Streaming events → JSON-RPC notification format.
+            //
+            // Built by the shared constructor, not by hand. The hand-built
+            // version omitted `"jsonrpc": "2.0"`, which every client on
+            // `shared/client` requires to parse a frame at all — so the CLI and
+            // the TUI dropped EVERY event behind one `debug!` line, for as long
+            // as this shape existed. Two hand-written halves of one envelope is
+            // how that happened; one type is how it stops.
+            serde_json::to_value(aleph_protocol::JsonRpcRequest::notification(
+                method,
+                Some(frame_value),
+            ))?
         } else {
             // Non-streaming events → TopicEvent format
             serde_json::json!({

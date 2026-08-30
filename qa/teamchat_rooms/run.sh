@@ -27,6 +27,17 @@
 #      the turn a human started; this one is about a prompt built one spawn
 #      later, from a task-local the spawn had to re-establish.
 #
+# ## One claim this fixture does NOT make (2026-08-29)
+#
+# Claim 6's memory leg is not coverage of §3.17② (`request_scope_strings`).
+# `chat.send` arrives with its scope already corrected by
+# `handlers::agent::resolve_attribution`, so the correction that defect was
+# about is a no-op on every path this fixture drives. Reverting it and
+# re-running left all 46 green. Reaching it needs a run produced by
+# `inbound_router/executor.rs` or cron ON a room-claimed session key — a
+# channel fixture crossed with this one. See the note in `drive_rooms.mjs`
+# phase 6, which carries the full reasoning.
+#
 # ## The two identities are not optional
 #
 # `resolve_connect_auth` authorises a loopback peer on its first line, before it
@@ -63,7 +74,7 @@ command -v node >/dev/null 2>&1 || { echo "node is required for this fixture" >&
 # of it happens. Nothing after this line runs cargo.
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
   echo "=== build ==="
-  (cd "$REPO" && cargo build --bin aleph-server 2>&1 | tail -3) || {
+  qa_build --bin aleph-server || {
     echo "server build failed" >&2; exit 1; }
 fi
 TARGET_DIR="$(cd "$REPO" && cargo metadata --format-version 1 --no-deps 2>/dev/null \
@@ -83,6 +94,7 @@ if [ -z "${QA_ROOT:-}" ]; then
 fi
 
 . "$HERE/../lib/scratch_home.sh"
+. "$HERE/../lib/build.sh"
 qa_redirect_home "$QA_ROOT"
 export REAL_HOME
 mkdir -p "$ALEPH_HOME"

@@ -106,9 +106,21 @@ struct Stamp {
 /// in-window run already covers this node.** A stamp whose run is still in
 /// flight is not that evidence — if it fails, [`debounce_rollback`] erases it
 /// and no review will have happened, while the settle's one-shot claim was
-/// already spent. That outcome therefore answers "not covered", and the
-/// released claim's retry lands on either the flipped `Done` stamp (covered,
-/// free) or a fresh poke.
+/// already spent. That outcome therefore answers "not covered".
+///
+/// **Asymmetry the prior doc missed: "release on `HeldForOtherNode`" is
+/// bookkeeping, not a retry.** The CAS key for a settle is
+/// `(id, completed_at_ms)`, which never moves again once a goal/team/workflow
+/// reaches its terminal state — so a follow-up observation of the same row
+/// re-enters `debounce_pass` against the SAME stamp. If that stamp is for a
+/// DIFFERENT node (e.g. A's run flipped to `{a, Done}` while B's settle was
+/// still in window), B's `for_node` still does not match, `debounce_pass`
+/// still returns `HeldForOtherNode`, and B's review is retired for good. The
+/// release exists to keep the discipline tidy (a missed poke does not hang
+/// the slot); it does NOT buy a future review. The choice between "credit the
+/// stale run against this claim" (a lie) and "retire this review for good"
+/// (silence) is deliberate; round 9 picked the latter and this enum exists
+/// to make the cost of picking it legible.
 #[derive(Debug, PartialEq, Eq)]
 enum Debounce {
     /// Go ahead and poke (an `InFlight` stamp was recorded).
@@ -349,6 +361,8 @@ async fn notify_node_settled(node_id: &str) -> bool {
         }
     };
     if watcher_jobs.is_empty() {
+        info!(node = %node_id,
+            "loop_graph: no watchers paired — settle claim spent without review");
         return true;
     }
     let Some(cron) = CRON_TRIGGER.get() else {

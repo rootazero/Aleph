@@ -275,6 +275,15 @@ impl NoteManageTool {
     }
 
     pub(super) async fn handle_append(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
+        // Cap the per-call number of facts to a generous upper bound so a
+        // steered model cannot append millions of facts in one call —
+        // each fact is persisted to SQLite and re-rendered into
+        // search results, so the blast radius of an unbounded
+        // append is the note's lifetime. 100k is orders of magnitude
+        // above the realistic 10-50 facts a single update produces.
+        const MAX_APPEND_FACTS: usize = 100_000;
+        const MAX_FACT_CHARS: usize = 4096;
+
         let agent_id_owned = self.resolve_agent_id(args)?;
         let agent_id = agent_id_owned.as_str();
 
@@ -302,6 +311,20 @@ impl NoteManageTool {
         // they are persisted. Links are wikilink references (note titles), not
         // free-form content, so only the facts carry an injection surface.
         if !new_facts.is_empty() {
+            if new_facts.len() > MAX_APPEND_FACTS {
+                return Err(AlephError::tool(format!(
+                    "append: {} facts exceeds the per-call cap of {MAX_APPEND_FACTS}",
+                    new_facts.len()
+                )));
+            }
+            for (i, fact) in new_facts.iter().enumerate() {
+                if fact.chars().count() > MAX_FACT_CHARS {
+                    return Err(AlephError::tool(format!(
+                        "append: fact #{i} is {} chars; the per-fact cap is {MAX_FACT_CHARS}",
+                        fact.chars().count()
+                    )));
+                }
+            }
             scan_note_for_threats(&new_facts.join("\n"))?;
         }
 

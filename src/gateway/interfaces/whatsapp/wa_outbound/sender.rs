@@ -35,16 +35,26 @@ impl WaOutbound {
 mod tests {
     use super::*;
     use crate::gateway::interfaces::whatsapp::wa_auth::WaAuthManager;
+    use crate::secrets::vault::SecretVault;
+    use tempfile::TempDir;
 
+    /// An absent client is `NotConnected` even when the state says otherwise.
+    ///
+    /// The auth manager is scaffolding and is built against a throwaway vault
+    /// on purpose. `WaAuthManager::new` resolves `SecretVault::default_path()`,
+    /// so the previous `WaAuthManager::new("test")` reached into whatever vault
+    /// the developer running the suite actually owns — and the `save` beside it
+    /// then wrote a `whatsapp/auth/test` entry into it. `WaRuntime::new` never
+    /// reads the stored blob (it moves the manager into the struct and nothing
+    /// else touches it before `start`), so that write bought this test nothing;
+    /// what it did buy, once `vault_store::save` became fail-closed on the
+    /// shared-token manager, was a panic on the scaffolding instead of an
+    /// assertion about the subject.
     #[tokio::test]
     async fn test_send_message_without_client_returns_error() {
-        let auth = WaAuthManager::new("test");
-        let data = crate::gateway::interfaces::whatsapp::wa_auth::WaAuthData {
-            creds_blob: vec![1],
-            keys_blob: vec![2],
-            app_state_sync: vec![3],
-        };
-        auth.save(&data).unwrap();
+        let dir = TempDir::new().unwrap();
+        let vault = SecretVault::open(dir.path().join("test.vault")).unwrap();
+        let auth = WaAuthManager::with_vault(vault, "test");
         let (tx, _rx) = tokio::sync::mpsc::channel(4);
         let runtime = WaRuntime::new(auth, tx).await.unwrap();
         runtime

@@ -48,7 +48,19 @@ impl ImageMediaProvider {
                 let format = match media_type {
                     MediaType::Image { format, .. } => Self::to_vision_format(format)
                         .ok_or_else(|| MediaError::UnsupportedFormat(format!("{:?}", format)))?,
-                    _ => VisionImageFormat::Png,
+                    other => {
+                        // The image provider only consumes `MediaType::Image`.
+                        // Any other category (Audio, Video, Document,
+                        // Unknown) reaching here is a routing bug —
+                        // surface it explicitly so the upstream
+                        // classification path can be fixed rather than
+                        // silently re-encoding as PNG (which would then
+                        // fail at the decode step with a less
+                        // informative error).
+                        return Err(MediaError::UnsupportedFormat(format!(
+                            "ImageMediaProvider cannot handle base64 input of media_type {other:?}"
+                        )));
+                    }
                 };
                 Ok(ImageInput::Base64 {
                     // rust-doctor-disable-next-line excessive-clone

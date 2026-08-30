@@ -64,10 +64,21 @@
 //!   traversal/mutation is bounded by `ProjectsConfig::allowed_roots` and
 //!   canonicalisation-checked before touching the filesystem; a path outside
 //!   the configured roots never reaches `fs::read_dir`/`fs::create_dir` and
-//!   returns `-32600`. See `src/gateway/handlers/fs.rs:14-17` (doc) and
-//!   `:93-106` (`validate_in_scope`, called from every handler). This is the
-//!   RPC-surface equivalent of member tool execution, which the trust model
-//!   already concedes — not a server-global config surface.
+//!   returns `-32600`. See `src/gateway/handlers/fs.rs` (doc) and
+//!   `validate_in_scope`, called from every handler.
+//!
+//!   ⚠️ The reason recorded here until 2026-08-29 was "this is the RPC-surface
+//!   equivalent of member tool execution, which the trust model already
+//!   concedes" — and that premise was FALSE in the direction that mattered.
+//!   Member tool execution passes `file_ops::get_denied_paths` (the SSH / AWS
+//!   / GnuPG / kube / netrc credential stores, `secrets.vault`, the whole
+//!   `<config_dir>/data` device-pairing tree) and the operator's `[sandbox]
+//!   deny_read_globs`; `validate_in_scope` bound neither. With
+//!   `allowed_roots` defaulting to `["~"]`, "equivalent to member tool
+//!   execution" therefore described a face that was strictly WIDER than the
+//!   tool face it claimed parity with. The two now share one denylist (see
+//!   `handlers::fs::refuse_if_denied`), which is what makes the open ruling
+//!   true rather than merely asserted.
 //! - `clarification.*` / `subagent.tree` — genuinely member's-own-session
 //!   surfaces by *purpose* (answering the agent's own parked question;
 //!   viewing your own run's subagent tree for the Panel dashboard). Gating

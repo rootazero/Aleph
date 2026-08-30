@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::output;
 use crate::output::theme::{paint, Style};
 use aleph_client::{AlephClient, CliConfig, CliResult};
+use aleph_protocol::session_thread::HistoryWindow;
 
 use super::run_follow::{self, FollowOptions};
 
@@ -44,7 +45,7 @@ pub async fn send(
             .get("run_id")
             .and_then(|v| v.as_str())
             .map(str::to_string);
-        let _ = run_follow::follow_run(
+        let _outcome = run_follow::follow_run(
             &mut events,
             &FollowOptions {
                 json,
@@ -52,7 +53,7 @@ pub async fn send(
                 run_id,
             },
         )
-        .await;
+        .await?;
     } else if json {
         output::print_json(&result);
     } else {
@@ -133,10 +134,12 @@ pub async fn history(
     if json {
         output::print_json(&result);
     } else {
-        let count = result
-            .get("count")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
+        // Read through the shared contract instead of reaching for keys by
+        // name: this footer used to take `count` — the length of the WINDOW —
+        // and print it after the word "Total", so `--limit 20` on a 102-row
+        // conversation reported "Total: 20 messages". A rename now fails here
+        // rather than silently re-pointing the column.
+        let window: Option<HistoryWindow> = serde_json::from_value(result.clone()).ok();
         println!(
             "{}",
             paint(Style::Header, &format!("Chat History · {session_key}"))
@@ -151,14 +154,58 @@ pub async fn history(
             }
         }
         println!();
-        println!(
-            "{}",
-            paint(Style::Muted, &format!("Total: {count} messages"))
-        );
+        println!("{}", paint(Style::Muted, &history_footer(window)));
     }
 
     client.close().await?;
     Ok(())
+}
+
+/// The one line under a transcript that says how much of the conversation the
+/// reader is actually looking at.
+///
+/// Pure (no I/O) because that is the only seam this crate can test: it may not
+/// depend on `alephcore`, so there is no way to exercise the RPC here, and a
+/// test that asserts on a literal written beside it would be testing
+/// `serde_json`. The cross-crate half is `alephcore`'s
+/// `history_reports_the_whole_transcript_alongside_the_window_it_serves`.
+///
+/// Three cases, and the distinction between the last two is the point:
+/// - the window IS the conversation → the old wording, now true;
+/// - the window is a slice → say so, name what is missing, and say how to get
+///   it, because `--limit` is the user's own doing and reversible;
+/// - the server did not report a total → claim nothing. "Showing N" is honest
+///   about what is on screen; "Total: N" would be a guess presented as fact,
+///   which is what this function was written to remove.
+fn history_footer(window: Option<HistoryWindow>) -> String {
+    let Some(window) = window else {
+        // The envelope did not parse — `count` is required, so this means the
+        // wire shape moved. Say nothing about sizes rather than print a zero.
+        return "(could not read this response's message counts)".to_string();
+    };
+    let count = window.count;
+    match (window.above(), window.total) {
+        (Some(0), _) => format!("Total: {count} {}", plural(count)),
+        (Some(above), Some(total)) => format!(
+            "Showing {count} of {total} {} · {above} earlier not shown \
+             (raise --limit, or omit it for the whole conversation)",
+            plural(total)
+        ),
+        // `above()` is `Some` exactly when `total` is, so this arm is the
+        // no-answer case; matching on the pair rather than on `total` alone
+        // keeps that from being re-derived.
+        _ => format!("Showing {count} {}", plural(count)),
+    }
+}
+
+/// "message" / "messages". Small, but "Total: 1 messages" is the kind of thing
+/// that makes a reader distrust the number next to it.
+fn plural(n: usize) -> &'static str {
+    if n == 1 {
+        "message"
+    } else {
+        "messages"
+    }
 }
 
 /// Render one history message for the human transcript view.
@@ -241,6 +288,72 @@ pub async fn clear(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The regression: `--limit 20` against a 102-row conversation used to
+    /// print "Total: 20 messages". A window is not a total.
+    #[test]
+    fn a_truncated_window_says_so_and_says_how_to_widen_it() {
+        let footer = history_footer(Some(HistoryWindow {
+            count: 20,
+            total: Some(102),
+        }));
+        assert!(footer.contains("Showing 20 of 102 messages"), "{footer}");
+        assert!(footer.contains("82 earlier not shown"), "{footer}");
+        assert!(footer.contains("--limit"), "{footer}");
+        assert!(
+            !footer.contains("Total:"),
+            "the window must never be labelled the total: {footer}"
+        );
+    }
+
+    /// When the window IS the conversation the old wording is correct, so it
+    /// stays — the fix is not to stop reporting a total, it is to stop
+    /// reporting the window as one.
+    #[test]
+    fn a_complete_window_is_still_called_a_total() {
+        let footer = history_footer(Some(HistoryWindow {
+            count: 7,
+            total: Some(7),
+        }));
+        assert_eq!(footer, "Total: 7 messages");
+        assert_eq!(
+            history_footer(Some(HistoryWindow { count: 1, total: Some(1) })),
+            "Total: 1 message"
+        );
+    }
+
+    /// A core that does not report `total` must leave the reader knowing only
+    /// what is on screen. Printing "Total: 20" here is the original defect
+    /// with a different cause.
+    #[test]
+    fn no_answer_from_the_server_claims_nothing() {
+        let footer = history_footer(Some(HistoryWindow {
+            count: 20,
+            total: None,
+        }));
+        assert_eq!(footer, "Showing 20 messages");
+        assert!(!footer.contains("Total"), "{footer}");
+    }
+
+    /// Two reads of a growing store can put the window ahead of the count; the
+    /// footer must read that as complete, not as a negative remainder.
+    #[test]
+    fn a_window_ahead_of_the_count_reads_as_complete() {
+        let footer = history_footer(Some(HistoryWindow {
+            count: 5,
+            total: Some(4),
+        }));
+        assert_eq!(footer, "Total: 5 messages");
+    }
+
+    /// An envelope that will not parse is a moved wire shape. Say that, rather
+    /// than print a zero that reads as an empty conversation.
+    #[test]
+    fn an_unreadable_envelope_prints_no_number_at_all() {
+        let footer = history_footer(None);
+        assert!(!footer.contains('0'), "{footer}");
+        assert!(footer.contains("could not read"), "{footer}");
+    }
 
     #[test]
     fn history_entry_renders_role_header_and_body() {

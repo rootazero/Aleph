@@ -85,6 +85,7 @@ trap 'exit 130' INT
 # The build must run BEFORE HOME is redirected — cargo's registry, git cache
 # and rustup toolchain all live under the real HOME. See qa/README.md.
 . "$HERE/../lib/scratch_home.sh"
+. "$HERE/../lib/build.sh"
 qa_redirect_home "$QA_ROOT"
 mkdir -p "$ALEPH_HOME"
 CONFIG="$ALEPH_HOME/config.toml"
@@ -96,7 +97,7 @@ BIN="$REPO/target/debug/aleph-server"
 
 say "build"
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
-  if ! (cd "$REPO" && HOME="$REAL_HOME" cargo build --bin aleph-server 2>&1 | tail -5); then
+  if ! qa_build --bin aleph-server; then
     echo "build failed" >&2; exit 1
   fi
 fi

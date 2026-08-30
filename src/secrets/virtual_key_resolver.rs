@@ -7,12 +7,12 @@
 //! pass through unchanged, so this is a transparent, opt-in layer.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use crate::secrets::injection::AsyncSecretResolver;
 use crate::secrets::types::{DecryptedSecret, SecretError};
+use crate::sync_primitives::Arc;
 
 /// Resolver decorator that applies a virtual-key alias map before delegation.
 pub struct VirtualKeyResolver {

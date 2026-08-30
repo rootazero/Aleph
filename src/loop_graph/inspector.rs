@@ -39,9 +39,11 @@ use crate::loop_graph::snapshot::{EventRecord, SnapshotStore};
 use crate::loop_graph::store::LoopGraphStore;
 use crate::loop_graph::types::{EdgeKind, GraphEdge, GraphNode, NodeKind};
 
-/// Maximum depth for ancestor/descendant walks. Generous (matches the upper
-/// bound the lint walk sets implicitly), so an operator's deliberately deep
-/// governance chain does not get silently clipped. Independent of node count.
+/// Maximum number of unique nodes processed by a single `walk_chain` call
+/// before returning `Err`. Bounded to at most 1024 unique nodes processed
+/// per walk before returning Err. Generous (matches the upper bound the lint
+/// walk sets implicitly), so an operator's deliberately deep governance chain
+/// does not get silently clipped. Independent of node count.
 const MAX_TRAVERSAL_STEPS: usize = 1024;
 
 /// A pre-computed view of one node's place in the governance topology. Cheaper

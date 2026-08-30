@@ -43,54 +43,70 @@ impl SessionManager {
             .lock()
             .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
-        // Get the ID threshold
-        let threshold_id: Option<i64> = conn
-            .query_row(
-                "SELECT id FROM messages WHERE session_key = ?
-                 ORDER BY timestamp DESC LIMIT 1 OFFSET ?",
+        // The rows to drop, named by the SAME ranking that decides which ones
+        // are "old": everything past the newest `keep` in reader order.
+        //
+        // Not a threshold id plus `id < threshold`. That spelling asks the
+        // ranking for a boundary and then applies it in a DIFFERENT order —
+        // `id` is insert order — so the two agree only while the column is the
+        // insert clock. It no longer is (`add_message_full` keeps the
+        // producer's stamp), and one out-of-order projection is enough to make
+        // "everything older than the boundary row" and "everything inserted
+        // before it" name different sets: with rows `(id 1, t 300)`,
+        // `(id 2, t 100)`, `(id 3, t 200)` and `keep = 2` the boundary lands on
+        // id 2 and `id < 2` deletes id 1 — the NEWEST message in the session,
+        // while the oldest survives. Silently, with a success return.
+        //
+        // Ordered by `id` — the order the rows were recorded, which is the
+        // transcript's order on both backends (`SessionStore::history_page`).
+        //
+        // `LIMIT -1` is SQLite's "no limit"; `OFFSET` requires a `LIMIT` beside
+        // it. The subquery is correlated to nothing — it re-states the
+        // `session_key` predicate — so it is evaluated once.
+        let doomed = "SELECT id FROM messages WHERE session_key = ?1
+             ORDER BY id DESC LIMIT -1 OFFSET ?2";
+
+        // Sync FTS5: remove entries before deleting messages
+        conn.execute(
+            &format!("DELETE FROM messages_fts WHERE rowid IN ({doomed})"),
+            params![&key_str, keep],
+        )
+        .ok();
+
+        let deleted = conn
+            .execute(
+                &format!("DELETE FROM messages WHERE session_key = ?1 AND id IN ({doomed})"),
                 params![&key_str, keep],
-                |row| row.get(0),
             )
-            .ok();
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-        if let Some(threshold) = threshold_id {
-            // Sync FTS5: remove entries before deleting messages
-            conn.execute(
-                "DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE session_key = ? AND id < ?)",
-                params![&key_str, threshold],
-            )
-            .ok();
-
-            let deleted = conn
-                .execute(
-                    "DELETE FROM messages WHERE session_key = ? AND id < ?",
-                    params![&key_str, threshold],
-                )
-                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
-
-            let new_count: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM messages WHERE session_key = ?",
-                    params![&key_str],
-                    |row| row.get(0),
-                )
-                .unwrap_or(0);
-
-            conn.execute(
-                "UPDATE sessions SET message_count = ?, compaction_count = compaction_count + 1 WHERE key = ?",
-                params![new_count, &key_str],
-            )
-            .ok();
-
-            info!(
-                "Compacted session {}: removed {} messages",
-                key_str, deleted
-            );
-
-            return Ok(deleted);
+        if deleted == 0 {
+            // Nothing was over the keep line. Reporting 0 without bumping
+            // `compaction_count` is what the threshold spelling did when it
+            // found no boundary row to cut at.
+            return Ok(0);
         }
 
-        Ok(0)
+        let new_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE session_key = ?",
+                params![&key_str],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        conn.execute(
+            "UPDATE sessions SET message_count = ?, compaction_count = compaction_count + 1 WHERE key = ?",
+            params![new_count, &key_str],
+        )
+        .ok();
+
+        info!(
+            "Compacted session {}: removed {} messages",
+            key_str, deleted
+        );
+
+        Ok(deleted)
     }
 
     /// Close a session: set status=closed, store topic in metadata JSON

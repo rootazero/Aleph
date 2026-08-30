@@ -117,7 +117,6 @@ async fn session(
                     // the warn log; it is available at trace level only.
                     tracing::warn!(
                         frame_len = text.len(),
-                        head = &text[..text.len().min(80)],
                         "notification bridge: failed to parse JSON frame: {e}"
                     );
                     tracing::trace!(raw = text.as_str(), "notification bridge: raw bad frame");

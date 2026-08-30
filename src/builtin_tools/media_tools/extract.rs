@@ -117,7 +117,15 @@ Example:
             .await
         {
             Ok(output) => {
-                let data = serde_json::to_value(&output).unwrap_or_default();
+                // Surface a serialization failure as a tool error rather
+                // than a silently-null `data` field — a missing `data` looks
+                // like "no extractable content" to the model, which is the
+                // wrong remediation for a code bug in the output type.
+                let data = serde_json::to_value(&output).map_err(|e| {
+                    crate::builtin_tools::error::ToolError::Execution(format!(
+                        "document_extract: failed to serialize provider output: {e}"
+                    ))
+                })?;
                 match &output {
                     MediaOutput::Text { text } => Ok(DocumentExtractOutput::ok(text.clone())),
                     _ => Ok(DocumentExtractOutput::ok_data(
