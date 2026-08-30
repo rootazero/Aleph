@@ -469,7 +469,25 @@ impl SessionStore for FileSessionStore {
             }
             let contents = match tokio::fs::read_to_string(&meta_path).await {
                 Ok(c) => c,
-                Err(_) => continue,
+                // Six lines below, the parse arm says out loud why silence is
+                // expensive here. That argument is true of this arm verbatim, and
+                // this one was the silent half: an unreadable file and a file that
+                // is not there produce the same empty listing, and `rescope`'s
+                // `NothingToMove` receipt asserts the absence.
+                //
+                // NotFound stays silent because it really is an absence -- the
+                // `exists()` check above raced a delete. Every other kind is "I
+                // could not look", which is not the same answer.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    tracing::warn!(
+                        path = %meta_path.display(),
+                        error = %e,
+                        "Unreadable session metadata -- this conversation will be \
+                         missing from every listing until the file can be read"
+                    );
+                    continue;
+                }
             };
             let meta: SessionMetadata = match serde_json::from_str(&contents) {
                 Ok(m) => m,
