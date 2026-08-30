@@ -79,17 +79,26 @@
 //!    one red naming the offending body, where the same fork was `41 passed;
 //!    0 failed` before it existed.
 //!
-//! The bounds, stated so nobody has to infer them. **Every one of them is a
-//! case in `tests`** — `the_layer_3_counts_object_to_a_second_occurrence_not_a_second_answer`,
+//! The bounds, stated so nobody has to infer them. Three generations of this
+//! paragraph shipped false — each narrower than the last and each still wide —
+//! because prose about coverage has no test and drifts every time it is
+//! touched, so each layer's coverage IS a case now:
+//! `the_layer_3_counts_object_to_a_second_occurrence_not_a_second_answer`,
 //! `layer_2_sees_both_spellings_of_a_raw_read_and_neither_of_a_built_one`,
 //! `the_projection_body_must_call_request_scope`,
 //! `the_declined_from_persisted_count_would_have_caught_the_duplicate`,
 //! `the_default_premise_reads_the_derive_list_and_this_file_only`, and
 //! `run_loop::tests::layer_4_discriminates_the_answer_and_only_the_answer`.
-//! Three generations of this paragraph shipped false — each narrower than the
-//! last and each still wide — because prose about coverage has no test and
-//! drifts every time it is touched. **A claim added here without a case down
-//! there is the fourth.**
+//! **A coverage claim added here that COULD be a case and is not, is the
+//! fourth generation.**
+//!
+//! Not every bound below can be, and saying "every one of them is" would be
+//! that same error one level up — the first draft of this paragraph said it.
+//! So each bound is labelled with what actually holds it: a named test, a
+//! recorded measurement, or another module's guard. The two compile-failure
+//! claims in layer 1 (`E0308` at the field; a struct literal outside
+//! `crate::scope`) are held by the field-privacy assertion plus rustc, and
+//! nothing short of a `trybuild` fixture reaches them directly.
 //!
 //! - **Layer 1 constrains a shape, not a provenance, and one public call
 //!   bridges the gap.** [`crate::scope::ScopeAttribution`] is `pub` with `pub`
@@ -107,7 +116,9 @@
 //!   it, and that is the half this bound is about — no rule about a SPELLING
 //!   reaches provenance. Sealing `ScopeAttribution` is not on the table — it is `pub`
 //!   with `pub` fields and used repo-wide — so provenance is layer 4's, and
-//!   only layer 4's.
+//!   only layer 4's. **Held by a recorded measurement, not by a test**: the
+//!   numbers above are probe results on a mutated tree, and nothing goes red
+//!   if `ScopeAttribution` stops being reachable that way.
 //! - **Two of the five tests in that block are not provenance guards at all.**
 //!   `an_off_roster_speaker_is_projected_exactly_as_the_raw_read_was` asserts
 //!   equality WITH the raw read, so the bypass above satisfies it rather than
@@ -135,11 +146,15 @@
 //!   `47 passed; 0 failed`. **That residue is open and belongs to no layer
 //!   here.** It is worth naming rather than rounding off, because it is 地雷 Q
 //!   clause ③'s own recorded history: a later reader forking away from
-//!   `request_scope` because a fork was easier to write than a call.
+//!   `request_scope` because a fork was easier to write than a call. **Held by
+//!   `tests::the_projection_body_must_call_request_scope` and
+//!   `tests::the_layer_3_counts_object_to_a_second_occurrence_not_a_second_answer`**,
+//!   both halves — the catch and the residue.
 //! - **A raw read OUTSIDE this module** is not covered by 2, 3 or 5, and
 //!   `BusyInputMode::for_shared_room` (`execution_engine/mod.rs`) is one — it
 //!   runs on the admission path, before `request_scope` can have run, and
-//!   answers a different question with a different predicate. See its doc.
+//!   answers a different question with a different predicate. **Held by that
+//!   function's own guard, not by anything here** — see its doc.
 
 #[cfg(test)]
 mod tests {
