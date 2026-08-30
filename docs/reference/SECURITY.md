@@ -2804,7 +2804,15 @@ attribution, and a bound workspace as the room's default cwd.
   `546984c2b` fixed, and the reason this action could not ship before it).
   `TurnContext` is per **turn**, not per connection, and the gateway has
   already resolved the originating connection's authority into it by the
-  time any tool executes. Note the deliberate asymmetry: the check fires
+  time any tool executes. ⚠️ **Bound**: `require_operator_tier()` is
+  `current_turn_context().is_none_or(|t| t.caller_is_operator())` — an
+  ABSENT context reads as operator. That branch is unreachable today (both
+  production call sites of `build_request_tool_service`,
+  `run_loop/inner.rs:945` and `:1228`, pass `Some(turn_context)`, and
+  `ScopedToolService::execute` scopes `TURN_CONTEXT` only in the `Some`
+  arm) — but **nothing pins it**, so the sentence above holds for
+  gateway-originated turns, not for "any tool execution" in general.
+  Note the deliberate asymmetry: the check fires
   only when a path is actually NAMED, so **releasing** a binding stays
   reachable from a session that a bad binding broke.
 
