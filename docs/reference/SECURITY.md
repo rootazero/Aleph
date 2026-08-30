@@ -1026,14 +1026,19 @@ the operator could not have removed.
   会话粒度的开关 `[policies.terminal] enabled` 是这一层唯一说得出口的谓词；关掉它会杀掉在飞的会话。
 - **终端历史住在服务器上**（每会话 `scrollback_lines` 行，默认 1000），因此对诊断与审计面可见。
 - **同一装机的所有 operator 共享 `["*"]` 作用域**，能互相看见并 attach 彼此的会话。这是单层信任模型的有意结果，不是疏漏。
-- **打开这道闸本身不举卡就是一次绕闸**：`[policies.terminal] enabled` 是 `GATE_DECIDING_CONFIG_PATHS`
-  的第三个成员（`config::types::policies::exec_tier`），所以经 `self_config` 写它在**每个执行档位**
-  ——包括 `Full`——都停下来问，且这张卡不提供"始终允许"（`GateRule::GateRemoval` 不是那类地板）。
-  它站上这张名单的理由和另外两个成员不同：写 `policies.tool_permissions` / `policies.exec_tier`
-  是**退掉**一张已有的卡，写这一项是**交出**一个此前没有任何卡在看守的执行面（`pty.*` 本身不经
-  command policy、不经 exec tier）——两者都是"写配置，再自由行动"能把两个各自合法的步骤拼成的
-  一步免卡动作，这正是该常量存在的理由。一条精确点名 `self_config` 的 `[policies.tool_permissions]`
-  条目仍能站下这张卡（那是人写的决定，创建它的那次写入自己已经经过这条规则举过卡），这是有意的。
+- **打开这道闸本身不举卡就是一次绕闸**：`[policies.terminal] enabled` 在
+  `config::types::policies::exec_tier::GATE_DECIDING_CONFIG_PATHS` 上，所以经 `self_config`
+  写它在**每个执行档位**——包括 `Full`——都停下来问。这张卡不提供"始终允许"，原因不是它例外，
+  恰恰相反：`GateRule::GateRemoval` **本来就在** `FLOOR_RULES` 上，`for_confirm_gate` 正是
+  因为这条地板判定才收回持久授权按钮——同一套地板机制覆盖名单上的每个成员，`policies.terminal`
+  不是特例（`is_floor()` 自己的注释警告过"地板"在这个子系统里有两层含义，此处说的是"这张卡不许
+  提供持久授权"那一层，不要在这句话之外再造第三种读法）。它上榜的理由属于该名单的两类之一：写它
+  不是**退掉**一张已有的卡，而是**交出**一个此前没有任何卡在看守的执行面（`pty.*` 本身不经
+  command policy、不经 exec tier）——这正是"写配置，再自由行动"能把两个各自合法的步骤拼成的
+  一步免卡动作，也是该常量存在的理由（名单里另一类成员的写法是退掉一张已有的卡，具体成员与理由
+  见 `GATE_DECIDING_CONFIG_PATHS` 自己的 doc，不在此重复——那份名单会变，这句话不该跟着腐烂）。
+  一条精确点名 `self_config` 的 `[policies.tool_permissions]` 条目仍能站下这张卡（那是人写的
+  决定，创建它的那次写入自己已经经过这条规则举过卡），这是有意的。
 
 ---
 

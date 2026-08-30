@@ -74,6 +74,15 @@ pub struct SpawnOptions {
     /// caller-identified face). Carried here rather than through a
     /// `spawn_as` wrapper for the same reason `scrollback_lines` is — see
     /// that field's doc.
+    ///
+    /// Sourced from `visibility::ambient_actor()`, which on `pty.spawn`'s one
+    /// production call site (a bare RPC, never a run under a `TurnContext`)
+    /// degenerates to `ambient_owner()` — a person, always. That is currently
+    /// moot, not a settled design: `ambient_actor()` has a third arm reading
+    /// an AGENT id (`turn_context::current_agent_id()`), so if this face is
+    /// ever reached from inside a run (a future spawn-a-terminal tool, say),
+    /// this column starts holding two kinds of identity under a doc that
+    /// says "who asked". Worth re-deciding at that point, not before.
     pub created_by: Option<String>,
 }
 

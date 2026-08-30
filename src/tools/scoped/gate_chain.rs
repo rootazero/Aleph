@@ -100,10 +100,13 @@ pub(super) enum GateRule<'a> {
     /// arguments, not the tool: the same tool with different arguments runs
     /// without a card.
     DestructiveArguments,
-    /// This call can reach the configuration that decides whether the approval
-    /// gates fire at all — a `self_config` write intersecting
-    /// `policies.tool_permissions` / `policies.exec_tier`, or a config
-    /// rollback.
+    /// This call can reach the configuration that decides whether the
+    /// approval gates fire at all — a `self_config` write intersecting
+    /// `exec_tier::GATE_DECIDING_CONFIG_PATHS`, or a config rollback. Not a
+    /// fixed pair of paths: membership on that list is a rule (stands down
+    /// an existing card, or opens an execution surface no card was
+    /// watching), not an enumeration to restate here — see that constant's
+    /// own doc for the current members and why.
     ///
     /// The second **floor**: like [`Self::ToolDeclared`] it asks under every
     /// tier including `full`, so its reason must not point the reader at a
@@ -279,10 +282,12 @@ impl GateRule<'_> {
                  filter down."
             ),
             Self::GateRemoval => format!(
-                "This `{tool}` call can change the settings that decide which tool calls \
-                 stop for you (`policies.tool_permissions` / `policies.exec_tier`), so it \
-                 asks under every execution tier — including `full`. Raising the tier does \
-                 not stand it down: the tier lasts one turn and this change would outlive it."
+                "This `{tool}` call touches configuration that decides whether approval \
+                 gates fire at all — either standing down a card this chain would \
+                 otherwise raise, or opening an execution surface no card was watching in \
+                 the first place — so it asks under every execution tier, including \
+                 `full`. Raising the tier does not stand it down: the tier lasts one turn \
+                 and this change would outlive it."
             ),
             Self::PolicyAsk {
                 pattern,
@@ -969,6 +974,80 @@ mod tests {
             )
             .is_none(),
             "an exact entry is a person's decision and stands the floor down by design"
+        );
+    }
+
+    /// A sentence that names ANY member of `GATE_DECIDING_CONFIG_PATHS`
+    /// literally must name EVERY member.
+    ///
+    /// This is the durable fix for a defect fix round 1 found: this chain's
+    /// own `GateRule::GateRemoval::reason()` and `ExecTier::Full`'s
+    /// model-facing prompt line both spelled out `policies.tool_permissions`
+    /// / `policies.exec_tier` by name, and neither was touched when
+    /// `policies.terminal` joined the list — so the card an operator answers,
+    /// and the sentence the model reads on every request at `full`, both
+    /// went on describing a two-member list after it became three. A partial
+    /// enumeration is a stale enumeration the moment a member is added; the
+    /// only shapes that stay correct across that change are "name every
+    /// member" (the constant's own doc, which is precisely why it explains
+    /// each one) or "name none and state the rule generically" (what
+    /// `reason()` and the prompt line do after this fix).
+    ///
+    /// Scans the three sites `docs/reference/SECURITY.md`'s own "three
+    /// copies" paragraph names: the card/model-facing `reason()`, the
+    /// `Full`-tier prompt line, and the constant's own doc comment — read
+    /// from `exec_tier.rs`'s source rather than restated here, because a
+    /// census that carries its own copy of the membership list — or of the
+    /// prose describing it — is the defect this test exists to catch, one
+    /// level up.
+    ///
+    /// Self-protecting: the member list and each site's text must be
+    /// non-empty, so a scan that silently reads nothing cannot pass by
+    /// vacuity.
+    #[test]
+    fn a_sentence_naming_any_gate_deciding_path_names_every_member() {
+        use crate::config::types::policies::exec_tier::{
+            gate_deciding_members_named_in, gate_deciding_paths_doc_text,
+            GATE_DECIDING_CONFIG_PATHS,
+        };
+
+        assert!(
+            GATE_DECIDING_CONFIG_PATHS.len() >= 2,
+            "fewer than 2 members ({}) -- the partial-enumeration failure \
+             mode this test exists to catch cannot occur below 2",
+            GATE_DECIDING_CONFIG_PATHS.len()
+        );
+
+        let card_text = GateRule::GateRemoval.reason("self_config");
+        let full_line = ExecTier::Full.approval_prompt_line();
+        let doc_text = gate_deciding_paths_doc_text();
+
+        let mut sites_examined = 0usize;
+        for (site, text) in [
+            ("GateRule::GateRemoval::reason()", card_text.as_str()),
+            ("ExecTier::Full.approval_prompt_line()", full_line),
+            ("GATE_DECIDING_CONFIG_PATHS's doc comment", doc_text),
+        ] {
+            assert!(
+                !text.is_empty(),
+                "{site} produced empty text -- the scan read nothing"
+            );
+            let named = gate_deciding_members_named_in(text);
+            assert!(
+                named.is_empty() || named.len() == GATE_DECIDING_CONFIG_PATHS.len(),
+                "{site} names {}/{} GATE_DECIDING_CONFIG_PATHS members by \
+                 name ({named:?}) -- a sentence that names one member must \
+                 name every member, or name none and describe the rule \
+                 generically instead. Full member list: \
+                 {GATE_DECIDING_CONFIG_PATHS:?}",
+                named.len(),
+                GATE_DECIDING_CONFIG_PATHS.len()
+            );
+            sites_examined += 1;
+        }
+        assert_eq!(
+            sites_examined, 3,
+            "this census must examine exactly the three known sentence sites"
         );
     }
 }
