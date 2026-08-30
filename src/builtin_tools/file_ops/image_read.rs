@@ -81,11 +81,12 @@ pub(super) fn encode_for_model(bytes: &[u8]) -> Option<EncodedImage> {
     // The limits flow through to the underlying decoder (e.g. PngDecoder
     // honours them via its own `with_limits`), so a crafted header that
     // claims a 100k × 100k image returns `ImageError::Limits` instead of
-    // allocating the full buffer.
+    // allocating the full buffer. The format must be set explicitly from the
+    // magic-byte sniff: `ImageReader::new` over a reader does NOT guess, so
+    // `decode()` without it fails with "format could not be determined" —
+    // which silently degraded every non-PNG image to the binary stub.
     let mut reader = ImageReader::new(std::io::Cursor::new(bytes));
-    if sniffed == ImageFormat::Png {
-        reader.set_format(sniffed);
-    }
+    reader.set_format(sniffed);
     reader.limits(limits);
     let decoded = reader.decode().ok()?;
 
