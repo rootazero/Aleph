@@ -1076,59 +1076,190 @@ mod tests {
         pty::manager().close(&sid).expect("close");
     }
 
-    /// Every test in this module shares one process-global resource: the
-    /// `pty::manager()` singleton. `config::live_apply`'s
-    /// `disabling_the_terminal_live_kills_sessions_through_apply_live_sections`
-    /// calls `close_all()` on that same singleton, which kills sessions these
-    /// tests spawned and are still asserting about. The two sides are kept
-    /// apart by a `serial_test` key: that one test holds
-    /// `#[serial_test::serial(pty_global_manager)]`, every test here holds
-    /// `#[serial_test::parallel(pty_global_manager)]` (still parallel with
-    /// each other — the key only excludes the serial one).
+    /// Every test in this crate that reaches the process-global `PtyManager`
+    /// carries one of the two `pty_global_manager` `serial_test` keys.
     ///
-    /// A named list would only describe the tests that existed the day it was
-    /// written, and the failure mode of forgetting the tag is a flake in
-    /// SOMEONE ELSE's test, not this one. So the requirement is derived from
-    /// the source: every test attribute in this module must be followed by the
-    /// tag. Comment lines are stripped first — a `//` mentioning the tag is
-    /// documentation, not an annotation.
+    /// `config::live_apply`'s
+    /// `disabling_the_terminal_live_kills_sessions_through_apply_live_sections`
+    /// holds `#[serial_test::serial(pty_global_manager)]` and calls
+    /// `PtyManager::close_all()`, which kills EVERY live session in the
+    /// process. Any test that spawns one and is still asserting about it must
+    /// hold `#[serial_test::parallel(pty_global_manager)]` — still parallel
+    /// with its siblings; the key only excludes the serial one.
+    ///
+    /// # Why the question is "every test that calls `manager()`" and not
+    /// "every test in this file"
+    ///
+    /// The census this replaces read `include_str!("pty.rs")` — its own
+    /// module's source — and required the tag on every test attribute in it.
+    /// That is a guard whose corpus is a FILE, so it was structurally blind to
+    /// a user of the singleton living anywhere else, which is the only place
+    /// the next one was ever going to appear (§0 "一条守卫如果按名字列举它要
+    /// 检查的成员，成员集合增长时它不会知道" — here the enumeration was of
+    /// files rather than of members, with the same result). It duly missed
+    /// `gateway::pty::tests::a_write_reaches_a_real_subscriber_over_the_pty_screen_topic`,
+    /// which drives the singleton deliberately: it exists to prove the real
+    /// `attach_event_bus` wire, so a local `PtyManager` would defeat its
+    /// purpose. Measured before the tag was added,
+    /// `cargo test -p alephcore --lib -- --test-threads=16 gateway::pty
+    /// config::live_apply` failed **3 times in 8 runs**, each failing run
+    /// taking 5.24 s — that test's 100 x 50 ms poll timing out — against
+    /// 0.07 s when it passed. A default-threaded `--lib` run was green, which
+    /// is why the whole branch was.
+    ///
+    /// So the corpus is the whole crate source and membership is derived from
+    /// the CALL. `super::manager()` and a bare `manager()` are only this
+    /// singleton inside `src/gateway/pty/`; elsewhere they are some other
+    /// module's function of the same name, so the unqualified spellings are
+    /// only needles for files under that directory.
+    ///
+    /// # Attribution, and the one case it refuses to guess
+    ///
+    /// A hit is charged to the brace-matched body of the `#[test]` /
+    /// `#[tokio::test]` function containing it. A hit that lands in NO test
+    /// body — a shared helper in the test module — fails too, naming itself:
+    /// the guard cannot tell which tests call a helper, and silently charging
+    /// it to whichever test happens to precede it in the file would be a
+    /// verdict about the wrong function. Failing is the honest answer;
+    /// tagging every test in that file is the fix.
+    ///
+    /// [`code_text`](crate::utils::source_scan::code_text) rather than
+    /// `strip_comment_lines`: this guard's own file is inside the corpus it
+    /// scans, and `code_text` blanks string-literal payloads as well as
+    /// comments, so the needles below cannot match themselves. That deletes
+    /// the self-match problem instead of growing an exemption for this one
+    /// file — and an exemption is what later hides a real hit.
     #[test]
     #[serial_test::parallel(pty_global_manager)]
-    fn every_test_here_is_tagged_against_the_global_manager_killer() {
-        const TAG: &str = "#[serial_test::parallel(pty_global_manager)]";
-        // `cfg_test_portion` / `strip_comment_lines` rather than a hand-rolled
-        // split and a `//` prefix filter: this repo already owns both cuts
-        // (`utils::source_scan`), and `no_module_hand_rolls_the_cfg_test_prefix_cut`
-        // fails by name for a second copy. `strip_comment_lines` is also a real
-        // lexer — it will not mistake this module's own prose about the tag for
-        // an annotation, which a `starts_with("//")` filter can only do by luck.
-        let tests = crate::utils::source_scan::cfg_test_portion(include_str!("pty.rs"));
-        let code = crate::utils::source_scan::strip_comment_lines(&tests);
-        let lines: Vec<&str> = code.lines().map(str::trim).collect();
+    fn every_test_that_reaches_the_global_pty_manager_is_tagged() {
+        use crate::utils::source_scan::{cfg_test_portion, code_text, rust_sources_under};
 
-        let mut checked = 0usize;
-        for (i, line) in lines.iter().enumerate() {
-            if !(line.starts_with("#[tokio::test") || *line == "#[test]") {
+        const PARALLEL_TAG: &str = "#[serial_test::parallel(pty_global_manager)]";
+        const SERIAL_TAG: &str = "#[serial_test::serial(pty_global_manager)]";
+        const QUALIFIED: &str = "pty::manager()";
+        const VIA_SUPER: &str = "super::manager()";
+        const BARE: &str = "manager()";
+
+        // The three files that reached the singleton the day this census was
+        // written. Asserted PRESENT, never asserted to be the whole set: a new
+        // file is allowed to reach the singleton, it just has to be tagged.
+        // The membership assertion is here so that a scan which silently stops
+        // finding anything — a moved directory, a broken lexer, a test binary
+        // built from another worktree — fails loudly instead of passing
+        // vacuously.
+        const KNOWN_REACHERS: [&str; 3] = [
+            "src/gateway/handlers/pty.rs",
+            "src/gateway/pty/mod.rs",
+            "src/config/live_apply.rs",
+        ];
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut reaching: Vec<String> = Vec::new();
+        let mut checked_tests = 0usize;
+        let mut violations: Vec<String> = Vec::new();
+
+        for (path, src) in rust_sources_under(&root) {
+            // Cheap pre-filter: every spelling above contains `manager()`.
+            if !src.contains(BARE) {
                 continue;
             }
-            checked += 1;
-            assert_eq!(
-                lines.get(i + 1).copied(),
-                Some(TAG),
-                "a test attribute in gateway::handlers::pty::tests is not followed by \n\
-                 `{TAG}`. Without it, live_apply's close_all test can kill this test's \n\
-                 session mid-assertion; measured 5 failures in 6 runs of \n\
-                 `cargo test -p alephcore --lib -- gateway::handlers::pty config::live_apply` \n\
-                 before the tags were added. Context around it: {:?}",
-                &lines[i.saturating_sub(1)..(i + 2).min(lines.len())]
+            let in_pty_module = path.contains("/gateway/pty/");
+            let code = code_text(&cfg_test_portion(&src));
+            let lines: Vec<&str> = code.lines().collect();
+            let reaches = |l: &str| {
+                l.contains(QUALIFIED)
+                    || (in_pty_module && (l.contains(VIA_SUPER) || l.contains(BARE)))
+            };
+            if !lines.iter().any(|l| reaches(l)) {
+                continue;
+            }
+            reaching.push(path.clone());
+
+            let mut charged = vec![false; lines.len()];
+            let mut i = 0usize;
+            while i < lines.len() {
+                let attr = lines[i].trim();
+                if !(attr.starts_with("#[tokio::test") || attr == "#[test]") {
+                    i += 1;
+                    continue;
+                }
+                // The rest of the attribute block, then the `fn` line.
+                let mut j = i + 1;
+                let mut tagged = false;
+                while j < lines.len() && lines[j].trim().starts_with("#[") {
+                    let a = lines[j].trim();
+                    tagged |= a == PARALLEL_TAG || a == SERIAL_TAG;
+                    j += 1;
+                }
+                if j >= lines.len() {
+                    break;
+                }
+                let name = lines[j].trim().to_string();
+
+                // Brace-match the body. Literal payloads are already blanked,
+                // so a `{` inside a string cannot desynchronise this.
+                let (mut depth, mut opened, mut end) = (0i32, false, j);
+                for (k, l) in lines.iter().enumerate().skip(j) {
+                    depth += i32::try_from(l.matches('{').count()).unwrap_or(0);
+                    depth -= i32::try_from(l.matches('}').count()).unwrap_or(0);
+                    opened |= l.contains('{');
+                    end = k;
+                    if opened && depth <= 0 {
+                        break;
+                    }
+                }
+
+                checked_tests += 1;
+                let body_reaches = lines[j..=end].iter().any(|l| reaches(l));
+                for c in charged.iter_mut().take(end + 1).skip(j) {
+                    *c = true;
+                }
+                if body_reaches && !tagged {
+                    violations.push(format!(
+                        "{path}: `{name}` reaches the process-global PtyManager but carries \
+                         neither {PARALLEL_TAG} nor {SERIAL_TAG}"
+                    ));
+                }
+                i = end + 1;
+            }
+
+            for (k, l) in lines.iter().enumerate() {
+                if !charged[k] && reaches(l) {
+                    violations.push(format!(
+                        "{path}:{}: `{}` reaches the process-global PtyManager outside any \
+                         #[test] body (a shared helper?). This guard will not guess which \
+                         tests call it — move the call into the tests, or tag every test in \
+                         that file with {PARALLEL_TAG}",
+                        k + 1,
+                        l.trim()
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "untagged users of the process-global PtyManager. Without the key, \
+             config::live_apply's close_all test can kill a session mid-assertion; \
+             measured 3 failures in 8 runs of `cargo test -p alephcore --lib -- \
+             --test-threads=16 gateway::pty config::live_apply` before the tag on \
+             `a_write_reaches_a_real_subscriber_over_the_pty_screen_topic` was added.\n  {}",
+            violations.join("\n  ")
+        );
+        for known in KNOWN_REACHERS {
+            assert!(
+                reaching.iter().any(|p| p.ends_with(known)),
+                "the scan no longer sees {known} reaching the global PtyManager. Either the \
+                 call moved (fine — update this list) or the scanner stopped working (not \
+                 fine: a census that finds nothing passes vacuously). Files it did find: {reaching:?}"
             );
         }
         assert!(
-            checked >= 12,
-            "the scanner found only {checked} test attributes in this module — it read {} \
-             lines and expected at least the 12 that existed when this census was written. \
-             A scanner that finds nothing passes vacuously.",
-            lines.len()
+            checked_tests >= 12,
+            "the scanner charged only {checked_tests} test functions across {} files that \
+             reach the singleton — fewer than the 12 that existed when this census was \
+             written. A scanner that finds nothing passes vacuously.",
+            reaching.len()
         );
     }
 }

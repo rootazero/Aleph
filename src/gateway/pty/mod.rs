@@ -115,6 +115,7 @@ mod tests {
     /// deliberately, not a fixed sleep-then-assert: bounded retries against a
     /// real 16ms cadence, so a slow CI runner doesn't turn into a flake.
     #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::parallel(pty_global_manager)]
     async fn a_write_reaches_a_real_subscriber_over_the_pty_screen_topic() {
         let bus = Arc::new(GatewayEventBus::new());
         let mut rx = bus.subscribe();
