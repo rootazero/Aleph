@@ -69,6 +69,10 @@ impl Cell {
     }
 }
 
+/// The interval between tab stops. Fixed: HTS/TBC (programmable stops) are
+/// not modelled, so every stop is a multiple of this.
+const TAB_WIDTH: u16 = 8;
+
 /// The visible screen plus its cursor. Scrollback lands in [`Grid::scrollback`]
 /// as rows fall off the top.
 #[derive(Debug)]
@@ -275,6 +279,39 @@ impl Grid {
     /// characters — the redraw could not get back to the column it began at.
     pub fn goto_col(&mut self, col: u16) {
         self.cursor_col = col.min(self.cols - 1);
+    }
+
+    /// HT (0x09): move to the next tab stop.
+    ///
+    /// A MOVE, not a write of spaces. The two are indistinguishable on a
+    /// fresh row and differ the moment a tab crosses text that is already
+    /// there — which is what a shell does every time it redraws a line, so
+    /// writing spaces here would quietly erase the row it moved across.
+    ///
+    /// A stop can land on a wide glyph's spacer. That is left alone
+    /// deliberately: "the cursor is sitting on a spacer" is a question
+    /// [`Self::put`]'s `repair_straddled_glyph` already answers, and
+    /// answering it a second way here would be a second source of truth for
+    /// it. HT therefore ends at [`Self::goto_col`], exactly like CHA.
+    pub fn tab(&mut self) {
+        // Saturating because `cursor_col` can be `cols - 1` on a grid as
+        // wide as `u16::MAX`, where the next stop does not fit — the same
+        // "panics in debug, wraps in release" arithmetic `move_cursor`
+        // avoids. `goto_col` clamps to the row either way.
+        let next = (self.cursor_col / TAB_WIDTH)
+            .saturating_add(1)
+            .saturating_mul(TAB_WIDTH);
+        self.goto_col(next);
+    }
+
+    /// BS (0x08): one column left, and nothing else.
+    ///
+    /// It does not erase. Erasing is the application's call — a shell rubs
+    /// a character out by sending `\b \b`, and a BS that erased on its own
+    /// would make that sequence eat two. It does not wrap onto the previous
+    /// row either; that is `reverse-wrap` mode, which is not modelled.
+    pub fn backspace(&mut self) {
+        self.cursor_col = self.cursor_col.saturating_sub(1);
     }
 
     /// CSI d (VPA): absolute row, column unchanged — CHA's twin.
