@@ -40,9 +40,19 @@ impl EventScopeGuard {
     /// [`ADMIN_PREFIXES`](crate::gateway::method_admin) all along, with the
     /// written reason that a PTY is a raw shell mediated by neither the command
     /// policy nor the exec tier. Gating only the RPC left the screen content
-    /// itself on an unguarded topic — `session_identity_of` has no `pty.*` arm
-    /// either, so the frames fell to `_ => Global` and reached every
-    /// connection. Requires `admin` alone, for the same reason `node.` does.
+    /// itself on an unguarded topic — `session_identity_of` had no `pty.*` arm
+    /// either at the time, so the frames fell to `_ => Global` and reached
+    /// every connection. Requires `admin` alone, for the same reason `node.`
+    /// does.
+    ///
+    /// `session_identity_of` now DOES have a `pty.*` arm
+    /// ([`crate::gateway::event_visibility::SessionIdentity::ByPtySession`]),
+    /// narrowing per-session ownership within the operators this rule admits
+    /// — the same two-layer shape `approval.` uses (role here, ownership one
+    /// filter term further down). This rule stays: ownership alone would
+    /// still let a member who somehow held a permission scope subscribe raw
+    /// shell output, and role alone would still cross-wire two operators'
+    /// terminals — see `handlers::pty::require_owned`'s doc.
     ///
     /// `node.` is the delivery-side half of the `environments.` RPC gate
     /// (`method_admin.rs`). `node.connected` / `node.disconnected` carry the
