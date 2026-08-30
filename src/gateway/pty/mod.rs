@@ -22,7 +22,9 @@ pub mod manager;
 pub mod screen;
 pub mod session;
 
-pub use manager::{attach_event_bus, manager, PtyManager, SessionInfo, SpawnResult};
+pub use manager::{
+    attach_event_bus, manager, owner_admits, PtyManager, SessionInfo, SessionOwner, SpawnResult,
+};
 pub use session::{PtySession, SpawnOptions};
 
 /// The workspace roots a PTY may be spawned under, read fresh on every

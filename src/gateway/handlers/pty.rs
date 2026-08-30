@@ -253,6 +253,9 @@ pub async fn handle_attach(request: JsonRpcRequest) -> JsonRpcResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    if let Err(resp) = require_owned(&request, &params.session_id) {
+        return resp;
+    }
     match pty::manager().attach_snapshot(&params.session_id) {
         Ok(snapshot) => match serde_json::to_value(&snapshot) {
             Ok(v) => JsonRpcResponse::success(id, v),
@@ -269,6 +272,9 @@ pub async fn handle_input(request: JsonRpcRequest) -> JsonRpcResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    if let Err(resp) = require_owned(&request, &params.session_id) {
+        return resp;
+    }
     let bytes = if params.base64 {
         match BASE64.decode(params.data.as_bytes()) {
             Ok(b) => b,
@@ -314,6 +320,10 @@ pub async fn handle_resize(request: JsonRpcRequest) -> JsonRpcResponse {
         return JsonRpcResponse::error(id, INVALID_PARAMS, e);
     }
 
+    if let Err(resp) = require_owned(&request, &params.session_id) {
+        return resp;
+    }
+
     let Some(conn_id) = crate::gateway::caller_identity::current_caller_conn_id() else {
         return JsonRpcResponse::error(
             id,
@@ -340,17 +350,77 @@ pub async fn handle_close(request: JsonRpcRequest) -> JsonRpcResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    if let Err(resp) = require_owned(&request, &params.session_id) {
+        return resp;
+    }
     match pty::manager().close(&params.session_id) {
         Ok(()) => JsonRpcResponse::success(id, json!({ "ok": true })),
         Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, e),
     }
 }
 
-/// `pty.list` — enumerate active sessions.
+/// `pty.list` — enumerate THIS CALLER'S active sessions.
+///
+/// The filter is the reason `SessionInfo::created_by` exists, and it is not
+/// cosmetic: this list is where a client gets the ids the four addressed
+/// methods take, and the shipped Panel adopts the first live entry it finds
+/// as its own view's session. Unfiltered, a second operator's terminal view
+/// silently joined the first one's shell — scrollback restored, keystrokes
+/// delivered. The addressed methods carry the same predicate ([`require_owned`])
+/// rather than trusting this one, because a list that hides an id is not a
+/// gate on the id.
+///
+/// The trust model makes operators permission-equivalent, which is why this
+/// is scoping and not a privilege fix: it is what justifies GRANTING access
+/// on request, not handing it over by default. Terminal bytes also bypass the
+/// secret masker, so a key typed at one prompt reached every attached
+/// operator connection.
 pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
     let id = request.id.clone();
-    let sessions = pty::manager().list();
+    let actor = crate::gateway::visibility::ambient_actor();
+    let sessions: Vec<_> = pty::manager()
+        .list()
+        .into_iter()
+        .filter(|s| pty::owner_admits(s.created_by.as_deref(), actor.as_deref()))
+        .collect();
     JsonRpcResponse::success(id, json!({ "sessions": sessions }))
+}
+
+/// The ownership gate every session-ADDRESSED `pty.*` method passes through.
+///
+/// One body, one predicate ([`pty::owner_admits`], also used by
+/// [`handle_list`]'s filter and by `event_visibility`'s `pty.screen` /
+/// `pty.exit` arm), because a rule enforced on some of a verb's faces is not
+/// a rule. Pinned by `every_addressed_pty_handler_checks_ownership`, which
+/// derives its membership from the source rather than listing the four
+/// handlers — the fifth one is the one that would be missed.
+///
+/// # Refused as "no such session", byte for byte
+///
+/// The message is exactly what the manager returns for an id that does not
+/// exist, on purpose: a distinct "not yours" would turn every addressed
+/// method into an oracle for enumerating other operators' session ids, which
+/// is the very thing scoping `pty.list` just took away. Callers lose nothing
+/// — a session you may not address is one you have no legitimate use for.
+///
+/// # No TOCTOU worth closing
+///
+/// This resolves the owner and the addressed call resolves the session, two
+/// lock acquisitions apart. A session that dies in between makes the call
+/// fail with the same not-found it would have failed with anyway, and the id
+/// is a v4 UUID that is never reused — so there is no window in which the
+/// answer this returns can become wrong for the id it was asked about.
+#[allow(clippy::result_large_err)]
+fn require_owned(request: &JsonRpcRequest, session_id: &str) -> Result<(), JsonRpcResponse> {
+    let actor = crate::gateway::visibility::ambient_actor();
+    if pty::manager().owner_of(session_id).admits(actor.as_deref()) {
+        return Ok(());
+    }
+    Err(JsonRpcResponse::error(
+        request.id.clone(),
+        INVALID_PARAMS,
+        format!("no such session: {session_id}"),
+    ))
 }
 
 /// Parse typed params, mapping a missing/invalid body to `INVALID_PARAMS`.
@@ -1074,6 +1144,210 @@ mod tests {
              SpawnOptions field and not the other passes every other test in both tasks"
         );
         pty::manager().close(&sid).expect("close");
+    }
+
+    /// The whole of F2 in one run: a second operator can neither SEE nor
+    /// ADDRESS a session it did not create, on every face that takes or hands
+    /// out a session id.
+    ///
+    /// Both halves matter and neither implies the other. Hiding the id in
+    /// `pty.list` without gating the addressed methods leaves a guessable
+    /// handle; gating the methods without filtering the list leaves the
+    /// shipped Panel adopting a stranger's shell as its own view (it takes
+    /// the first live entry) and then failing every call against it.
+    #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
+    async fn a_second_operator_can_neither_see_nor_address_another_operators_session() {
+        let (config, _tmp) = isolated_config();
+        let spawn = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_spawn(req("pty.spawn", json!({})), config),
+            )
+            .await;
+        let sid = spawn.result.as_ref().expect("spawned")["session_id"]
+            .as_str()
+            .expect("session_id")
+            .to_string();
+
+        // --- the enumeration face ---
+        let bob_list = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                handle_list(req("pty.list", json!({}))),
+            )
+            .await;
+        let listed = |resp: &JsonRpcResponse| -> bool {
+            resp.result
+                .as_ref()
+                .and_then(|v| v.get("sessions"))
+                .and_then(|v| v.as_array())
+                .expect("sessions array")
+                .iter()
+                .any(|s| s.get("session_id").and_then(Value::as_str) == Some(sid.as_str()))
+        };
+        assert!(!listed(&bob_list), "bob must not be handed alice's id");
+
+        let alice_list = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_list(req("pty.list", json!({}))),
+            )
+            .await;
+        assert!(
+            listed(&alice_list),
+            "and the filter must not swallow the owner's own session — a \
+             scoping that hides it from everyone is not a fix"
+        );
+
+        // --- the four addressed faces, with the id supplied out of band ---
+        for (name, resp) in [
+            (
+                "pty.attach",
+                crate::gateway::caller_identity::CALLER_USER
+                    .scope(
+                        Some("u-bob".to_string()),
+                        handle_attach(req("pty.attach", json!({ "session_id": sid }))),
+                    )
+                    .await,
+            ),
+            (
+                "pty.input",
+                crate::gateway::caller_identity::CALLER_USER
+                    .scope(
+                        Some("u-bob".to_string()),
+                        handle_input(req("pty.input", json!({ "session_id": sid, "data": "id\n" }))),
+                    )
+                    .await,
+            ),
+            (
+                "pty.resize",
+                crate::gateway::caller_identity::CALLER_USER
+                    .scope(
+                        Some("u-bob".to_string()),
+                        crate::gateway::caller_identity::CALLER_CONN_ID.scope(
+                            Some("conn-bob".to_string()),
+                            handle_resize(req(
+                                "pty.resize",
+                                json!({ "session_id": sid, "rows": 24, "cols": 80 }),
+                            )),
+                        ),
+                    )
+                    .await,
+            ),
+            (
+                "pty.close",
+                crate::gateway::caller_identity::CALLER_USER
+                    .scope(
+                        Some("u-bob".to_string()),
+                        handle_close(req("pty.close", json!({ "session_id": sid }))),
+                    )
+                    .await,
+            ),
+        ] {
+            let err = resp
+                .error
+                .unwrap_or_else(|| panic!("{name} must refuse a session bob does not own"));
+            assert_eq!(
+                err.message,
+                format!("no such session: {sid}"),
+                "{name} must refuse in the same words an unknown id gets — a \
+                 distinguishable refusal is an oracle for enumerating other \
+                 operators' session ids, which is what scoping pty.list just \
+                 took away"
+            );
+        }
+
+        // Alice's own session is untouched by all of that — in particular
+        // bob's `pty.close` must not have killed it.
+        let alice_attach = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_attach(req("pty.attach", json!({ "session_id": sid }))),
+            )
+            .await;
+        assert!(
+            alice_attach.result.is_some(),
+            "the owner must still be able to attach: {:?}",
+            alice_attach.error
+        );
+
+        pty::manager().close(&sid).expect("close");
+    }
+
+    /// Membership derived from the source, not listed here: every
+    /// session-ADDRESSED handler in this file must carry the ownership gate.
+    ///
+    /// The enumeration this replaces would name `attach`/`input`/`resize`/
+    /// `close` — and the handler that matters is the fifth one, written later
+    /// by someone who read the four and copied the shape without the check.
+    /// So the question asked is "does this handler body reach for
+    /// `params.session_id`", which is exactly what makes a handler addressed;
+    /// `handle_spawn` mints an id rather than accepting one and is excluded
+    /// by the same rule that includes the others, not by an exemption.
+    ///
+    /// [`code_text`](crate::utils::source_scan::code_text) over the
+    /// production prefix, because this guard's needles appear in its own
+    /// doc comment and assertion strings — blanking comments and literal
+    /// payloads deletes the self-match problem instead of exempting this file.
+    #[test]
+    fn every_addressed_pty_handler_checks_ownership() {
+        use crate::utils::source_scan::{code_text, production_prefix};
+
+        const GATE: &str = "require_owned(";
+        const ADDRESSED: &str = "params.session_id";
+
+        let src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway/handlers/pty.rs"),
+        )
+        .expect("this file must be readable");
+        let code = code_text(&production_prefix(&src));
+        let lines: Vec<&str> = code.lines().collect();
+
+        let mut addressed: Vec<String> = Vec::new();
+        let mut ungated: Vec<String> = Vec::new();
+        let mut i = 0usize;
+        while i < lines.len() {
+            if !lines[i].trim_start().starts_with("pub async fn handle_") {
+                i += 1;
+                continue;
+            }
+            let name = lines[i].trim().to_string();
+            let (mut depth, mut opened, mut end) = (0i32, false, i);
+            for (k, l) in lines.iter().enumerate().skip(i) {
+                depth += i32::try_from(l.matches('{').count()).unwrap_or(0);
+                depth -= i32::try_from(l.matches('}').count()).unwrap_or(0);
+                opened |= l.contains('{');
+                end = k;
+                if opened && depth <= 0 {
+                    break;
+                }
+            }
+            let body = lines[i..=end].join("\n");
+            if body.contains(ADDRESSED) {
+                addressed.push(name.clone());
+                if !body.contains(GATE) {
+                    ungated.push(name);
+                }
+            }
+            i = end + 1;
+        }
+
+        assert!(
+            ungated.is_empty(),
+            "these `pty.*` handlers address a caller-supplied session id without \
+             passing `{GATE}`. Every face of the ownership rule has to carry it: \
+             a session hidden from `pty.list` is still reachable by id.\n  {}",
+            ungated.join("\n  ")
+        );
+        assert!(
+            addressed.len() >= 4,
+            "the scan found only {} addressed handlers ({addressed:?}); \
+             attach/input/resize/close existed when this census was written, so \
+             a smaller number means the scanner stopped working and this guard \
+             is passing vacuously",
+            addressed.len()
+        );
     }
 
     /// Every test in this crate that reaches the process-global `PtyManager`

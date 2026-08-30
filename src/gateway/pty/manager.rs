@@ -29,6 +29,23 @@ use crate::sync_primitives::{Arc, AtomicUsize, Ordering};
 /// freshly constructed `PtyManager` starts with.
 const DEFAULT_MAX_SESSIONS: usize = 64;
 
+/// How many `session_id -> created_by` stamps are kept for the ownership
+/// filter, INCLUDING sessions that are already gone.
+///
+/// The retention is the point, not a leak. `pty.exit` is published by the
+/// reader thread and `PtyManager::remove` is called on the very next line,
+/// while delivery to a subscriber is asynchronous — so an ownership filter
+/// that consulted live sessions alone would fail closed on the one frame
+/// that tells a client its shell died. `EventVisibilityIndex`'s module doc
+/// rules on the same shape for run->session seeds: retire by CAPACITY, never
+/// at end-of-life, because "the entry is gone" and "the caller may not have
+/// it" are different answers and only one of them is true here.
+///
+/// Comfortably above any plausible `[policies.terminal] max_sessions` (the
+/// default is 64) so a stamp cannot age out while its session is still
+/// live; each entry is two short strings.
+const OWNER_RETENTION: usize = 1024;
+
 /// Publish cadence. 16 ms ≈ 60 Hz: fast enough that no human sees the delay,
 /// slow enough that a process writing megabytes per second still costs one
 /// bounded frame per tick. This coalescing *is* the backpressure design.
@@ -41,14 +58,13 @@ pub struct SessionInfo {
     pub shell: String,
     pub created_at: i64,
     pub closed: bool,
-    /// Number of connections currently holding a viewport constraint on this
-    /// session — the diagnostic surface for the smallest-wins sizing table
-    /// (`PtyManager::note_viewport`/`release_conn`). Not the same thing as
-    /// "how many clients are attached": a client that has only ever called
-    /// `pty.attach`/`pty.input` without resizing never appears here.
-    pub attached_count: usize,
     /// Who asked for this session — see [`SpawnOptions::created_by`]. `None`
     /// for a spawn that did not come through a caller-identified face.
+    ///
+    /// Read by [`handle_list`](crate::gateway::handlers::pty::handle_list),
+    /// which drops every row this caller does not own; the same stamp answers
+    /// the four addressed methods and the `pty.screen`/`pty.exit` delivery
+    /// filter through [`PtyManager::owner_of`].
     pub created_by: Option<String>,
 }
 
@@ -68,6 +84,88 @@ struct Inner {
     /// screen makes multi-client sharing free, and the moment a second client
     /// attaches, something has to decide the one size the PTY gets.
     viewports: HashMap<String, HashMap<String, (u16, u16)>>,
+    /// `session_id -> created_by`, deliberately OUTLIVING the session — see
+    /// [`OWNER_RETENTION`]. Written once at spawn and never rewritten: a
+    /// session's creator does not change, and a second writer would be a
+    /// second answer to "whose is this".
+    owners: HashMap<String, Option<String>>,
+    /// Insertion order for [`OWNER_RETENTION`] eviction.
+    owner_order: VecDeque<String>,
+}
+
+impl Inner {
+    /// Record who created a session, evicting the oldest stamp past
+    /// [`OWNER_RETENTION`]. Called under the same lock that inserts the
+    /// session itself.
+    fn remember_owner(&mut self, session_id: &str, created_by: Option<String>) {
+        if self.owners.insert(session_id.to_string(), created_by).is_none() {
+            self.owner_order.push_back(session_id.to_string());
+        }
+        while self.owner_order.len() > OWNER_RETENTION {
+            if let Some(old) = self.owner_order.pop_front() {
+                self.owners.remove(&old);
+            }
+        }
+    }
+}
+
+/// The answer to "who created this session" — the input to the ONE ownership
+/// predicate every `pty.*` face shares ([`owner_admits`]).
+///
+/// Two variants rather than `Option<Option<String>>` because the outer layer
+/// is a different question from the inner one: `Unknown` is "there is no
+/// record of this id" (never existed, or aged out of [`OWNER_RETENTION`]),
+/// while `Known(None)` is "this session exists and was spawned through a face
+/// that resolved no caller". Folding them together is how a fail-closed answer
+/// gets consumed as a value — `CLAUDE.md` §0 rules on exactly that shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionOwner {
+    /// The session is (or recently was) on record; this is its `created_by`.
+    Known(Option<String>),
+    /// No record at all.
+    Unknown,
+}
+
+impl SessionOwner {
+    /// Whether `actor` may address — or be delivered frames for — the session
+    /// this stamp describes.
+    #[must_use]
+    pub fn admits(&self, actor: Option<&str>) -> bool {
+        match self {
+            Self::Known(created_by) => owner_admits(created_by.as_deref(), actor),
+            // Never existed, or aged out: fail closed for anyone who has an
+            // identity to compare against, unrestricted for an unscoped caller
+            // on the same reasoning as `owner_admits`.
+            Self::Unknown => actor.is_none(),
+        }
+    }
+}
+
+/// The single derivation of "may this caller have this session", shared by
+/// `pty.list`'s filter, the four addressed methods, and the
+/// `pty.screen`/`pty.exit` delivery filter.
+///
+/// One body because a predicate answered once per face is this repo's
+/// signature defect: an ownership rule enforced on `pty.list` and not on
+/// `pty.input` is not an ownership rule, it is a hidden list.
+///
+/// `actor: None` is unrestricted, matching every `visibility::*_visible_to`
+/// in the repo: it means no caller identity was resolved — internal wiring, a
+/// test, or a deployment that resolves none — not "an anonymous stranger". On
+/// the delivery face the topic is separately operator-gated by
+/// `EventScopeGuard`, so a walled socket never reaches this predicate.
+///
+/// `created_by: None` with a scoped actor is REFUSED: a session nobody is
+/// recorded as owning is not one a particular user may claim. In production
+/// this cannot arise — `handle_spawn` stamps `visibility::ambient_actor()`,
+/// which resolves through `CALLER_USER` for every gateway dispatch, loopback
+/// included (it resolves to `OWNER_USER_ID`).
+#[must_use]
+pub fn owner_admits(created_by: Option<&str>, actor: Option<&str>) -> bool {
+    match actor {
+        None => true,
+        Some(actor) => created_by == Some(actor),
+    }
 }
 
 /// The global PTY session registry.
@@ -137,6 +235,10 @@ impl PtyManager {
         let cap = self.max_sessions.load(Ordering::SeqCst);
         let evicted = {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            // Stamp the owner under the SAME lock acquisition that inserts the
+            // session, so no face can observe a live session with no ownership
+            // record and fall through to whatever its "unknown" arm does.
+            inner.remember_owner(&id, opts.created_by.clone());
             let mut evicted: Option<Arc<PtySession>> = None;
             if inner.sessions.len() >= cap {
                 if let Some(old_id) = inner.order.pop_front() {
@@ -224,7 +326,30 @@ impl PtyManager {
         inner.sessions.remove(session_id);
     }
 
+    /// Who created a session — the ownership input for every `pty.*` face.
+    ///
+    /// Answers for sessions that are ALREADY GONE, up to [`OWNER_RETENTION`].
+    /// That is not slack, it is the requirement: `pty.exit` is published and
+    /// `remove` is called on the next line, so a filter that consulted
+    /// `inner.sessions` would deny a client the frame announcing its own
+    /// shell's death — and a client that never learns its shell died shows a
+    /// live terminal forever.
+    #[must_use]
+    pub fn owner_of(&self, session_id: &str) -> SessionOwner {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        match inner.owners.get(session_id) {
+            Some(created_by) => SessionOwner::Known(created_by.clone()),
+            None => SessionOwner::Unknown,
+        }
+    }
+
     /// Snapshot of all active sessions.
+    ///
+    /// Deliberately UNFILTERED: the caller-scoped view is
+    /// `handle_list`'s, built from [`SessionInfo::created_by`] through
+    /// [`owner_admits`]. Filtering here would put the predicate below the
+    /// only face that knows who is asking, and `close_all`/`live_apply` need
+    /// the whole set.
     pub fn list(&self) -> Vec<SessionInfo> {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner
@@ -236,7 +361,6 @@ impl PtyManager {
                 shell: s.shell.clone(),
                 created_at: s.created_at,
                 closed: s.is_closed(),
-                attached_count: inner.viewports.get(&s.id).map_or(0, HashMap::len),
                 created_by: s.created_by.clone(),
             })
             .collect()
@@ -247,10 +371,9 @@ impl PtyManager {
     /// acquisition — checking via a separate `list()` call first (as the
     /// caller used to) leaves a TOCTOU window where a `close()`/`remove()`
     /// landing between the check and the record creates an orphaned
-    /// `viewports` entry for a dead `session_id`, invisible to `list()`
-    /// (`attached_count` only iterates sessions still in `inner.sessions`)
-    /// and reclaimed only when the connection eventually disconnects via
-    /// `release_conn`.
+    /// `viewports` entry for a dead `session_id`, invisible to any caller
+    /// (nothing iterates `inner.viewports` outside this lock) and reclaimed
+    /// only when the connection eventually disconnects via `release_conn`.
     pub fn note_viewport(
         &self,
         session_id: &str,
@@ -437,17 +560,88 @@ mod tests {
         mgr.close(&sid).expect("close");
     }
 
+    /// The stamp has to answer for a session that is already gone, because
+    /// the one frame whose delivery decision needs it — `pty.exit` — is
+    /// published a line BEFORE `remove`, and delivery is asynchronous. A
+    /// filter keyed on live sessions would deny a client the news of its own
+    /// shell's death.
     #[test]
-    fn attached_count_is_visible_for_diagnosis() {
+    fn the_owner_stamp_outlives_the_session_it_names() {
         let mgr = PtyManager::new();
         let sid = mgr
-            .spawn(&SpawnOptions::default())
+            .spawn(&SpawnOptions {
+                created_by: Some("u-alice".to_string()),
+                ..Default::default()
+            })
             .expect("spawn")
             .session_id;
-        mgr.note_viewport(&sid, "conn-a", 24, 80).expect("note ok");
-        mgr.note_viewport(&sid, "conn-b", 24, 80).expect("note ok");
-        assert_eq!(mgr.list()[0].attached_count, 2);
-        mgr.close(&sid).expect("close");
+
+        assert_eq!(
+            mgr.owner_of(&sid),
+            SessionOwner::Known(Some("u-alice".to_string()))
+        );
+        mgr.remove(&sid);
+        assert!(
+            mgr.list().is_empty(),
+            "remove must retire the session itself"
+        );
+        assert_eq!(
+            mgr.owner_of(&sid),
+            SessionOwner::Known(Some("u-alice".to_string())),
+            "and must NOT retire its ownership stamp — the exit frame is \
+             published before the removal and delivered after it"
+        );
+        assert_eq!(
+            mgr.owner_of("never-existed"),
+            SessionOwner::Unknown,
+            "an id nothing ever spawned is Unknown, not Known(None): the two \
+             are different answers and only one of them fails closed for a \
+             scoped caller"
+        );
+    }
+
+    /// The retention window is bounded, or a long-lived daemon accumulates a
+    /// stamp per shell it ever opened.
+    #[test]
+    fn owner_stamps_are_evicted_by_capacity() {
+        let mgr = PtyManager::new();
+        {
+            let mut inner = mgr.inner.lock().expect("lock");
+            for i in 0..(OWNER_RETENTION + 2) {
+                inner.remember_owner(&format!("s-{i}"), Some(format!("u-{i}")));
+            }
+        }
+        assert_eq!(mgr.owner_of("s-0"), SessionOwner::Unknown);
+        assert_eq!(mgr.owner_of("s-1"), SessionOwner::Unknown);
+        assert_eq!(
+            mgr.owner_of("s-2"),
+            SessionOwner::Known(Some("u-2".to_string()))
+        );
+        let inner = mgr.inner.lock().expect("lock");
+        assert_eq!(inner.owners.len(), OWNER_RETENTION);
+        assert_eq!(inner.owner_order.len(), OWNER_RETENTION);
+    }
+
+    /// The one predicate, exhaustively — every other face delegates here, so
+    /// a hole in this table is a hole on all four of them.
+    #[test]
+    fn the_ownership_predicate_covers_every_combination() {
+        // Same user: the only admitting scoped case.
+        assert!(owner_admits(Some("u-alice"), Some("u-alice")));
+        // A different operator is still a different person. Permission
+        // equivalence is why they COULD be given access; it is not a reason
+        // to hand it over by default, with the scrollback attached.
+        assert!(!owner_admits(Some("u-alice"), Some("u-bob")));
+        // An unowned session is claimable by nobody who has an identity.
+        assert!(!owner_admits(None, Some("u-bob")));
+        // An unscoped caller is internal wiring, not a stranger.
+        assert!(owner_admits(Some("u-alice"), None));
+        assert!(owner_admits(None, None));
+
+        // And through the lookup wrapper, including the fail-closed arm.
+        assert!(SessionOwner::Known(Some("u-alice".into())).admits(Some("u-alice")));
+        assert!(!SessionOwner::Unknown.admits(Some("u-alice")));
+        assert!(SessionOwner::Unknown.admits(None));
     }
 
     /// `note_viewport` must reject an unknown session under the SAME lock
