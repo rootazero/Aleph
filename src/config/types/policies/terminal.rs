@@ -62,7 +62,83 @@ pub struct TerminalConfig {
     /// Read fresh at spawn time (`PtyManager::set_max_sessions`), not a
     /// boot-time snapshot.
     pub max_sessions: usize,
+    /// The canvas font stack. A CSS `font-family` list, applied verbatim to
+    /// the terminal canvas.
+    ///
+    /// Default carries Nerd Font names because the shipped default before
+    /// this field existed named one font most machines do not have
+    /// (`'JetBrains Mono'`) and then fell back to generic `monospace`, which
+    /// has NO Private Use Area glyphs — so every powerlevel10k user saw
+    /// hollow boxes where their prompt icons should be. CSS fallback is
+    /// per-character, so a symbols-only font listed AFTER the text font
+    /// supplies the icons without changing any letterform. Segments, in
+    /// order:
+    ///
+    /// - A handful of complete, patched Nerd Font builds -- letters AND
+    ///   icons from the same font -- covering the families people actually
+    ///   run `install.sh` for: `'Hack Nerd Font Mono'`, `'0xProto Nerd Font
+    ///   Mono'`, `'FiraCode Nerd Font Mono'`, `'JetBrainsMono Nerd Font
+    ///   Mono'`, `'MesloLGS NF'`, `'CaskaydiaCove Nerd Font Mono'`,
+    ///   `'SauceCodePro Nerd Font Mono'`, `'UbuntuMono Nerd Font Mono'`.
+    ///   `MesloLGS NF` is the exact font powerlevel10k's own installer
+    ///   downloads (no separate `Mono` build exists under that name -- the
+    ///   p10k patch is already fixed-width); every other entry names the
+    ///   project's own `Mono` variant, not the plain patched build, per the
+    ///   warning below. `Hack Nerd Font Mono` and `0xProto Nerd Font Mono`
+    ///   are placed first because they are MEASURED, not guessed: a real
+    ///   p10k bug report's installed fonts held exactly those two and none
+    ///   of the other three names an earlier, shorter list tried first --
+    ///   that five-entry list survived only on its LAST named font on that
+    ///   exact machine. FiraCode / JetBrainsMono / MesloLGS NF /
+    ///   CaskaydiaCove / SauceCodePro / UbuntuMono are NOT verified against
+    ///   that machine or any other -- they are a judgement call about what
+    ///   else is common, not a second measurement, and that distinction
+    ///   matters: do not cite them as confirmed the way the first two are.
+    /// - `'JetBrains Mono'` — the pre-existing default, unpatched. Supplies
+    ///   letters (no icons) for anyone with only this installed, so the
+    ///   letterform this shipped with before is unchanged for them.
+    /// - `'Symbols Nerd Font Mono'` — icons only. Many people install just
+    ///   this alongside an unrelated coding font; listed last among the
+    ///   named fonts so it only ever donates the PUA codepoints nothing
+    ///   earlier in the list has. It is what makes the default degrade
+    ///   gracefully for someone whose coding font is unpatched: verified on
+    ///   the same real machine above, where it was the entry every earlier
+    ///   one missed.
+    /// - `monospace` — universal safety net if nothing above is installed.
+    ///
+    /// ⚠️ Use a Nerd Font **Mono** variant. The non-Mono variants draw their
+    /// icons double-width, while the server counts every Private Use Area
+    /// codepoint as one column (`UnicodeWidthChar`), so the whole row shifts.
+    ///
+    /// ⚠️ **This list's job is to make the common case work, not to be
+    /// complete.** There are roughly sixty patched Nerd Font families in
+    /// circulation and this default will never hold them all -- that is
+    /// what this field exists for. Do not "finish" this list toward
+    /// exhaustiveness; if a font is missing, that is what setting
+    /// `font_family` is for, not a reason to add a ninth named entry here.
+    /// Grow the documentation of this field before you grow the list.
+    pub font_family: String,
+    /// Canvas font size in CSS px. Bounded on read by the Panel's
+    /// `render::measure`, which clamps to `MIN_FONT_SIZE_PX`..=
+    /// `MAX_FONT_SIZE_PX` before the value ever reaches the canvas — a zero
+    /// or absurd value would make the cell metrics degenerate and the grid
+    /// fit meaningless. (`apply_font`, one call below the clamp, is the
+    /// FAMILY's check, not the size's; naming it here sent the reader to a
+    /// function that does not contain the bound.)
+    pub font_size_px: u32,
 }
+
+/// The pre-existing size, unchanged: bumping this default would shift every
+/// existing user's row count on upgrade, which is a separate decision from
+/// fixing the missing-icon default.
+pub const DEFAULT_TERMINAL_FONT_SIZE_PX: u32 = 14;
+
+/// See `TerminalConfig::font_family`'s doc for what each segment is for and
+/// why this list stops where it does.
+pub const DEFAULT_TERMINAL_FONT_FAMILY: &str = "'Hack Nerd Font Mono', '0xProto Nerd Font Mono', \
+     'FiraCode Nerd Font Mono', 'JetBrainsMono Nerd Font Mono', 'MesloLGS NF', \
+     'CaskaydiaCove Nerd Font Mono', 'SauceCodePro Nerd Font Mono', 'UbuntuMono Nerd Font Mono', \
+     'JetBrains Mono', 'Symbols Nerd Font Mono', monospace";
 
 impl Default for TerminalConfig {
     fn default() -> Self {
@@ -70,6 +146,8 @@ impl Default for TerminalConfig {
             enabled: true,
             scrollback_lines: 1000,
             max_sessions: 64,
+            font_family: DEFAULT_TERMINAL_FONT_FAMILY.to_string(),
+            font_size_px: DEFAULT_TERMINAL_FONT_SIZE_PX,
         }
     }
 }
@@ -95,5 +173,41 @@ mod tests {
         assert!(!cfg.enabled);
         assert_eq!(cfg.scrollback_lines, 200);
         assert_eq!(cfg.max_sessions, 64, "unset fields keep their defaults");
+    }
+
+    /// The size default is pinned byte-for-byte: bumping it would shift row
+    /// count for every existing user on upgrade, a decision this task does
+    /// not make. The family default must contain a Nerd Font name — this is
+    /// the assertion that keeps a future "cleanup" from quietly reverting
+    /// the fix this struct exists for back to a letters-only stack.
+    #[test]
+    fn default_font_stack_carries_the_size_unchanged_and_a_nerd_font_name() {
+        let cfg = TerminalConfig::default();
+        assert_eq!(
+            cfg.font_size_px, 14,
+            "must match the pre-field default exactly"
+        );
+        assert!(
+            cfg.font_family.contains("Nerd Font") || cfg.font_family.contains("MesloLGS"),
+            "default font stack lost its Nerd Font entry -- p10k icons \
+             regress to hollow boxes for every user who never sets this: {:?}",
+            cfg.font_family
+        );
+        assert!(
+            cfg.font_family.contains("monospace"),
+            "default font stack must still end in a universal fallback: {:?}",
+            cfg.font_family
+        );
+    }
+
+    /// Only `font_family` set: `font_size_px` must keep its default rather
+    /// than becoming Rust's own `u32::default()` (0), which downstream would
+    /// make the cell metrics degenerate.
+    #[test]
+    fn setting_only_the_family_leaves_the_size_at_its_default() {
+        let cfg: TerminalConfig =
+            toml::from_str("font_family = \"'My Font', monospace\"\n").expect("parse");
+        assert_eq!(cfg.font_size_px, 14);
+        assert_eq!(cfg.font_family, "'My Font', monospace");
     }
 }
