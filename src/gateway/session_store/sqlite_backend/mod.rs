@@ -474,6 +474,35 @@ impl SessionStore for SessionManager {
             .map_err(map_err)
     }
 
+    /// See the trait doc. Written directly against `self.conn` — like
+    /// `stamp_last_assistant_metadata` above — rather than as an inherent
+    /// `SessionManager` method plus `map_err`: `SessionManagerError` has no
+    /// variant for "this key is not rescopable", because that is a
+    /// store-level concept (`SessionStoreError::Unsupported`), not a
+    /// manager-level one. There is no scope-kind check here: `project_id` is
+    /// not a rendered scope string, so there is no "wrong kind of scope"
+    /// value for this verb to reject — it only ever renders `Project`.
+    async fn rescope_attribution(
+        &self,
+        key: &SessionKey,
+        project_id: &str,
+    ) -> Result<bool, SessionStoreError> {
+        crate::gateway::session_store::require_conversation_key(key)?;
+        let scope_id = crate::scope::ScopeId::Project(project_id.to_string()).render();
+        let key_str = key.to_key_string();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Lock error: {e}")))?;
+        let rows = conn
+            .execute(
+                "UPDATE sessions SET scope_id = ?2 WHERE key = ?1",
+                params![&key_str, scope_id],
+            )
+            .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
+        Ok(rows > 0)
+    }
+
     async fn set_source_channel(
         &self,
         key: &SessionKey,
@@ -689,5 +718,75 @@ mod tests {
             .unwrap()
             .expect("register_epoch must create the child session row");
         assert_eq!(meta.key, child.to_key_string());
+    }
+
+    /// The one exception to "session scope is immutable once set": an operator
+    /// binding a channel conversation to a room. Everything else must keep
+    /// getting the create-only behaviour.
+    #[tokio::test]
+    async fn rescoping_a_group_row_to_a_room_moves_only_the_scope() {
+        use crate::routing::session_key::PeerKind;
+        use crate::scope::{with_scope, ScopeAttribution};
+
+        let temp = tempdir().unwrap();
+        let store = test_store(&temp);
+        let key = SessionKey::group("main", "telegram", PeerKind::Group, "C1");
+        with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            store.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+
+        let changed = store
+            .rescope_attribution(&key, "p-1")
+            .await
+            .expect("a sqlite backend supports rescoping");
+        assert!(changed, "the row moved");
+
+        let meta = store.get_metadata(&key).await.unwrap().unwrap();
+        assert_eq!(meta.scope_id.as_deref(), Some("project:p-1"));
+        assert_eq!(
+            meta.owner_user_id.as_deref(),
+            Some("u-alice"),
+            "the owner still names whoever spoke first — the room's visibility is \
+             decided by the roster, so overwriting the owner would only lose the byline"
+        );
+    }
+
+    /// A non-group key must be refused. Rescoping is a visibility grant, and a
+    /// DM has exactly one human on the far side: there is no roster to grant to.
+    #[tokio::test]
+    async fn rescoping_refuses_a_key_that_is_not_a_conversation() {
+        let temp = tempdir().unwrap();
+        let store = test_store(&temp);
+        let key = SessionKey::main("main");
+        let result = store.rescope_attribution(&key, "p-1").await;
+        assert!(
+            result.is_err(),
+            "only a group conversation may be rescoped into a room"
+        );
+    }
+
+    /// A group nobody has spoken in yet has no row. That is not an error —
+    /// it is the common case for a freshly bound room, and the trait doc
+    /// pins `Ok(false)` for it specifically so a store that cannot tell the
+    /// difference between "unsupported" and "nothing to move" cannot use it
+    /// to mean either.
+    #[tokio::test]
+    async fn rescoping_a_row_that_does_not_exist_yet_reports_no_change() {
+        use crate::routing::session_key::PeerKind;
+
+        let temp = tempdir().unwrap();
+        let store = test_store(&temp);
+        let key = SessionKey::group("main", "telegram", PeerKind::Group, "C-unspoken");
+        let changed = store
+            .rescope_attribution(&key, "p-1")
+            .await
+            .expect("a sqlite backend supports rescoping");
+        assert!(
+            !changed,
+            "there is no row yet for a group nobody has spoken in"
+        );
     }
 }

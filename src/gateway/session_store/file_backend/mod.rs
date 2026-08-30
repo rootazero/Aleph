@@ -469,7 +469,36 @@ impl SessionStore for FileSessionStore {
             }
             let contents = match tokio::fs::read_to_string(&meta_path).await {
                 Ok(c) => c,
-                Err(_) => continue,
+                // Six lines below, the parse arm says out loud why silence is
+                // expensive here. That argument is true of this arm verbatim, and
+                // this one was the silent half: an unreadable file and a file that
+                // is not there produce the same empty listing, and `rescope`'s
+                // `NothingToMove` receipt asserts the absence.
+                //
+                // NotFound stays silent because it really is an absence -- the
+                // `exists()` check above raced a delete. Every other kind is "I
+                // could not look", which is not the same answer.
+                //
+                // BOUND, so nobody records this half as closed: that argument
+                // leans on `exists()`, which is `metadata(path).is_ok()` and
+                // therefore answers `false` for ANY error, not only for
+                // absence. A session directory this process can stat but not
+                // traverse is skipped at the `exists()` check above and never
+                // reaches either arm here, so the silent half is NARROWED by
+                // this change, not closed. Root CLAUDE.md documents that exact
+                // shape -- "I could not look" answered as "there is nothing
+                // there". Closing it belongs to the `exists()` call, not to
+                // this match.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    tracing::warn!(
+                        path = %meta_path.display(),
+                        error = %e,
+                        "Unreadable session metadata -- this conversation will be \
+                         missing from every listing until the file can be read"
+                    );
+                    continue;
+                }
             };
             let meta: SessionMetadata = match serde_json::from_str(&contents) {
                 Ok(m) => m,
@@ -963,6 +992,31 @@ impl SessionStore for FileSessionStore {
         }
         meta.owner_user_id = Some(owner_user_id.to_string());
         meta.scope_id = Some(scope_id.to_string());
+        guard.commit().await?;
+        Ok(true)
+    }
+
+    /// See the trait doc. Validation of the key shape happens before the row
+    /// is even locked — no reason to take the lock for an input this verb
+    /// was never going to accept. There is no scope-kind check: `project_id`
+    /// is not a rendered scope string, so there is no "wrong kind of scope"
+    /// value for this verb to reject — it only ever renders `Project`.
+    async fn rescope_attribution(
+        &self,
+        key: &SessionKey,
+        project_id: &str,
+    ) -> Result<bool, SessionStoreError> {
+        crate::gateway::session_store::require_conversation_key(key)?;
+        let scope_id = crate::scope::ScopeId::Project(project_id.to_string()).render();
+        let key_str = key.to_key_string();
+        let mut guard = self.lock_metadata(&key_str).await?;
+        // No row yet — a freshly bound room whose members have not spoken.
+        // Not an error, per the trait doc: the bind still succeeds, and
+        // there is nothing here for this verb to move yet.
+        let Some(meta) = guard.existing_mut() else {
+            return Ok(false);
+        };
+        meta.scope_id = Some(scope_id);
         guard.commit().await?;
         Ok(true)
     }
@@ -1834,5 +1888,83 @@ mod branch_checkpoint_attribution_tests {
 
         assert_eq!(branched.owner_user_id, None);
         assert_eq!(branched.scope_id, None);
+    }
+}
+
+#[cfg(test)]
+mod rescope_attribution_tests {
+    use super::*;
+    use crate::routing::session_key::PeerKind;
+    use crate::scope::{with_scope, ScopeAttribution};
+
+    fn temp_store() -> (FileSessionStore, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = FileSessionStoreConfig {
+            base_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        (FileSessionStore::new(config).expect("store"), dir)
+    }
+
+    /// The one exception to "session scope is immutable once set": an operator
+    /// binding a channel conversation to a room. Everything else must keep
+    /// getting the create-only behaviour.
+    #[tokio::test]
+    async fn rescoping_a_group_row_to_a_room_moves_only_the_scope() {
+        let (store, _dir) = temp_store();
+        let key = SessionKey::group("main", "telegram", PeerKind::Group, "C1");
+        with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            store.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+
+        let changed = store
+            .rescope_attribution(&key, "p-1")
+            .await
+            .expect("a file backend supports rescoping");
+        assert!(changed, "the row moved");
+
+        let meta = store.get_metadata(&key).await.unwrap().unwrap();
+        assert_eq!(meta.scope_id.as_deref(), Some("project:p-1"));
+        assert_eq!(
+            meta.owner_user_id.as_deref(),
+            Some("u-alice"),
+            "the owner still names whoever spoke first — the room's visibility is \
+             decided by the roster, so overwriting the owner would only lose the byline"
+        );
+    }
+
+    /// A non-group key must be refused. Rescoping is a visibility grant, and a
+    /// DM has exactly one human on the far side: there is no roster to grant to.
+    #[tokio::test]
+    async fn rescoping_refuses_a_key_that_is_not_a_conversation() {
+        let (store, _dir) = temp_store();
+        let key = SessionKey::main("main");
+        let result = store.rescope_attribution(&key, "p-1").await;
+        assert!(
+            result.is_err(),
+            "only a group conversation may be rescoped into a room"
+        );
+    }
+
+    /// A group nobody has spoken in yet has no row. That is not an error —
+    /// it is the common case for a freshly bound room, and the trait doc
+    /// pins `Ok(false)` for it specifically so a store that cannot tell the
+    /// difference between "unsupported" and "nothing to move" cannot use it
+    /// to mean either.
+    #[tokio::test]
+    async fn rescoping_a_row_that_does_not_exist_yet_reports_no_change() {
+        let (store, _dir) = temp_store();
+        let key = SessionKey::group("main", "telegram", PeerKind::Group, "C-unspoken");
+        let changed = store
+            .rescope_attribution(&key, "p-1")
+            .await
+            .expect("a file backend supports rescoping");
+        assert!(
+            !changed,
+            "there is no row yet for a group nobody has spoken in"
+        );
     }
 }

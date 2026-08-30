@@ -1313,18 +1313,34 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 )
             });
 
+            // P1 data isolation: this run's owner/scope attribution, resolved
+            // through the same reader the session row and the loop task-local
+            // use — NOT read back out of `request.metadata`. The raw keys hold
+            // the producer's own stamp; `request_scope` is what turns a bound
+            // channel conversation's `personal:<speaker>` into the room's
+            // scope, so reading them here dropped that upgrade at the harness
+            // spawn while the row kept it. That `FlowRequest` carries strings
+            // is why this converts (`ScopeId::render`, matching
+            // `scope::stamp_metadata`), not why it should read another source.
+            // `FlowScope`'s fields are private, so THAT SPELLING of the raw
+            // read does not type-check here. Only that shape, though: one
+            // public call — `ScopeAttribution::from_persisted` on the raw
+            // map, whose signature is exactly the pair a metadata map yields
+            // — still reaches this site and compiles, with every lexical
+            // layer green. What holds PROVENANCE is behavioural:
+            // `tests::the_flow_request_projection_carries_the_room_upgrade`
+            // and `::the_projection_round_trips_through_the_dispatch_rebuild`.
+            // See that type's doc and `flow_scope_census`'s layer list, which
+            // states each layer's bound as a measured case rather than a
+            // sentence.
+            let scope = super::request_scope_strings(request);
             let req = crate::orchestrator::FlowRequest {
                 flow_id: None,
                 agent_id: agent.id().to_string(),
                 input: flow_input,
                 channel: request.metadata.get("platform").cloned(),
                 session_hint: Some(request.session_key.to_key_string()),
-                // P1 data isolation: forward the owner/scope attribution
-                // already stamped on this request's metadata verbatim — the
-                // two strings, not a re-derived `ScopeAttribution`, since
-                // `FlowRequest` carries them as strings (see its doc).
-                owner_user_id: request.metadata.get(crate::scope::OWNER_META_KEY).cloned(),
-                scope_id: request.metadata.get(crate::scope::SCOPE_META_KEY).cloned(),
+                scope,
                 parent_session: None,
                 depth: 0,
                 tool_service: Some(tool_service),

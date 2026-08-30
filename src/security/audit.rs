@@ -388,6 +388,10 @@ mod tests {
             "room roster add / remove",
         ),
         (
+            "src/gateway/handlers/projects_channel.rs",
+            "room bound to / released from a channel conversation",
+        ),
+        (
             "src/gateway/handlers/pairing.rs",
             "channel sender approve / revoke",
         ),
@@ -406,6 +410,26 @@ mod tests {
         (
             "src/builtin_tools/agent_manage/update.rs",
             "allowed_users rewritten (tool)",
+        ),
+        (
+            "src/gateway/handlers/cluster.rs",
+            "cluster node device credential mint (enroll) / revoke (deregister)",
+        ),
+        (
+            "src/gateway/handlers/config.rs",
+            "config section rewritten (may touch auth / provider keys / channel wiring)",
+        ),
+        (
+            "src/gateway/handlers/daemon_control.rs",
+            "daemon shutdown requested (ends every connected session)",
+        ),
+        (
+            "src/gateway/handlers/gateway_token.rs",
+            "shared gateway token rotated / every paired device revoked",
+        ),
+        (
+            "src/gateway/handlers/secrets.rs",
+            "vault secret set / delete (key name only)",
         ),
     ];
 

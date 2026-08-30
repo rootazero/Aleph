@@ -412,17 +412,27 @@ pub struct FlowRequest {
     /// `parent_session` for isolation rather than bare hints.
     pub session_hint: Option<String>,
     /// P1 data isolation: the run's owner/scope attribution. `FlowRequest`
-    /// has no metadata map (unlike `RunRequest`), so this rides as an
-    /// explicit pair of fields instead of `crate::scope::stamp_metadata`.
+    /// has no metadata map (unlike `RunRequest`), so this rides as the pair of
+    /// strings [`crate::scope::stamp_metadata`] would have written, wrapped in
+    /// [`crate::scope::FlowScope`].
+    ///
+    /// The wrapper is the point. Its fields are private and its only non-empty
+    /// constructor takes an already-resolved `ScopeAttribution`, so the one
+    /// production filler of this field
+    /// (`gateway::execution_engine::run_loop::request_scope_strings`) cannot be
+    /// replaced by a read of `RunRequest.metadata` — that pair is
+    /// `(Option<String>, Option<String>)` and no longer fits. `src/gateway/
+    /// CLAUDE.md` 地雷 Q is the incident this closes; the type's own doc says
+    /// what it does not close.
+    ///
     /// Callers inside `process_request`'s task tree may inherit the ambient
     /// `crate::scope::current_scope()`; callers with no live task-local
-    /// (cron, hook-less wakes) must pass it explicitly. `None` = unscoped
+    /// (cron, hook-less wakes) must pass it explicitly.
+    /// [`FlowScope::unscoped`](crate::scope::FlowScope::unscoped) = unscoped
     /// (legacy owner semantics) — see `Orchestrator::dispatch`, which
-    /// re-derives a `ScopeAttribution` from these two strings via
+    /// re-derives a `ScopeAttribution` from the pair via
     /// `crate::scope::scope_from_metadata` and re-seeds it inside the spawn.
-    pub owner_user_id: Option<String>,
-    /// See [`Self::owner_user_id`]. Rendered form of `ScopeId` (`scope.render()`).
-    pub scope_id: Option<String>,
+    pub scope: crate::scope::FlowScope,
     pub parent_session: Option<String>,
     pub depth: u8,
     /// Per-request tool service override. `None` causes `AgentHarnessRunner`
@@ -982,9 +992,7 @@ impl Orchestrator {
         // do not cross `tokio::spawn`); re-derived into a `ScopeAttribution`
         // and re-seeded inside, sibling of `with_agent_id`/`with_project_root`.
         // rust-doctor-disable-next-line excessive-clone
-        let owner_user_id = req.owner_user_id.clone();
-        // rust-doctor-disable-next-line excessive-clone
-        let scope_id = req.scope_id.clone();
+        let (owner_user_id, scope_id) = req.scope.clone().into_parts();
         // P2 speaker label — the SAME boundary and the same reason as the two
         // above, but this one has no `FlowRequest` field to be re-derived from,
         // so the live task-local is captured here on the caller's side. It is

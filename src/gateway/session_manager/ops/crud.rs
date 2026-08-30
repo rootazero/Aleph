@@ -48,11 +48,8 @@ impl SessionManager {
             // and inbound routing continued to treat the session as live. The
             // contract for a stopped session must be explicit: refuse a silent
             // resume; require an explicit reopen.
-            match meta.state {
-                Some(SessionState::Stopped) => {
-                    return Err(SessionManagerError::SessionStopped(meta.key.clone()));
-                }
-                _ => {}
+            if let Some(SessionState::Stopped) = meta.state {
+                return Err(SessionManagerError::SessionStopped(meta.key.clone()));
             }
 
             // Transition Created or Idle -> Active

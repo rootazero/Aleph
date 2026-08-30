@@ -15,21 +15,58 @@
 //! outlives the turn that built it — and a wrong-but-valid identity is the
 //! failure mode with no symptom: every check passes, against the wrong person.
 //!
-//! ## Deliberately NOT here: `bind_workspace`
+//! ## `bind_workspace` is here now, and what had to become true first
 //!
 //! Binding a room to a directory is the fifth writer of `workspace_path`, and
 //! since P2 that column is the default cwd of every member's run — so a writer
-//! is a permission grant, not a preference. The RPC face gates it with
-//! `caller_may_choose_directory()`, which is fail-OPEN for a caller with no
-//! connection role (cron, A2A, in-process). On this face that arm is reachable
-//! by a model in a scheduled run, and admitting it would let one room's
-//! automation repoint every other member's working directory.
+//! is a permission grant, not a preference. This verb was kept off the tool
+//! face until 2026-08-29 for a reason that was true when written and is not
+//! any more: the only in-run answer to "may this actor name a server
+//! directory" was `caller_may_choose_directory()`, which reads the ambient
+//! `CALLER_ROLE` task-local — and that task-local is dead past the
+//! `tokio::spawn` every run crosses. It therefore did not gate a tool call,
+//! it mis-answered one, in whichever direction its `None` arm happened to
+//! point.
 //!
-//! The alternative — a stricter predicate just for this face — would be a
-//! second answer to "may this actor name a server directory", and two answers
-//! to one question is the shape this codebase has watched drift more than
-//! once. So the verb stays on the Panel/RPC path, where the gate it needs
-//! already means what it says. Ruled 2026-08-25.
+//! What this face uses instead is not a second predicate. It is the SAME
+//! question asked of the object that is alive inside a run:
+//! [`TurnContext::caller_is_operator`](crate::tools::turn_context::TurnContext::caller_is_operator)
+//! — the exact predicate `src/tools/scoped/dispatch.rs`'s `check_operator_gate`
+//! reads to decide whether a config-tier tool may proceed. The gateway builds
+//! a `TurnContext` per turn with the connection's role stamped into it, so
+//! `"guest"` (every chat-tier channel) fails, `"operator"` passes, and an
+//! absent role means "no role was recorded" — an internal/cron run — rather
+//! than "the task-local died". That distinction is the whole reason the
+//! ambient form could not be reused here, and it is why this one can be.
+//!
+//! Two things this deliberately does NOT do:
+//!
+//! - It does not put `project_manage` in
+//!   [`crate::gateway::method_authz`]'s `OPERATOR_TOOLS`. That gate is
+//!   per-TOOL, and `list` / `get` / `create` / `member_list` are actions plain
+//!   members are meant to use; promoting the whole tool would refuse eight
+//!   verbs to close one. The gate wanted here is per-ACTION.
+//! - It does not gate UNBINDING. Passing no path is a de-escalation, and the
+//!   RPC face has always left it reachable for exactly the situation that
+//!   needs it most — a room stuck on a folder that has gone missing, which
+//!   `build_run_request` refuses to run in. Gating the way out of a broken
+//!   state is how a gate starts pushing people toward the wider setting.
+//!
+//! ## Still deliberately NOT here: `bind_channel`
+//!
+//! `projects.channel.bind` points a room at a channel group conversation —
+//! its exposure runs OUTWARD, into an audience the roster does not control,
+//! which is a different question from naming a folder on this machine. It
+//! stays on the Panel/RPC/CLI faces (spec §7).
+//!
+//! **`DESCRIPTION` names those same three faces, in those same words**, and
+//! `the_model_facing_copy_names_the_same_faces` pins the spelling. Until
+//! 2026-08-30 it named one of the three ("on the Panel"): under-inclusive
+//! rather than false, which is why nothing red — and it is the copy the model
+//! obeys, so it is also the sentence a user asking "then where?" gets relayed.
+//! The CLI face shipped in this same round, which is what made one-of-three
+//! wrong; a fourth face has to update all three carriers, and the guard is
+//! what makes that a red rather than a memory.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -63,6 +100,11 @@ pub enum ProjectAction {
     MemberRemove,
     /// The roster of one room.
     MemberList,
+    /// Point the room at a folder, or (with no `path`) release it.
+    ///
+    /// Owner-or-admin like the other mutations, and additionally
+    /// operator-tier when a path is named — see the module doc.
+    BindWorkspace,
 }
 
 /// Arguments for `project_manage`.
@@ -79,6 +121,14 @@ pub struct ProjectManageArgs {
     /// Target user id. Required by `member_add` / `member_remove`.
     #[serde(default)]
     pub user_id: Option<String>,
+    /// Absolute folder for `bind_workspace`. Omitted (or empty) RELEASES the
+    /// room's folder rather than being a missing-argument error — that is the
+    /// same shape `projects.bind_workspace` has on the wire, and the
+    /// difference is load-bearing: releasing is the repair for a room pointed
+    /// at a folder that no longer exists, so it must not need the same
+    /// authority naming one does.
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 /// One room as the model sees it.
@@ -181,7 +231,37 @@ impl ProjectManageTool {
             .store
             .members(&project.id)
             .map_err(|e| AlephError::tool(format!("failed to read roster: {e}")))?;
-        Ok(ProjectRow::render(project, members))
+        Ok(crate::gateway::handlers::projects::render_project(
+            project, members,
+        ))
+    }
+
+    /// Refuse unless the running turn is config-tier.
+    ///
+    /// The in-run equivalent of the RPC face's `require_directory_choice` →
+    /// `caller_may_choose_directory()`. It is not a second derivation of that
+    /// question: it reads
+    /// [`TurnContext::caller_is_operator`](crate::tools::turn_context::TurnContext::caller_is_operator),
+    /// the very method `src/tools/scoped/dispatch.rs`'s `check_operator_gate`
+    /// calls when it decides whether a config-tier tool may run at all.
+    ///
+    /// `is_loopback` has no in-run meaning and so is not consulted: a run is
+    /// not a connection, and the gateway has already resolved the originating
+    /// connection's authority into `TurnContext::caller_role` by the time any
+    /// tool executes. `None` there means "no role was recorded" — a cron or
+    /// in-process run — which the config-tier predicate has always admitted;
+    /// it is NOT the dead-task-local `None` that made
+    /// `caller_may_choose_directory()` unusable on this face.
+    fn require_operator_tier() -> Result<()> {
+        let operator = crate::tools::turn_context::current_turn_context()
+            .is_none_or(|t| t.caller_is_operator());
+        if operator {
+            return Ok(());
+        }
+        Err(AlephError::tool(
+            "binding a project workspace requires an operator-tier session: that folder \
+             becomes every member's working directory. Releasing it (omit `path`) does not.",
+        ))
     }
 
     fn need<'a>(value: Option<&'a String>, field: &str, action: ProjectAction) -> Result<&'a str> {
@@ -197,10 +277,14 @@ impl AlephTool for ProjectManageTool {
     const DESCRIPTION: &'static str =
         "Manage project rooms — shared workspaces with their own roster, memory and group chat. \
          Actions: list (rooms you are on), get, create, rename, archive, member_add, \
-         member_remove, member_list. Rename/archive/member changes need you to be the room's \
-         owner or an org admin. A room you are not on reads as not found, so an id that comes \
-         back missing may simply not be yours. Binding a room to a folder is NOT here: that \
-         changes every member's working directory, so it stays in the Panel's room settings.";
+         member_remove, member_list, bind_workspace. Rename/archive/member changes need you to \
+         be the room's owner or an org admin. A room you are not on reads as not found, so an \
+         id that comes back missing may simply not be yours. bind_workspace with a path points \
+         the room at a folder, which becomes every member's working directory, so it also needs \
+         an operator-tier session; with no path it RELEASES the folder and needs only \
+         ownership, which is the repair when a room's folder has gone missing. Binding a room \
+         to a chat channel is a separate, operator-only action on the Panel/RPC/CLI faces, \
+         not here.";
 
     type Args = ProjectManageArgs;
     type Output = ProjectManageOutput;
@@ -359,6 +443,46 @@ impl AlephTool for ProjectManageTool {
                     message,
                 })
             }
+            ProjectAction::BindWorkspace => {
+                let id = Self::need(args.project_id.as_ref(), "project_id", action)?;
+                let project = self.room(id, actor)?;
+                self.require_owner(&project, actor)?;
+
+                // Empty and absent both mean "release it", exactly as
+                // `handle_bind_workspace` reads them. A trimmed-empty string
+                // is the shape a model produces when it means "clear this",
+                // and letting it through as a path would hand the store a
+                // relative "" to canonicalise.
+                let path = args
+                    .path
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                    .map(std::path::PathBuf::from);
+
+                // Only when a path is actually NAMED — see the module doc for
+                // why releasing must stay reachable from a broken state.
+                if path.is_some() {
+                    Self::require_operator_tier()?;
+                }
+
+                let bound = self
+                    .store
+                    .bind_workspace(id, path.as_deref())
+                    .map_err(|e| AlephError::tool(format!("failed to bind workspace: {e}")))?;
+                self.announce(id, ChangeKind::Updated, None);
+                let message = bound.workspace_path.as_ref().map_or_else(
+                    || format!("released '{}' from its folder", bound.name),
+                    |p| format!("'{}' now works in {}", bound.name, p.display()),
+                );
+                Ok(ProjectManageOutput {
+                    action,
+                    project: Some(self.render(bound)?),
+                    projects: Vec::new(),
+                    member_ids: Vec::new(),
+                    message,
+                })
+            }
         }
     }
 }
@@ -409,6 +533,7 @@ mod tests {
                 project_id: None,
                 name: None,
                 user_id: None,
+                path: None,
             })
             .await
         })
@@ -432,6 +557,7 @@ mod tests {
                 project_id: Some(project.id.clone()),
                 name: Some("bob's room".into()),
                 user_id: None,
+                path: None,
             })
             .await
         })
@@ -447,6 +573,7 @@ mod tests {
                 project_id: Some(project.id.clone()),
                 name: Some("mine now".into()),
                 user_id: None,
+                path: None,
             })
             .await
         })
@@ -457,6 +584,7 @@ mod tests {
                 project_id: Some("p-nope".into()),
                 name: Some("mine now".into()),
                 user_id: None,
+                path: None,
             })
             .await
         })
@@ -481,6 +609,7 @@ mod tests {
                 project_id: Some(project.id.clone()),
                 name: None,
                 user_id: Some("u-carol".into()),
+                path: None,
             })
             .await
         })
@@ -497,6 +626,7 @@ mod tests {
                 project_id: Some(project.id.clone()),
                 name: None,
                 user_id: Some("u-bob".into()),
+                path: None,
             })
             .await
         })
@@ -508,17 +638,25 @@ mod tests {
             .contains(&"u-bob".to_string()));
     }
 
-    /// `bind_workspace` is deliberately absent (see the module doc). Asserted
-    /// on the SCHEMA rather than in prose, so a future action added without
-    /// re-opening that ruling fails here rather than shipping.
+    /// The half of the 2026-08-25 ruling that did NOT change: pointing a room
+    /// at a channel conversation is not an action here. Asserted on the SCHEMA
+    /// rather than in prose, so a future action added without re-opening that
+    /// ruling fails here rather than shipping.
+    ///
+    /// `bind_workspace` used to be asserted absent by this same test. It is
+    /// now asserted PRESENT below — the ruling was overturned on 2026-08-29
+    /// once an in-run operator predicate existed (see the module doc), and the
+    /// two halves were never the same question: naming a folder on this
+    /// machine is bounded by the machine, while binding a chat conversation
+    /// exposes the room outward to an audience the roster does not control.
     #[test]
-    fn the_action_set_does_not_include_binding_a_directory() {
+    fn binding_a_chat_conversation_is_still_not_an_action() {
         let schema = serde_json::to_string(&schemars::schema_for!(ProjectAction))
             .expect("action schema serializes");
         assert!(
-            !schema.contains("bind_workspace") && !schema.contains("workspace"),
-            "binding a room to a directory changes every member's cwd; it stays on the \
-             Panel/RPC path where caller_may_choose_directory means what it says: {schema}"
+            !schema.contains("bind_channel") && !schema.contains("channel"),
+            "binding a room to a channel conversation exposes it outward, past the roster; \
+             it stays on the Panel/RPC/CLI faces (spec §7): {schema}"
         );
         for expected in [
             "list",
@@ -529,8 +667,205 @@ mod tests {
             "member_add",
             "member_remove",
             "member_list",
+            "bind_workspace",
         ] {
             assert!(schema.contains(expected), "missing action {expected}");
+        }
+    }
+
+    /// The three carriers of "where binding lives" must agree, and the one the
+    /// model obeys is the one with no compiler behind it.
+    ///
+    /// The module doc and the assertion message above both say
+    /// "Panel/RPC/CLI faces"; `DESCRIPTION` said "on the Panel" for the whole
+    /// round in which the CLI face shipped. Nothing could have caught that:
+    /// a description is a `&str`, a doc comment is a comment, and neither
+    /// reads the other. This is the cheapest thing that reds when they drift.
+    #[test]
+    fn the_model_facing_copy_names_the_same_faces() {
+        let desc = <ProjectManageTool as crate::tools::AlephTool>::DESCRIPTION;
+        assert!(
+            desc.contains("Panel/RPC/CLI faces"),
+            "the model-facing copy must name the same faces as the module doc \
+             and the schema guard, in the same words, so one grep finds all \
+             three: {desc}"
+        );
+    }
+
+    /// A turn carrying `role`, as the gateway stamps one per turn.
+    fn turn_as(role: Option<&str>) -> crate::tools::turn_context::TurnContext {
+        crate::tools::turn_context::TurnContext {
+            session_key: crate::routing::session_key::SessionKey::main("main"),
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: role.map(str::to_string),
+            channel_tool_permissions: None,
+            unattended: false,
+            plan_gate: None,
+            side_question: false,
+        }
+    }
+
+    /// Run `fut` as `user`, inside a turn whose connection had `role`.
+    ///
+    /// Both scopes, because the two answer different questions and this verb
+    /// asks both: `CALLER_USER` decides WHICH ROOMS this actor may address
+    /// (ownership), `TURN_CONTEXT` decides whether this connection may name a
+    /// server-side folder at all (tier). A test that scoped only one would
+    /// pass for the wrong reason.
+    async fn as_user_at_tier<T>(
+        user: &str,
+        role: Option<&str>,
+        fut: impl std::future::Future<Output = T>,
+    ) -> T {
+        crate::tools::turn_context::TURN_CONTEXT
+            .scope(turn_as(role), CALLER_USER.scope(Some(user.to_string()), fut))
+            .await
+    }
+
+    fn bind_args(project_id: &str, path: Option<&str>) -> ProjectManageArgs {
+        ProjectManageArgs {
+            action: ProjectAction::BindWorkspace,
+            project_id: Some(project_id.to_string()),
+            name: None,
+            user_id: None,
+            path: path.map(str::to_string),
+        }
+    }
+
+    /// The gate the tool face applies must be the SAME predicate the dispatch
+    /// chokepoint applies, not a lookalike written next to it.
+    ///
+    /// Pinned against `turn_context::role_is_operator` — the function
+    /// `check_operator_gate` reaches through `TurnContext::caller_is_operator`
+    /// — rather than against a literal list of role strings. A list would say
+    /// "guest is refused today"; this says "this face refuses exactly whom the
+    /// config-tier gate refuses", which is the property that has to survive a
+    /// new role being introduced somewhere else entirely.
+    #[tokio::test]
+    async fn the_tier_gate_admits_exactly_who_the_config_tier_gate_admits() {
+        for role in [None, Some("operator"), Some("guest"), Some("member")] {
+            let admitted = crate::tools::turn_context::TURN_CONTEXT
+                .scope(turn_as(role), async {
+                    ProjectManageTool::require_operator_tier().is_ok()
+                })
+                .await;
+            assert_eq!(
+                admitted,
+                crate::tools::turn_context::role_is_operator(role),
+                "role {role:?}: this face and the config-tier gate must agree"
+            );
+        }
+    }
+
+    /// A chat-tier run binding a workspace would point every member of the
+    /// room at an arbitrary folder with no human in the loop.
+    ///
+    /// The second assertion is the one that matters: a refusal that still
+    /// wrote the row would be a gate that reports "no" and means "yes".
+    #[tokio::test]
+    async fn a_chat_tier_run_may_not_bind_a_workspace() {
+        let (tool, project, store, _g) = fixture();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().to_string_lossy().to_string();
+
+        let err = as_user_at_tier("u-alice", Some("guest"), async {
+            tool.call(bind_args(&project.id, Some(&path))).await
+        })
+        .await
+        .expect_err("a chat-tier run must be refused");
+        assert!(
+            err.to_string().contains("operator-tier"),
+            "the refusal must name what is missing, not just decline: {err}"
+        );
+        assert_eq!(
+            store.get(&project.id).unwrap().unwrap().workspace_path,
+            None,
+            "the refusal must not have written the folder anyway"
+        );
+    }
+
+    /// The gate is ADDITIONAL to ownership, not a replacement for it.
+    ///
+    /// Without this, an operator-tier connection could redirect the working
+    /// directory of a room belonging to somebody else — the tier answers "may
+    /// this connection name paths", never "is this room yours".
+    #[tokio::test]
+    async fn operator_tier_does_not_substitute_for_owning_the_room() {
+        let (tool, project, store, _g) = fixture();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().to_string_lossy().to_string();
+
+        let err = as_user_at_tier("u-bob", Some("operator"), async {
+            tool.call(bind_args(&project.id, Some(&path))).await
+        })
+        .await
+        .expect_err("a plain member may not rebind the room");
+        assert!(err.to_string().contains("not the project owner"), "got: {err}");
+        assert_eq!(
+            store.get(&project.id).unwrap().unwrap().workspace_path,
+            None
+        );
+    }
+
+    /// The owner at operator tier binds, and the row actually moves.
+    #[tokio::test]
+    async fn the_owner_at_operator_tier_binds_the_folder() {
+        let (tool, project, store, _g) = fixture();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().to_string_lossy().to_string();
+
+        let out = as_user_at_tier("u-alice", Some("operator"), async {
+            tool.call(bind_args(&project.id, Some(&path))).await
+        })
+        .await
+        .expect("the owner at operator tier may bind");
+        assert!(
+            out.project.expect("a bound room comes back").workspace_path.is_some(),
+            "the receipt must show the folder it says it bound"
+        );
+        assert!(store
+            .get(&project.id)
+            .unwrap()
+            .unwrap()
+            .workspace_path
+            .is_some());
+    }
+
+    /// Releasing is a de-escalation and is NOT tier-gated — which is load
+    /// bearing rather than lenient: the state that most needs releasing is a
+    /// room pointed at a folder that has gone missing, and `build_run_request`
+    /// refuses to run there. A tier gate on the way out would leave a
+    /// chat-tier owner with a room they cannot use and cannot repair, whose
+    /// only escape is asking for a wider connection.
+    ///
+    /// Both spellings are asserted, because a model that means "clear this"
+    /// produces either, and only one of them is an obvious no-path call.
+    #[tokio::test]
+    async fn releasing_a_folder_is_not_tier_gated() {
+        let (tool, project, store, _g) = fixture();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().to_string_lossy().to_string();
+
+        for release_with in [None, Some("   ")] {
+            as_user_at_tier("u-alice", Some("operator"), async {
+                tool.call(bind_args(&project.id, Some(&path))).await
+            })
+            .await
+            .expect("bound first");
+
+            as_user_at_tier("u-alice", Some("guest"), async {
+                tool.call(bind_args(&project.id, release_with)).await
+            })
+            .await
+            .unwrap_or_else(|e| panic!("releasing with {release_with:?} must not be gated: {e}"));
+
+            assert_eq!(
+                store.get(&project.id).unwrap().unwrap().workspace_path,
+                None,
+                "releasing with {release_with:?} must actually clear the folder"
+            );
         }
     }
 
@@ -545,6 +880,7 @@ mod tests {
                 project_id: None,
                 name: None,
                 user_id: None,
+                path: None,
             })
             .await
         })
@@ -565,6 +901,7 @@ mod tests {
                 project_id: None,
                 name: Some("headless room".into()),
                 user_id: None,
+                path: None,
             })
             .await
             .expect("create succeeds");

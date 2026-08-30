@@ -36,6 +36,7 @@
 //! brand-new session, and the two never saw each other's messages on any
 //! surface.
 
+mod channel_bindings;
 mod kanban;
 mod memory;
 mod settings;

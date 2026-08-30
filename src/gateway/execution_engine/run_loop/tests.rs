@@ -1166,3 +1166,685 @@ async fn an_unclaimed_key_keeps_the_producers_scope() {
         Some("personal:u-alice".to_string())
     );
 }
+
+// ============================================================================
+// Task 6 — room_claiming's second arm: a channel conversation bound to a room
+// ============================================================================
+//
+// Twins of the two arm-1 tests just above
+// (`the_loop_runs_under_the_room_scope_for_a_claimed_key`,
+// `an_unclaimed_key_keeps_the_producers_scope`), for the conversation-binding
+// arm `ProjectStore::project_for_bound_session` adds. `request_scope` is
+// exercised directly rather than through `with_request_scope`: the roster
+// gate these tests pin lives entirely inside it and needs no task-local nest
+// to observe.
+
+/// A request whose metadata carries `attr` and whose key is a channel group
+/// conversation.
+fn channel_group_request(attr: &crate::scope::ScopeAttribution, peer: &str) -> RunRequest {
+    let mut metadata = std::collections::HashMap::new();
+    crate::scope::stamp_metadata(&mut metadata, attr);
+    RunRequest {
+        session_key: crate::routing::session_key::SessionKey::group(
+            "main",
+            "telegram",
+            crate::routing::session_key::PeerKind::Group,
+            peer,
+        ),
+        ..minimal_request(metadata)
+    }
+}
+
+#[test]
+fn a_bound_conversation_upgrades_a_roster_member_to_the_room_scope() {
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+    let room = store.create("bound-room-1", Some("u-alice"), None).unwrap();
+    store.add_member(&room.id, "u-alice").unwrap();
+    store
+        .bind_conversation(
+            &room.id,
+            "telegram",
+            aleph_protocol::projects::BindingPeerKind::Group,
+            "C-up",
+            Some("u-alice"),
+            None,
+        )
+        .unwrap();
+
+    let attr = crate::scope::ScopeAttribution::personal("u-alice");
+    let resolved = super::request_scope(&channel_group_request(&attr, "C-up"))
+        .expect("a stamped run resolves a scope");
+    assert_eq!(
+        resolved.scope,
+        crate::scope::ScopeId::Project(room.id.clone()),
+        "a roster member speaking in a bound group takes the room scope"
+    );
+    assert_eq!(
+        resolved.owner_user_id, "u-alice",
+        "the owner still names whoever spoke — overwriting it would lose the byline"
+    );
+}
+
+#[test]
+fn a_bound_conversation_does_not_upgrade_a_non_member() {
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+    let room = store.create("bound-room-2", Some("u-alice"), None).unwrap();
+    store.add_member(&room.id, "u-alice").unwrap();
+    store
+        .bind_conversation(
+            &room.id,
+            "telegram",
+            aleph_protocol::projects::BindingPeerKind::Group,
+            "C-out",
+            Some("u-alice"),
+            None,
+        )
+        .unwrap();
+
+    let attr = crate::scope::ScopeAttribution::personal("u-bob");
+    let resolved = super::request_scope(&channel_group_request(&attr, "C-out"))
+        .expect("a stamped run resolves a scope");
+    assert_eq!(
+        resolved.scope,
+        crate::scope::ScopeId::Personal("u-bob".to_string()),
+        "being in the Telegram group must not be equivalent to being on the roster: \
+         the channel path has no session_visible admission check, so this is the \
+         only place that answers it"
+    );
+}
+
+#[test]
+fn an_unpaired_speaker_in_a_bound_conversation_takes_no_room_scope() {
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+    let room = store.create("bound-room-3", Some("u-alice"), None).unwrap();
+    store.add_member(&room.id, "u-alice").unwrap();
+    store
+        .bind_conversation(
+            &room.id,
+            "telegram",
+            aleph_protocol::projects::BindingPeerKind::Group,
+            "C-anon",
+            Some("u-alice"),
+            None,
+        )
+        .unwrap();
+
+    let mut request = channel_group_request(
+        &crate::scope::ScopeAttribution::personal("ignored"),
+        "C-anon",
+    );
+    request.metadata.clear(); // an unpaired sender stamps nothing at all
+    assert!(
+        super::request_scope(&request).is_none(),
+        "an unstamped turn must resolve no scope: this is what keeps a stranger \
+         out of the room partition AND out of RoomRosterLayer, which reads the \
+         same task-local. It is true today by derivation, not by guard — hence \
+         this test."
+    );
+}
+
+#[test]
+fn a_producer_that_already_stamped_the_room_is_left_alone() {
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+    let room = store.create("bound-room-4", Some("u-alice"), None).unwrap();
+    // Deliberately NOT on the roster: this is the cron/A2A shape that
+    // `resolve_attribution`'s Path 2 produces (owner = OWNER_USER_ID, scope =
+    // Project) after its own admission check already passed.
+    store
+        .bind_conversation(
+            &room.id,
+            "telegram",
+            aleph_protocol::projects::BindingPeerKind::Group,
+            "C-cron",
+            Some("u-alice"),
+            None,
+        )
+        .unwrap();
+
+    let attr = crate::scope::ScopeAttribution {
+        owner_user_id: crate::gateway::security::store::OWNER_USER_ID.to_string(),
+        scope: crate::scope::ScopeId::Project(room.id.clone()),
+    };
+    let resolved = super::request_scope(&channel_group_request(&attr, "C-cron"))
+        .expect("a stamped run resolves a scope");
+    assert_eq!(
+        resolved.scope,
+        crate::scope::ScopeId::Project(room.id),
+        "the roster gate answers 'is this DERIVED room-scoping trustworthy'. A run \
+         whose producer already stamped the room went through admission; re-judging \
+         it would silently demote an admitted room run to a personal one."
+    );
+}
+
+/// Pins the invariant `the_loop_runs_under_the_room_scope_for_a_claimed_key`
+/// (above, via `ensure_session_under_request_scope`) already carried
+/// implicitly, stated directly in terms of the fix: the roster gate applies
+/// to arm 2 (a bound conversation) only. An explicit `projects.room_session`
+/// claim is a declaration, and this path serves producers — cron/A2A
+/// re-opening a room's session chief among them — whose stamped owner is
+/// legitimately the legacy owner and sits on no roster at all.
+#[test]
+fn an_explicit_claim_upgrades_a_producer_whose_owner_is_not_on_the_roster() {
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+    let room = store
+        .create("claimed-room-not-on-roster", Some("u-alice"), None)
+        .unwrap();
+    // Deliberately NOT added to the roster.
+    let key = crate::routing::session_key::SessionKey::project_room("test-agent", &room.id);
+    store
+        .claim_session_key(&room.id, &key.to_key_string())
+        .unwrap();
+
+    let attr = crate::scope::ScopeAttribution::personal("u-nobody");
+    let mut metadata = std::collections::HashMap::new();
+    crate::scope::stamp_metadata(&mut metadata, &attr);
+    let mut request = minimal_request(metadata);
+    request.session_key = key;
+
+    let resolved = super::request_scope(&request).expect("a stamped run resolves a scope");
+    assert_eq!(
+        resolved.scope,
+        crate::scope::ScopeId::Project(room.id),
+        "arm 1 is a declaration, not an inference — the roster gate applies only \
+         to arm 2, so an explicit claim outranks the producer's stamp even when \
+         its owner is on no roster at all"
+    );
+}
+
+// ============================================================================
+// Task AE — the two room-claim twins must not drift apart again
+// ============================================================================
+
+/// The pair this pins are `handlers::agent::resolve_attribution` (admission)
+/// and [`super::request_scope`] (after it). Both ask
+/// [`crate::projects::ProjectStore::room_claiming`] which project claims a
+/// session key; only that *lookup* is shared, because the two do genuinely
+/// different things with the answer. What they must never do is disagree about
+/// **which project governs the turn** — that is what this asserts.
+///
+/// The two are reachable by the *same principal* on the *same conversation*
+/// through two different doors. A bound Telegram group's real traffic goes
+/// channel → inbound router → `request_scope`. That same person can also send
+/// that same channel-shaped session key to `agent.run` / `chat.send` from the
+/// TUI, the CLI, or any RPC client, and land on `resolve_attribution` instead.
+/// Task 6 gated the two claim arms identically on the admission path and
+/// differently after it, so those two doors answered differently for the
+/// non-member-on-a-bound-conversation case. That is the defect this test
+/// exists to keep out.
+///
+/// **"Governs" is not "admits."** Admission may refuse; `request_scope`
+/// structurally cannot — it runs on a request already cleared to execute. A
+/// refusal is still an answer about which project governs: it names one, and
+/// refuses *because of* it. So it is compared as that project rather than
+/// skipped. Reading a refusal as "no project governs" instead would make row 3
+/// vacuous and would let row 4 — the actual regression — pass while broken.
+///
+/// **Agreement is asserted alongside an absolute anchor, not on its own.** A
+/// pure agreement test is satisfied by a dead lookup — gut
+/// [`crate::projects::ProjectStore::room_claiming`] to `None` and both sides
+/// fall through to personal, so every row compares `None == None` and this test
+/// passes over a corpse. Three of the four rows therefore name the project that
+/// must govern them, and the anchor is checked first so that mutation reports
+/// the missing room rather than a contented equality.
+///
+/// The admission side is driven through the public
+/// `handlers::agent::build_run_request` rather than the private resolver: that
+/// is the funnel every Panel / TUI / CLI run really passes, and using it needs
+/// no visibility widened for a test's convenience.
+#[tokio::test]
+async fn the_two_room_claim_twins_agree_on_which_project_governs() {
+    use crate::gateway::caller_identity::CALLER_USER;
+    use crate::gateway::handlers::agent::{build_run_request, AgentRunParams, BuildRunError};
+    use crate::routing::session_key::{PeerKind, SessionKey};
+
+    // The project a side concluded governs this turn, or `None` for "this is a
+    // personal turn". Deliberately not a `Result`: the question is which
+    // project governs, and a stamp and a refusal both answer it.
+    async fn admission_says(principal: &str, key: &SessionKey) -> Option<String> {
+        let params = AgentRunParams {
+            input: "hi".into(),
+            session_key: None,
+            channel: None,
+            peer_id: None,
+            stream: false,
+            thinking: None,
+            attachments: vec![],
+            agent_id: None,
+            project_root: None,
+            model_override: None,
+            exec_tier: None,
+            mode: None,
+            memory: None,
+            voice_input: false,
+            // No `project_id` — the whole question is what the KEY says.
+            project_id: None,
+        };
+        let built = CALLER_USER
+            .scope(
+                Some(principal.to_string()),
+                build_run_request(
+                    "r-twins".into(),
+                    key,
+                    params,
+                    None,
+                    // No session store: the documented Simulated-fallback
+                    // carve-out, which cannot tell an existing session from a
+                    // new one and so takes Path 2 for every turn. Path 2 is
+                    // the path under test.
+                    None,
+                    &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                ),
+            )
+            .await;
+        match built {
+            Ok(req) => match crate::scope::scope_from_metadata(&req.metadata).map(|a| a.scope) {
+                Some(crate::scope::ScopeId::Project(pid)) => Some(pid),
+                _ => None,
+            },
+            // A refusal names the project it refused on behalf of. That IS its
+            // answer to "which project governs" — see this test's doc.
+            Err(BuildRunError::ProjectNotFound(pid)) => Some(pid),
+            Err(other) => panic!("unexpected admission failure: {other}"),
+        }
+    }
+
+    // The post-admission twin, driven the way the channel inbound router
+    // drives it: `personal:<speaker>` in the metadata, same key.
+    fn loop_says(principal: &str, key: &SessionKey) -> Option<String> {
+        let mut metadata = std::collections::HashMap::new();
+        crate::scope::stamp_metadata(
+            &mut metadata,
+            &crate::scope::ScopeAttribution::personal(principal),
+        );
+        let mut request = minimal_request(metadata);
+        request.session_key = key.clone();
+        match super::request_scope(&request).map(|a| a.scope) {
+            Some(crate::scope::ScopeId::Project(pid)) => Some(pid),
+            _ => None,
+        }
+    }
+
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+
+    // Arm 1: a room that claimed a Panel-minted key of its own.
+    let claimed = store.create("twins-arm1", Some("u-alice"), None).unwrap();
+    store.add_member(&claimed.id, "u-member").unwrap();
+    let claimed_key = SessionKey::project_room("main", &claimed.id);
+    store
+        .claim_session_key(&claimed.id, &claimed_key.to_key_string())
+        .unwrap();
+
+    // Arm 2: a room an operator bound to a channel conversation.
+    let bound = store.create("twins-arm2", Some("u-alice"), None).unwrap();
+    store.add_member(&bound.id, "u-member").unwrap();
+    store
+        .bind_conversation(
+            &bound.id,
+            "telegram",
+            aleph_protocol::projects::BindingPeerKind::Group,
+            "C-twins",
+            Some("u-alice"),
+            None,
+        )
+        .unwrap();
+    let bound_key = SessionKey::group("main", "telegram", PeerKind::Group, "C-twins");
+
+    // The third column is the ABSOLUTE expectation, and it is why this test
+    // cannot pass with the feature dead. Agreement alone is satisfied by a
+    // gutted `ProjectStore::room_claiming`: return `None` and both sides fall
+    // to personal, all four rows compare `None == None`, and a test whose doc
+    // calls itself "the point of the whole task" stays green over a corpse.
+    // Three of the four rows name a project outright, so that mutation now
+    // reddens THIS test by name and not only its neighbours.
+    //
+    // Row 3 carries an anchor too, which the shape makes easy to miss:
+    // admission refuses *in the room's name*, so its answer to "which project
+    // governs" is that room, not nothing.
+    let rows: [(&str, &SessionKey, Option<&str>, &str); 4] = [
+        (
+            "u-member",
+            &claimed_key,
+            Some(claimed.id.as_str()),
+            "a member on a room's own claimed key",
+        ),
+        (
+            "u-member",
+            &bound_key,
+            Some(bound.id.as_str()),
+            "a member on a bound channel conversation",
+        ),
+        (
+            // Both sides say the room governs — admission by refusing in its
+            // name, the loop by upgrading the stamp to it. They differ only on
+            // whether to let this caller in, which is admission's job alone and
+            // is not what this test claims.
+            "u-stranger",
+            &claimed_key,
+            Some(claimed.id.as_str()),
+            "a non-member on a room's own claimed key",
+        ),
+        (
+            // The regression. Before this fix admission refused with the room's
+            // id while the loop said "personal": the same person, the same
+            // conversation, two different governing projects depending on which
+            // door they came through.
+            //
+            // The one row whose correct answer really is "no project governs".
+            // It is therefore the weakest of the four on its own, which is
+            // exactly why the other three carry absolute anchors.
+            "u-stranger",
+            &bound_key,
+            None,
+            "a non-member on a bound channel conversation",
+        ),
+    ];
+
+    for (who, key, expected, what) in rows {
+        let admission = admission_says(who, key).await;
+        // Anchor first: with the lookup dead, this is the assertion that fires,
+        // and it says so — where the agreement assertion below would report a
+        // contented `None == None`.
+        assert_eq!(
+            admission.as_deref(),
+            expected,
+            "the admission path names the wrong governing project for {what}. \
+             This is the absolute half of the test: it holds the two sides to a \
+             named room rather than only to each other, so gutting \
+             `ProjectStore::room_claiming` cannot pass by making both sides \
+             equally empty."
+        );
+        assert_eq!(
+            admission,
+            loop_says(who, key),
+            "the two room-claim twins disagree about which project governs the \
+             turn for {what}. They share the claim LOOKUP and split only on \
+             policy; a split that changes the GOVERNING project means one \
+             principal gets a different room depending on whether they spoke \
+             through a channel or through agent.run / chat.send."
+        );
+    }
+}
+
+// ============================================================================
+// Task 15 — the fourth reader: what `FlowRequest` carries across the spawn
+// ============================================================================
+//
+// `request_scope_strings` is the projection `inner.rs` hands to
+// `orchestrator::dispatch`, which re-seeds the scope task-local inside its
+// `tokio::spawn`. Until this task it read `request.metadata` directly, so the
+// room upgrade below reached the session ROW and nothing after the spawn.
+//
+// The two tests are a pair and neither is redundant. The first says the
+// upgrade is carried; the second says nothing else moved — an off-roster
+// speaker must be projected to the very bytes the raw read produced, which is
+// the only way to show this change did not widen who gets a room scope.
+
+/// The two strings the shipped code used to forward: a verbatim copy of the
+/// old `inner.rs` expression, kept so the tests below can state the OLD value
+/// as a measured fact rather than describe it.
+fn raw_metadata_pair(request: &RunRequest) -> (Option<String>, Option<String>) {
+    (
+        request.metadata.get(crate::scope::OWNER_META_KEY).cloned(),
+        request.metadata.get(crate::scope::SCOPE_META_KEY).cloned(),
+    )
+}
+
+#[test]
+fn the_flow_request_projection_carries_the_room_upgrade() {
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+    let room = store.create("flow-room-1", Some("u-alice"), None).unwrap();
+    store.add_member(&room.id, "u-alice").unwrap();
+    store
+        .bind_conversation(
+            &room.id,
+            "telegram",
+            aleph_protocol::projects::BindingPeerKind::Group,
+            "C-flow",
+            Some("u-alice"),
+            None,
+        )
+        .unwrap();
+
+    let request = channel_group_request(
+        &crate::scope::ScopeAttribution::personal("u-alice"),
+        "C-flow",
+    );
+
+    assert_eq!(
+        raw_metadata_pair(&request).1.as_deref(),
+        Some("personal:u-alice"),
+        "premise: the channel producer stamps the SPEAKER, not the room. If this \
+         ever stops being true the test below stops testing the upgrade."
+    );
+
+    let (owner, scope) = super::request_scope_strings(&request).into_parts();
+    let expected_room_scope = format!("project:{}", room.id);
+    assert_eq!(
+        scope.as_deref(),
+        Some(expected_room_scope.as_str()),
+        "the scope handed to the harness must be the room's. This is the whole \
+         defect: with the raw read it was `personal:u-alice`, so the session row \
+         was filed under the room while the memory partition, the <room_context> \
+         roster and the transcript byline all ran personal."
+    );
+    assert_eq!(
+        owner.as_deref(),
+        Some("u-alice"),
+        "the owner still names whoever spoke — `request_scope` replaces only the \
+         scope, and the projection must not invent a different rule"
+    );
+}
+
+#[test]
+fn an_off_roster_speaker_is_projected_exactly_as_the_raw_read_was() {
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+    let room = store.create("flow-room-2", Some("u-alice"), None).unwrap();
+    store.add_member(&room.id, "u-alice").unwrap();
+    store
+        .bind_conversation(
+            &room.id,
+            "telegram",
+            aleph_protocol::projects::BindingPeerKind::Group,
+            "C-flow-out",
+            Some("u-alice"),
+            None,
+        )
+        .unwrap();
+
+    // In the bound conversation, not on the roster: arm 2's gate keeps this
+    // speaker personal, and that decision is made in `request_scope`, not here.
+    let request = channel_group_request(
+        &crate::scope::ScopeAttribution::personal("u-bob"),
+        "C-flow-out",
+    );
+
+    assert_eq!(
+        super::request_scope_strings(&request).into_parts(),
+        raw_metadata_pair(&request),
+        "an off-roster speaker in a bound conversation must reach the harness with \
+         BYTE-IDENTICAL strings before and after this change. Deriving the pair from \
+         `request_scope` carries the decision arm 2's roster gate already made; it \
+         must not make a new one. If these ever diverge, being in the Telegram group \
+         has become equivalent to being on the roster."
+    );
+    assert_eq!(
+        super::request_scope_strings(&request)
+            .into_parts()
+            .1
+            .as_deref(),
+        Some("personal:u-bob"),
+        "stated absolutely as well as relatively: equality with the raw read is \
+         also satisfied if BOTH sides became the room, which is the direction that \
+         would matter"
+    );
+}
+
+#[test]
+fn an_unstamped_turn_projects_no_strings() {
+    let mut request = minimal_request(std::collections::HashMap::new());
+    request.metadata.insert(
+        crate::scope::OWNER_META_KEY.to_string(),
+        "u-alice".to_string(),
+    );
+    // Owner without scope: `scope_from_metadata` is fail-closed on the pair.
+    assert_eq!(
+        super::request_scope_strings(&request).into_parts(),
+        (None, None),
+        "the projection must inherit `scope_from_metadata`'s fail-closed pairing. \
+         The raw read forwarded `Some(owner), None` here; `dispatch` rebuilds a map \
+         from whatever it gets and runs it through `scope_from_metadata` again, so \
+         both spellings land on the same dead task-local — but only this one says so \
+         at the boundary instead of two layers later."
+    );
+}
+
+#[test]
+fn the_projection_round_trips_through_the_dispatch_rebuild() {
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+    let room = store.create("flow-room-3", Some("u-alice"), None).unwrap();
+    store.add_member(&room.id, "u-alice").unwrap();
+    store
+        .bind_conversation(
+            &room.id,
+            "telegram",
+            aleph_protocol::projects::BindingPeerKind::Group,
+            "C-flow-rt",
+            Some("u-alice"),
+            None,
+        )
+        .unwrap();
+
+    let request = channel_group_request(
+        &crate::scope::ScopeAttribution::personal("u-alice"),
+        "C-flow-rt",
+    );
+    let (owner, scope) = super::request_scope_strings(&request).into_parts();
+
+    // Verbatim shape of `orchestrator::dispatch`'s rebuild inside its spawn.
+    let mut rebuilt = std::collections::HashMap::new();
+    if let Some(owner) = owner {
+        rebuilt.insert(crate::scope::OWNER_META_KEY.to_string(), owner);
+    }
+    if let Some(scope) = scope {
+        rebuilt.insert(crate::scope::SCOPE_META_KEY.to_string(), scope);
+    }
+
+    assert_eq!(
+        crate::scope::scope_from_metadata(&rebuilt),
+        super::request_scope(&request),
+        "`ScopeId::render` must be the same spelling `scope::stamp_metadata` writes \
+         and `ScopeId::parse` reads, or the strings would cross the spawn and fail \
+         to parse on the far side — which is indistinguishable from an unscoped run"
+    );
+}
+
+/// Layer 4's bound, measured instead of described.
+///
+/// The two tests above are the layer that owns provenance, and what they
+/// assert is a VALUE: the pair a claimed session key must reach the harness
+/// with. Two consequences follow from that, and the docs describing them have
+/// now been written wrong three times in a row — each generation narrower than
+/// the last and each still wide — because prose about coverage has no test.
+/// So both are cases here:
+///
+/// * anything that LOSES the upgrade is a different value and is red. That
+///   includes the empty pair, which is what a `Default` mint would produce and
+///   what no text search inside `run_loop` can find — the residue
+///   `flow_scope_census::tests::the_flow_request_scope_type_refuses_a_raw_pair_and_an_unnamed_empty`
+///   documents and hands to this layer.
+/// * anything that REACHES the same value satisfies them, whatever computed
+///   it. That is the hole: a second, independent resolution that agrees today
+///   is invisible here by construction, and it stays invisible for exactly as
+///   long as it keeps agreeing. `flow_scope_census`'s layer-3 counts do not
+///   object to it either (measured there, by name), and what does object is
+///   layer 5 — `the_flow_request_site_derives_its_scope_from_request_scope`'s
+///   requirement that this projection's BODY call `request_scope` — and only
+///   for a body that forked away from it entirely.
+///
+/// The second case deliberately builds its `ScopeAttribution` by struct
+/// literal rather than calling `request_scope` under another name: a
+/// re-implementation in this file would drift with `request_scope` and turn
+/// this case into a maintenance red, and the claim is about the ANSWER, not
+/// about how a duplicate would be written.
+#[test]
+fn layer_4_discriminates_the_answer_and_only_the_answer() {
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+    let room = store.create("flow-room-4", Some("u-alice"), None).unwrap();
+    store.add_member(&room.id, "u-alice").unwrap();
+    store
+        .bind_conversation(
+            &room.id,
+            "telegram",
+            aleph_protocol::projects::BindingPeerKind::Group,
+            "C-flow-l4",
+            Some("u-alice"),
+            None,
+        )
+        .unwrap();
+
+    let request = channel_group_request(
+        &crate::scope::ScopeAttribution::personal("u-alice"),
+        "C-flow-l4",
+    );
+    let shipped = super::request_scope_strings(&request).into_parts();
+
+    let by_hand = crate::scope::FlowScope::resolved(Some(&crate::scope::ScopeAttribution {
+        owner_user_id: "u-alice".to_string(),
+        scope: crate::scope::ScopeId::Project(room.id.clone()),
+    }))
+    .into_parts();
+    assert_eq!(
+        by_hand, shipped,
+        "a projection that reaches the same pair without going through \
+         `request_scope` at all satisfies the two tests above. That is not a defect \
+         in them — they assert the property that matters — but it is the exact \
+         reason they cannot be cited as objecting to a SECOND RESOLUTION. If this \
+         ever fires, layer 4 has become provenance-sensitive and every doc that \
+         calls it a value assertion is now wrong."
+    );
+
+    assert_ne!(
+        crate::scope::FlowScope::unscoped().into_parts(),
+        shipped,
+        "the empty pair is a different value, so layer 4 is red for it — this is \
+         what catches a `Default` mint inside `run_loop`, which layer 1's derive \
+         read cannot see when the impl is hand-written in another module and no \
+         text search can find `Default::default()` at all"
+    );
+    assert_ne!(
+        raw_metadata_pair(&request),
+        shipped,
+        "premise: the producer's own stamp is a different value here, or this whole \
+         block is measuring a room upgrade that never happened"
+    );
+}

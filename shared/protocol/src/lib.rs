@@ -31,6 +31,7 @@ pub mod jsonrpc;
 pub mod paths;
 pub mod plan;
 pub mod plugins;
+pub mod projects;
 pub mod providers;
 pub mod queue;
 pub mod receipt;
