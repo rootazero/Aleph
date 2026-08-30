@@ -331,8 +331,13 @@ pub fn stamp_metadata(meta: &mut HashMap<String, String>, attr: &ScopeAttributio
 /// and a struct literal,
 /// which `tests/gateway_chat_room_author_across_spawn.rs` builds from outside
 /// the crate. One public call therefore bridges metadata straight to this
-/// type, it compiles, and every lexical layer in `flow_scope_census` stays
-/// green while it does.
+/// type and it compiles. When that was measured every lexical layer in
+/// `flow_scope_census` stayed green while it did; layer 5 — the projection's
+/// body must CALL `request_scope` — has since made that particular bypass
+/// red, because feeding `resolved` from `from_persisted` is a body that
+/// stopped calling the resolver. Layers 2 and 3 are still green on it, which
+/// is the half this section is about: no rule about a SPELLING reaches
+/// provenance.
 ///
 /// The same is true of the older hole this section already named: a caller can
 /// resolve an attribution the wrong way — `scope_from_metadata` on the raw map,
@@ -345,7 +350,12 @@ pub fn stamp_metadata(meta: &mut HashMap<String, String>, attr: &ScopeAttributio
 /// that a claimed session key reaches the harness as the ROOM. They are red for
 /// any resolution that LOSES that upgrade, however it is spelled — which no
 /// rule about a spelling can be. Not for a second resolution that reaches the
-/// same answer: that one is layer 3's counts, not theirs.
+/// same answer — that one SATISFIES them, because what they assert is a value
+/// and anything computing the same value passes. Nor is it layer 3's counts:
+/// those count occurrences, not answers. `flow_scope_census`'s layer 5
+/// (`request_scope_strings`'s body must call `request_scope`) is the only
+/// thing in the package that objects, and only when the fork drops the call
+/// entirely.
 /// `flow_scope_census`'s module doc lists them as layer 4 and states the bound
 /// in full; do not trade them away as redundant with this type.
 ///
@@ -394,8 +404,10 @@ impl FlowScope {
     ///
     /// What must not spread is a SECOND way to resolve one inside `run_loop`,
     /// and that is held off by `flow_scope_census` — its `scope_from_metadata`
-    /// and `FlowScope::resolved` counts lexically, and its layer 4 (two
-    /// behavioural tests, named there) behaviourally. Not by this signature.
+    /// and `FlowScope::resolved` counts lexically, its layer 5 (the
+    /// projection's body must call `request_scope`) structurally, and its
+    /// layer 4 (two behavioural tests, named there) behaviourally. Not by
+    /// this signature.
     #[must_use]
     pub fn resolved(attr: Option<&ScopeAttribution>) -> Self {
         Self {

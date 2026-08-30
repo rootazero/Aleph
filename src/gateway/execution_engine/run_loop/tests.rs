@@ -1764,3 +1764,87 @@ fn the_projection_round_trips_through_the_dispatch_rebuild() {
          to parse on the far side — which is indistinguishable from an unscoped run"
     );
 }
+
+/// Layer 4's bound, measured instead of described.
+///
+/// The two tests above are the layer that owns provenance, and what they
+/// assert is a VALUE: the pair a claimed session key must reach the harness
+/// with. Two consequences follow from that, and the docs describing them have
+/// now been written wrong three times in a row — each generation narrower than
+/// the last and each still wide — because prose about coverage has no test.
+/// So both are cases here:
+///
+/// * anything that LOSES the upgrade is a different value and is red. That
+///   includes the empty pair, which is what a `Default` mint would produce and
+///   what no text search inside `run_loop` can find — the residue
+///   `flow_scope_census::tests::the_flow_request_scope_type_refuses_a_raw_pair_and_an_unnamed_empty`
+///   documents and hands to this layer.
+/// * anything that REACHES the same value satisfies them, whatever computed
+///   it. That is the hole: a second, independent resolution that agrees today
+///   is invisible here by construction, and it stays invisible for exactly as
+///   long as it keeps agreeing. `flow_scope_census`'s layer-3 counts do not
+///   object to it either (measured there, by name), and what does object is
+///   layer 5 — `the_flow_request_site_derives_its_scope_from_request_scope`'s
+///   requirement that this projection's BODY call `request_scope` — and only
+///   for a body that forked away from it entirely.
+///
+/// The second case deliberately builds its `ScopeAttribution` by struct
+/// literal rather than calling `request_scope` under another name: a
+/// re-implementation in this file would drift with `request_scope` and turn
+/// this case into a maintenance red, and the claim is about the ANSWER, not
+/// about how a duplicate would be written.
+#[test]
+fn layer_4_discriminates_the_answer_and_only_the_answer() {
+    let _guard = crate::projects::roster::TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let store = crate::projects::ProjectStore::shared();
+    let room = store.create("flow-room-4", Some("u-alice"), None).unwrap();
+    store.add_member(&room.id, "u-alice").unwrap();
+    store
+        .bind_conversation(
+            &room.id,
+            "telegram",
+            aleph_protocol::projects::BindingPeerKind::Group,
+            "C-flow-l4",
+            Some("u-alice"),
+            None,
+        )
+        .unwrap();
+
+    let request = channel_group_request(
+        &crate::scope::ScopeAttribution::personal("u-alice"),
+        "C-flow-l4",
+    );
+    let shipped = super::request_scope_strings(&request).into_parts();
+
+    let by_hand = crate::scope::FlowScope::resolved(Some(&crate::scope::ScopeAttribution {
+        owner_user_id: "u-alice".to_string(),
+        scope: crate::scope::ScopeId::Project(room.id.clone()),
+    }))
+    .into_parts();
+    assert_eq!(
+        by_hand, shipped,
+        "a projection that reaches the same pair without going through \
+         `request_scope` at all satisfies the two tests above. That is not a defect \
+         in them — they assert the property that matters — but it is the exact \
+         reason they cannot be cited as objecting to a SECOND RESOLUTION. If this \
+         ever fires, layer 4 has become provenance-sensitive and every doc that \
+         calls it a value assertion is now wrong."
+    );
+
+    assert_ne!(
+        crate::scope::FlowScope::unscoped().into_parts(),
+        shipped,
+        "the empty pair is a different value, so layer 4 is red for it — this is \
+         what catches a `Default` mint inside `run_loop`, which layer 1's derive \
+         read cannot see when the impl is hand-written in another module and no \
+         text search can find `Default::default()` at all"
+    );
+    assert_ne!(
+        raw_metadata_pair(&request),
+        shipped,
+        "premise: the producer's own stamp is a different value here, or this whole \
+         block is measuring a room upgrade that never happened"
+    );
+}

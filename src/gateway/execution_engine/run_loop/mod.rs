@@ -169,7 +169,13 @@ fn request_scope(request: &RunRequest) -> Option<crate::scope::ScopeAttribution>
 /// `tests::the_projection_round_trips_through_the_dispatch_rebuild` keep this
 /// function honest behaviourally: they are the only two that go red when a
 /// re-resolution here LOSES the room upgrade, whatever spelling it uses. A
-/// re-resolution that keeps it is layer 3's counts, not theirs.
+/// re-resolution that KEEPS it is neither theirs nor layer 3's counts: those
+/// count OCCURRENCES, not answers, and a fork that agrees adds none of them.
+/// One thing objects — `flow_scope_census`'s layer 5, the requirement that
+/// this body CALL `request_scope` — and a fork that leaves a dead call
+/// standing beside its own resolution still passes even that. Both halves are
+/// measured in
+/// `flow_scope_census::tests::the_projection_body_must_call_request_scope`.
 fn request_scope_strings(request: &RunRequest) -> crate::scope::FlowScope {
     crate::scope::FlowScope::resolved(request_scope(request).as_ref())
 }
