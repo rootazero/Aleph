@@ -100,6 +100,21 @@
 //! `crate::scope`) are held by the field-privacy assertion plus rustc, and
 //! nothing short of a `trybuild` fixture reaches them directly.
 //!
+//! The cases have a bound of their own, and it is this whole approach's:
+//! **they go red when a LAYER changes, not when this paragraph does.**
+//! `production_code_lines` blanks comment-only lines, so an edit to a `//!`
+//! is invisible to every check in this package, this file's own census
+//! included — measured by restoring generation 3's exact false sentence with
+//! no code change: `--lib run_loop`, 47 passed / 0 failed. All three earlier
+//! generations WERE edits to this paragraph, so against the three failures
+//! these cases exist to prevent, they would have red nothing. What they buy
+//! is the other direction: each claim in the LIST above names the test that
+//! measures it, so checking one is running that test instead of reasoning
+//! over a loop inlined in a live test — which is how all three came to be
+//! written wrong in the first place. **Held by a recorded measurement, and
+//! by nothing that can go red**: no case can detect that its sibling
+//! paragraph became false.
+//!
 //! - **Layer 1 constrains a shape, not a provenance, and one public call
 //!   bridges the gap.** [`crate::scope::ScopeAttribution`] is `pub` with `pub`
 //!   fields and is reachable three ways: `from_persisted`, which takes exactly
