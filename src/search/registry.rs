@@ -1,5 +1,7 @@
 use crate::error::{AlephError, Result};
-use crate::search::{SearchOptions, SearchProvider, SearchResult, WebFetchSerpFallback};
+use crate::search::{
+    SearchCapabilities, SearchOptions, SearchProvider, SearchResult, WebFetchSerpFallback,
+};
 use crate::sync_primitives::Arc;
 
 /// Map an `AlephError` returned by a search provider to a short, stable
@@ -208,6 +210,47 @@ impl SearchRegistry {
         self.providers.insert(name, provider);
     }
 
+    /// Which dimensions this request actually asks for.
+    fn requested(options: &SearchOptions) -> SearchCapabilities {
+        SearchCapabilities {
+            domain_filter: !options.include_domains.is_empty()
+                || !options.exclude_domains.is_empty(),
+            recency: options.recency.is_some(),
+            full_content: options.include_full_content,
+        }
+    }
+
+    /// Default first, then fallbacks in configuration order, then stably
+    /// reordered so providers that can carry every requested dimension come
+    /// first.
+    ///
+    /// Stable on purpose: within a group the configured order survives, so the
+    /// same query reaches the same backend on every call. An unstable sort
+    /// would trade that for nothing anyone asked for.
+    fn ordered_candidates(&self, options: &SearchOptions) -> Vec<String> {
+        let want = Self::requested(options);
+        // An order-preserving seen-set, not `Vec::dedup` — `dedup` only
+        // catches *consecutive* repeats, and a provider named as both the
+        // default and again in `fallback_providers` produces a duplicate
+        // that is never adjacent (`[default, ...fallbacks]`). Missing that
+        // would consult the same backend twice, spend its quota twice, and
+        // count its failure twice against the chain.
+        let mut seen = std::collections::HashSet::new();
+        let mut names: Vec<String> = std::iter::once(self.default_provider.clone())
+            .chain(self.fallback_providers.iter().cloned())
+            .filter(|n| self.providers.contains_key(n))
+            .filter(|n| seen.insert(n.clone()))
+            .collect();
+        names.sort_by_key(|n| {
+            let have = self.providers[n].capabilities();
+            let satisfies = (!want.domain_filter || have.domain_filter)
+                && (!want.recency || have.recency)
+                && (!want.full_content || have.full_content);
+            usize::from(!satisfies)
+        });
+        names
+    }
+
     /// Set fallback providers
     pub fn set_fallback_providers(&mut self, providers: Vec<String>) {
         self.fallback_providers = providers;
@@ -226,66 +269,35 @@ impl SearchRegistry {
     pub async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
         let mut errors: Vec<String> = Vec::new();
 
-        // Try default provider
-        if let Some(provider) = self.providers.get(&self.default_provider) {
+        // Ordered candidates: default first, then fallbacks, stably
+        // reordered so a provider that can carry every dimension this
+        // request asks for is tried before one that cannot. `ordered_candidates`
+        // already dropped anything not in `self.providers`, so the lookup
+        // below cannot miss.
+        for provider_name in self.ordered_candidates(options) {
+            let provider = &self.providers[&provider_name];
             if !provider.is_available() {
-                let msg = format!(
-                    "Default provider '{}' is not available (missing configuration)",
-                    self.default_provider
-                );
+                let msg =
+                    format!("Provider '{provider_name}' is not available (missing configuration)");
                 log::warn!("{msg}");
                 errors.push(msg);
-            } else {
-                match provider.search(query, options).await {
-                    Ok(results) => return Ok(results),
-                    Err(e) => {
-                        let kind = classify_search_error(&e);
-                        let msg = format!(
-                            "Provider '{}' [{}] failed: {}",
-                            self.default_provider, kind, e
-                        );
-                        log::warn!(
-                            target: "search",
-                            "provider={} kind={} {}",
-                            self.default_provider,
-                            kind,
-                            e
-                        );
-                        errors.push(msg);
-                    }
-                }
+                continue;
             }
-        } else {
-            let msg = format!("Default provider '{}' not found", self.default_provider);
-            log::warn!("{msg}");
-            errors.push(msg);
-        }
-
-        // Try fallback providers
-        for provider_name in &self.fallback_providers {
-            if let Some(provider) = self.providers.get(provider_name) {
-                if !provider.is_available() {
-                    let msg = format!(
-                        "Fallback provider '{provider_name}' is not available (missing configuration)"
-                    );
-                    log::warn!("{msg}");
-                    errors.push(msg);
-                    continue;
-                }
-                match provider.search(query, options).await {
-                    Ok(results) => {
+            match provider.search(query, options).await {
+                Ok(results) => {
+                    if provider_name != self.default_provider {
                         log::info!("Search succeeded with fallback provider '{provider_name}'");
-                        return Ok(results);
                     }
-                    Err(e) => {
-                        let kind = classify_search_error(&e);
-                        let msg = format!("Provider '{provider_name}' [{kind}] failed: {e}");
-                        log::warn!(
-                            target: "search",
-                            "provider={provider_name} kind={kind} {e}"
-                        );
-                        errors.push(msg);
-                    }
+                    return Ok(results);
+                }
+                Err(e) => {
+                    let kind = classify_search_error(&e);
+                    let msg = format!("Provider '{provider_name}' [{kind}] failed: {e}");
+                    log::warn!(
+                        target: "search",
+                        "provider={provider_name} kind={kind} {e}"
+                    );
+                    errors.push(msg);
                 }
             }
         }
@@ -342,6 +354,7 @@ mod tests {
         name: String,
         should_fail: bool,
         result_count: usize,
+        capabilities: SearchCapabilities,
     }
 
     impl MockProvider {
@@ -350,7 +363,14 @@ mod tests {
                 name: name.to_string(),
                 should_fail,
                 result_count,
+                capabilities: SearchCapabilities::default(),
             }
+        }
+
+        /// Declares `domain_filter` support, for capability-ordering tests.
+        fn with_domain_filter(mut self) -> Self {
+            self.capabilities.domain_filter = true;
+            self
         }
     }
 
@@ -362,6 +382,10 @@ mod tests {
 
         fn is_available(&self) -> bool {
             true
+        }
+
+        fn capabilities(&self) -> SearchCapabilities {
+            self.capabilities
         }
 
         async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
@@ -754,6 +778,70 @@ mod tests {
         assert!(
             !registry.has_web_fetch_fallback(),
             "web_fetch_fallback=false must leave the registry without a fallback"
+        );
+    }
+
+    // ─── Capability-aware ordering (Round-4) ────────────────────────────
+
+    #[tokio::test]
+    async fn a_provider_that_can_carry_the_requested_dimension_goes_first() {
+        let mut reg = SearchRegistry::new("plain");
+        reg.add_provider(
+            "plain".into(),
+            Arc::new(MockProvider::new("plain", false, 1)),
+        );
+        reg.add_provider(
+            "rich".into(),
+            Arc::new(MockProvider::new("rich", false, 1).with_domain_filter()),
+        );
+        reg.set_fallback_providers(vec!["rich".into()]);
+
+        let opts = SearchOptions {
+            include_domains: vec!["github.com".into()],
+            ..Default::default()
+        };
+        assert_eq!(reg.ordered_candidates(&opts), vec!["rich", "plain"]);
+
+        // No dimension requested => configuration order is untouched.
+        assert_eq!(
+            reg.ordered_candidates(&SearchOptions::default()),
+            vec!["plain", "rich"]
+        );
+    }
+
+    /// Stable within a group: two providers that both satisfy (or both fail to
+    /// satisfy) the request keep configuration order, so the same query lands on
+    /// the same backend every time. Non-determinism here would make a cached or
+    /// rate-limited backend impossible to reason about.
+    #[tokio::test]
+    async fn ordering_is_stable_within_a_capability_group() {
+        let mut reg = SearchRegistry::new("a");
+        for n in ["a", "b", "c"] {
+            reg.add_provider(n.into(), Arc::new(MockProvider::new(n, false, 1)));
+        }
+        reg.set_fallback_providers(vec!["b".into(), "c".into()]);
+        for _ in 0..20 {
+            assert_eq!(
+                reg.ordered_candidates(&SearchOptions::default()),
+                vec!["a", "b", "c"]
+            );
+        }
+    }
+
+    /// A provider named both as the default and again in the fallback list is one
+    /// backend, not two. `Vec::dedup` would not catch this — the duplicates are not
+    /// adjacent — so the search would consult the same backend twice, spend twice, and
+    /// count its failure twice against the chain.
+    #[tokio::test]
+    async fn a_provider_named_twice_is_consulted_once() {
+        let mut reg = SearchRegistry::new("a");
+        for n in ["a", "b"] {
+            reg.add_provider(n.into(), Arc::new(MockProvider::new(n, false, 1)));
+        }
+        reg.set_fallback_providers(vec!["b".into(), "a".into()]);
+        assert_eq!(
+            reg.ordered_candidates(&SearchOptions::default()),
+            vec!["a", "b"]
         );
     }
 }
