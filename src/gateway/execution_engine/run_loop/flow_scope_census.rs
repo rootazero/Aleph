@@ -331,9 +331,10 @@ mod tests {
     // property of the corpus rather than of the claims. A helper behaviour
     // that every corpus entry happens to make indistinguishable is unpinned,
     // however many entries there are: measured on `projection_body`, whose
-    // brace matching was green under two different mutations because all
-    // thirteen entries declared `request_scope_strings` last and none of the
-    // three that reach it had a brace inside the body. The question a new
+    // brace matching was green under two different mutations because the
+    // thirteen entries of the day all declared `request_scope_strings` last
+    // and none of the three that reached it had a brace inside the body. The
+    // question a new
     // entry has to answer is not "what shape does this add" but "what does it
     // share with the others".
     // =====================================================================
@@ -524,8 +525,9 @@ fn request_scope_strings(request: &RunRequest) -> crate::scope::FlowScope {
     ///
     /// Every other entry declares `fn request_scope_strings` last, so
     /// "brace-matched body" and "everything from the opening brace to the end
-    /// of the text" are the SAME STRING on them; and no entry that reaches
-    /// `projection_body` has a nested brace, so "matching close brace" and
+    /// of the text" are the SAME STRING on them; and no OTHER entry that
+    /// reaches `projection_body` has a nested brace, so "matching close
+    /// brace" and
     /// "first close brace" are the same string too. Both mutations were
     /// measured green on the whole module (`--lib run_loop`, 47/0). The first
     /// one is not merely unpinned but load-bearing on the live file: with
@@ -1039,8 +1041,8 @@ impl Default for FlowScope {
         assert!(
             body.contains("FlowScope::resolved("),
             "`projection_body` must match braces by DEPTH and not stop at the first \
-             close brace. No entry that reaches this helper has a brace inside the \
-             projection body, and today's one-expression `request_scope_strings` has \
+             close brace. No OTHER entry that reaches this helper has a brace inside \
+             the projection body, and today's one-expression `request_scope_strings` has \
              none either, so a first-brace matcher is green everywhere else — \
              measured, `--lib run_loop` 47/0. Here it cuts the body off at the struct \
              literal inside the `and_then` closure and hands layer 5 a fragment: the \
