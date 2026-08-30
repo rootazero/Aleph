@@ -192,10 +192,12 @@ pub enum ExecTier {
     ///    friends still raise a card here, and in an unattended run still
     ///    fail closed; and
     /// 3. [`ExecTier::floor_asks_for_arguments`] — a `self_config` write that
-    ///    can reach the approval settings themselves. That one is here because
-    ///    this tier is a **per-request** knob and the config change is
-    ///    permanent: without it, one message at `full` retires a gate for every
-    ///    later session at every later tier.
+    ///    touches the configuration deciding whether these gates fire at all,
+    ///    whether that stands down an existing card or opens an execution
+    ///    surface no card was watching. That one is here because this tier
+    ///    is a **per-request** knob and the config change is permanent:
+    ///    without it, one message at `full` retires a gate for every later
+    ///    session at every later tier.
     ///
     /// "Full" therefore means "the tier gates nothing", not "nothing is
     /// gated". Both the variant doc and
@@ -617,10 +619,29 @@ pub(crate) fn gate_deciding_members_named_in(text: &str) -> Vec<&'static str> {
 /// exists to prevent, one level up. The two anchors below bound the doc
 /// comment block precisely: everything between the marker phrase (unique to
 /// this doc's first line) and the `const` keyword that follows it.
+///
+/// Both anchor needles are assembled with `concat!` rather than written as
+/// one string literal, for the reason this repo's own
+/// `every_dist_gated_skip_in_this_module_is_accounted_for` needle already
+/// documents (`control_plane/server.rs`): `SRC` is this WHOLE file via
+/// `include_str!`, which includes THIS FUNCTION'S OWN BODY — an unsplit
+/// needle would match its own quoted copy here as readily as the real doc
+/// or `const` it is looking for. `.find` returns the first match in FILE
+/// ORDER, not "the one that's semantically the doc comment", so if either
+/// helper function in this pair were ever moved above the doc comment or
+/// above the real `const` in a future reorganization, an unsplit needle
+/// would silently match its own quoted copy and return a wrong-but-non-empty
+/// span. Fed through [`gate_deciding_members_named_in`], a wrong span with
+/// no path names in it scores "0 members named" and the census would PASS
+/// on a doc comment it never actually read. `concat!`'s two pieces are not
+/// textually adjacent in source, so only the real contiguous prose can
+/// satisfy `.find`, independent of where these functions sit in the file.
+/// Fix round 2 added this after a re-review found the risk was real, if
+/// latent — current file order was never actually wrong.
 #[cfg(test)]
 pub(crate) fn gate_deciding_paths_doc_text() -> &'static str {
     const SRC: &str = include_str!("exec_tier.rs");
-    let marker = "config subtrees a `self_config` write may never touch";
+    let marker = concat!("config subtrees a `self_config` write ", "may never touch");
     let start = SRC.find(marker).unwrap_or_else(|| {
         panic!(
             "doc marker {marker:?} not found in exec_tier.rs -- the \
@@ -628,11 +649,50 @@ pub(crate) fn gate_deciding_paths_doc_text() -> &'static str {
              update this anchor"
         )
     });
-    let const_marker = "const GATE_DECIDING_CONFIG_PATHS";
+    let const_marker = concat!("const GATE_DECIDING", "_CONFIG_PATHS");
     let end = SRC[start..].find(const_marker).unwrap_or_else(|| {
         panic!(
             "{const_marker:?} not found after the doc marker in exec_tier.rs \
              -- update this anchor"
+        )
+    }) + start;
+    &SRC[start..end]
+}
+
+/// The doc comment on the [`ExecTier::Full`] variant, read from source the
+/// same way [`gate_deciding_paths_doc_text`] reads the constant's — see that
+/// function's doc for why (the self-reference hazard and the `concat!` fix),
+/// and [`gate_deciding_members_named_in`]'s doc for what this feeds.
+///
+/// The fourth site added in fix round 2:
+/// `docs/reference/SECURITY.md`'s own "three copies" paragraph
+/// (`:996-998`) names this variant doc, `approval_prompt_line(Full)`, and
+/// `GateRule::GateRemoval::reason` as the three canonical sync points — and
+/// fix round 1's census scanned only the latter two (plus this constant's
+/// own doc, which SECURITY.md does not name but which earns its place, see
+/// that function's doc). Round 1's own census doc claimed to scan "the
+/// three sites SECURITY.md names" while actually scanning a different set —
+/// a second, narrower statement of what SECURITY.md already designated,
+/// which is an instance of the exact defect class this whole census exists
+/// to catch. This function closes that gap.
+#[cfg(test)]
+pub(crate) fn full_variant_doc_text() -> &'static str {
+    const SRC: &str = include_str!("exec_tier.rs");
+    let marker = concat!(
+        "The tier itself asks nothing. ",
+        "**Three floors survive it**"
+    );
+    let start = SRC.find(marker).unwrap_or_else(|| {
+        panic!(
+            "the `ExecTier::Full` variant doc's opening line was not found \
+             in exec_tier.rs -- it moved or was reworded; update this anchor"
+        )
+    });
+    let end_marker = concat!("Full", ",");
+    let end = SRC[start..].find(end_marker).unwrap_or_else(|| {
+        panic!(
+            "no `{end_marker}` found after the `Full` variant doc's opening \
+             line in exec_tier.rs -- update this anchor"
         )
     }) + start;
     &SRC[start..end]

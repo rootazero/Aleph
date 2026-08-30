@@ -1001,6 +1001,14 @@ replaced the single `rule_id != DECLARED_FLOOR_RULE` equality, pinned to
 `GateRule::is_floor` from both ends by
 `every_floor_variant_is_declared_a_floor_on_both_sides`.
 
+> **2026-08-30 update, left as a pointer rather than a rewrite**: this section is
+> a changelog entry for when the mechanism landed (round 11 / 2026-08-12) and
+> stays historical — the two paths it names above were the complete list *then*.
+> The list has since grown a third member, `policies.terminal` (see "内嵌终端"
+> below); the two names above are no longer complete. `GATE_DECIDING_CONFIG_PATHS`
+> (`config::types::policies::exec_tier`) is the current, authoritative list —
+> read that, not the two names in the paragraph above.
+
 ### The chain names every gate, and the trail hears it (2026-08-12)
 
 `GateRule` gained `OperatorRequired` and `HookRequested`: the two gates that

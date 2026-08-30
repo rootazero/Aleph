@@ -984,30 +984,79 @@ mod tests {
     /// own `GateRule::GateRemoval::reason()` and `ExecTier::Full`'s
     /// model-facing prompt line both spelled out `policies.tool_permissions`
     /// / `policies.exec_tier` by name, and neither was touched when
-    /// `policies.terminal` joined the list — so the card an operator answers,
-    /// and the sentence the model reads on every request at `full`, both
-    /// went on describing a two-member list after it became three. A partial
-    /// enumeration is a stale enumeration the moment a member is added; the
-    /// only shapes that stay correct across that change are "name every
-    /// member" (the constant's own doc, which is precisely why it explains
-    /// each one) or "name none and state the rule generically" (what
-    /// `reason()` and the prompt line do after this fix).
+    /// `policies.terminal` joined the list.
     ///
-    /// Scans the three sites `docs/reference/SECURITY.md`'s own "three
-    /// copies" paragraph names: the card/model-facing `reason()`, the
-    /// `Full`-tier prompt line, and the constant's own doc comment — read
-    /// from `exec_tier.rs`'s source rather than restated here, because a
+    /// # What this actually tests, vs. the proxy it uses
+    ///
+    /// The real criterion is: **if a fourth member were added to the list,
+    /// would this sentence become FALSE?** A sentence naming every member
+    /// stays true — it is complete. A sentence naming none and describing
+    /// the rule generically stays true — it states a category, not a
+    /// headcount. A sentence naming SOME members by name goes false the
+    /// moment one more joins: it silently stops being a complete
+    /// enumeration, which is exactly the shape of the two round-1 defects.
+    ///
+    /// "Names any ⇒ names all" is a PROXY for that question, not the
+    /// question itself, and the proxy is exact only for sentences that
+    /// describe the list generically (by rule, not by content). It misfires
+    /// in both directions, and this test deliberately does not try to
+    /// correct either one:
+    ///
+    /// - **False positive** — `docs/reference/SECURITY.md`'s "内嵌终端"
+    ///   bullet names `policies.terminal` by name: its subject IS that one
+    ///   member, and it explicitly declines to restate the rest ("具体成员
+    ///   与理由见 `GATE_DECIDING_CONFIG_PATHS` 自己的 doc，不在此重复——那份
+    ///   名单会变，这句话不该跟着腐烂"). Adding a fourth member does not make
+    ///   that sentence false — it was never claiming completeness. Held to
+    ///   "names any ⇒ names all" it would fail for naming one member without
+    ///   naming two others that have nothing to do with the terminal.
+    ///   Deliberately NOT scanned here, and should stay that way.
+    /// - **False negative, the more dangerous direction** — fix round 2
+    ///   found a real fourth copy of this sentence, predating Task 13:
+    ///   `ExecTier::Full`'s own enum variant doc (a site
+    ///   `docs/reference/SECURITY.md:996-998`'s own "three copies" paragraph
+    ///   names as one of the three canonical sync points — round 1's census
+    ///   missed it, scanning a narrower set than SECURITY.md itself
+    ///   designates). It said the third floor was a write that "can reach
+    ///   the approval settings themselves" — false for `policies.terminal`,
+    ///   which opens a new execution surface no card was watching, not the
+    ///   approval settings. That sentence named ZERO members, so
+    ///   `gate_deciding_members_named_in` returned empty and the
+    ///   `named.is_empty()` branch passed it by construction, even though it
+    ///   was wrong. **The proxy is structurally blind to "names none,
+    ///   describes the list incorrectly"** — the failure looks identical to
+    ///   the correct shape (`reason()` and `approval_prompt_line(Full)`
+    ///   after their own fixes also name zero members). Do NOT paper over
+    ///   this with a substring check for "correct" phrasing to try to close
+    ///   it: that is the same weak shape as the four substring checks in
+    ///   `the_full_tier_prompt_line_names_every_floor` that slept through
+    ///   the original round-1 finding 2 — a check that only recognizes
+    ///   shapes it already knows advertises coverage it does not have. An
+    ///   honest stated limit beats a guard that cannot fail.
+    ///
+    /// # Scanned sites
+    ///
+    /// Four. `docs/reference/SECURITY.md:996-998`'s own "three copies"
+    /// paragraph names three (`ExecTier::Full`'s variant doc,
+    /// `approval_prompt_line(Full)`, `GateRule::GateRemoval::reason`); this
+    /// test also scans `GATE_DECIDING_CONFIG_PATHS`'s own doc comment, which
+    /// SECURITY.md does not designate but which earns its place regardless
+    /// — it is what would catch "a fourth member is added and no prose is
+    /// touched" (that member's own explanatory bullet would be missing, so
+    /// the doc would name 3 of 4 members — the exact partial-enumeration
+    /// shape this whole test exists to reject). All four read from source
+    /// (`exec_tier.rs`'s helpers) rather than being restated here, because a
     /// census that carries its own copy of the membership list — or of the
     /// prose describing it — is the defect this test exists to catch, one
     /// level up.
     ///
     /// Self-protecting: the member list and each site's text must be
     /// non-empty, so a scan that silently reads nothing cannot pass by
-    /// vacuity.
+    /// vacuity, and the loop asserts it examined exactly four sites.
     #[test]
     fn a_sentence_naming_any_gate_deciding_path_names_every_member() {
         use crate::config::types::policies::exec_tier::{
-            gate_deciding_members_named_in, gate_deciding_paths_doc_text,
+            full_variant_doc_text, gate_deciding_members_named_in, gate_deciding_paths_doc_text,
             GATE_DECIDING_CONFIG_PATHS,
         };
 
@@ -1021,12 +1070,14 @@ mod tests {
         let card_text = GateRule::GateRemoval.reason("self_config");
         let full_line = ExecTier::Full.approval_prompt_line();
         let doc_text = gate_deciding_paths_doc_text();
+        let variant_doc_text = full_variant_doc_text();
 
         let mut sites_examined = 0usize;
         for (site, text) in [
             ("GateRule::GateRemoval::reason()", card_text.as_str()),
             ("ExecTier::Full.approval_prompt_line()", full_line),
             ("GATE_DECIDING_CONFIG_PATHS's doc comment", doc_text),
+            ("ExecTier::Full's variant doc comment", variant_doc_text),
         ] {
             assert!(
                 !text.is_empty(),
@@ -1046,8 +1097,8 @@ mod tests {
             sites_examined += 1;
         }
         assert_eq!(
-            sites_examined, 3,
-            "this census must examine exactly the three known sentence sites"
+            sites_examined, 4,
+            "this census must examine exactly the four known sentence sites"
         );
     }
 }
