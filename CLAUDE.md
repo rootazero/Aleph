@@ -603,7 +603,7 @@
 - **重构一个有几十个消费者的共享工具时，「行为没变」要测不要读** —— `utils::source_scan` 这一轮长出 `code_keeping_literals` 并与 `code_text` 共用一次词法走，而**读代码读不出**旧函数是否逐字节没动；它的消费者是几十个源码级守卫，每一个都会在它变了的时候**安静地**换答案。方法值得抄：把**两个 sha 上的模块各抽成一个独立程序**，在真语料上逐函数比对输出（`src/ tests/ interfaces/ shared/ desktop/`：**3 297** 个 `.rs`、**16 485** 次比较、**0 处不同**），**并且先把量具弄坏一次**（强制 `keep = true` ⇒ 12 290 次里 **2 300** 处不同，带首次分歧偏移）——**一条没被证伪过的守卫不算守卫，这句话对量具自己也成立**。⚠️ 顺带一条记账纪律：这三个数里只有**文件数**在本轮复测时纹丝不动（3 297），原记录里那个「50.6 MB」复测是 48.3 MB——**体积随树漂，别把它和结论一起引用**。
 - **`cargo fmt -p <crate> -- <file>` 不会只格式化那个文件** —— `cargo fmt --help` 第一行逐字写着它格式化「当前 crate 的**全部** bin 与 lib 文件」，而 `--` 之后的东西是**传给 rustfmt 的选项**，不是文件过滤器。要格式化单个文件只有一条路：直接 **`rustfmt <file>`**。共享 worktree 里这条尤其贵——它会把树里既有的漂移一并卷进你的改动，而别人看到的是"有第三方在实时编辑这棵树"。**本仓已经栽过两次**（一次 66 个、一次 5 个无关文件），而第一次记录下来的是**症状**（"别跑 `cargo fmt -p alephcore`"）：**记录症状阻止不了复发**——第二次那个人相信自己已经限定了范围，并且手里有一句看起来能证明这一点的咒语 → 附录 C.6
 - **一条被挪到后台的验证命令，它的「completed (exit code 0)」不是结果——那是管道尾巴上 `tail` 的退出码** —— 而会被挪到后台的恰恰是这个仓最重的那条闸：`cargo test -p alephcore --features test-helpers --test '*'` 要 `-j 1`（默认并行会以一个**假的** `can't find crate` E0463 失败——那是资源限制不是代码），而 `-j 1` 是一小时量级，超过本 harness 的 600 s 前台上限。**一次实测 17 分钟链完 29 / 137 个集成测试二进制——所以 29 只是它停在哪儿，不是结论。**判据：**这条命令的结论要么真的跑完，要么标成 UNCLAIMED**；第三种「跑了一半然后按比例外推」是这一族最容易被接受的假话，因为它读起来像一次测量。同族一句：后台命令要按**它自己写下的那行 `test result:`** 判，不按 harness 报给你的那个退出码。
-- **最小可信验证集是六条命令，不是一条**：
+- **最小可信验证集是七条命令，不是一条**：
   ```
   cargo test -p alephcore --lib --no-run
   cargo test -p alephcore --bins                                        # 唯一一条真跑而非 --no-run 的：
@@ -613,6 +613,14 @@
       # --all-targets 只展开 target 不展开 feature；`-j 1` 不是保守是必须——默认并行会以一个假的
       # `can't find crate` E0463 失败（资源限制，不是你的代码），而这条要一小时量级，见上一条
   cargo test -p aleph-panel --lib --no-run                               # check 看不见它的 #[cfg(test)]；曾整程编译不过
+  cargo test -p aleph-protocol                                          # 实测 262 passed / 0 filtered out / 热跑 2 秒
+      # 上面每一条都编译得到它、没有一条跑得动它：alephcore 只是把它当**依赖**构建，
+      # 而 `--workspace` clippy 编译它的测试 target 却一条断言都不跑（lint 不是测试，
+      # 同下面那条 aleph-tui/aleph-cli 的论证）。而它偏偏是**跨 crate wire 契约的家**——
+      # §0 那条「两边各持一份形状就会互相抵消」的规定修法就是把形状放进这个 crate，
+      # 所以对账断言恰恰住在唯一没人运行的地方。第二个 target
+      # （`export_desktop_bridge_schema`）打的 `running 0 tests` 是一个没有测试的 bin，
+      # 不是 VACUOUS——看 lib 那一行
   cargo check -p aleph-desktop-{macos,windows,linux}                    # 跨平台改动要 check 那个目标的限肢 crate
   cargo clippy --workspace --all-targets                                # 先 just _stage-shell-placeholders
       # --all-targets 展开的是 target（examples 只有它才暴露），--workspace 展开的才是 package：
