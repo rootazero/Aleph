@@ -747,11 +747,14 @@ mod tests {
         s.feed(b"abcdef\x1b[3GZ");
         assert_eq!(s.grid.row_text(0), "abZdef");
 
+        // Asserted as a position, not a length: `row_text` trims trailing
+        // blanks, so a length of 10 passes for anything that leaves the row
+        // 10 characters long, including a clamp to the wrong column.
         let mut s = Screen::new(2, 10);
         s.feed(b"abc\x1b[99GZ");
         assert_eq!(
-            s.grid.row_text(0).len(),
-            10,
+            s.grid.row_text(0),
+            "abc      Z",
             "a column past the right edge clamps to the last column"
         );
     }
@@ -840,29 +843,66 @@ mod tests {
     /// A line editor mid-line does not only shift ASCII: DCH/ICH can cut
     /// through a wide glyph's owner/spacer pair the same way an erase can.
     /// `clear_range` handles that for erases by widening the range; a shift
-    /// cannot widen, so the halves are re-checked after the move. Asserted
-    /// through `row_cells` -- `row_text` filters spacers and would hide a
-    /// half-glyph, which is exactly how the original spacer bug survived.
+    /// cannot widen, so the halves are re-checked after the move.
+    ///
+    /// Asserted on the CHARACTERS, not on "does a spacer remain". The two
+    /// kinds of damage have to be named separately: an orphaned OWNER
+    /// leaves no spacer behind, so a `!any(is_spacer)` assertion passes
+    /// against it. That is how `repair_row_pairs`'s `orphan_owner` branch
+    /// went untested -- measured, not supposed: replacing that whole clause
+    /// with `false` left all 82 tests in this module green.
+    ///
+    /// `row_text` is not used because it filters spacers out entirely, so a
+    /// test written against it cannot see this class at all.
     #[test]
     fn char_edits_do_not_strand_half_of_a_wide_glyph() {
-        // Delete the column the wide glyph owns: its spacer must not
-        // survive alone once the tail slides left.
+        let chars = |s: &Screen, n: usize| -> Vec<char> {
+            s.grid.row_cells(0)[..n].iter().map(|c| c.ch).collect()
+        };
+
+        // Delete the column the glyph owns: the tail slides left and its
+        // spacer must not survive alone. (Pure `orphan_spacer`.)
         let mut s = Screen::new(2, 10);
         s.feed("a\u{4e2d}b".as_bytes());
         s.feed(b"\x1b[1;2H\x1b[1P");
-        assert!(
-            !s.grid.row_cells(0).iter().any(|c| c.is_spacer()),
-            "deleting a wide glyph's owner must not leave its spacer behind"
+        assert_eq!(
+            chars(&s, 3),
+            ['a', ' ', 'b'],
+            "the owner was deleted, so its spacer must be blanked, not left behind"
         );
 
-        // Insert in the middle of the pair: the owner stays put and the
-        // spacer is pushed one cell right, so neither may survive.
+        // Insert between owner and spacer: the owner stays put, the spacer
+        // is pushed one right, so BOTH halves must go -- `orphan_owner` at
+        // the owner, `orphan_spacer` at the displaced spacer.
         let mut s = Screen::new(2, 10);
         s.feed("a\u{4e2d}b".as_bytes());
         s.feed(b"\x1b[1;3H\x1b[1@");
-        assert!(
-            !s.grid.row_cells(0).iter().any(|c| c.is_spacer()),
-            "splitting a wide glyph with an insert must leave neither half"
+        assert_eq!(
+            chars(&s, 5),
+            ['a', ' ', ' ', ' ', 'b'],
+            "the insert orphans the owner, which must be blanked too -- asserting \
+             only that no spacer remains passes without that"
+        );
+
+        // The `c + 1 == cols` sub-case: an insert to the left of a wide
+        // glyph pushes its spacer off the end of the row, stranding the
+        // owner in the last column where there is no neighbour to inspect.
+        //
+        // On the LAST row deliberately. On any other row `cells[start +
+        // cols]` is simply the next row's first cell -- blank, hence not a
+        // spacer -- so dropping the `c + 1 == cols` guard gives the same
+        // answer and the mutation reads as a no-op. On the last row that
+        // index is off the end of the grid, which is what makes the guard
+        // load-bearing rather than decorative.
+        let mut s = Screen::new(2, 4);
+        s.feed(b"\x1b[2;1H");
+        s.feed("ab\u{4e2d}".as_bytes()); // owner at 2, spacer at 3
+        s.feed(b"\x1b[2;1H\x1b[1@");
+        let last: Vec<char> = s.grid.row_cells(1).iter().map(|c| c.ch).collect();
+        assert_eq!(
+            last,
+            [' ', 'a', 'b', ' '],
+            "a glyph pushed into the last column lost its spacer off the row edge"
         );
     }
 
@@ -1017,6 +1057,15 @@ mod tests {
     /// Every `'X'` character literal. In `csi_dispatch` those are the final
     /// bytes it claims; a `b'?'` byte literal there compares an
     /// intermediate, not a final byte, so it is excluded.
+    ///
+    /// ⚠️ Lexical, and therefore not total. An arm keyed on a constant
+    /// (`SU => …`) or spelled `'\u{53}'` is invisible to it, and no amount
+    /// of scanning fixes that — reading a `const`'s value would mean
+    /// evaluating the source. So this reads "every verb spelled as a
+    /// character literal", not "every verb". Its sibling
+    /// [`claimed_byte_literals`] can be made total for its own shape and is;
+    /// this one cannot, and says so rather than implying a totality it does
+    /// not have.
     fn claimed_char_literals(code: &str) -> std::collections::BTreeSet<u8> {
         let c: Vec<char> = code.chars().collect();
         let mut out = std::collections::BTreeSet::new();
@@ -1040,9 +1089,14 @@ mod tests {
     /// | hex      | `0x0a`   | `execute`      |
     ///
     /// So every path has a table whose guard drops bytes if that path stops
-    /// reading -- verified by blinding each one in turn. A scraper blind to
-    /// a spelling nobody used yet would go unnoticed, which is the same
-    /// reason the tables themselves get scraped rather than restated.
+    /// reading -- verified by blinding each one in turn.
+    ///
+    /// A spelling NOT in that table (`b'\x1b'`, `b'\\'`, `b'\''`) used to
+    /// fall through silently, and then both sets were unchanged and
+    /// `assert_claims_match_probes` compared two unchanged sets and passed
+    /// — a blind spot inside the very guard meant to catch blind spots. Any
+    /// unread spelling now **panics** naming the literal, so this function
+    /// is total for byte literals: it reads them or it stops the test.
     fn claimed_byte_literals(code: &str) -> std::collections::BTreeSet<u8> {
         let c: Vec<char> = code.chars().collect();
         let mut out = std::collections::BTreeSet::new();
@@ -1055,22 +1109,37 @@ mod tests {
                     continue;
                 }
                 if c.get(i + 2) == Some(&'\\') && c.get(i + 4) == Some(&'\'') {
-                    // An escape this arm does not know is simply not
-                    // inserted, which fails the set comparison rather than
-                    // passing quietly.
                     let byte = match c[i + 3] {
-                        'n' => Some(b'\n'),
-                        'r' => Some(b'\r'),
-                        't' => Some(b'\t'),
-                        '0' => Some(0),
-                        _ => None,
+                        'n' => b'\n',
+                        'r' => b'\r',
+                        't' => b'\t',
+                        '0' => 0,
+                        '\\' => b'\\',
+                        '\'' => b'\'',
+                        // Loud, not skipped. Skipping leaves BOTH sets
+                        // unchanged, so `assert_claims_match_probes` would
+                        // compare two unchanged sets and pass -- the exact
+                        // failure these guards exist to catch, hidden inside
+                        // the guard itself.
+                        other => panic!(
+                            "byte-literal escape `b'\\{other}'` is a spelling this \
+                             scraper does not read. Teach it here, or the guard goes \
+                             blind to the arm that uses it."
+                        ),
                     };
-                    if let Some(byte) = byte {
-                        out.insert(byte);
-                    }
+                    out.insert(byte);
                     i += 5;
                     continue;
                 }
+                // `b'` opened and neither shape closed it -- `b'\x1b'` is the
+                // realistic one. Same reasoning as the escape arm above:
+                // falling through to `i += 1` is silent blindness.
+                let tail: String = c[i..(i + 8).min(c.len())].iter().collect();
+                panic!(
+                    "byte literal starting `{tail}` is a spelling this scraper does \
+                     not read. Teach it here, or the guard goes blind to the arm \
+                     that uses it."
+                );
             }
             if c[i] == '0' && c.get(i + 1) == Some(&'x') {
                 let hex: String = c.iter().skip(i + 2).take(2).collect();
@@ -1188,6 +1257,47 @@ mod tests {
             (0, 9),
             "past the last stop, HT clamps to the last column"
         );
+
+        // The pending-wrap state: exactly filling a row leaves
+        // `cursor_col == cols`, which is the model's only representation of
+        // "a wrap is owed". The new C0 arithmetic all depends on
+        // `cursor_col <= cols`, and nothing else exercises the `== cols`
+        // end of it. HT from there cancels the pending wrap and sits on the
+        // last column, which is what xterm does.
+        let mut s = Screen::new(2, 10);
+        s.feed(b"abcdefghij");
+        assert_eq!(s.grid.cursor(), (0, 10), "a full row leaves a wrap pending");
+        s.feed(b"\t");
+        assert_eq!(
+            s.grid.cursor(),
+            (0, 9),
+            "HT out of a pending wrap lands on the last column, not the next row"
+        );
+    }
+
+    /// Checklist item #4 of this plan's real-machine list is a tab-aligned
+    /// CJK table, and it was pinned only by a one-time live reading. The
+    /// claim it makes is that a 2-column and a 4-column first cell put their
+    /// second cell at the SAME stop — which fails both if HT is dropped and
+    /// if a wide glyph is counted as one column, so it is worth a
+    /// regression test rather than a measurement someone has to repeat.
+    #[test]
+    fn ht_aligns_a_column_across_glyphs_of_different_widths() {
+        let mut s = Screen::new(4, 20);
+        s.feed("ab\tX\r\n".as_bytes());
+        s.feed("\u{4e2d}\u{6587}\tX".as_bytes());
+
+        // Column, not string index: `row_text` drops spacers, so the wide
+        // row's `X` sits at index 3 while standing in column 8.
+        let column_of_x = |row: u16| {
+            s.grid
+                .row_cells(row)
+                .iter()
+                .position(|c| c.ch == 'X')
+                .expect("both rows print an X")
+        };
+        assert_eq!(column_of_x(0), 8, "a 2-column cell tabs to the stop at 8");
+        assert_eq!(column_of_x(1), 8, "a 4-column cell tabs to the same stop");
     }
 
     /// A tab stop can land on the spacer half of a double-width glyph.

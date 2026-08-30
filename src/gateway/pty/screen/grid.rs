@@ -81,6 +81,13 @@ pub struct Grid {
     cols: u16,
     cells: Vec<Cell>,
     cursor_row: u16,
+    /// Invariant: `cursor_col <= cols`, note the `<=`. `put` leaves it
+    /// exactly at `cols` after filling a row, and that is the model's only
+    /// representation of "a wrap is owed" — there is no separate flag. Every
+    /// method that does arithmetic on it (`tab`, `backspace`, `erase_chars`,
+    /// `delete_chars`, `insert_chars`) has to stay correct at that one
+    /// out-of-range-looking value, so subtract from `cols` rather than
+    /// assuming `cursor_col < cols`.
     cursor_col: u16,
     scrollback: std::collections::VecDeque<Vec<Cell>>,
     scrollback_limit: usize,
@@ -230,8 +237,10 @@ impl Grid {
     /// overwrite an owner whose spacer sits just past the write. Left
     /// unrepaired, either case orphans a spacer cell — one with no owning
     /// wide glyph immediately to its left. [`Self::row_text`] filters
-    /// spacers and would hide the corruption; [`Self::row_cells`], which is
-    /// what the wire sends, would not.
+    /// spacers, so a test written against it cannot see this at all;
+    /// [`Self::row_cells`] can. (The wire drops spacers too — see
+    /// [`Self::repair_row_pairs`] for what each kind of orphan looks like on
+    /// the client — so `row_cells` is a test's window, not the wire's.)
     fn repair_straddled_glyph(&mut self, w: u16, fg: Color, bg: Color, attrs: Attrs) {
         let blank = Cell {
             ch: ' ',
@@ -364,14 +373,26 @@ impl Grid {
     /// that is no longer beside it. [`Self::clear_range`] handles this for
     /// erasures by widening the range, but a shift has no range to widen,
     /// so the pairs are re-checked afterwards and any half left alone is
-    /// blanked. [`Self::row_text`] filters spacers and would hide the
-    /// damage; [`Self::row_cells`], which is what the wire sends, would not.
+    /// blanked.
     ///
-    /// Left to right is the order that terminates: blanking an orphaned
-    /// owner at `c` orphans its spacer at `c + 1`, which this loop has yet
-    /// to reach. The mirror never arises — a spacer is only orphaned when
-    /// its left neighbour is not an owner, and that neighbour therefore
-    /// claimed nothing when the loop passed it.
+    /// What each kind of damage looks like if this does not run:
+    /// [`super::diff::row_runs`] drops spacers on the way to the wire, so an
+    /// orphaned SPACER reaches the client as a row one column short, and an
+    /// orphaned OWNER as a glyph the client draws two columns wide while the
+    /// server counts one — a row one column long, with everything after it
+    /// displaced. Both are client-visible; only the second leaves nothing
+    /// behind for a test to find, which is why the tests assert characters
+    /// rather than "no spacer remains". [`Self::row_text`] filters spacers
+    /// too, so a test written against it cannot see either.
+    ///
+    /// One left-to-right pass suffices, and the reason is that the loop
+    /// never creates a new orphan: blanking writes a width-1 blank, and
+    /// neither predicate at an already-visited `c - 1` can be flipped by
+    /// that. `orphan_owner(c-1)` reads `cells[c].is_spacer()` — in the
+    /// orphan-spacer case `cells[c-1]` was already established not to be an
+    /// owner, and in the orphan-owner case `cells[c]` was not a spacer
+    /// before or after. `orphan_spacer(c-1)` reads only `cells[c-2]` and
+    /// `cells[c-1]`, which this write does not touch.
     fn repair_row_pairs(&mut self, row: u16) {
         let start = self.idx(row, 0);
         let cols = self.cols as usize;
