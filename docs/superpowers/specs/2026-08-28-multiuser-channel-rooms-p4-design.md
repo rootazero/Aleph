@@ -7,7 +7,7 @@
 - **上游 spec**: `2026-08-04-multi-user-org-project-design.md`（P0/P1/P2 已执行）· `2026-08-24-multiuser-teamchat-p3-design.md`（P3 已执行）
 - **兑现的账本项**: `SECURITY.md` Known gap 2「channels-into-rooms is spec §11-3 / P4」· round-5→round-8 ③「房间存量归属回填」· round-8 刻意未做 ①「`bind_workspace` 工具面」④「子代理房间名册真机验证」
 - **记录文档**: 完成后回填 `FEATURE_LOCATOR.md` §5.22 第九轮、`SECURITY.md`（Known gap 表重写）、`GATEWAY.md`、`src/gateway/CLAUDE.md`
-- **状态**: ✅ **已实施**（2026-08-30，19 个编号任务 + 13 份复审报告，69 提交，worktree `multiuser-round9`）。回填记录见 `FEATURE_LOCATOR.md` §5.22 **第九轮**（主缺陷、既存缺陷成因、刻意未做、真机 QA）· `SECURITY.md`（Known gap 表重写：gap 1 收窄到 `channel.*`、gap 2 的入方向已兑现、新增 gap 6/7/8，外加 §10 不可变性的唯一例外）· `GATEWAY.md`（「A conversation can be bound to a project room」）· `src/gateway/CLAUDE.md` 地雷 Q（五个读者 / 五道闸）。
+- **状态**: ✅ **已实施**（2026-08-30，worktree `multiuser-round9`；逐份任务/复审记录见 `.superpowers/sdd/2026-08-28-multiuser-channel-rooms-p4/`——**刻意不写任务数/复审数/提交数**，那类计数写在本分支文档里就自我作废，见 `FEATURE_LOCATOR.md` §5.22 第九轮 ⑥）。回填记录见 `FEATURE_LOCATOR.md` §5.22 **第九轮**（主缺陷、既存缺陷成因、刻意未做、真机 QA）· `SECURITY.md`（Known gap 表重写：gap 1 收窄到 `channel.*`、gap 2 的入方向已兑现、新增 gap 6/7/8，外加 §10 不可变性的唯一例外）· `GATEWAY.md`（「A conversation can be bound to a project room」）· `src/gateway/CLAUDE.md` 地雷 Q（五个读者 / 五道闸）。
   ⚠️ **本文档写于实施之前，正文里带 ⚠️ 的「规划期读实更正」是执行期回填的**；除此之外正文描述的是**设计意图**，不是最终代码。落差最大的两处：`peer_kind` 已 typed 成 `aleph_protocol::projects::BindingPeerKind`（Ruling V，不再是 `String`），Panel 的 `BindingRow` DTO 不存在（Ruling AA，Panel 直接 import `ChannelBindingRow`）。**以代码为准。**
 
 ---
