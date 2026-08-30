@@ -3008,6 +3008,13 @@ attribution, and a bound workspace as the room's default cwd.
        absence — and every other kind now warns by path. ⚠️ **No test
        covers either `Err` arm**; the change is compile-verified and argued,
        not asserted. Whoever next touches this function owes it one.
+       ⚠️ **And the silent half is narrowed, not closed**: the "it really is
+       an absence" argument rests on the `exists()` check above the read,
+       and `Path::exists()` is `metadata(path).is_ok()` — it answers `false`
+       for **any** error. A session directory the process can stat but not
+       traverse is skipped there and never reaches either arm, silently.
+       That is the shape root `CLAUDE.md` §8 names («我看不了» answered as
+       «那里没有东西»); closing it belongs to the `exists()` call.
      - **Inherent to any snapshot** — a turn whose routing resolved before
        the bind committed, but whose session row is created after the
        listing, is stamped `personal:<speaker>` and never seen.

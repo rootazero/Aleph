@@ -478,6 +478,17 @@ impl SessionStore for FileSessionStore {
                 // NotFound stays silent because it really is an absence -- the
                 // `exists()` check above raced a delete. Every other kind is "I
                 // could not look", which is not the same answer.
+                //
+                // BOUND, so nobody records this half as closed: that argument
+                // leans on `exists()`, which is `metadata(path).is_ok()` and
+                // therefore answers `false` for ANY error, not only for
+                // absence. A session directory this process can stat but not
+                // traverse is skipped at the `exists()` check above and never
+                // reaches either arm here, so the silent half is NARROWED by
+                // this change, not closed. Root CLAUDE.md documents that exact
+                // shape -- "I could not look" answered as "there is nothing
+                // there". Closing it belongs to the `exists()` call, not to
+                // this match.
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(e) => {
                     tracing::warn!(
