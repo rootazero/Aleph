@@ -160,8 +160,10 @@
 //!   standing beside it — dead, logged, or used for something else — which is
 //!   `47 passed; 0 failed`. **That residue is open and belongs to no layer
 //!   here.** It is worth naming rather than rounding off, because it is 地雷 Q
-//!   clause ③'s own recorded history: a later reader forking away from
-//!   `request_scope` because a fork was easier to write than a call. **Held by
+//!   配套 3's own recorded history — 配套 3 is the third of that entry's five
+//!   follow-on clauses, NOT its layer ③, which is the counts this sentence
+//!   contrasts against: a later reader forking away from `request_scope`
+//!   because a fork was easier to write than a call. **Held by
 //!   `tests::the_projection_body_must_call_request_scope` and
 //!   `tests::the_layer_3_counts_object_to_a_second_occurrence_not_a_second_answer`**,
 //!   both halves — the catch and the residue.
