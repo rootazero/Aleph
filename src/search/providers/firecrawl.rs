@@ -1,6 +1,6 @@
 use crate::error::{AlephError, Result};
 use crate::search::providers::base::{build_client, check_status, parse_json};
-use crate::search::{SearchOptions, SearchProvider, SearchResult};
+use crate::search::{SearchCapabilities, SearchOptions, SearchProvider, SearchResult};
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use reqwest::Client;
@@ -154,6 +154,14 @@ impl SearchProvider for FirecrawlProvider {
 
     fn is_available(&self) -> bool {
         !self.api_key.is_empty()
+    }
+
+    fn capabilities(&self) -> SearchCapabilities {
+        SearchCapabilities {
+            domain_filter: false,
+            recency: true,
+            full_content: true,
+        }
     }
 }
 

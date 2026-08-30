@@ -1,6 +1,6 @@
 use crate::error::{AlephError, Result};
 use crate::search::providers::base::{build_client, check_status};
-use crate::search::{SearchOptions, SearchProvider, SearchResult};
+use crate::search::{SearchCapabilities, SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
 use reqwest::Client;
 use scraper::{Html, Selector};
@@ -98,6 +98,14 @@ impl SearchProvider for DuckDuckGoProvider {
 
     fn is_available(&self) -> bool {
         true
+    }
+
+    fn capabilities(&self) -> SearchCapabilities {
+        SearchCapabilities {
+            domain_filter: false,
+            recency: true,
+            full_content: false,
+        }
     }
 }
 
