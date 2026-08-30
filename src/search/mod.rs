@@ -51,7 +51,7 @@ mod web_fetch_fallback;
 /// ```
 // Re-exports
 pub use factory::{ProviderFactory, ProviderFactoryRegistry};
-pub use options::SearchOptions;
+pub use options::{Recency, SearchOptions};
 pub use provider::SearchProvider;
 pub use registry::SearchRegistry;
 pub use result::SearchResult;

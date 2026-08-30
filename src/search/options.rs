@@ -2,7 +2,7 @@
 ///
 /// This module defines options passed to search providers, plus the
 /// per-provider parameter mappings for the four "rich" fields
-/// (`language`, `region`, `date_range`, `safe_search`). Each provider
+/// (`language`, `region`, `recency`, `safe_search`). Each provider
 /// expects different field names and value vocabularies for the same
 /// concept — by collecting the mappings here, the per-provider HTTP
 /// builders stay simple (each just calls one helper) and adding a new
@@ -15,17 +15,35 @@
 /// |--------------|---------------|--------------|--------------|--------------|----------|------------|-----------|
 /// | language     | `search_lang`   | setLang      | `lr=lang_XX`   | language     | —        | —          | lang      |
 /// | region       | country       | cc           | gl           | —            | —        | kl         | country   |
-/// | `date_range`   | freshness     | freshness    | dateRestrict | `time_range`   | days     | df         | tbs       |
+/// | `recency`      | freshness     | freshness    | dateRestrict | `time_range`   | days     | df         | tbs       |
 /// | `safe_search`  | safesearch    | safeSearch   | safe         | safesearch   | —        | kp         | —         |
 ///
 /// Providers that have no native concept for a field omit it entirely
 /// (the helper returns `None` or the call site simply doesn't push it).
 use serde::{Deserialize, Serialize};
 
+/// The freshness vocabulary, owned in one place.
+///
+/// Every provider has its own spelling for the same four buckets (`pd` /
+/// `Day` / `d1` / `qdr:d` / 1 day / ...). Before this enum the four words
+/// lived seven times over — once inside each mapper — and every mapper
+/// answered `None` for anything it did not recognise, so a caller passing
+/// `"7d"` got an unconstrained search while believing it had constrained one.
+/// With a closed enum the rejection happens at the tool boundary and names
+/// the legal values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Recency {
+    Day,
+    Week,
+    Month,
+    Year,
+}
+
 /// Search options passed to providers.
 ///
 /// See module-level docs for the per-provider mapping table covering
-/// `language`/`region`/`date_range`/`safe_search`.
+/// `language`/`region`/`recency`/`safe_search`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchOptions {
     /// Language code (ISO 639-1: "en", "zh", "ja", etc.)
@@ -38,11 +56,11 @@ pub struct SearchOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<String>,
 
-    /// Date range filter — one of "day" / "week" / "month" / "year".
-    /// Other values are silently ignored by the per-provider mappers.
-    /// Forwarded to Brave/Bing/Google/SearXNG/Tavily/DDG; ignored elsewhere.
+    /// How fresh a result has to be. `None` = no constraint.
+    /// Forwarded to Brave/Bing/Google/SearXNG/Tavily/DDG/Firecrawl, each in
+    /// its own vocabulary — see the mapping table above.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub date_range: Option<String>,
+    pub recency: Option<Recency>,
 
     /// Enable safe search (adult content filtering)
     /// Forwarded to Brave/Bing/Google/SearXNG/DDG; ignored by Tavily/Exa/Jina.
@@ -80,7 +98,7 @@ impl Default for SearchOptions {
         Self {
             language: None,
             region: None,
-            date_range: None,
+            recency: None,
             safe_search: default_safe_search(),
             max_results: default_max_results(),
             timeout_seconds: default_timeout(),
@@ -120,12 +138,11 @@ impl SearchOptions {
     /// Brave `freshness` (`pd`/`pw`/`pm`/`py`).
     #[must_use]
     pub fn brave_freshness(&self) -> Option<&'static str> {
-        Some(match self.date_range.as_deref()? {
-            "day" => "pd",
-            "week" => "pw",
-            "month" => "pm",
-            "year" => "py",
-            _ => return None,
+        Some(match self.recency? {
+            Recency::Day => "pd",
+            Recency::Week => "pw",
+            Recency::Month => "pm",
+            Recency::Year => "py",
         })
     }
 
@@ -142,12 +159,12 @@ impl SearchOptions {
     /// Bing `freshness` (`Day`/`Week`/`Month`). Bing has no `Year`.
     #[must_use]
     pub fn bing_freshness(&self) -> Option<&'static str> {
-        Some(match self.date_range.as_deref()? {
-            "day" => "Day",
-            "week" => "Week",
-            "month" => "Month",
-            _ => return None,
-        })
+        match self.recency? {
+            Recency::Day => Some("Day"),
+            Recency::Week => Some("Week"),
+            Recency::Month => Some("Month"),
+            Recency::Year => None,
+        }
     }
 
     /// Bing `safeSearch` (`Off`/`Moderate`).
@@ -163,12 +180,11 @@ impl SearchOptions {
     /// Google CSE `dateRestrict` (`d1`/`w1`/`m1`/`y1`).
     #[must_use]
     pub fn google_date_restrict(&self) -> Option<&'static str> {
-        Some(match self.date_range.as_deref()? {
-            "day" => "d1",
-            "week" => "w1",
-            "month" => "m1",
-            "year" => "y1",
-            _ => return None,
+        Some(match self.recency? {
+            Recency::Day => "d1",
+            Recency::Week => "w1",
+            Recency::Month => "m1",
+            Recency::Year => "y1",
         })
     }
 
@@ -193,12 +209,11 @@ impl SearchOptions {
     /// `SearXNG` `time_range` (`day`/`week`/`month`/`year`). Bare token.
     #[must_use]
     pub fn searxng_time_range(&self) -> Option<&'static str> {
-        Some(match self.date_range.as_deref()? {
-            "day" => "day",
-            "week" => "week",
-            "month" => "month",
-            "year" => "year",
-            _ => return None,
+        Some(match self.recency? {
+            Recency::Day => "day",
+            Recency::Week => "week",
+            Recency::Month => "month",
+            Recency::Year => "year",
         })
     }
 
@@ -218,12 +233,11 @@ impl SearchOptions {
     /// freshness token; it takes a "look back N days" int instead.
     #[must_use]
     pub fn tavily_days(&self) -> Option<u32> {
-        Some(match self.date_range.as_deref()? {
-            "day" => 1,
-            "week" => 7,
-            "month" => 30,
-            "year" => 365,
-            _ => return None,
+        Some(match self.recency? {
+            Recency::Day => 1,
+            Recency::Week => 7,
+            Recency::Month => 30,
+            Recency::Year => 365,
         })
     }
 
@@ -240,24 +254,22 @@ impl SearchOptions {
     /// `DuckDuckGo` `df` (`d`/`w`/`m`/`y`).
     #[must_use]
     pub fn ddg_df(&self) -> Option<&'static str> {
-        Some(match self.date_range.as_deref()? {
-            "day" => "d",
-            "week" => "w",
-            "month" => "m",
-            "year" => "y",
-            _ => return None,
+        Some(match self.recency? {
+            Recency::Day => "d",
+            Recency::Week => "w",
+            Recency::Month => "m",
+            Recency::Year => "y",
         })
     }
 
     /// Firecrawl `tbs` time filter (Google-style `qdr:d`/`qdr:w`/`qdr:m`/`qdr:y`).
     #[must_use]
     pub fn firecrawl_tbs(&self) -> Option<&'static str> {
-        Some(match self.date_range.as_deref()? {
-            "day" => "qdr:d",
-            "week" => "qdr:w",
-            "month" => "qdr:m",
-            "year" => "qdr:y",
-            _ => return None,
+        Some(match self.recency? {
+            Recency::Day => "qdr:d",
+            Recency::Week => "qdr:w",
+            Recency::Month => "qdr:m",
+            Recency::Year => "qdr:y",
         })
     }
 }
@@ -290,7 +302,7 @@ mod tests {
         let options = SearchOptions {
             language: Some("zh-CN".to_string()),
             region: Some("CN".to_string()),
-            date_range: Some("week".to_string()),
+            recency: Some(Recency::Week),
             safe_search: true,
             max_results: 10,
             timeout_seconds: 15,
@@ -338,38 +350,70 @@ mod tests {
         assert_eq!(options.validated_max_results(), 10);
     }
 
-    fn opts_with_range(d: &str) -> SearchOptions {
+    fn opts_with_recency(r: Recency) -> SearchOptions {
         SearchOptions {
-            date_range: Some(d.to_string()),
+            recency: Some(r),
             ..Default::default()
         }
     }
 
     #[test]
     fn brave_freshness_maps_canonical_tokens() {
-        assert_eq!(opts_with_range("day").brave_freshness(), Some("pd"));
-        assert_eq!(opts_with_range("week").brave_freshness(), Some("pw"));
-        assert_eq!(opts_with_range("month").brave_freshness(), Some("pm"));
-        assert_eq!(opts_with_range("year").brave_freshness(), Some("py"));
-        assert_eq!(opts_with_range("garbage").brave_freshness(), None);
+        assert_eq!(
+            opts_with_recency(Recency::Day).brave_freshness(),
+            Some("pd")
+        );
+        assert_eq!(
+            opts_with_recency(Recency::Week).brave_freshness(),
+            Some("pw")
+        );
+        assert_eq!(
+            opts_with_recency(Recency::Month).brave_freshness(),
+            Some("pm")
+        );
+        assert_eq!(
+            opts_with_recency(Recency::Year).brave_freshness(),
+            Some("py")
+        );
         assert_eq!(SearchOptions::default().brave_freshness(), None);
     }
 
     #[test]
     fn bing_freshness_has_no_year() {
-        assert_eq!(opts_with_range("day").bing_freshness(), Some("Day"));
-        assert_eq!(opts_with_range("week").bing_freshness(), Some("Week"));
-        assert_eq!(opts_with_range("month").bing_freshness(), Some("Month"));
+        assert_eq!(
+            opts_with_recency(Recency::Day).bing_freshness(),
+            Some("Day")
+        );
+        assert_eq!(
+            opts_with_recency(Recency::Week).bing_freshness(),
+            Some("Week")
+        );
+        assert_eq!(
+            opts_with_recency(Recency::Month).bing_freshness(),
+            Some("Month")
+        );
         // Bing API has no Year option — must return None, NOT a panic.
-        assert_eq!(opts_with_range("year").bing_freshness(), None);
+        assert_eq!(opts_with_recency(Recency::Year).bing_freshness(), None);
     }
 
     #[test]
     fn google_date_restrict_uses_n1_suffix() {
-        assert_eq!(opts_with_range("day").google_date_restrict(), Some("d1"));
-        assert_eq!(opts_with_range("week").google_date_restrict(), Some("w1"));
-        assert_eq!(opts_with_range("month").google_date_restrict(), Some("m1"));
-        assert_eq!(opts_with_range("year").google_date_restrict(), Some("y1"));
+        assert_eq!(
+            opts_with_recency(Recency::Day).google_date_restrict(),
+            Some("d1")
+        );
+        assert_eq!(
+            opts_with_recency(Recency::Week).google_date_restrict(),
+            Some("w1")
+        );
+        assert_eq!(
+            opts_with_recency(Recency::Month).google_date_restrict(),
+            Some("m1")
+        );
+        assert_eq!(
+            opts_with_recency(Recency::Year).google_date_restrict(),
+            Some("y1")
+        );
     }
 
     #[test]
@@ -384,11 +428,10 @@ mod tests {
 
     #[test]
     fn tavily_days_converts_range_to_integer() {
-        assert_eq!(opts_with_range("day").tavily_days(), Some(1));
-        assert_eq!(opts_with_range("week").tavily_days(), Some(7));
-        assert_eq!(opts_with_range("month").tavily_days(), Some(30));
-        assert_eq!(opts_with_range("year").tavily_days(), Some(365));
-        assert_eq!(opts_with_range("decade").tavily_days(), None);
+        assert_eq!(opts_with_recency(Recency::Day).tavily_days(), Some(1));
+        assert_eq!(opts_with_recency(Recency::Week).tavily_days(), Some(7));
+        assert_eq!(opts_with_recency(Recency::Month).tavily_days(), Some(30));
+        assert_eq!(opts_with_recency(Recency::Year).tavily_days(), Some(365));
     }
 
     #[test]
@@ -415,26 +458,91 @@ mod tests {
 
     #[test]
     fn searxng_time_range_passes_through_canonical_tokens() {
-        assert_eq!(opts_with_range("day").searxng_time_range(), Some("day"));
-        assert_eq!(opts_with_range("year").searxng_time_range(), Some("year"));
-        assert_eq!(opts_with_range("century").searxng_time_range(), None);
+        assert_eq!(
+            opts_with_recency(Recency::Day).searxng_time_range(),
+            Some("day")
+        );
+        assert_eq!(
+            opts_with_recency(Recency::Year).searxng_time_range(),
+            Some("year")
+        );
     }
 
     #[test]
     fn ddg_df_uses_single_letter_codes() {
-        assert_eq!(opts_with_range("day").ddg_df(), Some("d"));
-        assert_eq!(opts_with_range("week").ddg_df(), Some("w"));
-        assert_eq!(opts_with_range("month").ddg_df(), Some("m"));
-        assert_eq!(opts_with_range("year").ddg_df(), Some("y"));
+        assert_eq!(opts_with_recency(Recency::Day).ddg_df(), Some("d"));
+        assert_eq!(opts_with_recency(Recency::Week).ddg_df(), Some("w"));
+        assert_eq!(opts_with_recency(Recency::Month).ddg_df(), Some("m"));
+        assert_eq!(opts_with_recency(Recency::Year).ddg_df(), Some("y"));
     }
 
     #[test]
     fn firecrawl_tbs_maps_canonical_tokens() {
-        assert_eq!(opts_with_range("day").firecrawl_tbs(), Some("qdr:d"));
-        assert_eq!(opts_with_range("week").firecrawl_tbs(), Some("qdr:w"));
-        assert_eq!(opts_with_range("month").firecrawl_tbs(), Some("qdr:m"));
-        assert_eq!(opts_with_range("year").firecrawl_tbs(), Some("qdr:y"));
-        assert_eq!(opts_with_range("garbage").firecrawl_tbs(), None);
+        assert_eq!(
+            opts_with_recency(Recency::Day).firecrawl_tbs(),
+            Some("qdr:d")
+        );
+        assert_eq!(
+            opts_with_recency(Recency::Week).firecrawl_tbs(),
+            Some("qdr:w")
+        );
+        assert_eq!(
+            opts_with_recency(Recency::Month).firecrawl_tbs(),
+            Some("qdr:m")
+        );
+        assert_eq!(
+            opts_with_recency(Recency::Year).firecrawl_tbs(),
+            Some("qdr:y")
+        );
         assert_eq!(SearchOptions::default().firecrawl_tbs(), None);
+    }
+
+    #[test]
+    fn recency_maps_to_every_provider_vocabulary() {
+        use Recency::{Day, Month, Week, Year};
+        // (recency, brave, bing, google, searxng, tavily, ddg, firecrawl)
+        // Bing has no Year bucket (see bing_freshness_has_no_year above), so
+        // its column is `Option<&str>` while the other six are bare `&str`.
+        let cases = [
+            (Day, "pd", Some("Day"), "d1", "day", 1u32, "d", "qdr:d"),
+            (Week, "pw", Some("Week"), "w1", "week", 7, "w", "qdr:w"),
+            (Month, "pm", Some("Month"), "m1", "month", 30, "m", "qdr:m"),
+            (Year, "py", None, "y1", "year", 365, "y", "qdr:y"),
+        ];
+        for (r, brave, bing, google, searxng, tavily, ddg, firecrawl) in cases {
+            let o = SearchOptions {
+                recency: Some(r),
+                ..Default::default()
+            };
+            assert_eq!(o.brave_freshness(), Some(brave), "{r:?}");
+            assert_eq!(o.bing_freshness(), bing, "{r:?}");
+            assert_eq!(o.google_date_restrict(), Some(google), "{r:?}");
+            assert_eq!(o.searxng_time_range(), Some(searxng), "{r:?}");
+            assert_eq!(o.tavily_days(), Some(tavily), "{r:?}");
+            assert_eq!(o.ddg_df(), Some(ddg), "{r:?}");
+            assert_eq!(o.firecrawl_tbs(), Some(firecrawl), "{r:?}");
+        }
+    }
+
+    /// The whole point of the enum: a value outside the four-word table is
+    /// rejected at the edge instead of being dropped by seven mappers, each of
+    /// which used to answer `None` and let the caller believe it had constrained
+    /// the search.
+    #[test]
+    fn an_unknown_recency_string_is_rejected_not_dropped() {
+        let err = serde_json::from_value::<Recency>(serde_json::json!("7d")).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("day"),
+            "the error must list the legal values: {msg}"
+        );
+    }
+
+    #[test]
+    fn no_recency_means_no_provider_parameter() {
+        let o = SearchOptions::default();
+        assert_eq!(o.brave_freshness(), None);
+        assert_eq!(o.tavily_days(), None);
+        assert_eq!(o.firecrawl_tbs(), None);
     }
 }
