@@ -988,51 +988,85 @@ mod tests {
     ///
     /// # What this actually tests, vs. the proxy it uses
     ///
-    /// The real criterion is: **if a fourth member were added to the list,
-    /// would this sentence become FALSE?** A sentence naming every member
-    /// stays true — it is complete. A sentence naming none and describing
-    /// the rule generically stays true — it states a category, not a
-    /// headcount. A sentence naming SOME members by name goes false the
-    /// moment one more joins: it silently stops being a complete
-    /// enumeration, which is exactly the shape of the two round-1 defects.
+    /// Fix round 3 corrected this section: the original criterion here —
+    /// "if a fourth member were added, would this sentence become false" —
+    /// does NOT separate the two defects this test is actually about. The
+    /// variant doc below was already false of the THIRD member, not a
+    /// hypothetical fourth; a fourth member would not have made it "become"
+    /// anything, because it was wrong before any fourth member existed. The
+    /// real criterion:
     ///
-    /// "Names any ⇒ names all" is a PROXY for that question, not the
-    /// question itself, and the proxy is exact only for sentences that
-    /// describe the list generically (by rule, not by content). It misfires
-    /// in both directions, and this test deliberately does not try to
-    /// correct either one:
+    /// **As the list stands TODAY, is this sentence still true of EVERY
+    /// member?**
+    ///
+    /// A sentence can go stale in two different ways, and only one of them
+    /// is mechanisable:
+    ///
+    /// - **ENUMERATION** — the sentence NAMES members, so it is true only of
+    ///   the ones it names; the list growing past that set makes it
+    ///   INCOMPLETE. Both round-1 defects were this shape: `reason()` and
+    ///   `approval_prompt_line(Full)` named `policies.tool_permissions` /
+    ///   `policies.exec_tier` and went incomplete the moment
+    ///   `policies.terminal` joined. **This half is what
+    ///   `gate_deciding_members_named_in` mechanises** — a sentence naming a
+    ///   strict subset of the current list is enumeration-shaped and stale,
+    ///   full stop; the "names any ⇒ names all" proxy below is exact here.
+    /// - **CHARACTERISATION** — the sentence describes what the WHOLE list
+    ///   IS (a shared property), naming no one. It goes false the moment any
+    ///   CURRENT member stops fitting — no growth required. `ExecTier::Full`'s
+    ///   variant doc was this shape: "a write that can reach the approval
+    ///   settings themselves" named nobody, so it was never an incomplete
+    ///   enumeration — it was simply wrong about `policies.terminal`, which
+    ///   opens a new execution surface no card was watching rather than
+    ///   reaching the approval settings. **This half is NOT mechanisable.**
+    ///   Whether a generic sentence still accurately characterises every
+    ///   current member is a judgment call about MEANING, not a string
+    ///   comparison — the same blind spot the proxy discussion below
+    ///   documents, now with a name.
+    ///
+    /// "Names any ⇒ names all" is the PROXY this test actually runs, and it
+    /// covers only the enumeration half. It misfires in both directions,
+    /// and this test deliberately does not try to correct either one:
     ///
     /// - **False positive** — `docs/reference/SECURITY.md`'s "内嵌终端"
     ///   bullet names `policies.terminal` by name: its subject IS that one
     ///   member, and it explicitly declines to restate the rest ("具体成员
     ///   与理由见 `GATE_DECIDING_CONFIG_PATHS` 自己的 doc，不在此重复——那份
-    ///   名单会变，这句话不该跟着腐烂"). Adding a fourth member does not make
-    ///   that sentence false — it was never claiming completeness. Held to
-    ///   "names any ⇒ names all" it would fail for naming one member without
-    ///   naming two others that have nothing to do with the terminal.
-    ///   Deliberately NOT scanned here, and should stay that way.
+    ///   名单会变，这句话不该跟着腐烂"). It is out of scope by SUBJECT, not
+    ///   by the true-of-every-member test above — that test does not even
+    ///   apply to it, since it never claims anything about the other two
+    ///   members. Held to "names any ⇒ names all" it would fail for naming
+    ///   one member without naming two others that have nothing to do with
+    ///   the terminal. Deliberately NOT scanned here, and should stay that
+    ///   way. The two low-stakes echoes fix round 2 left alone
+    ///   (`allowed_decisions.rs`'s `GATE_REMOVAL_RULE` doc,
+    ///   `slash_command.rs`'s inline comment) are the OTHER kind of correct
+    ///   exclusion: both are characterisation-shaped and, as of fix round 3,
+    ///   true of every current member — the same reason the current
+    ///   `reason()` passes, not a growth argument.
     /// - **False negative, the more dangerous direction** — fix round 2
     ///   found a real fourth copy of this sentence, predating Task 13:
     ///   `ExecTier::Full`'s own enum variant doc (a site
     ///   `docs/reference/SECURITY.md:996-998`'s own "three copies" paragraph
     ///   names as one of the three canonical sync points — round 1's census
     ///   missed it, scanning a narrower set than SECURITY.md itself
-    ///   designates). It said the third floor was a write that "can reach
-    ///   the approval settings themselves" — false for `policies.terminal`,
-    ///   which opens a new execution surface no card was watching, not the
-    ///   approval settings. That sentence named ZERO members, so
+    ///   designates). Its false "can reach the approval settings themselves"
+    ///   claim is the CHARACTERISATION half above: it named ZERO members, so
     ///   `gate_deciding_members_named_in` returned empty and the
     ///   `named.is_empty()` branch passed it by construction, even though it
     ///   was wrong. **The proxy is structurally blind to "names none,
     ///   describes the list incorrectly"** — the failure looks identical to
     ///   the correct shape (`reason()` and `approval_prompt_line(Full)`
-    ///   after their own fixes also name zero members). Do NOT paper over
-    ///   this with a substring check for "correct" phrasing to try to close
-    ///   it: that is the same weak shape as the four substring checks in
+    ///   after their own fixes, and the two echoes above, all correctly name
+    ///   zero members too). Do NOT paper over this with a substring check
+    ///   for "correct" phrasing to try to close it: that is the same weak
+    ///   shape as the four substring checks in
     ///   `the_full_tier_prompt_line_names_every_floor` that slept through
     ///   the original round-1 finding 2 — a check that only recognizes
     ///   shapes it already knows advertises coverage it does not have. An
-    ///   honest stated limit beats a guard that cannot fail.
+    ///   honest stated limit beats a guard that cannot fail. The
+    ///   characterisation half stays a human's job: read the sentence, read
+    ///   the list, ask whether every current member still fits.
     ///
     /// # Scanned sites
     ///
