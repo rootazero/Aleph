@@ -3170,6 +3170,18 @@ Add to `src/tools/scoped/gate_chain.rs` 的 `mod tests`：
 `confirmation_rule` 上（controller 已核实 `service(..)` / `perms(..)` 两个 helper 的签名与
 `GateRule::id()` 的取值，`gate_chain.rs:506/524/178`）：
 
+⚠️ **controller 修正（2026-08-30，Task 13 落地后）：下面这些 payload 原来写的是
+`{"action": "set", "path": …, "value": …}`——那不是 `SelfConfigArgs` 的线上形状。**
+真实形状由 `#[serde(tag = "action", rename_all = "snake_case")]` 决定：
+`{"action": "update_config", "config_path": …, "config_value": …}`，而
+`self_config_touches_the_gate`（`exec_tier.rs:614`）正是按 `action == "update_config"`
+与 `config_path` 读的。照原样写下去，这几条测试**在 Step 3 之后仍然是红的**，而红的理由
+与它们要证明的事无关。
+
+**生产代码没有这个错**——那道闸是既有代码，字段名一直对；错的只有本计划里的夹具。
+但这是「一条只读自己刚写下的字面量的断言」的邻居形态：**一个 payload 里的键名也是 wire 契约**，
+而计划文本没有编译器替它查。写跨层夹具时去读那个类型的 serde 属性，别按记忆里的字段名写。
+
 ```rust
     /// A gate whose off-switch can be flipped without a card is not a gate:
     /// two individually legal steps ("write the config", "spawn a terminal")
@@ -3192,7 +3204,7 @@ Add to `src/tools/scoped/gate_chain.rs` 的 `mod tests`：
         let rule = svc
             .confirmation_rule(
                 "self_config",
-                &json!({"action": "set", "path": "policies.terminal.enabled", "value": true}),
+                &json!({"action": "update_config", "config_path": "policies.terminal.enabled", "config_value": true}),
             )
             .expect("flipping the terminal gate must card at every tier, Full included");
         // The constant, not the literal: `GateRule::id`'s own doc says a rename
@@ -3214,7 +3226,7 @@ Add to `src/tools/scoped/gate_chain.rs` 的 `mod tests`：
         assert!(
             svc.confirmation_rule(
                 "self_config",
-                &json!({"action": "set", "path": "behavior.greeting", "value": "hi"}),
+                &json!({"action": "update_config", "config_path": "behavior.greeting", "config_value": "hi"}),
             )
             .is_none(),
             "only the gate-deciding subtrees card at Full"
@@ -3235,7 +3247,7 @@ Add to `src/tools/scoped/gate_chain.rs` 的 `mod tests`：
         assert!(
             svc.confirmation_rule(
                 "self_config",
-                &json!({"action": "set", "path": "policies.terminal_legacy.x", "value": 1}),
+                &json!({"action": "update_config", "config_path": "policies.terminal_legacy.x", "config_value": 1}),
             )
             .is_none(),
             "`policies.terminal_legacy` is a different subtree"
@@ -3258,7 +3270,7 @@ Add to `src/tools/scoped/gate_chain.rs` 的 `mod tests`：
         assert!(
             svc.confirmation_rule(
                 "self_config",
-                &json!({"action": "set", "path": "policies.terminal.enabled", "value": true}),
+                &json!({"action": "update_config", "config_path": "policies.terminal.enabled", "config_value": true}),
             )
             .is_none(),
             "an exact entry is a person's decision and stands the floor down by design"
