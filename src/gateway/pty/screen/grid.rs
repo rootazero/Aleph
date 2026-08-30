@@ -204,7 +204,17 @@ impl Grid {
             return;
         }
         let w = width as u16;
-        if self.cursor_col + w > self.cols {
+        // Widened to `u32` before the compare: `cursor_col` may legitimately
+        // sit AT `cols` (the invariant is `cursor_col <= cols` — parking there
+        // means "a wrap is owed"), so on a maximally wide grid `cursor_col + w`
+        // overflows `u16` — panic in debug, wrap in release, and a wrapped sum
+        // is `< cols`, so the wrap check says "no wrap needed" and `idx` then
+        // indexes past the row. Today `handlers::pty::MAX_TERMINAL_DIMENSION`
+        // keeps `cols` three orders of magnitude below that, but the arithmetic
+        // must not depend on a bound enforced in another module — still less on
+        // the older accident that the allocation for such a grid aborted the
+        // process first.
+        if u32::from(self.cursor_col) + u32::from(w) > u32::from(self.cols) {
             self.newline();
             self.cursor_col = 0;
         }

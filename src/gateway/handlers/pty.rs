@@ -41,6 +41,54 @@ use crate::config::Config;
 use crate::gateway::pty::{self, SpawnOptions};
 use crate::sync_primitives::Arc;
 
+/// The largest terminal geometry `pty.spawn` / `pty.resize` will accept, per
+/// axis.
+///
+/// `Grid` allocates `rows * cols` cells of 16 bytes each in a single `vec!`,
+/// twice over on a resize (a whole second grid is built before the swap), and
+/// `rows`/`cols` arrive on the wire as bare `u16`. At the type's ceiling that
+/// is 65535 x 65535 x 16 B ~= 68 GB in one allocation — and a Rust allocation
+/// failure calls `handle_alloc_error`, which **aborts the process**. It does
+/// not unwind, so there is no `catch_unwind` and no failed-request arm: the
+/// whole daemon goes, including the vault it holds. `pty.resize` is the
+/// cheaper way to reach it, because unlike `pty.spawn` it never consults
+/// `[policies.terminal] enabled`.
+///
+/// 1000 because 1000 x 1000 = 10^6 cells = 16 MB, which is a grid a host can
+/// lose without noticing, and because a 1000-COLUMN terminal needs a window
+/// roughly 7000 px wide at any legible monospace advance — wider than an 8K
+/// display, let alone a Panel pane inside one. No real terminal has ever
+/// asked for it. The number is deliberately far below "the largest value that
+/// would still work": this is a floor against a malformed request, not a
+/// capacity plan, and the failure it prevents is unrecoverable while the
+/// failure it causes is a legible error message.
+///
+/// **Refused, never silently clamped.** A client that sends nonsense has to
+/// learn it did; a clamp would leave it rendering against dimensions the
+/// server never agreed to. Note what the shipped client does and do not copy
+/// it: `render::viewport_cells` clamps its own measurement to
+/// `f64::from(u16::MAX)` — the largest value this server will *parse*, not one
+/// it survives. Client-side clamping is not the enforcement point and cannot
+/// be: the bound has to hold for a caller that never ran our JavaScript.
+pub const MAX_TERMINAL_DIMENSION: u16 = 1000;
+
+/// The one geometry predicate, shared by `pty.spawn` and `pty.resize`.
+///
+/// One body rather than a check at each call site: these are the two faces of
+/// the same question, and a bound enforced on one face is not a bound. `0` is
+/// admitted on purpose — it is the wire's "unset", which `PtySession::spawn`
+/// substitutes 24/80 for and `note_viewport` raises with `.max(1)`; refusing
+/// it here would break every client that omits the fields.
+fn check_dimensions(rows: u16, cols: u16) -> Result<(), String> {
+    if rows > MAX_TERMINAL_DIMENSION || cols > MAX_TERMINAL_DIMENSION {
+        return Err(format!(
+            "terminal geometry {rows}x{cols} exceeds the maximum of \
+             {MAX_TERMINAL_DIMENSION}x{MAX_TERMINAL_DIMENSION} (rows x cols)"
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct SpawnParams {
     #[serde(default)]
@@ -109,6 +157,13 @@ pub async fn handle_spawn(request: JsonRpcRequest, config: Arc<RwLock<Config>>) 
         // Empty params → default shell.
         None => SpawnParams::default(),
     };
+
+    // Before the config read and before any allocation: a geometry this large
+    // is refused on the cheapest possible path, and the refusal does not
+    // depend on any policy being loaded.
+    if let Err(e) = check_dimensions(params.rows, params.cols) {
+        return JsonRpcResponse::error(id, INVALID_PARAMS, e);
+    }
 
     // Read fresh on every spawn (not cached at boot) so a `[policies.terminal]`
     // patch — the gate below, or a workspace root registered after
@@ -250,6 +305,15 @@ pub async fn handle_resize(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(resp) => return resp,
     };
 
+    // The same bound `pty.spawn` applies, and the reason it must be repeated
+    // here rather than left to spawn: `note_viewport` -> `apply_effective_size`
+    // -> `Grid::resize` reaches the same single allocation, and this face never
+    // consults `[policies.terminal] enabled`, so it is the cheaper of the two
+    // ways in.
+    if let Err(e) = check_dimensions(params.rows, params.cols) {
+        return JsonRpcResponse::error(id, INVALID_PARAMS, e);
+    }
+
     let Some(conn_id) = crate::gateway::caller_identity::current_caller_conn_id() else {
         return JsonRpcResponse::error(
             id,
@@ -345,6 +409,93 @@ mod tests {
         let mut cfg = Config::default();
         cfg.agents.defaults.workspace_root = Some(dir.path().to_path_buf());
         (Arc::new(RwLock::new(cfg)), dir)
+    }
+
+    /// The geometry ceiling, on the face that reaches the allocation without
+    /// consulting any policy.
+    ///
+    /// `pty.resize` is the cheaper of the two ways to `Grid::resize`'s single
+    /// `vec![Cell; rows * cols]` — it never reads `[policies.terminal]`. The
+    /// session id is deliberately a ghost: the refusal has to land BEFORE the
+    /// lookup, so this passes for the right reason only if the message names
+    /// the ceiling rather than the missing session.
+    #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
+    async fn resize_refuses_a_geometry_that_would_allocate_the_host() {
+        let resp = handle_resize(req(
+            "pty.resize",
+            json!({ "session_id": "ghost", "rows": 65535, "cols": 65535 }),
+        ))
+        .await;
+        let msg = resp
+            .error
+            .expect("oversized resize must be refused")
+            .message;
+        assert!(
+            msg.contains("exceeds the maximum"),
+            "must refuse on geometry, not on the unknown session: {msg}"
+        );
+        assert!(
+            msg.contains(&MAX_TERMINAL_DIMENSION.to_string()),
+            "the refusal must name the ceiling so a client can correct itself: {msg}"
+        );
+    }
+
+    /// Refused, not silently clamped — and refused on `spawn` too, because a
+    /// bound enforced on one of two faces is not a bound.
+    #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
+    async fn spawn_refuses_a_geometry_that_would_allocate_the_host() {
+        let (config, _dir) = isolated_config();
+        let resp = handle_spawn(
+            req("pty.spawn", json!({ "rows": 65535, "cols": 65535 })),
+            config,
+        )
+        .await;
+        let msg = resp.error.expect("oversized spawn must be refused").message;
+        assert!(
+            msg.contains("exceeds the maximum"),
+            "spawn must refuse oversized geometry: {msg}"
+        );
+        assert!(
+            resp.result.is_none(),
+            "a refused spawn must not return a session"
+        );
+    }
+
+    /// One axis is enough. Written because the natural way to get this wrong
+    /// is `rows > MAX && cols > MAX` — which admits 24 x 65535, whose product
+    /// is the same order of magnitude as the case above.
+    #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
+    async fn a_single_oversized_axis_is_refused() {
+        assert!(
+            check_dimensions(24, 65535).is_err(),
+            "wide grid must refuse"
+        );
+        assert!(
+            check_dimensions(65535, 80).is_err(),
+            "tall grid must refuse"
+        );
+        assert!(
+            check_dimensions(MAX_TERMINAL_DIMENSION, MAX_TERMINAL_DIMENSION).is_ok(),
+            "the ceiling itself is admissible"
+        );
+        assert!(
+            check_dimensions(MAX_TERMINAL_DIMENSION + 1, 80).is_err(),
+            "one past the ceiling is not"
+        );
+    }
+
+    /// `0` means "unset" on this wire, not "a zero-sized terminal": every
+    /// client that omits the fields sends it, `PtySession::spawn` substitutes
+    /// 24/80 and `note_viewport` raises it with `.max(1)`. A ceiling check
+    /// that also refused the floor would break the common case.
+    #[test]
+    #[serial_test::parallel(pty_global_manager)]
+    fn zero_is_the_wires_unset_and_stays_admissible() {
+        assert!(check_dimensions(0, 0).is_ok());
+        assert!(check_dimensions(24, 80).is_ok());
     }
 
     #[tokio::test]
