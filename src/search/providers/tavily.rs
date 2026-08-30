@@ -32,6 +32,13 @@ struct TavilyRequest {
     /// dropped here.
     #[serde(skip_serializing_if = "Option::is_none")]
     days: Option<u32>,
+    /// An empty list must be omitted rather than sent as `[]` — Tavily
+    /// treats an empty `include_domains` as "no results anywhere", not as
+    /// "no constraint".
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    include_domains: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    exclude_domains: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -63,13 +70,14 @@ impl TavilyProvider {
             client: build_client()?,
         })
     }
-}
 
-#[async_trait]
-impl SearchProvider for TavilyProvider {
-    async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
-        let request_body = TavilyRequest {
-            api_key: self.api_key.to_string(),
+    /// Build the request body. Split out of `search` so the wire shape can be
+    /// asserted without an HTTP round trip — the parameter names are a
+    /// contract with Tavily and "it looked right" is how the fill_form /
+    /// wait_for key mismatches in the browser layer shipped.
+    fn build_request(api_key: &str, query: &str, options: &SearchOptions) -> TavilyRequest {
+        TavilyRequest {
+            api_key: api_key.to_string(),
             query: query.to_string(),
             search_depth: if options.include_full_content {
                 "advanced".to_string()
@@ -78,13 +86,18 @@ impl SearchProvider for TavilyProvider {
             },
             include_answer: false,
             max_results: options.validated_max_results(),
-            include_raw_content: if options.include_full_content {
-                Some(true)
-            } else {
-                None
-            },
+            include_raw_content: options.include_full_content.then_some(true),
             days: options.tavily_days(),
-        };
+            include_domains: options.include_domains.clone(),
+            exclude_domains: options.exclude_domains.clone(),
+        }
+    }
+}
+
+#[async_trait]
+impl SearchProvider for TavilyProvider {
+    async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
+        let request_body = Self::build_request(&self.api_key, query, options);
 
         let response = self
             .client
@@ -125,9 +138,9 @@ impl SearchProvider for TavilyProvider {
 
     fn capabilities(&self) -> SearchCapabilities {
         SearchCapabilities {
-            domain_filter: false, // Task 3 flips this
-            recency: true,        // tavily_days -> `days`
-            full_content: true,   // include_raw_content
+            domain_filter: true, // include_domains / exclude_domains
+            recency: true,       // tavily_days -> `days`
+            full_content: true,  // include_raw_content
         }
     }
 }
@@ -178,6 +191,29 @@ mod tests {
     fn test_tavily_provider_rejects_empty_key() {
         let result = TavilyProvider::new("".to_string());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn domain_lists_reach_the_tavily_request_body() {
+        let o = SearchOptions {
+            include_domains: vec!["github.com".into()],
+            exclude_domains: vec!["pinterest.com".into()],
+            ..Default::default()
+        };
+        let body = TavilyProvider::build_request("k", "q", &o);
+        let v = serde_json::to_value(&body).unwrap();
+        assert_eq!(v["include_domains"], serde_json::json!(["github.com"]));
+        assert_eq!(v["exclude_domains"], serde_json::json!(["pinterest.com"]));
+    }
+
+    /// An empty list must not appear on the wire at all: Tavily treats an empty
+    /// include list as "no results anywhere", not as "no constraint".
+    #[test]
+    fn empty_domain_lists_are_omitted_entirely() {
+        let body = TavilyProvider::build_request("k", "q", &SearchOptions::default());
+        let v = serde_json::to_value(&body).unwrap();
+        assert!(v.get("include_domains").is_none(), "{v}");
+        assert!(v.get("exclude_domains").is_none(), "{v}");
     }
 
     // Integration test (requires real API key)

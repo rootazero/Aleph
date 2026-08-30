@@ -79,6 +79,19 @@ pub struct SearchOptions {
     /// WARNING: Significantly increases latency and token usage
     #[serde(default)]
     pub include_full_content: bool,
+
+    /// Restrict results to these domains. Empty = no constraint.
+    ///
+    /// Not every backend has a native parameter for this; the ones that do
+    /// declare `SearchCapabilities::domain_filter` and the registry prefers
+    /// them. A backend that cannot express it says so in the result notes
+    /// rather than silently returning the whole web.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include_domains: Vec<String>,
+
+    /// Drop results from these domains. Empty = no constraint.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_domains: Vec<String>,
 }
 
 const fn default_safe_search() -> bool {
@@ -103,6 +116,8 @@ impl Default for SearchOptions {
             max_results: default_max_results(),
             timeout_seconds: default_timeout(),
             include_full_content: false,
+            include_domains: Vec::new(),
+            exclude_domains: Vec::new(),
         }
     }
 }
@@ -307,11 +322,20 @@ mod tests {
             max_results: 10,
             timeout_seconds: 15,
             include_full_content: true,
+            include_domains: vec![],
+            exclude_domains: vec![],
         };
 
         assert_eq!(options.language.unwrap(), "zh-CN");
         assert_eq!(options.max_results, 10);
         assert!(options.include_full_content);
+    }
+
+    #[test]
+    fn domain_lists_default_to_empty_which_means_no_constraint() {
+        let o = SearchOptions::default();
+        assert!(o.include_domains.is_empty());
+        assert!(o.exclude_domains.is_empty());
     }
 
     #[test]
