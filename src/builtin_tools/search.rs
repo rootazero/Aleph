@@ -194,9 +194,25 @@ impl SearchTool {
     /// Tool identifier
     pub const NAME: &'static str = "search";
 
-    /// Tool description for AI prompt
-    pub const DESCRIPTION: &'static str =
-        "Search the internet for current information. Use for questions requiring up-to-date data.";
+    /// Tool description for AI prompt.
+    ///
+    /// Longer than one line on purpose: five of these parameters landed with
+    /// this round, and a knob the model cannot tell when to reach for is a
+    /// knob nobody turns. The bytes are paid on every request that can see
+    /// this tool, so each clause is here because it changes what the model
+    /// sends: how to ask several questions, what freshness values exist, that
+    /// domain filtering is a preference the answer reports on rather than a
+    /// guarantee, that page bodies are expensive, and that naming a backend
+    /// is an instruction rather than a hint.
+    pub const DESCRIPTION: &'static str = "Search the web for current information. \
+         One query per call; ask several questions with several calls. \
+         `recency` (`day|week|month|year`) bounds how old a result may be. \
+         `domains` and `exclude_domains` restrict results by site. Both are \
+         preferences, not guarantees: a backend that cannot express one still \
+         answers, and the reply's notes say which dimension was dropped. \
+         `full_content` returns whole page bodies instead of snippets — expensive, \
+         so use it only when a summary will not do. `provider` asks exactly one \
+         configured backend and fails rather than answering from another.";
 
     /// Create with a `SearchRegistry`, the only way in.
     ///
@@ -293,6 +309,44 @@ mod tests {
             serde_json::from_str(r#"{"query": "rust programming", "limit": 10}"#).unwrap();
         assert_eq!(args.query, "rust programming");
         assert_eq!(args.limit, Some(10));
+    }
+
+    /// The prose and the schema must not disagree about what this tool
+    /// accepts. A DESCRIPTION naming a parameter the schema does not carry
+    /// teaches the model to send something that will be rejected; the reverse
+    /// hides a parameter nobody will use.
+    ///
+    /// There is deliberately no exemption list. A backticked word that reads
+    /// like a parameter and is not one gets un-backticked or reworded — an
+    /// exemption list here would be a licence with no expiry, and the words it
+    /// would hold are ours to change.
+    #[test]
+    fn every_parameter_named_in_the_search_description_exists_in_its_schema() {
+        let schema = serde_json::to_value(schemars::schema_for!(SearchArgs)).unwrap();
+        let props: std::collections::BTreeSet<String> = schema["properties"]
+            .as_object()
+            .expect("SearchArgs must render an object schema")
+            .keys()
+            .cloned()
+            .collect();
+        let mut named = 0usize;
+        for word in SearchTool::DESCRIPTION.split('`').skip(1).step_by(2) {
+            if props.contains(word) {
+                named += 1;
+                continue;
+            }
+            // Not every backticked run is a parameter — a value list like
+            // `day|week|month|year` is not a lowercase identifier, so it
+            // cannot be read as one.
+            assert!(
+                !word.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                "`{word}` reads as a parameter name but SearchArgs has no such field"
+            );
+        }
+        assert!(
+            named >= 5,
+            "the description must actually name the parameters; it named {named}"
+        );
     }
 
     #[test]
