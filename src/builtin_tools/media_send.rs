@@ -88,7 +88,7 @@ impl AlephTool for MediaSendTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let ssrf_policy = &self.ssrf_policy;
         for item in &args.items {
-            preflight(&item.url, &ssrf_policy).await?;
+            preflight(&item.url, ssrf_policy).await?;
         }
 
         let count = args.items.len();

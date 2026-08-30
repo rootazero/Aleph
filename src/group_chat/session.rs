@@ -182,8 +182,8 @@ impl GroupChatSession {
     /// the coordinator prompt stays bounded (an unbounded history grew
     /// linearly with session length — a 50-round × 4-persona session pushed
     /// >100k tokens into every coordinator call). `window_rounds == 0`
-    /// disables the window entirely and returns the full history, matching
-    /// [`Self::build_history_text`].
+    /// > disables the window entirely and returns the full history, matching
+    /// > [`Self::build_history_text`].
     #[must_use]
     pub fn build_history_text_windowed(&self, window_rounds: u32) -> String {
         if window_rounds == 0 || self.current_round <= window_rounds {

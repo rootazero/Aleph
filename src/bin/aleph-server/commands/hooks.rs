@@ -140,11 +140,9 @@ fn run_command_with_payload(command: &str, event: &str) -> CmdResult {
         Some("1") | Some("true") | Some("yes")
     ) && command.chars().any(|c| SHELL_METACHARS.contains(&c))
     {
-        return Err(format!(
-            "hook command contains shell metacharacters; \
+        return Err("hook command contains shell metacharacters; \
              refusing to invoke 'sh -c' / 'cmd /C' on it. \
-             Set ALEPH_HOOK_ALLOW_SHELL_METACHARS=1 to override."
-        )
+             Set ALEPH_HOOK_ALLOW_SHELL_METACHARS=1 to override.".to_string()
         .into());
     }
     let payload = synthetic_payload(event);

@@ -1699,7 +1699,7 @@ impl super::DesktopTool {
                             "screen_record duration must be non-negative",
                         )));
                     }
-                    Some(v) if v == 0.0 => {
+                    Some(0.0) => {
                         return Ok(Some(invalid_args(
                             "screen_record duration must be greater than zero",
                         )));

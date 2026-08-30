@@ -328,7 +328,7 @@ impl AlephTool for SessionsListTool {
                 }
             });
             let histories = futures::future::join_all(history_futures).await;
-            for (row, history) in rows.iter_mut().zip(histories.into_iter()) {
+            for (row, history) in rows.iter_mut().zip(histories) {
                 row.messages = history;
             }
         }

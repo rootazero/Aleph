@@ -1505,7 +1505,7 @@ mod tests {
         const FED: usize = 64 * 1024;
         let mut s = Screen::new(4, 20);
         let mut bytes = b"\x1b]0;".to_vec();
-        bytes.extend(std::iter::repeat(b'A').take(FED));
+        bytes.extend(std::iter::repeat_n(b'A', FED));
         bytes.push(0x07);
         s.feed(&bytes);
 

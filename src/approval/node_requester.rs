@@ -162,6 +162,31 @@ pub async fn run_node_approval(
     (outcome_to_wire(outcome), resolved.deny_reason)
 }
 
+/// Sanitize a remote-RPC string before it is embedded in the operator-facing
+/// `command` field or rendered into a UI card.
+///
+/// Strips control characters (incl. newline, which would let a malicious
+/// node forge a fake audit-log entry) and truncates to `max_len` bytes.
+/// ANSI escape sequences are stripped to defend terminal/UI rendering.
+fn sanitize_for_display(s: &str, max_len: usize) -> String {
+    let mut out = String::with_capacity(s.len().min(max_len));
+    for c in s.chars() {
+        if c.is_control() {
+            out.push(' ');
+        } else if c == '\u{1b}' {
+            // ESC — drop the start of any ANSI sequence by replacing with space.
+            out.push(' ');
+        } else {
+            out.push(c);
+        }
+        if out.len() >= max_len {
+            out.push('…');
+            break;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,29 +272,4 @@ mod tests {
 
         assert_eq!(handle.await.unwrap(), ("approved_session", None));
     }
-}
-
-/// Sanitize a remote-RPC string before it is embedded in the operator-facing
-/// `command` field or rendered into a UI card.
-///
-/// Strips control characters (incl. newline, which would let a malicious
-/// node forge a fake audit-log entry) and truncates to `max_len` bytes.
-/// ANSI escape sequences are stripped to defend terminal/UI rendering.
-fn sanitize_for_display(s: &str, max_len: usize) -> String {
-    let mut out = String::with_capacity(s.len().min(max_len));
-    for c in s.chars() {
-        if c.is_control() {
-            out.push(' ');
-        } else if c == '\u{1b}' {
-            // ESC — drop the start of any ANSI sequence by replacing with space.
-            out.push(' ');
-        } else {
-            out.push(c);
-        }
-        if out.len() >= max_len {
-            out.push('…');
-            break;
-        }
-    }
-    out
 }

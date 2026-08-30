@@ -207,7 +207,9 @@ struct LaunchedPid {
     pid: u32,
     /// Linux only: `starttime` from `/proc/<pid>/stat` field 22, in clock
     /// ticks since boot. `None` on other platforms (the verification step
-    /// then falls back to a `kill(pid, 0)` liveness probe).
+    /// then falls back to a `kill(pid, 0)` liveness probe). Read only inside
+    /// the `cfg(target_os = "linux")` arm of `Drop`, hence the attr.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     starttime: Option<u64>,
 }
 
