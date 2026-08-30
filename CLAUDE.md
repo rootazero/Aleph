@@ -662,6 +662,7 @@
 | `src/tasks/cron/` `src/tasks/heartbeat/` | §4.13b（写面对账守卫 · 共用告警判据 · 停摆 job）· §4.13c（**不阻塞 tick · 投递失败即失败 · 孪生子系统对账**）· `src/tasks/shared/{alert,delivery}.rs` |
 | `src/gateway/session_store/` `src/gateway/session_manager/` | 判据清单 §0（权威序 · 删除边界 · idle 地板）· FEATURE_LOCATOR §6.9 · **改顺序、删除边界或任一 idle sweep 前跑 `qa/session_order/run.sh`**（两个 backend 各驱动同一段对话、停机后把戳改成**降序**再重读——生产数据上两序恒合，所以不打乱就等于没测；断言服务序不变 · `session.truncate` 真的到达数据库 · 它留下的是**头部** · 两个 backend 销毁同一批行） |
 | `src/sandbox/` | [SANDBOX.md](docs/reference/SANDBOX.md) · §3.8 · §3.15（后台执行生命周期 · 实时尾巴 · 两阶段 cwd 闸） |
+| `src/gateway/pty/` `interfaces/webchat/.../views/terminal/` | FEATURE_LOCATOR §6.11 · 判据清单 §0（分派表的静默 no-op · 有损可观测量）· **`Perform` 未实现的方法默认静默 no-op**，所以每张手写分派表都欠一条「我声称支持的动词真的到达网格了吗」的守卫（三张表各犯过一次）· 缺口是**会滚动的应用**（vim / `less`），btop 与 nano 今天就是对的、nano 是回归对照组 |
 
 > **对照表已做完，别重做**：openclaw（gateway / cluster / hub / model catalog）· codex（权限模型 / Multi-agent V2）· hermes · pi · LangGraph · RouteLLM/LiteLLM/Bifrost · DeepSeek-Reasonix · FluidVoice/WhisperLive · SkillOpt · buzz · **deepseek-harness (dsh, 2026-08-15)**（Cordis 插件架构本身不移植；10 维扫描 + 13 项对抗验证的逐项结论与 DEFER 见 FEATURE_LOCATOR §3.1 dsh 轮）。逐项结论与"刻意不做清单"都在对应 reference 文档里。
 

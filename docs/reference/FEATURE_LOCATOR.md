@@ -184,6 +184,11 @@
 | 安全 | `agent_type="main"` 提权 / 子代理拿到 `allowed_tools:["*"]` | Spawnable-Agent Resolution | `AgentRegistry::resolve_spawnable()`（四个 spawn 面共用；prompt 目录与 spawn 侧此前判据不一致）| ✅ (§4.13, 2026-08-08) |
 | 横切 | 这个绿是真的吗 / 测试全绿但功能是坏的 / 数字每次数都不一样 / 守卫为什么不报错 / 变异了却没变红 / 一次扫描能证明什么 | Verification Discipline | **附录 C**（判据全文；CLAUDE.md 判据清单 §0 / §10 是它的触发器） | ✅ (附录 C, 2026-08-26) |
 | 横切 | boot 到底装没装上 / `configured: false` 是没配置还是没安装 / 功能不生效但零报错 / doctor 说 capability wiring / 全局 `OnceLock` / `install_*` 零调用者 | Process-Global Capability Handles | `src/capability/`（`CapabilitySlot` + `census.rs` 成员规则）+ `src/utils/source_scan.rs` + `diagnostics/checks/capability_wiring.rs` | ✅ (§5.25, 2026-08-26) |
+| UI/Panel | Panel 里没有终端 / 想在面板里开个 shell / 内嵌终端 | Panel Embedded Terminal | `src/gateway/pty/`（服务端屏模型）+ `interfaces/webchat/.../views/terminal/`（Canvas2d 客户端）+ `pty.{spawn,attach,input,resize,close,list}` 六个 Admin 方法 | ✅ (§6.11, 2026-08-30) |
+| UI/Panel | 敲一个字符屏幕上出三个 / `eecho hello` / p10k 提示符糊成一片 | Hand-Written Dispatch Tables Were Incomplete | `pty/screen/perform.rs` 三张表（`execute` 的 C0 缺 HT/BS/VT/FF · `csi_dispatch` 缺 CHA/VPA/ECH/DCH/ICH/IL/DL · `esc_dispatch` **整个不存在**）——zsh 重绘用 **BS** 不是 CHA；`Perform` 未实现的方法**默认静默 no-op** | ✅ (§6.11, 2026-08-30) |
+| UI/Panel | 终端图标是空心方框 / 装了 nerd font 还是不显示 / 想配终端字体 | Terminal Font Stack Config | `config/types/policies/terminal.rs::DEFAULT_TERMINAL_FONT_FAMILY` + `[policies.terminal] font_family / font_size_px`——CSS 回退是**逐字符**的，所以符号字体排在文本字体之后只补图标不改字形；⚠️ 必须用 **Mono** 变体 | ✅ (§6.11, 2026-08-30) |
+| UI/Panel | 终端没占满右边 / 只有 26 行 / canvas 比容器小 | Terminal View Needs An Explicit Height | `views/terminal/mod.rs` 根 div 的 `h-full`（`flex-1` 在 `display:block` 的父盒下是惰性的）+ 源码级守卫 | ✅ (§6.11, 2026-08-30) |
+| UI/Panel | vim 滚动后顶行是旧内容 / 行号从 1 重开 / `less` 往回翻页乱掉 | Scrolling Apps Need A Scroll Region | 缺 DECSTBM / 区裁剪 / DECAWM / RI / G0——**btop 与 nano 今天就是对的**（绝对定位重绘），坏的是**会滚动的**那些；vim 规格 measured 2026-08-30 | ⚠️ 已知缺口，Part 2 (§6.11) |
 
 ---
 
@@ -3599,6 +3604,25 @@ round-2 结尾留了三条，本轮全部收掉。共同形状：**三条都不�
 **本轮唯一的自我纠正**：`check_title` 一开始返回 `&'static str`，真机第一眼就看见中文界面里蹦出英文句子。改成闭集 `TitleRejection` 枚举（服务端 `Display` 给模型和日志，Panel 穷举 `match` 到 i18n）——第四个理由是**编译错误**而不是 UI 上的一片空白。顺带一条通用教训：**往 JSON 语言包插键时锚点必须唯一**，`"rename": "Rename",` 在 `chat` 块里先出现，`replace(..., 1)` 于是把三个画布键插进了聊天块（编译期报 `canvas_subkeys` 没有该方法才发现）。
 
 - **打磨话术**：「改任何 canvas 行为先读 [CANVAS.md](CANVAS.md)。『冲突怎么检测的』＝ Panel 按**错误码**（`api/canvas.rs::CanvasApplyError` 在 API 边界按 `aleph_protocol::jsonrpc::REVISION_CONFLICT` 分类；两侧读同一个共享常量，改号即编译错；2026-08-17 之前按 message 文本——那个短语匹配器与其对账测试已删，别复活）。『事件会乱序吗』＝不会按构造：`DocGuard::commit(&mut self)` 留锁、发布在临界区内。『HTML 素材直开 URL 会怎样』＝ text/plain（裁定不是回退），HTML 只在 sandboxed iframe srcdoc 渲染。『模型的 apply 要带 revision 吗』＝不带，工具自读自重试一次。『为什么工具没有 delete』＝整画布删除是 RPC 面 owner-only 动词。新增 addressed RPC/action 记得三面同一个谓词（`canvas_visible_to`），拒绝与不存在同形（no-oracle）。改 `views/canvas/` 逻辑先动纯函数模块+单测，组件只接线；改完跑 `cargo test -p aleph-panel --lib`（不是 check）。」
+
+### 6.11 Panel 内嵌终端 (Panel Embedded Terminal · 2026-08-30)
+
+- **口语关键词**：内嵌终端、Panel 里开终端、敲一个字符屏幕上出三个 / `eecho hello`、图标是空心方框 / nerd font 不显示 / 装了 p10k 但图标没了、终端字体配置、tab 对不齐 / `中文表格|OK` 挤在一起、终端没占满右边 / 只有 26 行、vim 花屏 / 滚动后顶行是旧内容、`less` 往回翻页乱掉、终端开不了 / 「the embedded terminal is disabled」
+- **代码锚点**：
+  - **服务端屏模型（真源）**：`src/gateway/pty/screen/`——`perform.rs`（VTE `Perform` 的**三张手写分派表**：`execute` 的 C0、`csi_dispatch`、`esc_dispatch`；外加 `osc_dispatch` 这张**策展白名单**）、`grid.rs`（单元格网格与全部动词）、`diff.rs`（`row_runs` 行级样式游程，**跳过宽字形占位格**）、`convert.rs`、`mod.rs`（`Screen`）
+  - **会话与生命周期**：`src/gateway/pty/{session,manager,jail}.rs`（`jail.rs` 是 cwd 闸）
+  - **RPC 面**：`src/gateway/handlers/pty.rs`——`pty.{spawn,attach,input,resize,close,list}` **六个方法，全部 `Class::Admin`**（`method_census.rs:352-357`）
+  - **线协议**：`shared/protocol/src/pty.rs`（⚠️ `pty.attach` 结果里的 `rows` 是**行数**不是内容；内容在 `patch.rows[i].runs[*].text`）
+  - **客户端**：`interfaces/webchat/src/platform/wide/views/terminal/`——`mod.rs`（视图外壳 + 几何 + 读服务端**有效**配置）、`session.rs`（客户端屏 + 增量应用）、`render.rs`（Canvas2d：`measure` / `apply_font` 哨兵 / `run_font` / `paint`）、`keymap.rs`（`encode_key`）
+  - **配置**：`src/config/types/policies/terminal.rs`——`[policies.terminal]` 的 `enabled` / `scrollback_lines` / `max_sessions` / `font_family` / `font_size_px`
+- **现状**：可用。真机十一条全部跑通（2026-08-30，见下）。字体默认栈带 Nerd Font 名（p10k 图标开箱即渲染），布局 `h-full` 后 canvas 与容器逐像素相等（实测 717/717，`rows: 42`）。
+- **⚠️ 已知缺口（不是"全屏应用坏了"，是「**会滚动的应用**」）**：无 DECSTBM（滚动区）、`insert_lines`/`delete_lines`/`newline` 不按区裁剪、无 DECAWM、`?1049h/l` 不做自己的光标存取、无 RI、无 G0 字符集。**vim 与 `less` 因此可见地坏**（vim 实测特征：滚动后顶行是陈旧内容、其下一行行号从 `1` 重开、缓冲区文本本身正确）。**btop 与 nano 今天就是对的**——它们用绝对定位重绘而不滚动，nano 因此是这一包的**回归对照组**。
+  ⚠️ 这份规格 **measured 2026-08-30，针对本机那个 vim**（`ESC[1;22r` + `ESC[11L`/`ESC[11M`）——版本会动，照着实现前先重测一次。
+- **判据（详见 CLAUDE.md 判据清单 §0/§7 与附录 D）**：`Perform` 未实现的方法**默认是静默 no-op**，所以每张分派表都欠一条「我声称支持的动词真的到达网格了吗」的守卫；这三张表各犯过一次同样的病（`csi_dispatch` 缺 CHA/VPA/ECH/DCH/ICH/IL/DL、`execute` 缺 HT/BS/VT/FF、`esc_dispatch` **整个不存在**），而症状是 zsh/p10k 的重绘用 **BS**（不是 CHA）擦写，于是敲一个字符屏幕上出三个。
+- **真机 QA（2026-08-30，十一条全部产出结果）**：提示符与几何与图标 · `echo hello` 不再回显成 `eecho hello` · `ls --color` 两列不错位 · `中文表格\t|\tOK` 制表位真的分开 · vim（只记观察不下判决） · 刷新恢复会话 · `yes | head -100000` 三秒且之后仍可用 · Ctrl-C 打断 `sleep 100` · 第二个标签页**双向**共享 · `enabled=false` 杀在飞会话并用原话拒绝 `pty.spawn` · 字体默认栈与单字体覆写两半。⚠️ 第 10/11 条走隔离 home（`qa/lib/scratch_home.sh::qa_redirect_home` + 另一个端口）——**启动一个 server 本身就会重写操作者真实的 `~/.aleph/config.toml`**，所以隔离的边界是**进程**不是**操作**。
+
+---
+
 
 ---
 
