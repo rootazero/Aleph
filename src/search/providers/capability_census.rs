@@ -16,11 +16,12 @@
 //! that enumerates its own inputs is structurally blind to whatever it did
 //! not enumerate). Both sides are derived from source instead:
 //!
-//! * the accessor names are derived from `options.rs` — any fn whose body
-//!   reads `self.recency` is a recency accessor, by construction;
+//! * the accessor names are derived from `options.rs` — any `pub fn`/`pub
+//!   const fn` whose body reads `self.recency` is a recency accessor, by
+//!   construction;
 //! * each provider's declaration is parsed out of its own `capabilities()`.
 
-use crate::utils::source_scan::production_code_lines;
+use crate::utils::source_scan::{code_text, production_prefix};
 use std::collections::{BTreeMap, BTreeSet};
 
 const OPTIONS_SRC: &str = include_str!("../options.rs");
@@ -52,9 +53,19 @@ fn provider_sources() -> BTreeMap<&'static str, &'static str> {
     ])
 }
 
+/// This file's view of a Rust source: no `#[cfg(test)]` items, no comments,
+/// no string/char literal payloads. `code_text` composed AFTER
+/// `production_prefix` (the order its own doc recommends) means neither
+/// this scanner's own marker text nor a provider's format strings can be
+/// mistaken for the code they merely describe — see `code_text`'s doc for
+/// why a naive quote-walk is unsafe here.
+fn production_view(src: &str) -> String {
+    code_text(&production_prefix(src))
+}
+
 /// Accessor fn names in `options.rs` whose body reads one of `members`.
 fn accessors_reading(members: &[&str]) -> BTreeSet<String> {
-    let src = production_code_lines(&OPTIONS_SRC.replace('\r', ""));
+    let src = production_view(OPTIONS_SRC);
     let mut current: Option<String> = None;
     let mut found = BTreeSet::new();
     for line in src.lines() {
@@ -75,14 +86,44 @@ fn accessors_reading(members: &[&str]) -> BTreeSet<String> {
 }
 
 /// The literal value of one field inside this file's `capabilities()` body.
+///
+/// The body's end is found by brace-balance counting from the `{` that
+/// opens it — not by an indentation-anchored string search (the previous
+/// implementation searched for the literal text `"\n    }"`, which happens
+/// to fall out of rustfmt's current formatting of a three-field struct
+/// literal for all nine files today, but is defined by rustfmt's behaviour
+/// rather than by this function's own syntax). Braces inside string/char
+/// literal payloads are already gone by the time this scan sees them
+/// (`production_view` composes `code_text`, which replaces each literal
+/// with a non-brace sentinel), so every `{`/`}` counted here is a real code
+/// delimiter — see
+/// `declared_bit_survives_a_body_containing_the_old_boundary_heuristics_own_marker`
+/// for the fixture that pins this against the old heuristic.
 fn declared_bit(src: &str, field: &str) -> bool {
-    let src = production_code_lines(&src.replace('\r', ""));
-    let Some(start) = src.find("fn capabilities(") else {
+    let code = production_view(src);
+    let Some(sig_start) = code.find("fn capabilities(") else {
         return false; // no override => trait default => all false
     };
-    let body = &src[start..];
-    let end = body.find("\n    }").map_or(body.len(), |i| i);
-    body[..end].contains(&format!("{field}: true"))
+    let Some(brace_offset) = code[sig_start..].find('{') else {
+        return false; // signature without a body — malformed, treat as absent
+    };
+    let body_start = sig_start + brace_offset;
+    let mut depth = 0i32;
+    let mut end = code.len();
+    for (offset, ch) in code[body_start..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = body_start + offset + 1; // include the closing brace
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    code[body_start..end].contains(&format!("{field}: true"))
 }
 
 #[test]
@@ -113,7 +154,7 @@ fn every_declared_capability_is_backed_by_a_parameter_that_is_actually_sent() {
     for (dim, members) in DIMENSIONS {
         let accessors = accessors_reading(members);
         for (name, src) in provider_sources() {
-            let prod = production_code_lines(&src.replace('\r', ""));
+            let prod = production_view(src);
             let uses = accessors.iter().any(|a| prod.contains(&format!("{a}(")))
                 || members
                     .iter()
@@ -136,5 +177,41 @@ fn every_declared_capability_is_backed_by_a_parameter_that_is_actually_sent() {
         checked,
         DIMENSIONS.len() * 9,
         "the census must compare every dimension against every provider"
+    );
+}
+
+/// Pins `declared_bit`'s brace-balance boundary against the old
+/// indentation-anchored heuristic it replaced (`body.find("\n    }")`).
+///
+/// This fixture's `capabilities()` body opens a string literal, spanning
+/// two physical lines, whose payload contains the exact byte sequence
+/// `"\n    }"` — a newline, four spaces, and a closing brace — BEFORE the
+/// real `recency: true` declaration. Against the old implementation this
+/// is exactly the false negative the review finding predicted: `body.find`
+/// locates that sequence inside the string payload, long before the
+/// function's actual closing brace, and truncates the slice there — so
+/// `recency: true`, sitting after the truncation point, is never seen and
+/// `declared_bit` answers `false` for a provider that really does declare
+/// `true`. A brace-balance scan over `code_text`'s output is unaffected:
+/// the `}` inside the string was never emitted (string interiors are
+/// replaced by a single `"` sentinel), so it is never counted as a real
+/// delimiter.
+#[test]
+fn declared_bit_survives_a_body_containing_the_old_boundary_heuristics_own_marker() {
+    let src = r#"
+fn capabilities(&self) -> SearchCapabilities {
+    let _marker = "line one
+    }";
+    SearchCapabilities {
+        domain_filter: false,
+        recency: true,
+        full_content: false,
+    }
+}
+"#;
+    assert!(
+        declared_bit(src, "recency"),
+        "a string literal containing the old boundary heuristic's own \"\\n    }}\" \
+         marker must not truncate the body before the real declaration"
     );
 }
