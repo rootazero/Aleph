@@ -1034,6 +1034,47 @@ mod tests {
         );
     }
 
+    /// The scraper is itself a dispatch table -- one arm per spelling -- so
+    /// it gets the treatment it exists to impose: every spelling it claims
+    /// to read is named here with the byte it must yield.
+    ///
+    /// This exists because I wrote "`b'\\'` and `b'\''` are read outright"
+    /// after verifying only the panic, and one of those two was false:
+    /// `b'\''` yielded `0x5C` because the plain shape was tested first and
+    /// matched on the escape's closing quote. **"Verified by mutation" is a
+    /// per-claim property, not a per-finding one** -- a supported claim and
+    /// an unsupported one travelled in the same sentence.
+    #[test]
+    fn the_byte_literal_scraper_reads_every_spelling_it_claims() {
+        for (src, want) in [
+            ("b'7'", b'7'),
+            ("b'\\n'", b'\n'),
+            ("b'\\r'", b'\r'),
+            ("b'\\t'", b'\t'),
+            ("b'\\0'", 0),
+            ("b'\\\\'", b'\\'),
+            ("b'\\''", b'\''),
+            ("0x1b", 0x1b),
+        ] {
+            let got = claimed_byte_literals(src);
+            assert_eq!(
+                got.iter().copied().collect::<Vec<u8>>(),
+                vec![want],
+                "{src} must scrape to {want:#04x}"
+            );
+        }
+    }
+
+    /// The other half of that contract: a spelling it does NOT read must
+    /// stop the test rather than silently contribute nothing, because
+    /// contributing nothing leaves both sets unchanged and the comparison
+    /// passes.
+    #[test]
+    #[should_panic(expected = "is a spelling this scraper does not read")]
+    fn the_byte_literal_scraper_panics_on_a_spelling_it_cannot_read() {
+        let _ = claimed_byte_literals("b'\\x1b'");
+    }
+
     /// The body of one `Perform` method, comment lines removed -- comments
     /// are prose, not dispatch, and the guards' own paragraphs name verbs
     /// their function does not handle. `\r` goes first so the boundary
@@ -1103,11 +1144,12 @@ mod tests {
         let mut i = 0;
         while i < c.len() {
             if c[i] == 'b' && c.get(i + 1) == Some(&'\'') {
-                if c.get(i + 3) == Some(&'\'') && c[i + 2].is_ascii() {
-                    out.insert(c[i + 2] as u8);
-                    i += 4;
-                    continue;
-                }
+                // Escape shape FIRST, and the order is load-bearing: in
+                // `b'\''` the closing quote of the ESCAPE sits where the
+                // plain shape expects its own closing quote, so a
+                // plain-first test matches and yields `\` (0x5C) instead of
+                // `'` (0x27). Silent, because the escaped character is
+                // itself a quote and nothing else looks wrong.
                 if c.get(i + 2) == Some(&'\\') && c.get(i + 4) == Some(&'\'') {
                     let byte = match c[i + 3] {
                         'n' => b'\n',
@@ -1129,6 +1171,11 @@ mod tests {
                     };
                     out.insert(byte);
                     i += 5;
+                    continue;
+                }
+                if c.get(i + 3) == Some(&'\'') && c[i + 2].is_ascii() {
+                    out.insert(c[i + 2] as u8);
+                    i += 4;
                     continue;
                 }
                 // `b'` opened and neither shape closed it -- `b'\x1b'` is the
@@ -1276,19 +1323,26 @@ mod tests {
     }
 
     /// Checklist item #4 of this plan's real-machine list is a tab-aligned
-    /// CJK table, and it was pinned only by a one-time live reading. The
-    /// claim it makes is that a 2-column and a 4-column first cell put their
-    /// second cell at the SAME stop — which fails both if HT is dropped and
-    /// if a wide glyph is counted as one column, so it is worth a
-    /// regression test rather than a measurement someone has to repeat.
+    /// CJK table, pinned only by a one-time live reading. It claims two
+    /// hazards: HT dropped, and a wide glyph counted as one column.
+    ///
+    /// **The width count is why the input is four glyphs and the stop is
+    /// 16.** Stops are every 8 columns, so a miscount only shows up when
+    /// the true and miscounted widths fall either side of a multiple of 8.
+    /// Four wide glyphs occupy 8 columns and tab to 16; miscounted as one
+    /// column each they occupy 4 and tab to 8 — different stops, so the
+    /// assertion separates them. With TWO glyphs (the shape this test had
+    /// first) the counts are 4 and 2, both of which floor-divide to stop 8:
+    /// the `cursor_col += w` → `+= 1` mutation ran and changed nothing, and
+    /// the test read as coverage it did not have.
     #[test]
     fn ht_aligns_a_column_across_glyphs_of_different_widths() {
-        let mut s = Screen::new(4, 20);
-        s.feed("ab\tX\r\n".as_bytes());
-        s.feed("\u{4e2d}\u{6587}\tX".as_bytes());
+        let mut s = Screen::new(4, 24);
+        s.feed("abcdefgh\tX\r\n".as_bytes()); // 8 narrow columns
+        s.feed("\u{4e2d}\u{6587}\u{8868}\u{683c}\tX".as_bytes()); // 4 wide = 8 columns
 
         // Column, not string index: `row_text` drops spacers, so the wide
-        // row's `X` sits at index 3 while standing in column 8.
+        // row's `X` sits at index 5 there while standing in column 16.
         let column_of_x = |row: u16| {
             s.grid
                 .row_cells(row)
@@ -1296,8 +1350,16 @@ mod tests {
                 .position(|c| c.ch == 'X')
                 .expect("both rows print an X")
         };
-        assert_eq!(column_of_x(0), 8, "a 2-column cell tabs to the stop at 8");
-        assert_eq!(column_of_x(1), 8, "a 4-column cell tabs to the same stop");
+        assert_eq!(
+            column_of_x(0),
+            16,
+            "eight narrow columns tab to the stop at 16"
+        );
+        assert_eq!(
+            column_of_x(1),
+            16,
+            "four wide glyphs are also eight columns and reach the same stop"
+        );
     }
 
     /// A tab stop can land on the spacer half of a double-width glyph.
