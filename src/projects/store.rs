@@ -1402,6 +1402,84 @@ mod tests {
         store.create_schema().expect("re-open must be a no-op");
     }
 
+    /// The same migration-order criterion, asserted about the table this
+    /// round added rather than about the one round 8 added.
+    ///
+    /// The design spec names this test; it did not exist until 2026-08-30,
+    /// and the criterion it guards was satisfied by construction the whole
+    /// time — `project_channel_bindings` and its index are both in `SCHEMA`,
+    /// and the index reads only that table's own `project_id`. That is
+    /// exactly the state a pinning test is for: **the property held, and
+    /// nothing would have said so if it stopped holding.** Put that index on
+    /// a column some later migration adds and `create_schema` fails with
+    /// "no such column" against every database that predates it — which is
+    /// every deployed one, and none of the fixtures in this module.
+    ///
+    /// Distinct from `a_pre_rooms_catalogue_still_opens_and_indexes` two
+    /// tests up in what it *names*: that one would red on a mis-ordered
+    /// index too, because `create_schema` runs as a whole — but it names
+    /// only the `projects` column and that column's index, so a reader
+    /// auditing the new table finds no assertion mentioning it. This one
+    /// binds a row that predates the table and reads the binding back.
+    #[test]
+    fn a_pre_rooms_catalogue_still_opens_and_binds() {
+        let conn = Connection::open_in_memory().unwrap();
+        // Pre-rooms: no `current_session_key`, and no bindings table at all.
+        conn.execute_batch(
+            "CREATE TABLE projects (
+                 id                  TEXT PRIMARY KEY,
+                 name                TEXT NOT NULL,
+                 owner_user_id       TEXT,
+                 workspace_path      TEXT,
+                 status              TEXT NOT NULL DEFAULT 'active',
+                 created_at          INTEGER NOT NULL,
+                 updated_at          INTEGER NOT NULL,
+                 last_used_at        INTEGER NOT NULL
+             );
+             INSERT INTO projects (id, name, created_at, updated_at, last_used_at)
+             VALUES ('p-old', 'before rooms', 1, 1, 1);",
+        )
+        .unwrap();
+
+        let store = ProjectStore::new(conn);
+        store
+            .create_schema()
+            .expect("a pre-rooms catalogue must migrate, not fail to open");
+
+        // The table and its index arrived with the schema, not with a later
+        // migration that a pre-rooms database would never have run.
+        let objects: i64 = store
+            .with_conn(|c| {
+                c.query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE name IN ('project_channel_bindings',
+                                    'idx_project_channel_bindings_project')",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(db_err)
+            })
+            .unwrap();
+        assert_eq!(
+            objects, 2,
+            "the bindings table and its index must both exist after migrating a \
+             pre-rooms catalogue"
+        );
+
+        // And a row that predates the table can be bound and read back.
+        store
+            .bind_conversation("p-old", "tg", BindingPeerKind::Group, "C-42", None, None)
+            .expect("a pre-rooms room must be bindable");
+        assert_eq!(
+            store
+                .project_for_conversation("tg", BindingPeerKind::Group, "C-42")
+                .unwrap()
+                .as_deref(),
+            Some("p-old"),
+            "the binding must be readable through the lookup the router uses"
+        );
+    }
+
     #[test]
     fn legacy_json_catalogue_migrates_into_the_table_once() {
         let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
