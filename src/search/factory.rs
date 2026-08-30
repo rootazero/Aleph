@@ -151,26 +151,29 @@ mod tests {
         }
     }
 
+    /// Set equality, both directions.
+    ///
+    /// This replaces a hand-copied list of the nine names, which was a second
+    /// statement of the same fact and could only ever assert containment: an
+    /// entry missing from *both* the list and the registry reads as passing,
+    /// which is how two channel adapters sat unconfigurable for four months.
     #[test]
-    fn defaults_registers_all_first_party_providers() {
-        let reg = ProviderFactoryRegistry::with_defaults();
-        let types = reg.known_provider_types();
-        for expected in [
-            "tavily",
-            "searxng",
-            "brave",
-            "bing",
-            "google",
-            "exa",
-            "firecrawl",
-            "jina",
-            "duckduckgo",
-        ] {
-            assert!(
-                types.contains(&expected),
-                "missing factory for provider_type '{expected}'"
-            );
-        }
+    fn the_factory_builds_exactly_the_providers_the_protocol_advertises() {
+        use std::collections::BTreeSet;
+        let buildable: BTreeSet<&str> = ProviderFactoryRegistry::with_defaults()
+            .known_provider_types()
+            .into_iter()
+            .collect();
+        let advertised: BTreeSet<&str> = aleph_protocol::search::CONFIGURABLE_SEARCH_PROVIDERS
+            .iter()
+            .map(|p| p.name)
+            .collect();
+        assert_eq!(
+            buildable, advertised,
+            "left = the factory can build it, right = the UI offers it. \
+             An entry on only one side is either a provider nobody can configure \
+             or a card that saves a config the server will refuse."
+        );
     }
 
     #[test]

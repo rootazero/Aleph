@@ -85,8 +85,10 @@ pub const fn default_true() -> bool {
 /// Search backend configuration
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchBackendConfig {
-    /// Provider type: "tavily", "searxng", "brave", "google", "bing", "exa",
-    /// "jina", "duckduckgo", or "firecrawl"
+    /// Provider type — see `aleph_protocol::search::CONFIGURABLE_SEARCH_PROVIDERS`
+    /// for the authoritative list, and a census in `search::factory` that pins
+    /// it to what the factory can actually build. Enumerating the names here
+    /// made a third copy of a fact that had already drifted once.
     pub provider_type: String,
 
     /// Runtime-only API key (populated from encrypted vault, never persisted to config.toml)
