@@ -10,18 +10,43 @@ use web_sys::CanvasRenderingContext2d;
 
 use super::session::ClientScreen;
 
-/// One cell's pixel size, measured once from the loaded monospace font.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// One cell's pixel size, measured once from the loaded font. No longer
+/// `Copy` now that it carries a `String` -- callers that need the same
+/// value twice hold it by reference or `.clone()`, which is one extra
+/// character at each of the two call sites this cost, in exchange for the
+/// family living in exactly one place instead of two.
+#[derive(Debug, Clone, PartialEq)]
 pub struct CellMetrics {
     pub width: f64,
     pub height: f64,
+    /// The font size, in CSS px, these metrics were measured at.
+    ///
+    /// Carried rather than re-stated because `paint` builds its own
+    /// `set_font` string per run (bold and italic vary per run) and would
+    /// otherwise be free to draw at a size the layout was not measured
+    /// for -- the grid advancing by one size while glyphs draw at
+    /// another, with nothing anywhere to report it.
+    pub font_px: f64,
+    /// The CSS `font-family` list these metrics were measured with, and the
+    /// same value `paint` must draw every run with.
+    ///
+    /// This field is the fix for a double-write this file shipped once: the
+    /// family used to also be a literal inside `paint`, matching
+    /// `measure`'s caller only because the two literals happened to read
+    /// the same. The moment the family became configurable, `measure`
+    /// would have measured one font while `paint` drew another and the
+    /// whole grid would drift. Carrying it here, the way `font_px` already
+    /// was carried, makes that drift structurally impossible instead of a
+    /// thing to remember: `paint` has no family literal to drift FROM (see
+    /// `run_font`, and `paint_never_states_a_font_family_literal` below).
+    pub font_family: String,
 }
 
 impl CellMetrics {
     /// A zero or non-finite metric means the font has not loaded. Painting
     /// with it divides by zero; callers check this first.
     #[must_use]
-    pub fn is_usable(self) -> bool {
+    pub fn is_usable(&self) -> bool {
         self.width.is_finite() && self.height.is_finite() && self.width > 0.0 && self.height > 0.0
     }
 }
@@ -29,7 +54,7 @@ impl CellMetrics {
 /// How many cells fit. Floors, and never returns zero: a pane measured
 /// mid-layout is 0x0, and a zero-column PTY is not a thing.
 #[must_use]
-pub fn viewport_cells(px_w: f64, px_h: f64, m: CellMetrics) -> (u16, u16) {
+pub fn viewport_cells(px_w: f64, px_h: f64, m: &CellMetrics) -> (u16, u16) {
     if !m.is_usable() {
         return (1, 1);
     }
@@ -78,12 +103,90 @@ impl Theme {
     }
 }
 
+/// The font this module falls back to when a requested family or size
+/// cannot be trusted -- the RPC failed, or (see `apply_font`) a font string
+/// the browser silently rejected. Hand-written, never user input, so it is
+/// the one font string in this module allowed to be a literal.
+///
+/// Deliberately just `monospace`, not a font stack: `TerminalConfig` in
+/// `alephcore` already owns the opinion about what a good DEFAULT stack is
+/// (`DEFAULT_TERMINAL_FONT_FAMILY`, with Nerd Font names) and the Panel
+/// reads it as the server's EFFECTIVE config -- defaults already applied,
+/// see `mod.rs`'s font-config effect. A second, differently-composed stack
+/// here would be the identical double-write this task exists to close one
+/// level up, except unrecoverable: this constant is reached only when there
+/// is NO answer from the server at all, so a competing opinion here could
+/// never be corrected by fixing the config. `monospace` alone carries no
+/// opinion to disagree with -- it is a visible, honest "nothing loaded"
+/// signal (plain letters, no icons), not a second guess at the real default.
+pub(super) const FALLBACK_FONT_FAMILY: &str = "monospace";
+pub(super) const FALLBACK_FONT_SIZE_PX: f64 = 14.0;
+
+/// Bounds on a configured font size. `0` (or a negative/garbage value from a
+/// config typo) must not be able to reach `ctx.measure_text` at all -- a
+/// zero or negative cell height divides by zero everywhere downstream. 6px
+/// is small enough that anything below it means the operator meant a
+/// different unit or field, not a terminal anyone could read; 96px just
+/// keeps a fat-fingered extra digit from producing an unusable page. Either
+/// end of this range still measures to a positive, finite cell size.
+const MIN_FONT_SIZE_PX: f64 = 6.0;
+const MAX_FONT_SIZE_PX: f64 = 96.0;
+
+/// A CSS font string that will never occur by accident: used as a
+/// before/after sentinel in `apply_font` to detect a `set_font` call the
+/// browser silently rejected. Deliberately quoted (syntactically a valid,
+/// if fictitious, custom family) so setting it can never itself fail.
+const FONT_PROBE_SENTINEL: &str = "1px 'aleph-terminal-font-probe-sentinel'";
+
+/// Apply `family`/`size_px` to `ctx`, verifying the browser actually
+/// accepted the string rather than trusting that it did, and returning
+/// whatever ended up active.
+///
+/// `CanvasRenderingContext2d::set_font` on a syntactically malformed string
+/// is a silent no-op per spec: the browser leaves the PREVIOUS font in
+/// place rather than erroring. A naive caller that just calls `set_font`
+/// and moves on gets a confidently wrong grid from one missing quote in a
+/// config value -- `measure_text` would report the OLD font's metrics for
+/// cell sizing while nothing ever says so.
+///
+/// Detected with a before/after sentinel rather than by comparing
+/// `ctx.font()` against the REQUESTED string: a browser is free to
+/// re-serialize a syntactically valid font string (re-quoting a family
+/// name, reordering, ...), so exact-string comparison against the request
+/// would false-positive on that canonicalization -- on literally every
+/// successful call, since this runs on every resize and every repaint with
+/// the same configured font. Comparing against a sentinel we control (set
+/// immediately before the real attempt) only asks "did the string we just
+/// tried change anything", which is the question that actually matters.
+fn apply_font(ctx: &CanvasRenderingContext2d, family: &str, size_px: f64) -> (String, f64) {
+    ctx.set_font(FONT_PROBE_SENTINEL);
+    let requested = format!("{size_px}px {family}");
+    ctx.set_font(&requested);
+    if ctx.font() != FONT_PROBE_SENTINEL {
+        return (family.to_string(), size_px);
+    }
+    // Rejected: the sentinel is still active, meaning `requested` never
+    // took. Fall back to the hand-written literal, trusted syntactically
+    // valid because it is ours, not configuration.
+    let fallback = format!("{FALLBACK_FONT_SIZE_PX}px {FALLBACK_FONT_FAMILY}");
+    ctx.set_font(&fallback);
+    (FALLBACK_FONT_FAMILY.to_string(), FALLBACK_FONT_SIZE_PX)
+}
+
 /// Measure the monospace cell. `measure_text` on a wide sample divided by its
 /// length is steadier than measuring one glyph, which sub-pixel rounding can
 /// skew enough to drift a column over 200 cells.
+///
+/// `size_px` is clamped before it ever reaches the canvas (see
+/// `MIN_FONT_SIZE_PX`/`MAX_FONT_SIZE_PX`); `family` is verified by
+/// `apply_font` and silently replaced with the fallback stack if the
+/// browser rejected it. Either way, the `(family, size)` carried on the
+/// returned `CellMetrics` is what is ACTUALLY active on `ctx`, never what
+/// was merely requested.
 #[must_use]
-pub fn measure(ctx: &CanvasRenderingContext2d, font: &str) -> CellMetrics {
-    ctx.set_font(font);
+pub fn measure(ctx: &CanvasRenderingContext2d, family: &str, size_px: f64) -> CellMetrics {
+    let size_px = size_px.clamp(MIN_FONT_SIZE_PX, MAX_FONT_SIZE_PX);
+    let (font_family, font_px) = apply_font(ctx, family, size_px);
     // ASCII only, and it must stay ASCII: the divisor below is `len()`, a BYTE
     // count. A non-ASCII sample would silently make every cell too narrow.
     const SAMPLE: &str = "MMMMMMMMMMMMMMMMMMMM";
@@ -92,14 +195,12 @@ pub fn measure(ctx: &CanvasRenderingContext2d, font: &str) -> CellMetrics {
         .map(|m| m.width() / SAMPLE.len() as f64)
         .unwrap_or(0.0);
     // Line height is not measurable portably; the canonical ratio for a
-    // terminal is ~1.2x the em box, and the font size is parsed from `font`.
-    let px = font
-        .split_whitespace()
-        .find_map(|t| t.strip_suffix("px").and_then(|n| n.parse::<f64>().ok()))
-        .unwrap_or(14.0);
+    // terminal is ~1.2x the em box.
     CellMetrics {
         width,
-        height: (px * 1.2).round(),
+        height: (font_px * 1.2).round(),
+        font_px,
+        font_family,
     }
 }
 
@@ -113,6 +214,30 @@ pub fn measure(ctx: &CanvasRenderingContext2d, font: &str) -> CellMetrics {
 #[must_use]
 fn run_extent(text: &str, cell_width: f64) -> f64 {
     UnicodeWidthStr::width(text) as f64 * cell_width
+}
+
+/// The CSS `font` shorthand for one run, given its bold/italic attributes.
+///
+/// Pure and separated out so it is testable without a live canvas, and so
+/// `paint` itself has no font-family or font-size literal to state --
+/// both come from `m`, the SAME `CellMetrics` `measure` produced. That is
+/// what makes `measure` and `paint` sharing one font a structural fact
+/// rather than a coincidence of two literals reading the same (see
+/// `CellMetrics::font_family`'s doc, and
+/// `run_font_is_derived_from_the_metrics_it_is_given_not_a_literal` below).
+#[must_use]
+fn run_font(m: &CellMetrics, attrs: PtyAttrs) -> String {
+    let weight = if attrs.has(PtyAttrs::BOLD) {
+        "bold "
+    } else {
+        ""
+    };
+    let style = if attrs.has(PtyAttrs::ITALIC) {
+        "italic "
+    } else {
+        ""
+    };
+    format!("{style}{weight}{}px {}", m.font_px, m.font_family)
 }
 
 /// Repaint the whole grid.
@@ -136,17 +261,7 @@ pub fn paint(ctx: &CanvasRenderingContext2d, screen: &ClientScreen, m: CellMetri
                 ctx.fill_rect(x, y, run_w, m.height);
             }
             ctx.set_fill_style_str(&theme.resolve_fg(run.fg));
-            let weight = if run.attrs.has(PtyAttrs::BOLD) {
-                "bold "
-            } else {
-                ""
-            };
-            let style = if run.attrs.has(PtyAttrs::ITALIC) {
-                "italic "
-            } else {
-                ""
-            };
-            ctx.set_font(&format!("{style}{weight}14px 'JetBrains Mono', monospace"));
+            ctx.set_font(&run_font(&m, run.attrs));
             let _ = ctx.fill_text(&run.text, x, y + m.height * 0.8);
             x += run_w;
         }
@@ -177,15 +292,17 @@ mod tests {
         let m = CellMetrics {
             width: 8.0,
             height: 17.0,
+            font_px: 14.0,
+            font_family: "monospace".to_string(),
         };
-        assert_eq!(viewport_cells(800.0, 340.0, m), (20, 100));
+        assert_eq!(viewport_cells(800.0, 340.0, &m), (20, 100));
         assert_eq!(
-            viewport_cells(7.0, 3.0, m),
+            viewport_cells(7.0, 3.0, &m),
             (1, 1),
             "a tiny pane still needs one cell"
         );
         assert_eq!(
-            viewport_cells(0.0, 0.0, m),
+            viewport_cells(0.0, 0.0, &m),
             (1, 1),
             "a pane mid-layout must not divide by zero"
         );
@@ -197,17 +314,23 @@ mod tests {
     fn metrics_report_whether_they_are_usable() {
         assert!(CellMetrics {
             width: 8.0,
-            height: 17.0
+            height: 17.0,
+            font_px: 14.0,
+            font_family: "monospace".to_string()
         }
         .is_usable());
         assert!(!CellMetrics {
             width: 0.0,
-            height: 17.0
+            height: 17.0,
+            font_px: 14.0,
+            font_family: "monospace".to_string()
         }
         .is_usable());
         assert!(!CellMetrics {
             width: f64::NAN,
-            height: 17.0
+            height: 17.0,
+            font_px: 14.0,
+            font_family: "monospace".to_string()
         }
         .is_usable());
     }
@@ -232,6 +355,8 @@ mod tests {
         let m = CellMetrics {
             width: 8.0,
             height: 17.0,
+            font_px: 14.0,
+            font_family: "monospace".to_string(),
         };
         // "你好" is 2 CJK chars — 1 unit each under `chars().count()` — but 2
         // display columns each, 4 columns total, not 2.
@@ -260,6 +385,73 @@ mod tests {
             x,
             second_run_x + m.width,
             "an ASCII run after it must still advance by exactly 1 column"
+        );
+    }
+
+    /// `measure` and `paint` (via `run_font`) sharing one font is a
+    /// structural fact now, not two literals that happen to agree -- so
+    /// this asserts the OUTPUT tracks the INPUT, not that two hardcoded
+    /// strings are equal (the latter is exactly the shape the original bug
+    /// had: it would still pass if `run_font` silently ignored `m` and
+    /// hardcoded a family, as long as the hardcoded string matched
+    /// `measure`'s literal too). Two different `CellMetrics` must produce
+    /// two different font strings, tracking BOTH family and size.
+    #[test]
+    fn run_font_is_derived_from_the_metrics_it_is_given_not_a_literal() {
+        let a = CellMetrics {
+            width: 8.0,
+            height: 17.0,
+            font_px: 14.0,
+            font_family: "Family A".to_string(),
+        };
+        let b = CellMetrics {
+            width: 8.0,
+            height: 17.0,
+            font_px: 20.0,
+            font_family: "Family B".to_string(),
+        };
+        let fa = run_font(&a, PtyAttrs::default());
+        let fb = run_font(&b, PtyAttrs::default());
+        assert!(fa.contains("Family A") && fa.contains("14"), "got {fa:?}");
+        assert!(fb.contains("Family B") && fb.contains("20"), "got {fb:?}");
+        assert_ne!(
+            fa, fb,
+            "two different CellMetrics must produce two different font strings"
+        );
+    }
+
+    /// Source-level guard against the double-write this file already
+    /// shipped once: the font family stated a second time, as a literal
+    /// inside `paint`, drifting from `measure`'s the moment the two are no
+    /// longer forced to match by coincidence. `paint` now has no family
+    /// literal to state at all (see `run_font`) -- this is the regression
+    /// sentinel that keeps it that way. Manually broken once while writing
+    /// it: reintroducing `ctx.set_font(&format!("...{}px 'JetBrains Mono',
+    /// monospace", m.font_px))` inside `paint`'s body turns this red with
+    /// the offending body printed, exactly as intended.
+    #[test]
+    fn paint_never_states_a_font_family_literal() {
+        let src = include_str!("render.rs").replace('\r', "");
+        let start = src.find("pub fn paint(").expect("paint is gone");
+        let body_start = src[start..]
+            .find('{')
+            .map(|i| start + i)
+            .expect("paint has a body");
+        // The next brace at column 0 (immediately preceded by a newline) is
+        // `paint`'s own closing brace: every block INSIDE it is indented by
+        // rustfmt, so only the enclosing top-level item's brace can appear
+        // unindented.
+        let body_end = src[body_start..]
+            .find("\n}\n")
+            .map(|i| body_start + i)
+            .expect("paint's closing brace");
+        let body = &src[body_start..body_end];
+        assert!(
+            !body.contains('\'') && !body.contains("monospace"),
+            "paint's body states a font family literal -- the family must \
+             come from `CellMetrics::font_family` via `run_font`, never a \
+             literal, or `measure` and `paint` can silently draw two \
+             different fonts. Offending body:\n{body}"
         );
     }
 }
