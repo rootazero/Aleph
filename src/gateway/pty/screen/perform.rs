@@ -315,6 +315,17 @@ impl vte::Perform for Performer<'_> {
             'B' => self.screen.grid.move_cursor(i32::from(p(0, 1)), 0),
             'C' => self.screen.grid.move_cursor(0, i32::from(p(0, 1))),
             'D' => self.screen.grid.move_cursor(0, -i32::from(p(0, 1))),
+            // CHA / VPA: absolute column and row, 1-based on the wire like
+            // CUP above. A shell's line editor uses these and the five
+            // below on every redraw; `p`'s "0 means default" is right for
+            // all of them, unlike `J`/`K` whose 0 is a real mode value.
+            'G' => self.screen.grid.goto_col(p(0, 1) - 1),
+            'd' => self.screen.grid.goto_row(p(0, 1) - 1),
+            'X' => self.screen.grid.erase_chars(p(0, 1)),
+            'P' => self.screen.grid.delete_chars(p(0, 1)),
+            '@' => self.screen.grid.insert_chars(p(0, 1)),
+            'L' => self.screen.grid.insert_lines(p(0, 1)),
+            'M' => self.screen.grid.delete_lines(p(0, 1)),
             'J' => self
                 .screen
                 .grid
@@ -657,5 +668,280 @@ mod tests {
             "every row of the restored primary must ship"
         );
         assert_eq!(p.alt_screen, Some(false));
+    }
+
+    /// CSI G (CHA). zsh redraws its input line by jumping to a column and
+    /// reprinting; dropping this makes every redraw append instead of
+    /// overwrite, so typing one `x` puts `xxx` on the screen. Measured on a
+    /// real server before this arm existed.
+    #[test]
+    fn cha_moves_the_cursor_to_an_absolute_column() {
+        let mut s = Screen::new(2, 10);
+        s.feed(b"abcdef\x1b[1GZ");
+        assert_eq!(s.grid.row_text(0), "Zbcdef");
+    }
+
+    /// The 1-based wire convention, and a column past the edge clamps
+    /// rather than panicking.
+    #[test]
+    fn cha_is_one_based_and_clamps() {
+        let mut s = Screen::new(2, 10);
+        s.feed(b"abcdef\x1b[3GZ");
+        assert_eq!(s.grid.row_text(0), "abZdef");
+
+        let mut s = Screen::new(2, 10);
+        s.feed(b"abc\x1b[99GZ");
+        assert_eq!(
+            s.grid.row_text(0).len(),
+            10,
+            "a column past the right edge clamps to the last column"
+        );
+    }
+
+    /// CSI d (VPA) is CHA's row twin; p10k uses it to park the cursor.
+    #[test]
+    fn vpa_moves_the_cursor_to_an_absolute_row() {
+        let mut s = Screen::new(4, 6);
+        s.feed(b"top\x1b[3dZ");
+        assert_eq!(s.grid.row_text(0), "top");
+        assert_eq!(
+            s.grid.row_text(2),
+            "   Z",
+            "row 3 (1-based), column unchanged"
+        );
+    }
+
+    /// CSI X (ECH) blanks in place: it moves neither the cursor nor the
+    /// cells after the erased run.
+    #[test]
+    fn ech_blanks_cells_without_moving_the_cursor_or_the_tail() {
+        let mut s = Screen::new(2, 10);
+        s.feed(b"abcdef\x1b[1G\x1b[3XQ");
+        assert_eq!(s.grid.row_text(0), "Q  def");
+    }
+
+    /// CSI P (DCH) pulls the tail left; CSI @ (ICH) pushes it right. Both
+    /// are how a line editor edits mid-line.
+    #[test]
+    fn dch_pulls_the_tail_left_and_ich_pushes_it_right() {
+        let mut s = Screen::new(2, 10);
+        s.feed(b"abcdef\x1b[1G\x1b[2P");
+        assert_eq!(s.grid.row_text(0), "cdef");
+
+        let mut s = Screen::new(2, 10);
+        s.feed(b"abcdef\x1b[1G\x1b[2@");
+        assert_eq!(s.grid.row_text(0), "  abcdef");
+    }
+
+    /// A delete or insert wider than the row must blank it, not panic and
+    /// not wrap into the next row.
+    #[test]
+    fn char_edits_wider_than_the_row_blank_it() {
+        let mut s = Screen::new(2, 6);
+        s.feed(b"abcdef\x1b[1G\x1b[99P");
+        assert_eq!(s.grid.row_text(0), "");
+
+        let mut s = Screen::new(2, 6);
+        s.feed(b"abcdef\x1b[1G\x1b[99@");
+        assert_eq!(s.grid.row_text(0), "");
+    }
+
+    /// CSI L / M insert and delete whole rows from the cursor row down.
+    #[test]
+    fn il_and_dl_move_the_rows_below_the_cursor() {
+        let mut s = Screen::new(4, 4);
+        s.feed(b"aaa\r\nbbb\x1b[1A\x1b[1L");
+        assert_eq!(s.grid.row_text(0), "");
+        assert_eq!(s.grid.row_text(1), "aaa");
+        assert_eq!(s.grid.row_text(2), "bbb");
+
+        let mut s = Screen::new(4, 4);
+        s.feed(b"aaa\r\nbbb\x1b[1;1H\x1b[1M");
+        assert_eq!(s.grid.row_text(0), "bbb");
+        assert_eq!(s.grid.row_text(1), "");
+    }
+
+    /// Rows pushed off the bottom by an insert are discarded, not filed as
+    /// history: scrollback is what scrolled off the TOP of the screen, and
+    /// a mid-screen insert never reached the top. Filing them would let a
+    /// client scrolling back read rows the user never saw leave the screen.
+    #[test]
+    fn rows_pushed_off_the_bottom_do_not_become_scrollback() {
+        let mut s = Screen::new(3, 4);
+        s.feed(b"aaa\r\nbbb\r\nccc");
+        let before = s.grid.scrollback_len();
+        s.feed(b"\x1b[1;1H\x1b[2L");
+        assert_eq!(
+            s.grid.scrollback_len(),
+            before,
+            "an in-screen line insert is not history"
+        );
+        assert_eq!(s.grid.row_text(2), "aaa", "the rows below moved down");
+    }
+
+    /// A line editor mid-line does not only shift ASCII: DCH/ICH can cut
+    /// through a wide glyph's owner/spacer pair the same way an erase can.
+    /// `clear_range` handles that for erases by widening the range; a shift
+    /// cannot widen, so the halves are re-checked after the move. Asserted
+    /// through `row_cells` -- `row_text` filters spacers and would hide a
+    /// half-glyph, which is exactly how the original spacer bug survived.
+    #[test]
+    fn char_edits_do_not_strand_half_of_a_wide_glyph() {
+        // Delete the column the wide glyph owns: its spacer must not
+        // survive alone once the tail slides left.
+        let mut s = Screen::new(2, 10);
+        s.feed("a\u{4e2d}b".as_bytes());
+        s.feed(b"\x1b[1;2H\x1b[1P");
+        assert!(
+            !s.grid.row_cells(0).iter().any(|c| c.is_spacer()),
+            "deleting a wide glyph's owner must not leave its spacer behind"
+        );
+
+        // Insert in the middle of the pair: the owner stays put and the
+        // spacer is pushed one cell right, so neither may survive.
+        let mut s = Screen::new(2, 10);
+        s.feed("a\u{4e2d}b".as_bytes());
+        s.feed(b"\x1b[1;3H\x1b[1@");
+        assert!(
+            !s.grid.row_cells(0).iter().any(|c| c.is_spacer()),
+            "splitting a wide glyph with an insert must leave neither half"
+        );
+    }
+
+    /// Every arm that changes cells must mark its row dirty, or a client
+    /// that missed no frames never learns the row changed -- the defect
+    /// would come back as "it is right after a refresh and wrong while you
+    /// watch". The print that sets the row up is drained first: without
+    /// that drain this loop passes against an unimplemented verb, because
+    /// printing `abc` already dirtied row 0.
+    ///
+    /// CHA and VPA are absent on purpose -- they move the cursor and touch
+    /// no cell, so they have no row to dirty; their effect is asserted by
+    /// the text tests above.
+    #[test]
+    fn the_new_cell_editing_arms_all_mark_their_rows_dirty() {
+        for seq in [
+            &b"\x1b[1X"[..],
+            &b"\x1b[1P"[..],
+            &b"\x1b[1@"[..],
+            &b"\x1b[1L"[..],
+            &b"\x1b[1M"[..],
+        ] {
+            let mut s = Screen::new(3, 6);
+            s.feed(b"abc\x1b[1G");
+            let _ = s.grid.take_dirty();
+            s.feed(seq);
+            assert!(
+                !s.grid.take_dirty().is_empty(),
+                "{seq:?} changed cells but marked nothing dirty"
+            );
+        }
+    }
+
+    /// The verb list in `csi_dispatch` was written by hand once, and the
+    /// one it omitted -- CHA (`CSI G`) -- is the one ordinary typing
+    /// depends on: every zsh prompt redraw jumps back to a column and
+    /// reprints, so dropping it made each redraw append instead of
+    /// overwrite and one keystroke drew three characters. Nothing went red,
+    /// because nothing tests a verb that was never listed.
+    ///
+    /// So this guard does not restate the list. It reads the final bytes
+    /// `csi_dispatch` claims out of that function's own source and requires
+    /// the probe table to name exactly the same set: an arm added without a
+    /// probe fails the set comparison, and a claimed verb that no longer
+    /// reaches the grid fails its own probe. A scraper that stopped finding
+    /// literals would yield an empty set and fail the same comparison, so
+    /// there is no arrangement in which this passes by seeing nothing.
+    ///
+    /// It follows that a character literal added to `csi_dispatch` for some
+    /// purpose other than naming a final byte also turns this red. That is
+    /// the intended trade: a loud question is cheaper than a scanner that
+    /// quietly decides which literals it believes in.
+    #[test]
+    fn every_csi_verb_the_dispatcher_claims_actually_reaches_the_grid() {
+        // (final byte, bytes whose effect on the screen proves the arm ran)
+        let probes: &[(char, &[u8])] = &[
+            ('H', b"abc\x1b[1;1HZ"),
+            ('f', b"abc\x1b[1;1fZ"),
+            ('A', b"a\r\nb\x1b[1AZ"),
+            ('B', b"a\x1b[1BZ"),
+            ('C', b"a\x1b[2CZ"),
+            ('D', b"abc\x1b[2DZ"),
+            ('G', b"abc\x1b[1GZ"),
+            ('d', b"abc\x1b[2dZ"),
+            ('J', b"abc\x1b[2J"),
+            ('K', b"abc\x1b[1G\x1b[0K"),
+            ('X', b"abc\x1b[1G\x1b[2X"),
+            ('P', b"abc\x1b[1G\x1b[1P"),
+            ('@', b"abc\x1b[1G\x1b[1@"),
+            ('L', b"abc\x1b[1L"),
+            ('M', b"abc\x1b[1M"),
+            ('m', b"\x1b[31ma"),
+            ('h', b"abc\x1b[?1049h"),
+            ('l', b"abc\x1b[?1049h\x1b[?1049l"),
+        ];
+
+        let render = |bytes: &[u8]| {
+            let mut s = Screen::new(3, 8);
+            s.feed(bytes);
+            // Cells, not text: SGR changes colour without changing any
+            // character, and `row_text` would call that no change.
+            (0..3)
+                .map(|r| s.grid.row_cells(r).to_vec())
+                .collect::<Vec<_>>()
+        };
+        for (verb, seq) in probes {
+            // The mutation below rewrites every byte equal to the final
+            // byte, so a probe containing it twice would compare two
+            // differences and prove neither.
+            assert_eq!(
+                seq.iter().filter(|b| **b == *verb as u8).count(),
+                1,
+                "CSI {verb}'s probe must contain its final byte exactly once"
+            );
+            // The same bytes with the escape's final byte swapped for one
+            // no arm claims: whatever differs is what this verb did.
+            let inert: Vec<u8> = seq
+                .iter()
+                .map(|b| if *b == *verb as u8 { b'~' } else { *b })
+                .collect();
+            assert_ne!(
+                render(seq),
+                render(&inert),
+                "CSI {verb} changed nothing -- it is not wired to the grid"
+            );
+        }
+
+        let src = include_str!("perform.rs").replace('\r', "");
+        let body = src
+            .split_once("fn csi_dispatch")
+            .expect("csi_dispatch is defined in this file")
+            .1
+            .split("\n    fn ")
+            .next()
+            .expect("split always yields a first piece");
+        // Comment lines are prose, not dispatch -- the paragraph above
+        // names several verbs it does not handle.
+        let code: Vec<char> = body
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .chars()
+            .collect();
+        let mut claimed = std::collections::BTreeSet::new();
+        for i in 1..code.len() {
+            // `b'?'` is a byte literal comparing an intermediate, not a
+            // final byte this function dispatches on.
+            if code[i] == '\'' && code.get(i + 2) == Some(&'\'') && code[i - 1] != 'b' {
+                claimed.insert(code[i + 1]);
+            }
+        }
+        let probed: std::collections::BTreeSet<char> = probes.iter().map(|(v, _)| *v).collect();
+        assert_eq!(
+            claimed, probed,
+            "the verbs csi_dispatch names and the verbs probed here must be the same set -- \
+             add a probe for the arm you added, or drop the probe for the arm you removed"
+        );
     }
 }

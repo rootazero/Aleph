@@ -270,6 +270,119 @@ impl Grid {
         self.cursor_col = c.clamp(0, i64::from(self.cols - 1)) as u16;
     }
 
+    /// CSI G (CHA): absolute column, row unchanged. Every zsh prompt redraw
+    /// starts here, which is why its absence made one keystroke draw three
+    /// characters — the redraw could not get back to the column it began at.
+    pub fn goto_col(&mut self, col: u16) {
+        self.cursor_col = col.min(self.cols - 1);
+    }
+
+    /// CSI d (VPA): absolute row, column unchanged — CHA's twin.
+    pub fn goto_row(&mut self, row: u16) {
+        self.cursor_row = row.min(self.rows - 1);
+    }
+
+    /// CSI X (ECH): blank `n` cells from the cursor. Unlike DCH this moves
+    /// nothing — neither the cursor nor the cells after the erased run.
+    pub fn erase_chars(&mut self, n: u16) {
+        let from = self.idx(self.cursor_row, self.cursor_col);
+        let to = from + n.min(self.cols - self.cursor_col) as usize;
+        self.clear_range(from, to);
+    }
+
+    /// CSI P (DCH): delete `n` cells at the cursor, pulling the rest of the
+    /// row left and blanking what it vacates at the right edge.
+    pub fn delete_chars(&mut self, n: u16) {
+        let cols = self.cols as usize;
+        let at = self.cursor_col as usize;
+        let n = (n as usize).min(cols - at);
+        let start = self.idx(self.cursor_row, 0);
+        let row = &mut self.cells[start..start + cols];
+        row.copy_within(at + n.., at);
+        for cell in &mut row[cols - n..] {
+            *cell = Cell::default();
+        }
+        self.dirty.insert(self.cursor_row);
+        self.repair_row_pairs(self.cursor_row);
+    }
+
+    /// CSI @ (ICH): insert `n` blanks at the cursor, pushing the rest of the
+    /// row right; whatever that pushes past the right edge is gone.
+    pub fn insert_chars(&mut self, n: u16) {
+        let cols = self.cols as usize;
+        let at = self.cursor_col as usize;
+        let n = (n as usize).min(cols - at);
+        let start = self.idx(self.cursor_row, 0);
+        let row = &mut self.cells[start..start + cols];
+        row.copy_within(at..cols - n, at + n);
+        for cell in &mut row[at..at + n] {
+            *cell = Cell::default();
+        }
+        self.dirty.insert(self.cursor_row);
+        self.repair_row_pairs(self.cursor_row);
+    }
+
+    /// A row-wide shift splits any wide glyph the shift boundary fell
+    /// inside: the displaced half leaves the survivor claiming a partner
+    /// that is no longer beside it. [`Self::clear_range`] handles this for
+    /// erasures by widening the range, but a shift has no range to widen,
+    /// so the pairs are re-checked afterwards and any half left alone is
+    /// blanked. [`Self::row_text`] filters spacers and would hide the
+    /// damage; [`Self::row_cells`], which is what the wire sends, would not.
+    ///
+    /// Left to right is the order that terminates: blanking an orphaned
+    /// owner at `c` orphans its spacer at `c + 1`, which this loop has yet
+    /// to reach. The mirror never arises — a spacer is only orphaned when
+    /// its left neighbour is not an owner, and that neighbour therefore
+    /// claimed nothing when the loop passed it.
+    fn repair_row_pairs(&mut self, row: u16) {
+        let start = self.idx(row, 0);
+        let cols = self.cols as usize;
+        let owns_next = |cell: Cell| UnicodeWidthChar::width(cell.ch) == Some(2);
+        for c in 0..cols {
+            let orphan_spacer = self.cells[start + c].is_spacer()
+                && (c == 0 || !owns_next(self.cells[start + c - 1]));
+            let orphan_owner = owns_next(self.cells[start + c])
+                && (c + 1 == cols || !self.cells[start + c + 1].is_spacer());
+            if orphan_spacer || orphan_owner {
+                self.cells[start + c] = Cell::default();
+            }
+        }
+    }
+
+    /// CSI L (IL): insert `n` blank rows at the cursor row, pushing the rows
+    /// below it down. Rows pushed past the bottom are discarded rather than
+    /// filed as scrollback: scrollback is what scrolled off the TOP of the
+    /// screen, and an in-screen insert never reached the top — filing them
+    /// would let a client scrolling back read rows the user never saw leave.
+    pub fn insert_lines(&mut self, n: u16) {
+        let (rows, cols) = (self.rows as usize, self.cols as usize);
+        let top = self.cursor_row as usize;
+        let n = (n as usize).min(rows - top);
+        let region = &mut self.cells[top * cols..rows * cols];
+        region.copy_within(..(rows - top - n) * cols, n * cols);
+        for cell in &mut region[..n * cols] {
+            *cell = Cell::default();
+        }
+        self.dirty.extend(self.cursor_row..self.rows);
+    }
+
+    /// CSI M (DL): delete `n` rows at the cursor row, pulling the rows below
+    /// it up and blanking the bottom. Same discard reasoning as
+    /// [`Self::insert_lines`] — a deleted row is not history either.
+    pub fn delete_lines(&mut self, n: u16) {
+        let (rows, cols) = (self.rows as usize, self.cols as usize);
+        let top = self.cursor_row as usize;
+        let n = (n as usize).min(rows - top);
+        let region = &mut self.cells[top * cols..rows * cols];
+        region.copy_within(n * cols.., 0);
+        let vacated = region.len() - n * cols;
+        for cell in &mut region[vacated..] {
+            *cell = Cell::default();
+        }
+        self.dirty.extend(self.cursor_row..self.rows);
+    }
+
     /// CSI J. 0 = cursor to end, 1 = start to cursor, anything else = all.
     pub fn erase_in_display(&mut self, mode: u16) {
         let cur = self.idx(self.cursor_row, self.cursor_col);
