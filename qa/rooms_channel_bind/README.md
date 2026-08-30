@@ -12,11 +12,17 @@ carrying real group messages, and the real `aleph` CLI. Before this fixture,
 **every claim about `projects.channel.*` rested on compile-and-unit-test
 evidence** — nothing on this branch had spoken to a live server.
 
-## It is currently RED, on purpose, and it names why
+## It landed RED on purpose, named the defect, and is now GREEN
 
-`43 passed, 7 failed, 2 skipped` as of 2026-08-29. All seven failures have one
-cause, and the driver prints a `FINDING` block naming it rather than leaving the
-next reader to decide whether the fixture is broken:
+**Today: `52 passed, 0 failed, 0 skipped`** — `14a1ba355` onward, recorded by
+**four** separate agents on this machine (the fixing agent, the task-16
+implementer, and two reviewers), at least two of them building the binaries
+themselves rather than reusing `SKIP_BUILD=1`.
+
+It was committed at **`43 passed, 7 failed, 2 skipped`** and that history is the
+point of this section, not a stale number to delete. All seven failures had one
+cause, and the driver printed a `FINDING` block naming it rather than leaving the
+next reader to decide whether the fixture was broken:
 
 > `run_loop/inner.rs` fills the `FlowRequest`'s two scope fields from the raw
 > `OWNER_META_KEY` / `SCOPE_META_KEY` metadata instead of from
@@ -25,15 +31,19 @@ next reader to decide whether the fixture is broken:
 > correct; the prompt, every tool, and the speaker label are on the far side and
 > run under `personal:<speaker>`.
 
-Measured both ways on this fixture: deriving those two fields from
-`super::request_scope(request)` turns all seven green and changes nothing else.
-The fix is not in this commit — it is a product change, and this fixture is the
-evidence for it, not its author.
+The fixture's author measured it both ways and shipped it red rather than
+shipping the fix, so the evidence would not be written by the same hand as the
+change. The fix (`14a1ba355`, `01560c72f`) then went the other way round: its
+author rebuilt `aleph-server` from the **pre-fix** source, reproduced
+`43 / 7 / 2` exactly, and only then measured the green. Two agents,
+independently, got the same red — which is what makes the green mean something.
 
-The two `SKIP`s are the same defect one layer out. Scenario 3's positive control
-(Ruling AG) fails because the room partition never received a row, so the two
-"this partition gained nothing" assertions are withheld rather than passed — an
-empty partition would satisfy them for exactly the wrong reason.
+The two `SKIP`s were the same defect one layer out. Scenario 3's positive control
+(Ruling AG) failed because the room partition never received a row, so the two
+"this partition gained nothing" assertions were withheld rather than passed — an
+empty partition would satisfy them for exactly the wrong reason. With the fix the
+control passes, so both run and both pass, and the total is 43 + 7 + 2 = **52**.
+Those two assertions had never once executed before.
 
 ## What each scenario claims, and why only a live machine can settle it
 
