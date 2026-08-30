@@ -621,6 +621,7 @@
 - **`interfaces/webchat/` 有任何改动（哪怕不是你改的）就跑一次 `cargo test -p aleph-panel --lib`**（不是 `cargo check`——它看不见这个 crate 的测试模块，那正是 805 条测试整程没跑的原因） —— 这个 crate 的**语义合并冲突是常态形状**：一侧的类型 + 另一侧的调用点，git 不报冲突、两边单独看都完整。合并实现过同一功能的分支前先 grep 功能名；修完**先看警告再看错误**（`unused variable` 说明那半边根本没有调用者，正解是 CUT）
 - **`cargo check -p aleph-desktop-shell` 前需先 `just _stage-shell-placeholders`**（tauri-build 要求 externalBin 占位文件存在）—— **上面那条 `--workspace` clippy 同样要**，它会把 shell crate 一起编。占位路径**别在别处抄一份**：那条 recipe 自己推 triple、Windows 补 `.exe`、`AlephBridge-` 只在 macOS 上建，手抄的模板会漏掉后两件
 - **`MessageRecord.timestamp` 单位有歧义**（SQLite 写秒 / file backend 写毫秒）—— 一律走 `MessageRecord::instant()` / `rfc3339()`（`src/gateway/session_store/types.rs`，1e11 分界），裸格式化就是这个 bug 的下一次复发。**源头未改是有意的**——该值同时是 `get_history_before` 的分页游标，改单位要连全部存量会话一起迁移
+- **一个子代理报 idle 而无产出，和它**断线**结束，是两件事——后者是唯一一种可能把树留在半应用状态的结局** —— idle 那种的规矩是先去读它的产物和日志再判断它的能力（**一个 idle 的 agent 不是关于那个 agent 的证据**）；`idleReason: "failed"`（连接中断）那种要走**现场勘查**，四步：① **先勘查再决定，而且四项互相独立**——树干净吗（有没有半应用的探针）· 有没有 cargo 残留 · commit 落地了几个 · 报告写了没有；② **不要由控制器代写它的报告**——它手里有你没有的上下文，**而一份由你写的报告不是独立证据**；让它续跑（`SendMessage` 到那个 agent，名字仍可寻址）；③ **明确要求它交代「断线那一刻有没有留下半途而废的东西」**——它主动说出的缺口是便宜的，你后面自己发现的不是（本次答案是干净的：断在写报告那条 bash 的**解析期**，heredoc 引号不配对，一个字节都没写出去）；④ **但那是唯一不可能知道自己错了的那一方给出的声称**，所以复审要分一点预算给**完整性**而不只是正确性——本次照做，并因此找到一处「报出的计数只在证伪它的那次运行里打印」的散文缺陷。
 
 ---
 
