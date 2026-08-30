@@ -21,7 +21,15 @@ use serde::{Deserialize, Serialize};
 /// floors below it are not optional — operator-only on both the RPC and the
 /// subscribe face, and a cwd jail — and because a default-off switch on a
 /// freshly wired feature makes "nobody used it" and "nobody could use it"
-/// indistinguishable. It is turned off from Panel → Settings → Terminal.
+/// indistinguishable.
+///
+/// ⚠️ There is NO Panel settings surface for this section — no writer for
+/// `policies.terminal.*` exists anywhere in `interfaces/webchat/src`, and an
+/// earlier version of this sentence named one. The two paths that do turn it
+/// off are the `self_config` tool, and editing `config.toml` **and then**
+/// calling `config.reload`. A bare file edit is not enough: the file watcher
+/// deliberately does not run `apply_live_sections` (`gateway/hot_reload.rs`),
+/// so see the caveat on `enabled` below.
 ///
 /// Three facts a reader who only sees this struct would otherwise have to
 /// discover the hard way (full story: `docs/reference/SECURITY.md`'s
@@ -49,6 +57,14 @@ pub struct TerminalConfig {
     /// (`live_apply`'s `"policies.terminal"` arm calls `PtyManager::close_all`)
     /// — a gate evaluated only at admission would leave a shell that is
     /// already open still open.
+    ///
+    /// ⚠️ That kill happens when `apply_live_sections` runs, NOT when the file
+    /// changes. Its real callers are `config/patcher.rs` and
+    /// `handlers/config.rs` — the hot-reload watcher deliberately does not
+    /// call it. So on the edit-the-file path the shell stays open until a
+    /// `config.reload` lands, and "off" is only true of new sessions until
+    /// then. The `self_config` tool takes the applying path and does not have
+    /// this gap.
     ///
     /// A `self_config` write to this path always asks for confirmation, at
     /// every execution tier including `full` — see the struct doc above and
