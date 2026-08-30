@@ -38,7 +38,8 @@ pub struct CellMetrics {
     /// whole grid would drift. Carrying it here, the way `font_px` already
     /// was carried, makes that drift structurally impossible instead of a
     /// thing to remember: `paint` has no family literal to drift FROM (see
-    /// `run_font`, and `paint_never_states_a_font_family_literal` below).
+    /// `run_font`, and `paint_only_ever_passes_set_font_a_run_font_call`
+    /// below).
     pub font_family: String,
 }
 
@@ -425,12 +426,34 @@ mod tests {
     /// inside `paint`, drifting from `measure`'s the moment the two are no
     /// longer forced to match by coincidence. `paint` now has no family
     /// literal to state at all (see `run_font`) -- this is the regression
-    /// sentinel that keeps it that way. Manually broken once while writing
-    /// it: reintroducing `ctx.set_font(&format!("...{}px 'JetBrains Mono',
-    /// monospace", m.font_px))` inside `paint`'s body turns this red with
-    /// the offending body printed, exactly as intended.
+    /// sentinel that keeps it that way.
+    ///
+    /// This is a POSITIVE rule, not a list of forbidden spellings: the
+    /// only argument `paint` may ever pass to `set_font` is a bare
+    /// `run_font(...)` call. An earlier version of this guard was a
+    /// negative lexical scan (forbidding `'` and `"monospace"`) and was
+    /// proven evadable by mutation on two independent shapes, neither of
+    /// which turned it red. First, a bare custom name using neither
+    /// token: `format!("{}px MyCustomFont", m.font_px)`. Second, a
+    /// literal spliced ALONGSIDE `m.font_family` rather than replacing
+    /// it: `format!("{}px {}, ExtraFallback", m.font_px, m.font_family)`
+    /// -- the mere presence of the field name read as "derived from `m`"
+    /// to a scan that never checked `m.font_family` was the ONLY
+    /// contributor to the family list. Asserting the call's exact shape
+    /// closes both: no literal, keyword, or splice can ever read as
+    /// `run_font(...)`, no matter how it is quoted or what else it is
+    /// spliced next to.
+    ///
+    /// Blind spot this still cannot see: indirection that bottoms out in
+    /// a literal one hop away from `paint` -- e.g. a helper or `const`
+    /// that itself hardcodes a family and gets passed here in place of
+    /// `run_font`, or `run_font`'s result reassigned to a differently
+    /// named local before the call. This guard proves what `paint`
+    /// textually passes to `set_font` is a `run_font(...)` call; it does
+    /// not prove `run_font` is the only function in the file capable of
+    /// producing a font string.
     #[test]
-    fn paint_never_states_a_font_family_literal() {
+    fn paint_only_ever_passes_set_font_a_run_font_call() {
         let src = include_str!("render.rs").replace('\r', "");
         let start = src.find("pub fn paint(").expect("paint is gone");
         let body_start = src[start..]
@@ -446,12 +469,33 @@ mod tests {
             .map(|i| body_start + i)
             .expect("paint's closing brace");
         let body = &src[body_start..body_end];
+
+        const NEEDLE: &str = "set_font(";
+        let mut checked = 0usize;
+        let mut idx = 0usize;
+        while let Some(rel) = body[idx..].find(NEEDLE) {
+            let call_start = idx + rel + NEEDLE.len();
+            let rest = body[call_start..].trim_start();
+            let arg = rest.strip_prefix('&').unwrap_or(rest);
+            assert!(
+                arg.starts_with("run_font("),
+                "paint passes set_font something other than a bare \
+                 `run_font(...)` call -- the family must come from \
+                 `CellMetrics::font_family` via `run_font`, never a \
+                 literal or a splice next to it, or `measure` and `paint` \
+                 can silently draw two different fonts. Found near byte \
+                 {call_start}: {:?}",
+                &rest[..rest.len().min(60)]
+            );
+            checked += 1;
+            idx = call_start;
+        }
         assert!(
-            !body.contains('\'') && !body.contains("monospace"),
-            "paint's body states a font family literal -- the family must \
-             come from `CellMetrics::font_family` via `run_font`, never a \
-             literal, or `measure` and `paint` can silently draw two \
-             different fonts. Offending body:\n{body}"
+            checked > 0,
+            "found no set_font( call inside paint's body at all -- either \
+             paint was refactored to draw text some other way (update \
+             this guard to match what replaced it), or the body-extraction \
+             boundaries above no longer bracket the real function"
         );
     }
 }
