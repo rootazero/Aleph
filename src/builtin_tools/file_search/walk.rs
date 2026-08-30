@@ -349,11 +349,22 @@ mod tests {
         fs::create_dir(dir.path().join("node_modules")).unwrap();
         fs::write(dir.path().join("node_modules/dep.js"), "c").unwrap();
         fs::write(dir.path().join("main.rs"), "fn main() {}").unwrap();
+        // The walker honours .gitignore files in PARENTS of the root
+        // (`parents(true)`), and some environments ship a $TMPDIR/.gitignore
+        // that already names `node_modules/` — which skips the dir before the
+        // floor filter ever sees it, leaving `floor_skipped_dirs` at 0 for a
+        // reason the test did not arrange. A local negation keeps the dir
+        // visible to the gitignore layer so the skip measured below is the
+        // floor filter's own work, not the ambient environment's.
+        fs::write(dir.path().join(".gitignore"), "!node_modules/\n").unwrap();
 
         let root = dir.path().to_string_lossy().to_string();
         let (canonical, report) = walk(&req(&root, None, &[])).unwrap();
 
-        assert_eq!(names(&report, &canonical), vec!["main.rs".to_string()]);
+        assert_eq!(
+            names(&report, &canonical),
+            vec![".gitignore".to_string(), "main.rs".to_string()]
+        );
         assert_eq!(report.floor_skipped_dirs, 1);
     }
 

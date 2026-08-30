@@ -736,13 +736,12 @@ pub async fn execute_delete(
     let items_deleted = if is_symlink {
         // Unlink the symlink itself — never touch its target.
         let canonical = canonical.clone();
-        let deleted = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             std::fs::remove_file(&canonical)
                 .map_err(|e| ToolError::Execution(format!("Failed to delete symlink: {e}")))
         })
         .await
         .map_err(|e| ToolError::Execution(format!("Delete task join failed: {e}")))??;
-        let _ = deleted;
         1
     } else if is_dir {
         // Count the whole tree before removal so the reported figure is the
@@ -751,7 +750,7 @@ pub async fn execute_delete(
         // them on the blocking pool so a deep tree does not monopolize a
         // tokio worker.
         let canonical_for_blocking = canonical.clone();
-        let (count, deleted) = tokio::task::spawn_blocking(move || {
+        let (count, ()) = tokio::task::spawn_blocking(move || {
             let count = count_path_entries(&canonical_for_blocking);
             std::fs::remove_dir_all(&canonical_for_blocking)
                 .map_err(|e| ToolError::Execution(format!("Failed to delete directory: {e}")))?;
@@ -759,17 +758,15 @@ pub async fn execute_delete(
         })
         .await
         .map_err(|e| ToolError::Execution(format!("Delete task join failed: {e}")))??;
-        let _ = deleted;
         count
     } else {
         let canonical = canonical.clone();
-        let deleted = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             std::fs::remove_file(&canonical)
                 .map_err(|e| ToolError::Execution(format!("Failed to delete file: {e}")))
         })
         .await
         .map_err(|e| ToolError::Execution(format!("Delete task join failed: {e}")))??;
-        let _ = deleted;
         1
     };
 

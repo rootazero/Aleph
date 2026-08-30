@@ -750,7 +750,6 @@ pub(crate) fn focus_window(handle: &tauri::AppHandle) {
         }) {
             tracing::warn!("could not dispatch focus_window to main thread: {e}");
         }
-        return;
     }
 
     #[cfg(not(target_os = "macos"))]

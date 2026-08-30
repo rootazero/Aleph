@@ -197,7 +197,7 @@ mod tests {
         assert!(internal("tauri://localhost/index.html"));
         assert!(internal("http://tauri.localhost/index.html"));
         assert!(internal("about:blank"));
-        assert!(internal("data:text/html,hello"));
+        // `data:` is deliberately NOT internal — see `data_urls_are_not_internal`.
     }
 
     #[test]

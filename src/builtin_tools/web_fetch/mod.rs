@@ -646,36 +646,49 @@ mod tests {
         );
     }
 
+    /// BT-D-R4-22: fetch providers are deliberately SKIPPED — the validated
+    /// DNS pin cannot be threaded into a provider's own HTTP client, so
+    /// running one would reopen the DNS-rebinding window between validate and
+    /// connect. A configured provider must never be consulted; the call falls
+    /// through to the built-in pinned fetch. The dead-port URL makes that
+    /// fall-through fail fast and deterministically without external network.
     #[tokio::test]
-    async fn uses_fetch_provider_before_builtin() {
-        struct TestProvider;
+    async fn fetch_providers_are_skipped_for_dns_pin_gap() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        struct SpyProvider(Arc<AtomicBool>);
         #[async_trait::async_trait]
-        impl crate::fetch::FetchProvider for TestProvider {
+        impl crate::fetch::FetchProvider for SpyProvider {
             async fn fetch(&self, _url: &str) -> crate::error::Result<String> {
-                Ok("# FROM-PROVIDER\n\nbody".into())
+                self.0.store(true, Ordering::SeqCst);
+                Ok("# FROM-PROVIDER".into())
             }
             fn name(&self) -> &str {
-                "test"
+                "spy"
             }
             fn is_available(&self) -> bool {
                 true
             }
         }
+
+        let called = Arc::new(AtomicBool::new(false));
         let tool = WebFetchTool::new()
             .with_ssrf_policy(SsrfPolicy::disabled())
-            .with_fetch_providers(vec![std::sync::Arc::new(TestProvider)]);
+            .with_fetch_providers(vec![Arc::new(SpyProvider(Arc::clone(&called)))]);
         let result = tool
             .call_impl(WebFetchArgs {
-                url: "https://example.com/fetch-provider-test".to_string(),
+                // Port 1 refuses connections on any sane host — the built-in
+                // fetch fails fast with no external network involved.
+                url: "http://127.0.0.1:1/fetch-provider-test".to_string(),
                 extract_mode: ExtractMode::Markdown,
                 prompt: None,
             })
-            .await
-            .unwrap();
+            .await;
+        assert!(result.is_err(), "built-in fetch to a dead port must fail");
         assert!(
-            result.content.contains("FROM-PROVIDER"),
-            "expected provider content in result; got: {:?}",
-            &result.content[..result.content.len().min(200)]
+            !called.load(Ordering::SeqCst),
+            "provider must not be consulted: the DNS pin cannot be threaded into it (BT-D-R4-22)"
         );
     }
 

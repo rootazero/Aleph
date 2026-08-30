@@ -91,7 +91,7 @@ impl Default for SessionMap {
 impl SessionMap {
     #[must_use]
     pub fn new() -> Self {
-        let owner = Owner::current().unwrap_or_else(Owner::new);
+        let owner = Owner::current().unwrap_or_default();
         Self {
             live: RwSignal::new(HashMap::new()),
             meta: RwSignal::new(HashMap::new()),

@@ -84,8 +84,8 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
                             set_result_errors.set(error_list.into_iter().take(5).collect());
 
                             set_result_counts.set(Some((
-                                facts_updated as u64,
-                                facts_total as u64,
+                                facts_updated,
+                                facts_total,
                                 errors as u64,
                             )));
                         }

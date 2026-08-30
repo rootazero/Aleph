@@ -248,8 +248,8 @@ fn main() {
     println!("  commit  {commit}");
     println!("  walked  {walked} file(s) with ignore rules in force\n");
     println!(
-        "  {:<44} {:>8} {:>11}   {}",
-        "case", "ms", "peak heap", "reported"
+        "  {:<44} {:>8} {:>11}   reported",
+        "case", "ms", "peak heap"
     );
     for row in &rows {
         println!(
