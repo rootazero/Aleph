@@ -7,7 +7,8 @@
 - **上游 spec**: `2026-08-04-multi-user-org-project-design.md`（P0/P1/P2 已执行）· `2026-08-24-multiuser-teamchat-p3-design.md`（P3 已执行）
 - **兑现的账本项**: `SECURITY.md` Known gap 2「channels-into-rooms is spec §11-3 / P4」· round-5→round-8 ③「房间存量归属回填」· round-8 刻意未做 ①「`bind_workspace` 工具面」④「子代理房间名册真机验证」
 - **记录文档**: 完成后回填 `FEATURE_LOCATOR.md` §5.22 第九轮、`SECURITY.md`（Known gap 表重写）、`GATEWAY.md`、`src/gateway/CLAUDE.md`
-- **状态**: 📐 设计已定稿，待实施
+- **状态**: ✅ **已实施**（2026-08-30，19 个编号任务 + 13 份复审报告，69 提交，worktree `multiuser-round9`）。回填记录见 `FEATURE_LOCATOR.md` §5.22 **第九轮**（主缺陷、既存缺陷成因、刻意未做、真机 QA）· `SECURITY.md`（Known gap 表重写：gap 1 收窄到 `channel.*`、gap 2 的入方向已兑现、新增 gap 6/7/8，外加 §10 不可变性的唯一例外）· `GATEWAY.md`（「A conversation can be bound to a project room」）· `src/gateway/CLAUDE.md` 地雷 Q（五个读者 / 五道闸）。
+  ⚠️ **本文档写于实施之前，正文里带 ⚠️ 的「规划期读实更正」是执行期回填的**；除此之外正文描述的是**设计意图**，不是最终代码。落差最大的两处：`peer_kind` 已 typed 成 `aleph_protocol::projects::BindingPeerKind`（Ruling V，不再是 `String`），Panel 的 `BindingRow` DTO 不存在（Ruling AA，Panel 直接 import `ChannelBindingRow`）。**以代码为准。**
 
 ---
 
@@ -350,7 +351,7 @@ round-7 最贵的教训——两两冲突扫描**抓不到**「一个句柄没�
 | Scope 原语 | `ScopeId = "kind:ref"`，5 类（personal/channel/team/org/group），`src/types.ts` | `ScopeId::{Org,Personal,Project}` 枚举 | 不动（Aleph 类型更严；类别更少是刻意的） |
 | 授权谓词 | `canRead/canWrite/canManage/membershipControls/currentMembers`，`src/resolution/scope-membership.ts` | `visibility.rs` 谓词族 + `roster::is_member` + `projects::authz` | 打平；Aleph 的「一个谓词体服务四张脸」已优于 qm（qm 在一个文件里重复五次同一检查） |
 | 逐资源 Grant ACL | `src/acl/{acl-store,resource-ref}.ts`，`Grant{ownerScope,ref,granteeScope,permission}` | 无 —— 名册即授权 | **已裁决不移植**（round-4），本轮不重提 |
-| 成员资格三态 | `boolean \| undefined` + 会话历史兜底 | `is_member` 的 `Err` 臂已按 Ruling P9 处理 | 打平；本轮为 scope 决定新增一条**方向相反**的 `Err` 裁决（§4.4） |
+| 成员资格三态 | `boolean \| undefined` + 会话历史兜底 | ~~`is_member` 的 `Err` 臂已按 Ruling P9 处理~~ → **`is_member` 根本没有 `Err` 臂**（`-> bool`），三态全部读作 `false` | 打平。~~本轮为 scope 决定新增一条**方向相反**的 `Err` 裁决（§4.4）~~ —— **这一格与它论证的那条一起作废**：§4.4 的规划期读实更正推翻了「有个 `Err` 臂要裁决」这个前提，而这张对照表没跟着改。Ruling P9 读的是另一个东西（`ProjectStore::members()`，那个才返回 `Result`）。**一次更正只改了它自己那一节，同一份文档里引用它的那一格安静地留在原地** |
 | **项目 ⟷ 频道绑定** | `Project.slackChannel` + `syncChannelMembers` + 项目实现 `ManagedGroupDirectory`，`src/projects/project-store.ts` | **无** | ✅ **本轮主线**；绑定关系移植，`syncChannelMembers` 不移植（D2） |
 | 乐观并发 | `withVersion(groupRef, version, fn)` | 名册投影在 store 写锁内发布（更强） | 不移植；Aleph 的写锁方案严格更强 |
 | 一次解析产出全部 | `Resolution{layers[ro/rw], prompt, egress, commandPolicy, securityPolicy, grants}` | 分散在 `resolve_agent_dir` / sandbox jail / `tool_permissions` / exec_tier，各自有守卫 | 记为**未来候选**，本轮不做（触 R10 边界，收益比需先验证） |
