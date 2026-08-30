@@ -3506,8 +3506,21 @@ actor 那半留给 `a_spawn_records_who_asked_for_it`，并在报告里说明为
 - **同一装机的所有 operator 共享 `["*"]` 作用域**，能互相看见并 attach 彼此的会话。这是单层信任模型的有意结果，不是疏漏。
 ```
 
-同时把这三句的**同义表述**同批加到 `[policies.terminal]` 的 doc comment 与 `self_config` 的
-`DESCRIPTION` —— 一句关于什么被闸住的话有三份拷贝，最贵的那份是发给模型的。
+同时把这三句的**同义表述**加到 `[policies.terminal]` 的 doc comment。
+
+⚠️ **`self_config` 的 `DESCRIPTION` 那一份：不要加**（controller 裁定，2026-08-30，Task 13
+落地后核实）。本行原来要求"同批加到 doc comment 与 `DESCRIPTION`"，理由是"一句关于什么被闸住的
+话有三份拷贝，最贵的那份是发给模型的"。那条判据本身是对的，**但它在这里的前提是假的**：
+`self_config` 的 `DESCRIPTION`（`src/builtin_tools/self_config.rs:752`）**从来没有提过这道闸**
+——`GATE_DECIDING_CONFIG_PATHS` 两个既有成员（`policies.tool_permissions` /
+`policies.exec_tier`）一个都没写进去。
+
+所以第三份拷贝**对三个成员都不存在**，而不是"漏了新的这个"。只给新成员加，得到的是一份
+**只列出三分之一的名单**——那正是"列举法只覆盖立法当天的世界"这条判据的**出生形态**，比没有
+名单更糟：模型会读成"只有这一条会举卡"。
+
+要给模型这份回声，是一次**独立的、覆盖全部三个成员**的改动，而且它先要在别处省出字节
+（实测 108_784 B 对天花板 108_800 B，**只剩 16 字节**），**不是抬天花板**。
 
 ⚠️ **改 `self_config` 的 `DESCRIPTION` 会动描述字节棘轮，本任务原来对此一个字都没说。**
 controller 已查实（2026-08-29）：`self_config` 的 `DESCRIPTION`
@@ -3534,7 +3547,15 @@ Expected: 全 passed。
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/tools/scoped/gate_chain.rs src/config/types/policies/exec_tier.rs src/gateway/pty/manager.rs src/gateway/handlers/pty.rs docs/reference/SECURITY.md
+# ⚠️ 这一行原来漏了三个本任务必然会改的文件（controller 2026-08-30 补，**第三次**同形）：
+#   src/gateway/pty/session.rs             —— created_by 进 SpawnOptions
+#   src/builtin_tools/self_config.rs       —— DESCRIPTION 那句话
+#   src/config/types/policies/terminal.rs  —— 同一句话的 doc comment 拷贝
+# 所以：**暂存清单从 `git status --short` 推导**，逐个文件问「这一轮是不是我的」，
+# 提交前跑 `git diff --cached --stat` 核对。下面这行只是起点，不是清单。
+# 一个明确**不是**你的路径：src/executor/builtin_registry/definitions.rs
+# （量棘轮时会临时改它；提交时它若还是 modified，说明还原没做干净，或棘轮真的动了——后者要上报）。
+git add src/tools/scoped/gate_chain.rs src/config/types/policies/exec_tier.rs src/gateway/pty/session.rs src/gateway/pty/manager.rs src/gateway/handlers/pty.rs src/builtin_tools/self_config.rs src/config/types/policies/terminal.rs docs/reference/SECURITY.md
 git commit -m "pty: gate the terminal switch's writer, record who spawned, document the limit
 
 SECURITY.md states plainly what the cwd jail buys and what it does not: it
@@ -5187,7 +5208,50 @@ cargo clippy --workspace --all-targets
 just wasm
 ```
 
-**全部必须绿。** 任何一条红就停下修，不要记为"已知问题"。
+**全部必须绿。** 任何一条红就停下修，不要记为"已知问题"——**但下面这两类除外，它们是
+controller 实测归类过的，别去修，也别为它们停下**。
+
+**① 六条在 main 上就红的测试。** 本清单里的命令**都是限定范围的**，所以正常情况下你一条也
+碰不到；只有当你自己去跑一次全量 `cargo test -p alephcore --lib` 时才会看见：
+
+```
+thinker::prompt_budget::tests::{truncate_long_content_preserves_head_tail,
+    estimate_factor_tightens_token_gate,
+    truncate_marker_intact_when_truncated_count_has_many_digits,
+    truncate_marker_with_six_digit_count_stays_within_budget}
+thinker::prompt_sanitizer::tests::supplement_does_not_overlap_with_unicode_guard_ssot
+gateway::interfaces::whatsapp::wa_outbound::sender::tests::test_send_message_without_client_returns_error
+```
+
+归类方式是**测量**不是命名：每一条**单跑也红**，而 `git diff --name-only main...HEAD` 显示本
+分支从未碰过 `src/thinker/` 或 whatsapp。另有两条**间歇性**的（`gateway::session_projector::
+tests::projector_materializes_events_into_store_with_tokens` 与
+`gateway::handlers::chat::tests::visibility_guards::history_serves_the_durable_execution_list`），
+八次全量跑里出现一次，同样在本分支没碰过的子系统里。**都不归本计划**，也不要顺手修。
+
+**② clippy 的既存警告。** `cargo clippy --workspace --all-targets` 在这棵树上本来就有警告
+（`src/utils/instance_lock.rs`、`src/group_chat/session.rs`、`src/gateway/session_manager/`
+等，全是本分支没碰过的文件）。判据不是"零警告"，是**本分支碰过的文件里零新增警告**：
+
+```bash
+# 本分支碰过哪些文件
+git diff --name-only main...HEAD | grep '\.rs$' > /tmp/touched.txt
+# clippy 的命中落在哪些文件
+cargo clippy --workspace --all-targets 2>&1 | grep -oE '^\s+--> [^:]+' | sed 's/.*--> //' | sort -u
+```
+两者取交集，**必须为空**。交集非空才是你的。
+
+⚠️ **`cargo test -p alephcore --lib gateway::pty` 不够，还要跑这一条：**
+
+```bash
+cargo test -p alephcore --lib -- gateway::handlers::pty config::live_apply
+```
+
+理由是它抓到过一个前者结构上抓不到的缺陷：`config::live_apply` 那条 `close_all` 测试动的是
+**进程全局**的 `pty::manager()`，会杀掉 handler 测试正在断言的会话。实测这条命令曾 6 次红 5 次，
+而 `gateway::pty` 单跑 6/6 绿、全量 `--lib` 8/8 绿。**一个缺陷可以同时躲过限定命令和全量命令，
+只在这两者之间的那条命令下现形**——它现在由 `serial_test` 键 + 源码级 census 挡住，这条命令是
+那道守卫的回归测试。
 
 - [ ] **Step 2: 确认熵减清单已执行**
 
