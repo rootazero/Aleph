@@ -69,6 +69,12 @@ pub struct SpawnOptions {
     /// coverage it does not have. What remains is the first reason and one
     /// path instead of two.
     pub scrollback_lines: Option<usize>,
+    /// Who asked for this session, for `pty.list`'s accountability column.
+    /// `None` = not attributable (a spawn that did not come through a
+    /// caller-identified face). Carried here rather than through a
+    /// `spawn_as` wrapper for the same reason `scrollback_lines` is — see
+    /// that field's doc.
+    pub created_by: Option<String>,
 }
 
 /// A live PTY session handle. Cloneable via `Arc`; all mutating operations are
@@ -80,6 +86,8 @@ pub struct PtySession {
     pub shell: String,
     /// Unix-epoch seconds at spawn time.
     pub created_at: i64,
+    /// Who asked for this session — see [`SpawnOptions::created_by`].
+    pub created_by: Option<String>,
     /// Writer into the child's stdin (the PTY master write side).
     writer: crate::sync_primitives::Mutex<Box<dyn Write + Send>>,
     /// Master handle, retained for resize (`TIOCSWINSZ` equivalent).
@@ -165,6 +173,7 @@ impl PtySession {
             id: id.clone(),
             shell: label,
             created_at: chrono::Utc::now().timestamp(),
+            created_by: opts.created_by.clone(),
             writer: crate::sync_primitives::Mutex::new(writer),
             master: crate::sync_primitives::Mutex::new(master),
             killer: crate::sync_primitives::Mutex::new(killer),

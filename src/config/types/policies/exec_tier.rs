@@ -557,14 +557,35 @@ fn loop_graph_touches_protected(input: &Value) -> bool {
     })
 }
 
-/// The two config subtrees that decide whether the argument-level cards above
-/// are raised at all.
+/// The config subtrees a `self_config` write may never touch without a
+/// card, at every execution tier including `Full`.
+///
+/// The membership rule is not a count and not "important settings" — it is
+/// what a write here can DO to the confirmation chain. A path belongs on
+/// this list if writing it either STANDS DOWN an argument-level card the
+/// chain would otherwise raise, or OPENS an execution surface no card was
+/// ever watching in the first place. Both are "write the override, then act
+/// freely" turning two individually legal steps into the one-step,
+/// un-carded removal of a human checkpoint — see
+/// [`self_config_touches_the_gate`]'s doc for the composition this whole
+/// mechanism exists to close.
 ///
 /// - `policies.tool_permissions` — one entry named after a tool disarms that
 ///   tool's card via `ScopedToolServiceBuilder::explicitly_named`, whose whole
-///   justification is "the operator already decided about this tool".
-/// - `policies.exec_tier` — `Full` never asks, by contract.
-const GATE_DECIDING_CONFIG_PATHS: &[&str] = &["policies.tool_permissions", "policies.exec_tier"];
+///   justification is "the operator already decided about this tool". Stands
+///   down a card.
+/// - `policies.exec_tier` — `Full` never asks, by contract. Stands down every
+///   tier-raised card at once.
+/// - `policies.terminal` — `[policies.terminal] enabled = true` turns on
+///   `pty.*`, a raw shell the command policy does not see and the exec tier
+///   does not gate (`gateway::handlers::pty`'s module doc). This entry
+///   stands down no OTHER card; it opens a new execution surface no card
+///   was ever watching.
+const GATE_DECIDING_CONFIG_PATHS: &[&str] = &[
+    "policies.tool_permissions",
+    "policies.exec_tier",
+    "policies.terminal",
+];
 
 /// Whether this `self_config` call can reach the configuration that decides
 /// whether [`ExecTier::asks_for_arguments`] fires.

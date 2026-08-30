@@ -135,6 +135,7 @@ pub async fn handle_spawn(request: JsonRpcRequest, config: Arc<RwLock<Config>>) 
         Err(e) => return JsonRpcResponse::error(id, INVALID_PARAMS, e),
     };
 
+    let actor = crate::gateway::visibility::ambient_actor();
     let opts = SpawnOptions {
         command: params.command,
         args: params.args,
@@ -152,6 +153,7 @@ pub async fn handle_spawn(request: JsonRpcRequest, config: Arc<RwLock<Config>>) 
         // Carried in the options rather than applied afterwards — see
         // `SpawnOptions::scrollback_lines` for the race a post-hoc setter opens.
         scrollback_lines: Some(terminal.scrollback_lines as usize),
+        created_by: actor.clone(),
     };
 
     pty::manager().set_max_sessions(terminal.max_sessions);
@@ -877,6 +879,50 @@ mod tests {
             "an omitted cwd must chdir the child into the resolved first workspace root \
              {expected}, not the unjailed $HOME/USERPROFILE fallback; screen held: {last_seen:?}"
         );
+    }
+
+    /// The handler is the only place both fields have to be filled in, and it
+    /// is the one place neither task's own test looks: Task 12's constructs
+    /// `SpawnOptions` by hand and asserts the scrollback field reaches the
+    /// grid; a `created_by` test of the same shape would assert the same
+    /// thing about the other field. A `handle_spawn` that filled exactly one
+    /// of them passes both.
+    #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
+    async fn a_spawn_through_the_handler_carries_both_the_actor_and_the_scrollback() {
+        let (config, _tmp) = isolated_config();
+        config.write().await.policies.terminal.scrollback_lines = 7;
+
+        let resp = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_spawn(req("pty.spawn", json!({})), config),
+            )
+            .await;
+        let sid = resp.result.as_ref().expect("spawn should succeed")["session_id"]
+            .as_str()
+            .expect("session_id")
+            .to_string();
+
+        // Never `pty::manager().list()[0]` -- this binary's tests share one
+        // process-global manager, so `[0]` can be a sibling's session.
+        let info = pty::manager()
+            .list()
+            .into_iter()
+            .find(|s| s.session_id == sid)
+            .expect("the session we just spawned must be listed");
+        assert_eq!(
+            info.created_by.as_deref(),
+            Some("u-alice"),
+            "the actor must reach the session"
+        );
+        assert_eq!(
+            pty::manager().scrollback_limit_of(&sid),
+            Some(7),
+            "and so must the configured scrollback -- a handler that fills one \
+             SpawnOptions field and not the other passes every other test in both tasks"
+        );
+        pty::manager().close(&sid).expect("close");
     }
 
     /// Every test in this module shares one process-global resource: the

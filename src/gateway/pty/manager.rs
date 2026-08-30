@@ -47,6 +47,9 @@ pub struct SessionInfo {
     /// "how many clients are attached": a client that has only ever called
     /// `pty.attach`/`pty.input` without resizing never appears here.
     pub attached_count: usize,
+    /// Who asked for this session — see [`SpawnOptions::created_by`]. `None`
+    /// for a spawn that did not come through a caller-identified face.
+    pub created_by: Option<String>,
 }
 
 /// Result of a successful `pty.spawn`.
@@ -234,6 +237,7 @@ impl PtyManager {
                 created_at: s.created_at,
                 closed: s.is_closed(),
                 attached_count: inner.viewports.get(&s.id).map_or(0, HashMap::len),
+                created_by: s.created_by.clone(),
             })
             .collect()
     }
@@ -479,6 +483,24 @@ mod tests {
             Some(7),
             "the configured limit must bound the session's ring, not the built-in default"
         );
+        mgr.close(&sid).expect("close");
+    }
+
+    /// Accountability names the person, not just the identity: on a
+    /// multi-user install "which operator" is the question an audit asks.
+    #[test]
+    fn a_spawn_records_who_asked_for_it() {
+        // A LOCAL PtyManager, so `list()` really is this test's own sessions.
+        // Never index the process-global one -- see the handler test below.
+        let mgr = PtyManager::new();
+        let sid = mgr
+            .spawn(&SpawnOptions {
+                created_by: Some("u-alice".to_string()),
+                ..Default::default()
+            })
+            .expect("spawn")
+            .session_id;
+        assert_eq!(mgr.list()[0].created_by.as_deref(), Some("u-alice"));
         mgr.close(&sid).expect("close");
     }
 

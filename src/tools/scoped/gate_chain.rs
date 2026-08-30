@@ -842,4 +842,133 @@ mod tests {
             );
         }
     }
+
+    /// A gate whose off-switch can be flipped without a card is not a gate:
+    /// two individually legal steps ("write the config", "spawn a terminal")
+    /// would add up to the thing the gate refuses.
+    ///
+    /// Asserted at `Full`, and through `confirmation_rule` rather than through
+    /// any single predicate, because `Full` is the whole point: it never asks
+    /// by contract, so a rule that only fires below it buys nothing against the
+    /// operator most likely to flip this switch in one sentence. Rule 2
+    /// (`GateRemoval`) returns before the chain ever reaches `permission_for`
+    /// — that position, not any `is_floor()` verdict, is what makes it
+    /// tier-independent.
+    #[test]
+    fn writing_the_terminal_switch_cards_even_at_full() {
+        let svc = service(
+            vec![Declared {
+                name: "self_config",
+                idempotent: false,
+                confirm: false,
+            }],
+            ExecTier::Full,
+            Some(perms(PermissionAction::Allow, &[])),
+        );
+        let rule = svc
+            .confirmation_rule(
+                "self_config",
+                &json!({
+                    "action": "update_config",
+                    "config_path": "policies.terminal.enabled",
+                    "config_value": true,
+                }),
+            )
+            .expect("flipping the terminal gate must card at every tier, Full included");
+        // The constant, not the literal: `GateRule::id`'s own doc says a rename
+        // here is a compile error at the decision-set derivation, and a test
+        // spelling it out by hand would quietly opt out of that.
+        assert_eq!(rule.id(), crate::exec::allowed_decisions::GATE_REMOVAL_RULE);
+    }
+
+    /// The narrowness half. A rule that cards every `self_config` write would
+    /// answer this task's question and destroy the tool: the claim is
+    /// "gate-deciding subtrees", not "config writes".
+    #[test]
+    fn an_unrelated_config_write_still_does_not_card_at_full() {
+        let svc = service(
+            vec![Declared {
+                name: "self_config",
+                idempotent: false,
+                confirm: false,
+            }],
+            ExecTier::Full,
+            Some(perms(PermissionAction::Allow, &[])),
+        );
+        assert!(
+            svc.confirmation_rule(
+                "self_config",
+                &json!({
+                    "action": "update_config",
+                    "config_path": "behavior.greeting",
+                    "config_value": "hi",
+                }),
+            )
+            .is_none(),
+            "only the gate-deciding subtrees card at Full"
+        );
+    }
+
+    /// `dot_paths_intersect` compares by SEGMENT (`exec_tier.rs:614` — it tests
+    /// `starts_with("{b}.")`, with the dot), so a sibling key that merely shares
+    /// a prefix must not be swept in. Written because "add a prefix" is how this
+    /// change reads, and prefix matching would be the wrong mechanism.
+    #[test]
+    fn a_sibling_key_sharing_the_prefix_is_not_swept_in() {
+        let svc = service(
+            vec![Declared {
+                name: "self_config",
+                idempotent: false,
+                confirm: false,
+            }],
+            ExecTier::Full,
+            Some(perms(PermissionAction::Allow, &[])),
+        );
+        assert!(
+            svc.confirmation_rule(
+                "self_config",
+                &json!({
+                    "action": "update_config",
+                    "config_path": "policies.terminal_legacy.x",
+                    "config_value": 1,
+                }),
+            )
+            .is_none(),
+            "`policies.terminal_legacy` is a different subtree"
+        );
+    }
+
+    /// Requirement 3, asserted rather than assumed: an exactly-named
+    /// `[policies.tool_permissions]` entry DOES stand this down, because
+    /// `gate_removal_floor` is `!explicitly_named(name) && ..`. That is
+    /// deliberate — the entry is a decision a person wrote, and the write that
+    /// created it carded through this very rule (`policies.tool_permissions` is
+    /// itself on the list). Do not "fix" this.
+    #[test]
+    fn an_exactly_named_entry_stands_the_terminal_floor_down() {
+        let svc = service(
+            vec![Declared {
+                name: "self_config",
+                idempotent: false,
+                confirm: false,
+            }],
+            ExecTier::Full,
+            Some(perms(
+                PermissionAction::Allow,
+                &[("self_config", PermissionAction::Allow)],
+            )),
+        );
+        assert!(
+            svc.confirmation_rule(
+                "self_config",
+                &json!({
+                    "action": "update_config",
+                    "config_path": "policies.terminal.enabled",
+                    "config_value": true,
+                }),
+            )
+            .is_none(),
+            "an exact entry is a person's decision and stands the floor down by design"
+        );
+    }
 }

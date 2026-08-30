@@ -23,6 +23,22 @@ use serde::{Deserialize, Serialize};
 /// freshly wired feature makes "nobody used it" and "nobody could use it"
 /// indistinguishable. It is turned off from Panel → Settings → Terminal.
 ///
+/// Three facts a reader who only sees this struct would otherwise have to
+/// discover the hard way (full story: `docs/reference/SECURITY.md`'s
+/// "内嵌终端" section, `gateway::handlers::pty`'s module doc):
+///
+/// - Operator-only on BOTH faces — RPC (`method_admin::ADMIN_PREFIXES`) and
+///   the subscribe face (`event_scope::default_rules`).
+/// - The cwd jail bounds only where a session STARTS. A `cd` once inside is
+///   unconstrained — a command-grained policy is not expressible over an
+///   interactive byte stream (Enter, inside `vim`, is not a command). This
+///   buys "every session's starting point is enumerable and auditable", not
+///   "a session cannot leave the workspace".
+/// - `pty.*` bypasses `[sandbox.command_policy]` and the exec tier entirely
+///   — this session-grained switch is the only predicate this layer has, and
+///   it is why `self_config` writes reaching this path always ask, at every
+///   tier including `full` (`GATE_DECIDING_CONFIG_PATHS`).
+///
 /// All three fields are live — see `reload_impact::LIVE_SUBSECTIONS`'s doc
 /// for the per-field liveness story, since "declared live" and "every field
 /// actually applies without a restart" are not the same claim.
@@ -33,6 +49,10 @@ pub struct TerminalConfig {
     /// (`live_apply`'s `"policies.terminal"` arm calls `PtyManager::close_all`)
     /// — a gate evaluated only at admission would leave a shell that is
     /// already open still open.
+    ///
+    /// A `self_config` write to this path always asks for confirmation, at
+    /// every execution tier including `full` — see the struct doc above and
+    /// `GATE_DECIDING_CONFIG_PATHS`.
     pub enabled: bool,
     /// Server-held scrollback per session (see `gateway::pty::screen::grid`).
     /// Applies to sessions started after a live patch; a session already

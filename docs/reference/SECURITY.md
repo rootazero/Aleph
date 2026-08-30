@@ -1017,6 +1017,26 @@ the operator could not have removed.
 
 ---
 
+### 内嵌终端（`pty.*`）
+
+- **两面 operator-only**：RPC 面在 `method_admin::ADMIN_PREFIXES`，订阅面在 `event_scope::default_rules`。
+- **cwd jail 只管起点**。终端内部的 `cd` 不受约束 —— 命令粒度的闸在交互式字节流上不可表达（`vim` 里的回车不是命令）。
+  它买到的是**"每个终端的起点可枚举、可审计"，不是"终端不能离开工作区"**。别把它当成隔离来引用。
+- **PTY 不经 `[sandbox.command_policy]` 也不经 exec tier**（`method_admin.rs` 的注释自陈 "strictly more dangerous"）。
+  会话粒度的开关 `[policies.terminal] enabled` 是这一层唯一说得出口的谓词；关掉它会杀掉在飞的会话。
+- **终端历史住在服务器上**（每会话 `scrollback_lines` 行，默认 1000），因此对诊断与审计面可见。
+- **同一装机的所有 operator 共享 `["*"]` 作用域**，能互相看见并 attach 彼此的会话。这是单层信任模型的有意结果，不是疏漏。
+- **打开这道闸本身不举卡就是一次绕闸**：`[policies.terminal] enabled` 是 `GATE_DECIDING_CONFIG_PATHS`
+  的第三个成员（`config::types::policies::exec_tier`），所以经 `self_config` 写它在**每个执行档位**
+  ——包括 `Full`——都停下来问，且这张卡不提供"始终允许"（`GateRule::GateRemoval` 不是那类地板）。
+  它站上这张名单的理由和另外两个成员不同：写 `policies.tool_permissions` / `policies.exec_tier`
+  是**退掉**一张已有的卡，写这一项是**交出**一个此前没有任何卡在看守的执行面（`pty.*` 本身不经
+  command policy、不经 exec tier）——两者都是"写配置，再自由行动"能把两个各自合法的步骤拼成的
+  一步免卡动作，这正是该常量存在的理由。一条精确点名 `self_config` 的 `[policies.tool_permissions]`
+  条目仍能站下这张卡（那是人写的决定，创建它的那次写入自己已经经过这条规则举过卡），这是有意的。
+
+---
+
 ## Command allowlist
 
 There is **no** `src/exec/allowlist.rs` and no `exec.allowlist` / `exec.blocklist`
