@@ -59,7 +59,7 @@
 **孪生管道**（与 exec_tier / think_level 逐点同构）。⚠️ **别在这里维护一个数目**：这一族
 2026-08-11 起有**五根**——`exec_tier` / `session_mode` / `think_level` / `memory_mode`
 （`turn_memory.rs`）/ `model_pin`（`turn_model.rs`，写者只有 `select_model` 工具）。加第六根的
-清单与它们各自漏过的那一步见 CLAUDE.md「会话旋钮」与 [FEATURE_LOCATOR §5.23](FEATURE_LOCATOR.md)：
+清单与它们各自漏过的那一步见 [SESSION_KNOBS.md](SESSION_KNOBS.md) 与 [FEATURE_LOCATOR §5.23](FEATURE_LOCATOR.md)：
 `think_level` 走完 1–4 步却**一个客户端面都没有**，于是它被强制了很久而没人看得见。
 
 1. 载体入口：`chat.send`/`agent.run` 顶层 `mode` 参数（`SendParams.mode` → `AgentRunParams.mode`，
