@@ -1,8 +1,16 @@
 use crate::error::{AlephError, Result};
+use crate::search::notes::{all_empty, answered_after_failures, degraded};
 use crate::search::{
     SearchCapabilities, SearchOptions, SearchProvider, SearchResult, WebFetchSerpFallback,
 };
 use crate::sync_primitives::Arc;
+
+/// The name the SERP scrape fallback answers under.
+///
+/// It is not a registered provider, so it has no `name()` to ask; the string
+/// reaches an operator's log line and a caller's `SearchAnswer.provider`, and
+/// two spellings of it would be two different backends to anyone grepping.
+const WEB_FETCH_FALLBACK_NAME: &str = "web-fetch-fallback";
 
 /// Map an `AlephError` returned by a search provider to a short, stable
 /// kind label used for structured log output. Lets ops grep the search
@@ -24,6 +32,24 @@ pub(super) const fn classify_search_error(e: &AlephError) -> &'static str {
 ///
 /// This module manages multiple search providers and routes requests
 use std::collections::HashMap;
+
+/// What a search returned, together with what it could not do.
+///
+/// The results alone cannot carry the second half: a dimension the answering
+/// backend has no parameter for produces a perfectly ordinary-looking result
+/// set. Only the registry knows which backend answered and what that backend
+/// declared, so the notes are assembled here and travel with the results
+/// rather than being re-derived by a layer that cannot see either.
+#[derive(Debug, Clone)]
+pub struct SearchAnswer {
+    /// The results, in the answering backend's order.
+    pub results: Vec<SearchResult>,
+    /// Which backend answered. Not always the one the chain starts with.
+    pub provider: String,
+    /// Sentences from [`crate::search::notes`] naming what this answer is
+    /// missing and which lever the caller can pull. Empty is the common case.
+    pub notes: Vec<String>,
+}
 
 /// Registry for managing multiple search providers
 ///
@@ -220,6 +246,73 @@ impl SearchRegistry {
         }
     }
 
+    /// The notes owed to a caller who asked for a dimension the answering
+    /// backend cannot express.
+    ///
+    /// Derived from the same two values [`Self::ordered_candidates`] sorts on
+    /// — what the request asks for, and what the backend declares — so the
+    /// backend that was picked *despite* not carrying a dimension is exactly
+    /// the one that says so. Phrasing the comparison a second way here is how
+    /// the sort and the note drift apart.
+    fn degradation_notes(
+        options: &SearchOptions,
+        provider: &str,
+        have: SearchCapabilities,
+    ) -> Vec<String> {
+        let want = Self::requested(options);
+        // The dimension is named as the *caller* spelled it, not as the field
+        // is spelled here: a note naming a lever the reader cannot find in
+        // their own request is an apology, not a note. Both domain lists share
+        // one capability bit, so which word to use comes from what was set.
+        let domains = match (
+            options.include_domains.is_empty(),
+            options.exclude_domains.is_empty(),
+        ) {
+            (true, false) => "exclude_domains",
+            (false, false) => "domains/exclude_domains",
+            _ => "domains",
+        };
+        [
+            (domains, want.domain_filter, have.domain_filter),
+            ("recency", want.recency, have.recency),
+            ("full_content", want.full_content, have.full_content),
+        ]
+        .into_iter()
+        .filter(|&(_, want, have)| want && !have)
+        .map(|(dimension, _, _)| degraded(dimension, provider))
+        .collect()
+    }
+
+    /// Assemble the answer a backend just produced, with the notes it owes.
+    ///
+    /// One place, because the three points that can produce an answer (a named
+    /// backend, the chain, the SERP fallback) owe the same three sentences for
+    /// the same three reasons; written out at each of them they come out
+    /// nearly-but-not-quite the same. `answered_empty` is how many backends
+    /// were asked and came back with nothing — it is only read when `results`
+    /// is empty, which is the only case where that count is an answer.
+    fn answer(
+        options: &SearchOptions,
+        provider: String,
+        have: SearchCapabilities,
+        results: Vec<SearchResult>,
+        failed: usize,
+        answered_empty: usize,
+    ) -> SearchAnswer {
+        let mut notes = Self::degradation_notes(options, &provider, have);
+        if failed > 0 {
+            notes.push(answered_after_failures(&provider, failed));
+        }
+        if results.is_empty() {
+            notes.push(all_empty(answered_empty));
+        }
+        SearchAnswer {
+            results,
+            provider,
+            notes,
+        }
+    }
+
     /// Default first, then fallbacks in configuration order, then stably
     /// reordered so providers that can carry every requested dimension come
     /// first.
@@ -275,12 +368,14 @@ impl SearchRegistry {
     /// still get a turn. Only a chain where nobody answered (every attempt
     /// errored, or there were no candidates at all) is an `Err`, reported as
     /// a structured `name [kind] message` line per attempted backend.
-    pub async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
+    ///
+    /// Whatever the answer, it carries the notes it owes: a dimension the
+    /// answering backend could not express, the failures it answered after,
+    /// and an empty result set said out loud as an answer rather than left to
+    /// read as a failure.
+    pub async fn search(&self, query: &str, options: &SearchOptions) -> Result<SearchAnswer> {
         // Naming a provider is an instruction, not a preference: resolve and
         // delegate to it alone, without touching the fallback chain below.
-        // Kept deliberately small — Task 7 folds this into the same
-        // answer-building path as the main chain, so no chain-specific logic
-        // belongs here.
         if let Some(name) = &options.provider {
             let Some(p) = self.providers.get(name).filter(|p| p.is_available()) else {
                 let mut known: Vec<&str> = self.providers.keys().map(String::as_str).collect();
@@ -291,7 +386,18 @@ impl SearchRegistry {
                     known.join(", ")
                 )));
             };
-            return p.search(query, options).await;
+            let results = p.search(query, options).await?;
+            // A named backend is the whole chain: nothing failed ahead of it,
+            // and its empty answer is still an answer from the one backend
+            // that was asked.
+            return Ok(Self::answer(
+                options,
+                name.clone(),
+                p.capabilities(),
+                results,
+                0,
+                1,
+            ));
         }
 
         let mut errors: Vec<String> = Vec::new();
@@ -319,7 +425,15 @@ impl SearchRegistry {
                     if provider_name != self.default_provider {
                         log::info!("Search succeeded with fallback provider '{provider_name}'");
                     }
-                    return Ok(results);
+                    let have = provider.capabilities();
+                    return Ok(Self::answer(
+                        options,
+                        provider_name,
+                        have,
+                        results,
+                        errors.len(),
+                        0,
+                    ));
                 }
                 Ok(_) => {
                     // Answering "nothing" is not a reason to stop asking: a
@@ -354,10 +468,22 @@ impl SearchRegistry {
                 "no provider returned results; attempting WebFetch SERP fallback"
             );
             match fallback.search(query, options).await {
-                Ok(results) => return Ok(results),
+                Ok(results) => {
+                    // The scraper forwards only the timeout and the result
+                    // count (see [`WebFetchSerpFallback::search`]), so it
+                    // carries none of the dimensions a caller can ask for.
+                    return Ok(Self::answer(
+                        options,
+                        WEB_FETCH_FALLBACK_NAME.to_string(),
+                        SearchCapabilities::default(),
+                        results,
+                        errors.len(),
+                        empty.len() + 1,
+                    ));
+                }
                 Err(e) => {
                     let kind = classify_search_error(&e);
-                    errors.push(format!("web-fetch-fallback [{kind}] {e}"));
+                    errors.push(format!("{WEB_FETCH_FALLBACK_NAME} [{kind}] {e}"));
                 }
             }
         }
@@ -369,17 +495,30 @@ impl SearchRegistry {
         // retry something it already has the answer to. Only a chain where
         // *nobody* answered (every attempt errored, or there were no
         // candidates at all) is an `Err`.
-        if empty.is_empty() {
-            // One `name [kind] message` line per attempted backend, headed
-            // by a summary line — the classifier's `kind` has computed a
-            // label for every failure since it was written; this report is
-            // its first real consumer, read by both the model deciding
-            // whether to retry and the operator grepping the log.
-            let mut lines = vec!["All search providers failed:".to_string()];
-            lines.extend(errors);
-            Err(AlephError::provider(lines.join("\n")))
-        } else {
-            Ok(Vec::new())
+        match empty.first() {
+            None => {
+                // One `name [kind] message` line per attempted backend, headed
+                // by a summary line — the classifier's `kind` has computed a
+                // label for every failure since it was written; this report is
+                // its first real consumer, read by both the model deciding
+                // whether to retry and the operator grepping the log.
+                let mut lines = vec!["All search providers failed:".to_string()];
+                lines.extend(errors);
+                Err(AlephError::provider(lines.join("\n")))
+            }
+            Some(first) => {
+                // Somebody answered — with nothing. `empty` is in chain order,
+                // so the first entry is the backend whose answer this is.
+                let have = self.providers[first].capabilities();
+                Ok(Self::answer(
+                    options,
+                    first.clone(),
+                    have,
+                    Vec::new(),
+                    errors.len(),
+                    empty.len(),
+                ))
+            }
         }
     }
 }
@@ -494,7 +633,11 @@ mod tests {
             ..Default::default()
         };
 
-        let results = registry.search("test query", &options).await.unwrap();
+        let results = registry
+            .search("test query", &options)
+            .await
+            .unwrap()
+            .results;
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].title, "test query - Result 1");
@@ -525,7 +668,7 @@ mod tests {
         registry.set_fallback_providers(vec!["nonexistent".to_string()]);
 
         let options = SearchOptions::default();
-        let results = registry.search("test", &options).await.unwrap();
+        let results = registry.search("test", &options).await.unwrap().results;
 
         // Should get results from default provider
         assert_eq!(results.len(), 3);
@@ -551,11 +694,20 @@ mod tests {
         registry.set_fallback_providers(vec!["fallback1".to_string(), "fallback2".to_string()]);
 
         let options = SearchOptions::default();
-        let results = registry.search("test", &options).await.unwrap();
+        let answer = registry.search("test", &options).await.unwrap();
 
         // Should get results from second fallback
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].provider, Some("fallback2".to_string()));
+        assert_eq!(answer.results.len(), 2);
+        assert_eq!(answer.results[0].provider, Some("fallback2".to_string()));
+        assert_eq!(
+            answer.provider, "fallback2",
+            "the answer names who answered"
+        );
+        assert!(
+            answer.notes.iter().any(|n| n.contains("fallback2")),
+            "two backends failed before it answered: {:?}",
+            answer.notes
+        );
     }
 
     #[tokio::test]
@@ -592,7 +744,7 @@ mod tests {
             ..Default::default()
         };
 
-        let results = registry.search("test", &options).await.unwrap();
+        let results = registry.search("test", &options).await.unwrap().results;
 
         // Should only get max_results
         assert_eq!(results.len(), 5);
@@ -622,7 +774,8 @@ mod tests {
         let results = registry
             .search("rust", &SearchOptions::default())
             .await
-            .unwrap();
+            .unwrap()
+            .results;
         assert_eq!(
             results.len(),
             3,
@@ -921,7 +1074,7 @@ mod tests {
 
         let out = reg.search("q", &SearchOptions::default()).await.unwrap();
         assert_eq!(
-            out.len(),
+            out.results.len(),
             3,
             "the chain must continue past a zero-result answer"
         );
@@ -937,7 +1090,12 @@ mod tests {
         reg.add_provider("b".into(), Arc::new(MockProvider::new("b", false, 0)));
         reg.set_fallback_providers(vec!["b".into()]);
         let out = reg.search("q", &SearchOptions::default()).await.unwrap();
-        assert!(out.is_empty());
+        assert!(out.results.is_empty());
+        assert!(
+            out.notes.iter().any(|n| n.contains('2')),
+            "both backends were asked and both answered nothing: {:?}",
+            out.notes
+        );
     }
 
     /// A backend that answered "nothing" answered. Only a chain where *nobody*
@@ -957,7 +1115,7 @@ mod tests {
             out.is_ok(),
             "one backend errored and one answered with zero results; the chain answered"
         );
-        assert!(out.unwrap().is_empty());
+        assert!(out.unwrap().results.is_empty());
     }
 
     // ─── Explicit provider override (Task 6) ─────────────────────────────
@@ -1012,6 +1170,32 @@ mod tests {
         assert!(
             err.contains("a ["),
             "expected `name [kind]` framing, got: {err}"
+        );
+    }
+
+    /// Dropping a dimension the caller asked for is the failure this note
+    /// exists to prevent: the search still runs, but silently unfiltered on
+    /// that axis reads exactly like a filtered answer.
+    #[tokio::test]
+    async fn a_backend_that_cannot_express_the_dimension_says_so() {
+        let mut reg = SearchRegistry::new("plain");
+        reg.add_provider(
+            "plain".into(),
+            Arc::new(MockProvider::new("plain", false, 2)),
+        );
+        let opts = SearchOptions {
+            include_domains: vec!["github.com".into()],
+            ..Default::default()
+        };
+        let answer = reg.search("q", &opts).await.unwrap();
+        assert_eq!(answer.results.len(), 2, "the search still runs");
+        assert!(
+            answer
+                .notes
+                .iter()
+                .any(|n| n.contains("domains") && n.contains("plain")),
+            "silently dropping the dimension is the failure this note exists to prevent: {:?}",
+            answer.notes
         );
     }
 }

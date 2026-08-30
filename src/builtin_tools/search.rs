@@ -148,8 +148,9 @@ impl SearchTool {
             }
 
             match registry.search(&args.query, &options).await {
-                Ok(results) => {
-                    let results: Vec<SearchResult> = results
+                Ok(answer) => {
+                    let results: Vec<SearchResult> = answer
+                        .results
                         .into_iter()
                         .map(|r| SearchResult {
                             title: r.title,

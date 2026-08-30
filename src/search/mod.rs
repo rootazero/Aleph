@@ -1,4 +1,5 @@
 mod factory;
+mod notes;
 mod options;
 mod provider;
 pub mod providers;
@@ -53,6 +54,6 @@ mod web_fetch_fallback;
 pub use factory::{ProviderFactory, ProviderFactoryRegistry};
 pub use options::{Recency, SearchOptions};
 pub use provider::{SearchCapabilities, SearchProvider};
-pub use registry::SearchRegistry;
+pub use registry::{SearchAnswer, SearchRegistry};
 pub use result::SearchResult;
 pub use web_fetch_fallback::WebFetchSerpFallback;
