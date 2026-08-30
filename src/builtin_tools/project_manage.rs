@@ -58,6 +58,15 @@
 //! its exposure runs OUTWARD, into an audience the roster does not control,
 //! which is a different question from naming a folder on this machine. It
 //! stays on the Panel/RPC/CLI faces (spec §7).
+//!
+//! **`DESCRIPTION` names those same three faces, in those same words**, and
+//! `the_model_facing_copy_names_the_same_faces` pins the spelling. Until
+//! 2026-08-30 it named one of the three ("on the Panel"): under-inclusive
+//! rather than false, which is why nothing red — and it is the copy the model
+//! obeys, so it is also the sentence a user asking "then where?" gets relayed.
+//! The CLI face shipped in this same round, which is what made one-of-three
+//! wrong; a fourth face has to update all three carriers, and the guard is
+//! what makes that a red rather than a memory.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -274,7 +283,8 @@ impl AlephTool for ProjectManageTool {
          the room at a folder, which becomes every member's working directory, so it also needs \
          an operator-tier session; with no path it RELEASES the folder and needs only \
          ownership, which is the repair when a room's folder has gone missing. Binding a room \
-         to a chat channel is a separate, operator-only action on the Panel, not here.";
+         to a chat channel is a separate, operator-only action on the Panel/RPC/CLI faces, \
+         not here.";
 
     type Args = ProjectManageArgs;
     type Output = ProjectManageOutput;
@@ -661,6 +671,25 @@ mod tests {
         ] {
             assert!(schema.contains(expected), "missing action {expected}");
         }
+    }
+
+    /// The three carriers of "where binding lives" must agree, and the one the
+    /// model obeys is the one with no compiler behind it.
+    ///
+    /// The module doc and the assertion message above both say
+    /// "Panel/RPC/CLI faces"; `DESCRIPTION` said "on the Panel" for the whole
+    /// round in which the CLI face shipped. Nothing could have caught that:
+    /// a description is a `&str`, a doc comment is a comment, and neither
+    /// reads the other. This is the cheapest thing that reds when they drift.
+    #[test]
+    fn the_model_facing_copy_names_the_same_faces() {
+        let desc = <ProjectManageTool as crate::tools::AlephTool>::DESCRIPTION;
+        assert!(
+            desc.contains("Panel/RPC/CLI faces"),
+            "the model-facing copy must name the same faces as the module doc \
+             and the schema guard, in the same words, so one grep finds all \
+             three: {desc}"
+        );
     }
 
     /// A turn carrying `role`, as the gateway stamps one per turn.

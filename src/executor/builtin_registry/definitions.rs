@@ -2325,6 +2325,20 @@ mod tests {
     /// never tries the release form that would have worked; (3) the consumer
     /// is `ProjectManageTool`, catalogued and dispatched, whose new arm is
     /// exercised by six tests.
+    /// 2026-08-30: 109_032 -> 109_046 B (+14) to correct that same tool's
+    /// DESCRIPTION, which named one of the three faces binding lives on
+    /// ("on the Panel") while the module doc and the schema guard both said
+    /// "Panel/RPC/CLI faces". The CLI face shipped in the same round, which is
+    /// what made one-of-three wrong; it is under-inclusive rather than false,
+    /// which is why nothing red. The three questions: (1) which face carries a
+    /// verb is a deployment fact no schema can express — the schema's job here
+    /// is to say `bind_channel` is *absent*, and a model told only "absent"
+    /// has nothing to relay to a user who asks "then where?"; (2) a stronger
+    /// model cannot infer an authority split either, and the failure mode is
+    /// that it sends the user to the one face they may not have; (3) the
+    /// consumer is `ProjectManageTool`, catalogued and dispatched, and the
+    /// spelling is now pinned by `the_model_facing_copy_names_the_same_faces`
+    /// so a fourth face reds instead of silently making this two-of-four.
     ///
     /// Measured, not computed — `catalog_description_bytes_ratchet` printed
     /// this number and it was copied. The ceiling sits flush against the
@@ -2334,7 +2348,7 @@ mod tests {
     /// "headroom … so the next adjacent PR doesn't trip the ratchet" and
     /// "still a hard cap, not a soft floor" — two claims that cannot both be
     /// true, and 20% of silent growth in between).
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 109_032;
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 109_046;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
