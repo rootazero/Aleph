@@ -1033,10 +1033,11 @@ impl Default for FlowScope {
              twice below it, in `with_request_scope` and \
              `ensure_session_under_request_scope`. A matcher that ran on would take \
              layer 5's assertion from those two lines whatever the projection did — \
-             measured with the depth tracking replaced by `&from_fn[open + 1..]`: \
-             the corpus stays `--lib run_loop` 47/0, and a forked \
-             `request_scope_strings` on the live file goes from 43/4 to 44/3, the \
-             red it loses being layer 5's. Body was:\n{body}"
+             measured with the depth tracking replaced by `&from_fn[open + 1..]` on \
+             the corpus of the day, before this entry: it stayed `--lib run_loop` \
+             47/0, and a forked `request_scope_strings` on the live file went from \
+             43/4 to 44/3, the red it lost being layer 5's. With this entry the same \
+             mutation is 46/1, and this case is the red. Body was:\n{body}"
         );
         assert!(
             body.contains("FlowScope::resolved("),
