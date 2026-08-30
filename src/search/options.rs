@@ -92,6 +92,14 @@ pub struct SearchOptions {
     /// Drop results from these domains. Empty = no constraint.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude_domains: Vec<String>,
+
+    /// Consult exactly this backend. `None` = the configured chain.
+    ///
+    /// Naming one is an instruction: if it is unknown or unavailable the
+    /// search fails and says so, rather than quietly answering from a backend
+    /// the caller did not pick.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 const fn default_safe_search() -> bool {
@@ -118,6 +126,7 @@ impl Default for SearchOptions {
             include_full_content: false,
             include_domains: Vec::new(),
             exclude_domains: Vec::new(),
+            provider: None,
         }
     }
 }
@@ -324,6 +333,7 @@ mod tests {
             include_full_content: true,
             include_domains: vec![],
             exclude_domains: vec![],
+            provider: None,
         };
 
         assert_eq!(options.language.unwrap(), "zh-CN");

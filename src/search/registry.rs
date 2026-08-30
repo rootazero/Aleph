@@ -262,11 +262,38 @@ impl SearchRegistry {
         self.providers.get(name)
     }
 
-    /// Execute search with fallback logic
+    /// Execute search, honouring an explicit provider or falling back through
+    /// the configured chain.
     ///
-    /// Tries default provider first, then falls back to alternatives if it fails.
-    /// Aggregates error messages from all attempted providers.
+    /// When `options.provider` names a backend, only that backend is
+    /// consulted: an unknown or unavailable name is a hard failure, never a
+    /// silent fallback to a backend the caller did not choose. Otherwise the
+    /// candidates are the default provider, then `fallback_providers`,
+    /// stably reordered so a backend that can carry every dimension this
+    /// request asks for goes first. A backend answering with zero results
+    /// does not end the chain — the rest, then the `WebFetch` SERP fallback,
+    /// still get a turn. Only a chain where nobody answered (every attempt
+    /// errored, or there were no candidates at all) is an `Err`, reported as
+    /// a structured `name [kind] message` line per attempted backend.
     pub async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
+        // Naming a provider is an instruction, not a preference: resolve and
+        // delegate to it alone, without touching the fallback chain below.
+        // Kept deliberately small — Task 7 folds this into the same
+        // answer-building path as the main chain, so no chain-specific logic
+        // belongs here.
+        if let Some(name) = &options.provider {
+            let Some(p) = self.providers.get(name).filter(|p| p.is_available()) else {
+                let mut known: Vec<&str> = self.providers.keys().map(String::as_str).collect();
+                known.sort_unstable();
+                return Err(AlephError::invalid_config(format!(
+                    "search provider '{name}' is not configured or not available; \
+                     configured: {}",
+                    known.join(", ")
+                )));
+            };
+            return p.search(query, options).await;
+        }
+
         let mut errors: Vec<String> = Vec::new();
         // Providers that answered with zero results. Tracked separately from
         // `errors` so the end of this function can tell "nobody found it"
@@ -282,8 +309,7 @@ impl SearchRegistry {
         for provider_name in self.ordered_candidates(options) {
             let provider = &self.providers[&provider_name];
             if !provider.is_available() {
-                let msg =
-                    format!("Provider '{provider_name}' is not available (missing configuration)");
+                let msg = format!("{provider_name} [unavailable] missing configuration");
                 log::warn!("{msg}");
                 errors.push(msg);
                 continue;
@@ -305,7 +331,7 @@ impl SearchRegistry {
                 }
                 Err(e) => {
                     let kind = classify_search_error(&e);
-                    let msg = format!("Provider '{provider_name}' [{kind}] failed: {e}");
+                    let msg = format!("{provider_name} [{kind}] {e}");
                     log::warn!(
                         target: "search",
                         "provider={provider_name} kind={kind} {e}"
@@ -344,8 +370,14 @@ impl SearchRegistry {
         // *nobody* answered (every attempt errored, or there were no
         // candidates at all) is an `Err`.
         if empty.is_empty() {
-            let summary = format!("All search providers failed: {}", errors.join("; "));
-            Err(AlephError::provider(summary))
+            // One `name [kind] message` line per attempted backend, headed
+            // by a summary line — the classifier's `kind` has computed a
+            // label for every failure since it was written; this report is
+            // its first real consumer, read by both the model deciding
+            // whether to retry and the operator grepping the log.
+            let mut lines = vec!["All search providers failed:".to_string()];
+            lines.extend(errors);
+            Err(AlephError::provider(lines.join("\n")))
         } else {
             Ok(Vec::new())
         }
@@ -926,5 +958,60 @@ mod tests {
             "one backend errored and one answered with zero results; the chain answered"
         );
         assert!(out.unwrap().is_empty());
+    }
+
+    // ─── Explicit provider override (Task 6) ─────────────────────────────
+
+    /// Naming a provider is an instruction, not a preference. Falling back would
+    /// hand the caller results from a backend it did not choose while reporting
+    /// success — a confident wrong answer, which is the expensive kind.
+    #[tokio::test]
+    async fn an_unknown_named_provider_fails_loudly_instead_of_falling_back() {
+        let mut reg = SearchRegistry::new("a");
+        reg.add_provider("a".into(), Arc::new(MockProvider::new("a", false, 3)));
+        let opts = SearchOptions {
+            provider: Some("nope".into()),
+            ..Default::default()
+        };
+        let err = reg.search("q", &opts).await.unwrap_err().to_string();
+        assert!(err.contains("nope"), "{err}");
+        assert!(
+            err.contains('a'),
+            "the error must list what IS configured: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_named_provider_is_the_only_one_consulted() {
+        let mut reg = SearchRegistry::new("a");
+        reg.add_provider("a".into(), Arc::new(MockProvider::new("a", true, 0))); // fails
+        reg.add_provider("b".into(), Arc::new(MockProvider::new("b", false, 3)));
+        reg.set_fallback_providers(vec!["b".into()]);
+        let opts = SearchOptions {
+            provider: Some("a".into()),
+            ..Default::default()
+        };
+        assert!(
+            reg.search("q", &opts).await.is_err(),
+            "must not silently use b"
+        );
+    }
+
+    /// The classifier already computed a failure kind for every provider; before
+    /// this it fed one log line and nothing else. The message a model and an
+    /// operator both read is the right consumer.
+    #[tokio::test]
+    async fn the_failure_report_names_each_provider_and_its_failure_kind() {
+        let mut reg = SearchRegistry::new("a");
+        reg.add_provider("a".into(), Arc::new(MockProvider::new("a", true, 0)));
+        let err = reg
+            .search("q", &SearchOptions::default())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("a ["),
+            "expected `name [kind]` framing, got: {err}"
+        );
     }
 }
