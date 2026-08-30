@@ -361,7 +361,11 @@ pub fn stamp_metadata(meta: &mut HashMap<String, String>, attr: &ScopeAttributio
 ///
 /// [`FlowScope::unscoped`] is the empty pair (`None`, `None`) — legacy owner
 /// semantics, what every non-gateway dispatcher and every test fixture passes.
-/// Deliberately a named constructor and NOT a `Default` derive: two spellings
+/// Deliberately a named constructor and NOT a `Default` — neither the derive
+/// nor a hand-written `impl Default for FlowScope`. `flow_scope_census` reads
+/// THIS FILE for both, because the derive assertion turned out to be blind to
+/// the impl and the justification it gave ("no text search can find it")
+/// applied verbatim to the impl as well. Two spellings
 /// of the same value would be two things the census has to know about, and the
 /// census is what pins `unscoped` to zero uses inside `run_loop` — handing the
 /// harness a deliberately empty pair there is the other way to drop the room.
