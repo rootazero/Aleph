@@ -155,17 +155,19 @@ mod tests {
         (router, msg_store)
     }
 
-    /// In-memory team store with `team-1` seeded and "leader-1" as the
+    /// In-memory team store with one team seeded and "leader-1" as the
     /// leader + member. Used by tests of the BT-D-R4-23 auth gate so
-    /// `require_team_auth` resolves the team.
-    async fn make_team_store() -> Arc<dyn TeamStore> {
+    /// `require_team_auth` resolves the team. Returns the store AND the real
+    /// team id — `create_team` generates a UUID, so the name ("team-1") is
+    /// NOT a valid lookup key.
+    async fn make_team_store() -> (Arc<dyn TeamStore>, crate::teams::types::TeamId) {
         use crate::teams::store::SqliteTeamStore;
         use crate::teams::types::{NewTeam, NewTeamMember, TeamId};
         use rusqlite::Connection;
         let conn = Connection::open_in_memory().expect("open in-memory sqlite");
         let store = SqliteTeamStore::new(conn);
         store.migrate().await.expect("migrate");
-        store
+        let team = store
             .create_team(NewTeam {
                 name: "team-1".into(),
                 description: String::new(),
@@ -173,7 +175,7 @@ mod tests {
             })
             .await
             .expect("seed team");
-        let team_id: TeamId = "team-1".into();
+        let team_id: TeamId = team.id;
         store
             .add_member(NewTeamMember {
                 team_id: team_id.clone(),
@@ -185,25 +187,25 @@ mod tests {
             .expect("seed leader membership");
         store
             .add_member(NewTeamMember {
-                team_id: team_id,
+                team_id: team_id.clone(),
                 agent_id: "worker-1".into(),
                 role: "member".into(),
                 ..Default::default()
             })
             .await
             .expect("seed worker membership");
-        Arc::new(store) as Arc<dyn TeamStore>
+        (Arc::new(store) as Arc<dyn TeamStore>, team_id)
     }
 
     #[tokio::test]
     async fn approve_sends_shutdown_approved() {
         let (router, msg_store) = make_router().await;
-        let team_store = make_team_store().await;
+        let (team_store, team_id) = make_team_store().await;
         let tool = LifecycleResolveShutdownTool::new(router, "leader-1".into(), team_store);
 
         let out = tool
             .call(LifecycleResolveShutdownArgs {
-                team_id: "team-1".into(),
+                team_id: team_id.clone(),
                 shutdown_request_id: "req-1".into(),
                 requester_agent_id: "worker-1".into(),
                 decision: "approve".into(),
@@ -214,7 +216,7 @@ mod tests {
         assert_eq!(out.resolution, "approved");
 
         let inbox = msg_store
-            .read_inbox("worker-1", "team-1", Some(&MessageType::ShutdownApproved))
+            .read_inbox("worker-1", &team_id, Some(&MessageType::ShutdownApproved))
             .await
             .unwrap();
         assert_eq!(inbox.len(), 1);
@@ -226,12 +228,12 @@ mod tests {
     #[tokio::test]
     async fn reject_sends_shutdown_rejected_with_feedback_default() {
         let (router, msg_store) = make_router().await;
-        let team_store = make_team_store().await;
+        let (team_store, team_id) = make_team_store().await;
         let tool = LifecycleResolveShutdownTool::new(router, "leader-1".into(), team_store);
 
         let out = tool
             .call(LifecycleResolveShutdownArgs {
-                team_id: "team-1".into(),
+                team_id: team_id.clone(),
                 shutdown_request_id: "req-1".into(),
                 requester_agent_id: "worker-1".into(),
                 decision: "reject".into(),
@@ -242,7 +244,7 @@ mod tests {
         assert_eq!(out.resolution, "rejected");
 
         let inbox = msg_store
-            .read_inbox("worker-1", "team-1", Some(&MessageType::ShutdownRejected))
+            .read_inbox("worker-1", &team_id, Some(&MessageType::ShutdownRejected))
             .await
             .unwrap();
         assert_eq!(inbox.len(), 1);
@@ -252,12 +254,12 @@ mod tests {
     #[tokio::test]
     async fn invalid_decision_errors() {
         let (router, _) = make_router().await;
-        let team_store = make_team_store().await;
+        let (team_store, team_id) = make_team_store().await;
         let tool = LifecycleResolveShutdownTool::new(router, "leader-1".into(), team_store);
 
         let err = tool
             .call(LifecycleResolveShutdownArgs {
-                team_id: "team-1".into(),
+                team_id,
                 shutdown_request_id: "req-1".into(),
                 requester_agent_id: "worker-1".into(),
                 decision: "maybe".into(),
@@ -271,7 +273,7 @@ mod tests {
     #[tokio::test]
     async fn reply_to_threads_back_to_request() {
         let (router, msg_store) = make_router().await;
-        let team_store = make_team_store().await;
+        let (team_store, team_id) = make_team_store().await;
         let tool = LifecycleResolveShutdownTool::new(router.clone(), "leader-1".into(), team_store);
 
         // Seed: send an initial ShutdownRequest from worker so the resolve
@@ -279,7 +281,7 @@ mod tests {
         // thread_id linkage.
         let original = router
             .send(SendRequest {
-                team_id: "team-1".into(),
+                team_id: team_id.clone(),
                 from_agent: "worker-1".into(),
                 to: vec!["leader-1".into()],
                 cc: vec![],
@@ -293,7 +295,7 @@ mod tests {
             .unwrap();
 
         tool.call(LifecycleResolveShutdownArgs {
-            team_id: "team-1".into(),
+            team_id: team_id.clone(),
             shutdown_request_id: original.id.clone(),
             requester_agent_id: "worker-1".into(),
             decision: "approve".into(),
@@ -303,7 +305,7 @@ mod tests {
         .unwrap();
 
         let inbox = msg_store
-            .read_inbox("worker-1", "team-1", Some(&MessageType::ShutdownApproved))
+            .read_inbox("worker-1", &team_id, Some(&MessageType::ShutdownApproved))
             .await
             .unwrap();
         assert_eq!(inbox.len(), 1);
