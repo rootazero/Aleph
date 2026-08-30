@@ -606,7 +606,9 @@
 - **最小可信验证集是七条命令，不是一条**：
   ```
   cargo test -p alephcore --lib --no-run
-  cargo test -p alephcore --bins                                        # 唯一一条真跑而非 --no-run 的：
+  cargo test -p alephcore --bins                                        # alephcore 里唯一一条真跑而非 --no-run 的
+      # （2026-08-30 前这里写的是「唯一一条」——加进 aleph-protocol 那条之后不再成立，
+      #   而作废它的正是同一笔改动：一次 before/after 的差额，缺的那一项在修复自己身上）
       # --lib 与 --bins 是两个 target，前者一条都带不到 src/bin/ 下的 94 条（含钉住 boot 无条件
       # install_policy/install_ledger 的那条 census）；clippy 编译它们但不跑断言，所以只有这条会红
   cargo test -p alephcore --features test-helpers --test '*' --no-run -j 1
