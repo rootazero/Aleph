@@ -5,6 +5,13 @@ use crate::search::{
 };
 use crate::sync_primitives::Arc;
 
+/// The default-provider name an unconfigured registry carries.
+///
+/// It names no backend, and that is the point: `search` on a machine with
+/// nothing configured must fail with "no search backend is configured", not
+/// with a complaint about a specific backend the operator never chose.
+const UNCONFIGURED_DEFAULT: &str = "none";
+
 /// The name the SERP scrape fallback answers under.
 ///
 /// It is not a registered provider, so it has no `name()` to ask; the string
@@ -115,6 +122,57 @@ impl SearchRegistry {
     #[must_use]
     pub const fn has_web_fetch_fallback(&self) -> bool {
         self.web_fetch_fallback.is_some()
+    }
+
+    /// Build a one-backend registry from a bare `TAVILY_API_KEY`.
+    ///
+    /// This replaces a second implementation of "how do I search" that lived
+    /// in `SearchTool` and read the environment itself. That path predated
+    /// `SearchOptions` and ignored all of it, so every parameter the tool face
+    /// accepts would have been accepted, reported as applied, and dropped on
+    /// any machine without a `[search]` block — which is the zero-config
+    /// install, not a corner case.
+    ///
+    /// No SERP fallback is armed: `[search].web_fetch_fallback` is the switch
+    /// for that, and an install with no `[search]` block has not touched it.
+    #[must_use]
+    pub fn from_env_only(api_key: &str) -> Option<Self> {
+        if api_key.trim().is_empty() {
+            return None;
+        }
+        let provider = match crate::search::providers::TavilyProvider::new(api_key.to_string()) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("TAVILY_API_KEY is set but unusable, so no backend was built: {e}");
+                return None;
+            }
+        };
+        let name = crate::search::providers::tavily::NAME;
+        let mut registry = Self::new(name);
+        registry.add_provider(name.to_string(), Arc::new(provider));
+        Some(registry)
+    }
+
+    /// The registry a `SearchTool` is built on, given what boot constructed.
+    ///
+    /// Two construction points need this decision, and they used to state it
+    /// twice — one of them under a comment reading "must mirror
+    /// `builder/constructor/mod.rs:48`", which is a fact with two authors and
+    /// no compiler between them. Order: the registry built from `[search]`,
+    /// else one synthesised from a bare key, else an empty one.
+    ///
+    /// Never `None`. A machine with nothing configured still registers the
+    /// tool and fails, when called, with a message naming what to set: a
+    /// missing tool tells the model this harness cannot search, which is a
+    /// different claim and a false one.
+    #[must_use]
+    pub fn for_tool(configured: Option<&Arc<Self>>, api_key: Option<&str>) -> Arc<Self> {
+        if let Some(registry) = configured {
+            return Arc::clone(registry);
+        }
+        api_key
+            .and_then(Self::from_env_only)
+            .map_or_else(|| Arc::new(Self::new(UNCONFIGURED_DEFAULT)), Arc::new)
     }
 
     /// Build a `SearchRegistry` from `[search]` TOML configuration.
@@ -496,6 +554,16 @@ impl SearchRegistry {
         // *nobody* answered (every attempt errored, or there were no
         // candidates at all) is an `Err`.
         match empty.first() {
+            None if errors.is_empty() => {
+                // Nothing was attempted at all: no candidate resolved to a
+                // configured backend. "All providers failed" would be a report
+                // about a chain that does not exist, and it tells the reader
+                // to look for a failure instead of for a setting.
+                Err(AlephError::invalid_config(
+                    "no search backend is configured: add a backend under [search] in \
+                     config.toml, or set TAVILY_API_KEY in the environment",
+                ))
+            }
             None => {
                 // One `name [kind] message` line per attempted backend, headed
                 // by a summary line — the classifier's `kind` has computed a
@@ -543,6 +611,47 @@ mod tests {
                 "wrong kind for: {err}",
             );
         }
+    }
+
+    /// Zero-config still works: a machine with TAVILY_API_KEY and no [search]
+    /// block gets a one-backend registry, not a second code path that ignores
+    /// every option the tool face accepts.
+    #[test]
+    fn an_env_only_install_still_gets_a_registry() {
+        let reg = SearchRegistry::from_env_only("tvly-test").expect("registry");
+        assert_eq!(reg.default_options().max_results, 5);
+        assert!(reg.get_provider("tavily").is_some());
+    }
+
+    #[test]
+    fn no_key_and_no_config_yields_no_registry_rather_than_a_second_path() {
+        assert!(SearchRegistry::from_env_only("").is_none());
+        assert!(
+            SearchRegistry::from_env_only("   ").is_none(),
+            "an all-whitespace key is unset, not a credential"
+        );
+    }
+
+    /// The tool is built either way, so `for_tool` must answer for all three
+    /// worlds. The one it used to get wrong is the third: no registry and no
+    /// key produced a tool that read the environment itself.
+    #[test]
+    fn for_tool_prefers_the_configured_registry_then_the_key_then_nothing() {
+        let configured = Arc::new(SearchRegistry::new("searxng"));
+        assert_eq!(
+            SearchRegistry::for_tool(Some(&configured), Some("tvly-test")).default_provider,
+            "searxng",
+            "a configured registry wins over a bare key"
+        );
+        assert_eq!(
+            SearchRegistry::for_tool(None, Some("tvly-test")).default_provider,
+            "tavily"
+        );
+        let empty = SearchRegistry::for_tool(None, None);
+        assert!(
+            empty.providers.is_empty(),
+            "nothing configured must still yield a registry, just an empty one"
+        );
     }
 
     /// Mock provider for testing
@@ -654,7 +763,10 @@ mod tests {
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("All search providers failed"));
+        assert!(
+            err_msg.contains("no search backend is configured"),
+            "nothing was attempted, so the message must name a setting, not a failure: {err_msg}"
+        );
     }
 
     #[tokio::test]

@@ -9,7 +9,12 @@ use serde::{Deserialize, Serialize};
 /// Tavily AI search provider
 ///
 /// Tavily provides AI-optimized search results with clean, structured data
-const NAME: &str = "tavily";
+/// The name this backend is configured and reported under.
+///
+/// Public because it is not only a log label: `SearchRegistry::from_env_only`
+/// registers the backend under it, and a second spelling there would be a
+/// second backend to everything that reads `provider`.
+pub const NAME: &str = "tavily";
 
 #[derive(Debug)]
 pub struct TavilyProvider {

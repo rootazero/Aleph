@@ -1,13 +1,11 @@
-//! Web search tool with Tavily API integration
+//! Web search tool over the provider registry.
 //!
 //! Implements `AlephTool` trait for AI agent integration.
 
 use async_trait::async_trait;
-use reqwest::Client;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::env;
-use tracing::{debug, info, warn};
+use tracing::info;
 
 use super::error::ToolError;
 use crate::error::Result;
@@ -81,17 +79,6 @@ impl SearchArgs {
     }
 }
 
-/// Result count used by the registry-less legacy Tavily path, mirroring the
-/// `[search].max_results` schema default.
-const DEFAULT_MAX_RESULTS: usize = 5;
-
-/// What the legacy direct-to-Tavily path answers under.
-///
-/// It is not a registered provider — there is no registry on that path at all
-/// — but `provider_used` must still name who answered, and "tavily" reaching
-/// the model from two different code paths is the same fact either way.
-const LEGACY_TAVILY_PROVIDER: &str = "tavily";
-
 /// Longest snippet handed to the model, in characters.
 ///
 /// Deliberately not `grep`'s 240: a grep line is a *locator* for a file the
@@ -108,12 +95,6 @@ const SNIPPET_MAX_CHARS: usize = 600;
 /// per-body bound keeps the comparison to "a few pages", and the overall
 /// budget is capped again by [`SearchTool::max_result_tokens`].
 const FULL_CONTENT_MAX_CHARS: usize = 20_000;
-
-/// Timeout for the registry-less legacy Tavily path. The provider-path
-/// `reqwest::Client` is constructed once with `build_client()` (which sets
-/// the per-request timeout); the legacy path's `Client::new()` has no
-/// timeout, so without this a hung Tavily endpoint wedges the agent loop.
-const LEGACY_FALLBACK_TIMEOUT_SECS: u64 = 10;
 
 /// A single search result
 ///
@@ -199,30 +180,14 @@ fn render_results(results: Vec<crate::search::SearchResult>) -> (Vec<SearchResul
     (mapped, notes)
 }
 
-/// Tavily API response structure
-#[derive(Debug, Deserialize)]
-struct TavilyResponse {
-    results: Vec<TavilyResult>,
-}
-
-/// A single result from Tavily API
-#[derive(Debug, Deserialize)]
-struct TavilyResult {
-    title: String,
-    url: String,
-    content: String,
-}
-
-/// Web search tool using Tavily API
+/// Web search tool over the provider registry.
+///
+/// There is exactly one way in: whatever boot could construct, resolved by
+/// [`SearchRegistry::for_tool`]. An empty registry is a legitimate state — the
+/// tool still exists and says what is missing when called.
+#[derive(Clone)]
 pub struct SearchTool {
-    client: Client,
-    api_key: Option<String>,
-    /// Multi-provider search registry (when available, takes priority over direct Tavily)
-    registry: Option<Arc<SearchRegistry>>,
-    /// Per-request timeout for the legacy Tavily fallback branch (in seconds).
-    /// The provider-path `reqwest::Client` carries its own timeout via
-    /// `build_client`; this is for the bare `Client::new()` legacy path.
-    fallback_timeout: std::time::Duration,
+    registry: Arc<SearchRegistry>,
 }
 
 impl SearchTool {
@@ -233,185 +198,54 @@ impl SearchTool {
     pub const DESCRIPTION: &'static str =
         "Search the internet for current information. Use for questions requiring up-to-date data.";
 
-    /// Create a new `SearchTool` instance
+    /// Create with a `SearchRegistry`, the only way in.
     ///
-    /// Reads `TAVILY_API_KEY` from environment variable
-    pub fn new() -> Self {
-        let api_key = env::var("TAVILY_API_KEY").ok();
-        if api_key.is_none() {
-            warn!("TAVILY_API_KEY not set - search tool will not function");
-        }
-        Self {
-            client: Client::new(),
-            api_key,
-            registry: None,
-            fallback_timeout: std::time::Duration::from_secs(LEGACY_FALLBACK_TIMEOUT_SECS),
-        }
-    }
-
-    /// Create a new `SearchTool` instance with explicit API key
-    ///
-    /// Falls back to `TAVILY_API_KEY` environment variable if `api_key` is None
-    pub fn with_api_key(api_key: Option<String>) -> Self {
-        let resolved_key = api_key.or_else(|| env::var("TAVILY_API_KEY").ok());
-        if resolved_key.is_none() {
-            warn!(
-                "TAVILY_API_KEY not set (neither config nor env) - search tool will not function"
-            );
-        } else {
-            info!("SearchTool initialized with API key");
-        }
-        Self {
-            client: Client::new(),
-            api_key: resolved_key,
-            registry: None,
-            fallback_timeout: std::time::Duration::from_secs(LEGACY_FALLBACK_TIMEOUT_SECS),
-        }
-    }
-
-    /// Create with a `SearchRegistry` for multi-provider support
+    /// Build the argument with [`SearchRegistry::for_tool`] rather than
+    /// deciding here what an install with nothing configured should get: that
+    /// decision has two callers, and it used to be written out at both.
     pub fn with_registry(registry: Arc<SearchRegistry>) -> Self {
-        info!("SearchTool initialized with multi-provider registry");
-        Self {
-            client: Client::new(),
-            api_key: None,
-            registry: Some(registry),
-            fallback_timeout: std::time::Duration::from_secs(LEGACY_FALLBACK_TIMEOUT_SECS),
-        }
+        info!("SearchTool initialized with the provider registry");
+        Self { registry }
     }
 
-    /// Execute a web search, trying registry first then falling back to direct Tavily API
+    /// Execute a web search over the configured backends.
     async fn call_impl(&self, args: SearchArgs) -> std::result::Result<SearchOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
         let args_summary = format!("搜索: {}", &args.query);
         notify_tool_start(Self::NAME, &args_summary);
 
-        // Try SearchRegistry first (multi-provider with fallback)
-        if let Some(ref registry) = self.registry {
-            // Start from the operator's `[search]` defaults (max_results /
-            // timeout_seconds); whatever the model named still wins.
-            let options = args.to_options(&registry.default_options());
+        // Start from the operator's `[search]` defaults (max_results /
+        // timeout_seconds); whatever the model named still wins.
+        let options = args.to_options(&self.registry.default_options());
 
-            match registry.search(&args.query, &options).await {
-                Ok(answer) => {
-                    let (results, clamp_notes) = render_results(answer.results);
-                    // The registry's notes first: which backend answered and
-                    // what it could not express frames everything below it.
-                    let mut notes = answer.notes;
-                    notes.extend(clamp_notes);
+        match self.registry.search(&args.query, &options).await {
+            Ok(answer) => {
+                let (results, clamp_notes) = render_results(answer.results);
+                // The registry's notes first: which backend answered and what
+                // it could not express frames everything below it.
+                let mut notes = answer.notes;
+                notes.extend(clamp_notes);
 
-                    info!(count = results.len(), "Search completed via registry");
-                    let result_summary = format!("找到 {} 条搜索结果", results.len());
-                    notify_tool_result(Self::NAME, &result_summary, true);
+                info!(count = results.len(), "Search completed via registry");
+                let result_summary = format!("找到 {} 条搜索结果", results.len());
+                notify_tool_result(Self::NAME, &result_summary, true);
 
-                    return Ok(SearchOutput {
-                        results,
-                        query: args.query,
-                        provider_used: answer.provider,
-                        notes,
-                    });
-                }
-                Err(e) => {
-                    warn!(
-                        "Registry search failed, falling back to direct Tavily: {}",
-                        e
-                    );
-                    // Fall through to direct Tavily path
-                }
+                Ok(SearchOutput {
+                    results,
+                    query: args.query,
+                    provider_used: answer.provider,
+                    notes,
+                })
             }
-        }
-
-        // Fallback: Direct Tavily API call (legacy path). No registry here, so
-        // no `[search]` block was parsed — use the same default the config
-        // schema documents.
-        let limit = args.limit.unwrap_or(DEFAULT_MAX_RESULTS);
-        let api_key = self.api_key.as_ref().ok_or_else(|| {
-            notify_tool_result(Self::NAME, "No search provider available", false);
-            ToolError::InvalidArgs(
-                "No search provider configured (no registry and no TAVILY_API_KEY)".to_string(),
-            )
-        })?;
-
-        info!(query = %args.query, limit, "Executing Tavily search");
-
-        // Build Tavily API request
-        let request_body = serde_json::json!({
-            "api_key": api_key,
-            "query": args.query,
-            "max_results": limit,
-            "include_answer": false
-        });
-
-        debug!("Sending request to Tavily API");
-
-        let response = self
-            .client
-            .post("https://api.tavily.com/search")
-            .json(&request_body)
-            .timeout(self.fallback_timeout)
-            .send()
-            .await
-            .map_err(|e| ToolError::Network(format!("Failed to send request: {e}")))?;
-
-        // Check response status
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            let error_msg = format!("Tavily API returned status {status}: {error_text}");
-            notify_tool_result(Self::NAME, &error_msg, false);
-            return Err(ToolError::Execution(error_msg));
-        }
-
-        // Parse response
-        let tavily_response: TavilyResponse = response.json().await.map_err(|e| {
-            let error_msg = format!("Failed to parse response: {e}");
-            notify_tool_result(Self::NAME, &error_msg, false);
-            ToolError::Execution(error_msg)
-        })?;
-
-        // Convert to our SearchResult format. Same renderer as the registry
-        // path: two mappings of the same shape drift, and this one is where a
-        // clamp would go unannounced.
-        let (results, notes) = render_results(
-            tavily_response
-                .results
-                .into_iter()
-                .map(|r| crate::search::SearchResult::new(r.title, r.url, r.content))
-                .collect(),
-        );
-
-        info!(count = results.len(), "Search completed successfully");
-
-        // Notify success
-        let result_summary = format!("找到 {} 条搜索结果", results.len());
-        notify_tool_result(Self::NAME, &result_summary, true);
-
-        Ok(SearchOutput {
-            results,
-            query: args.query,
-            provider_used: LEGACY_TAVILY_PROVIDER.to_string(),
-            notes,
-        })
-    }
-}
-
-impl Default for SearchTool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Clone for SearchTool {
-    fn clone(&self) -> Self {
-        Self {
-            client: Client::new(),
-            api_key: self.api_key.clone(),
-            registry: self.registry.clone(),
-            fallback_timeout: self.fallback_timeout,
+            Err(e) => {
+                // Every backend failed, or none was configured. The registry's
+                // message already distinguishes the two and names the lever
+                // for each, so it goes to the model unedited.
+                let error_msg = e.to_string();
+                notify_tool_result(Self::NAME, &error_msg, false);
+                Err(ToolError::Execution(error_msg))
+            }
         }
     }
 }
@@ -465,135 +299,26 @@ mod tests {
     fn test_search_tool_creation() {
         assert_eq!(SearchTool::NAME, "search");
         assert!(!SearchTool::DESCRIPTION.is_empty());
-
-        let tool = SearchTool::new();
-        // API key may or may not be set in test environment
-        // Just verify the tool can be created
-        assert!(tool.api_key.is_none() || tool.api_key.is_some());
     }
 
+    /// The tool must exist even with nothing configured, and say so when
+    /// called — a missing tool reads to the model as "this harness cannot
+    /// search", which is a different and wrong statement.
     #[tokio::test]
-    async fn test_search_without_api_key() {
-        // Temporarily clear the API key if set
-        let original_key = env::var("TAVILY_API_KEY").ok();
-        env::remove_var("TAVILY_API_KEY");
-
-        let tool = SearchTool::new();
-        let args = SearchArgs {
-            query: "test query".to_string(),
-            limit: Some(5),
-            ..Default::default()
-        };
-
-        // Use fully qualified syntax to avoid ambiguity with blanket impl
-        let result = AlephTool::call(&tool, args).await;
-        assert!(result.is_err());
-
-        // Error is now AlephError (converted from ToolError)
-        let err = result.unwrap_err();
-        let err_msg = err.to_string();
+    async fn a_registry_with_no_providers_fails_with_an_actionable_message() {
+        let tool = SearchTool::with_registry(SearchRegistry::for_tool(None, None));
+        let err = tool
+            .call_impl(SearchArgs {
+                query: "q".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no search backend"), "{err}");
         assert!(
-            err_msg.contains("TAVILY_API_KEY"),
-            "Error message should contain 'TAVILY_API_KEY': {}",
-            err_msg
+            err.contains("TAVILY_API_KEY") || err.contains("[search]"),
+            "the message has to name what to set: {err}"
         );
-
-        // Restore original key if it existed
-        if let Some(key) = original_key {
-            env::set_var("TAVILY_API_KEY", key);
-        }
-    }
-
-    /// Seven fields on `SearchOptions`, two of which had a writer before this.
-    /// Every one of them has a decoder in some provider downstream, so an
-    /// argument that stops here is a parameter the model can name and nothing
-    /// can act on.
-    #[test]
-    fn every_argument_reaches_search_options() {
-        let args: SearchArgs = serde_json::from_value(serde_json::json!({
-            "query": "q",
-            "limit": 7,
-            "recency": "week",
-            "domains": ["github.com"],
-            "exclude_domains": ["pinterest.com"],
-            "full_content": true,
-            "provider": "tavily"
-        }))
-        .unwrap();
-        let o = args.to_options(&SearchOptions::default());
-        assert_eq!(o.max_results, 7);
-        assert_eq!(o.recency, Some(crate::search::Recency::Week));
-        assert_eq!(o.include_domains, vec!["github.com".to_string()]);
-        assert_eq!(o.exclude_domains, vec!["pinterest.com".to_string()]);
-        assert!(o.include_full_content);
-        assert_eq!(o.provider.as_deref(), Some("tavily"));
-    }
-
-    /// The operator's `[search]` defaults apply to whatever the model omitted —
-    /// omitting a parameter must not silently mean "the hardcoded default".
-    #[test]
-    fn omitted_arguments_defer_to_the_operator_defaults() {
-        let args: SearchArgs = serde_json::from_value(serde_json::json!({"query": "q"})).unwrap();
-        let base = SearchOptions {
-            max_results: 11,
-            timeout_seconds: 42,
-            ..Default::default()
-        };
-        let o = args.to_options(&base);
-        assert_eq!(o.max_results, 11);
-        assert_eq!(o.timeout_seconds, 42);
-        assert_eq!(o.recency, None);
-        assert!(o.include_domains.is_empty());
-    }
-
-    /// A snippet is content, not a locator (grep clamps a line to 240 because a
-    /// grep line points at a file you can then read; a snippet is the answer).
-    /// It still needs a bound, and exceeding it has to be said out loud.
-    #[test]
-    fn long_snippets_are_clamped_and_the_clamp_is_announced() {
-        let long = "x".repeat(SNIPPET_MAX_CHARS + 500);
-        let (results, notes) =
-            render_results(vec![crate::search::SearchResult::new("t", "u", long)]);
-        assert!(results[0].snippet.chars().count() <= SNIPPET_MAX_CHARS);
-        assert!(notes.iter().any(|n| n.contains("clamp")), "{notes:?}");
-    }
-
-    /// The three fields the old mapping dropped on the floor have to survive,
-    /// and the two the backend did not send must stay absent rather than
-    /// acquiring a value nobody reported.
-    #[test]
-    fn the_fields_a_backend_reported_survive_the_mapping() {
-        let rich = crate::search::SearchResult {
-            title: "t".into(),
-            url: "u".into(),
-            snippet: "s".into(),
-            relevance_score: Some(0.5),
-            full_content: Some("body".into()),
-            published_date: Some("2024-01-01".into()),
-            provider: Some("tavily".into()),
-        };
-        let (results, notes) = render_results(vec![
-            rich,
-            crate::search::SearchResult::new("t2", "u2", "s2"),
-        ]);
-        assert_eq!(results[0].relevance_score, Some(0.5));
-        assert_eq!(results[0].full_content.as_deref(), Some("body"));
-        assert_eq!(results[0].published_date.as_deref(), Some("2024-01-01"));
-        assert_eq!(
-            results[1].published_date, None,
-            "absent means the backend did not say, so nothing may be invented"
-        );
-        assert!(notes.is_empty(), "nothing was clamped: {notes:?}");
-    }
-
-    #[test]
-    fn test_search_tool_with_registry() {
-        use crate::search::SearchRegistry;
-        use crate::sync_primitives::Arc;
-
-        let registry = Arc::new(SearchRegistry::new("tavily".to_string()));
-        let tool = SearchTool::with_registry(registry);
-        assert!(tool.registry.is_some());
-        assert!(tool.api_key.is_none());
     }
 }

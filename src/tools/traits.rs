@@ -374,7 +374,7 @@ pub trait AlephToolDyn: Send + Sync {
 ///
 /// ```rust,ignore
 /// let tools: Vec<Box<dyn AlephToolDyn>> = vec![
-///     Box::new(SearchTool::new()),
+///     Box::new(SearchTool::with_registry(registry)),
 ///     Box::new(WebFetchTool::new()),
 /// ];
 /// ```

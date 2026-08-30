@@ -1012,20 +1012,15 @@ pub fn create_tool_boxed(
 ) -> Option<Box<dyn AlephToolDyn>> {
     match name {
         "search" => {
-            // Must mirror `builder/constructor/mod.rs:48` — a registry, when the
-            // caller has one, otherwise the direct Tavily key. The arm used to
-            // read only `tavily_api_key`, so any future production caller of
-            // this generic constructor would silently get a search tool with no
-            // SearXNG/Brave backends and no SERP fallback, indistinguishable
-            // from the real one in the tool list.
-            let tool = match config {
-                Some(cfg) => match cfg.search_registry {
-                    Some(ref registry) => SearchTool::with_registry(Arc::clone(registry)),
-                    None => SearchTool::with_api_key(cfg.tavily_api_key.clone()),
-                },
-                None => SearchTool::new(),
-            };
-            Some(Box::new(tool))
+            // The "registry, else bare key, else empty" decision lives in
+            // `SearchRegistry::for_tool` — it used to be written out here and
+            // again in `builder/constructor/mod.rs`, under a comment saying
+            // the two must mirror each other.
+            let registry = crate::search::SearchRegistry::for_tool(
+                config.and_then(|cfg| cfg.search_registry.as_ref()),
+                config.and_then(|cfg| cfg.tavily_api_key.as_deref()),
+            );
+            Some(Box::new(SearchTool::with_registry(registry)))
         }
         "web_fetch" => Some(Box::new(WebFetchTool::new())),
         "google_meet" => Some(Box::new(
