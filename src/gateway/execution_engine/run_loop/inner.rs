@@ -1322,8 +1322,17 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // spawn while the row kept it. That `FlowRequest` carries strings
             // is why this converts (`ScopeId::render`, matching
             // `scope::stamp_metadata`), not why it should read another source.
-            // `FlowScope`'s fields are private, so the raw-read spelling does
-            // not type-check here at all — see that type's doc.
+            // `FlowScope`'s fields are private, so THAT SPELLING of the raw
+            // read does not type-check here. Only that shape, though: one
+            // public call — `ScopeAttribution::from_persisted` on the raw
+            // map, whose signature is exactly the pair a metadata map yields
+            // — still reaches this site and compiles, with every lexical
+            // layer green. What holds PROVENANCE is behavioural:
+            // `tests::the_flow_request_projection_carries_the_room_upgrade`
+            // and `::the_projection_round_trips_through_the_dispatch_rebuild`.
+            // See that type's doc and `flow_scope_census`'s layer list, which
+            // states each layer's bound as a measured case rather than a
+            // sentence.
             let scope = super::request_scope_strings(request);
             let req = crate::orchestrator::FlowRequest {
                 flow_id: None,
