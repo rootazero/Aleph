@@ -1,5 +1,5 @@
 mod factory;
-mod notes;
+pub(crate) mod notes;
 mod options;
 mod provider;
 pub mod providers;

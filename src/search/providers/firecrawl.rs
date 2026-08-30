@@ -105,6 +105,7 @@ impl FirecrawlProvider {
                 snippet: r.description,
                 relevance_score: None,
                 full_content: r.markdown,
+                published_date: None,
                 provider: Some(NAME.to_string()),
             })
             .collect()

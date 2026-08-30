@@ -29,6 +29,21 @@ pub struct SearchResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub full_content: Option<String>,
 
+    /// When the page says it was published, in whatever spelling the backend
+    /// sent (RFC 2822 from Tavily, ISO-8601 from Exa). Not normalised: a
+    /// reader can tell 2019 from last week in either, and parsing every
+    /// vendor's dialect to re-emit one of them buys nothing a caller asked
+    /// for.
+    ///
+    /// `None` means **this backend did not say** — never "this result has no
+    /// date". The distinction is the whole point of the field: a backend that
+    /// reports no dates makes every result look equally undated, and a caller
+    /// asking about recent work needs to know which of the two they are
+    /// looking at. Backends that send nothing leave it absent rather than
+    /// having a date invented for them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_date: Option<String>,
+
     /// Provider that returned this result
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
@@ -47,6 +62,7 @@ impl SearchResult {
             snippet: snippet.into(),
             relevance_score: None,
             full_content: None,
+            published_date: None,
             provider: None,
         }
     }
@@ -84,16 +100,24 @@ mod tests {
         assert_eq!(result, deserialized);
     }
 
-    /// Deserializing legacy JSON that still contains the deprecated
-    /// `published_date` / `source_type` fields must succeed (we don't
-    /// `deny_unknown_fields`), preserving wire-level back-compat.
+    /// A field this struct once carried and no longer does (`source_type`)
+    /// must still parse — we don't `deny_unknown_fields`, and that is the
+    /// wire-level back-compat this test pins.
+    ///
+    /// `published_date` is back, so it is no longer one of them: it was cut in
+    /// `8297b1fce` for having zero producers, and returns here with two
+    /// (Tavily and Exa) and a renderer on the tool face. It is typed as the
+    /// string the vendors send; the numeric epoch this test used to pass was
+    /// never a shape anything emitted, since every provider left the field
+    /// `None` and `skip_serializing_if` meant it never reached the wire at
+    /// all.
     #[test]
     fn test_search_result_ignores_legacy_fields() {
         let legacy_json = r#"{
             "title": "Test",
             "url": "https://test.com",
             "snippet": "Snippet",
-            "published_date": 1704067200,
+            "published_date": "Mon, 01 Jan 2024 00:00:00 GMT",
             "source_type": "article",
             "relevance_score": 0.5,
             "provider": "tavily"
@@ -103,6 +127,10 @@ mod tests {
         assert_eq!(parsed.title, "Test");
         assert_eq!(parsed.relevance_score, Some(0.5));
         assert_eq!(parsed.provider.as_deref(), Some("tavily"));
+        assert_eq!(
+            parsed.published_date.as_deref(),
+            Some("Mon, 01 Jan 2024 00:00:00 GMT")
+        );
     }
 
     #[test]
@@ -113,6 +141,7 @@ mod tests {
             snippet: "Test snippet".to_string(),
             relevance_score: Some(0.95),
             full_content: None,
+            published_date: None,
             provider: Some("tavily".to_string()),
         };
 

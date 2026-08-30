@@ -596,6 +596,7 @@ mod tests {
                     url: format!("https://example.com/{}", i + 1),
                     snippet: format!("Snippet for result {}", i + 1),
                     full_content: None,
+                    published_date: None,
                     provider: Some(self.name.clone()),
                     relevance_score: Some(1.0 - (i as f32 * 0.1)),
                 });

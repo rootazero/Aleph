@@ -72,6 +72,20 @@ pub fn snippets_clamped(n: usize, max: usize) -> String {
     )
 }
 
+/// Page bodies were cut to fit the tool's budget.
+///
+/// Kept distinct from [`snippets_clamped`] because the levers differ: a
+/// clamped snippet is completed by fetching the url, a truncated body is
+/// already the fetch, and the reader's next move is to narrow the query
+/// instead.
+#[must_use]
+pub fn full_content_truncated(n: usize, max: usize) -> String {
+    format!(
+        "{n} page body(s) were truncated at {max} characters; ask for fewer results, or search \
+         for the part of the page you need"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,12 +94,13 @@ mod tests {
     /// into one phrasing ("some results were withheld") readers learn to skip
     /// the line, which costs more than the line saves.
     #[test]
-    fn the_four_notes_do_not_read_alike() {
+    fn no_two_notes_read_alike() {
         let all = [
             degraded("domains", "exa"),
             answered_after_failures("brave", 2),
             all_empty(3),
             snippets_clamped(4, 600),
+            full_content_truncated(2, 20_000),
         ];
         for (i, a) in all.iter().enumerate() {
             for b in all.iter().skip(i + 1) {

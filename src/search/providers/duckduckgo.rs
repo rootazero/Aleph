@@ -173,6 +173,7 @@ pub(crate) fn parse_ddg_html(body: &str, max_results: usize) -> Vec<SearchResult
             snippet,
             relevance_score: None,
             full_content: None,
+            published_date: None,
             provider: Some(NAME.to_string()),
         });
     }
@@ -234,6 +235,7 @@ pub(crate) fn parse_ddg_lite_html(body: &str, max_results: usize) -> Vec<SearchR
             snippet,
             relevance_score: None,
             full_content: None,
+            published_date: None,
             provider: Some(NAME.to_string()),
         })
         .collect()

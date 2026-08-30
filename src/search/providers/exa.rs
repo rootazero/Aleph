@@ -46,6 +46,9 @@ struct ExaResult {
     url: String,
     #[serde(default)]
     text: Option<String>,
+    /// ISO-8601, as Exa spells it. Absent for pages it has no date for.
+    #[serde(default, rename = "publishedDate")]
+    published_date: Option<String>,
 }
 
 impl ExaProvider {
@@ -104,6 +107,7 @@ impl SearchProvider for ExaProvider {
                 snippet: r.text.unwrap_or_default(),
                 relevance_score: None,
                 full_content: None,
+                published_date: r.published_date,
                 provider: Some(NAME.to_string()),
             })
             .collect();

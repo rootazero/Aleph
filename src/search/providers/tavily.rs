@@ -56,6 +56,9 @@ struct TavilyResult {
     score: Option<f32>,
     #[serde(default)]
     raw_content: Option<String>,
+    /// RFC 2822, as Tavily spells it. Absent for pages it has no date for.
+    #[serde(default)]
+    published_date: Option<String>,
 }
 
 impl TavilyProvider {
@@ -121,6 +124,7 @@ impl SearchProvider for TavilyProvider {
                 snippet: r.content,
                 relevance_score: r.score,
                 full_content: r.raw_content,
+                published_date: r.published_date,
                 provider: Some(NAME.to_string()),
             })
             .collect();
