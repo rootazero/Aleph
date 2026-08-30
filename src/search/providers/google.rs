@@ -1,6 +1,6 @@
 use crate::error::{AlephError, Result};
 use crate::search::providers::base::build_client;
-use crate::search::{SearchOptions, SearchProvider, SearchResult};
+use crate::search::{SearchCapabilities, SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
 use reqwest::{Client, Response, StatusCode};
 use serde::Deserialize;
@@ -135,6 +135,7 @@ impl SearchProvider for GoogleProvider {
                 snippet: item.snippet.unwrap_or_default(),
                 relevance_score: None,
                 full_content: None,
+                published_date: None,
                 provider: Some(NAME.to_string()),
             })
             .collect();
@@ -148,6 +149,14 @@ impl SearchProvider for GoogleProvider {
 
     fn is_available(&self) -> bool {
         !self.api_key.is_empty() && !self.engine_id.is_empty()
+    }
+
+    fn capabilities(&self) -> SearchCapabilities {
+        SearchCapabilities {
+            domain_filter: false,
+            recency: true,
+            full_content: false,
+        }
     }
 }
 

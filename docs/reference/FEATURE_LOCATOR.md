@@ -1742,6 +1742,58 @@ SSOT（`unicode_guard::is_invisible_char`）长出了零宽与方向标记，补
   - **`aleph exec` 徽标是中文、TUI/频道跟 locale** 这条 §3.17d 记下的不一致仍然在：`terminate_badge` 整张表都是中文。频道那一面本轮跟上了 locale，CLI 那一面没有（它按裁定读 POSIX 环境变量，是另一条管道）。
   - **`qa/channels/run.sh` 的 `errors` / `approval` 两阶段没跑**——`reach` 阶段跑了（**17 条断言全过 / 3.0s**，含完整的 inbound → outbound 往返：签名 webhook → agent 回合 → 回复打回 mock Lark 的 `im/v1/messages`，以及 `the streaming emitter was constructed (its config came from the channel)`——那正是新 `locale` 字段所在的构造路径，也是本轮改动的真机证据）。另外两阶段与本轮改动无关（限频分类、审批腿），且 `approval` 需要自带一次 reboot，留给动那两处的人。
 
+### 3.18 Web 搜索面：七个字段两个写入点，与十五个等着它们的译码器 (Web Search Face · 2026-08-31)
+
+- **口语关键词**：web 搜索、`search` 工具、Tavily / SearXNG / Brave / Exa / Jina、时效性 / recency / 新鲜度、域名过滤 / site:、full_content、provider 覆写、搜索后端排序、搜索降级说明
+- **锚点**：`src/search/options.rs`（`Recency` 四词表 + 每 provider 映射器）· `src/search/provider.rs`（`SearchCapabilities`）· `src/search/providers/capability_census.rs`（源码级守卫）· `src/search/registry.rs`（能力感知排序 · 空结果续链 · 显式 provider · `SearchAnswer`）· `src/search/notes.rs`（省略与降级的单一源）· `src/builtin_tools/search.rs`（工具面）· `shared/protocol/src/search/`（后端清单单一源）· `interfaces/webchat/.../settings/search.rs`（卡片派生）· 真机 `qa/web_search/`
+- **职责**：把 `SearchOptions` 的七个字段接到模型够得到的工具面上，让接不上的维度**出声**而不是静默消失，并消灭「哪些后端存在」的三份清单。
+- **状态**：✅ 本轮落地（15 任务计划 `docs/superpowers/plans/2026-08-30-web-search-face.md`，spec `docs/superpowers/specs/2026-08-30-web-search-face-design.md`）。
+
+**开工时的缺口（四条，全部是既有判据的新实例）**
+
+1. **两端完整而中间没线**：`SearchOptions` 七个字段，`date_range` 与 `include_full_content` 在 `src/` + `shared/` + `interfaces/` **零写入点**（定义文件除外），而下游有十五个 per-provider 译码器在等它们——**七个映射器翻译一个没有任何调用者能设置的新鲜度值**。dead-code 分析对这一类结构性失明：两端都有测试。
+2. **四词表被抄了七遍，每一份都以静默丢弃收尾**：`pd`/`Day`/`d1`/`qdr:d`/… 各写在各自的映射器里，且每个都对不认识的值答 `None` ⇒ 传 `"7d"` 的调用者拿到一次**无约束**的搜索，同时相信自己约束了它。收敛成闭集 `Recency`，拒绝发生在工具边界并点名合法值。
+3. **`SearchResult` 六字段被工具面压成三字段**：`relevance_score` / `full_content` / `provider` 落地即丢，全链没有任何发布日期 ⇒ 一个关于「最近的进展」的问题回来时没有任何办法分新旧（附录 D.0.28 的同形）。
+4. **「哪些后端存在」有三份表述**：factory 注册表 / `config/types/search.rs` 的九个名字 / Panel 的八张卡。`jina` 有 provider、有 factory、有文档行、**没有卡片**——唯一的配置方式是手改 `config.toml`（与两个频道 adapter 那次同形，见 §4.9）。
+
+**本轮的形状与判据**
+
+- **能力位是承诺，且守卫必须钉在源码上**：`SearchCapabilities{domain_filter, recency, full_content}` 由每个 provider 自陈，`capability_census.rs` 从 `options.rs` 抽出访问器名字集合、扫每个 `providers/*.rs` 是否真的调了其中之一，**双向**比对字面量声明。声明一个你不发送的参数不会响亮失败，它只会**静默放宽别人的搜索**。
+- **能力位是排序键，不是闸**：`ordered_candidates` 稳定排序（能带全部被请求维度的排在前面），因为它是**偏好**不是保证——闸会让一个只配了 searxng 的装机在任何带 `domains` 的请求上直接失败，而正确答案是照常搜索并**说出来**。
+- **空结果不终结链**：一个后端答"零条"是在回答，但不是值得终结链的回答——fallback 列表存在的理由正是后端们对"存在什么"意见不同。
+- **`notes` 单一源**（`src/search/notes.rs`，先例 `builtin_tools::file_search::notes`）：五类话各一种措辞。两个面（registry / 工具面）合成同一个 `notes` 列表；分开写会写成"近乎相同但不相同"，而那正是读者学会跳过这一行的方式。
+- **CUT 的复活要有新的理由**：`published_date` 在 `8297b1fce` 因**零生产者**被删（当时正确），本轮带着两个生产者（Tavily 的 RFC 2822 / Exa 的 ISO-8601）和一个渲染者回来。缺席一律读作「**这个后端没说**」，绝不是「这条没有日期」——不许发明。
+- **一个报成功的第二实现**：`SearchTool` 的直连 Tavily 路径读自己的 `TAVILY_API_KEY`、早于 `SearchOptions` 存在，**而它是零配置装机上唯一跑的那条路** ⇒ 五个新参数会在那台机器上被接受、被报告为已应用、然后被丢掉。收敛成 `SearchRegistry::{from_env_only, for_tool}`，删掉约 120 行第二答案。「registry / 裸 key / 空」这个决定原本写在**两个**构造点上，其中一个的注释逐字写着 "must mirror `builder/constructor/mod.rs:48`"——一个有两个作者、中间没有编译器的事实。
+
+**实测数字（两条棘轮，均为本轮实测，非算术）**
+
+| 棘轮 | 之前 | 之后 | 归因 |
+|---|---|---|---|
+| `CATALOG_DESCRIPTION_CEILING_BYTES` | 111_856 B | **112_346 B**（+490） | 全部是 `search` 的 DESCRIPTION：字面量本身 **89 → 579 B**（第二次独立测量，因为 `search` 不在守卫打印的「最大五个」里，总数本身说不出它的名字） |
+| `REGISTRY_SCHEMA_CEILING_BYTES` | 102_639 B | **104_134 B**（+1_495） | 守卫自己的逐工具账本点名 `search` 是唯一移动的一行：**387 → 1_882 B** |
+
+**刻意不做（附重访条件）**
+
+1. **扩后端表**（bocha / kimi / xai-grok / gemini / search1api…）——现有九个的能力今天有 5/7 到不了模型，第十个只会是第十个够不到的东西。**重访**：某个维度**所有**现有 provider 都不支持时。
+2. **`site:` 查询折叠**替代原生域名参数——它是"域名过滤"的第二个答案，会改写模型看得见的 query。**重访**：`domain_filter: true` 的 provider 少到排序键买不到东西时。
+3. **跨 provider 结果合并 / 去重**——要求"同一条结果"有身份（URL 归一化 + 内容指纹），是另一轮。今天是 first-success 链，逐结果的 `provider` 因此**刻意不上工具面**（一次调用只有一个后端作答，逐行重复它是零信息；合并落地那天它才有第一个消费者）。
+4. **`[search]` 的新配置旋钮**——三个上限都在 note 里点名自己的杠杆；加设置就是给"一次搜索能有多大"造第二个答案（R10）。
+5. **`multi_grep`**（2026-08-29 裁定，2026-08-30 复核维持）。
+
+**真机实测（`qa/web_search/`，四阶段 14 条断言，首跑全过）**
+
+| 阶段 | 证据（不是判词） |
+|---|---|
+| `reach` | mock SearXNG 的请求日志：`q=QA_ARM_REACH+rust+async&format=json&count=5&safesearch=1&time_range=week`——模型在工具面写下的 `recency:"week"` 到了后端的 query string；模型收到的 `tool_result` 带 `provider_used:"searxng"` |
+| `degrade` | 结果非空**且**note 逐字为「`domains` was not applied: the answering backend `searxng` has no native parameter for it…」，同时后端的 query string 里没有任何 domain 参数（不发它不认识的参数） |
+| `empty` | 零结果的后端答完，第二个后端**也收到了请求**，答案 `provider_used:"full"` |
+| `order` | 带 `domains` 的那次：note 说「`searxng` answered after 1 earlier backend(s) failed」——排在前面的是 exa（唯一声明 `domain_filter` 的可达后端）；**对照臂**（同配置、不带任何维度）没有这句话，所以绿的不是「exa 总是失败」 |
+
+**变异（两条已执行，一条只写下）**：把 `searxng_time_range` 改成恒 `None` ⇒ `reach` **只**红在 `time_range` 那条断言上、锚点仍绿（说明装置到达了分类器而不是死在它之前）；把空结果分支改回「立即返回」⇒ `empty` 红，且后端日志说明了原因——零结果的 mock 收到四次请求、第二个后端一次都没有。第三条（`ordered_candidates` 不排序 ⇒ `order` 的 domains 臂红、对照臂仍绿）**没有执行**，按判据它就还只是一句关于装置的声明，写在 README 里标着 not run。
+
+**真机装置的边界（写进 `qa/web_search/README.md`，不只写在这里）**
+
+SearXNG 是唯一能指向 mock 的后端：九个里七个把 endpoint 写死，第九个（firecrawl）要一个这里没有的凭据。所以四个阶段证明的是**接线**——参数到达 provider 的请求构造器、registry 的排序与 failover、notes 到达模型——而**不是**另外八个后端各自的请求构造器，后者由 `capability_census` 在源码级覆盖。两者互补，谁也不能替代谁：census 看不见一条 wire，装置看不见九分之八的后端。
 
 ## 4. Loop 层
 

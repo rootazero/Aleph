@@ -38,6 +38,7 @@ pub mod pty;
 pub mod queue;
 pub mod receipt;
 pub mod scope;
+pub mod search;
 pub mod session_thread;
 pub mod spend;
 pub mod subagent_tree;

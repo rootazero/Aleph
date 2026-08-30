@@ -5,6 +5,27 @@ use crate::search::{SearchOptions, SearchResult};
 /// This module defines the `SearchProvider` trait which all search backends implement
 use async_trait::async_trait;
 
+/// What a provider can express on the wire.
+///
+/// A bit here is a promise: the registry uses it as a **sorting key** (spec
+/// §3) — a provider that claims `domain_filter` gets the requests that ask
+/// for one. Claiming a parameter you do not send therefore does not fail
+/// loudly, it silently widens somebody's search. `capability_census.rs`
+/// compares each bit against the request builder that would have to send it.
+///
+/// The default is all-`false` on purpose: a new provider that forgets to
+/// declare anything is invisible to dimension-aware routing, which is the
+/// safe direction. The reverse default would make it claim everything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SearchCapabilities {
+    /// Accepts an include/exclude domain list.
+    pub domain_filter: bool,
+    /// Accepts a freshness constraint (`SearchOptions::recency`).
+    pub recency: bool,
+    /// Can return page bodies, not just snippets.
+    pub full_content: bool,
+}
+
 /// Unified interface for search providers
 ///
 /// All search backends (Tavily, Google, `SearXNG`, etc.) implement this trait.
@@ -40,6 +61,12 @@ pub trait SearchProvider: Send + Sync {
     ///
     /// Returns `false` if API key is missing or invalid
     fn is_available(&self) -> bool;
+
+    /// What this provider can express. Default: nothing — see
+    /// [`SearchCapabilities`] for why the default is not "everything".
+    fn capabilities(&self) -> SearchCapabilities {
+        SearchCapabilities::default()
+    }
 }
 
 #[cfg(test)]

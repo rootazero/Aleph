@@ -98,6 +98,7 @@ impl SearchProvider for JinaProvider {
                 snippet: r.description.unwrap_or_default(),
                 relevance_score: None,
                 full_content: None,
+                published_date: None,
                 provider: Some(NAME.to_string()),
             })
             .collect();

@@ -1,6 +1,6 @@
 use crate::error::{AlephError, Result};
 use crate::search::providers::base::{build_client, check_status};
-use crate::search::{SearchOptions, SearchProvider, SearchResult};
+use crate::search::{SearchCapabilities, SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
 use reqwest::Client;
 use scraper::{Html, Selector};
@@ -99,6 +99,14 @@ impl SearchProvider for DuckDuckGoProvider {
     fn is_available(&self) -> bool {
         true
     }
+
+    fn capabilities(&self) -> SearchCapabilities {
+        SearchCapabilities {
+            domain_filter: false,
+            recency: true,
+            full_content: false,
+        }
+    }
 }
 
 /// Parse DDG's `/html/` result page.
@@ -165,6 +173,7 @@ pub(crate) fn parse_ddg_html(body: &str, max_results: usize) -> Vec<SearchResult
             snippet,
             relevance_score: None,
             full_content: None,
+            published_date: None,
             provider: Some(NAME.to_string()),
         });
     }
@@ -226,6 +235,7 @@ pub(crate) fn parse_ddg_lite_html(body: &str, max_results: usize) -> Vec<SearchR
             snippet,
             relevance_score: None,
             full_content: None,
+            published_date: None,
             provider: Some(NAME.to_string()),
         })
         .collect()

@@ -1,4 +1,5 @@
 mod factory;
+pub(crate) mod notes;
 mod options;
 mod provider;
 pub mod providers;
@@ -51,8 +52,8 @@ mod web_fetch_fallback;
 /// ```
 // Re-exports
 pub use factory::{ProviderFactory, ProviderFactoryRegistry};
-pub use options::SearchOptions;
-pub use provider::SearchProvider;
-pub use registry::SearchRegistry;
+pub use options::{Recency, SearchOptions};
+pub use provider::{SearchCapabilities, SearchProvider};
+pub use registry::{SearchAnswer, SearchRegistry};
 pub use result::SearchResult;
 pub use web_fetch_fallback::WebFetchSerpFallback;

@@ -1,6 +1,6 @@
 use crate::error::{AlephError, Result};
 use crate::search::providers::base::{build_client, check_status, parse_json};
-use crate::search::{SearchOptions, SearchProvider, SearchResult};
+use crate::search::{SearchCapabilities, SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,10 @@ struct ExaRequest {
     #[serde(rename = "numResults")]
     num_results: usize,
     contents: ExaContents,
+    #[serde(rename = "includeDomains", skip_serializing_if = "Vec::is_empty")]
+    include_domains: Vec<String>,
+    #[serde(rename = "excludeDomains", skip_serializing_if = "Vec::is_empty")]
+    exclude_domains: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -42,6 +46,9 @@ struct ExaResult {
     url: String,
     #[serde(default)]
     text: Option<String>,
+    /// ISO-8601, as Exa spells it. Absent for pages it has no date for.
+    #[serde(default, rename = "publishedDate")]
+    published_date: Option<String>,
 }
 
 impl ExaProvider {
@@ -56,16 +63,26 @@ impl ExaProvider {
             client: build_client()?,
         })
     }
+
+    /// Build the request body. Split out of `search` so the wire shape can be
+    /// asserted without an HTTP round trip — the parameter names are a
+    /// contract with Exa and "it looked right" is how the fill_form /
+    /// wait_for key mismatches in the browser layer shipped.
+    fn build_request(query: &str, options: &SearchOptions) -> ExaRequest {
+        ExaRequest {
+            query: query.to_string(),
+            num_results: options.validated_max_results(),
+            contents: ExaContents { text: true },
+            include_domains: options.include_domains.clone(),
+            exclude_domains: options.exclude_domains.clone(),
+        }
+    }
 }
 
 #[async_trait]
 impl SearchProvider for ExaProvider {
     async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
-        let request_body = ExaRequest {
-            query: query.to_string(),
-            num_results: options.validated_max_results(),
-            contents: ExaContents { text: true },
-        };
+        let request_body = Self::build_request(query, options);
 
         let response = self
             .client
@@ -90,6 +107,7 @@ impl SearchProvider for ExaProvider {
                 snippet: r.text.unwrap_or_default(),
                 relevance_score: None,
                 full_content: None,
+                published_date: r.published_date,
                 provider: Some(NAME.to_string()),
             })
             .collect();
@@ -103,6 +121,14 @@ impl SearchProvider for ExaProvider {
 
     fn is_available(&self) -> bool {
         !self.api_key.is_empty()
+    }
+
+    fn capabilities(&self) -> SearchCapabilities {
+        SearchCapabilities {
+            domain_filter: true, // includeDomains / excludeDomains
+            recency: false,      // ExaRequest has no freshness field
+            full_content: false, // exa.rs:92 hardcodes full_content: None
+        }
     }
 }
 
@@ -152,5 +178,26 @@ mod tests {
     fn test_exa_provider_rejects_empty_key() {
         let result = ExaProvider::new("".to_string());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn domain_lists_reach_the_exa_request_body() {
+        let o = SearchOptions {
+            include_domains: vec!["github.com".into()],
+            exclude_domains: vec!["pinterest.com".into()],
+            ..Default::default()
+        };
+        let body = ExaProvider::build_request("q", &o);
+        let v = serde_json::to_value(&body).unwrap();
+        assert_eq!(v["includeDomains"], serde_json::json!(["github.com"]));
+        assert_eq!(v["excludeDomains"], serde_json::json!(["pinterest.com"]));
+    }
+
+    #[test]
+    fn empty_domain_lists_are_omitted_entirely() {
+        let body = ExaProvider::build_request("q", &SearchOptions::default());
+        let v = serde_json::to_value(&body).unwrap();
+        assert!(v.get("includeDomains").is_none(), "{v}");
+        assert!(v.get("excludeDomains").is_none(), "{v}");
     }
 }

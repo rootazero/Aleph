@@ -1012,20 +1012,15 @@ pub fn create_tool_boxed(
 ) -> Option<Box<dyn AlephToolDyn>> {
     match name {
         "search" => {
-            // Must mirror `builder/constructor/mod.rs:48` — a registry, when the
-            // caller has one, otherwise the direct Tavily key. The arm used to
-            // read only `tavily_api_key`, so any future production caller of
-            // this generic constructor would silently get a search tool with no
-            // SearXNG/Brave backends and no SERP fallback, indistinguishable
-            // from the real one in the tool list.
-            let tool = match config {
-                Some(cfg) => match cfg.search_registry {
-                    Some(ref registry) => SearchTool::with_registry(Arc::clone(registry)),
-                    None => SearchTool::with_api_key(cfg.tavily_api_key.clone()),
-                },
-                None => SearchTool::new(),
-            };
-            Some(Box::new(tool))
+            // The "registry, else bare key, else empty" decision lives in
+            // `SearchRegistry::for_tool` — it used to be written out here and
+            // again in `builder/constructor/mod.rs`, under a comment saying
+            // the two must mirror each other.
+            let registry = crate::search::SearchRegistry::for_tool(
+                config.and_then(|cfg| cfg.search_registry.as_ref()),
+                config.and_then(|cfg| cfg.tavily_api_key.as_deref()),
+            );
+            Some(Box::new(SearchTool::with_registry(registry)))
         }
         "web_fetch" => Some(Box::new(WebFetchTool::new())),
         "google_meet" => Some(Box::new(
@@ -2363,7 +2358,39 @@ mod tests {
     /// one `grep -r` across a repository carrying `node_modules/` routinely
     /// returns tens of KB of matches nobody asked for — per call, in the
     /// context window, forever. 3 KB of constants against that is not close.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 111_856;
+    /// 2026-08-31: 111_856 -> 112_346 B (+490) for `search`'s parameters.
+    /// Measured twice, and the two agree: the ratchet reports the totals
+    /// (111_856 -> 112_346), and the literal itself measures 89 -> 579 bytes.
+    /// `search` is not in the printed "largest" five, so the attribution comes
+    /// from the second measurement rather than from reading the diff.
+    ///
+    /// The three questions:
+    ///
+    /// (1) No schema can carry it. The schema says `recency` is one of four
+    /// strings and `domains` is an array; what earns the bytes is that a
+    /// domain filter is a *preference* — the backends that cannot express it
+    /// still answer, and the reply's notes say so — that one call carries one
+    /// query, that `full_content` returns N page bodies where `web_fetch`
+    /// returns one, and that naming a `provider` is an instruction that fails
+    /// rather than falling through. Every one of those is a fact about the
+    /// registry's behaviour, which no per-field description can state.
+    ///
+    /// (2) A stronger model cannot infer them. That this repository's search
+    /// is a first-success chain over heterogeneous backends with declared
+    /// capabilities is a property of this codebase, not a convention. A model
+    /// that assumed the other shape would treat a missing domain filter as a
+    /// silent success — the exact failure the round removed.
+    ///
+    /// (3) The consumers are shipped and dispatched: `SearchArgs::to_options`
+    /// carries each of the five into `SearchOptions`, the registry orders and
+    /// reports on them, and a guard in `builtin_tools::search` asserts the
+    /// prose and the schema name the same parameters, so the two cannot drift.
+    ///
+    /// What the bytes buy back: before this round the tool accepted
+    /// `{query, limit}` while fifteen per-provider decoders sat downstream,
+    /// seven of them translating a freshness value no caller could set. The
+    /// knobs are worthless if the model cannot tell when to reach for them.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 112_346;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -2746,7 +2773,21 @@ mod tests {
     /// not bookkeeping, it is a pre-authorised allowance that the next author
     /// spends without an edit here. Zero headroom means the next byte costs a
     /// deliberate paragraph, which is the whole mechanism.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 102_639;
+    /// 2026-08-31: 102_639 -> 104_134 B (+1_495), all of it `search`
+    /// (387 -> 1_882). Not read off a diff: the guard's own per-tool ledger
+    /// names `search` as the only row that moved, which is what this table was
+    /// built for after the last attribution turned out to be backwards.
+    ///
+    /// Five parameters and their descriptions: `recency` (a four-value enum),
+    /// `domains`, `exclude_domains`, `full_content`, `provider`. The schema
+    /// half is where the model reads what values are legal, and the four
+    /// freshness buckets are a closed set it cannot guess — before this round
+    /// every provider's mapper answered `None` for anything it did not
+    /// recognise, so a caller passing "7d" got an unconstrained search while
+    /// believing it had constrained one.
+    ///
+    /// Set flush against the measurement, as the rule above requires.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 104_134;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -2817,7 +2858,7 @@ mod tests {
         ("recall_events", 553),
         ("remember", 1907),
         ("scratchpad", 4014),
-        ("search", 387),
+        ("search", 1882),
         ("self_config", 3553),
         ("self_manage", 328),
         ("session_list", 931),

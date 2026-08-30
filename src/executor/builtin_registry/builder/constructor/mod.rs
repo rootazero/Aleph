@@ -45,11 +45,10 @@ impl BuiltinToolRegistry {
     /// - Tool policy is enforced layered (Guardrails + Sandbox + `ApprovalGate`).
     ///   See docs/reference/SANDBOX.md.
     pub async fn with_config(mut config: BuiltinToolConfig) -> crate::error::Result<Self> {
-        let search_tool = if let Some(ref registry) = config.search_registry {
-            SearchTool::with_registry(Arc::clone(registry))
-        } else {
-            SearchTool::with_api_key(config.tavily_api_key.clone())
-        };
+        let search_tool = SearchTool::with_registry(crate::search::SearchRegistry::for_tool(
+            config.search_registry.as_ref(),
+            config.tavily_api_key.as_deref(),
+        ));
         let web_fetch_tool = if let Some(ref cfg) = config.config {
             // Single read for both consumers: two independent `read().await`s
             // could observe different config generations if a patch lands
@@ -829,7 +828,10 @@ impl BuiltinToolRegistry {
             use crate::tools::AlephTool;
             let gateway_route_meta =
                 crate::builtin_tools::gateway_route::GatewayRouteTool::default();
-            let google_meet_meta = crate::builtin_tools::google_meet::GoogleMeetTool::new(None, crate::security::ssrf::SsrfPolicy::default());
+            let google_meet_meta = crate::builtin_tools::google_meet::GoogleMeetTool::new(
+                None,
+                crate::security::ssrf::SsrfPolicy::default(),
+            );
             let select_model_meta = crate::builtin_tools::SelectModelTool;
             let doctor_meta = crate::builtin_tools::DoctorTool::default();
             let extra_defs = [

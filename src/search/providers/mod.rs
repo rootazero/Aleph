@@ -30,3 +30,6 @@ pub use google::GoogleFactory;
 pub use jina::JinaFactory;
 pub use searxng::SearxngFactory;
 pub use tavily::TavilyFactory;
+
+#[cfg(test)]
+mod capability_census;

@@ -36,6 +36,15 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                 # not steered — `rg` is absent on some machines
                                 # and the driver reports SKIP, not PASS.
 
+./qa/web_search/run.sh reach    # `recency:"week"` from the tool face arrives as
+                                # time_range=week in the backend's query string
+./qa/web_search/run.sh order    # a backend that can carry the asked-for dimension
+                                # is asked first — with a control arm that asks
+                                # for nothing, so a green is not "exa always fails"
+./qa/web_search/run.sh degrade  # a dimension no configured backend can express is
+                                # reported in the answer's notes, not dropped
+./qa/web_search/run.sh empty    # a zero-result answer does not end the chain
+
 ./qa/announce/run.sh outlive     # a background bash job outlives its run -> a fresh run is driven
 ./qa/announce/run.sh collected   # the model collected it itself -> no turn is spent
 ./qa/announce/run.sh midrun      # the run is still alive -> absorbed as steering, ONE run
