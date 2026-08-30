@@ -564,7 +564,7 @@ fn event_wire_form(
 /// when the connection registered no filter at all, and `event_admits` short-
 /// circuits on `SessionIdentity::Global` *before* it reads `caller_user`. A bare
 /// remote WebSocket that sent nothing therefore received every `Global` frame —
-/// including `pty.output`, whose RPC face has been in `ADMIN_PREFIXES` all along.
+/// including `pty.screen`, whose RPC face has been in `ADMIN_PREFIXES` all along.
 ///
 /// So: **an authorization predicate belongs on every direction a connection
 /// carries data, not on the one where the caller asks a question.** The event
@@ -1149,10 +1149,10 @@ async fn handle_connection(
                                         }
 
                                         // Helper closure: standard lane dispatch (no idempotency)
-                                        let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass, caller_role: Option<String>, caller_user: Option<String>, caller_is_loopback: bool| async move {
+                                        let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass, caller_role: Option<String>, caller_user: Option<String>, caller_is_loopback: bool, caller_conn_id: Option<String>| async move {
                                             let lane_result = lm.acquire(&method, class).await;
                                             match lane_result {
-                                                Ok(_permit) => dispatch_with_caller_context(&text, &mc, caller_role, caller_user, caller_is_loopback).await,
+                                                Ok(_permit) => dispatch_with_caller_context(&text, &mc, caller_role, caller_user, caller_is_loopback, caller_conn_id).await,
                                                 Err(_) => serde_json::to_string(&JsonRpcResponse::error(
                                                     req_id,
                                                     INTERNAL_ERROR,
@@ -1199,7 +1199,7 @@ async fn handle_connection(
                                                         let lane_result = ctx.lane_manager.acquire(&req.method, ctx.channel_class).await;
                                                         match lane_result {
                                                             Ok(_permit) => {
-                                                                let resp = dispatch_with_caller_context(&text, &ctx.middleware_chain, caller_role.clone(), caller_user.clone(), ctx.client_is_local).await;
+                                                                let resp = dispatch_with_caller_context(&text, &ctx.middleware_chain, caller_role.clone(), caller_user.clone(), ctx.client_is_local, Some(conn_id.clone())).await;
                                                                 if let Ok(parsed) = serde_json::from_str::<JsonRpcResponse>(&resp) {
                                                                     if parsed.is_success() {
                                                                         if let Some(result) = parsed.result {
@@ -1228,11 +1228,11 @@ async fn handle_connection(
                                                 }
                                             } else {
                                                 // Query lane — skip idempotency
-                                                do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), caller_user.clone(), ctx.client_is_local).await
+                                                do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), caller_user.clone(), ctx.client_is_local, Some(conn_id.clone())).await
                                             }
                                         } else {
                                             // No idempotency key — standard lane dispatch
-                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), caller_user.clone(), ctx.client_is_local).await
+                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone(), caller_user.clone(), ctx.client_is_local, Some(conn_id.clone())).await
                                         };
                                         // --- End idempotency + lane block ---
 
@@ -2034,6 +2034,13 @@ async fn handle_connection(
     // Remove subscriptions for this connection
     ctx.subscription_manager.remove_connection(&conn_id).await;
 
+    // Release any PTY viewport constraints this connection held, so a
+    // crashed/closed tab does not permanently pin a shared terminal's size
+    // (`caller_identity::CALLER_CONN_ID` / `PtyManager::note_viewport`). This
+    // is the sixth per-connection subsystem cleaned up here, alongside conns
+    // / reverse-RPC / node registry / presence / subscriptions above.
+    crate::gateway::pty::manager().release_conn(&conn_id);
+
     info!("Connection closed: {}", conn_id);
     Ok(())
 }
@@ -2043,16 +2050,18 @@ async fn handle_connection(
 /// truth shared by both dispatch stations (`do_lane_dispatch`'s closure and
 /// the idempotency `Proceed` arm) so the two call sites cannot drift apart —
 /// see `src/gateway/CLAUDE.md`'s note that `CALLER_ROLE`/`CALLER_USER`/
-/// `CALLER_IS_LOOPBACK` must be scoped around `process_request` at both
-/// sites. `scope::with_scope` is the outermost (4th) layer: a `caller_user`
-/// seeds a personal-scope attribution, observable via `scope::current_scope`
-/// for the lifetime of this dispatch (spec P1 §5).
+/// `CALLER_IS_LOOPBACK`/`CALLER_CONN_ID` must be scoped around
+/// `process_request` at both sites. `scope::with_scope` is the outermost
+/// (4th) layer: a `caller_user` seeds a personal-scope attribution,
+/// observable via `scope::current_scope` for the lifetime of this dispatch
+/// (spec P1 §5).
 async fn dispatch_with_caller_context(
     text: &str,
     mc: &MiddlewareChain,
     caller_role: Option<String>,
     caller_user: Option<String>,
     caller_is_loopback: bool,
+    caller_conn_id: Option<String>,
 ) -> String {
     crate::scope::with_scope(
         caller_user
@@ -2062,8 +2071,11 @@ async fn dispatch_with_caller_context(
             caller_user,
             crate::gateway::caller_identity::CALLER_ROLE.scope(
                 caller_role,
-                crate::gateway::caller_identity::CALLER_IS_LOOPBACK
-                    .scope(caller_is_loopback, process_request(text, mc)),
+                crate::gateway::caller_identity::CALLER_IS_LOOPBACK.scope(
+                    caller_is_loopback,
+                    crate::gateway::caller_identity::CALLER_CONN_ID
+                        .scope(caller_conn_id, process_request(text, mc)),
+                ),
             ),
         ),
     )
@@ -2484,7 +2496,7 @@ mod tests {
         assert!(guard.can_receive("surface.approval", &scope));
         assert!(!guard.can_receive("config.changed", &scope));
         assert!(!guard.can_receive("pairing.requested", &scope));
-        assert!(!guard.can_receive("pty.output", &scope));
+        assert!(!guard.can_receive("pty.screen", &scope));
         // `approval.requested` deliberately passes THIS table since 2026-08-08
         // — a member must be able to answer the gate blocking their own run.
         // The per-session decision is made in `event_visibility`, pinned there.
@@ -2593,8 +2605,9 @@ mod tests {
         // `ConnectionState::new` stamps `caller_role: "guest"`.
         assert!(
             !wall_admits(Some("guest"), ""),
-            "an unauthorized socket must receive no event frame; `pty.output` \
-             is Global-classified and carries the operator's raw shell bytes"
+            "an unauthorized socket must receive no event frame; `pty.screen` \
+             is Global-classified and carries the operator's live terminal \
+             content"
         );
         // …and the same is true for a role word nobody stamps.
         assert!(!wall_admits(Some("bogus"), ""));
@@ -2967,6 +2980,7 @@ mod tests {
             Some("member".to_string()),
             Some("u-alice".to_string()),
             false,
+            None,
         )
         .await;
         assert!(
@@ -2994,10 +3008,48 @@ mod tests {
         let text = r#"{"jsonrpc":"2.0","id":1,"method":"probe.scope","params":{}}"#;
 
         let resp =
-            dispatch_with_caller_context(text, &mc, Some("operator".to_string()), None, true).await;
+            dispatch_with_caller_context(text, &mc, Some("operator".to_string()), None, true, None)
+                .await;
         assert!(
             resp.contains("\"owner_user_id\":null"),
             "no caller_user must mean no scope attribution: {resp}"
+        );
+    }
+
+    /// `pty.resize` refuses to guess a connection identity — it reads
+    /// `CALLER_CONN_ID`, which only `dispatch_with_caller_context` scopes.
+    /// This proves that scope actually carries the real connection id from
+    /// the dispatch boundary down into `process_request`'s handler dispatch,
+    /// the same way `both_dispatch_stations_seed_scope` proves it for
+    /// `CALLER_USER`.
+    #[tokio::test]
+    async fn dispatch_with_caller_context_seeds_conn_id() {
+        use crate::gateway::handlers::HandlerRegistry;
+        use crate::gateway::rate_limiter::RateLimitConfig;
+
+        let mut registry = HandlerRegistry::new();
+        registry.register("probe.conn_id", |req| async move {
+            let conn_id = crate::gateway::caller_identity::current_caller_conn_id();
+            JsonRpcResponse::success(req.id, serde_json::json!({ "conn_id": conn_id }))
+        });
+        let mc = MiddlewareChain::new(
+            Arc::new(registry),
+            Arc::new(RateLimiter::new(RateLimitConfig::default())),
+        );
+        let text = r#"{"jsonrpc":"2.0","id":1,"method":"probe.conn_id","params":{}}"#;
+
+        let resp = dispatch_with_caller_context(
+            text,
+            &mc,
+            Some("operator".to_string()),
+            None,
+            true,
+            Some("127.0.0.1:9999".to_string()),
+        )
+        .await;
+        assert!(
+            resp.contains("\"conn_id\":\"127.0.0.1:9999\""),
+            "conn id must be observable inside process_request's dispatch: {resp}"
         );
     }
 

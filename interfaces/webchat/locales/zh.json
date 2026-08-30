@@ -8,7 +8,8 @@
     "extensions": "Aleph Hub",
     "settings": "设置",
     "canvas": "画布",
-    "projects": "项目"
+    "projects": "项目",
+    "terminal": "终端"
   },
   "session": {
     "healthy": "正常",

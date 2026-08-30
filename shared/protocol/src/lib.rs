@@ -34,6 +34,7 @@ pub mod paths;
 pub mod plan;
 pub mod plugins;
 pub mod providers;
+pub mod pty;
 pub mod queue;
 pub mod receipt;
 pub mod scope;

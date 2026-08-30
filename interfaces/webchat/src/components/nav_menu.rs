@@ -16,9 +16,9 @@ use leptos_router::hooks::{use_location, use_navigate};
 /// Sections offered in the switcher, in display order. Extensions (Aleph Hub)
 /// is intentionally absent: its launcher lives in the Chat sidebar's
 /// advanced-features zone, below "project management". The `Extensions` arms in
-/// `route_of`/`label_of`/`icon_of` are still needed for the trigger button,
-/// which mirrors the current section whenever the route is `/extensions`.
-const ALL_MODES: [PanelMode; 8] = [
+/// `label_of`/`icon_of` are still needed for the trigger button, which
+/// mirrors the current section whenever the route is `/extensions`.
+const ALL_MODES: [PanelMode; 9] = [
     PanelMode::Chat,
     PanelMode::Dashboard,
     PanelMode::Memory,
@@ -26,24 +26,9 @@ const ALL_MODES: [PanelMode; 8] = [
     PanelMode::Agents,
     PanelMode::Teams,
     PanelMode::Projects,
+    PanelMode::Terminal,
     PanelMode::Settings,
 ];
-
-/// Default route a section navigates to.
-const fn route_of(mode: PanelMode) -> &'static str {
-    match mode {
-        PanelMode::Chat => "/chat",
-        PanelMode::Dashboard => "/dashboard",
-        PanelMode::Memory => "/memory",
-        PanelMode::Canvas => "/canvas",
-        PanelMode::Agents => "/agents",
-        PanelMode::Teams => "/teams",
-        PanelMode::Projects => "/projects",
-        PanelMode::Extensions => "/extensions",
-        PanelMode::More => "/more",
-        PanelMode::Settings => "/settings",
-    }
-}
 
 /// Localized section label.
 fn label_of(mode: PanelMode, i18n: I18nContext<Locale>) -> String {
@@ -55,6 +40,7 @@ fn label_of(mode: PanelMode, i18n: I18nContext<Locale>) -> String {
         PanelMode::Agents => t_string!(i18n, nav.agents).to_string(),
         PanelMode::Teams => t_string!(i18n, nav.teams).to_string(),
         PanelMode::Projects => t_string!(i18n, nav.projects).to_string(),
+        PanelMode::Terminal => t_string!(i18n, nav.terminal).to_string(),
         PanelMode::Extensions => t_string!(i18n, nav.extensions).to_string(),
         PanelMode::More => "More".to_string(),
         PanelMode::Settings => t_string!(i18n, nav.settings).to_string(),
@@ -84,6 +70,11 @@ const fn icon_of(mode: PanelMode) -> &'static str {
         }
         PanelMode::Projects => {
             r#"<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>"#
+        }
+        // Same terminal glyph as the ACP Harnesses settings tab
+        // (settings_sidebar.rs) — one icon for "shell prompt" in this set.
+        PanelMode::Terminal => {
+            r#"<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>"#
         }
         PanelMode::Extensions => {
             r#"<path d="M20.5 11H19V7a2 2 0 0 0-2-2h-4V3.5a2.5 2.5 0 0 0-5 0V5H4a2 2 0 0 0-2 2v3.8h1.5a2.2 2.2 0 1 1 0 4.4H2V19a2 2 0 0 0 2 2h3.8v-1.5a2.2 2.2 0 1 1 4.4 0V21H17a2 2 0 0 0 2-2v-4h1.5a2.5 2.5 0 0 0 0-5z"/>"#
@@ -150,7 +141,7 @@ pub fn NavMenu() -> impl IntoView {
                             rounded-xl border border-border bg-surface-overlay/85 shadow-xl p-1.5 space-y-0.5"
                     on:mouseleave=move |_| open.set(false)>
                     {ALL_MODES.into_iter().map(|m| {
-                        let route = route_of(m);
+                        let route = m.path();
                         let nav = navigate.clone();
                         let is_active = move || current.get() == m;
                         view! {
