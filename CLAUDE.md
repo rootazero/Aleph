@@ -609,8 +609,12 @@
   cargo test -p alephcore --bins                                        # alephcore 里唯一一条真跑而非 --no-run 的
       # （2026-08-30 前这里写的是「唯一一条」——加进 aleph-protocol 那条之后不再成立，
       #   而作废它的正是同一笔改动：一次 before/after 的差额，缺的那一项在修复自己身上）
-      # --lib 与 --bins 是两个 target，前者一条都带不到 src/bin/ 下的 94 条（含钉住 boot 无条件
+      # --lib 与 --bins 是两个 target，前者一条都带不到 src/bin/ 下那些测试（含钉住 boot 无条件
       # install_policy/install_ledger 的那条 census）；clippy 编译它们但不跑断言，所以只有这条会红
+      # 这里曾写「94 条」：94 是源码里 `#[test]`/`#[tokio::test]` **属性**的个数（main 与本轮同为
+      # 94），而 `--bins` 在这台 Windows 上实跑 **87**（`0 ignored; 0 filtered out`），差的 7 条是
+      # 平台 `cfg` 门控——**两个数答的不是同一问**，所以谁都不"错"；错的是只写一个数而不写它测的
+      # 是哪一问、在哪台机器上测的，那会让下一个复核者去证明上一个人错了（附录 C.1）
   cargo test -p alephcore --features test-helpers --test '*' --no-run -j 1
       # --all-targets 只展开 target 不展开 feature；`-j 1` 不是保守是必须——默认并行会以一个假的
       # `can't find crate` E0463 失败（资源限制，不是你的代码），而这条要一小时量级，见上一条
