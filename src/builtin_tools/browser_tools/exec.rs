@@ -847,12 +847,12 @@ async fn run_one(
                 .await
                 .map_err(|e| super::backend_error_text(manager, &e))?;
             // The same unwrap-then-bound/redact/fence pipeline
-            // `browser_evaluate` returns; it hands back a JSON string, which is
-            // exactly what `output` is.
-            let out = match super::process_evaluate_result(manager, &raw) {
-                serde_json::Value::String(s) => s,
-                other => other.to_string(),
-            };
+            // `browser_evaluate` returns; it hands back a string
+            // directly (process_evaluate_result used to return
+            // `Value::String` and the only caller unwrapped it — the
+            // wrapper was dead ceremony, so the function now returns
+            // `String`).
+            let out = super::process_evaluate_result(manager, &raw);
             Ok(StepOutcome::read(out))
         }
         PlannedAction::Screenshot { full_page } => {

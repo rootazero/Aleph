@@ -446,13 +446,18 @@ pub(crate) fn offload_content_to(
         .map(|(footer, _)| footer)
 }
 
-pub(crate) fn process_evaluate_result(manager: &ProfileManager, raw: &str) -> serde_json::Value {
+/// Re-emit a `browser_evaluate` raw response as a redacted + wrapped
+/// string. The previous shape returned `serde_json::Value` and the
+/// only caller (browser_exec) immediately unwrapped the
+/// `Value::String` — the function never produced anything else, so
+/// the `Value` wrapper was dead ceremony. Return `String` directly.
+pub(crate) fn process_evaluate_result(manager: &ProfileManager, raw: &str) -> String {
     let text = match serde_json::from_str::<serde_json::Value>(raw) {
         Ok(serde_json::Value::String(s)) => s,
         Ok(other) => serde_json::to_string(&other).unwrap_or_else(|_| raw.to_string()),
         Err(_) => raw.to_string(),
     };
-    serde_json::Value::String(redact_and_wrap(manager, &text))
+    redact_and_wrap(manager, &text)
 }
 
 /// [`redact_and_wrap`] variant for append-ordered logs (`browser_console` /
@@ -528,7 +533,16 @@ pub(crate) fn bound_screenshot_png(png_bytes: Vec<u8>) -> Vec<u8> {
     // until under the cap. If the floor is reached first, return the smallest
     // attempt: a slightly-over-budget screenshot beats dropping the capture.
     let mut smallest = buf;
-    for scale in [0.7_f64, 0.5, 0.35, 0.25] {
+    // Iterative downscale factors. 0.7 / 0.5 / 0.35 / 0.25 of the
+    // edge-capped image's dimensions, the 0.25 floor matching
+    // computer-use parity. The four-step ladder is empirically
+    // tuned to land most screenshots under the byte cap in one
+    // or two steps; the rare worst case re-encodes through all
+    // four before giving up. Each factor here is treated as
+    // a `const SCALE` so a future tweak lands in one named
+    // place rather than four inline literals.
+    const SCALE_LADDER: [f64; 4] = [0.7, 0.5, 0.35, 0.25];
+    for scale in SCALE_LADDER {
         let w = (f64::from(fitted.width()) * scale).round().max(1.0) as u32;
         let h = (f64::from(fitted.height()) * scale).round().max(1.0) as u32;
         let shrunk = fitted.resize_exact(w, h, image::imageops::FilterType::Triangle);
