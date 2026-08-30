@@ -648,3 +648,34 @@ Related: `Config.channels` is a **map keyed by instance id**
 (`[channels.webhook]`), not an array of tables. The `[[channels]] id = "webhook"`
 form shown in `webhook/mod.rs`'s own module doc does not parse — the server
 refuses to boot with `invalid type: sequence, expected a map`.
+
+---
+
+## 每个装置在证明什么（由根 `CLAUDE.md` 子系统路由表迁入，2026-08-30）
+
+根 `CLAUDE.md` 的路由表现在只写「改 X 前跑 `qa/Y/run.sh`」。**为什么非真机不可、以及每个阶段
+挡的是哪一类假绿**，母本在这里。判据全文见 [FEATURE_LOCATOR 附录 E](../docs/reference/FEATURE_LOCATOR.md)。
+
+- **`file_search`** — 改 walk / 上限 / deny 绑定前跑 `{floor,page,reach,steer}`。`floor` 证明
+  `[sandbox] deny_read_globs` **从配置文件**绑住 `grep` 与 `find`，且 `no_ignore` 掀不掉它——单测把
+  `denied_paths` 手递进去，证明的是**谓词**不是**接线**。`reach`/`steer` 读 mock provider 的 request log，
+  那是「模型收到了什么」唯一的 oracle。耗时与峰值堆另用 `cargo bench --bench file_search_scan`
+  （`ALEPH_BENCH_ROOT` 可指向任意树）。
+- **`channels`** — 改 `interfaces/<channel>/` 或通道接线前跑。三阶段：
+  - `reach` — 三个通道**真被构造**（msteams 作对照组）· qq 扁平拼法过了配置解析 · feishu `start()` 对
+    mock Lark 真拨号 · webhook 事件 → agent 回合 → 回复打回 `im/v1/messages`。
+  - `errors` — 旧版 `400 + 99991400` 限频被重试且退避读 `x-ogw-ratelimit-reset` · `403` 报状态码且不重试 ·
+    无限频码的 `400` 是终态。
+  - `approval` — 通道腿的「通知 + 永久等待」：卡带无过期哨兵**且该键真在 wire 上**（否则断言恒真）·
+    真发到 Feishu · **过了旧的 120 s 死线仍在 pending** · `/approve` 文本回复仍能结掉一张已超死线的卡。
+    ⚠️ **自带一次 reboot**：`policies` 是 `ReloadImpact::Restart`，运行时 patch 会被保存并忽略，
+    而那会让这一阶段对着一道**从未武装的闸**作断言。
+- **`session_order`** — 改转录顺序、删除边界或任一 idle sweep 前跑。两个 backend 各驱动同一段对话，
+  停机后把戳改成**降序**再重读——**生产数据上两序恒合，所以不打乱就等于没测**。断言：服务序不变 ·
+  `session.truncate` 真的到达数据库 · 它留下的是**头部** · 两个 backend 销毁同一批行。
+- **`browser_managed`** — 改 `src/browser/` 或 `src/builtin_tools/browser_tools/` 前跑。
+  `{open,ambient,headed,tools,frames,reap,pdf,existing,exec-offload}`——**两个 driver 的每个动词都有效果断言**。
+- **`btw_tui`** — 改 `/btw` 的到达顺序或退休面前先读 FEATURE_LOCATOR §4.14 的机制图，再跑 `{frames,promote}`。
+- **`picker_nav`** — 改 `interfaces/webchat/` 的键盘导航/渐隐前跑：键盘 walk · 条件渐隐 · 手机端加 provider，
+  三档宽度各带效果断言。
+- **`canvas`** — 改 `src/canvas/` 或 Panel canvas 视图前跑：九项清单每条带效果断言。
