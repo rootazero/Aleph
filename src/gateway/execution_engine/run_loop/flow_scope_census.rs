@@ -309,6 +309,16 @@ mod tests {
     // which is how the paragraphs above got written wrong three times. As
     // functions the claims tests below drive the SAME code the live census
     // drives, so a claim and its measurement cannot drift apart.
+    //
+    // Driving the same code is not the same as PINNING it, and the gap is a
+    // property of the corpus rather than of the claims. A helper behaviour
+    // that every corpus entry happens to make indistinguishable is unpinned,
+    // however many entries there are: measured on `projection_body`, whose
+    // brace matching was green under two different mutations because all
+    // thirteen entries declared `request_scope_strings` last and none of the
+    // three that reach it had a brace inside the body. The question a new
+    // entry has to answer is not "what shape does this add" but "what does it
+    // share with the others".
     // =====================================================================
 
     /// Layer 3's three counts over an arbitrary corpus.
@@ -378,6 +388,12 @@ mod tests {
     /// balance. The live test reports that separately from a body that
     /// forked: "the projection is gone" and "the projection re-derives" are
     /// two different reds.
+    ///
+    /// Both ends of the brace match are load-bearing and neither is visible
+    /// on a corpus of one-function texts, so both are pinned by
+    /// `FORKED_BODY_WITH_A_BLOCK_AND_A_LATER_CALLER` in
+    /// `the_projection_body_must_call_request_scope`. **Held by that case**,
+    /// measured red in both directions.
     fn projection_body(module_code: &str) -> Option<&str> {
         let from_fn = &module_code[module_code.find("fn request_scope_strings")?..];
         let open = from_fn.find('{')?;
@@ -430,7 +446,8 @@ mod tests {
     // Probe corpora
     //
     // The smallest module text carrying each shape the module doc makes a
-    // claim about. All of them live inside `mod tests`, which
+    // claim about, plus the shapes the HELPERS' own contracts turn on. All of
+    // them live inside `mod tests`, which
     // `production_prefix` and `production_code_lines` excise, so none can
     // trip the live census on this file.
     // =====================================================================
@@ -481,6 +498,57 @@ fn request_scope_strings(request: &RunRequest) -> crate::scope::FlowScope {
         request.metadata.get(concat!("scope", "_id")).map(String::as_str),
     );
     crate::scope::FlowScope::resolved(upgrade_for_room(request, dup).as_ref())
+}
+"#;
+
+    /// The same fork again, with the two properties the other thirteen
+    /// entries all lack — a body that is NOT the last thing in the text, and
+    /// a brace inside it.
+    ///
+    /// Every other entry declares `fn request_scope_strings` last, so
+    /// "brace-matched body" and "everything from the opening brace to the end
+    /// of the text" are the SAME STRING on them; and no entry that reaches
+    /// `projection_body` has a nested brace, so "matching close brace" and
+    /// "first close brace" are the same string too. Both mutations were
+    /// measured green on the whole module (`--lib run_loop`, 47/0). The first
+    /// one is not merely unpinned but load-bearing on the live file: with
+    /// `request_scope_strings` forked to re-derive off `from_persisted`, the
+    /// shipped helper gives 43/4 and the run-to-EOF helper gives 44/3 — the
+    /// missing red is layer 5's, which is the layer that fork exists to trip.
+    /// That is not a gap in the claims; it is a gap in the corpus, and it is
+    /// what a fourteenth entry sharing the other thirteen's shape could not
+    /// have closed.
+    ///
+    /// The real `mod.rs` has both properties. `request_scope_strings` is
+    /// declared at line 179 and `request_scope(request),` appears twice
+    /// BELOW it — inside `with_request_scope` and
+    /// `ensure_session_under_request_scope`, both of which legitimately call
+    /// the resolver — so a matcher that ran to the end of the text would take
+    /// layer 5's assertion from those two lines no matter what the projection
+    /// did. The live test's own comment says this hazard was already known
+    /// for the module-wide search and deliberately avoided there; the brace
+    /// matching is what avoids it here, and this entry is what says so.
+    const FORKED_BODY_WITH_A_BLOCK_AND_A_LATER_CALLER: &str = r#"
+fn request_scope_strings(request: &RunRequest) -> crate::scope::FlowScope {
+    let dup = request
+        .metadata
+        .get(concat!("scope_owner", "_user_id"))
+        .and_then(|owner| {
+            let raw = request.metadata.get(concat!("scope", "_id"))?;
+            Some(crate::scope::ScopeAttribution {
+                owner_user_id: owner.clone(),
+                scope: crate::scope::ScopeId::parse(raw)?,
+            })
+        });
+    crate::scope::FlowScope::resolved(upgrade_for_room(request, dup).as_ref())
+}
+
+pub(super) async fn with_request_scope<F, T>(request: &RunRequest, fut: F) -> T {
+    crate::scope::with_scope(
+        request_scope(request),
+        crate::scope::with_room_author(None, fut),
+    )
+    .await
 }
 "#;
 
@@ -928,6 +996,39 @@ impl Default for FlowScope {
              time beside it. That residue is stated as open in the module doc. If \
              this ever fires, layer 5 has grown past a lexical call check and the \
              doc must stop calling it one."
+        );
+
+        // The HELPER's own two ends. Everything above reads `projection_body`
+        // on texts where the projection is the last function and its body is
+        // one expression, and on those the brace match has nothing to do:
+        // both mutations below were measured green over the whole module.
+        // This entry is the only one that can tell them apart.
+        let body = projection_body(FORKED_BODY_WITH_A_BLOCK_AND_A_LATER_CALLER)
+            .expect("premise: the fourteenth corpus entry parses");
+        assert!(
+            !body.contains("request_scope("),
+            "`projection_body` must stop at `request_scope_strings`'s MATCHING close \
+             brace and not run on to the end of the text. Every other entry declares \
+             the projection last, so on them the two are the same string; the real \
+             `mod.rs` declares it at line 179 and names `request_scope(request),` \
+             twice below it, in `with_request_scope` and \
+             `ensure_session_under_request_scope`. A matcher that ran on would take \
+             layer 5's assertion from those two lines whatever the projection did — \
+             measured with the depth tracking replaced by `&from_fn[open + 1..]`: \
+             the corpus stays `--lib run_loop` 47/0, and a forked \
+             `request_scope_strings` on the live file goes from 43/4 to 44/3, the \
+             red it loses being layer 5's. Body was:\n{body}"
+        );
+        assert!(
+            body.contains("FlowScope::resolved("),
+            "`projection_body` must match braces by DEPTH and not stop at the first \
+             close brace. No entry that reaches this helper has a brace inside the \
+             projection body, and today's one-expression `request_scope_strings` has \
+             none either, so a first-brace matcher is green everywhere else — \
+             measured, `--lib run_loop` 47/0. Here it cuts the body off at the struct \
+             literal inside the `and_then` closure and hands layer 5 a fragment: the \
+             call it is looking for could sit past that brace and still be inside the \
+             body. Body was:\n{body}"
         );
     }
 
