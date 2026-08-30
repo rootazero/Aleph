@@ -1,0 +1,101 @@
+I have sufficient findings to write the report.
+
+```json
+{
+  "module": "src/canvas",
+  "files_reviewed": 6,
+  "findings": [
+    {
+      "file": "src/canvas/store.rs",
+      "line": 340,
+      "severity": "medium",
+      "category": "clippy",
+      "issue": "Event publish clones the full op batch on every apply (`ops.to_vec()`), bounded by `MAX_OPS_PER_APPLY` but unnecessary because the caller already owns the slice until `apply` returns.",
+      "evidence": "ops: ops.to_vec(),",
+      "suggested_fix": "Have `emit_updated` take `Vec<CanvasOp>` and pass `ops.to_vec()` once at the top of `apply` if the bus cannot borrow, or pass an `Arc<Vec<CanvasOp>>` to avoid cloning per-subscriber.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/canvas/store.rs",
+      "line": 284,
+      "severity": "medium",
+      "category": "concurrency",
+      "issue": "Orphan sweep runs INSIDE the per-canvas critical section, so a slow `read_dir` over a large `assets/` dir blocks every other `apply` on the same canvas.",
+      "evidence": "if let Err(e) = self.sweep_assets_with(id, &referenced).await {",
+      "suggested_fix": "Move the sweep call to AFTER `drop(guard)`. The `referenced` set is already an owned `HashSet<String>` and the asset filesystem is independent of the doc, so holding the lock while sweeping only serializes for no correctness gain.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/canvas/store.rs",
+      "line": 319,
+      "severity": "medium",
+      "category": "concurrency",
+      "issue": "`delete` calls `tokio::fs::remove_dir_all` while still holding the per-canvas write lock; for a canvas with many assets this is unbounded wall-time inside the critical section.",
+      "evidence": "tokio::fs::remove_dir_all(self.root.join(id))",
+      "suggested_fix": "Stage the delete under a separate `delete-pending` marker inside the lock, drop the guard, then perform `remove_dir_all` and verify the marker survived (or repeat if a concurrent create stole the id).",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/canvas/validate.rs",
+      "line": 82,
+      "severity": "medium",
+      "category": "error_handling",
+      "issue": "`apply_ops` mutates `doc.shapes`, `doc.title`, `doc.decks` in place BEFORE the post-state `MAX_SHAPES` check. The partial mutation is safe because the caller drops the guard uncommitted, but the function name gives no signal that failure leaves the doc half-rewritten in memory.",
+      "evidence": "doc.shapes.push(shape.clone()) ... if doc.shapes.len() > MAX_SHAPES { return Err(...) }",
+      "suggested_fix": "Either rename to `try_apply_ops` and document the side-effect contract, or pre-validate the count (e.g. simulate the cap delta over the op list) before mutating.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/canvas/assets.rs",
+      "line": 148,
+      "severity": "medium",
+      "category": "resource_leak",
+      "issue": "TOCTOU between `tokio::fs::metadata(&path)` and the subsequent `atomic_write_bytes`. The per-canvas lock blocks in-process races, but an external process (operator, sync client) can swap a file for a directory between the check and the write, turning the dedupe branch into a failed write that leaves the caller's bytes unstored.",
+      "evidence": "let dedupe_hit = match tokio::fs::metadata(&path).await { ... atomic_write_bytes(&path, bytes)",
+      "suggested_fix": "Open with `O_CREAT | O_EXCL | O_NOFOLLOW` semantics (via `tokio::fs::OpenOptions::new().create_new(true).write(true)`), treat `AlreadyExists` as a dedupe hit, and fall back to overwriting only after confirming the inode is still a regular file.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/canvas/assets.rs",
+      "line": 217,
+      "severity": "low",
+      "category": "concurrency",
+      "issue": "`read_asset`'s fallback `tokio::fs::metadata(&canvas_dir)` to distinguish \"asset missing\" from \"canvas missing\" is unlocked and can yield a misleading exact message if a concurrent `delete` lands between the two syscalls.",
+      "evidence": "match tokio::fs::metadata(&canvas_dir).await { Ok(_) => Err(... \"asset ...\"), Err(_) => Err(... \"canvas ...\") }",
+      "suggested_fix": "Either collapse both messages to a single NotFound, or take the per-canvas read-side slot (currently absent) for the two syscalls.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/canvas/doc_io.rs",
+      "line": 50,
+      "severity": "low",
+      "category": "error_handling",
+      "issue": "Silent recovery from a poisoned `std::sync::Mutex` via `unwrap_or_else(|e| e.into_inner())` — if a thread panicked mid-insert, the slot map can be observed in a partial state and the panic root cause is hidden.",
+      "evidence": "self.slots.lock().unwrap_or_else(|e| e.into_inner())",
+      "suggested_fix": "Keep the recovery (the `MetaLocks` precedent is defensible for a metadata table) but at minimum `tracing::error!(...)` the poison before draining so the panic is observable in logs.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/canvas/selection.rs",
+      "line": 99,
+      "severity": "low",
+      "category": "error_handling",
+      "issue": "Same poisoned-mutex silent-recovery pattern as `doc_io.rs`; a panic in one selection setter hides its own cause and exposes the table to potentially-stale state.",
+      "evidence": ".unwrap_or_else(|e| e.into_inner()) (lines 99 and 109, in `set` and `get`)",
+      "suggested_fix": "Log the poison before draining, or convert to `tokio::sync::Mutex` and propagate as an error variant instead of swallowing.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/canvas/store.rs",
+      "line": 284,
+      "severity": "low",
+      "category": "error_handling",
+      "issue": "Sweep failures inside `apply` are logged and discarded; an asset directory that becomes unwritable will accumulate orphans indefinitely with no signal beyond a `warn!` per apply.",
+      "evidence": "if let Err(e) = self.sweep_assets_with(id, &referenced).await { warn!(...) }",
+      "suggested_fix": "Track consecutive sweep failures per canvas and surface a doctor-style diagnostic (`core/orphan_sweep_stuck`) so an unwritable assets dir does not silently degrade.",
+      "confidence": "low"
+    }
+  ],
+  "summary": "The canvas module is well-defended against path traversal, lost updates, and torn writes by the per-canvas lock + atomic-write + base_revision design; the dominant residual risks are the deliberate decision to keep the orphan sweep and `remove_dir_all` inside the critical section (blocks other applies) and a TOCTOU in `put_asset`'s dedupe check that an external process could exploit. A handful of minor issues — silent poisoned-mutex recovery in both lock tables and an unlocked NotFound-distinguishing metadata check in `read_asset` — round out the report."
+}
+```

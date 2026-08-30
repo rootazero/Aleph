@@ -293,6 +293,142 @@ pub fn stamp_metadata(meta: &mut HashMap<String, String>, attr: &ScopeAttributio
     meta.insert(SCOPE_META_KEY.to_string(), attr.scope.render());
 }
 
+/// The scope attribution [`crate::orchestrator::FlowRequest`] carries across
+/// `orchestrator::dispatch`'s `tokio::spawn` — the same two strings
+/// [`stamp_metadata`] writes, in a struct that cannot be assembled by hand.
+///
+/// # Why a type and not the two `Option<String>` fields it replaces
+///
+/// `FlowRequest` used to carry them raw, and the gateway filled them by
+/// reading `request.metadata` back out. That read is the whole defect
+/// `src/gateway/CLAUDE.md` 地雷 Q describes: the metadata holds whatever the
+/// PRODUCER stamped, and for a channel turn in a bound room that is
+/// `personal:<speaker>`, not the room —
+/// `gateway::execution_engine::run_loop::request_scope` is the only thing that
+/// applies the room's claim on top of it. The session row got the corrected
+/// scope and everything past the spawn got the producer's, with no error
+/// anywhere.
+///
+/// The census in `run_loop::flow_scope_census` catches that read when it is
+/// spelled with the key CONSTANTS, and — since this round — when it is spelled
+/// with their literal values. Both are lexical: they detect a spelling. This
+/// type removes one SHAPE instead: the fields are private, there is no
+/// `Default`, and the only way to mint a non-empty value is
+/// [`FlowScope::resolved`], which takes a [`ScopeAttribution`]. So a raw
+/// `(Option<String>, Option<String>)` written at the `FlowRequest` site is
+/// `E0308` (measured), and the struct literal does not compile outside this
+/// module. 编译错误强于登记表 — for that shape.
+///
+/// # What it does NOT prevent
+///
+/// **It does not constrain where the [`ScopeAttribution`] came from**, and an
+/// earlier version of this doc said it did ("a pair of strings lifted out of a
+/// metadata map no longer type-checks, whatever it is spelled like"). That
+/// sentence was false and a review measured it false. `ScopeAttribution` is
+/// `pub` with `pub` fields and is reachable three ways —
+/// [`ScopeAttribution::from_persisted`], whose signature is *exactly* the pair
+/// of `Option<&str>` a metadata map yields; [`ScopeAttribution::personal`];
+/// and a struct literal,
+/// which `tests/gateway_chat_room_author_across_spawn.rs` builds from outside
+/// the crate. One public call therefore bridges metadata straight to this
+/// type and it compiles. When that was measured every lexical layer in
+/// `flow_scope_census` stayed green while it did; layer 5 — the projection's
+/// body must CALL `request_scope` — has since made that particular bypass
+/// red, because feeding `resolved` from `from_persisted` is a body that
+/// stopped calling the resolver. Layers 2 and 3 are still green on it, which
+/// is the half this section is about: no rule about a SPELLING reaches
+/// provenance.
+///
+/// The same is true of the older hole this section already named: a caller can
+/// resolve an attribution the wrong way — `scope_from_metadata` on the raw map,
+/// skipping the room correction — and pass THAT here. Neither is a type error
+/// and neither is meant to be.
+///
+/// What actually holds provenance is behavioural, not lexical and not typed:
+/// `run_loop::tests::the_flow_request_projection_carries_the_room_upgrade` and
+/// `::the_projection_round_trips_through_the_dispatch_rebuild`, which assert
+/// that a claimed session key reaches the harness as the ROOM. They are red for
+/// any resolution that LOSES that upgrade, however it is spelled — which no
+/// rule about a spelling can be. Not for a second resolution that reaches the
+/// same answer — that one SATISFIES them, because what they assert is a value
+/// and anything computing the same value passes. Nor is it layer 3's counts:
+/// those count occurrences, not answers. `flow_scope_census`'s layer 5
+/// (`request_scope_strings`'s body must call `request_scope`) is the only
+/// thing in the package that objects, and only when the fork drops the call
+/// entirely.
+/// `flow_scope_census`'s module doc lists them as layer 4 and states the bound
+/// in full; do not trade them away as redundant with this type.
+///
+/// [`FlowScope::unscoped`] is the empty pair (`None`, `None`) — legacy owner
+/// semantics, what every non-gateway dispatcher and every test fixture passes.
+/// Deliberately a named constructor and NOT a `Default` — neither the derive
+/// nor a hand-written `impl Default for FlowScope`. `flow_scope_census` reads
+/// THIS FILE for both, because the derive assertion turned out to be blind to
+/// the impl and the justification it gave ("no text search can find it")
+/// applied verbatim to the impl as well. Two spellings
+/// of the same value would be two things the census has to know about, and the
+/// census is what pins `unscoped` to zero uses inside `run_loop` — handing the
+/// harness a deliberately empty pair there is the other way to drop the room.
+#[derive(Clone, Debug)]
+pub struct FlowScope {
+    owner_user_id: Option<String>,
+    scope_id: Option<String>,
+}
+
+impl FlowScope {
+    /// The unscoped pair: no owner, no scope, legacy owner semantics.
+    #[must_use]
+    pub fn unscoped() -> Self {
+        Self {
+            owner_user_id: None,
+            scope_id: None,
+        }
+    }
+
+    /// Project an already-resolved attribution into the pair `FlowRequest`
+    /// carries.
+    ///
+    /// `None` (the fail-closed result of [`scope_from_metadata`], and of
+    /// `request_scope` built on it) projects to the unscoped pair, so a
+    /// half-stamped turn arrives as `(None, None)` rather than
+    /// `(Some(owner), None)` — `dispatch` re-runs [`scope_from_metadata`] on
+    /// the rebuilt map and would reach the same dead task-local either way,
+    /// but only this says so at the boundary.
+    ///
+    /// `pub` rather than `pub(crate)` because integration tests build scoped
+    /// `FlowRequest`s from outside the crate. Widening it costs nothing this
+    /// type is defending — but not for the reason first written here, which
+    /// was that "a pair of strings lifted out of a metadata map is still not
+    /// expressible". It is expressible, in one public call, because
+    /// [`ScopeAttribution::from_persisted`] takes precisely that pair; the
+    /// integration test that forced this widening builds a `ScopeAttribution`
+    /// by struct literal, which is the same point from the other side. The
+    /// widening is free because this signature never defended provenance, not
+    /// because the shape stays out of reach.
+    ///
+    /// What must not spread is a SECOND way to resolve one inside `run_loop`,
+    /// and that is held off by `flow_scope_census` — its `scope_from_metadata`
+    /// and `FlowScope::resolved` counts lexically, its layer 5 (the
+    /// projection's body must call `request_scope`) structurally, and its
+    /// layer 4 (two behavioural tests, named there) behaviourally. Not by
+    /// this signature.
+    #[must_use]
+    pub fn resolved(attr: Option<&ScopeAttribution>) -> Self {
+        Self {
+            owner_user_id: attr.map(|a| a.owner_user_id.clone()),
+            scope_id: attr.map(|a| a.scope.render()),
+        }
+    }
+
+    /// The `(owner_user_id, scope_id)` pair, for the one consumer that rebuilds
+    /// a metadata map from it (`orchestrator::dispatch`, re-seeding the scope
+    /// task-local inside its spawn).
+    #[must_use]
+    pub(crate) fn into_parts(self) -> (Option<String>, Option<String>) {
+        (self.owner_user_id, self.scope_id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

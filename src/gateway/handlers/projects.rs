@@ -12,17 +12,30 @@
 //! has a `workspace_path` — and `bind_workspace` is the verb that moves a row
 //! between the two views in either direction.
 //!
-//! ## The four writers of `workspace_path` — three gated, one exempt
+//! ## The five writers of `workspace_path` — four gated, one exempt
 //!
-//! `add`, `create_blank` and `bind_workspace` are the three that CHOOSE a
-//! directory. Since P2 (Task 7) that column is the default working directory
-//! of every run in the room, so all three go through
+//! `add`, `create_blank` and `bind_workspace` are three of the four that
+//! CHOOSE a directory. Since P2 (Task 7) that column is the default working
+//! directory of every run in the room, so all three go through
 //! [`require_directory_choice`] — the same config-tier predicate the per-turn
-//! `project_root` override uses. Adding a fifth writer without it reopens
+//! `project_root` override uses. Adding a sixth writer without a gate reopens
 //! "register a folder, then chat in it", a two-step path to an arbitrary
 //! server directory with both steps legal.
 //!
-//! The fourth is `execution_engine::run_loop::inner`, which auto-registers a
+//! The fourth chooser is `builtin_tools::project_manage`'s `bind_workspace`
+//! action, which calls `ProjectStore::bind_workspace` DIRECTLY rather than
+//! routing through this module. It is gated, but **by a different predicate,
+//! and that is deliberate**: `require_operator_tier()` reads
+//! `TurnContext::caller_is_operator()`, because the ambient
+//! `caller_may_choose_directory()` is dead inside a run — the task-local is
+//! not re-established across the harness spawn, which is exactly what made
+//! that predicate constant-true on this face until 2026-08-30. `TurnContext`
+//! is per TURN rather than per connection and the gateway has already
+//! resolved the connection's authority into it before any tool executes.
+//! It fires only when a path is NAMED, so RELEASING a binding stays reachable
+//! from a session a bad binding broke.
+//!
+//! The fifth is `execution_engine::run_loop::inner`, which auto-registers a
 //! run's `workspace_override` into the catalogue (via `ProjectStore::add_for`)
 //! so a CLI/programmatic cwd shows up in the desktop picker next time. It is
 //! exempt, and the exemption is an invariant rather than an oversight: **it
@@ -48,6 +61,18 @@
 //! The count is load-bearing: leaving it at three means whoever adds a
 //! genuinely new writer believes they are the fourth when they are the fifth,
 //! and looks for three precedents when there are four.
+//!
+//! **And this paragraph went stale exactly the way it warns about.** It said
+//! "four writers — three gated" from P2 until 2026-08-30, when
+//! `project_manage(bind_workspace)` landed as the fourth chooser and nothing
+//! here changed; SECURITY.md's copy of the count went stale in the same
+//! silence. Nothing catches this — a count of members is prose, and prose has
+//! no compiler. Two consequences worth carrying: the RULE below is the part
+//! that survives, so read it rather than the number; and when you add the
+//! sixth, grep `workspace_path` and `bind_workspace` for every writer rather
+//! than trusting this list, then fix BOTH this doc and SECURITY.md's
+//! «The workspace binding is a privilege» bullet, which names this module as
+//! its authority.
 //!
 //! ## The four verdicts (spec §6.3)
 //!
@@ -91,12 +116,27 @@ use crate::sync_primitives::Arc;
 
 /// Serializable view of a project room.
 ///
+/// The shape itself lives in `aleph_protocol` (as
+/// [`aleph_protocol::projects::ProjectRow`]) rather than here, for the reason
+/// `projects.channel.*` already put its shapes there: `aleph-cli` must not
+/// depend on `alephcore`, so `aleph projects list` had no way to name this row
+/// and would have hand-written a third copy of it. The Panel's
+/// `api::projects::ProjectInfo` is already a second one, and a hand-copied
+/// client row is how `aleph providers list` came to render two columns
+/// (`type`, `default`) the server had never sent.
+///
+/// The alias is deliberately kept: this name is what the seven construction
+/// sites below and `builtin_tools::project_manage` already read, and the
+/// direction that matters is that the response is **built from** the contract
+/// type. A test that only parses a response proves the client's fields are a
+/// subset of what was sent, never that the two are the same set.
+///
 /// `workspace_path` is `null` for a room that is not bound to a folder — the
 /// ordinary shape for a room created through `projects.create`, and the reason
-/// this is an `Option` rather than the pre-P2 `path: String` that spelled
+/// it is an `Option` rather than the pre-P2 `path: String` that spelled
 /// "unbound" as `""`.
 ///
-/// When it is set, it is rendered through
+/// When it is set, [`render_project`] runs it through
 /// [`crate::utils::paths::display_string`]. The stored value comes out of
 /// `std::fs::canonicalize`, so on Windows it carries the `\\?\`
 /// extended-length prefix — which is right for the filesystem layer and wrong
@@ -104,34 +144,26 @@ use crate::sync_primitives::Arc;
 /// echoes a path back. The row keeps the canonical bytes; only this projection
 /// is simplified, and the round trip is safe because every path the client
 /// sends back is re-canonicalised by `ProjectStore::canonical_dir`.
-#[derive(Debug, Clone, Serialize)]
-pub struct ProjectView {
-    pub id: String,
-    pub name: String,
-    pub owner_user_id: Option<String>,
-    pub workspace_path: Option<String>,
-    pub status: String,
-    pub member_ids: Vec<String>,
-    pub created_at: i64,
-    pub updated_at: i64,
-    pub last_used_at: i64,
-}
+pub type ProjectView = aleph_protocol::projects::ProjectRow;
 
-impl ProjectView {
-    pub(crate) fn render(p: Project, member_ids: Vec<String>) -> Self {
-        Self {
-            id: p.id,
-            name: p.name,
-            owner_user_id: p.owner_user_id,
-            workspace_path: p
-                .workspace_path
-                .map(|w| crate::utils::paths::display_string(&w)),
-            status: p.status.as_str().to_string(),
-            member_ids,
-            created_at: p.created_at,
-            updated_at: p.updated_at,
-            last_used_at: p.last_used_at,
-        }
+/// Project a stored room plus its roster into the wire row.
+///
+/// A free function rather than `ProjectView::render`, because Rust does not
+/// allow an inherent impl on a type from another crate. Same body, same
+/// callers.
+pub(crate) fn render_project(p: Project, member_ids: Vec<String>) -> ProjectView {
+    ProjectView {
+        id: p.id,
+        name: p.name,
+        owner_user_id: p.owner_user_id,
+        workspace_path: p
+            .workspace_path
+            .map(|w| crate::utils::paths::display_string(&w)),
+        status: p.status.as_str().to_string(),
+        member_ids,
+        created_at: p.created_at,
+        updated_at: p.updated_at,
+        last_used_at: p.last_used_at,
     }
 }
 
@@ -146,7 +178,7 @@ impl ProjectView {
 /// the one `projects.get` already returned for a missing id before P2, so a
 /// single-user deployment sees byte-identical output to before.
 #[must_use]
-fn project_not_found(id: Option<Value>, project_id: &str) -> JsonRpcResponse {
+pub(super) fn project_not_found(id: Option<Value>, project_id: &str) -> JsonRpcResponse {
     JsonRpcResponse::error(
         id,
         RESOURCE_NOT_FOUND,
@@ -161,7 +193,7 @@ fn project_not_found(id: Option<Value>, project_id: &str) -> JsonRpcResponse {
 /// supplies its own. Fails closed on a store error, and answers a refusal
 /// with the same not-found shape absence produces — see that module's doc.
 #[allow(clippy::result_large_err)] // house shape for Result<_, JsonRpcResponse> gates
-fn gate_project(
+pub(super) fn gate_project(
     store: &ProjectStore,
     id: Option<Value>,
     project_id: &str,
@@ -300,10 +332,18 @@ pub async fn handle_list(request: JsonRpcRequest, store: Arc<ProjectStore>) -> J
         .filter(|p| visibility::project_visible(&p.id))
         .map(|p| {
             let members = rosters.remove(&p.id).unwrap_or_default();
-            ProjectView::render(p, members)
+            render_project(p, members)
         })
         .collect();
-    JsonRpcResponse::success(request.id, json!({ "projects": view }))
+    // The envelope is a wire key too, and it is usually the last hand-copied
+    // part: the rows got a contract type while `{"projects": …}` stayed a
+    // literal in the handler and again in every client. Constructing
+    // `ProjectListResult` is how `aleph projects list` learns the key rather
+    // than guessing it.
+    JsonRpcResponse::success(
+        request.id,
+        json!(aleph_protocol::projects::ProjectListResult { projects: view }),
+    )
 }
 
 // ============================================================================
@@ -335,7 +375,7 @@ pub async fn handle_create(
             projects::events::publish_changed(&event_bus, &project.id, ChangeKind::Created, None);
             JsonRpcResponse::success(
                 request.id,
-                json!({ "project": ProjectView::render(project, members) }),
+                json!({ "project": render_project(project, members) }),
             )
         }
         Err(e) => project_error_response(request.id, e),
@@ -383,7 +423,7 @@ pub async fn handle_add(
             projects::events::publish_changed(&event_bus, &project.id, ChangeKind::Updated, None);
             JsonRpcResponse::success(
                 request.id,
-                json!({ "project": ProjectView::render(project, members) }),
+                json!({ "project": render_project(project, members) }),
             )
         }
         Err(e) => project_error_response(request.id, e),
@@ -421,7 +461,7 @@ pub async fn handle_create_blank(
             projects::events::publish_changed(&event_bus, &project.id, ChangeKind::Created, None);
             JsonRpcResponse::success(
                 request.id,
-                json!({ "project": ProjectView::render(project, members) }),
+                json!({ "project": render_project(project, members) }),
             )
         }
         Err(e) => project_error_response(request.id, e),
@@ -452,7 +492,7 @@ pub async fn handle_get(request: JsonRpcRequest, store: Arc<ProjectStore>) -> Js
     };
     JsonRpcResponse::success(
         request.id,
-        json!({ "project": ProjectView::render(project, members) }),
+        json!({ "project": render_project(project, members) }),
     )
 }
 
@@ -489,7 +529,7 @@ pub async fn handle_rename(
             projects::events::publish_changed(&event_bus, &renamed.id, ChangeKind::Updated, None);
             JsonRpcResponse::success(
                 request.id,
-                json!({ "project": ProjectView::render(renamed, members) }),
+                json!({ "project": render_project(renamed, members) }),
             )
         }
         Err(e) => project_error_response(request.id, e),
@@ -604,7 +644,7 @@ pub async fn handle_bind_workspace(
             projects::events::publish_changed(&event_bus, &bound.id, ChangeKind::Updated, None);
             JsonRpcResponse::success(
                 request.id,
-                json!({ "project": ProjectView::render(bound, members) }),
+                json!({ "project": render_project(bound, members) }),
             )
         }
         Err(e) => project_error_response(request.id, e),
@@ -869,7 +909,10 @@ fn member_list_response(
     }
 }
 
-fn project_error_response(id: Option<serde_json::Value>, err: ProjectError) -> JsonRpcResponse {
+pub(super) fn project_error_response(
+    id: Option<serde_json::Value>,
+    err: ProjectError,
+) -> JsonRpcResponse {
     let (code, msg) = match &err {
         ProjectError::NotFound(_) => (RESOURCE_NOT_FOUND, err.to_string()),
         ProjectError::NotAbsolute(_)

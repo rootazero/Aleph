@@ -21,11 +21,13 @@
 
 pub mod attribution_backfill;
 pub mod authz;
+pub mod binding;
 pub mod events;
 pub mod roster;
 mod run_context;
 mod store;
 
 pub use attribution_backfill::{backfill_legacy_room_attribution, BackfillReport};
+pub use binding::ChannelBinding;
 pub use run_context::{current as current_project_root, with_project_root};
 pub use store::{Project, ProjectError, ProjectStatus, ProjectStore};

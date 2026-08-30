@@ -1058,7 +1058,28 @@ fn namespace_explicit_project_id(project_id: &str) -> String {
                     }
                 })
                 .collect();
-            format!("{project_id}__{slug}")
+            // If the actor id contains only non-ASCII / special chars,
+            // every char gets replaced with `-` and the slug collapses
+            // to a single dashed string — which then collides across
+            // two such actors. Append a short hash of the raw actor id
+            // so distinct non-ASCII actors get distinct namespaced ids.
+            // The hash is BLAKE3 keyed for speed; collision resistance
+            // is not the point (the canonical actor id is the slug
+            // for any user looking at the project), the point is
+            // non-collision.
+            let disambiguator: String = if slug.chars().all(|c| c == '-') {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                actor.hash(&mut h);
+                format!("{:x}", h.finish())[..8].to_string()
+            } else {
+                String::new()
+            };
+            if disambiguator.is_empty() {
+                format!("{project_id}__{slug}")
+            } else {
+                format!("{project_id}__{slug}__{disambiguator}")
+            }
         }
         _ => project_id.to_string(),
     }

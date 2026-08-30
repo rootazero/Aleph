@@ -130,6 +130,12 @@ impl AlephTool for TeamUsageTool {
             "team_usage: dispatch"
         );
 
+        // BT-D-R4-23: gate before any read so a non-member cannot read any
+        // team's token usage breakdown. The same NotFound-shaped refusal
+        // every other team tool uses — a non-member probing ids cannot
+        // tell "not found" from "not a member".
+        super::require_team_auth(&*self.team_store, &args.team_id, &self.actor()).await?;
+
         // Validate team exists so the caller gets a clear NotFound instead of
         // a silent zero-row response.
         let _team = self

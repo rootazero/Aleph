@@ -1,0 +1,217 @@
+{
+  "module": "src/builtin_tools/file_ops",
+  "files_reviewed": 16,
+  "findings": [
+    {
+      "file": "src/builtin_tools/file_ops/image_read.rs",
+      "line": 58,
+      "severity": "critical",
+      "category": "security",
+      "issue": "Image decode has no decompression-bomb guard: `image::load_from_memory` will materialize a malicious multi-GB allocation from a small crafted PNG/GIF/TIFF before any size cap can fire.",
+      "evidence": "let decoded = image::load_from_memory(bytes).ok()?;",
+      "suggested_fix": "Construct an `ImageReader::from_memory(bytes)` and call `with_guessed_format(...).set_limits(image::Limits::default())` (or stricter, e.g. 64 MB decoded max) before loading. Currently the only defence is the upstream `file_read` size cap (100 MB raw bytes), which is the input size, not the decoded size.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/batch.rs",
+      "line": 118,
+      "severity": "high",
+      "category": "api_misuse",
+      "issue": "`execute_batch_move` calls blocking `fs::rename` (and `fs::metadata`) inside an async function while a `lock_path_pair` guard is held — every rename on a slow/network filesystem stalls a tokio worker and blocks any concurrent task waiting on the same path lock.",
+      "evidence": "let _path_guards = crate::tools::path_locks::lock_path_pair(&src_canonical, &dest_path).await; ... match fs::rename(&path, &dest_path) {",
+      "suggested_fix": "Switch to `tokio::fs::rename` and `tokio::fs::metadata`, or wrap the rename in `tokio::task::spawn_blocking`. The path lock should be released before any blocking syscall that does not need cross-task coordination across an `.await`.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/batch.rs",
+      "line": 306,
+      "severity": "high",
+      "category": "api_misuse",
+      "issue": "`execute_organize` calls blocking `fs::read_dir`, `fs::create_dir`, `fs::rename`, `fs::metadata` inside an async function, blocking tokio workers — same failure mode `stats::count_lines` was specifically rewritten to avoid.",
+      "evidence": "let entries: Vec<_> = fs::read_dir(&canonical) ... fs::rename(&path, &dest_path)",
+      "suggested_fix": "Move the walk + rename loop into `tokio::task::spawn_blocking`, or convert to `tokio::fs` calls. The `count_lines` precedent (audit BTS-5) shows this exact issue already caused 'wedged executor' in production.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/ops.rs",
+      "line": 47,
+      "severity": "high",
+      "category": "api_misuse",
+      "issue": "`execute_list` calls blocking `fs::read_dir` and `entry.metadata()` inside an async function. On a directory with many entries (e.g. `node_modules/`, a build cache), the entire walk happens on a tokio worker thread.",
+      "evidence": "for entry in fs::read_dir(&canonical) ... let Ok(metadata) = entry.metadata() else {",
+      "suggested_fix": "Use `tokio::fs::read_dir` and `entry.metadata().await`, or move the walk into `spawn_blocking` as `stats::count_lines` does.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/ops.rs",
+      "line": 115,
+      "severity": "high",
+      "category": "api_misuse",
+      "issue": "`read_file_bytes` calls blocking `fs::metadata` and `fs::read` inside an async function — a multi-second read on a slow/network filesystem stalls a tokio worker.",
+      "evidence": "let metadata = fs::metadata(&canonical) ... let bytes = fs::read(&canonical)",
+      "suggested_fix": "Use `tokio::fs::metadata` and `tokio::fs::read`.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/ops.rs",
+      "line": 270,
+      "severity": "high",
+      "category": "api_misuse",
+      "issue": "`execute_move` calls blocking `fs::rename` inside an async function (and while holding the path lock).",
+      "evidence": "fs::rename(&from_canonical, &to_canonical)",
+      "suggested_fix": "Switch to `tokio::fs::rename`.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/ops.rs",
+      "line": 348,
+      "severity": "high",
+      "category": "api_misuse",
+      "issue": "`execute_copy` calls blocking `fs::copy`, `fs::create_dir_all`, `fs::canonicalize`, `fs::read_dir`, `fs::copy` inside async functions (the recursive helper runs on the same executor).",
+      "evidence": "tally.bytes = fs::copy(&from_canonical, &to_canonical) ... copy_dir_recursive(...)",
+      "suggested_fix": "Either migrate the recursive walker to `tokio::fs` calls (lots of churn), or move the whole copy into a single `spawn_blocking` — the entire operation is I/O-bound and benefits from blocking-pool scheduling more than from cooperative scheduling.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/ops.rs",
+      "line": 643,
+      "severity": "high",
+      "category": "api_misuse",
+      "issue": "`execute_delete` calls blocking `fs::remove_file`, `fs::remove_dir_all`, and `count_path_entries` (which itself calls `fs::read_dir` recursively) inside an async function while holding the path lock.",
+      "evidence": "fs::remove_file(&canonical) ... fs::remove_dir_all(&canonical)",
+      "suggested_fix": "Either migrate to `tokio::fs` (the recursive tree-walk is awkward to port) or wrap the whole deletion in a single `spawn_blocking`. Note that holding the per-path lock across a multi-second blocking call defeats the lock's purpose of protecting concurrent edits.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/ops.rs",
+      "line": 715,
+      "severity": "high",
+      "category": "api_misuse",
+      "issue": "`execute_mkdir` calls blocking `fs::create_dir_all`/`fs::create_dir` and uses `canonical.exists()` / `canonical.is_dir()` (blocking stat) inside an async function while holding the path lock.",
+      "evidence": "if canonical.exists() { ... fs::create_dir_all(&canonical)",
+      "suggested_fix": "Use `tokio::fs` equivalents; the exists/is_dir checks should also be async stat calls.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/search.rs",
+      "line": 66,
+      "severity": "medium",
+      "category": "api_misuse",
+      "issue": "`execute_search` calls blocking `fs::metadata(&path)` inside an async function for every glob match — `glob::glob` is sync, but the per-match stat should not block the worker.",
+      "evidence": "if let Ok(metadata) = fs::metadata(&path) {",
+      "suggested_fix": "Use `tokio::fs::metadata` (or `spawn_blocking` over the whole `for entry in glob::glob` loop).",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/batch.rs",
+      "line": 111,
+      "severity": "medium",
+      "category": "type_safety",
+      "issue": "`execute_batch_move` uses `file_name().unwrap_or_default()` and passes the empty `OsStr` through `replace(['/', '\\\\'], \"_\")` (no-op), then `unique_dest(dest_canonical, \"\")` returns `dest_canonical` itself. The subsequent `fs::rename(file, dest_dir)` is harmless (the rename fails), but a model-targeted glob pattern that matches e.g. a pathless entry silently turns into a no-op with no error surfaced.",
+      "evidence": "let file_name = path.file_name().unwrap_or_default(); let safe_name = file_name.to_string_lossy().replace(['/', '\\\\'], \"_\");",
+      "suggested_fix": "If `file_name()` returns empty, treat the entry as malformed and continue (or push to `errors`). Don't pass \"\" into `unique_dest`.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/batch.rs",
+      "line": 18,
+      "severity": "low",
+      "category": "resource_leak",
+      "issue": "`unique_dest` loops `for n in 1..usize::MAX` — a directory holding ~4 billion same-named entries will spin for many seconds before terminating. The file-existence probe is O(N) syscall per iteration.",
+      "evidence": "for n in 1..usize::MAX { ... if !candidate.exists() { return candidate; } }",
+      "suggested_fix": "Cap iterations at a smaller constant (e.g. 1_000_000) and return an error past that, or use a HashSet-based dedup so the loop is O(1) probe.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/batch.rs",
+      "line": 247,
+      "severity": "low",
+      "category": "error_handling",
+      "issue": "`execute_organize` silently discards directory-entry errors via `filter_map(|e| e.ok())` — EACCES or removed-mid-walk entries vanish with no count, unlike `ops::execute_list` (which reports `skipped`).",
+      "evidence": "let entries: Vec<_> = fs::read_dir(&canonical) ... .filter_map(|e| e.ok()) .collect();",
+      "suggested_fix": "Mirror `execute_list`: count dropped entries and disclose in the message (\"Skipped N unreadable entries\").",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/search.rs",
+      "line": 66,
+      "severity": "low",
+      "category": "error_handling",
+      "issue": "`execute_search` silently drops every match whose `fs::metadata` fails (`if let Ok(metadata) = ...`). A search result with all entries unreadable returns the same shape as an empty search, with no skipped count.",
+      "evidence": "if let Ok(metadata) = fs::metadata(&path) { matched += 1;",
+      "suggested_fix": "Track a `skipped_unreadable: usize` and disclose it in the result message, matching `execute_list` / `execute_stats`.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/ops.rs",
+      "line": 466,
+      "severity": "low",
+      "category": "error_handling",
+      "issue": "`copy_dir_recursive` treats a `canonicalize` failure on a non-symlink as `tally.note_unresolvable(...)` — good — but the `Ok(())` early-return path on a SYMLINK's canonicalize failure hard-errors the whole copy. A dangling symlink in the tree aborts the entire batch.",
+      "evidence": "let canonical = match fs::canonicalize(&from_path) { Ok(canonical) => canonical, Err(e) if is_symlink => { return Err(ToolError::Execution(format!(\"Failed to canonicalize symlink: {e}\"))) } Err(e) => { tally.note_unresolvable(&from_path); continue; } };",
+      "suggested_fix": "Dangling symlinks should be reported as unresolvable (or skipped), not fatal — the parallel `execute_list` and `execute_stats` paths already do so.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/read.rs",
+      "line": 218,
+      "severity": "low",
+      "category": "error_handling",
+      "issue": "`render_window` relies on three `.expect(...)` panics labelled 'invariant' (lines 218, 263, 288). The invariants are documented but if violated the entire async task panics on the tokio worker — a model that crafts a request forcing an off-by-one (e.g. `offset=0` combined with the `max(1)` clamp) would crash the tool, not return an error.",
+      "evidence": "lines.get(start..line_end).expect(\"invariant: start..line_end is clamped to lines length\")",
+      "suggested_fix": "Replace `expect` with `match` returning a `FileReadOutput { success: false, message: \"...\", .. }`. Invariant violations are a defensive surface, not a reason to panic the worker.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/path_utils.rs",
+      "line": 700,
+      "severity": "low",
+      "category": "api_misuse",
+      "issue": "`resolve_for_removal` calls blocking `std::fs::symlink_metadata` and `safe_normalize` (which calls blocking `canonicalize`) inside what is otherwise the async path-resolver layer. Called from async fns (`execute_move`, `execute_delete`).",
+      "evidence": "let is_symlink = std::fs::symlink_metadata(&expanded) ... let canon_parent = safe_normalize(parent)",
+      "suggested_fix": "Either make `resolve_for_removal` async and use `tokio::fs::symlink_metadata`, or accept it as a synchronous helper but document the cost — currently it's silently borrowed into every async move/delete call.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/edit.rs",
+      "line": 32,
+      "severity": "low",
+      "category": "magic_value",
+      "issue": "`read_text_file`'s 100 MB cap and `FileWriteTool::call`'s 32 MB cap and `FileReadTool::new`'s 100 MB cap are three independent inline constants. Drift between any two of them surfaces as a tool-family inconsistency the model has to discover empirically.",
+      "evidence": "const MAX_EDIT_BYTES: u64 = 100 * 1024 * 1024; ... const MAX_WRITE_CONTENT_BYTES: usize = 32 * 1024 * 1024; ... max_read_size: 100 * 1024 * 1024",
+      "suggested_fix": "Promote these to `pub(crate) const` in `text.rs` (next to `MAX_LINE_CHARS`) so the read/write/edit family shares one named limit and any future adjustment is single-site.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/ops.rs",
+      "line": 358,
+      "severity": "low",
+      "category": "concurrency",
+      "issue": "`execute_copy` claims a single `lock_path_pair` on (source, destination) for the entire recursive walk — including all `fs::copy` blocking syscalls — so a concurrent edit anywhere in the source subtree waits for the full copy to finish, and a concurrent destination write waits for it too.",
+      "evidence": "let _path_guards = lock_path_pair(&from_canonical, &to_canonical).await; ... copy_dir_recursive(...)",
+      "suggested_fix": "Lock per-entry inside the recursive walker, not once at the top. The `batch_move` / `organize` loop already does the per-item version; copy should follow suit. Same comment applies to `execute_move`'s single-source/destination lock.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/apply_patch.rs",
+      "line": 155,
+      "severity": "low",
+      "category": "magic_value",
+      "issue": "`MAX_PATCH_BYTES = 4 MiB`, `MAX_PATCH_OPS = 500`, `MAX_ADD_LINES = 100_000`, `MAX_ADD_BODY_BYTES = 16 MiB` are all inline `const` inside function bodies (e.g. `plan_add` declares `MAX_ADD_LINES` and `MAX_ADD_BODY_BYTES` inside the function). Discoverability and adjustability suffer.",
+      "evidence": "const MAX_ADD_LINES: usize = 100_000; const MAX_ADD_BODY_BYTES: usize = 16 * 1024 * 1024;",
+      "suggested_fix": "Hoist all four to module-level `pub(crate) const` next to `MAX_PATCH_BYTES` so a single block enumerates the envelope's resource ceiling.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/file_ops/read_cache.rs",
+      "line": 60,
+      "severity": "low",
+      "category": "error_handling",
+      "issue": "The eviction policy on `MAX_READ_CACHE_ENTRIES` overflow is `map.keys().next().cloned()` — a HashMap's iteration order is randomized, so a determined attacker model that reads10 001 distinct windows in quick succession can evict an arbitrary (not least-recently-used) entry. Documented as 'any is fine' but the cap fires every read past10 000, hammering the eviction path.",
+      "evidence": "if let Some(evicted) = map.keys().next().cloned() { map.remove(&evicted); }",
+      "suggested_fix": "Either accept the eviction cost and document it as a deliberate 'fingerprint, not LRU' choice, or wire in `lru::LruCache` and track recent insertions. The current comment already concedes the latter is the principled fix.",
+      "confidence": "low"
+    }
+  ],
+  "summary": "file_ops is generally well-defended against path traversal (canonicalize + FsScope rebase + deny glob) and against partial writes (atomic_write_file across all mutators), but it is undermined by a pervasive pattern of blocking std::fs calls inside async fns (ops.rs, batch.rs, search.rs) that stalls tokio workers, a missing decompression-bomb guard in image_read.rs, and a category of latent bugs around empty filenames and hard-errors on dangling symlinks. Concurrency locking is structurally sound but held across blocking I/O in batch/copy, and inline magic constants for size/line limits could be consolidated."
+}

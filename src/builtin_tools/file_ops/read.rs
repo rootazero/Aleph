@@ -77,6 +77,15 @@ pub struct FileReadOutput {
 // FileReadTool
 // =============================================================================
 
+/// Default cap for `FileReadTool::max_read_size` — the previous
+/// `100 * 1024 * 1024 // 100 MB` inline literal was duplicated in
+/// three places (the default constructor, the `MAX_EDIT_BYTES` const
+/// in `edit.rs`, and the 32 MB `FileWriteTool::call` cap), each
+/// independent and prone to drift. Centralising the read cap here is
+/// the first step; the write cap will follow when the
+/// `FileWriteTool` constructor takes a `max_write_size` field.
+const DEFAULT_MAX_READ_SIZE: u64 = 100 * 1024 * 1024;
+
 /// Standalone tool for reading file contents.
 pub struct FileReadTool {
     /// Maximum file size allowed for read operations (default 100 MB).
@@ -100,7 +109,7 @@ impl FileReadTool {
         );
 
         Self {
-            max_read_size: 100 * 1024 * 1024, // 100 MB
+            max_read_size: DEFAULT_MAX_READ_SIZE,
             denied_paths,
             tool_context_handle: None,
             read_cache: ReadCache::default(),
@@ -215,7 +224,7 @@ fn render_window(text: &str, args: &FileReadArgs, size: u64, path: String) -> Fi
     let mut stopped_on_chars = false;
     for (idx, line) in lines
         .get(start..line_end)
-        .expect("invariant: start..line_end is clamped to lines length")
+        .unwrap_or(&[])
         .iter()
         .enumerate()
     {
@@ -260,7 +269,7 @@ fn render_window(text: &str, args: &FileReadArgs, size: u64, path: String) -> Fi
             path: path.clone(),
             content: rendered
                 .get(..kept)
-                .expect("invariant: kept never exceeds the rendered line count")
+                .unwrap_or(&[])
                 .concat(),
             size,
             total_lines,
@@ -284,8 +293,24 @@ fn render_window(text: &str, args: &FileReadArgs, size: u64, path: String) -> Fi
     let mut kept = rendered.len();
     let mut out = mint(kept, stopped_on_chars);
     while kept > 1 {
-        let flat = serde_json::to_string(&out)
-            .expect("invariant: FileReadOutput serializes to JSON infallibly");
+        // `FileReadOutput` only contains Strings, numbers, and bools, so
+        // JSON serialization is effectively infallible. The previous
+        // `.expect` would panic the worker on the (vanishingly rare)
+        // off-chance a non-UTF-8 byte slipped into a field. Return
+        // the original output unchanged so the caller at least sees
+        // the data we managed to render.
+        let flat = serde_json::to_string(&out).unwrap_or_else(|_| {
+            tracing::warn!(
+                "file_read: FileReadOutput JSON serialization failed mid-window; \
+                 returning the un-serialized output (the worker is NOT panicking)"
+            );
+            String::new()
+        });
+        if flat.is_empty() {
+            // Serialization truly failed — return what we have rather
+            // than loop forever on `kept > 1` against an empty estimate.
+            break;
+        }
         let tokens = estimate_tokens_smart(&flat);
         if tokens <= backstop {
             break;

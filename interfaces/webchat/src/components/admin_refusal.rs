@@ -306,18 +306,50 @@ pub fn settings_write_error(
 ///     i18n, &e, |e| format!("Failed to save: {e}"),
 /// )));
 /// ```
+///
+/// # Why the opener is found two ways
+///
+/// The literal `.set(Some(` only matches when both calls land on one line.
+/// Inside a `view!` this deeply nested, rustfmt breaks a chain before every
+/// `.`, so `error.set(Some(fleet_error_label(…)))` becomes `error`, `.set(`
+/// and `Some(` on three separate lines — and the single-line search never
+/// sees it, whether the argument is classified or not. Measured:
+/// `cluster.rs:339-343` (the deregister handler's `Err` arm) fed a raw
+/// server error into the signal and this scanner stayed green, because it
+/// was reading a line that no longer contained the shape it was looking for.
+///
+/// [`set_then_some_on_next_line`] adds the second opener: `.set(` alone at
+/// the end of a line, `Some(` alone at the start of the next. It costs no
+/// allowlist for the same reason the single-line rule does not need one —
+/// `cluster.rs`'s actual call already routes through `fleet_error_label`
+/// (`calls_a_local_classifier`, see below), so making the write visible
+/// does not turn a correct site into a finding; it turns an unexamined site
+/// into an examined one. When the receiver itself is also on its own line
+/// (rustfmt's usual break point, one line above `.set(`), [`receiver_ident`]
+/// on the `.set(` line's empty prefix returns nothing, so
+/// [`receiver_on_line_above`] is the fallback rather than a second proxy.
 #[cfg(test)]
 fn unclassified_error_writes(src: &str) -> Vec<(usize, String)> {
     let lines: Vec<&str> = src.lines().collect();
     let mut out = Vec::new();
     for (i, line) in lines.iter().enumerate() {
-        let Some(at) = line.find(".set(Some(") else {
+        let (at, split) = if let Some(at) = line.find(".set(Some(") {
+            (at, false)
+        } else if set_then_some_on_next_line(&lines, i) {
+            (line.trim_end().len() - ".set(".len(), true)
+        } else {
             continue;
         };
         // The identifier itself, not the whole prefix: `Err(e) => { row` would
         // otherwise make the declaration lookup search for a name that is not
-        // one and never find it.
-        let receiver = receiver_ident(&line[..at]);
+        // one and never find it. On the split shape the receiver is blank on
+        // this line (it is on the line above), so fall back there.
+        let same_line = receiver_ident(&line[..at]);
+        let receiver = if same_line.is_empty() {
+            receiver_on_line_above(&lines, i)
+        } else {
+            same_line
+        };
         // Span of the write expression: from this line until the parens it
         // opened balance again. Over-reading swallows a later `admin_refusal`
         // and goes quiet; under-reading loses one and shouts. Both are possible
@@ -343,9 +375,47 @@ fn unclassified_error_writes(src: &str) -> Vec<(usize, String)> {
         if !receiver_holds_a_string(src, receiver) {
             continue;
         }
-        out.push((i + 1, (*line).trim().to_string()));
+        let text = if split {
+            format!(
+                "{} {}",
+                line.trim(),
+                lines.get(i + 1).map_or("", |l| l.trim())
+            )
+        } else {
+            (*line).trim().to_string()
+        };
+        out.push((i + 1, text));
     }
     out
+}
+
+/// Whether line `i` opens a `.set(Some(` write split across two lines:
+/// `.set(` alone at the end of `lines[i]`, `Some(` alone at the start of
+/// `lines[i + 1]`. This is the shape rustfmt produces for a chain this deep —
+/// see [`unclassified_error_writes`]'s doc for the measured proof.
+///
+/// Only the immediately next line is accepted, not the next non-blank one:
+/// every occurrence rustfmt actually produces has zero lines between `.set(`
+/// and `Some(`, and reaching further would make this guess at a shape it has
+/// no evidence for.
+#[cfg(test)]
+fn set_then_some_on_next_line(lines: &[&str], i: usize) -> bool {
+    lines[i].trim_end().ends_with(".set(")
+        && lines
+            .get(i + 1)
+            .is_some_and(|next| next.trim_start().starts_with("Some("))
+}
+
+/// The trailing identifier on the line above `i`, for the split shape where
+/// rustfmt has put the receiver alone on its own line and `.set(` starts the
+/// next one — so `line[..at]` on the `.set(` line is blank and
+/// [`receiver_ident`] has nothing to read there.
+#[cfg(test)]
+fn receiver_on_line_above<'a>(lines: &[&'a str], i: usize) -> &'a str {
+    match i.checked_sub(1) {
+        Some(prev) => receiver_ident(lines[prev]),
+        None => "",
+    }
 }
 
 /// The `Err(<ident>)` binding whose value this write stores, if any.
@@ -728,6 +798,50 @@ mod tests {
             }
         "#;
         assert_eq!(unclassified_error_writes(before).len(), 1);
+    }
+
+    /// RED proof, seventh shape — **the receiver, `.set(` and `Some(` each on
+    /// their own line**, the chain-break rustfmt produces inside a `view!`
+    /// this deep. `cluster.rs:339-343` has exactly this shape, and until the
+    /// scanner grew [`set_then_some_on_next_line`] as a second opener,
+    /// feeding a raw error there left it green — the literal `.set(Some(`
+    /// this scanner otherwise looks for never appears on any one line.
+    #[test]
+    fn the_scan_rejects_a_two_line_set_some_split() {
+        let before = r#"
+            Err(e) => {
+                error
+                    .set(
+                        Some(e),
+                    )
+            }
+        "#;
+        assert_eq!(unclassified_error_writes(before).len(), 1);
+    }
+
+    /// …and goes quiet on the same split when the argument is the local
+    /// classifier — the shape `cluster.rs::fleet_error_label` actually uses.
+    /// A rule that only widened the opener without joining the span across
+    /// lines would report this as unclassified, because the classifier call
+    /// sits two lines below the line the opener was found on.
+    #[test]
+    fn the_scan_accepts_a_two_line_local_classifier_wrapper() {
+        let after = r#"
+            fn fleet_error_label(err: &str, action: &str) -> String {
+                crate::components::admin_refusal::labeled(err, &format!("…{action}。"))
+            }
+            Err(e) => {
+                error
+                    .set(
+                        Some(fleet_error_label(&e, ACTION_READ_FLEET)),
+                    )
+            }
+        "#;
+        assert!(
+            unclassified_error_writes(after).is_empty(),
+            "a split write that goes through a local wrapper is classified, \
+             the same as the single-line form"
+        );
     }
 
     /// …and goes quiet on the sanctioned form, whose `format!` is three lines

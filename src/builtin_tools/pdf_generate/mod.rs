@@ -229,7 +229,18 @@ impl AlephTool for PdfGenerateTool {
             RenderEngine::Browser => {
                 browser_engine::generate(&args, &output_path, self.playwright_config.as_ref()).await
             }
-            RenderEngine::Native => native_engine::generate(&args, &output_path),
+            RenderEngine::Native => {
+                // `native_engine::generate` is sync CPU+IO (markdown parse, font
+                // file read, `printpdf` build, `std::fs::write`) — running it
+                // inline stalls the tokio worker for the full document. Move
+                // it to the blocking pool.
+                let output_path = output_path.clone();
+                tokio::task::spawn_blocking(move || native_engine::generate(&args, &output_path))
+                    .await
+                    .map_err(|e| crate::builtin_tools::error::ToolError::Execution(format!(
+                        "pdf_generate join failed: {e}"
+                    )))?
+            }
             RenderEngine::Auto => {
                 if browser_engine::is_browser_engine_available(self.playwright_config.as_ref()) {
                     match browser_engine::generate(
@@ -242,12 +253,24 @@ impl AlephTool for PdfGenerateTool {
                         Ok(output) => Ok(output),
                         Err(e) => {
                             warn!(error = %e, "Browser engine failed, falling back to native");
-                            native_engine::generate(&args, &output_path)
+                            let output_path = output_path.clone();
+                            tokio::task::spawn_blocking(move || {
+                                native_engine::generate(&args, &output_path)
+                            })
+                            .await
+                            .map_err(|e| crate::builtin_tools::error::ToolError::Execution(format!(
+                                "pdf_generate join failed: {e}"
+                            )))?
                         }
                     }
                 } else {
                     info!("Chrome not available, using native PDF engine");
-                    native_engine::generate(&args, &output_path)
+                    let output_path = output_path.clone();
+                    tokio::task::spawn_blocking(move || native_engine::generate(&args, &output_path))
+                        .await
+                        .map_err(|e| crate::builtin_tools::error::ToolError::Execution(format!(
+                            "pdf_generate join failed: {e}"
+                        )))?
                 }
             }
         };

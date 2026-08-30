@@ -28,6 +28,7 @@ pub mod memory;
 pub mod metrics;
 pub mod session_mode;
 pub mod spend;
+pub mod terminal;
 pub mod tool_permissions;
 pub mod web_fetch;
 
@@ -42,6 +43,7 @@ pub use memory::{CompressionPolicy, MemoryPolicies};
 pub use metrics::MetricsPolicy;
 pub use session_mode::{builtin_modes, SessionMode, MODE_SESSION_KEY};
 pub use spend::{SpendPeriod, SpendPolicy};
+pub use terminal::TerminalConfig;
 pub use tool_permissions::{PermissionMatch, ToolPermissionsConfig};
 pub use web_fetch::{Crawl4aiConfig, WebFetchPolicy};
 
@@ -127,6 +129,12 @@ pub struct PoliciesConfig {
     /// Absent ⇒ disabled.
     #[serde(default)]
     pub spend: SpendPolicy,
+
+    /// Embedded terminal (`pty.*`) session-grained switch, live scrollback
+    /// ceiling, and session cap. See [`TerminalConfig`] for per-field
+    /// liveness.
+    #[serde(default)]
+    pub terminal: TerminalConfig,
 
     /// How many complete main-session turns a COLD `/btw` side seed carries.
     /// Unset = [`DEFAULT_BTW_FORK_TURNS`]. `0` carries nothing — a side thread

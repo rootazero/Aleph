@@ -126,14 +126,19 @@ where
 
             // P2 (spec §10): in a shared project room, `Steer` / `Interrupt`
             // are authority over YOUR OWN turn, not a room-mate's. The guard is
-            // a no-op outside a project scope and for two turns by the same
-            // author, so nothing pre-P2 changes shape.
+            // a no-op outside a room and for two turns by the same author, so
+            // nothing pre-P2 changes shape. `session_key` is passed because
+            // "is this a room" has two answers on this path — the producer's
+            // stamp, which is `personal:<speaker>` for a channel turn, and the
+            // gateway's own claim — and admission runs before `request_scope`
+            // can reconcile them.
             let declared = super::BusyInputMode::from_metadata(&request.metadata);
             let busy_mode = match sibling.as_ref() {
-                // The room question is answered by `request_scope`, the same
-                // corrector the session row and the harness scope go through —
+                // The room question has one answer in the process
+                // (`run_loop::request_is_in_a_room`), which consults the
+                // gateway's own claim rather than the producer's raw stamp —
                 // reading the raw stamp here made the rule a no-op on every
-                // producer that needs the correction.
+                // producer that needs `request_scope`'s correction.
                 Some(s) => declared.for_shared_room(
                     super::run_loop::request_is_in_a_room(request),
                     &request.metadata,

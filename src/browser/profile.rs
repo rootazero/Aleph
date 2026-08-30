@@ -134,8 +134,12 @@ impl Default for ProfileConfig {
     }
 }
 
+// `default_true` lives in `super::network_policy` (single source); the
+// serde `default = "..."` attribute on this module's bool fields uses
+// a small local wrapper because serde macros require a path resolvable
+// in the current module's scope.
 const fn default_true() -> bool {
-    true
+    super::network_policy::default_true()
 }
 
 /// Configuration for the Playwright CLI integration.

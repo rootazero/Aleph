@@ -40,6 +40,7 @@ pub struct PlanResolveOutput {
 pub struct PlanResolveTool {
     plan_manager: Arc<PlanManager>,
     current_agent_id: String,
+    team_store: Arc<dyn crate::teams::TeamStore>,
 }
 
 impl PlanResolveTool {
@@ -50,10 +51,15 @@ impl PlanResolveTool {
     }
 
     #[must_use]
-    pub const fn new(plan_manager: Arc<PlanManager>, current_agent_id: String) -> Self {
+    pub fn new(
+        plan_manager: Arc<PlanManager>,
+        current_agent_id: String,
+        team_store: Arc<dyn crate::teams::TeamStore>,
+    ) -> Self {
         Self {
             plan_manager,
             current_agent_id,
+            team_store,
         }
     }
 }
@@ -71,6 +77,12 @@ impl AlephTool for PlanResolveTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let actor = self.actor();
+        // BT-D-R4-23: gate before any store mutation — any agent that knew
+        // a team's id could approve / reject any submitted plan. Use the
+        // shared team-auth helper so the NotFound-shaped refusal matches
+        // every other team tool (a non-leader probing ids cannot distinguish
+        // "not found" from "not authorized").
+        super::require_team_auth(&*self.team_store, &args.team_id, &actor).await?;
         let leader_id = if actor.is_empty() { "leader" } else { &actor };
 
         let decision = args.decision.trim().to_lowercase();

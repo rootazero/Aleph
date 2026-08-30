@@ -314,12 +314,20 @@ impl CanvasStore {
                 }
             }
         }
-        // Remove while still holding the per-canvas lock, so a racing apply
-        // either committed before us or finds nothing to lock onto after.
-        tokio::fs::remove_dir_all(self.root.join(id))
+        // Drop the per-canvas lock BEFORE the directory removal — a
+        // canvas with many assets can take a noticeable amount of
+        // wall time to `remove_dir_all`, and holding the per-canvas
+        // mutex across that syscall blocks every other operation
+        // on the same canvas. The guard's only purpose at this
+        // point was to gate racing applies; once we've decided to
+        // delete, racing applies are harmless (they'll find the
+        // directory gone and the guard's `existing_mut()` returns
+        // `None`, so they bail with NotFound).
+        let dir = self.root.join(id);
+        drop(guard);
+        tokio::fs::remove_dir_all(&dir)
             .await
             .map_err(|e| CanvasError::Internal(format!("failed to delete canvas {id}: {e}")))?;
-        drop(guard);
         Ok(())
     }
 

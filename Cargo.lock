@@ -334,6 +334,7 @@ dependencies = [
  "similar",
  "syntect",
  "tailwind_fuse",
+ "unicode-width 0.2.0",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -499,9 +500,11 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "unicode-width 0.2.0",
  "url",
  "user-idle",
  "uuid",
+ "vte",
  "walkdir",
  "whatsapp-rust",
  "whatsapp-rust-tokio-transport",
@@ -14846,6 +14849,7 @@ version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "231fdcd7ef3037e8330d8e17e61011a2c244126acc0a982f4040ac3f9f0bc077"
 dependencies = [
+ "arrayvec",
  "memchr",
 ]
 

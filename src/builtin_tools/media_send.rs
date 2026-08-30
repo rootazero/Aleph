@@ -48,18 +48,31 @@ pub struct MediaSendOutput {
 
 /// The `media_send` tool — passes media URLs through for channel delivery.
 #[derive(Clone)]
-pub struct MediaSendTool;
+pub struct MediaSendTool {
+    /// SSRF policy for the pre-flight URL check on outbound media
+    /// URLs. Sourced from the operator's `[ssrf]` config block at
+    /// construction time; the previous `SsrfPolicy::default()`
+    /// shape made the operator's allow/deny rules (and the
+    /// `config_audit` findings against them) a no-op against the
+    /// actual gate.
+    ssrf_policy: SsrfPolicy,
+}
 
 impl MediaSendTool {
     #[must_use]
-    pub const fn new() -> Self {
-        Self
+    pub const fn new(ssrf_policy: SsrfPolicy) -> Self {
+        Self { ssrf_policy }
     }
 }
 
 impl Default for MediaSendTool {
     fn default() -> Self {
-        Self::new()
+        // Tests / one-off construction without a config — the
+        // SSRF gate then falls back to the conservative default
+        // (private ranges blocked). The production path goes
+        // through `BuiltinToolConfig::ssrf_policy` via
+        // `create_tool_boxed`.
+        Self::new(SsrfPolicy::default())
     }
 }
 
@@ -73,7 +86,7 @@ impl AlephTool for MediaSendTool {
     type Output = MediaSendOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let ssrf_policy = SsrfPolicy::default();
+        let ssrf_policy = &self.ssrf_policy;
         for item in &args.items {
             preflight(&item.url, &ssrf_policy).await?;
         }
@@ -196,7 +209,7 @@ mod tests {
         );
         let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
 
-        let tool = MediaSendTool::new();
+        let tool = MediaSendTool::new(crate::security::ssrf::SsrfPolicy::default());
         let args = MediaSendArgs {
             items: vec![
                 MediaSendItem {
@@ -231,7 +244,7 @@ mod tests {
         );
         let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
 
-        let tool = MediaSendTool::new();
+        let tool = MediaSendTool::new(crate::security::ssrf::SsrfPolicy::default());
         let args = MediaSendArgs {
             items: vec![MediaSendItem {
                 url: "https://example.com/photo.png".to_string(),
@@ -259,7 +272,7 @@ mod tests {
         let clip = dir.join("clip.mp4");
         tokio::fs::write(&clip, b"fake mp4").await.unwrap();
 
-        let tool = MediaSendTool::new();
+        let tool = MediaSendTool::new(crate::security::ssrf::SsrfPolicy::default());
         let args = MediaSendArgs {
             items: vec![
                 MediaSendItem {
@@ -289,7 +302,7 @@ mod tests {
         // filesystem path — which no channel can send. Without this pre-flight
         // the model is told "Sending 1 media file..." and the user gets
         // nothing, with the refusal visible only in a server-side warn!.
-        let tool = MediaSendTool::new();
+        let tool = MediaSendTool::new(crate::security::ssrf::SsrfPolicy::default());
         let args = MediaSendArgs {
             items: vec![MediaSendItem {
                 url: "/etc/passwd".to_string(),
@@ -312,7 +325,7 @@ mod tests {
     async fn test_media_send_rejects_undecodable_data_url() {
         // Same silent degradation, other branch: a data: URL whose payload does
         // not decode never becomes bytes, so the user receives nothing.
-        let tool = MediaSendTool::new();
+        let tool = MediaSendTool::new(crate::security::ssrf::SsrfPolicy::default());
         let args = MediaSendArgs {
             items: vec![MediaSendItem {
                 url: "data:image/png;base64,!!!not base64!!!".to_string(),
@@ -334,7 +347,7 @@ mod tests {
     #[tokio::test]
     async fn test_media_send_still_blocks_ssrf_on_remote_url() {
         // Loopback/internal hosts over http must still be rejected.
-        let tool = MediaSendTool::new();
+        let tool = MediaSendTool::new(crate::security::ssrf::SsrfPolicy::default());
         let args = MediaSendArgs {
             items: vec![MediaSendItem {
                 url: "http://169.254.169.254/latest/meta-data/".to_string(),

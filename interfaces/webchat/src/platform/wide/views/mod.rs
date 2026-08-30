@@ -15,5 +15,6 @@ pub mod settings;
 pub mod subagent_tree;
 pub mod tasks;
 pub mod teams;
+pub mod terminal;
 pub mod usage;
 pub mod voice;

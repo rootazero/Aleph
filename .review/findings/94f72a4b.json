@@ -1,0 +1,127 @@
+{
+  "module": "src/builtin_tools/[a-m]",
+  "files_reviewed": 48,
+  "findings": [
+    {
+      "file": "src/builtin_tools/memory_search.rs",
+      "line": 235,
+      "severity": "low",
+      "category": "dead_code",
+      "issue": "The `similarity_threshold` parameter is computed and assigned to `_threshold` but never used, leaving the threshold config knob exposed in the API surface without effect.",
+      "evidence": "let _threshold = similarity_threshold.unwrap_or(Self::DEFAULT_SIMILARITY_THRESHOLD);",
+      "suggested_fix": "Either thread `_threshold` into the underlying `NoteIndexer`/retrieval layer, or remove the unused parameter and constant from the public constructor `new_with_config` and the struct doc. The current state suggests a half-completed change.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/memory_search.rs",
+      "line": 316,
+      "severity": "medium",
+      "category": "api_misuse",
+      "issue": "Invalid `scope` values (anything not 'all'/'current_session'/'both') silently return empty results — no error, no warning — because both string-comparison branches evaluate false.",
+      "evidence": "let scope = args.scope.as_deref().unwrap_or(\"all\"); ... if scope == \"current_session\" || scope == \"both\" { ... } else if scope == \"all\" || scope == \"both\" { ... }",
+      "suggested_fix": "Define an enum `MemorySearchScope { All, CurrentSession, Both }` with `Deserialize` and validate the wire form up front, returning `AlephError::tool` for any other value. The closed-vocabulary string-match across three sites will otherwise drift if a new scope is added.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/google_meet.rs",
+      "line": 116,
+      "severity": "low",
+      "category": "security",
+      "issue": "The `meeting` URL is forwarded to the configured bridge as a JSON-RPC arg with no SSRF/host validation at the tool layer; trust is delegated entirely to the bridge.",
+      "evidence": "pub meeting: Option<String>, ... if GoogleMeetAction::Join => Self::require(&args.meeting, \"meeting\", \"join\")?; (no host check before dispatch_to_bridge)",
+      "suggested_fix": "If the bridge is the only authoritative gate, document that explicitly on the field (and the DESCRIPTION). Otherwise, mirror `a2a_tools::add` and `media_send::preflight` and run `validate_url_async(&args.meeting, &SsrfPolicy::default())` before dispatch — cheap, defense-in-depth, and surfaces the failure to the model rather than the bridge.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/cron_manage.rs",
+      "line": 309,
+      "severity": "low",
+      "category": "concurrency",
+      "issue": "`let service = self.service.lock().await;` is acquired at the top of `call` and held for the entire await chain — every other cron-tool caller on the same `SharedCronService` blocks until the action returns.",
+      "evidence": "async fn call(&self, args: Self::Args) -> Result<Self::Output> {\n        let service = self.service.lock().await;\n        match args.action {",
+      "suggested_fix": "For the read actions (`list`, `get`, `runs`) take the lock per-call inside the arm and drop it before formatting the response. For `create`/`update`/`delete`/`run` the lock is necessary, but `Run` triggers another scheduler tick which may re-enter the lock downstream — verify the service's `run_job` is safe to call while the tool still holds the guard (or release the guard first).",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/memory_search.rs",
+      "line": 234,
+      "severity": "low",
+      "category": "api_misuse",
+      "issue": "`RetrievalScoringConfig` and `ExpansionConfig` are accepted by `new_with_config` and applied to `NoteFactRetrieval`, but there is no equivalent path to set `similarity_threshold` — meaning the retrieval layer's actual similarity gate cannot be tuned from the public constructor that the doc claims supports it.",
+      "evidence": "pub fn new_with_config(database, embedder, similarity_threshold, rerank_config, scoring_config, expansion_config) — `similarity_threshold` is consumed only by the dead-code `_threshold = ...` line above.",
+      "suggested_fix": "Wire `_threshold` into `NoteFactRetrieval::with_similarity_threshold` (or equivalent), or remove it from the constructor signature. As written, the constructor signature is a promise the implementation cannot keep.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/memory_search.rs",
+      "line": 729,
+      "severity": "low",
+      "category": "clippy",
+      "issue": "`similarity_score` is used as both `confidence` and `similarity_score` in the projection below, duplicating a numeric value under two field names — the model gets no signal that the two numbers are identical.",
+      "evidence": "confidence: f.similarity_score.unwrap_or(0.0), similarity_score: f.similarity_score.unwrap_or(0.0),",
+      "suggested_fix": "Drop one or rename one (`similarity_score → score` and `confidence → confidence` when a real confidence is available). Today they are guaranteed equal, which makes the schema effectively twice as wide as the data.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/a2a_tools.rs",
+      "line": 305,
+      "severity": "low",
+      "category": "security",
+      "issue": "The SSRF pre-flight uses `SsrfPolicy::default()` rather than the live `Config`-derived policy, so operator allow/deny rules on the SSRF panel do not propagate to `a2a_agents(add=…)`.",
+      "evidence": "validate_url_async(&url, &SsrfPolicy::default())",
+      "suggested_fix": "Pass the policy built from `crate::config::Config::ssrf` (the same `Config` `web_fetch` consults) so the operator's audit `config_audit` findings and the actual enforcement share a single source. A `default()` here means the audit tool can report \"allow_private_network=true is dangerous\" while `a2a_agents.add` still blocks private IPs — and vice versa.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/media_send.rs",
+      "line": 76,
+      "severity": "low",
+      "category": "security",
+      "issue": "SSRF pre-flight uses `SsrfPolicy::default()` rather than the operator's configured policy.",
+      "evidence": "let ssrf_policy = SsrfPolicy::default();",
+      "suggested_fix": "Same fix as `a2a_tools` — pull the policy from `Config::ssrf` so the operator's allowlist/audit reaches the tool face. The pre-flight is also a defense-in-depth check that `safe_fetch` re-runs; consistent policy values keep the two from drifting.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/list_models.rs",
+      "line": 574,
+      "severity": "low",
+      "category": "api_misuse",
+      "issue": "An `expect(\"invariant: name came from presets iterator\")` in production code; the invariant holds for the current call shape but is not enforced by types.",
+      "evidence": "let p = cfg.presets.get(name).expect(\"invariant: name came from presets iterator\");",
+      "suggested_fix": "Iterate entries once and project directly (`cfg.presets.iter().filter(...).map(|(name, p)| { ... })`) — keeps the invariant in the iterator and removes the expect. The two-pass `filter+collect` followed by `get` is a duplication the type system cannot verify.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/code_check.rs",
+      "line": 102,
+      "severity": "low",
+      "category": "security",
+      "issue": "`auto_detect_script` interpolates `path` into the shell via `shell_single_quote`; the auto-detection script that follows is then concatenated with that escaped fragment under no further quoting. The escape is correct, but the pattern is fragile (a future refactor that changes how the path fragment is concatenated could re-introduce shell injection).",
+      "evidence": "let py_target = path.map(str::trim).filter(|p| p.ends_with(\".py\") && !p.is_empty()).map(shell_single_quote); ... let py_fallback = match py_target { Some(q) => format!(\"python3 -m py_compile {q}\"), ... };",
+      "suggested_fix": "Either build the script as a `Vec<String>` and join with explicit shell-escaping at each call, or accept the path through an env var (already isolated by the sandbox) and reference it as `$PY_TARGET` so shell-quoting is unambiguous. Today the test pins the result string and any future refactor can silently lose the quoting.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/bashexec_process_completion.rs",
+      "line": 316,
+      "severity": "low",
+      "category": "concurrency",
+      "issue": "`bash_exec.rs:316` spawns a detached task that re-enters three task-locals (`SESSION_ID`, `LIVE_TAIL`, exec workspace) and a `CallIdentity`; the scope ordering is correct today but the `tokio::spawn` boundary means any future field added to the harness MUST also be re-entered or silently leak.",
+      "evidence": "let join = tokio::spawn(async move { ... LIVE_TAIL.scope(live_for_task, async move { crate::sandbox::context::with_exec_workspace(...) ... SESSION_ID.scope(sid, ...) }) });",
+      "suggested_fix": "Add a compile-time test that asserts every task-local set on the foreground side of `spawn_background` is also re-entered inside the task (`include_str!` over the file and a list of `.scope(` calls). The current behavioural test catches a leak of `LIVE_TAIL`; it does not catch a leak of `CallIdentity` or a future task-local.",
+      "confidence": "low"
+    },
+    {
+      "file": "src/builtin_tools/memory_search.rs",
+      "line": 728,
+      "severity": "low",
+      "category": "type_safety",
+      "issue": "`FactResult::path` is a plain `String` and the session-raw branch silently substitutes an empty string when `raw.path.is_none()` — a path the rest of the model surface treats as a valid (empty) file reference.",
+      "evidence": ".filter(|r| r.path.is_some()) ... path: raw.path.unwrap_or_default(),",
+      "suggested_fix": "Make `FactResult::path` an `Option<String>` (skip-serializing when `None`), and filter out rows whose path is `None` rather than coercing to `\"\"`. The current `unwrap_or_default()` is exactly the leak the `filter` immediately above it was written to prevent — the filter runs after `unwrap_or_default` would have produced an empty string only when `None`, but reading the code, the two lines disagree on whether an empty path is a real fact.",
+      "confidence": "medium"
+    }
+  ],
+  "summary": "Reviewed 48 top-level builtin_tools files (a–m). Overall code quality is high: command-execution tools properly sandbox via the shared `Arc<dyn Sandbox>`, SSRF policy is enforced at `media_send` and `a2a_agents` add, MCP tools validate server-prefix routing, memory tools correctly compose the session-scoped partition, and loop/goal/cron tools carry layered safety checks (zero-cap rejection, cross-session authorization, soft caps). The findings above are concentrated in `memory_search.rs` (silent scope errors, unused similarity threshold, duplicated score fields), with smaller issues in the security-sensitive files (`google_meet` URL trust delegation, `SsrfPolicy::default()` vs operator-configured policy). No critical command-injection, deadlock, or data-loss bugs in this slice."
+}

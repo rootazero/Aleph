@@ -403,7 +403,6 @@ mod tests {
         ) -> A2AResult<()> {
             Ok(())
         }
-
         async fn unregister(&self, _agent_id: &str) -> A2AResult<()> {
             Ok(())
         }

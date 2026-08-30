@@ -282,12 +282,23 @@ pub struct AgentDefinition {
 ///
 /// `user: None` is not "an anonymous stranger" — the login wall refuses those
 /// before any method runs. It means there is no gateway connection at all:
-/// cron, heartbeat, A2A, a team dispatcher, an in-process test. Every sibling
-/// predicate in the codebase opens with that same arm
-/// (`caller_may_choose_directory`, `role_is_operator`, `caller_is_member`),
-/// and deviating here would kill scheduled work on any restricted agent the
-/// moment an operator named a single user. Loopback is NOT this case — it
-/// resolves to the implicit owner, so a local Panel arrives as `Some(owner)`.
+/// cron, heartbeat, A2A, a team dispatcher, an in-process test.
+/// `role_is_operator` opens with that same arm by the same reasoning (its own
+/// doc: "Absent role = trusted local/internal run"). `caller_is_member`
+/// reaches the same place inversely: it returns `false` for an absent role
+/// (`current_caller_role() == Some("member")` is its only `true` arm), but
+/// every consumer branches on `!caller_is_member()`
+/// (`exec_approvals.rs:137,261`, `exec_grants.rs:133`), so a role-less caller
+/// lands in the same unrestricted branch as an operator — the same arm,
+/// expressed as a negation, which is exactly what makes it look like it does
+/// not belong on this list. Deviating here would kill scheduled work on any
+/// restricted agent the moment an operator named a single user.
+/// (`caller_may_choose_directory` no longer belongs on this list: as of
+/// 2026-08-28 (`546984c2b`) it REFUSES an absent role unless the connection
+/// is loopback — a narrower gate for a narrower question, "may this caller
+/// point the server at an arbitrary folder", not "is there identity data at
+/// all".) Loopback is NOT this case — it resolves to the implicit owner, so a
+/// local Panel arrives as `Some(owner)`.
 #[must_use]
 pub fn agent_admits_user(allowed: Option<&[String]>, user: Option<&str>) -> bool {
     match allowed {

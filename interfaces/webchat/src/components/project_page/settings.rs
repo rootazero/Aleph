@@ -21,6 +21,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
+use super::channel_bindings::ChannelBindingsSection;
 use super::ProjectsTabState;
 use crate::api::projects::{ProjectInfo, ProjectsApi};
 use crate::components::directory_browser::DirectoryBrowser;
@@ -84,6 +85,14 @@ pub fn SettingsTab(project: ProjectInfo, refresh: Callback<()>) -> impl IntoView
             <RenameSection project=project.clone() is_owner=is_owner dash=dash on_done=on_done />
             <RosterSection project=project.clone() is_owner=is_owner dash=dash dir=dir on_done=on_done />
             <WorkspaceSection project=project.clone() is_owner=is_owner dash=dash on_done=on_done />
+            // Takes neither `is_owner` nor `on_done`, and both omissions are
+            // deliberate. `projects.channel.bind`/`.unbind` are ADMIN-gated,
+            // not owner-gated, so `is_owner` would be wrong in both directions
+            // — and this section's receipts have to say more than "it worked"
+            // (what happened to the conversation's existing transcript is a
+            // three-valued answer), which the shared `Result<(), String>`
+            // callback cannot carry. See that module's doc.
+            <ChannelBindingsSection project_id=project.id.clone() dash=dash />
             <ArchiveSection project=project.clone() is_owner=is_owner dash=dash on_done=on_archived />
         </div>
     }

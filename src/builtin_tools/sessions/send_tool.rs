@@ -73,6 +73,13 @@ const fn default_timeout() -> u32 {
 /// while still leaving headroom for inline code attachments.
 const MAX_CROSS_SESSION_MESSAGE_CHARS: usize = 64 * 1024;
 
+/// Default fire-and-forget timeout when `args.timeout_seconds == 0` —
+/// five minutes, matching the long-tail RPC ceiling. The literal
+/// was inlined at the call site before; named here so a future
+/// change to either the default or the max timeout lands in one
+/// place.
+const DEFAULT_FIRE_AND_FORGET_TIMEOUT_SECS: u64 = 300;
+
 /// Status of the `sessions_send` operation
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -477,7 +484,7 @@ impl SessionsSendTool {
             timeout_secs: if args.timeout_seconds > 0 {
                 Some(u64::from(args.timeout_seconds))
             } else {
-                Some(300) // Default 5 min for fire-and-forget
+                Some(DEFAULT_FIRE_AND_FORGET_TIMEOUT_SECS)
             },
             metadata: sub_metadata.clone(),
             attachments: Vec::new(),

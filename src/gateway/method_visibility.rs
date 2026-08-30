@@ -685,6 +685,30 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("projects.room_session", Treatment::KeyChecked),
     ("projects.workspace.list", Treatment::KeyChecked),
     ("projects.workspace.read", Treatment::KeyChecked),
+    // `projects.channel.*` (P4 channel-conversation bindings). ONE entry, not
+    // three, and the two absences are rulings rather than gaps — see
+    // `the_admin_gated_channel_binding_verbs_are_deliberately_absent`.
+    //
+    // `projects.channel.list` is the only one a member reaches: it resolves
+    // the caller-supplied `project_id` through the same `gate_project`
+    // admission point as every sibling, so a room the caller is not on the
+    // roster of reads exactly like an id that was never minted.
+    //
+    // `bind` and `unbind` are in `method_admin::ADMIN_METHODS`, and this
+    // table's contract is that everything it claims is a surface a MEMBER
+    // reaches and it filters per user. A method cannot be both operator-only
+    // and member-filtered, and a stale claim here is worse than no claim —
+    // the same reason the `workspace.*` family left this table. `bind` does
+    // still run `gate_project` (an operator may only name a room they are on
+    // the roster of), exactly as the `workspace.*` handlers still call
+    // `partition_visible`: what is withdrawn is this table's MEMBER-facing
+    // claim, not the predicate.
+    //
+    // `unbind` would be absent even if it were open: it is addressed by
+    // CONVERSATION (`channel_id`, `peer_kind`, `peer_id`), not by any
+    // per-user key, so there is no caller-scoped record for a filter to
+    // narrow.
+    ("projects.channel.list", Treatment::KeyChecked),
     // --- canvas.* (whiteboard — handlers/canvas.rs) ---
     // Every addressed method resolves the document through the shared
     // `gate_canvas` admission point (`visibility::canvas_visible`: owner OR
@@ -1185,6 +1209,39 @@ mod tests {
                 "{m} is absent from SCOPED_METHODS only because it is admin-gated"
             );
         }
+    }
+
+    /// `projects.channel.bind` / `.unbind` are absent from `SCOPED_METHODS`
+    /// for the same reason the `workspace.*` family left it: this table's
+    /// contract is that every entry names a surface a MEMBER reaches and
+    /// filters per user, and a method cannot be both operator-only and
+    /// member-filtered.
+    ///
+    /// Pinned in BOTH directions, like its `workspace.*` precedent: opening
+    /// either verb to members fails here by name and forces an entry back,
+    /// and adding an entry while the admin gate still refuses it fails
+    /// `every_scoped_method_stays_open_to_members_in_method_admin`. Its
+    /// sibling `projects.channel.list` IS member-reachable and IS listed, so
+    /// this test also pins that the family was not gated wholesale.
+    #[test]
+    fn the_admin_gated_channel_binding_verbs_are_deliberately_absent() {
+        for m in ["projects.channel.bind", "projects.channel.unbind"] {
+            assert_eq!(treatment_of(m), None, "{m}");
+            assert!(
+                crate::gateway::method_admin::method_requires_admin(m),
+                "{m} is absent from SCOPED_METHODS only because it is admin-gated"
+            );
+        }
+        assert_eq!(
+            treatment_of("projects.channel.list"),
+            Some(Treatment::KeyChecked),
+            "seeing where your own room lives is not moving it — `list` stays \
+             member-reachable and roster-narrowed"
+        );
+        assert!(
+            !crate::gateway::method_admin::method_requires_admin("projects.channel.list"),
+            "listing a room's bindings is narrowed by gate_project, not gated"
+        );
     }
 
     /// `gateway.metrics.run_concurrency` is registered AND carved out of the

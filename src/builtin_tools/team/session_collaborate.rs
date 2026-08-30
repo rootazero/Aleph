@@ -56,6 +56,7 @@ pub struct SessionCollaborateOutput {
 pub struct SessionCollaborateTool {
     coordinator: Arc<SessionCoordinator>,
     current_agent_id: String,
+    team_store: Arc<dyn crate::teams::TeamStore>,
 }
 
 impl SessionCollaborateTool {
@@ -66,10 +67,15 @@ impl SessionCollaborateTool {
     }
 
     #[must_use]
-    pub const fn new(coordinator: Arc<SessionCoordinator>, current_agent_id: String) -> Self {
+    pub fn new(
+        coordinator: Arc<SessionCoordinator>,
+        current_agent_id: String,
+        team_store: Arc<dyn crate::teams::TeamStore>,
+    ) -> Self {
         Self {
             coordinator,
             current_agent_id,
+            team_store,
         }
     }
 }
@@ -90,6 +96,13 @@ impl AlephTool for SessionCollaborateTool {
             participants = ?args.participants,
             "session_collaborate: starting session"
         );
+
+        // BT-D-R4-23: gate before any coordinator mutation — starting a
+        // session for a foreign team would inject the caller into the team's
+        // transcript and let them open an authenticated channel into the
+        // team's members. The shared team-auth helper also matches the
+        // NotFound-shaped refusal the rest of the team tools use.
+        super::require_team_auth(&*self.team_store, &args.team_id, &self.actor()).await?;
 
         let input = NewSession {
             team_id: args.team_id,

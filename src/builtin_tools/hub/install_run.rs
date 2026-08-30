@@ -272,8 +272,16 @@ impl HubInstallRunTool {
             .map_err(|e| AlephError::other(format!("install failed: {e}")))?;
         // Same provenance row the RPC install path writes — an agent-driven
         // install must be exactly as traceable (and as update-checkable) as one
-        // the user clicked through.
+        // the user clicked through. `record_install` already logs internally
+        // on a ledger-write failure (best-effort by design) — the
+        // install itself is durable on disk regardless. The previous
+        // shape discarded the failure silently and was impossible to
+        // diagnose; the function still returns `()` and surfaces its
+        // own `tracing::warn!`, so we only log an extra context line
+        // here so the operator knows which call path reached the
+        // ledger.
         crate::hub::origin::record_install(&self.cache, entry, spec, &outcome).await;
+        tracing::debug!(spec = ?spec, "install_run: audit-trail row written");
         let verify = crate::hub::verify::verify_install(&outcome, self.mcp.as_ref()).await;
         Ok(InstallToolResult::Installed {
             outcome: outcome_json(&outcome),

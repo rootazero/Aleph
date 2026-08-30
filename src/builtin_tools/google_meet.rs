@@ -33,6 +33,8 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::{info, warn};
 
+use crate::security::ssrf::SsrfPolicy;
+
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -202,13 +204,21 @@ pub struct GoogleMeetOutput {
 #[derive(Clone)]
 pub struct GoogleMeetTool {
     bridge: Option<Arc<GoogleMeetBridge>>,
+    /// SSRF policy for the pre-flight check on the meeting URL —
+    /// the bridge is operator-hosted and could dereference a
+    /// host-policy-allowed hostname that flips to a blocked IP
+    /// (the same DNS-rebinding shape `web_fetch` was patched
+    /// against). Sourced from the operator's `[ssrf]` config
+    /// block at construction time.
+    ssrf_policy: SsrfPolicy,
 }
 
 impl GoogleMeetTool {
-    /// Construct with an optional configured bridge.
+    /// Construct with an optional configured bridge and the
+    /// operator's SSRF policy.
     #[must_use]
-    pub const fn new(bridge: Option<Arc<GoogleMeetBridge>>) -> Self {
-        Self { bridge }
+    pub const fn new(bridge: Option<Arc<GoogleMeetBridge>>, ssrf_policy: SsrfPolicy) -> Self {
+        Self { bridge, ssrf_policy }
     }
 
     /// Require a string field, returning a fixable validation error naming it.
@@ -374,6 +384,21 @@ impl AlephTool for GoogleMeetTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         Self::validate(&args)?;
+        // BT-D-R4-21: SSRF pre-flight on the meeting URL before
+        // dispatch. The bridge is operator-hosted and could
+        // dereference a host-policy-allowed hostname that flips to
+        // a blocked IP — the same DNS-rebinding shape `web_fetch`
+        // was patched against. The previous shape forwarded the
+        // URL to the bridge with no host check, so a steering
+        // attempt could turn the bridge into a confused deputy
+        // for any host on its network. Validate here.
+        if let Some(meeting) = args.meeting.as_deref() {
+            crate::security::ssrf::validate_url_async(meeting, &self.ssrf_policy)
+                .await
+                .map_err(|e| AlephError::tool(format!(
+                    "google_meet: meeting URL blocked by SSRF policy: {e}"
+                )))?;
+        }
         match self.bridge {
             Some(ref bridge) => Self::dispatch_to_bridge(bridge, &args).await,
             None => Ok(Self::not_configured(args.action)),
@@ -458,7 +483,7 @@ mod tests {
 
     #[tokio::test]
     async fn unconfigured_bridge_returns_actionable_status() {
-        let tool = GoogleMeetTool::new(None);
+        let tool = GoogleMeetTool::new(None, SsrfPolicy::default());
         let out = tool
             .call(GoogleMeetArgs {
                 action: GoogleMeetAction::Status,
@@ -478,7 +503,7 @@ mod tests {
     async fn validation_runs_before_bridge() {
         // Even with no bridge, a missing required field is a fixable validation
         // error (not a "not configured" status), so the model can correct it.
-        let tool = GoogleMeetTool::new(None);
+        let tool = GoogleMeetTool::new(None, SsrfPolicy::default());
         let err = tool
             .call(GoogleMeetArgs {
                 action: GoogleMeetAction::Join,

@@ -150,18 +150,15 @@ pub fn try_acquire(data_dir: &Path) -> std::io::Result<AcquireOutcome> {
 ///
 /// Returns:
 /// - `Ok(Some(diag))` — the sidecar exists, was readable, and parsed cleanly.
-/// - `Ok(None)`        — the sidecar is determinately absent or empty (a clean
-///                       "no holder" answer; the operator genuinely has no
-///                       lock to clear).
-/// - `Err(io::Error)`  — the sidecar exists but the filesystem refused to
-///                       answer (`EACCES`, AV lock, ACL revoke, ...). The
-///                       answer is *unknown* — NOT "no lock held" — and the
-///                       caller is expected to surface this as a diagnostic
-///                       warning rather than fold it into the reassuring
-///                       absent path. A doctor that reports `[ok] No lock
-///                       held` for an unreadable holder file is the line in
-///                       front of the exact vault-data-loss condition that
-///                       AGENTS.md names.
+/// - `Ok(None)` — the sidecar is determinately absent or empty (a clean
+///   "no holder" answer; the operator genuinely has no lock to clear).
+/// - `Err(io::Error)` — the sidecar exists but the filesystem refused to
+///   answer (`EACCES`, AV lock, ACL revoke, ...). The answer is *unknown* —
+///   NOT "no lock held" — and the caller is expected to surface this as a
+///   diagnostic warning rather than fold it into the reassuring absent path.
+///   A doctor that reports `[ok] No lock held` for an unreadable holder file
+///   is the line in front of the exact vault-data-loss condition that
+///   AGENTS.md names.
 pub fn diagnose_holder(data_dir: &Path) -> std::io::Result<Option<HolderDiagnostic>> {
     let holder_path = data_dir.join(HOLDER_FILENAME);
     let buf = match std::fs::read_to_string(&holder_path) {

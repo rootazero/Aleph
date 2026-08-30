@@ -23,10 +23,12 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::SystemTime;
 
+use aleph_protocol::projects::BindingPeerKind;
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
 use crate::gateway::security::store::OWNER_USER_ID;
+use crate::projects::binding::{self, ChannelBinding, ClaimSource};
 use crate::projects::roster::{self, RosterSnapshot};
 use crate::sync_primitives::{Arc, Mutex};
 
@@ -187,6 +189,29 @@ fn workspace_uniqueness_ddl() -> String {
     )
 }
 
+/// The room ⟷ conversation binding table.
+///
+/// Kept out of [`SCHEMA`] for the same reason `workspace_uniqueness_ddl` is:
+/// it is created together with its own index, and both must be applied AFTER
+/// the column migrations above. It references no column added by a migration,
+/// so it is safe against a pre-rooms catalogue — but the index is written here
+/// rather than in `SCHEMA` so that the table and the constraint that gives it
+/// its meaning can never be applied apart.
+const BINDING_DDL: &str = "
+CREATE TABLE IF NOT EXISTS project_channel_bindings (
+    project_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    peer_kind  TEXT NOT NULL,
+    peer_id    TEXT NOT NULL,
+    bound_by   TEXT,
+    bound_at   INTEGER NOT NULL,
+    label      TEXT,
+    PRIMARY KEY (channel_id, peer_kind, peer_id)
+);
+CREATE INDEX IF NOT EXISTS idx_project_channel_bindings_project
+    ON project_channel_bindings(project_id);
+";
+
 /// SQLite-backed catalogue.
 ///
 /// Cheap to clone (the connection is shared). The API is synchronous — hence
@@ -265,6 +290,7 @@ impl ProjectStore {
             conn.execute_batch(SCHEMA).map_err(db_err)?;
             conn.execute_batch(&workspace_uniqueness_ddl())
                 .map_err(db_err)?;
+            conn.execute_batch(BINDING_DDL).map_err(db_err)?;
             add_current_session_key_column(conn)?;
             // AFTER the column migration, never inside `SCHEMA`. On a database
             // created before rooms existed, `SCHEMA`'s `CREATE TABLE IF NOT
@@ -691,7 +717,19 @@ impl ProjectStore {
     /// `Ok(None)` for "no room claims this key" — the overwhelmingly common
     /// case, and the one that must stay a cheap indexed lookup rather than a
     /// scan.
-    pub fn project_for_session_key(
+    ///
+    /// `pub(in crate::projects)` because this is **arm 1's raw ingredient**,
+    /// and the composition it feeds ([`Self::room_claiming`]) must keep exactly
+    /// one author. Anything outside `projects` that could reach both this and
+    /// [`Self::project_for_bound_session`] could re-derive that composition,
+    /// and this repo has paid for that shape before — the two readers this task
+    /// converged were each re-deriving it. The visibility is what makes a third
+    /// derivation a **compile error** rather than a convention the next author
+    /// has to have read. Contrast [`Self::project_for_conversation`], which
+    /// stays `pub`: it is an independent query, not an ingredient of the
+    /// precedence rule, so narrowing it would block legitimate cross-module
+    /// callers without preventing any re-derivation.
+    pub(in crate::projects) fn project_for_session_key(
         &self,
         session_key: &str,
     ) -> Result<Option<String>, ProjectError> {
@@ -703,6 +741,328 @@ impl ProjectStore {
             )
             .optional()
             .map_err(db_err)
+        })
+    }
+
+    /// Bind a conversation to a room.
+    ///
+    /// The conversation side is the primary key, so a conversation another room
+    /// already holds is refused with [`ProjectError::Invalid`] rather than
+    /// silently taken over — an overwrite would move a live room's traffic
+    /// somewhere its members cannot see.
+    ///
+    /// Re-binding a conversation to the SAME room is a no-op that succeeds and
+    /// refreshes the label: an operator repeating a bind must not be told they
+    /// broke something.
+    ///
+    /// `channel_id` and `peer_id` are normalized via
+    /// [`binding::normalize_component`] before storage (Ruling AD) — the same
+    /// normalization a live `SessionKey` applies — so the operator's spelling
+    /// need not match a channel adapter's exactly. Pass the original spelling
+    /// as `label` if it is worth preserving for display; it is not otherwise
+    /// recoverable from the stored row. The already-bound conflict error below
+    /// names the operator's original input, not the normalized key, so it
+    /// reads back the words the operator actually typed.
+    pub fn bind_conversation(
+        &self,
+        project_id: &str,
+        channel_id: &str,
+        peer_kind: BindingPeerKind,
+        peer_id: &str,
+        bound_by: Option<&str>,
+        label: Option<&str>,
+    ) -> Result<ChannelBinding, ProjectError> {
+        let now = now_secs();
+        let peer_kind_col = peer_kind.as_str();
+        // Normalized forms, bound to their own names rather than shadowing
+        // `channel_id`/`peer_id`: the conflict error below must be able to
+        // quote the operator's own spelling back at them, not the key we
+        // actually store.
+        let channel_key = binding::normalize_component(channel_id);
+        let peer_key = binding::normalize_component(peer_id);
+        self.with_conn(|conn| {
+            let existing: Option<String> = conn
+                .query_row(
+                    "SELECT project_id FROM project_channel_bindings
+                     WHERE channel_id = ?1 AND peer_kind = ?2 AND peer_id = ?3",
+                    rusqlite::params![channel_key, peer_kind_col, peer_key],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(db_err)?;
+            if let Some(owner) = existing.as_deref() {
+                if owner != project_id {
+                    return Err(ProjectError::Invalid(format!(
+                        "{channel_id}:{peer_id} is already bound to project {owner}; \
+                         unbind it there first"
+                    )));
+                }
+            }
+            let exists: Option<String> = conn
+                .query_row(
+                    "SELECT id FROM projects WHERE id = ?1 AND status = 'active'",
+                    [project_id],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(db_err)?;
+            if exists.is_none() {
+                return Err(ProjectError::NotFound(project_id.to_string()));
+            }
+            conn.execute(
+                "INSERT INTO project_channel_bindings
+                     (project_id, channel_id, peer_kind, peer_id, bound_by, bound_at, label)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(channel_id, peer_kind, peer_id) DO UPDATE SET
+                     label = excluded.label,
+                     bound_by = excluded.bound_by,
+                     bound_at = excluded.bound_at",
+                rusqlite::params![
+                    project_id, channel_key, peer_kind_col, peer_key, bound_by, now, label
+                ],
+            )
+            .map_err(db_err)?;
+            Ok(ChannelBinding {
+                project_id: project_id.to_string(),
+                channel_id: channel_key.clone(),
+                peer_kind,
+                peer_id: peer_key.clone(),
+                bound_by: bound_by.map(str::to_string),
+                bound_at: now,
+                label: label.map(str::to_string),
+            })
+        })
+    }
+
+    /// Release a conversation. `Ok(false)` means nothing was bound — a distinct
+    /// answer from `Ok(true)`, because a receipt that says "unbound" about a
+    /// conversation that never was is a client asserting a result it did not
+    /// observe.
+    ///
+    /// `channel_id` and `peer_id` are normalized the same way
+    /// [`Self::bind_conversation`] normalizes them before storing, so an
+    /// operator's original spelling still resolves to the stored row.
+    pub fn unbind_conversation(
+        &self,
+        channel_id: &str,
+        peer_kind: BindingPeerKind,
+        peer_id: &str,
+    ) -> Result<bool, ProjectError> {
+        let peer_kind_col = peer_kind.as_str();
+        let channel_id = binding::normalize_component(channel_id);
+        let peer_id = binding::normalize_component(peer_id);
+        self.with_conn(|conn| {
+            let n = conn
+                .execute(
+                    "DELETE FROM project_channel_bindings
+                     WHERE channel_id = ?1 AND peer_kind = ?2 AND peer_id = ?3",
+                    rusqlite::params![channel_id, peer_kind_col, peer_id],
+                )
+                .map_err(db_err)?;
+            Ok(n > 0)
+        })
+    }
+
+    /// The room a conversation belongs to, if any.
+    ///
+    /// Sibling of [`Self::project_for_session_key`]: both answer "which room
+    /// owns this turn" and both must stay a cheap indexed lookup, because
+    /// [`Self::room_claiming`] calls them on every run.
+    ///
+    /// `channel_id` and `peer_id` are normalized the same way
+    /// [`Self::bind_conversation`] normalizes them before storing. A caller
+    /// passing the components straight out of [`binding::conversation_of`]
+    /// (already normalized, since they came from a live `SessionKey`) pays
+    /// nothing extra — normalization is idempotent.
+    pub fn project_for_conversation(
+        &self,
+        channel_id: &str,
+        peer_kind: BindingPeerKind,
+        peer_id: &str,
+    ) -> Result<Option<String>, ProjectError> {
+        let peer_kind_col = peer_kind.as_str();
+        let channel_id = binding::normalize_component(channel_id);
+        let peer_id = binding::normalize_component(peer_id);
+        self.with_conn(|conn| {
+            conn.query_row(
+                "SELECT project_id FROM project_channel_bindings
+                 WHERE channel_id = ?1 AND peer_kind = ?2 AND peer_id = ?3",
+                rusqlite::params![channel_id, peer_kind_col, peer_id],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(db_err)
+        })
+    }
+
+    /// The room a session key's conversation is bound to, if any.
+    ///
+    /// Composes [`binding::conversation_of`] (decomposing the key into the
+    /// `(channel, peer_kind, peer_id)` triple a binding is keyed on) with
+    /// [`Self::project_for_conversation`] (the stored lookup). `Ok(None)` for
+    /// a key that is not a conversation at all (a DM, a task, a main session)
+    /// as well as for a conversation nothing is bound to — both mean the same
+    /// thing to a caller asking "does a room claim this key".
+    ///
+    /// This is arm 2 of [`Self::room_claiming`], which is now its only caller
+    /// — it re-composes neither this nor `conversation_of` +
+    /// `project_for_conversation`, the same rule arm 1 already follows by
+    /// calling [`Self::project_for_session_key`] directly instead of
+    /// duplicating its query. It stays a method of its own rather than being
+    /// inlined there because the decomposition it performs is a property of
+    /// the *key*, not of the claim precedence above it.
+    ///
+    /// `pub(in crate::projects)` for the same reason as
+    /// [`Self::project_for_session_key`] — see that method's doc. These two are
+    /// arm 1's and arm 2's ingredients; holding both is what would let someone
+    /// rebuild [`Self::room_claiming`]'s precedence somewhere else.
+    pub(in crate::projects) fn project_for_bound_session(
+        &self,
+        session_key: &crate::routing::session_key::SessionKey,
+    ) -> Result<Option<String>, ProjectError> {
+        let Some((channel_id, peer_kind, peer_id)) = binding::conversation_of(session_key) else {
+            return Ok(None);
+        };
+        self.project_for_conversation(&channel_id, peer_kind, &peer_id)
+    }
+
+    /// The project that claims `session_key` as its room conversation, by
+    /// either of the two ways a room can claim one — and **which** of the two
+    /// answered.
+    ///
+    /// The single composition of [`Self::project_for_session_key`] (arm 1,
+    /// [`ClaimSource::ExplicitClaim`]) and [`Self::project_for_bound_session`]
+    /// (arm 2, [`ClaimSource::BoundConversation`]). It lives on `ProjectStore`
+    /// for the same reason arm 2's own composition does — see that method's
+    /// doc: a composition of catalogue lookups belongs on the catalogue, not
+    /// re-assembled at each caller. `projects::binding` is the other plausible
+    /// home and is deliberately not used: that module is store-free by
+    /// construction (`store.rs` depends on it, never the reverse), and putting
+    /// this there would invert that dependency to buy nothing.
+    ///
+    /// **Precedence:** an explicit claim outranks a binding. The two
+    /// disagreeing means an operator bound a conversation some room had
+    /// already claimed by key; the claim is the declaration, so it wins — and
+    /// the mismatch is said out loud rather than silently resolved.
+    ///
+    /// **Returns `Option`, not `Result`** — the only lookup on this type that
+    /// swallows its own error, and the reason it can is that both callers had
+    /// already ruled the same way on a degraded catalogue: a SQLite hiccup
+    /// must turn into neither a mis-scoped turn nor a refused one. The cost is
+    /// bounded (the row is then stamped the way it was stamped before rooms
+    /// existed); the alternative makes a transient database fault look like a
+    /// permissions failure. A ruling both callers share is exactly the thing
+    /// that must not be written twice.
+    ///
+    /// What the callers do **not** share is what a `None` *means* to them —
+    /// "leave the producer's stamp alone" after admission, "fall through to
+    /// the personal arm" on it — nor what an invisible project means, which
+    /// differs per arm on one side and not the other. Those are policy and
+    /// stay at the two call sites; only the lookup is here.
+    pub(crate) fn room_claiming(
+        &self,
+        session_key: &crate::routing::session_key::SessionKey,
+    ) -> Option<(String, ClaimSource)> {
+        // (1) The Panel-minted room conversation, claimed by `projects.room_session`.
+        let claimed = match self.project_for_session_key(&session_key.to_key_string()) {
+            Ok(pid) => pid,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "projects: room claim lookup failed; treating the key as not-a-room"
+                );
+                None
+            }
+        };
+        // (2) A channel conversation bound to a room. Keyed on the
+        // conversation, so an `agent_switch` (which changes the session key's
+        // agent component) does not un-bind it.
+        let bound = match self.project_for_bound_session(session_key) {
+            Ok(pid) => pid,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "projects: conversation binding lookup failed; treating the key as not-a-room"
+                );
+                None
+            }
+        };
+        match (claimed, bound) {
+            (Some(a), Some(b)) if a != b => {
+                tracing::warn!(
+                    claimed = %a,
+                    bound = %b,
+                    "projects: a session key is claimed by one room and its conversation is bound to another; \
+                     taking the explicit claim"
+                );
+                Some((a, ClaimSource::ExplicitClaim))
+            }
+            (Some(a), _) => Some((a, ClaimSource::ExplicitClaim)),
+            (None, Some(b)) => Some((b, ClaimSource::BoundConversation)),
+            (None, None) => None,
+        }
+    }
+
+    /// Every conversation a room is bound to, oldest first.
+    ///
+    /// A row whose stored `peer_kind` does not parse back as a
+    /// [`BindingPeerKind`] is skipped with a `warn!` naming the row's primary
+    /// key, rather than silently dropped: every writer of that column goes
+    /// through [`BindingPeerKind::as_str`], so a value its `FromStr` cannot
+    /// take means the row came from elsewhere (or was corrupted), and a
+    /// bindings table that silently omits a row is indistinguishable from an
+    /// empty one on the `list` surface.
+    ///
+    /// `channel_id`/`peer_id` on the returned rows are read back exactly as
+    /// [`Self::bind_conversation`] stored them — already normalized (Ruling
+    /// AD). A caller that wants the operator's original spelling reads
+    /// [`ChannelBinding::label`], not these two fields.
+    pub fn bindings_for(&self, project_id: &str) -> Result<Vec<ChannelBinding>, ProjectError> {
+        self.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT channel_id, peer_kind, peer_id, bound_by, bound_at, label
+                     FROM project_channel_bindings WHERE project_id = ?1
+                     ORDER BY bound_at, channel_id, peer_id",
+                )
+                .map_err(db_err)?;
+            let rows = stmt
+                .query_map([project_id], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                        r.get::<_, i64>(4)?,
+                        r.get::<_, Option<String>>(5)?,
+                    ))
+                })
+                .map_err(db_err)?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (channel_id, peer_kind_raw, peer_id, bound_by, bound_at, label) =
+                    row.map_err(db_err)?;
+                let Ok(peer_kind) = peer_kind_raw.parse::<BindingPeerKind>() else {
+                    tracing::warn!(
+                        project_id = %project_id,
+                        channel_id = %channel_id,
+                        peer_id = %peer_id,
+                        raw = %peer_kind_raw,
+                        "projects: unrecognised peer_kind in project_channel_bindings row; skipping"
+                    );
+                    continue;
+                };
+                out.push(ChannelBinding {
+                    project_id: project_id.to_string(),
+                    channel_id,
+                    peer_kind,
+                    peer_id,
+                    bound_by,
+                    bound_at,
+                    label,
+                });
+            }
+            Ok(out)
         })
     }
 
@@ -1040,6 +1400,84 @@ mod tests {
 
         // Idempotent: opening the same database again is not an error.
         store.create_schema().expect("re-open must be a no-op");
+    }
+
+    /// The same migration-order criterion, asserted about the table this
+    /// round added rather than about the one round 8 added.
+    ///
+    /// The design spec names this test; it did not exist until 2026-08-30,
+    /// and the criterion it guards was satisfied by construction the whole
+    /// time — `project_channel_bindings` and its index are both in `SCHEMA`,
+    /// and the index reads only that table's own `project_id`. That is
+    /// exactly the state a pinning test is for: **the property held, and
+    /// nothing would have said so if it stopped holding.** Put that index on
+    /// a column some later migration adds and `create_schema` fails with
+    /// "no such column" against every database that predates it — which is
+    /// every deployed one, and none of the fixtures in this module.
+    ///
+    /// Distinct from `a_pre_rooms_catalogue_still_opens_and_indexes` two
+    /// tests up in what it *names*: that one would red on a mis-ordered
+    /// index too, because `create_schema` runs as a whole — but it names
+    /// only the `projects` column and that column's index, so a reader
+    /// auditing the new table finds no assertion mentioning it. This one
+    /// binds a row that predates the table and reads the binding back.
+    #[test]
+    fn a_pre_rooms_catalogue_still_opens_and_binds() {
+        let conn = Connection::open_in_memory().unwrap();
+        // Pre-rooms: no `current_session_key`, and no bindings table at all.
+        conn.execute_batch(
+            "CREATE TABLE projects (
+                 id                  TEXT PRIMARY KEY,
+                 name                TEXT NOT NULL,
+                 owner_user_id       TEXT,
+                 workspace_path      TEXT,
+                 status              TEXT NOT NULL DEFAULT 'active',
+                 created_at          INTEGER NOT NULL,
+                 updated_at          INTEGER NOT NULL,
+                 last_used_at        INTEGER NOT NULL
+             );
+             INSERT INTO projects (id, name, created_at, updated_at, last_used_at)
+             VALUES ('p-old', 'before rooms', 1, 1, 1);",
+        )
+        .unwrap();
+
+        let store = ProjectStore::new(conn);
+        store
+            .create_schema()
+            .expect("a pre-rooms catalogue must migrate, not fail to open");
+
+        // The table and its index arrived with the schema, not with a later
+        // migration that a pre-rooms database would never have run.
+        let objects: i64 = store
+            .with_conn(|c| {
+                c.query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE name IN ('project_channel_bindings',
+                                    'idx_project_channel_bindings_project')",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(db_err)
+            })
+            .unwrap();
+        assert_eq!(
+            objects, 2,
+            "the bindings table and its index must both exist after migrating a \
+             pre-rooms catalogue"
+        );
+
+        // And a row that predates the table can be bound and read back.
+        store
+            .bind_conversation("p-old", "tg", BindingPeerKind::Group, "C-42", None, None)
+            .expect("a pre-rooms room must be bindable");
+        assert_eq!(
+            store
+                .project_for_conversation("tg", BindingPeerKind::Group, "C-42")
+                .unwrap()
+                .as_deref(),
+            Some("p-old"),
+            "the binding must be readable through the lookup the router uses"
+        );
     }
 
     #[test]
@@ -1488,6 +1926,302 @@ mod tests {
         assert!(
             !"proj-deadbeef".starts_with("p-"),
             "if this ever becomes true, partition_visible's arm order is wrong"
+        );
+    }
+
+    /// A binding is keyed on the conversation, so a second room cannot claim a
+    /// conversation the first one already holds. The refusal must be loud: a
+    /// silent overwrite would move an existing room's traffic somewhere else.
+    ///
+    /// The `project_for_conversation` assertion below also exercises
+    /// `project_for_conversation` normalizing a RAW (un-normalized) input:
+    /// it passes `"C0A1"` against a row stored under `"c0a1"`. See
+    /// `a_binding_written_with_an_operator_spelling_is_found_by_the_session_key_lookup`
+    /// for the fuller property -- that this normalization also agrees with a
+    /// live `SessionKey`'s, checked against that independent oracle rather
+    /// than a literal repeated on both sides the way this test does it.
+    #[test]
+    fn a_conversation_belongs_to_at_most_one_room() {
+        let _guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = ProjectStore::new(Connection::open_in_memory().unwrap());
+        store.create_schema().unwrap();
+        let a = store.create("room a", Some("u-alice"), None).unwrap();
+        let b = store.create("room b", Some("u-alice"), None).unwrap();
+
+        store
+            .bind_conversation(
+                &a.id,
+                "telegram",
+                BindingPeerKind::Group,
+                "C0A1",
+                Some("u-alice"),
+                None,
+            )
+            .expect("the first bind succeeds");
+        let second = store.bind_conversation(
+            &b.id,
+            "telegram",
+            BindingPeerKind::Group,
+            "C0A1",
+            Some("u-alice"),
+            None,
+        );
+        assert!(
+            matches!(second, Err(ProjectError::Invalid(_))),
+            "the second room must be refused, not silently take the conversation over"
+        );
+        assert_eq!(
+            store
+                .project_for_conversation("telegram", BindingPeerKind::Group, "C0A1")
+                .unwrap(),
+            Some(a.id.clone()),
+            "the original binding must survive the refused attempt"
+        );
+    }
+
+    /// The conflict error must quote the operator's own spelling back at
+    /// them, not the normalized key `project_channel_bindings` actually
+    /// stores under: an operator who typed `Slack`/`#Eng` and is told
+    /// `slack:-eng is already bound` may not recognise it as their own input.
+    #[test]
+    fn the_conflict_error_names_the_operators_original_spelling() {
+        let _guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = ProjectStore::new(Connection::open_in_memory().unwrap());
+        store.create_schema().unwrap();
+        let a = store.create("room a", Some("u-alice"), None).unwrap();
+        let b = store.create("room b", Some("u-alice"), None).unwrap();
+        store
+            .bind_conversation(
+                &a.id,
+                "Slack",
+                BindingPeerKind::Group,
+                "#Eng",
+                Some("u-alice"),
+                None,
+            )
+            .expect("the first bind succeeds");
+
+        let err = store
+            .bind_conversation(
+                &b.id,
+                "Slack",
+                BindingPeerKind::Group,
+                "#Eng",
+                Some("u-alice"),
+                None,
+            )
+            .expect_err("the second room must be refused");
+        let ProjectError::Invalid(message) = err else {
+            panic!("expected ProjectError::Invalid, got {err:?}");
+        };
+        assert!(
+            message.starts_with("Slack:#Eng"),
+            "the error must echo the operator's own spelling (\"Slack:#Eng\"), \
+             not the normalized key (\"slack:-eng\"); got: {message}"
+        );
+    }
+
+    /// Unbinding is idempotent and reports whether anything actually changed —
+    /// "nothing was bound" and "I unbound it" are different answers, and a
+    /// caller that renders a receipt needs to tell them apart.
+    #[test]
+    fn unbinding_reports_whether_it_changed_anything() {
+        let _guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = ProjectStore::new(Connection::open_in_memory().unwrap());
+        store.create_schema().unwrap();
+        let a = store.create("room a", Some("u-alice"), None).unwrap();
+        store
+            .bind_conversation(
+                &a.id,
+                "slack",
+                BindingPeerKind::Group,
+                "C9",
+                Some("u-alice"),
+                None,
+            )
+            .unwrap();
+
+        assert!(store
+            .unbind_conversation("slack", BindingPeerKind::Group, "C9")
+            .unwrap());
+        assert!(!store
+            .unbind_conversation("slack", BindingPeerKind::Group, "C9")
+            .unwrap());
+        assert_eq!(
+            store
+                .project_for_conversation("slack", BindingPeerKind::Group, "C9")
+                .unwrap(),
+            None
+        );
+    }
+
+    /// One room may live in several conversations (Telegram + Slack). The
+    /// uniqueness constraint is on the conversation side only — that is what
+    /// "one core, many channels" costs here.
+    #[test]
+    fn a_room_may_be_bound_to_several_conversations() {
+        let _guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = ProjectStore::new(Connection::open_in_memory().unwrap());
+        store.create_schema().unwrap();
+        let a = store.create("room a", Some("u-alice"), None).unwrap();
+        store
+            .bind_conversation(
+                &a.id,
+                "telegram",
+                BindingPeerKind::Group,
+                "C1",
+                Some("u-alice"),
+                None,
+            )
+            .unwrap();
+        store
+            .bind_conversation(
+                &a.id,
+                "slack",
+                BindingPeerKind::Group,
+                "C2",
+                Some("u-alice"),
+                Some("#eng"),
+            )
+            .unwrap();
+        let bound = store.bindings_for(&a.id).unwrap();
+        assert_eq!(bound.len(), 2);
+        // Not bound[1]: both binds land in the same `bound_at` second, so the
+        // `ORDER BY bound_at, channel_id, peer_id` tiebreak (correct, and not
+        // to be changed for this test) sorts by channel_id -- "slack" before
+        // "telegram" -- not by insertion order. Find the row instead of
+        // indexing it so this test does not depend on that tiebreak.
+        let slack = bound
+            .iter()
+            .find(|b| b.channel_id == "slack")
+            .expect("the slack binding is present");
+        assert_eq!(slack.label.as_deref(), Some("#eng"));
+    }
+
+    /// A catalogue created before this table existed must still open. The
+    /// isolated test HOME only ever builds the newest shape, so the old one has
+    /// to be constructed on purpose — the same reason
+    /// `a_pre_rooms_catalogue_still_opens_and_indexes` exists two tables up.
+    #[test]
+    fn a_pre_binding_catalogue_still_opens_and_binds() {
+        let _guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE projects (
+                 id TEXT PRIMARY KEY,
+                 name TEXT NOT NULL,
+                 owner_user_id TEXT,
+                 workspace_path TEXT,
+                 status TEXT NOT NULL DEFAULT 'active',
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL,
+                 last_used_at INTEGER NOT NULL
+             );",
+        )
+        .unwrap();
+        let store = ProjectStore::new(conn);
+        store
+            .create_schema()
+            .expect("a catalogue predating the binding table must migrate, not fail to open");
+        let a = store.create("room a", Some("u-alice"), None).unwrap();
+        store
+            .bind_conversation(
+                &a.id,
+                "telegram",
+                BindingPeerKind::Group,
+                "C0",
+                Some("u-alice"),
+                None,
+            )
+            .expect("binding must work on a migrated catalogue");
+    }
+
+    /// `bind_conversation` normalizes its own inputs via
+    /// [`binding::normalize_component`]. What is worth pinning is not that
+    /// fact alone -- it is that the normalization agrees with a live
+    /// `SessionKey`'s, checked against an INDEPENDENT oracle rather than a
+    /// second call to the same function: this binds through
+    /// `bind_conversation` with the operator's raw spelling, then derives the
+    /// expected key by constructing a real `SessionKey::group` and reading
+    /// its own sanitized fields via `conversation_of` -- never calling
+    /// `normalize_component` directly. That is the WRITE side.
+    ///
+    /// `SessionKey::group` normalizes at construction, so the value
+    /// `conversation_of` hands back is already normalized: querying
+    /// `project_for_conversation` with it cannot tell whether
+    /// `project_for_conversation` normalizes its OWN inputs, only whether
+    /// `bind_conversation` did. So this test also queries directly with the
+    /// operator's raw, un-normalized spelling -- the READ side, and the only
+    /// thing that distinguishes this test from
+    /// `a_conversation_belongs_to_at_most_one_room` covering the same ground.
+    /// Both assertions must stay: deleting either one un-pins the half it
+    /// alone proves, silently.
+    #[test]
+    fn a_binding_written_with_an_operator_spelling_is_found_by_the_session_key_lookup() {
+        let _guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = ProjectStore::new(Connection::open_in_memory().unwrap());
+        store.create_schema().unwrap();
+        let room = store.create("room a", Some("u-alice"), None).unwrap();
+        store
+            .bind_conversation(
+                &room.id,
+                "Slack",
+                BindingPeerKind::Group,
+                "#Eng",
+                Some("u-alice"),
+                Some("#Eng"),
+            )
+            .expect("bind with the operator's own spelling, capitals and all");
+
+        // WRITE side: a live inbound message builds its SessionKey from the
+        // channel adapter's raw ids the same way every real conversation
+        // does -- NOT pre-normalized by the caller. If bind_conversation's
+        // normalization disagreed with SessionKey::group's, this lookup
+        // (keyed on values conversation_of derives independently, never
+        // calling normalize_component) would miss.
+        let key = crate::routing::session_key::SessionKey::group(
+            "main",
+            "Slack",
+            crate::routing::session_key::PeerKind::Group,
+            "#Eng",
+        );
+        let (channel, kind, peer) =
+            binding::conversation_of(&key).expect("a group key is a conversation");
+        assert_eq!(
+            store.project_for_conversation(&channel, kind, &peer).unwrap(),
+            Some(room.id.clone()),
+            "a binding written with the operator's original spelling must be \
+             found by a lookup keyed on what a live SessionKey independently \
+             derives -- bind_conversation's normalization must agree with \
+             SessionKey::group's, not merely with itself"
+        );
+
+        // READ side: query with the operator's raw spelling directly, not
+        // via conversation_of. This is what pins project_for_conversation
+        // normalizing its own inputs -- the assertion above is structurally
+        // blind to that half, since conversation_of already normalized what
+        // it fed it.
+        assert_eq!(
+            store
+                .project_for_conversation("Slack", BindingPeerKind::Group, "#Eng")
+                .unwrap(),
+            Some(room.id),
+            "project_for_conversation must normalize a raw query the same way \
+             bind_conversation normalized what it stored, or a lookup using \
+             the operator's own spelling would never find a binding that \
+             lists as bound"
         );
     }
 }

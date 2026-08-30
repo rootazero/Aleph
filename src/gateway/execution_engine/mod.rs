@@ -555,6 +555,16 @@ mod shared_room_lane_tests {
         m
     }
 
+    /// A conversation-shaped key, the shape the channel inbound router mints.
+    fn key(peer: &str) -> crate::routing::session_key::SessionKey {
+        crate::routing::session_key::SessionKey::group(
+            "main",
+            "telegram",
+            crate::routing::session_key::PeerKind::Group,
+            peer,
+        )
+    }
+
     /// The rule itself: another member's run is not yours to steer or kill.
     #[test]
     fn a_room_mates_run_forces_queue_whatever_the_knob_says() {
@@ -585,6 +595,93 @@ mod shared_room_lane_tests {
             BusyInputMode::Interrupt.for_shared_room(true, &alice, &alice),
             BusyInputMode::Interrupt
         );
+    }
+
+    /// The door the stamped half cannot see: a channel conversation BOUND to a
+    /// room. The producer stamps `personal:<speaker>` — the room correction
+    /// happens later, in `run_loop::request_scope`, and this runs on the
+    /// admission path — so before the claim was consulted this guard
+    /// early-returned and a room-mate's message folded into the running turn.
+    ///
+    /// Bob is deliberately NOT added to the roster. `request_scope`'s arm-2
+    /// gate refuses to give an off-roster speaker the room's DATA scope; this
+    /// is a different question, and an off-roster speaker steering a member's
+    /// turn is worse rather than better. If someone later reuses that gate
+    /// here, this test is what goes red.
+    ///
+    /// # Why nothing here is torn down
+    ///
+    /// The project and the binding stay in `ProjectStore::shared()` for the
+    /// rest of the test binary, and that is a decision rather than an
+    /// oversight. Both identifiers are unique by construction, and nothing
+    /// reads that store in a way this leftover can move: no test in the crate
+    /// enumerates it (`projects::store`'s counting tests all build a
+    /// `fresh_store()`, and there are zero `ProjectStore::shared()` calls in
+    /// that module), and the only two production `list()` consumers
+    /// (`extension`) `filter_map` on `workspace_path`, which `create(…, None)`
+    /// leaves unset. A teardown would be a SECOND write to a global that
+    /// sibling cases read without holding this test's guard — the failure mode
+    /// 「一个进程全局的表被第二个实例写」 names, and this branch already
+    /// carries one flaky test. Leaving it is the smaller risk, and what makes
+    /// that true is the distinctness of these two names: keep them distinct.
+    #[test]
+    fn a_room_mate_in_a_bound_channel_conversation_still_cannot_steer() {
+        let _guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = crate::projects::ProjectStore::shared();
+        let room = store
+            .create("busy-lane-bound-room", Some("u-alice"), None)
+            .unwrap();
+        store
+            .bind_conversation(
+                &room.id,
+                "telegram",
+                aleph_protocol::projects::BindingPeerKind::Group,
+                "C-busy-lane",
+                Some("u-alice"),
+                None,
+            )
+            .unwrap();
+
+        // Exactly what the channel inbound router stamps: the SPEAKER.
+        let incoming = turn(Some("personal:u-bob"), Some("u-bob"));
+        let running = turn(Some("personal:u-alice"), Some("u-alice"));
+
+        // Premise: on the stamped half alone this pair is invisible — both
+        // turns read `personal:`. If this ever queues, the assertion below
+        // stops proving that the room CLAIM is what saw through it.
+        let unbound = super::tests::gate_test_request(&key("C-unbound"), "run-unbound");
+        assert!(
+            !super::run_loop::request_is_in_a_room(&unbound),
+            "premise: `C-unbound` must be a key no room has claimed"
+        );
+        assert_eq!(
+            BusyInputMode::Steer.for_shared_room(false, &incoming, &running),
+            BusyInputMode::Steer,
+        );
+
+        // The claim half: the binding is what sees through the personal stamp,
+        // and it does so WITHOUT the arm-2 roster gate — bob is deliberately
+        // off-roster, and an off-roster speaker steering a member's turn is
+        // worse rather than better. If someone routes this predicate through
+        // `request_scope`, this assertion is what goes red.
+        let mut bound = super::tests::gate_test_request(&key("C-busy-lane"), "run-bound");
+        bound.metadata = incoming.clone();
+        assert!(
+            super::run_loop::request_is_in_a_room(&bound),
+            "the room claim must see through the producer's `personal:` stamp"
+        );
+
+        for knob in [BusyInputMode::Steer, BusyInputMode::Interrupt] {
+            assert_eq!(
+                knob.for_shared_room(true, &incoming, &running),
+                BusyInputMode::Queue,
+                "{knob:?} must not reach across authors in a room reached through \
+                 a bound channel conversation either — the binding is what makes \
+                 two humans share one transcript there"
+            );
+        }
     }
 
     /// A personal session has one human by construction, so the rule may never

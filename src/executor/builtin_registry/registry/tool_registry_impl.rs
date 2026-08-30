@@ -1359,7 +1359,9 @@ impl ToolRegistry for BuiltinToolRegistry {
 
             // Media send tool — no dependencies, always available
             "media_send" => Box::pin(async move {
-                crate::builtin_tools::media_send::MediaSendTool::new()
+                crate::builtin_tools::media_send::MediaSendTool::new(
+                    crate::security::ssrf::SsrfPolicy::default(),
+                )
                     .call_json(arguments)
                     .await
             }),

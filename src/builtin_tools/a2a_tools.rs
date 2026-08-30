@@ -39,6 +39,12 @@ pub struct A2AToolDeps {
     pub sub_agent: Arc<A2ASubAgent>,
     /// Registry of known remote agents (backs the `a2a_agents` tool).
     pub card_registry: Arc<CardRegistry>,
+    /// SSRF policy for the pre-flight URL check in `a2a_agents.add`.
+    /// Threaded from the operator's `[ssrf]` config block so the
+    /// allow/deny rules reach the tool face — the previous
+    /// `SsrfPolicy::default()` shape made the operator's audit
+    /// (`config_audit`) findings a no-op against the actual gate.
+    pub ssrf_policy: SsrfPolicy,
 }
 
 /// Shared, swappable handle to [`A2AToolDeps`].
@@ -311,7 +317,12 @@ impl AlephTool for A2AAgentsTool {
                          refusing to register a non-HTTP A2A agent"
                     )));
                 }
-                validate_url_async(&url, &SsrfPolicy::default())
+                validate_url_async(
+                    &url,
+                    // Plumb the operator's `[ssrf]` config through
+                    // A2AToolDeps instead of the hard-coded default.
+                    &deps.ssrf_policy,
+                )
                     .await
                     .map_err(|e| {
                         AlephError::tool(format!(
@@ -423,6 +434,10 @@ mod tests {
         handle.store(Some(Arc::new(A2AToolDeps {
             sub_agent,
             card_registry: registry.clone(),
+            // Tests don't exercise the SSRF path; the default
+            // policy keeps the unit tests focused on the
+            // tool-level surface.
+            ssrf_policy: SsrfPolicy::default(),
         })));
         (handle, registry)
     }

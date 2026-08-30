@@ -5,6 +5,11 @@
 //! lives at `crate::projects` in `alephcore`; this module just shapes the
 //! JSON wire calls.
 
+use aleph_protocol::projects::{
+    BindingPeerKind, ChannelBindParams, ChannelBindResult, ChannelBindingRow, ChannelListParams,
+    ChannelListResult, ChannelUnbindParams, ChannelUnbindResult,
+};
+
 use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 
@@ -266,6 +271,76 @@ impl ProjectsApi {
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
+    /// The channel conversations this room is bound to.
+    ///
+    /// No row type is declared on this side. The wire row has exactly one
+    /// author — [`ChannelBindingRow`] in `aleph_protocol` — because a
+    /// field-by-field copy on the client is how `aleph providers list` ended
+    /// up rendering two columns the server had never sent. A Panel-local
+    /// redeclaration would also silently tolerate the server dropping a field:
+    /// parsing proves the client's fields are a subset of what arrived, never
+    /// that the two are the same set.
+    ///
+    /// Open to a room's members server-side, unlike bind/unbind.
+    pub async fn channel_list(
+        state: &DashboardState,
+        project_id: &str,
+    ) -> Result<Vec<ChannelBindingRow>, String> {
+        let params = to_params(&ChannelListParams {
+            project_id: project_id.to_string(),
+        })?;
+        let result = state.rpc_call("projects.channel.list", params).await?;
+        let parsed: ChannelListResult =
+            serde_json::from_value(result).map_err(|e| e.to_string())?;
+        Ok(parsed.bindings)
+    }
+
+    /// Point a channel group conversation at this room. **Admin-gated
+    /// server-side** — a member reaches this page and its buttons are live, so
+    /// the refusal must be classified by `components::admin_refusal` at the
+    /// call site rather than shown raw.
+    ///
+    /// Returns the whole [`ChannelBindResult`], not a `bool`: the receipt has
+    /// to tell the user what happened to the conversation's existing
+    /// transcript, and that answer is three-valued.
+    pub async fn channel_bind(
+        state: &DashboardState,
+        project_id: &str,
+        channel_id: &str,
+        peer_kind: BindingPeerKind,
+        peer_id: &str,
+        label: Option<&str>,
+    ) -> Result<ChannelBindResult, String> {
+        let params = to_params(&ChannelBindParams {
+            project_id: project_id.to_string(),
+            channel_id: channel_id.to_string(),
+            peer_kind,
+            peer_id: peer_id.to_string(),
+            label: label.map(str::to_string),
+        })?;
+        let result = state.rpc_call("projects.channel.bind", params).await?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
+    }
+
+    /// Release a conversation. Admin-gated server-side, like `channel_bind`.
+    ///
+    /// `unbound: false` means nothing was bound — a state, not a failure, and
+    /// the caller renders it as such.
+    pub async fn channel_unbind(
+        state: &DashboardState,
+        channel_id: &str,
+        peer_kind: BindingPeerKind,
+        peer_id: &str,
+    ) -> Result<ChannelUnbindResult, String> {
+        let params = to_params(&ChannelUnbindParams {
+            channel_id: channel_id.to_string(),
+            peer_kind,
+            peer_id: peer_id.to_string(),
+        })?;
+        let result = state.rpc_call("projects.channel.unbind", params).await?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
+    }
+
     /// Preview one text file under the room's bound workspace.
     pub async fn workspace_read(
         state: &DashboardState,
@@ -282,10 +357,90 @@ impl ProjectsApi {
     }
 }
 
+/// Serialize a contract params type into the `Value` `rpc_call` takes.
+///
+/// The request is BUILT from the contract type rather than hand-written as a
+/// `json!({..})`, which is the direction that matters: a hand-written object
+/// and the server's `#[derive(Deserialize)]` have no way to disagree until a
+/// user reports the button has never worked. Three families shipped that
+/// defect (`aleph workspace create`, the TUI's `agent.run`, `aleph providers
+/// add`).
+fn to_params<T: Serialize>(params: &T) -> Result<serde_json::Value, String> {
+    serde_json::to_value(params).map_err(|e| e.to_string())
+}
+
 fn parse_member_ids(result: serde_json::Value) -> Result<Vec<String>, String> {
     let arr = result
         .get("member_ids")
         .cloned()
         .unwrap_or(serde_json::Value::Array(vec![]));
     serde_json::from_value(arr).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shared row must parse what the server actually sends.
+    ///
+    /// A missing `#[serde(default)]` on one optional makes the WHOLE document
+    /// fail to deserialize — serde does not degrade field by field — and the
+    /// symptom is "the section is empty", not "one field is missing". That is
+    /// the same shape that made a single `{"source":"github"}` entry hide
+    /// every plugin in a marketplace.
+    ///
+    /// This test lives on the Panel side even though the type is shared: it is
+    /// the reconciliation, and a reconciliation belongs where the consumer is.
+    #[test]
+    fn a_row_without_optionals_still_parses() {
+        let row: ChannelBindingRow = serde_json::from_str(
+            r#"{"project_id":"p-1","channel_id":"telegram","peer_kind":"group",
+                "peer_id":"c1","bound_at":0}"#,
+        )
+        .expect("optionals must be defaulted, not required");
+        assert_eq!(row.label, None);
+        assert_eq!(row.bound_by, None);
+        assert_eq!(row.peer_kind, BindingPeerKind::Group);
+    }
+
+    /// An empty binding list is a list, not an error.
+    ///
+    /// A room with no conversations bound is the ordinary state, and this
+    /// section's whole job is to offer the bind form in it. Reading that as a
+    /// failure would put a red banner on a page that is working.
+    #[test]
+    fn a_room_with_no_bindings_parses_as_an_empty_list() {
+        let parsed: ChannelListResult = serde_json::from_str(r#"{"bindings":[]}"#)
+            .expect("an empty list is a state, not a failure");
+        assert!(parsed.bindings.is_empty());
+    }
+
+    /// Requests are built from the contract type, so their keys are the
+    /// server's keys by construction. This pins that the builder is actually
+    /// used — `to_params` returning something else would compile fine.
+    #[test]
+    fn the_bind_request_is_the_contract_shape() {
+        let v = to_params(&ChannelBindParams {
+            project_id: "p-1".into(),
+            channel_id: "telegram".into(),
+            peer_kind: BindingPeerKind::Thread,
+            peer_id: "c1".into(),
+            label: None,
+        })
+        .expect("params serialise");
+        let keys: std::collections::BTreeSet<&str> = v
+            .as_object()
+            .expect("params are an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            ["channel_id", "peer_id", "peer_kind", "project_id"]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            "an omitted label must be omitted rather than sent as null"
+        );
+        assert_eq!(v["peer_kind"], serde_json::json!("thread"));
+    }
 }

@@ -113,7 +113,23 @@ fn apply_description_to_identity(
     let Some(description) = description.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(());
     };
-    let existing = std::fs::read_to_string(identity_path).unwrap_or_default();
+    // NotFound is a true first run — IDENTITY.md does not exist yet, so
+    // we are about to create it. Other IO errors (PermissionDenied, a
+    // read of a corrupt-UTF8 file, a vanished file between checks) used
+    // to be flattened to '' by `unwrap_or_default`, then the
+    // `std::fs::write` below would race-append to a stale file the
+    // caller cannot read. Distinguish NotFound (genuine "no file yet")
+    // and propagate the rest so a stuck IDENTITY.md surfaces.
+    let existing = match std::fs::read_to_string(identity_path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            return Err(std::io::Error::new(
+                e.kind(),
+                format!("failed to read IDENTITY.md at {}: {e}", identity_path.display()),
+            ));
+        }
+    };
     // Skip if a `## Description` block already exists — user took the wheel.
     if existing.contains("## Description") {
         return Ok(());

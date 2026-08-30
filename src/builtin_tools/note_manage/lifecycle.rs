@@ -88,16 +88,27 @@ impl NoteManageTool {
             .await
             .map_err(|e| AlephError::tool(format!("Failed to rename note: {e}")))?;
         // Resolve the new category for an honest note_path in the result.
-        let new_paths = self
+        // The previous shape swallowed store failures into `unwrap_or_default()`
+        // — a transient DB error made the result report a nonexistent path
+        // (`other/{safe_new}`) even when the rename actually succeeded into a
+        // real category. Surface the failure instead of fabricating a path.
+        let note_path = match self
             .indexer
             .store()
             .find_by_filename(&safe_new, agent_id)
             .await
-            .unwrap_or_default();
-        let note_path = new_paths
-            .first()
-            .cloned()
-            .unwrap_or_else(|| format!("other/{safe_new}"));
+        {
+            Ok(paths) => paths
+                .first()
+                .cloned()
+                .unwrap_or_else(|| format!("other/{safe_new}")),
+            Err(e) => {
+                return Err(AlephError::tool(format!(
+                    "rename_note: succeeded, but failed to resolve the new note's \
+                     category for the result ({e}); the rename itself is on disk"
+                )));
+            }
+        };
         info!(old = %safe_old, new = %safe_new, "Note renamed");
         Ok(NoteManageResult {
             related_notes: None,

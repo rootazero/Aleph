@@ -101,6 +101,7 @@ pub mod oauth;
 pub mod pairing;
 pub mod plugins;
 pub mod projects;
+pub mod projects_channel;
 pub mod providers;
 pub mod pty;
 pub mod request_state;
@@ -354,16 +355,25 @@ impl HandlerRegistry {
         registry.register("services.list", services::handle_list);
         registry.register("services.status", services::handle_status);
 
-        // Embedded PTY terminal handlers (open to all connections under the
-        // LAN-trust model — every connection is the implicit operator).
-        // Stateless: they reach the process-global `pty::manager()` accessor;
-        // the event bus is attached once in `GatewayServer::build_router`, so
-        // no boot-time wiring is required here.
-        registry.register("pty.spawn", pty::handle_spawn);
+        // Embedded PTY terminal handlers — operator-only on both faces via the
+        // "pty." prefix (see `gateway::handlers::pty` module doc for why both
+        // faces matter). Stateless: they reach the process-global
+        // `pty::manager()` accessor; the event bus is attached once in
+        // `GatewayServer::build_router`, so no boot-time wiring is required here.
+        //
+        // `pty.spawn` is NOT registered here — it needs the live
+        // `Arc<RwLock<Config>>` to read `[policies.terminal]` (the session
+        // gate, and the scrollback/session-cap values), which this
+        // stateless registry has no handle to. It is registered instead by
+        // `register_pty_handlers` in
+        // `src/bin/aleph-server/commands/start/builder/handlers/system.rs`,
+        // via `register_handler!`, alongside the rest of the server's
+        // config-carrying handlers.
         registry.register("pty.input", pty::handle_input);
         registry.register("pty.resize", pty::handle_resize);
         registry.register("pty.close", pty::handle_close);
         registry.register("pty.list", pty::handle_list);
+        registry.register("pty.attach", pty::handle_attach);
 
         // Heartbeat handlers — real handlers wired with HeartbeatService in Gateway startup.
 
@@ -624,7 +634,7 @@ impl HandlerRegistry {
             });
             let s = default_store.clone();
             let u = default_security_store.clone();
-            let b = default_event_bus;
+            let b = default_event_bus.clone();
             registry.register("projects.member.remove", move |req| {
                 let s = s.clone();
                 let u = u.clone();
@@ -646,10 +656,44 @@ impl HandlerRegistry {
                 let s = s.clone();
                 async move { projects::handle_workspace_read(req, s).await }
             });
-            let s = default_store;
+            let s = default_store.clone();
             registry.register("projects.room_session", move |req| {
                 let s = s.clone();
                 async move { projects::handle_room_session(req, s).await }
+            });
+
+            // `projects.channel.*` — room ⟷ channel-conversation bindings.
+            //
+            // `bind` is the one verb in this family that also needs a
+            // `SessionStore` (it rescopes the conversation's existing
+            // transcript into the room), and this registry structurally has
+            // none — so it takes the same placeholder shape `session.usage` /
+            // `session.compact` / `session.truncate` take above, and is
+            // registered for real in `register_projects_handlers` at boot.
+            // Registering it here anyway is not decoration: the method-name
+            // census scrapes registration literals, and a `bind` that existed
+            // only in the boot path would be invisible to the `unbind`/`list`
+            // half of the sweep that runs against this file.
+            //
+            // `bind` and `unbind` are admin-gated in `method_admin`; the gate
+            // is enforced upstream at `process_request`, not here.
+            registry.register("projects.channel.bind", |req| async move {
+                service_unavailable(
+                    req,
+                    "projects.channel.bind requires SessionStore — wire in Gateway startup",
+                )
+            });
+            let s = default_store.clone();
+            let b = default_event_bus;
+            registry.register("projects.channel.unbind", move |req| {
+                let s = s.clone();
+                let b = b.clone();
+                async move { projects_channel::handle_unbind(req, s, b).await }
+            });
+            let s = default_store;
+            registry.register("projects.channel.list", move |req| {
+                let s = s.clone();
+                async move { projects_channel::handle_list(req, s).await }
             });
         }
 

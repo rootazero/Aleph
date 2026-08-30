@@ -812,7 +812,17 @@ pub fn normalize_agent_id(id: &str) -> String {
     }
 }
 
-fn sanitize_component(s: &str) -> String {
+/// Lowercase and fold every non-alphanumeric character to `-`, capped at 64
+/// bytes.
+///
+/// `pub(crate)` rather than private: `crate::projects::binding` calls this
+/// exact function (via `binding::normalize_component`) to normalize the
+/// `channel_id`/`peer_id` it stores, so a room bound under an operator's
+/// original spelling is found by the lookup a live `SessionKey` performs. A
+/// copy of this logic in `projects::binding` would pass today and silently
+/// drift the first time either one changes; see that module's doc for why the
+/// two paths must resolve to the same string.
+pub(crate) fn sanitize_component(s: &str) -> String {
     let trimmed = s.trim();
     if trimmed.is_empty() {
         return String::new();

@@ -100,10 +100,13 @@ pub(super) enum GateRule<'a> {
     /// arguments, not the tool: the same tool with different arguments runs
     /// without a card.
     DestructiveArguments,
-    /// This call can reach the configuration that decides whether the approval
-    /// gates fire at all — a `self_config` write intersecting
-    /// `policies.tool_permissions` / `policies.exec_tier`, or a config
-    /// rollback.
+    /// This call can reach the configuration that decides whether the
+    /// approval gates fire at all — a `self_config` write intersecting
+    /// `exec_tier::GATE_DECIDING_CONFIG_PATHS`, or a config rollback. Not a
+    /// fixed pair of paths: membership on that list is a rule (stands down
+    /// an existing card, or opens an execution surface no card was
+    /// watching), not an enumeration to restate here — see that constant's
+    /// own doc for the current members and why.
     ///
     /// The second **floor**: like [`Self::ToolDeclared`] it asks under every
     /// tier including `full`, so its reason must not point the reader at a
@@ -279,10 +282,12 @@ impl GateRule<'_> {
                  filter down."
             ),
             Self::GateRemoval => format!(
-                "This `{tool}` call can change the settings that decide which tool calls \
-                 stop for you (`policies.tool_permissions` / `policies.exec_tier`), so it \
-                 asks under every execution tier — including `full`. Raising the tier does \
-                 not stand it down: the tier lasts one turn and this change would outlive it."
+                "This `{tool}` call touches configuration that decides whether approval \
+                 gates fire at all — either standing down a card this chain would \
+                 otherwise raise, or opening an execution surface no card was watching in \
+                 the first place — so it asks under every execution tier, including \
+                 `full`. Raising the tier does not stand it down: the tier lasts one turn \
+                 and this change would outlive it."
             ),
             Self::PolicyAsk {
                 pattern,
@@ -841,5 +846,293 @@ mod tests {
                 "`{id}` is listed as a floor but no `GateRule` variant emits it"
             );
         }
+    }
+
+    /// A gate whose off-switch can be flipped without a card is not a gate:
+    /// two individually legal steps ("write the config", "spawn a terminal")
+    /// would add up to the thing the gate refuses.
+    ///
+    /// Asserted at `Full`, and through `confirmation_rule` rather than through
+    /// any single predicate, because `Full` is the whole point: it never asks
+    /// by contract, so a rule that only fires below it buys nothing against the
+    /// operator most likely to flip this switch in one sentence. Rule 2
+    /// (`GateRemoval`) returns before the chain ever reaches `permission_for`
+    /// — that position, not any `is_floor()` verdict, is what makes it
+    /// tier-independent.
+    #[test]
+    fn writing_the_terminal_switch_cards_even_at_full() {
+        let svc = service(
+            vec![Declared {
+                name: "self_config",
+                idempotent: false,
+                confirm: false,
+            }],
+            ExecTier::Full,
+            Some(perms(PermissionAction::Allow, &[])),
+        );
+        let rule = svc
+            .confirmation_rule(
+                "self_config",
+                &json!({
+                    "action": "update_config",
+                    "config_path": "policies.terminal.enabled",
+                    "config_value": true,
+                }),
+            )
+            .expect("flipping the terminal gate must card at every tier, Full included");
+        // The constant, not the literal: `GateRule::id`'s own doc says a rename
+        // here is a compile error at the decision-set derivation, and a test
+        // spelling it out by hand would quietly opt out of that.
+        assert_eq!(rule.id(), crate::exec::allowed_decisions::GATE_REMOVAL_RULE);
+    }
+
+    /// The narrowness half. A rule that cards every `self_config` write would
+    /// answer this task's question and destroy the tool: the claim is
+    /// "gate-deciding subtrees", not "config writes".
+    #[test]
+    fn an_unrelated_config_write_still_does_not_card_at_full() {
+        let svc = service(
+            vec![Declared {
+                name: "self_config",
+                idempotent: false,
+                confirm: false,
+            }],
+            ExecTier::Full,
+            Some(perms(PermissionAction::Allow, &[])),
+        );
+        assert!(
+            svc.confirmation_rule(
+                "self_config",
+                &json!({
+                    "action": "update_config",
+                    "config_path": "behavior.greeting",
+                    "config_value": "hi",
+                }),
+            )
+            .is_none(),
+            "only the gate-deciding subtrees card at Full"
+        );
+    }
+
+    /// `dot_paths_intersect` compares by SEGMENT (`exec_tier.rs:614` — it tests
+    /// `starts_with("{b}.")`, with the dot), so a sibling key that merely shares
+    /// a prefix must not be swept in. Written because "add a prefix" is how this
+    /// change reads, and prefix matching would be the wrong mechanism.
+    #[test]
+    fn a_sibling_key_sharing_the_prefix_is_not_swept_in() {
+        let svc = service(
+            vec![Declared {
+                name: "self_config",
+                idempotent: false,
+                confirm: false,
+            }],
+            ExecTier::Full,
+            Some(perms(PermissionAction::Allow, &[])),
+        );
+        assert!(
+            svc.confirmation_rule(
+                "self_config",
+                &json!({
+                    "action": "update_config",
+                    "config_path": "policies.terminal_legacy.x",
+                    "config_value": 1,
+                }),
+            )
+            .is_none(),
+            "`policies.terminal_legacy` is a different subtree"
+        );
+    }
+
+    /// Requirement 3, asserted rather than assumed: an exactly-named
+    /// `[policies.tool_permissions]` entry DOES stand this down, because
+    /// `gate_removal_floor` is `!explicitly_named(name) && ..`. That is
+    /// deliberate — the entry is a decision a person wrote, and the write that
+    /// created it carded through this very rule (`policies.tool_permissions` is
+    /// itself on the list). Do not "fix" this.
+    #[test]
+    fn an_exactly_named_entry_stands_the_terminal_floor_down() {
+        let svc = service(
+            vec![Declared {
+                name: "self_config",
+                idempotent: false,
+                confirm: false,
+            }],
+            ExecTier::Full,
+            Some(perms(
+                PermissionAction::Allow,
+                &[("self_config", PermissionAction::Allow)],
+            )),
+        );
+        assert!(
+            svc.confirmation_rule(
+                "self_config",
+                &json!({
+                    "action": "update_config",
+                    "config_path": "policies.terminal.enabled",
+                    "config_value": true,
+                }),
+            )
+            .is_none(),
+            "an exact entry is a person's decision and stands the floor down by design"
+        );
+    }
+
+    /// A sentence that names ANY member of `GATE_DECIDING_CONFIG_PATHS`
+    /// literally must name EVERY member.
+    ///
+    /// This is the durable fix for a defect fix round 1 found: this chain's
+    /// own `GateRule::GateRemoval::reason()` and `ExecTier::Full`'s
+    /// model-facing prompt line both spelled out `policies.tool_permissions`
+    /// / `policies.exec_tier` by name, and neither was touched when
+    /// `policies.terminal` joined the list.
+    ///
+    /// # What this actually tests, vs. the proxy it uses
+    ///
+    /// Fix round 3 corrected this section: the original criterion here —
+    /// "if a fourth member were added, would this sentence become false" —
+    /// does NOT separate the two defects this test is actually about. The
+    /// variant doc below was already false of the THIRD member, not a
+    /// hypothetical fourth; a fourth member would not have made it "become"
+    /// anything, because it was wrong before any fourth member existed. The
+    /// real criterion:
+    ///
+    /// **As the list stands TODAY, is this sentence still true of EVERY
+    /// member?**
+    ///
+    /// A sentence can go stale in two different ways, and only one of them
+    /// is mechanisable:
+    ///
+    /// - **ENUMERATION** — the sentence NAMES members, so it is true only of
+    ///   the ones it names; the list growing past that set makes it
+    ///   INCOMPLETE. Both round-1 defects were this shape: `reason()` and
+    ///   `approval_prompt_line(Full)` named `policies.tool_permissions` /
+    ///   `policies.exec_tier` and went incomplete the moment
+    ///   `policies.terminal` joined. **This half is what
+    ///   `gate_deciding_members_named_in` mechanises** — a sentence naming a
+    ///   strict subset of the current list is enumeration-shaped and stale,
+    ///   full stop; the "names any ⇒ names all" proxy below is exact here.
+    /// - **CHARACTERISATION** — the sentence describes what the WHOLE list
+    ///   IS (a shared property), naming no one. It goes false the moment any
+    ///   CURRENT member stops fitting — no growth required. `ExecTier::Full`'s
+    ///   variant doc was this shape: "a write that can reach the approval
+    ///   settings themselves" named nobody, so it was never an incomplete
+    ///   enumeration — it was simply wrong about `policies.terminal`, which
+    ///   opens a new execution surface no card was watching rather than
+    ///   reaching the approval settings. **This half is NOT mechanisable.**
+    ///   Whether a generic sentence still accurately characterises every
+    ///   current member is a judgment call about MEANING, not a string
+    ///   comparison — the same blind spot the proxy discussion below
+    ///   documents, now with a name.
+    ///
+    /// "Names any ⇒ names all" is the PROXY this test actually runs, and it
+    /// covers only the enumeration half. It misfires in both directions,
+    /// and this test deliberately does not try to correct either one:
+    ///
+    /// - **False positive** — `docs/reference/SECURITY.md`'s "内嵌终端"
+    ///   bullet names `policies.terminal` by name: its subject IS that one
+    ///   member, and it explicitly declines to restate the rest ("具体成员
+    ///   与理由见 `GATE_DECIDING_CONFIG_PATHS` 自己的 doc，不在此重复——那份
+    ///   名单会变，这句话不该跟着腐烂"). It is out of scope by SUBJECT, not
+    ///   by the true-of-every-member test above — that test does not even
+    ///   apply to it, since it never claims anything about the other two
+    ///   members. Held to "names any ⇒ names all" it would fail for naming
+    ///   one member without naming two others that have nothing to do with
+    ///   the terminal. Deliberately NOT scanned here, and should stay that
+    ///   way. The two low-stakes echoes fix round 2 left alone
+    ///   (`allowed_decisions.rs`'s `GATE_REMOVAL_RULE` doc,
+    ///   `slash_command.rs`'s inline comment) are the OTHER kind of correct
+    ///   exclusion: both are characterisation-shaped and, as of fix round 3,
+    ///   true of every current member — the same reason the current
+    ///   `reason()` passes, not a growth argument.
+    /// - **False negative, the more dangerous direction** — fix round 2
+    ///   found a real fourth copy of this sentence, predating Task 13:
+    ///   `ExecTier::Full`'s own enum variant doc (a site
+    ///   `docs/reference/SECURITY.md:996-998`'s own "three copies" paragraph
+    ///   names as one of the three canonical sync points — round 1's census
+    ///   missed it, scanning a narrower set than SECURITY.md itself
+    ///   designates). Its false "can reach the approval settings themselves"
+    ///   claim is the CHARACTERISATION half above: it named ZERO members, so
+    ///   `gate_deciding_members_named_in` returned empty and the
+    ///   `named.is_empty()` branch passed it by construction, even though it
+    ///   was wrong. **The proxy is structurally blind to "names none,
+    ///   describes the list incorrectly"** — the failure looks identical to
+    ///   the correct shape (`reason()` and `approval_prompt_line(Full)`
+    ///   after their own fixes, and the two echoes above, all correctly name
+    ///   zero members too). Do NOT paper over this with a substring check
+    ///   for "correct" phrasing to try to close it: that is the same weak
+    ///   shape as the four substring checks in
+    ///   `the_full_tier_prompt_line_names_every_floor` that slept through
+    ///   the original round-1 finding 2 — a check that only recognizes
+    ///   shapes it already knows advertises coverage it does not have. An
+    ///   honest stated limit beats a guard that cannot fail. The
+    ///   characterisation half stays a human's job: read the sentence, read
+    ///   the list, ask whether every current member still fits.
+    ///
+    /// # Scanned sites
+    ///
+    /// Four. `docs/reference/SECURITY.md:996-998`'s own "three copies"
+    /// paragraph names three (`ExecTier::Full`'s variant doc,
+    /// `approval_prompt_line(Full)`, `GateRule::GateRemoval::reason`); this
+    /// test also scans `GATE_DECIDING_CONFIG_PATHS`'s own doc comment, which
+    /// SECURITY.md does not designate but which earns its place regardless
+    /// — it is what would catch "a fourth member is added and no prose is
+    /// touched" (that member's own explanatory bullet would be missing, so
+    /// the doc would name 3 of 4 members — the exact partial-enumeration
+    /// shape this whole test exists to reject). All four read from source
+    /// (`exec_tier.rs`'s helpers) rather than being restated here, because a
+    /// census that carries its own copy of the membership list — or of the
+    /// prose describing it — is the defect this test exists to catch, one
+    /// level up.
+    ///
+    /// Self-protecting: the member list and each site's text must be
+    /// non-empty, so a scan that silently reads nothing cannot pass by
+    /// vacuity, and the loop asserts it examined exactly four sites.
+    #[test]
+    fn a_sentence_naming_any_gate_deciding_path_names_every_member() {
+        use crate::config::types::policies::exec_tier::{
+            full_variant_doc_text, gate_deciding_members_named_in, gate_deciding_paths_doc_text,
+            GATE_DECIDING_CONFIG_PATHS,
+        };
+
+        assert!(
+            GATE_DECIDING_CONFIG_PATHS.len() >= 2,
+            "fewer than 2 members ({}) -- the partial-enumeration failure \
+             mode this test exists to catch cannot occur below 2",
+            GATE_DECIDING_CONFIG_PATHS.len()
+        );
+
+        let card_text = GateRule::GateRemoval.reason("self_config");
+        let full_line = ExecTier::Full.approval_prompt_line();
+        let doc_text = gate_deciding_paths_doc_text();
+        let variant_doc_text = full_variant_doc_text();
+
+        let mut sites_examined = 0usize;
+        for (site, text) in [
+            ("GateRule::GateRemoval::reason()", card_text.as_str()),
+            ("ExecTier::Full.approval_prompt_line()", full_line),
+            ("GATE_DECIDING_CONFIG_PATHS's doc comment", doc_text),
+            ("ExecTier::Full's variant doc comment", variant_doc_text),
+        ] {
+            assert!(
+                !text.is_empty(),
+                "{site} produced empty text -- the scan read nothing"
+            );
+            let named = gate_deciding_members_named_in(text);
+            assert!(
+                named.is_empty() || named.len() == GATE_DECIDING_CONFIG_PATHS.len(),
+                "{site} names {}/{} GATE_DECIDING_CONFIG_PATHS members by \
+                 name ({named:?}) -- a sentence that names one member must \
+                 name every member, or name none and describe the rule \
+                 generically instead. Full member list: \
+                 {GATE_DECIDING_CONFIG_PATHS:?}",
+                named.len(),
+                GATE_DECIDING_CONFIG_PATHS.len()
+            );
+            sites_examined += 1;
+        }
+        assert_eq!(
+            sites_examined, 4,
+            "this census must examine exactly the four known sentence sites"
+        );
     }
 }

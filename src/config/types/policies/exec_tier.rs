@@ -218,10 +218,12 @@ pub enum ExecTier {
     ///    friends still raise a card here, and in an unattended run still
     ///    fail closed; and
     /// 3. [`ExecTier::floor_asks_for_arguments`] — a `self_config` write that
-    ///    can reach the approval settings themselves. That one is here because
-    ///    this tier is a **per-request** knob and the config change is
-    ///    permanent: without it, one message at `full` retires a gate for every
-    ///    later session at every later tier.
+    ///    touches the configuration deciding whether these gates fire at all,
+    ///    whether that stands down an existing card or opens an execution
+    ///    surface no card was watching. That one is here because this tier
+    ///    is a **per-request** knob and the config change is permanent:
+    ///    without it, one message at `full` retires a gate for every later
+    ///    session at every later tier.
     ///
     /// "Full" therefore means "the tier gates nothing", not "nothing is
     /// gated". Both the variant doc and
@@ -449,8 +451,9 @@ impl ExecTier {
                  hardline (fork bombs, `rm -rf /`, device wipes), the handful of tools \
                  that declare their own confirmation gate (credential writes, deleting an \
                  agent, disbanding a team, installing a skill), and a `self_config` write \
-                 that changes the approval settings themselves — those still pause for the \
-                 user."
+                 that touches the configuration deciding whether these gates fire at all — \
+                 whether that stands down an existing card or opens an execution surface no \
+                 card was watching — still pauses for the user."
             }
         }
     }
@@ -590,14 +593,143 @@ fn loop_graph_touches_protected(input: &Value) -> bool {
     })
 }
 
-/// The two config subtrees that decide whether the argument-level cards above
-/// are raised at all.
+/// The config subtrees a `self_config` write may never touch without a
+/// card, at every execution tier including `Full`.
+///
+/// The membership rule is not a count and not "important settings" — it is
+/// what a write here can DO to the confirmation chain. A path belongs on
+/// this list if writing it either STANDS DOWN an argument-level card the
+/// chain would otherwise raise, or OPENS an execution surface no card was
+/// ever watching in the first place. Both are "write the override, then act
+/// freely" turning two individually legal steps into the one-step,
+/// un-carded removal of a human checkpoint — see
+/// [`self_config_touches_the_gate`]'s doc for the composition this whole
+/// mechanism exists to close.
 ///
 /// - `policies.tool_permissions` — one entry named after a tool disarms that
 ///   tool's card via `ScopedToolServiceBuilder::explicitly_named`, whose whole
-///   justification is "the operator already decided about this tool".
-/// - `policies.exec_tier` — `Full` never asks, by contract.
-const GATE_DECIDING_CONFIG_PATHS: &[&str] = &["policies.tool_permissions", "policies.exec_tier"];
+///   justification is "the operator already decided about this tool". Stands
+///   down a card.
+/// - `policies.exec_tier` — `Full` never asks, by contract. Stands down every
+///   tier-raised card at once.
+/// - `policies.terminal` — `[policies.terminal] enabled = true` turns on
+///   `pty.*`, a raw shell the command policy does not see and the exec tier
+///   does not gate (`gateway::handlers::pty`'s module doc). This entry
+///   stands down no OTHER card; it opens a new execution surface no card
+///   was ever watching.
+pub(crate) const GATE_DECIDING_CONFIG_PATHS: &[&str] = &[
+    "policies.tool_permissions",
+    "policies.exec_tier",
+    "policies.terminal",
+];
+
+/// Which members of [`GATE_DECIDING_CONFIG_PATHS`] are named literally in
+/// `text`, in list order.
+///
+/// Shared by every guard that checks "if this sentence names one member of
+/// the list, does it name them all" — this file's own
+/// `the_full_tier_prompt_line_names_every_floor` (strengthened half), and
+/// `tools::scoped::gate_chain::tests::a_sentence_naming_any_gate_deciding_path_names_every_member`,
+/// which also scans the card text and this constant's own doc comment. A
+/// hand-rolled second copy of this filter in either test module would be
+/// exactly the defect a census like this exists to catch, one level up: it
+/// is not enough to derive the MEMBER LIST from the constant instead of a
+/// hand-written copy if the COMPARISON is then reimplemented twice and the
+/// two copies are free to drift from each other.
+#[cfg(test)]
+pub(crate) fn gate_deciding_members_named_in(text: &str) -> Vec<&'static str> {
+    GATE_DECIDING_CONFIG_PATHS
+        .iter()
+        .copied()
+        .filter(|member| text.contains(member))
+        .collect()
+}
+
+/// The doc comment immediately above [`GATE_DECIDING_CONFIG_PATHS`], read
+/// from this file's own source rather than duplicated by hand in a test —
+/// see [`gate_deciding_members_named_in`]'s doc for why a hand-copied second
+/// list (here, a hand-copied second COPY OF THE PROSE) is the defect this
+/// exists to prevent, one level up. The two anchors below bound the doc
+/// comment block precisely: everything between the marker phrase (unique to
+/// this doc's first line) and the `const` keyword that follows it.
+///
+/// Both anchor needles are assembled with `concat!` rather than written as
+/// one string literal, for the reason this repo's own
+/// `every_dist_gated_skip_in_this_module_is_accounted_for` needle already
+/// documents (`control_plane/server.rs`): `SRC` is this WHOLE file via
+/// `include_str!`, which includes THIS FUNCTION'S OWN BODY — an unsplit
+/// needle would match its own quoted copy here as readily as the real doc
+/// or `const` it is looking for. `.find` returns the first match in FILE
+/// ORDER, not "the one that's semantically the doc comment", so if either
+/// helper function in this pair were ever moved above the doc comment or
+/// above the real `const` in a future reorganization, an unsplit needle
+/// would silently match its own quoted copy and return a wrong-but-non-empty
+/// span. Fed through [`gate_deciding_members_named_in`], a wrong span with
+/// no path names in it scores "0 members named" and the census would PASS
+/// on a doc comment it never actually read. `concat!`'s two pieces are not
+/// textually adjacent in source, so only the real contiguous prose can
+/// satisfy `.find`, independent of where these functions sit in the file.
+/// Fix round 2 added this after a re-review found the risk was real, if
+/// latent — current file order was never actually wrong.
+#[cfg(test)]
+pub(crate) fn gate_deciding_paths_doc_text() -> &'static str {
+    const SRC: &str = include_str!("exec_tier.rs");
+    let marker = concat!("config subtrees a `self_config` write ", "may never touch");
+    let start = SRC.find(marker).unwrap_or_else(|| {
+        panic!(
+            "doc marker {marker:?} not found in exec_tier.rs -- the \
+             GATE_DECIDING_CONFIG_PATHS doc comment moved or was reworded; \
+             update this anchor"
+        )
+    });
+    let const_marker = concat!("const GATE_DECIDING", "_CONFIG_PATHS");
+    let end = SRC[start..].find(const_marker).unwrap_or_else(|| {
+        panic!(
+            "{const_marker:?} not found after the doc marker in exec_tier.rs \
+             -- update this anchor"
+        )
+    }) + start;
+    &SRC[start..end]
+}
+
+/// The doc comment on the [`ExecTier::Full`] variant, read from source the
+/// same way [`gate_deciding_paths_doc_text`] reads the constant's — see that
+/// function's doc for why (the self-reference hazard and the `concat!` fix),
+/// and [`gate_deciding_members_named_in`]'s doc for what this feeds.
+///
+/// The fourth site added in fix round 2:
+/// `docs/reference/SECURITY.md`'s own "three copies" paragraph
+/// (`:996-998`) names this variant doc, `approval_prompt_line(Full)`, and
+/// `GateRule::GateRemoval::reason` as the three canonical sync points — and
+/// fix round 1's census scanned only the latter two (plus this constant's
+/// own doc, which SECURITY.md does not name but which earns its place, see
+/// that function's doc). Round 1's own census doc claimed to scan "the
+/// three sites SECURITY.md names" while actually scanning a different set —
+/// a second, narrower statement of what SECURITY.md already designated,
+/// which is an instance of the exact defect class this whole census exists
+/// to catch. This function closes that gap.
+#[cfg(test)]
+pub(crate) fn full_variant_doc_text() -> &'static str {
+    const SRC: &str = include_str!("exec_tier.rs");
+    let marker = concat!(
+        "The tier itself asks nothing. ",
+        "**Three floors survive it**"
+    );
+    let start = SRC.find(marker).unwrap_or_else(|| {
+        panic!(
+            "the `ExecTier::Full` variant doc's opening line was not found \
+             in exec_tier.rs -- it moved or was reworded; update this anchor"
+        )
+    });
+    let end_marker = concat!("Full", ",");
+    let end = SRC[start..].find(end_marker).unwrap_or_else(|| {
+        panic!(
+            "no `{end_marker}` found after the `Full` variant doc's opening \
+             line in exec_tier.rs -- update this anchor"
+        )
+    }) + start;
+    &SRC[start..end]
+}
 
 /// Whether this `self_config` call can reach the configuration that decides
 /// whether [`ExecTier::asks_for_arguments`] fires.
@@ -1442,6 +1574,19 @@ mod tests {
     /// The model is told what still stops at `full`, and the copy has to name
     /// the floors that exist. Adding a third floor without touching this line
     /// is the "三份拷贝，其中一份是发给模型的" failure.
+    ///
+    /// The four substring checks below only prove the sentence still MENTIONS
+    /// the third floor — they say nothing about whether it describes it
+    /// correctly. This line went stale exactly that way once already: it
+    /// named `policies.tool_permissions` / `policies.exec_tier` outright, and
+    /// when `policies.terminal` joined `GATE_DECIDING_CONFIG_PATHS` the line
+    /// kept passing every check above while describing only 2 of what had
+    /// become 3 gate-deciding paths — and asserting something false of the
+    /// third (that it "changes the approval settings", when it opens a new
+    /// execution surface instead). Round-trip through
+    /// `gate_deciding_members_named_in` closes that: a partial enumeration
+    /// goes stale the moment a member is added, so the sentence must name
+    /// every member or none.
     #[test]
     fn the_full_tier_prompt_line_names_every_floor() {
         let line = ExecTier::Full.approval_prompt_line();
@@ -1449,6 +1594,16 @@ mod tests {
         assert!(line.contains("self_config"), "{line}");
         assert!(line.contains("command-policy"), "{line}");
         assert!(line.contains("confirmation gate"), "{line}");
+
+        let named = gate_deciding_members_named_in(line);
+        assert!(
+            named.is_empty() || named.len() == GATE_DECIDING_CONFIG_PATHS.len(),
+            "the Full-tier prompt line names {}/{} GATE_DECIDING_CONFIG_PATHS \
+             members by name ({named:?}) -- name every member or describe \
+             the rule generically instead. Full text: {line:?}",
+            named.len(),
+            GATE_DECIDING_CONFIG_PATHS.len()
+        );
     }
 
     /// The cost has to stay narrow, or the card becomes noise and gets turned

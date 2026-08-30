@@ -112,9 +112,17 @@ pub(in crate::commands::start) fn register_projects_handlers(
     // room's page both re-fetch on it. The same bus every other
     // `notify_*_changed` family (`teams.*`, `workspace.*`) publishes through.
     event_bus: &Arc<alephcore::gateway::event_bus::GatewayEventBus>,
+    // `projects.channel.bind` rescopes the bound conversation's EXISTING
+    // session row into the room. Without that the binding splits in two: the
+    // run takes the room scope while the row keeps `personal:<first speaker>`,
+    // so the group stays invisible in every other member's session list. The
+    // same `Arc` `register_session_handlers` gets — a second store here would
+    // rescope rows nothing else reads.
+    session_store: &Arc<dyn alephcore::gateway::session_store::SessionStore>,
     daemon: bool,
 ) {
     use alephcore::gateway::handlers::projects as projects_handlers;
+    use alephcore::gateway::handlers::projects_channel as projects_channel_handlers;
 
     register_handler!(
         server,
@@ -216,6 +224,32 @@ pub(in crate::commands::start) fn register_projects_handlers(
         project_store
     );
 
+    // `projects.channel.*`. `bind` and `unbind` are admin-gated in
+    // `method_admin::ADMIN_METHODS` — the exposure runs outward, and
+    // `bind_conversation`'s already-bound conflict message names the owning
+    // project id. `list` is open and narrowed to the roster by `gate_project`.
+    register_handler!(
+        server,
+        "projects.channel.bind",
+        projects_channel_handlers::handle_bind,
+        project_store,
+        session_store,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "projects.channel.unbind",
+        projects_channel_handlers::handle_unbind,
+        project_store,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "projects.channel.list",
+        projects_channel_handlers::handle_list,
+        project_store
+    );
+
     if !daemon {
         println!("Project methods:");
         println!("  - projects.list          : List my projects (sorted by last_used_at)");
@@ -236,6 +270,11 @@ pub(in crate::commands::start) fn register_projects_handlers(
         println!("  - projects.member.remove : Remove a user from a project roster (owner/admin)");
         println!("  - projects.member.list   : List a project's roster");
         println!("  - projects.room_session  : Get-or-create the room's shared chat session key");
+        println!(
+            "  - projects.channel.bind  : Bind a channel group conversation to a room (operator)"
+        );
+        println!("  - projects.channel.unbind: Release a bound conversation (operator)");
+        println!("  - projects.channel.list  : List a room's bound conversations");
         println!();
     }
 }

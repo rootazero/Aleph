@@ -76,18 +76,15 @@ impl SearchAdvisory {
             fts_candidates,
             degraded: None,
             bodies_omitted: None,
+            bodies_unreadable: None,
         }
     }
 
-    fn text_only(fts_candidates: usize, reason: Option<DegradedReason>) -> Self {
-        Self {
-            mode: "full-text".to_string(),
-            vector_candidates: 0,
-            fts_candidates,
-            degraded: reason.map(|r| r.as_str().to_string()),
-            bodies_omitted: None,
-        }
-    }
+    // The single previous call site was replaced with an inlined struct
+    // literal at the `text_only` construction point so the new
+    // `bodies_unreadable` field (BT-D-R4-22) cannot be forgotten — the
+    // helper would have shadowed the new field by default-initialising it
+    // to `None`, hiding the very signal we just added.
 }
 
 impl NoteManageTool {
@@ -165,6 +162,9 @@ impl NoteManageTool {
         // derivation for a reader that can look in a different directory than
         // the writer used.
         let memory_dir = self.indexer.memory_dir().to_path_buf();
+        // Per-body read result, so unreadable files count toward the advisory
+        // instead of silently flattening to an empty body (the previous shape
+        // inflated `fts_candidates` with rows the model could not see).
         let bodies = futures::future::join_all(entries.iter().map(|entry| {
             let path = crate::memory::notes::store::note_content_path(
                 &memory_dir,
@@ -172,9 +172,22 @@ impl NoteManageTool {
                 &entry.category,
                 &entry.filename,
             );
-            async move { tokio::fs::read_to_string(&path).await.unwrap_or_default() }
+            async move {
+                match tokio::fs::read_to_string(&path).await {
+                    Ok(content) => Ok(content),
+                    Err(e) => {
+                        warn!(
+                            path = %path.display(),
+                            error = %e,
+                            "note_manage query: body read failed"
+                        );
+                        Err(e)
+                    }
+                }
+            }
         }))
         .await;
+        let bodies_unreadable = bodies.iter().filter(|r| r.is_err()).count();
         let rows: SearchRows = entries
             .into_iter()
             .zip(bodies)
@@ -182,6 +195,14 @@ impl NoteManageTool {
             .map(|(rank, (entry, content))| {
                 // Rank-derived pseudo score — FTS entries carry no fused score.
                 let score = 1.0 / (1.0 + rank as f32);
+                // `bodies` is `Vec<Result<String, io::Error>>` after BT-D-R4-22:
+                // a per-body read failure is counted in
+                // `bodies_unreadable` above. The row itself still surfaces
+                // (the hit exists in the index) but its body is empty —
+                // downstream consumers should check `bodies_unreadable` to
+                // distinguish "found a thing but couldn't show it" from
+                // "truncated to fit the response".
+                let content = content.unwrap_or_default();
                 (
                     entry.path,
                     entry.category,
@@ -192,7 +213,14 @@ impl NoteManageTool {
                 )
             })
             .collect();
-        Ok((rows, SearchAdvisory::text_only(fts_hits, degraded)))
+        Ok((rows, SearchAdvisory {
+            mode: "full-text".to_string(),
+            vector_candidates: 0,
+            fts_candidates: fts_hits,
+            degraded: degraded.map(|r| r.as_str().to_string()),
+            bodies_omitted: None,
+            bodies_unreadable: (bodies_unreadable > 0).then_some(bodies_unreadable),
+        }))
     }
 
     pub(super) async fn handle_query(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {

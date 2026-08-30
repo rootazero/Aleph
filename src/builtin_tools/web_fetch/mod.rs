@@ -151,69 +151,40 @@ impl WebFetchTool {
         if !self.fetch_providers.is_empty() {
             // BT-D-R4-22: validate_url_async returns (Url, SocketAddr)
             // where the SocketAddr is the DNS pin we use for the built-in
-            // reqwest path. The fetch-provider path here does not (yet)
-            // thread that pin into the provider — the provider resolves DNS
-            // again inside its own HTTP client, so a provider fetch is
-            // exposed to DNS-rebinding in the gap between this validate and
-            // the provider's connection. The validate still gates on host
-            // policy (block list / private-range) so a provider cannot
-            // reach a denied host outright, but it cannot guarantee the
-            // exact IP the provider will connect to. Log the gap so
-            // operators see it, until the provider API learns to accept a
-            // pre-resolved pin.
-            match validate_url_async(&args.url, &self.ssrf_policy).await {
-                Ok((_url, _pinned)) => {
-                    warn!(
-                        url = %args.url,
-                        "fetch provider path does not thread the validated DNS pin; \
-                         provider performs its own resolution (SSRF host-policy gate enforced, \
-                         IP-pin TOCTOU window remains)"
-                    );
-                }
-                Err(e) => {
-                    let msg = format!("Fetch blocked or failed: {e}");
-                    notify_tool_result(Self::NAME, &msg, false);
-                    return Err(ToolError::Network(msg));
-                }
+            // reqwest path. Fetch providers resolve DNS again inside their
+            // own HTTP client, so a provider fetch is exposed to
+            // DNS-rebinding in the gap between this validate and the
+            // provider's connection.
+            //
+            // Policy: when the SSRF gate accepts the URL, SKIP the
+            // provider path entirely. The built-in `safe_fetch` below
+            // threads the validated SocketAddr into reqwest's connection
+            // and is the only path that closes the rebinding window.
+            // Operators who deliberately want a provider (crawl4ai,
+            // firecrawl, …) should accept that those providers are a
+            // separate trust domain; until the provider API learns to
+            // accept a pre-resolved pin we cannot run them through the
+            // same gate. The host policy (deny list / private ranges)
+            // is still enforced above, so a provider cannot reach a
+            // outright-denied host — only the rebinding IP at a
+            // host-policy-allowed host is the gap, and that gap is now
+            // closed by skipping the provider.
+            if let Err(e) = validate_url_async(&args.url, &self.ssrf_policy).await {
+                let msg = format!("Fetch blocked or failed: {e}");
+                notify_tool_result(Self::NAME, &msg, false);
+                return Err(ToolError::Network(msg));
             }
-            for provider in &self.fetch_providers {
-                match provider.fetch(&args.url).await {
-                    Ok(markdown) => {
-                        let content = self.truncate_fetched(&markdown);
-                        let summary = format!(
-                            "已获取网页内容 ({} 字符, {})",
-                            content.len(),
-                            provider.name()
-                        );
-                        notify_tool_result(Self::NAME, &summary, true);
-                        let wrapped = wrap_external_content(
-                            &content,
-                            ContentSource::WebFetch {
-                                url: args.url.clone(),
-                            },
-                        );
-                        let bare = WebFetchResult {
-                            url: args.url.clone(),
-                            title: None,
-                            content: wrapped,
-                            // Records the backend that actually served the
-                            // content; previously this was hardcoded to
-                            // `Crawl4ai`, which silently lied when firecrawl
-                            // (or any future provider) had done the work
-                            // (form-5 name drift in the result envelope).
-                            extractor: Extractor::for_provider_name(provider.name()),
-                        };
-                        cache_store(key, bare.clone());
-                        return Ok(apply_focus_prompt(bare, args.prompt.as_deref()));
-                    }
-                    Err(e) => {
-                        warn!(
-                            "fetch provider '{}' failed, trying next: {e}",
-                            provider.name()
-                        );
-                    }
-                }
-            }
+            warn!(
+                url = %args.url,
+                providers_configured = self.fetch_providers.len(),
+                "fetch providers skipped: SSRF DNS pin is not threaded into provider \
+                 HTTP clients (BT-D-R4-22), falling through to the built-in safe fetch"
+            );
+            // Intentional fall-through to the built-in safe_fetch below.
+            // The provider loop is removed; if a future provider API
+            // learns to accept a pre-resolved pin, reintroduce the loop
+            // with `provider.fetch_pinned(&args.url, pinned).await` and
+            // verify the pin is honored all the way down.
         }
 
         info!("Fetching URL: {}", args.url);

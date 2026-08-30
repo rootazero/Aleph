@@ -31,6 +31,14 @@ pub struct SearchAdvisory {
     /// Result bodies dropped to stay inside the response content budget.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bodies_omitted: Option<usize>,
+    /// Result bodies that existed in the index but whose on-disk file could
+    /// not be read (permissions, vanished file, corrupt UTF-8). The hit is
+    /// still reported as a row with an empty body — distinct from
+    /// `bodies_omitted`, which counts rows trimmed for budget — so the model
+    /// can tell "found a thing but couldn't show it" from "skipped to fit
+    /// the response".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bodies_unreadable: Option<usize>,
 }
 
 /// Actions supported by the `note_manage` tool.

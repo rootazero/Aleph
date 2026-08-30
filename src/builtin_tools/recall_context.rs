@@ -127,10 +127,35 @@ impl RecallContextTool {
 
         let fragments = matched
             .into_iter()
-            .map(|r| RecalledFragment {
-                content: r.content,
-                relevance_score: 1.0,
-                source_path: r.path.unwrap_or_default(),
+            .map(|r| {
+                // Compute a real (if simple) relevance score: a query
+                // hit earlier in the content is more likely to be a
+                // topical match than a hit at the tail. 1.0 means
+                // "exact match at byte 0"; 0.0 means "the hit was at
+                // or past the end". An empty query short-circuited
+                // above; here we always have a needle when we
+                // reach this branch.
+                let content_lower = r.content.to_ascii_lowercase();
+                let score = content_lower
+                    .find(&needle)
+                    .map(|idx| {
+                        if r.content.is_empty() {
+                            1.0
+                        } else {
+                            // Normalised: 1.0 at the start, decaying
+                            // toward 0 as the hit moves toward the
+                            // end. Cap at 0.0 (the fallback) so a
+                            // hit at the very tail does not produce
+                            // a negative score.
+                            1.0 - (idx as f32 / r.content.len() as f32)
+                        }
+                    })
+                    .unwrap_or(1.0);
+                RecalledFragment {
+                    content: r.content,
+                    relevance_score: score,
+                    source_path: r.path.unwrap_or_default(),
+                }
             })
             .collect();
 

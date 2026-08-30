@@ -1,0 +1,69 @@
+```json
+{
+  "module": "src/bundled + src/clarification",
+  "files_reviewed": 8,
+  "findings": [
+    {
+      "file": "src/bundled/extractor.rs",
+      "line": 457,
+      "severity": "high",
+      "category": "security",
+      "issue": "Skill extraction follows symlinks at the destination directory, allowing an attacker-planted symlink under skills_dir/<name> to redirect bundled files anywhere on disk.",
+      "evidence": "fn extract_dir_recursive(dir: &Dir, target: &Path) -> std::io::Result<()> { std::fs::create_dir_all(target)?; extract_dir_contents(dir, target)?; ... } — no symlink_metadata(target) guard. compare_plugin hardening at prepare_plugin_temp_dir (line 394) which explicitly rejects symlinks with the comment \"a user-planted symlink at the temp path must be removed BEFORE create_dir_all, otherwise the staging copy writes through the symlink and lands outside the cache\"; the same defense is missing here and in copy_tree_with_prune (line 661).",
+      "suggested_fix": "At the top of extract_dir_recursive (and copy_tree_with_prune) do `if let Ok(m) = std::fs::symlink_metadata(target) { if m.file_type().is_symlink() { return Err(io::Error::new(io::ErrorKind::InvalidInput, ...)) } }` — mirror prepare_plugin_temp_dir's pattern.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/bundled/manifest.rs",
+      "line": 159,
+      "severity": "medium",
+      "category": "error_handling",
+      "issue": "reconcile() counts per-entry read_dir / symlink_metadata errors in a Cell and logs them, but still proceeds to retain() — quietly dropping the affected entries from the manifest on the next save, losing provenance.",
+      "evidence": "// Per-entry errors during the read_dir iteration are counted and logged: silently dropping them would let a race-on-unlink or a permissions glitch on a subdir classify the affected entry as \"removed\" and remove it from the manifest on the next save ... pub fn reconcile(&mut self, skills_dir: &Path) -> std::io::Result<()> { ... self.skills.retain(|name, _| on_disk.contains(name)); ... }",
+      "suggested_fix": "Either return Err from reconcile when skip_count > 0 (caller skips save), or carry a `dirty` flag forward so callers don't call save() after a partial reconcile. The current 'log but proceed' shape silently reaps provenance on a transient permissions error.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/bundled/sync.rs",
+      "line": 30,
+      "severity": "medium",
+      "category": "concurrency",
+      "issue": "clone_or_update has a TOCTOU race on the .git existence check; two concurrent invocations for the same checkout_dir both observe existed=false and both call Repository::clone.",
+      "evidence": "let existed = checkout_dir.join(\".git\").exists(); ... let repo = if existed { git2::Repository::open(checkout_dir) ... } else { ... git2::Repository::clone(repo_url, checkout_dir) ... }; — explicit only check is unsynchronized; the doc says \"call from spawn_blocking\" but does not say single-flight.",
+      "suggested_fix": "Serialize the (repo_url, checkout_dir) pair via a manager-level DashMap/mutex keyed by checkout_dir, or wrap the exist-check-and-clone in a file lock (flock on the checkout_dir itself). At minimum, surface the second-clone error rather than panicking with a confusing libgit2 message.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/clarification/render.rs",
+      "line": 163,
+      "severity": "low",
+      "category": "security",
+      "issue": "render() interpolates prompt/header/labels/descriptions raw into the channel text; markdown-active channels (Telegram *bold*, _italic_, ```) interpret model-supplied text — no escaping layer exists.",
+      "evidence": "let mut text = format!(\"❓{position} {header}{}\", question.prompt); ... text.push_str(&menu(&question.options)); — collapse_whitespace is applied to labels/desc but there is no markdown escape for prompt/header/menu. The header wrap is format!(\"[{h}] \"), letting `]` in the header create overlapping brackets and any * _ ` characters in prompt reach the channel verbatim.",
+      "suggested_fix": "Add a markdown-neutralising pass for the prompt/header (replace * _ ` with fullwidth equivalents, or wrap pre-formatted blocks). Threats are limited because the model is also the prompt source, but a malformed prompt from a future ask_user producer would render unexpectedly.",
+      "confidence": "low"
+    },
+    {
+      "file": "src/clarification/ask.rs",
+      "line": 205,
+      "severity": "low",
+      "category": "resource_leak",
+      "issue": "RetireOnAbandon::drop silently no-ops when no tokio runtime is current, leaving the registry entry as a zombie; the assumption that ask() is always called under a runtime is unstated and untested.",
+      "evidence": "impl Drop for RetireOnAbandon { fn drop(&mut self) { drop(self.rx.take()); if !self.armed { return; } let Ok(handle) = tokio::runtime::Handle::try_current() else { return; }; ... handle.spawn(async move { manager.cancel_abandoned(&session_key).await; }); } }",
+      "suggested_fix": "Either document the runtime requirement at the ask() signature (or return Err on call sites lacking a runtime), or fall back to a synchronous retire (best-effort) using sync cleanup_expired under a sync Api. Add a test that exercises the no-handle path.",
+      "confidence": "low"
+    },
+    {
+      "file": "src/clarification/render.rs",
+      "line": 185,
+      "severity": "low",
+      "category": "type_safety",
+      "issue": "render() applies collapse_whitespace to label/description but NOT to question.prompt or header — a prompt with embedded \\n shifts the ❓ prefix formatting and breaks the user's mental model of question order on Telegram-style channels.",
+      "evidence": "let mut text = format!(\"❓{position} {header}{}\", question.prompt); — compare with menu() which calls collapse_whitespace(opt.label) and option.description.",
+      "suggested_fix": "Pass question.prompt through collapse_whitespace() before formatting, or assert/document that prompts are single-line by contract (and reject multi-line at ClarificationRequest::new()).",
+      "confidence": "low"
+    }
+  ],
+  "summary": "8 files reviewed with mostly defensive, well-documented code and several explicit security hardening comments. The single critical concern is extract_dir_recursive / copy_tree_with_prune not guarding against a pre-existing symlink at the destination, asymmetric with the plugin temp-dir hardening in the same file. Secondary issues: reconcile() silently reaps provenance on transient read errors, clone_or_update has an unsynchronized TOCTOU, and the render layer does no markdown escaping. The clarification state-machine and ask() Drop-guard logic are correctly designed with documented invariants."
+}
+```

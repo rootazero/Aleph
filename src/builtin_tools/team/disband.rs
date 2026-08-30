@@ -45,16 +45,24 @@ pub struct TeamDisbandTool {
     msg_store: Option<Arc<dyn MessageStore>>,
     session_store: Option<Arc<dyn SessionStore>>,
     event_store: Option<Arc<dyn EventLogStore>>,
+    current_agent_id: String,
 }
 
 impl TeamDisbandTool {
-    pub fn new(store: Arc<dyn TeamStore>) -> Self {
+    pub fn new(store: Arc<dyn TeamStore>, current_agent_id: String) -> Self {
         Self {
             store,
             msg_store: None,
             session_store: None,
             event_store: None,
+            current_agent_id,
         }
+    }
+
+    /// The agent acting in THIS call — the identity of the running turn, not
+    /// the one this tool was constructed with. See [`acting_agent_id`].
+    fn actor(&self) -> String {
+        crate::builtin_tools::acting_agent::acting_agent_id(&self.current_agent_id)
     }
 
     /// Set optional cleanup stores for post-disband resource cleanup.
@@ -88,6 +96,11 @@ impl AlephTool for TeamDisbandTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // BT-D-R4-23: gate before any store mutation — the previous shape
+        // relied on `requires_confirmation` (a UX safeguard) as the only
+        // gate, which is bypassable. Verify the caller is the team's
+        // leader or a member.
+        super::require_team_auth(&*self.store, &args.team_id, &self.actor()).await?;
         self.store.disband_team(&args.team_id).await?;
 
         info!(team_id = %args.team_id, "team_disband: team disbanded");

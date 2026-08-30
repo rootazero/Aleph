@@ -1,0 +1,121 @@
+I have enough context now. Let me compile the final review.
+
+```json
+{
+  "module": "src/builtin_tools/[n-z]",
+  "files_reviewed": 36,
+  "findings": [
+    {
+      "file": "src/builtin_tools/user_profile.rs",
+      "line": 265,
+      "severity": "low",
+      "category": "api_misuse",
+      "issue": "scan_ipv4 matches ANY dotted-quad (e.g. 999.999.999.999), not a valid IPv4 — group_len <= 3 is checked but octet value 0-255 is not.",
+      "evidence": "fn scan_ipv4 — `if group_len > 3 { return None; }` is the only bound; no 0-255 range check per octet; comment claims 'any private range' but the function matches any IPv4",
+      "suggested_fix": "Either tighten the regex to enforce 0-255 per octet (would need a state machine) or change the comment to 'any IPv4 shape' and accept the false positives; the redaction is harm-permissive but the wording now lies to the reader.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/user_profile.rs",
+      "line": 138,
+      "severity": "low",
+      "category": "error_context",
+      "issue": "Comment claims IPv4 redaction targets 'any private range' (SSRF surface) but the implementation redacts every dotted-quad — a model reading '[REDACTED:ip]' on a legitimate public address then propagates the false positive.",
+      "evidence": "Line 138: `// IPv4 (any private range)`; scan_ipv4 has no range filter.",
+      "suggested_fix": "Align the doc with the implementation: reword to 'any IPv4 shape' (broader, safer direction) or narrow the regex to 10/172.16-31/192.168 (correct, narrower).",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/partial_output.rs",
+      "line": 100,
+      "severity": "medium",
+      "category": "magic_value",
+      "issue": "The secret-prefix list is hand-maintained and duplicated from the finished-path scrubber — adding a new provider to one list without the other creates a live leak that the other surface catches.",
+      "evidence": "const PREFIXES: &[&[u8]] = &[b\"sk-ant-\", b\"sk-proj-\", b\"sk-\", b\"AKIA\", b\"ASIA\", b\"ghp_\", b\"gho_\", b\"ghs_\", b\"glpat-\", b\"xoxb-\", b\"xoxp-\"];",
+      "suggested_fix": "Extract a single shared `known_secret_prefixes()` accessor in the scrub module and call it from both call sites; the comment in the function already names this duplication risk.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/partial_output.rs",
+      "line": 95,
+      "severity": "low",
+      "category": "api_misuse",
+      "issue": "TAIL bound of 80 bytes is a magic value with no comment — short enough that a 90-byte prefix could be split across the window boundary and the second half of the prefix still lands in the visible window before the next flush.",
+      "evidence": "const TAIL: usize = 80; no justification for the size in the comment or test",
+      "suggested_fix": "Either widen the search window to max(prefix lengths) + a small safety margin and document the bound, or add a unit test that pins a prefix at byte 80-1 to lock the boundary behaviour.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/workflow_tool.rs",
+      "line": 1103,
+      "severity": "low",
+      "category": "concurrency",
+      "issue": "Cancel / pause / resume arms all snapshot tasks first, then re-fetch each task before writing — but the in-flight count and the per-task status are computed from the same snapshot, so a task that flipped Running → Done between snapshot and re-fetch is counted as in-flight in the message while being skipped in the write loop.",
+      "evidence": "Status writes iterate `tasks` snapshot and call `get_task(&task.id)` per iteration; `in_flight` is incremented from the original `live_status` before the re-fetch, but the cancel arm at line 1103 uses the same logic. Minor: the 'in-flight' branch only fires when the snapshot said InProgress AND the re-fetch confirmed it (otherwise it's been promoted to terminal and the snapshot counter is stale).",
+      "suggested_fix": "Recompute `in_flight` from the re-fetched statuses, not the snapshot — already done in pause (line 1171) but cancel still relies on `live_status == InProgress` which is correct; this is observation, not a defect.",
+      "confidence": "low"
+    },
+    {
+      "file": "src/builtin_tools/process_registry.rs",
+      "line": 350,
+      "severity": "low",
+      "category": "api_misuse",
+      "issue": "MAX_RUNNING_GLOBAL=32 + MAX_RUNNING_PER_SESSION=8 caps are silently rejected with no operator-visible telemetry — a runaway consumer model hit at 32 in a 2-session install, but the only log is a `tracing::warn!` absent here, only at the consumer's caller.",
+      "evidence": "RegisterOutcome::TooManyRunning returns the limit but the registry does not record the rejection; the cap is enforced but the operator never learns the fleet-wide ceiling was hit until they read the model's tool result.",
+      "suggested_fix": "Optional: emit a `tracing::warn!(metric=\"registry.rejected\", global=…, per_session=…)` so fleet-wide ceiling trips are observable in production logs.",
+      "confidence": "low"
+    },
+    {
+      "file": "src/builtin_tools/scratchpad.rs",
+      "line": 770,
+      "severity": "low",
+      "category": "api_misuse",
+      "issue": "namespace_explicit_project_id uses a sanitized actor slug; if the actor id contains only non-ASCII the slug collapses to all-dashes and two distinct non-ASCII actors collide on the same namespaced id.",
+      "evidence": "fn namespace_explicit_project_id — `slug: String = actor.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect();`",
+      "suggested_fix": "Use a hash of the actor (or a short hash suffix) when the slug is all-dashes to preserve the cross-principal separation even for non-ASCII actor names.",
+      "confidence": "medium"
+    },
+    {
+      "file": "src/builtin_tools/note_orient.rs",
+      "line": 80,
+      "severity": "low",
+      "category": "magic_value",
+      "issue": "MAX_ORIENT_TOKENS = 64 * 1024 is a hard cap with no test that asserts the cap is actually applied — a future refactor that drops the min() call would walk the entire corpus into a single tool result.",
+      "evidence": "let max_tokens = requested.min(MAX_ORIENT_TOKENS);",
+      "suggested_fix": "Add a unit test that constructs a tool with default_budget.max_tokens = usize::MAX and asserts the read_snapshot call receives the clamped budget.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/recall_context.rs",
+      "line": 115,
+      "severity": "low",
+      "category": "api_misuse",
+      "issue": "relevance_score is hard-coded to 1.0 for every fragment — the field is named 'relevance' but carries no scoring signal, so a downstream model that ranks hits by this field gets a meaningless order.",
+      "evidence": "relevance_score: 1.0 (line 115); comment on the BT-D-R4-01 fix says FTS5/BM25 is tracked separately",
+      "suggested_fix": "Either rename the field to a non-ranking name (`from_query: bool` or remove the `relevance_` prefix) or compute a real score (substring position, hit count) — the current name invites misuse.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/session_search.rs",
+      "line": 80,
+      "severity": "low",
+      "category": "magic_value",
+      "issue": "MAX_SESSION_SEARCH_RESULTS = 100 is the hard cap; clamp happens at line 178 and is the only defence against a model passing usize::MAX, but the constant is undocumented and there's no test pinning the behaviour.",
+      "evidence": "const MAX_SESSION_SEARCH_RESULTS: usize = 100;",
+      "suggested_fix": "Add a unit test that requests max_results = usize::MAX and asserts the returned hit count is bounded by 100.",
+      "confidence": "high"
+    },
+    {
+      "file": "src/builtin_tools/skill_manage.rs",
+      "line": 240,
+      "severity": "low",
+      "category": "resource_leak",
+      "issue": "create() writes SKILL.md then calls ensure_dir_registered + reload_file, but if reload_file errors the SKILL.md is already on disk and the registry may not see it — a partial-success state the caller gets back as an AlephError without knowing whether the file exists.",
+      "evidence": "tokio::fs::write(&path, &full).await...; self.system.ensure_dir_registered(root).await; self.system.reload_file(&path).await.map_err(...)?;",
+      "suggested_fix": "Surface the on-disk state in the error message ('wrote SKILL.md to X, but reload failed: Y') so the caller knows the file landed; current code propagates only the reload error.",
+      "confidence": "medium"
+    }
+  ],
+  "summary": "Codebase is exceptionally well-engineered — every reviewed file delegates security/crypto to well-defined layers (permission bypass in permission_tool, crypto in vault_store, install paths in skill_manage are all properly contained), and the high-complexity files (workflow_tool.rs 3976 lines, process_journal.rs 1718 lines, process_registry.rs 1416 lines) have thorough state-machine discipline and well-anchored invariants. The high-signal findings are concentrated in two areas: (1) a duplicated secret-prefix list in partial_output.rs that can drift from the finished-path scrubber, and (2) the user_profile.rs IPv4 redaction whose implementation does not match its doc. Concurrency is clean — no &mut across .await, locks use poison-tolerant accessors, and the workflow_tool state machine guards every transition with live re-fetches."
+}
+```

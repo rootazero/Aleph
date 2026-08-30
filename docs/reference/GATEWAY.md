@@ -242,6 +242,7 @@ it again.
 | `models.*` | `list`, `config` |
 | `generation.*` | `image`, `video` |
 | `cron.*` | `list`, `add`, `remove`, `run` |
+| `projects.*` | rooms: `list`, `get`, `create`, `rename`, `archive`, `member_*`, `bind_workspace`, `room_session`, `workspace.list/read` — plus `channel.bind` / `channel.unbind` / `channel.list`, below |
 
 ---
 
@@ -389,6 +390,66 @@ Slack implements it in `interfaces/slack/directory.rs::ConversationDirectory`
 cap). The cap is not cosmetic: `ChannelRegistry` holds the channel's **read guard**
 across the adapter call, so an unbounded sweep would block the write lock that
 `stop_channel` / `restart_channel` need.
+
+### A conversation can be bound to a project room
+
+There is a **fourth** thing worth keeping apart from the three above: the
+*binding key*. `projects.channel.bind` points a room at one channel
+conversation, and the table is keyed on
+`(channel_id, peer_kind, peer_id)` — the conversation's own identity — **not**
+on a session key. That is the whole reason it survives an `agent_switch`,
+which mints a new session key for the same group.
+
+What binding buys: every turn spoken in that group now runs under the room's
+scope instead of under `personal:<speaker>`. Memory partition, the
+`<room_context>` roster, the speaker label and the room's bound workspace all
+follow, and the conversation's existing session rows are moved into the room so
+roster members see it in `sessions.list`. Before this, a group's turns
+fragmented into one partition per speaker.
+
+Three things a reader would otherwise have to infer:
+
+- **The mechanism does not know which channel it is.** `conversation_of` reads
+  the binding key off any `SessionKey::Group`, so a Telegram group, a Feishu
+  group and a `webhook` conversation are the same case. Components are
+  normalized once, at `bind_conversation`, through
+  `binding::normalize_component` — and the comparison side must use the
+  normalized `ChannelBinding` rather than the raw request params, which is
+  enforced by `rescope_existing_transcript` taking `&ChannelBinding` and never
+  seeing `ChannelBindParams` at all. A signature says "this mistake cannot be
+  made without changing the signature"; a test only says it was not made.
+- **`bind`/`unbind` are admin-gated; `list` is not.** The two writers sit in
+  `method_admin::ADMIN_METHODS` because **their exposure runs outward**: after
+  binding, a roster member speaking in the group makes the agent answer out of
+  the room's shared memory, notes and workspace, and that answer is delivered
+  to the whole conversation — including people the roster does not control. No
+  per-caller filter can express that, which is why the decision belongs to an
+  operator rather than to a room owner who may be an ordinary member. `list`
+  stays open and is narrowed to the roster by `gate_project`.
+- **A roster gate sits on the upgrade, not on the conversation.** Being in a
+  bound conversation is not itself a claim on the room: the *binding* is an
+  operator's declaration, being in the group is not. So `room_claiming`'s
+  `BoundConversation` arm leaves the producer's stamp alone for a speaker the
+  roster does not admit. An unpaired speaker gets no scope at all — the
+  fail-closed `stamped?` in `request_scope` reaches that before the room
+  question is asked.
+
+**The receipt is three-valued and the third value is load-bearing.** `bind`
+answers `Moved` / `NothingToMove` / `Unknown`. An `Err` from the session store
+must **not** fold into `NothingToMove`: that would be a confident factual claim
+about a conversation whose store just failed. The bind has already committed by
+the time the scan runs, so the error must not fail the RPC either — hence
+`Unknown` plus a named `warn!`. An `Err` after some rows already moved is also
+`Unknown`, not `Moved`, because `Moved` asserts the whole transcript is in the
+room. How the scan can come back short in each backend is enumerated in
+`rescope_existing_transcript`'s doc and recorded as known gap #6 in
+[SECURITY.md](SECURITY.md).
+
+The gateway-owned mapping must win over producer metadata on **every** reader's
+path, not just the one you are looking at — `src/gateway/CLAUDE.md` 地雷 Q is
+the full account, and it exists because the fourth of five readers re-derived
+the answer from raw metadata and dropped the room at the harness spawn.
+Real-machine coverage: `qa/rooms_channel_bind/run.sh`.
 
 ### Capability flags are promises
 

@@ -765,7 +765,7 @@ impl GatewayServer {
             MiddlewareChain::new(self.handlers.clone(), self.rate_limiter.clone());
 
         // Wire the embedded-PTY subsystem to this server's event bus so live
-        // terminal output is broadcast on the `pty.output` / `pty.exit` topics
+        // terminal output is broadcast on the `pty.screen` / `pty.exit` topics
         // through the normal subscription path (single fixed port, no second
         // socket). Idempotent — safe if `build_router` runs more than once.
         crate::gateway::pty::attach_event_bus(self.event_bus.clone());

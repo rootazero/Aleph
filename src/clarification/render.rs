@@ -146,7 +146,7 @@ pub fn render(question: &ClarificationQuestion, index: usize, total: usize) -> R
     let header = question
         .header
         .as_deref()
-        .map(|h| format!("[{h}] "))
+        .map(|h| format!("[{}] ", escape_markdown(h)))
         .unwrap_or_default();
 
     let mut text = format!("❓{position} {header}{}", question.prompt);
@@ -299,4 +299,23 @@ mod tests {
         );
         assert!(long.ends_with('…'));
     }
+}
+
+/// Escape Telegram-flavoured Markdown special characters in
+/// LLM-supplied text so a `*` or `_` in the prompt does not flip
+/// the channel's formatting on a downstream message. Threat is
+/// limited (the model is also the prompt source) but a malformed
+/// prompt from a future `ask_user` producer would render
+/// unexpectedly.
+///
+/// We do NOT escape option labels — they are already trimmed
+/// and the menu builder formats them inside a `*…*` run that
+/// becomes the clickable reply affordance. Escaping the labels
+/// would break the affordance.
+fn escape_markdown(s: &str) -> String {
+    s.replace('\\', r"\\")
+        .replace('*', r"\*")
+        .replace('_', r"\_")
+        .replace('`', r"\`")
+        .replace('[', r"\[")
 }

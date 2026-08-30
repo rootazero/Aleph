@@ -145,7 +145,7 @@ fn end_of_item(lines: &[&str], start: usize) -> usize {
     // instead of being reset (and mis-scanned) on each new line.
     let mut state = LexState::default();
     while k < lines.len() {
-        let code = code_only(lines[k], &mut state);
+        let code = code_only(lines[k], &mut state, Payloads::Stripped);
         depth += i32::try_from(code.matches('{').count()).unwrap_or(0);
         depth -= i32::try_from(code.matches('}').count()).unwrap_or(0);
         if code.contains('{') {
@@ -320,7 +320,12 @@ fn raw_string_closes(chars: &[char], quote: usize, hashes: usize) -> bool {
 /// repo silently hid 9 763 lines of real code from ~36 census guards
 /// (measured 2026-08-24). One sentinel answers both questions; forking the
 /// lexer would have made a second author for the same walk.
-fn code_only(line: &str, state: &mut LexState) -> String {
+///
+/// `payloads` selects between the two questions a census can ask of the same
+/// walk — see [`Payloads`]. Comments are dropped either way; only literal
+/// interiors move.
+fn code_only(line: &str, state: &mut LexState, payloads: Payloads) -> String {
+    let keep = payloads == Payloads::Kept;
     let chars: Vec<char> = line.chars().collect();
     let mut out = String::with_capacity(chars.len());
     let mut idx = 0usize;
@@ -342,6 +347,9 @@ fn code_only(line: &str, state: &mut LexState) -> String {
         }
         if escaped {
             escaped = false;
+            if keep {
+                out.push(c);
+            }
             idx += 1;
             continue;
         }
@@ -355,17 +363,29 @@ fn code_only(line: &str, state: &mut LexState) -> String {
                     out.push('"'); // sentinel
                     idx += 1 + hashes;
                 } else {
+                    if keep {
+                        out.push(c);
+                    }
                     idx += 1;
                 }
                 continue;
             }
             match c {
-                '\\' => escaped = true,
+                '\\' => {
+                    escaped = true;
+                    if keep {
+                        out.push(c);
+                    }
+                }
                 '"' => {
                     state.in_str = false;
                     out.push('"'); // sentinel
                 }
-                _ => {}
+                _ => {
+                    if keep {
+                        out.push(c);
+                    }
+                }
             }
             idx += 1;
             continue;
@@ -382,7 +402,11 @@ fn code_only(line: &str, state: &mut LexState) -> String {
                     // Skip the whole literal — its interior is never counted —
                     // but leave a sentinel so a line that is nothing but a char
                     // literal does not read as empty.
-                    out.push('_');
+                    if keep {
+                        out.extend(chars[idx..idx + len].iter());
+                    } else {
+                        out.push('_');
+                    }
                     idx += len;
                 } else {
                     out.push(c); // a lifetime (or malformed literal) is ordinary text
@@ -401,6 +425,25 @@ fn code_only(line: &str, state: &mut LexState) -> String {
         }
     }
     out
+}
+
+/// What [`code_only`] does with the *interior* of a string / char literal.
+///
+/// Two censuses want opposite things from the same walk and neither can be
+/// served by the other:
+///
+/// - [`Payloads::Stripped`] ([`code_text`]) is what a guard searching for a
+///   piece of CODE needs, because its own message strings and marker constants
+///   live inside the corpus it scans — see `code_text`'s doc.
+/// - [`Payloads::Kept`] ([`code_keeping_literals`]) is what a guard searching
+///   for a *literal value* needs. `flow_scope_census` looks for
+///   `get("scope_id")` — a raw metadata read spelled by the key's value rather
+///   than by its constant — and `code_text` deletes exactly the bytes it is
+///   looking for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Payloads {
+    Stripped,
+    Kept,
 }
 
 /// Drop lines that are comment ONLY: a `//` line, a line consumed entirely
@@ -472,7 +515,7 @@ pub fn strip_comment_lines(src: &str) -> String {
 /// [`strip_comment_lines`]'s doc).
 fn line_is_code(line: &str, state: &mut LexState) -> bool {
     let entered_in_str = state.in_str;
-    let code = code_only(line, state);
+    let code = code_only(line, state, Payloads::Stripped);
     entered_in_str || line.trim().is_empty() || !code.trim().is_empty()
 }
 
@@ -541,7 +584,43 @@ pub fn code_text(src: &str) -> String {
     let mut state = LexState::default();
     src.replace('\r', "")
         .lines()
-        .map(|line| code_only(line, &mut state))
+        .map(|line| code_only(line, &mut state, Payloads::Stripped))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// `src` with comment text removed and every literal payload KEPT — the other
+/// half of [`code_text`]'s question, over the same lexer walk.
+///
+/// # Why this exists
+///
+/// [`code_text`] deletes literal payloads so a guard hunting for a piece of
+/// code cannot fire on its own message strings. That is exactly wrong for a
+/// guard hunting for a literal VALUE: `flow_scope_census` must see
+/// `request.metadata.get("scope_id")`, a raw read spelled by the key's value
+/// instead of by `crate::scope::SCOPE_META_KEY`, and `code_text` removes the
+/// bytes that distinguish it. A review reproduced the shipped defect end to
+/// end through that hole, on a build where all three census checks were green.
+///
+/// [`production_code_lines`] is not a substitute. It blanks comment-ONLY
+/// lines, so a doc comment quoting a key is not a hit — but a comment that
+/// TRAILS live code on the same line survives it, and a census searching that
+/// text would fire on prose. That false positive is the expensive direction
+/// (「一条会误报的守卫比一条不报的守卫贵，因为它会被当成证据引用」), so the
+/// comment stripping has to come from the lexer rather than from a line
+/// filter.
+///
+/// A literal payload's own quotes are preserved as the same `"` sentinel
+/// `code_text` leaves, so `"scope_id"` — quotes included — is an EXACT
+/// payload match: a message that merely mentions the key in prose
+/// (`"scope_id missing"`) does not contain it, and an escaped inner quote
+/// (`"\"scope_id\""`) does not either.
+#[must_use]
+pub fn code_keeping_literals(src: &str) -> String {
+    let mut state = LexState::default();
+    src.replace('\r', "")
+        .lines()
+        .map(|line| code_only(line, &mut state, Payloads::Kept))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -888,6 +967,55 @@ pub fn after() {}
         assert!(!code.contains("danger_marker()"), "got:\n{code}");
         assert!(code.contains("real_call()"), "got:\n{code}");
         assert!(code.contains("let m ="), "got:\n{code}");
+    }
+
+    /// The mirror question, and the reason `code_keeping_literals` is not just
+    /// `production_code_lines`: a guard hunting for a literal VALUE has to see
+    /// the payload, and must still not see prose.
+    #[test]
+    fn code_keeping_literals_keeps_payloads_and_still_drops_every_comment() {
+        let src = concat!(
+            "fn t() {\n",
+            "    let a = m.get(\"scope_id\");\n",
+            "    let b = 1; // trailing mention of m.get(\"scope_id\")\n",
+            "    // whole-line mention of m.get(\"scope_id\")\n",
+            "    let c = /* inline */ m.get(r#\"scope_id\"#);\n",
+            "}\n",
+        );
+        let kept = code_keeping_literals(src);
+        assert_eq!(
+            kept.matches("\"scope_id\"").count(),
+            2,
+            "exactly the two live reads — the raw string counts, both comments \
+             do not. got:\n{kept}"
+        );
+        assert!(!kept.contains("trailing mention"), "got:\n{kept}");
+        assert!(!kept.contains("whole-line mention"), "got:\n{kept}");
+        assert!(!kept.contains("inline"), "got:\n{kept}");
+        // The same input through the payload-stripping half sees neither —
+        // which is the hole this function exists to close.
+        assert!(!code_text(src).contains("scope_id"));
+    }
+
+    /// A quoted needle is an EXACT payload match, not a substring search:
+    /// prose that mentions the key, and an escaped inner quote, are both
+    /// misses. Without this the guard built on it would fire on its own
+    /// failure messages.
+    #[test]
+    fn a_quoted_needle_does_not_match_a_literal_that_merely_mentions_it() {
+        let src = concat!(
+            "fn t() {\n",
+            "    panic!(\"scope_id missing from the map\");\n",
+            "    let q = \"a \\\"scope_id\\\" in prose\";\n",
+            "}\n",
+        );
+        let kept = code_keeping_literals(src);
+        assert!(kept.contains("scope_id"), "premise: payloads survive");
+        assert_eq!(
+            kept.matches("\"scope_id\"").count(),
+            0,
+            "neither line is a read of the key. got:\n{kept}"
+        );
     }
 
     #[test]
@@ -1500,7 +1628,10 @@ pub fn after() {}
             }
             let mut state = LexState::default();
             for (n, line) in text.lines().enumerate() {
-                if code_only(line, &mut state).trim().is_empty() {
+                if code_only(line, &mut state, Payloads::Stripped)
+                    .trim()
+                    .is_empty()
+                {
                     continue;
                 }
                 if opens_a_cfg_test_literal(line) {

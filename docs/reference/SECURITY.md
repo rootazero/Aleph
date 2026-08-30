@@ -1002,6 +1002,14 @@ replaced the single `rule_id != DECLARED_FLOOR_RULE` equality, pinned to
 `GateRule::is_floor` from both ends by
 `every_floor_variant_is_declared_a_floor_on_both_sides`.
 
+> **2026-08-30 update, left as a pointer rather than a rewrite**: this section is
+> a changelog entry for when the mechanism landed (round 11 / 2026-08-12) and
+> stays historical — the two paths it names above were the complete list *then*.
+> The list has since grown a third member, `policies.terminal` (see "内嵌终端"
+> below); the two names above are no longer complete. `GATE_DECIDING_CONFIG_PATHS`
+> (`config::types::policies::exec_tier`) is the current, authoritative list —
+> read that, not the two names in the paragraph above.
+
 ### The chain names every gate, and the trail hears it (2026-08-12)
 
 `GateRule` gained `OperatorRequired` and `HookRequested`: the two gates that
@@ -1015,6 +1023,31 @@ identity ledger's signed preimage is append-ordered, so a new optional field
 would invalidate every existing chain — see AGENT_IDENTITY.md.) An auditor
 reading an `ApprovalGranted` row can now tell a tier-raised card from a floor
 the operator could not have removed.
+
+---
+
+### 内嵌终端（`pty.*`）
+
+- **两面 operator-only**：RPC 面在 `method_admin::ADMIN_PREFIXES`，订阅面在 `event_scope::default_rules`。
+- **cwd jail 只管起点**。终端内部的 `cd` 不受约束 —— 命令粒度的闸在交互式字节流上不可表达（`vim` 里的回车不是命令）。
+  它买到的是**"每个终端的起点可枚举、可审计"，不是"终端不能离开工作区"**。别把它当成隔离来引用。
+- **PTY 不经 `[sandbox.command_policy]` 也不经 exec tier**（`method_admin.rs` 的注释自陈 "strictly more dangerous"）。
+  会话粒度的开关 `[policies.terminal] enabled` 是这一层唯一说得出口的谓词；关掉它会杀掉在飞的会话。
+- **终端历史住在服务器上**（每会话 `scrollback_lines` 行，默认 1000），因此对诊断与审计面可见。
+- **同一装机的所有 operator 共享 `["*"]` 作用域**，能互相看见并 attach 彼此的会话。这是单层信任模型的有意结果，不是疏漏。
+- **打开这道闸本身不举卡就是一次绕闸**：`[policies.terminal] enabled` 在
+  `config::types::policies::exec_tier::GATE_DECIDING_CONFIG_PATHS` 上，所以经 `self_config`
+  写它在**每个执行档位**——包括 `Full`——都停下来问。这张卡不提供"始终允许"，原因不是它例外，
+  恰恰相反：`GateRule::GateRemoval` **本来就在** `FLOOR_RULES` 上，`for_confirm_gate` 正是
+  因为这条地板判定才收回持久授权按钮——同一套地板机制覆盖名单上的每个成员，`policies.terminal`
+  不是特例（`is_floor()` 自己的注释警告过"地板"在这个子系统里有两层含义，此处说的是"这张卡不许
+  提供持久授权"那一层，不要在这句话之外再造第三种读法）。它上榜的理由属于该名单的两类之一：写它
+  不是**退掉**一张已有的卡，而是**交出**一个此前没有任何卡在看守的执行面（`pty.*` 本身不经
+  command policy、不经 exec tier）——这正是"写配置，再自由行动"能把两个各自合法的步骤拼成的
+  一步免卡动作，也是该常量存在的理由（名单里另一类成员的写法是退掉一张已有的卡，具体成员与理由
+  见 `GATE_DECIDING_CONFIG_PATHS` 自己的 doc，不在此重复——那份名单会变，这句话不该跟着腐烂）。
+  一条精确点名 `self_config` 的 `[policies.tool_permissions]` 条目仍能站下这张卡（那是人写的
+  决定，创建它的那次写入自己已经经过这条规则举过卡），这是有意的。
 
 ---
 
@@ -2223,11 +2256,15 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
     the Panel's cold-load seed for those dots — filtered by the same rule and
     carved out of the admin gate in the same change, because a fallback that
     is admin-gated does not work for the population the filtering is for.
-    ⚠️ The drop rule interacts with WHEN the frame is published, and that
-    interaction is an open defect: the claim broadcasts before the session row
-    exists, so a new conversation's first turn resolves to nothing and is
-    dropped from both producers. See known gap #2 below — the fix belongs at
-    the resolution step, not in the drop rule.
+    ⚠️ The drop rule interacts with WHEN the frame is published: the claim
+    broadcasts before the session row exists, so a new conversation's first
+    turn resolved to nothing and was dropped from both producers. Fixed at the
+    resolution step rather than in the drop rule — see the CLOSED gap #2
+    («The running-set projection raced a new session's row into existence»),
+    which carries the resolution at the end of its own item. *(This paragraph
+    called it "an open defect" until 2026-08-30, pointing at an entry that had
+    already recorded itself resolved — a cross-reference is a second statement
+    of the same fact, and closing the target does not update the pointer.)*
 - **Background-work ownership.** `goal::Goal` and `looping::LoopState` both
   carry the same `owner_user_id`/`scope_id` pair, stamped once at creation
   from `scope::current_scope()` (`with_owner_scope`) and preserved across
@@ -2265,14 +2302,49 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   each scheduler already has — is Aleph's own 「界限要在执行时刻成立」 criterion
   applied to identity rather than to time, and is recorded as deliberately not
   done in FEATURE_LOCATOR §5.22 round-4 「刻意未做 ④」 rather than half-built.
-- **Scope is immutable for a session's lifetime** (spec §10).
-  `owner_user_id`/`scope_id` are stamped once, at session creation
+- **Scope is immutable for a session's lifetime** (spec §10), **with exactly
+  one exception, added 2026-08-30.** `owner_user_id`/`scope_id` are stamped
+  once, at session creation
   (`SessionMetadata::stamp_attribution`, the CREATE branch only — reading an
   EXISTING row, even as its owner, never (re)stamps it;
   `single_user_fixture_is_byte_identical_after_upgrade` pins this directly).
   This is also why the curated-memory envelope can stay in the prompt's
   Stable (cacheable) zone per session (CLAUDE.md §2.18): per-user bytes are
   per-session stable.
+
+  **The exception is `SessionStore::rescope_attribution`**, which moves an
+  existing row's scope into a project room when an operator binds a channel
+  conversation to that room. It exists because binding is a decision a human
+  makes, with a reason, recorded in the audit log — whereas
+  `backfill_attribution` can only heal rows that were never stamped at all.
+  Without it a bound conversation splits in two: the RUN takes the room scope
+  while the ROW keeps `personal:<first speaker>`, so every other member's
+  `session_visible_to` says false and the group stays invisible in their
+  session list.
+
+  **Three narrowings, and all three live in the verb rather than in a rule
+  each caller has to remember:**
+  1. **Only a conversation.** `key` must be a `SessionKey::Group`; anything
+     else is refused inside the verb via `require_conversation_key`, so
+     "only a conversation may be rescoped" is a property of the method and
+     has one author across every backend. A DM has one human on the far side
+     and no roster to grant visibility to.
+  2. **Only into a project.** It takes a `project_id`, **not** a rendered
+     `scope_id`. There is no such thing as rescoping a conversation into
+     someone's personal scope or into org scope, so the parameter's *type*
+     carries "which kind of scope" instead of it being a value the caller can
+     get wrong. The runtime check for that was **deleted**, not centralised —
+     there is no longer a rendered-personal-scope string a caller could pass.
+     (`backfill_attribution` legitimately takes a `&str` for all three kinds,
+     because it heals a NULL row to whatever the run's ambient attribution
+     was. The divergence is deliberate; do not "harmonise" it back.)
+  3. **Only the scope.** `owner_user_id` still names whoever spoke first. For
+     a project-scoped row visibility is decided by the roster, so overwriting
+     the owner would buy nothing and lose the byline.
+
+  Its single caller is pinned by name in
+  `session_store::caller_census::SOLE_CALLERS`, and the RPC that reaches it
+  (`projects.channel.bind`) is in `method_admin::ADMIN_METHODS`.
 - **NOT_FOUND over forbidden.** Every addressed-key visibility denial
   (`sessions.history`, `artifacts.read_text`, `sessions.new` on a foreign
   key, …) returns the EXACT SAME `RESOURCE_NOT_FOUND` response a genuinely
@@ -2413,7 +2485,12 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
     directions, and the event-forward arm had four terms, none of them
     authentication. Combined with `pty.output` classifying as `Global`, an
     unauthenticated LAN socket received the operator's raw shell bytes while
-    `"pty."` had been in `ADMIN_PREFIXES` all along;
+    `"pty."` had been in `ADMIN_PREFIXES` all along. (`pty.output` no longer
+    exists: the embedded-terminal work replaced the raw-byte topic with the
+    row-diff `pty.screen`. The name is kept here because it is what the defect
+    happened to — grep `PTY_SCREEN_TOPIC` for the topic that carries terminal
+    output today, and note the shape is unchanged: it is still a topic whose
+    payload is the operator's shell.)
   - `partition_visible` had only the task-local way of naming an actor, which is
     dead inside a spawned run — so every tool reaching for it would have got a
     silent always-true. It now has an explicit-actor twin
@@ -2776,8 +2853,23 @@ attribution, and a bound workspace as the room's default cwd.
   they already know the room exists, so "forbidden" leaks nothing and is
   actionable ("ask the owner"). Pinned by
   `a_stranger_binding_gets_not_found_not_permission_denied`.
-- **The workspace binding is a privilege, and it has four writers — three
-  gated, one exempt by invariant.** Turning `workspace_path` into the room's
+- **"Admin-gated" here means NOT-A-MEMBER, not IS-AN-OPERATOR.** The
+  predicate is `caller_identity::caller_is_member()`, which is literally
+  `current_caller_role() == Some("member")` — so a caller with **no** role at
+  all (`None`: cron, A2A, in-process) passes every one of these gates. That is
+  the house rule across the repo and it is deliberate: the login wall handles
+  the unauthenticated half, and an unrestricted internal caller is not a
+  principal being judged. Say it precisely when reading any "admin-gated"
+  claim in this document — a gate written as "is operator" and a gate written
+  as "is not a member" agree on every human and disagree on every machine
+  caller, and only the second one is what the code does.
+- **The workspace binding is a privilege, and it has five writers — four
+  gated, one exempt by invariant.** *(Was "four writers — three gated" until
+  2026-08-30; `project_manage(bind_workspace)` is the fifth and it calls
+  `ProjectStore::bind_workspace` directly rather than routing through the
+  RPC. A sentence that counts members goes quiet on the day the set grows,
+  which is why the authoritative census is a module doc and not this
+  number.)* Turning `workspace_path` into the room's
   runtime cwd (a dormant display field waking up) retroactively made every
   writer of that column a directory-choice authority: `projects.add`,
   `projects.create_blank`, and `projects.bind_workspace` all carry the same
@@ -2785,7 +2877,29 @@ attribution, and a bound workspace as the room's default cwd.
   loopback) — the same predicate `agent.run`'s explicit `project_root`
   param enforces. Without the write-side gate, "register a folder, then
   chat in it" is a two-step route to an arbitrary server directory in which
-  both steps are individually legal. The fourth writer is
+  both steps are individually legal.
+
+  **The tool face is gated by a different predicate, on purpose.**
+  `project_manage(bind_workspace)` uses
+  `require_operator_tier()` — `TurnContext::caller_is_operator()` — rather
+  than the ambient `caller_may_choose_directory()`, because the ambient
+  task-local is dead inside a run (that is the very defect round-9's
+  `546984c2b` fixed, and the reason this action could not ship before it).
+  `TurnContext` is per **turn**, not per connection, and the gateway has
+  already resolved the originating connection's authority into it by the
+  time any tool executes. ⚠️ **Bound**: `require_operator_tier()` is
+  `current_turn_context().is_none_or(|t| t.caller_is_operator())` — an
+  ABSENT context reads as operator. That branch is unreachable today (both
+  production call sites of `build_request_tool_service`,
+  `run_loop/inner.rs:945` and `:1228`, pass `Some(turn_context)`, and
+  `ScopedToolService::execute` scopes `TURN_CONTEXT` only in the `Some`
+  arm) — but **nothing pins it**, so the sentence above holds for
+  gateway-originated turns, not for "any tool execution" in general.
+  Note the deliberate asymmetry: the check fires
+  only when a path is actually NAMED, so **releasing** a binding stays
+  reachable from a session that a bad binding broke.
+
+  The fifth writer is
   `execution_engine::run_loop::inner`, which auto-registers a run's
   `workspace_override` into the catalogue so a CLI/programmatic cwd appears
   in the picker; it is exempt because it never *introduces* a directory — it
@@ -2802,7 +2916,9 @@ attribution, and a bound workspace as the room's default cwd.
   owner chose the directory through a gated verb; the member only inherits
   that choice. The full census lives in
   `gateway::handlers::projects`'s module doc, with a back-reference at the
-  fourth writer.
+  exempt writer — and that doc now also records that both it and this bullet
+  sat at "four / three gated" for the whole time there were five, because a
+  count of members is prose and prose has no compiler.
 - **Author attribution is display-grade, not signature-grade.** The
   `[name]` speaker labels a room prompt carries come from
   `SessionEvent::UserMessage.author_user_id`, stamped server-side from the
@@ -2904,14 +3020,43 @@ attribution, and a bound workspace as the room's default cwd.
   identical run id to. It is deliberately NOT a per-connection or per-device
   id — a run id fixes two tabs of one user as well, and mints no new identity
   concept.
-- **Known gaps (deliberate, recorded, not silently dropped):**
-  1. `projects.*` has no tool surface (R8 gap): rooms can only be managed
-     over RPC (Panel), not by conversation. Pre-existing family shape —
-     the whole `projects.*` namespace was RPC-only before P2.
-  2. Channel-originated runs bypass `build_run_request`, so a channel
-     session cannot acquire a room's bound workspace (or a room scope at
-     all). The P2 acceptance surface is the Panel; channels-into-rooms is
-     spec §11-3 / P4.
+- **Known gaps (deliberate, recorded, not silently dropped).** ⚠️ **A
+  known-gap record is itself a claim a later fix can quietly invalidate — two
+  entries below had already rotted when this table was last rewritten
+  (2026-08-30). Re-verify an entry in the code before acting on it.**
+  1. **`projects.channel.bind`/`unbind` have no tool surface (R8 gap).** A
+     channel conversation can be bound to a room over RPC (Panel) or
+     `aleph projects channel bind`, but not by conversation.
+     *(This entry used to read "`projects.*` has no tool surface" and was
+     false from 2026-08-25, when round-8 shipped `project_manage`; round-9
+     then added its ninth action, `bind_workspace`. Only `channel.*` is
+     left.)* Two reasons it is not a simple addition: `bind`/`unbind` are in
+     `method_admin::ADMIN_METHODS`, and the tool face runs **inside a run**
+     where the ambient role predicate is dead — `bind_workspace` could only
+     ship once it had `require_operator_tier()` to read `TurnContext`
+     instead. `channel.*` needs the equivalent answer, and inventing a
+     second, stricter predicate for one face would be a second answer to
+     "may this caller point the server at something".
+  2. **Channels into rooms: the INBOUND half is delivered (round-9); three
+     things at its boundary are not.** A channel group conversation bound to
+     a room now carries that room's scope all the way to the harness — memory
+     partition, `<room_context>`, speaker label — and `rescope_attribution`
+     moves the conversation's existing rows in so roster members see it in
+     `sessions.list`. What remains:
+     - **No room → group push.** Only the inbound direction exists. A turn
+       started from the Panel inside the room does not reach the bound group.
+     - **An unpaired speaker takes no scope at all, and lands in the BARE
+       base partition.** Measured, not inferred
+       (`qa/rooms_channel_bind` scenario 4): the note goes to `main`, not to
+       the room and not to any principal. That is not "nowhere":
+       `project_scope::session_read_ids` puts the bare base in **every**
+       scoped principal's read set, so an unpaired stranger's turn in a bound
+       group is readable by every member's recall. Pre-existing
+       adoption-by-absence shape, unchanged by this round; recorded here
+       because binding a group is what makes strangers reach it.
+     - **A re-bind with no `--label` silently clears the stored label.**
+       `bind` otherwise reads as an idempotent no-op; this half is not. The
+       fixture records it as a fact rather than asserting it.
   3. `resume_coordinator::retrigger` does not re-check the binding: a
      resumed room run whose folder vanished degrades to the agent workspace
      (background sweep, nobody to tell) where `build_run_request` refuses
@@ -2927,6 +3072,65 @@ attribution, and a bound workspace as the room's default cwd.
      creator-owned. New room-created teams carry `project:<id>` and belong
      to the roster. If a legacy room team must be shared, recreate it from
      inside the room.
+  6. **A session listing can come back short, and the receipt built on it
+     asserts an absence.** `projects.channel.bind`'s `NothingToMove` says no
+     transcript row was found for the conversation — a confident factual
+     claim, and only as honest as `list_sessions` is complete. Both backends
+     can under-report, and they do it differently:
+     - **SQLite (opt-in: `[general] session_store_backend = "sqlite"`; the
+       shipped default is `"file"`, see
+       `config::types::general::default_session_store_backend`, dispatched in
+       `bin/aleph-server/commands/start/helpers.rs::initialize_session_store`)**
+       — `session_manager::ops::query::list_sessions` collects with
+       `rows.filter_map(|r| r.ok())`. A row whose column mapping fails is
+       dropped in **complete silence**, so one damaged `sessions` row yields
+       `NothingToMove`. **Deliberately not fixed in round-9**: it is
+       pre-existing, has other callers, and re-classifying it is its own
+       task. **More severe in kind** -- it drops the row with no diagnostic at
+       all, where the file backend at least warned on one arm -- but
+       **smaller in blast radius, because it is opt-in**. Round-9 fixed the
+       half a stock install actually runs.
+     - **File backend** — the same class, now loud on both arms. An
+       unparseable `metadata.json` was already skipped with a named `warn!`;
+       an **unreadable** one was skipped in silence six lines above that
+       argument, which applied to it verbatim. Fixed in round-9
+       (`8e6134398`): `ErrorKind::NotFound` still skips silently — the
+       `exists()` check above it raced a delete, so that really is an
+       absence — and every other kind now warns by path. ⚠️ **No test
+       covers either `Err` arm**; the change is compile-verified and argued,
+       not asserted. Whoever next touches this function owes it one.
+       ⚠️ **And the silent half is narrowed, not closed**: the "it really is
+       an absence" argument rests on the `exists()` check above the read,
+       and `Path::exists()` is `metadata(path).is_ok()` — it answers `false`
+       for **any** error. A session directory the process can stat but not
+       traverse is skipped there and never reaches either arm, silently.
+       That is the shape root `CLAUDE.md` §8 names («我看不了» answered as
+       «那里没有东西»); closing it belongs to the `exists()` call.
+     - **Inherent to any snapshot** — a turn whose routing resolved before
+       the bind committed, but whose session row is created after the
+       listing, is stamped `personal:<speaker>` and never seen.
+       `stamp_attribution` is create-only and `backfill_attribution` heals
+       only NULL rows. The window is milliseconds and the remedy is free:
+       re-running `bind` on the same room is a documented no-op that re-runs
+       the scan.
+  7. **Single-project RPC responses have no typed envelope** (Ruling BD).
+     `projects.list` gained `ProjectListResult`; the single-project
+     responses did not — the server writes the literal
+     `json!({ "project": … })` in **6** places and the Panel reads
+     `.get("project")` in **5**, all of the latter in
+     `interfaces/webchat/src/api/projects.rs`. The criterion that motivated
+     the list change applies verbatim (信封也是 wire key，而且它通常是最后一个
+     没被类型化的部分). Deferred because 11 sites across two crates is a task
+     rather than a nit, and it is pre-existing. **Counts re-verified
+     2026-08-30 and unmoved; re-verify again before acting.**
+  8. **`AuthorityChange` is used more broadly than its own doc describes**
+     (Ruling BJ). `daemon.shutdown` is logged as an `AuthorityChange`, while
+     that variant's doc says it covers "changes who can do what". The ruling
+     is **record, do not act, and the likelier defect is the doc**: a
+     shutdown ends every connected session, which revokes everyone's ability
+     to do anything by any reading not purely about grants. The census row
+     is accurate and stays; narrowing prose beside a broader practice is
+     this repo's most common drift shape.
 
 ### Network boundary = reachability
 

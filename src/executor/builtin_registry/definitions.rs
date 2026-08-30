@@ -1031,6 +1031,9 @@ pub fn create_tool_boxed(
         "google_meet" => Some(Box::new(
             crate::builtin_tools::google_meet::GoogleMeetTool::new(
                 config.and_then(|c| c.google_meet_bridge.clone()),
+                config
+                    .and_then(|c| c.ssrf_policy.clone())
+                    .unwrap_or_default(),
             ),
         )),
         "file_ops" => Some(Box::new(FileOpsTool::new())),
@@ -1195,7 +1198,11 @@ pub fn create_tool_boxed(
                 )) as Box<dyn AlephToolDyn>
             }),
         "media_send" => Some(Box::new(
-            crate::builtin_tools::media_send::MediaSendTool::new(),
+            crate::builtin_tools::media_send::MediaSendTool::new(
+                config
+                    .and_then(|c| c.ssrf_policy.clone())
+                    .unwrap_or_default(),
+            ),
         )),
         "artifact_publish" => Some(Box::new(
             crate::builtin_tools::artifact_publish::ArtifactPublishTool::new(),
@@ -2319,6 +2326,48 @@ mod tests {
     /// cua-driver), not a convention; (3) the consumers are `DesktopTool` and
     /// `DesktopAxSnapshot`, shipped and dispatched, and every token refusal
     /// path reads as an instruction only if the model was told the contract.
+    /// 2026-08-29: 108_800 -> 109_032 B (+232) for `project_manage`'s
+    /// `bind_workspace` action. The sentence it replaces said the opposite
+    /// ("Binding a room to a folder is NOT here"), so leaving it would have
+    /// been telling the model something false on every request that lists this
+    /// tool — the bytes were already being spent, they were just being spent
+    /// on a lie. The three questions: (1) no schema can carry it — the schema
+    /// says `action` is an enum and `path` is an optional string, while the
+    /// load-bearing facts are that naming a path needs an operator-tier
+    /// session *in addition to* room ownership, that omitting the path
+    /// RELEASES rather than erroring, and that releasing is deliberately not
+    /// tier-gated because it is the repair for a room pointed at a folder that
+    /// has gone missing; (2) a stronger model cannot infer a deployment's
+    /// authority split, and the failure mode without the clause is the
+    /// expensive one — it discovers the gate by being refused, and the
+    /// refusal for the path form reads as a refusal of the whole verb, so it
+    /// never tries the release form that would have worked; (3) the consumer
+    /// is `ProjectManageTool`, catalogued and dispatched, whose new arm is
+    /// exercised by six tests.
+    /// 2026-08-30: 109_032 -> 109_046 B (+14) to correct that same tool's
+    /// DESCRIPTION, which named one of the three faces binding lives on
+    /// ("on the Panel") while the module doc and the schema guard both said
+    /// "Panel/RPC/CLI faces". The CLI face shipped in the same round, which is
+    /// what made one-of-three wrong; it is under-inclusive rather than false,
+    /// which is why nothing red. The three questions: (1) which face carries a
+    /// verb is a deployment fact no schema can express — the schema's job here
+    /// is to say `bind_channel` is *absent*, and a model told only "absent"
+    /// has nothing to relay to a user who asks "then where?"; (2) a stronger
+    /// model cannot infer an authority split either, and the failure mode is
+    /// that it sends the user to the one face they may not have; (3) the
+    /// consumer is `ProjectManageTool`, catalogued and dispatched, and the
+    /// spelling is now pinned by `the_model_facing_copy_names_the_same_faces`
+    /// so a fourth face reds instead of silently making this two-of-four.
+    ///
+    /// Measured, not computed — `catalog_description_bytes_ratchet` printed
+    /// this number and it was copied. The ceiling sits flush against the
+    /// measurement with no headroom: the gap between a "hard cap" and the
+    /// measured value is credit already extended, and this repo has approved
+    /// that once before (`measured + 1024`, with a comment claiming both
+    /// "headroom … so the next adjacent PR doesn't trip the ratchet" and
+    /// "still a hard cap, not a soft floor" — two claims that cannot both be
+    /// true, and 20% of silent growth in between).
+    ///
     /// 2026-08-29: 108_800 -> 111_856 B for the `grep` / `find` pair and the
     /// `bash` steer that points at them. Decomposed by measuring each literal
     /// (bytes, not chars — the em-dashes cost 3 apiece):
@@ -2356,7 +2405,23 @@ mod tests {
     /// one `grep -r` across a repository carrying `node_modules/` routinely
     /// returns tens of KB of matches nobody asked for — per call, in the
     /// context window, forever. 3 KB of constants against that is not close.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 111_856;
+    ///
+    /// 2026-08-30 (merge): both ledger entries above landed on the same 108_800
+    /// base on two branches, so neither of their ceilings describes the merged
+    /// catalogue. The arithmetic union of the two deltas is 112_102 — and that
+    /// is NOT the number below, because it is wrong by 16 B. The measured total
+    /// is 112_118 (92_522 catalog + 16_613 registry-only + 1_039 injected +
+    /// 1_944 bridge), printed by `catalog_description_bytes_ratchet` on the
+    /// merged tree and copied. The 16 B are the two branches' independent edits
+    /// to shared strings, which neither delta could see from its own side.
+    ///
+    /// Worth keeping as a worked example of this file's own rule: a ratchet
+    /// raised by arithmetic is a ratchet whose gate has not run, and the gap
+    /// between a computed number and the measured one is credit extended
+    /// silently. Here the computed figure was 16 B BELOW the truth, so it
+    /// would have failed loudly rather than over-granting — but the direction
+    /// of that error was luck, not method. Set flush against the measurement.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 112_118;
 
     #[test]
     fn catalog_description_bytes_ratchet() {

@@ -142,6 +142,9 @@ impl AlephTool for TeamDigestTool {
     type Output = TeamDigestOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // BT-D-R4-23: gate before any read so a non-member cannot read the
+        // team's event log (subjects, decisions, attachments, agent ids).
+        super::require_team_auth(&*self.team_store, &args.team_id, &self.actor()).await?;
         // Verify team exists
         let team = self
             .team_store
