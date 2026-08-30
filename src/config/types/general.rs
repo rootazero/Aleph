@@ -28,7 +28,8 @@ pub struct GeneralConfig {
     /// these providers are tried in order. Names must match keys in [providers].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fallback_providers: Vec<String>,
-    /// Session store backend: "sqlite" (default) or "file".
+    /// Session store backend: "file" (the default -- see
+    /// `default_session_store_backend` directly below) or "sqlite".
     #[serde(default = "default_session_store_backend")]
     pub session_store_backend: String,
 }

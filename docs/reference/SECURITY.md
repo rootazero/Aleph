@@ -2986,13 +2986,19 @@ attribution, and a bound workspace as the room's default cwd.
      transcript row was found for the conversation — a confident factual
      claim, and only as honest as `list_sessions` is complete. Both backends
      can under-report, and they do it differently:
-     - **SQLite (the shipped default, `[general] session_store = "sqlite"`)**
+     - **SQLite (opt-in: `[general] session_store_backend = "sqlite"`; the
+       shipped default is `"file"`, see
+       `config::types::general::default_session_store_backend`, dispatched in
+       `bin/aleph-server/commands/start/helpers.rs::initialize_session_store`)**
        — `session_manager::ops::query::list_sessions` collects with
        `rows.filter_map(|r| r.ok())`. A row whose column mapping fails is
        dropped in **complete silence**, so one damaged `sessions` row yields
        `NothingToMove`. **Deliberately not fixed in round-9**: it is
        pre-existing, has other callers, and re-classifying it is its own
-       task. This is the more severe half.
+       task. **More severe in kind** -- it drops the row with no diagnostic at
+       all, where the file backend at least warned on one arm -- but
+       **smaller in blast radius, because it is opt-in**. Round-9 fixed the
+       half a stock install actually runs.
      - **File backend** — the same class, now loud on both arms. An
        unparseable `metadata.json` was already skipped with a named `warn!`;
        an **unreadable** one was skipped in silence six lines above that
