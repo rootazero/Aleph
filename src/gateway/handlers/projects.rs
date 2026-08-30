@@ -12,17 +12,30 @@
 //! has a `workspace_path` — and `bind_workspace` is the verb that moves a row
 //! between the two views in either direction.
 //!
-//! ## The four writers of `workspace_path` — three gated, one exempt
+//! ## The five writers of `workspace_path` — four gated, one exempt
 //!
-//! `add`, `create_blank` and `bind_workspace` are the three that CHOOSE a
-//! directory. Since P2 (Task 7) that column is the default working directory
-//! of every run in the room, so all three go through
+//! `add`, `create_blank` and `bind_workspace` are three of the four that
+//! CHOOSE a directory. Since P2 (Task 7) that column is the default working
+//! directory of every run in the room, so all three go through
 //! [`require_directory_choice`] — the same config-tier predicate the per-turn
-//! `project_root` override uses. Adding a fifth writer without it reopens
+//! `project_root` override uses. Adding a sixth writer without a gate reopens
 //! "register a folder, then chat in it", a two-step path to an arbitrary
 //! server directory with both steps legal.
 //!
-//! The fourth is `execution_engine::run_loop::inner`, which auto-registers a
+//! The fourth chooser is `builtin_tools::project_manage`'s `bind_workspace`
+//! action, which calls `ProjectStore::bind_workspace` DIRECTLY rather than
+//! routing through this module. It is gated, but **by a different predicate,
+//! and that is deliberate**: `require_operator_tier()` reads
+//! `TurnContext::caller_is_operator()`, because the ambient
+//! `caller_may_choose_directory()` is dead inside a run — the task-local is
+//! not re-established across the harness spawn, which is exactly what made
+//! that predicate constant-true on this face until 2026-08-30. `TurnContext`
+//! is per TURN rather than per connection and the gateway has already
+//! resolved the connection's authority into it before any tool executes.
+//! It fires only when a path is NAMED, so RELEASING a binding stays reachable
+//! from a session a bad binding broke.
+//!
+//! The fifth is `execution_engine::run_loop::inner`, which auto-registers a
 //! run's `workspace_override` into the catalogue (via `ProjectStore::add_for`)
 //! so a CLI/programmatic cwd shows up in the desktop picker next time. It is
 //! exempt, and the exemption is an invariant rather than an oversight: **it
@@ -48,6 +61,18 @@
 //! The count is load-bearing: leaving it at three means whoever adds a
 //! genuinely new writer believes they are the fourth when they are the fifth,
 //! and looks for three precedents when there are four.
+//!
+//! **And this paragraph went stale exactly the way it warns about.** It said
+//! "four writers — three gated" from P2 until 2026-08-30, when
+//! `project_manage(bind_workspace)` landed as the fourth chooser and nothing
+//! here changed; SECURITY.md's copy of the count went stale in the same
+//! silence. Nothing catches this — a count of members is prose, and prose has
+//! no compiler. Two consequences worth carrying: the RULE below is the part
+//! that survives, so read it rather than the number; and when you add the
+//! sixth, grep `workspace_path` and `bind_workspace` for every writer rather
+//! than trusting this list, then fix BOTH this doc and SECURITY.md's
+//! «The workspace binding is a privilege» bullet, which names this module as
+//! its authority.
 //!
 //! ## The four verdicts (spec §6.3)
 //!
