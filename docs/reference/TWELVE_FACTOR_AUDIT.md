@@ -1,6 +1,6 @@
 # TWELVE_FACTOR_AUDIT.md — 12-Factor Agents 合规审计
 
-> **用途**：Aleph 对 [12-Factor Agents](https://github.com/humanlayer/12-factor-agents) 的逐 factor 合规审计 + 模块改造建议清单。是宪法 `CLAUDE.md` §《🧭 12-Factor 对照与采纳》的**带证据母本**（宪法放蒸馏版，本文放全量）。
+> **用途**：Aleph 对 [12-Factor Agents](https://github.com/humanlayer/12-factor-agents) 的逐 factor 合规审计 + 模块改造建议清单。是宪法 `CLAUDE.md` §《🧭 12-Factor 采纳》的**母本**——CLAUDE.md 那侧只留一行指针与 A1–A4 的标题，逐 factor 对照表、条款正文与证据全在本文（§D）。
 > **方法**：逐 factor 对照"已对应 R/P + 代码锚点"，给 ✅（已内化/超越）/ ⚠️（实现存在但宪法缺口或有张力）。锚点随重构漂移，发现不符就地更新。
 > **生成**：2026-06-27，依据 `docs/reference/FEATURE_LOCATOR.md` + 源码复核。
 
@@ -99,3 +99,51 @@
 - 采纳条款 A1–A4 是**叠加在 R/P 之上的工程承诺**，**不是新红线**——它们交叉引用既有 R/P，不新增"违反不得合入"效力。
 - **F9 / R10 读法说明（关键，消除误读）**：R10 第 5 不「不做错误恢复策略选择」约束的是**确定性 harness 替模型挑恢复策略 / 多级重试矩阵**；它**不**禁止"把错误压缩并呈递给模型让模型自己决定下一步"。换言之——**让模型看见并自愈错误 = 要（A2 采纳）；让 harness 替模型挑恢复策略 = 不要（R10 仍禁）**。`think.rs` 的 empty/ctx-overflow/max_tokens 有界 drain 是 provider-failure 的幂等恢复，不是策略选择，故合规。
 - A3 的硬约束：任何后续实现**不得**让 `src/harness/` 越过 R10 的 12 文件 / `src/harness/tests/budget.rs` 行数棘轮（当前 5043；旧 ~4900 系测量事故残值，已退休）。
+
+## D. 对照表与采纳条款 A1–A4（条款母本）
+
+> 本节是条款**母本**。根 `CLAUDE.md` 只留一行指针 + 四条采纳条款的标题，
+> 不复制这里的表与正文——两处都写全文就是「同一事实的两份表述」。
+> 条款是**叠加在 R1–R10 / P1–P8 之上的映射层**，不改任何红线、不设新红线（见 §C）。
+
+### D.1 逐 factor 对照表（蒸馏）
+
+| # | Factor | 一句话 | 已对应 | 状态 |
+|---|--------|--------|--------|------|
+| F1 | Natural Language → Tool Calls | 自然语言转结构化工具调用 | R7/R8/P8 | ✅ |
+| F2 | Own your prompts | 自有提示词流水线 | R9 | ✅ |
+| F3 | Own your context window | 显式拥有 context 取舍 | A1 ↔ R9 | ⚠️→A1 |
+| F4 | Tools are structured outputs | 工具=结构化输出，执行解耦 | R8 | ✅ |
+| F5 | Unify execution & business state | 执行/业务状态统一可重建 | A3 ↔ R10 | ⚠️→A3 |
+| F6 | Launch / Pause / Resume | 统一启动/暂停/恢复契约 | A4 ↔ R5/R6 | ⚠️→A4 |
+| F7 | Contact humans with tools | 人在环=工具调用 | R5 | ✅ |
+| F8 | Own your control flow | 自有控制流（笨循环） | R10 | ✅ 典范 |
+| F9 | Compact errors into context | 压缩错误进 context 自愈 | A2 ↔ R10 | ⚠️→A2 |
+| F10 | Small, focused agents | 小而专的 agent | R3 | ✅ |
+| F11 | Trigger from anywhere | 触发无处不在 | R5/R6 | ✅ |
+| F12 | Stateless reducer | 趋向纯 reducer | A3 ↔ R10 | ⚠️→A3 |
+
+> F13（pre-fetch context）已由 assembler 主动召回满足，仅在审计文档备注，不立条款。
+> F7 的"人在环"有两条腿：R5 的非阻塞多端推送 + `ask_user` / `ClarificationManager` 的**阻塞式澄清**（锚点 `src/builtin_tools/ask_user.rs` + `src/clarification/`，默认开启）。
+
+### D.2 采纳条款 (Adoption Clauses) — 工程承诺级，**非红线**
+
+**A1 · 自有 Context Window (F3)**
+> agent 按 **Prompt → Context → Harness → Loop** 四层构建；**Context 层**（历史压缩 / 压缩时机 / 内容类型路由缩减 / FTS5 检索回注 / 记忆三支柱）是一等工程关切，**context 的取舍由我们显式拥有**，不外包给框架默认消息格式。
+> 关联：R9 / P6。锚点：`src/context/`、`src/thinker/`。
+
+**A2 · 错误压缩 ≠ 错误恢复 (F9)**
+> **采纳**：把工具/Provider 错误**压缩并呈递给模型**，让模型下一轮自愈。
+> **仍禁**（= R10 第 5 不）：在 harness 里做**确定性的"错误恢复策略选择 / 多级重试矩阵"**。
+> 边界一句话：**让模型看见并自愈错误 = 要；让 harness 替模型挑恢复策略 = 不要**。
+> 锚点：`src/tool_output/structured/`、`src/tool_output/hygiene.rs`、`src/harness/agent/think.rs`。
+
+**A3 · 状态可重建，趋向纯 Reducer (F5+F12)**
+> **方向性承诺**：执行状态应尽量可从**单一持久源**重建；每轮 Think 趋向"对持久 context 的纯 reduce"。新增有状态机件时，优先让其状态可观测、可重建。
+> **硬约束**：**不得**为此让 `src/harness/` 越过 R10 的 12 文件 / `budget.rs::CEILING` 棘轮，或把业务状态搬进笨循环。
+> 锚点：`src/harness/trait_def.rs::TurnState`、`src/looping/`、`src/goal/`、`src/agents/swarm/tasks/store/`。
+
+**A4 · 统一 Launch / Pause / Resume 契约 (F6)**
+> 取消（`cancellation.rs`）、续跑（`resume_coordinator.rs`）、打断/注入（`steering.rs` 三态 Steer/Interrupt/Queue）、workflow resume 合称**一组生命周期契约**：任何长跑单元（goal / loop / workflow / team task）都应可被一致地启动、暂停、恢复、取消。
+> 由此推出的两条**跨单元规则**见 [FEATURE_LOCATOR 附录 E.0](FEATURE_LOCATOR.md)。逐轮进展见 FEATURE_LOCATOR §4.1 / §4.2。
+> 关联：R5 / R6。统一 API 面（薄 facade，**不进 harness**）列为 backlog。
