@@ -268,6 +268,11 @@ impl SearchRegistry {
     /// Aggregates error messages from all attempted providers.
     pub async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
         let mut errors: Vec<String> = Vec::new();
+        // Providers that answered with zero results. Tracked separately from
+        // `errors` so the end of this function can tell "nobody found it"
+        // (worth reporting as an empty `Ok`) from "nobody was asked at all"
+        // (only errors, or no candidates — still a hard failure).
+        let mut empty: Vec<String> = Vec::new();
 
         // Ordered candidates: default first, then fallbacks, stably
         // reordered so a provider that can carry every dimension this
@@ -284,11 +289,19 @@ impl SearchRegistry {
                 continue;
             }
             match provider.search(query, options).await {
-                Ok(results) => {
+                Ok(results) if !results.is_empty() => {
                     if provider_name != self.default_provider {
                         log::info!("Search succeeded with fallback provider '{provider_name}'");
                     }
                     return Ok(results);
+                }
+                Ok(_) => {
+                    // Answering "nothing" is not a reason to stop asking: a
+                    // fallback list exists precisely because backends
+                    // disagree about what exists. Keep trying the rest of
+                    // the chain (and the SERP fallback below) instead of
+                    // treating an empty answer as the final word.
+                    empty.push(provider_name);
                 }
                 Err(e) => {
                     let kind = classify_search_error(&e);
@@ -302,16 +315,17 @@ impl SearchRegistry {
             }
         }
 
-        // LAST-RESORT BRANCH (Round-2): every configured provider has
-        // failed. If the operator hasn't disabled the WebFetch SERP
+        // LAST-RESORT BRANCH (Round-2): no provider returned a non-empty
+        // result. If the operator hasn't disabled the WebFetch SERP
         // fallback, try scraping no-credential mirrors before giving
-        // up. This is the difference between "search degrades during
-        // rate-limit storms" and "search hard-fails until quota
-        // resets" — see [`WebFetchSerpFallback`] module docs.
+        // up — "every backend came back empty" is at least as often
+        // blocked egress or an expired credential that still answers
+        // 200 as it is a true zero, which is exactly the situation this
+        // fallback exists for. See [`WebFetchSerpFallback`] module docs.
         if let Some(ref fallback) = self.web_fetch_fallback {
             log::info!(
                 target: "search",
-                "all configured providers failed; attempting WebFetch SERP fallback"
+                "no provider returned results; attempting WebFetch SERP fallback"
             );
             match fallback.search(query, options).await {
                 Ok(results) => return Ok(results),
@@ -322,8 +336,19 @@ impl SearchRegistry {
             }
         }
 
-        let summary = format!("All search providers failed: {}", errors.join("; "));
-        Err(AlephError::provider(summary))
+        // Decided once, here, after the fallback has already had its turn:
+        // if at least one backend answered — with nothing, but an answer —
+        // that is a legitimate empty result, not a failure. Reporting
+        // failure for a question that was answered would tell the model to
+        // retry something it already has the answer to. Only a chain where
+        // *nobody* answered (every attempt errored, or there were no
+        // candidates at all) is an `Err`.
+        if empty.is_empty() {
+            let summary = format!("All search providers failed: {}", errors.join("; "));
+            Err(AlephError::provider(summary))
+        } else {
+            Ok(Vec::new())
+        }
     }
 }
 
@@ -843,5 +868,63 @@ mod tests {
             reg.ordered_candidates(&SearchOptions::default()),
             vec!["a", "b"]
         );
+    }
+
+    // ─── Empty results continue the chain (Task 5) ──────────────────────
+
+    /// A backend answering "zero results" is answering, but it is not an answer
+    /// worth ending the chain on: the whole point of a fallback list is that the
+    /// backends disagree about what exists. Before this, a default provider that
+    /// returned an empty list stopped eight others and the SERP fallback from
+    /// ever being asked.
+    #[tokio::test]
+    async fn an_empty_result_set_does_not_end_the_chain() {
+        let mut reg = SearchRegistry::new("empty");
+        reg.add_provider(
+            "empty".into(),
+            Arc::new(MockProvider::new("empty", false, 0)),
+        );
+        reg.add_provider("full".into(), Arc::new(MockProvider::new("full", false, 3)));
+        reg.set_fallback_providers(vec!["full".into()]);
+
+        let out = reg.search("q", &SearchOptions::default()).await.unwrap();
+        assert_eq!(
+            out.len(),
+            3,
+            "the chain must continue past a zero-result answer"
+        );
+    }
+
+    /// All empty is still a legitimate answer — an empty Ok, never an Err.
+    /// Folding "nobody found anything" into an error would make the model retry
+    /// a question that was answered.
+    #[tokio::test]
+    async fn all_backends_empty_returns_an_empty_ok() {
+        let mut reg = SearchRegistry::new("a");
+        reg.add_provider("a".into(), Arc::new(MockProvider::new("a", false, 0)));
+        reg.add_provider("b".into(), Arc::new(MockProvider::new("b", false, 0)));
+        reg.set_fallback_providers(vec!["b".into()]);
+        let out = reg.search("q", &SearchOptions::default()).await.unwrap();
+        assert!(out.is_empty());
+    }
+
+    /// A backend that answered "nothing" answered. Only a chain where *nobody*
+    /// answered is a failure — folding the two together tells the model to retry a
+    /// question that already has an answer.
+    #[tokio::test]
+    async fn an_error_plus_an_empty_answer_is_still_an_answer() {
+        let mut reg = SearchRegistry::new("boom");
+        reg.add_provider("boom".into(), Arc::new(MockProvider::new("boom", true, 0)));
+        reg.add_provider(
+            "quiet".into(),
+            Arc::new(MockProvider::new("quiet", false, 0)),
+        );
+        reg.set_fallback_providers(vec!["quiet".into()]);
+        let out = reg.search("q", &SearchOptions::default()).await;
+        assert!(
+            out.is_ok(),
+            "one backend errored and one answered with zero results; the chain answered"
+        );
+        assert!(out.unwrap().is_empty());
     }
 }
