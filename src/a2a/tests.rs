@@ -748,16 +748,6 @@ impl AgentResolver for MockAgentResolver {
         Ok(())
     }
 
-    async fn register_with_token(
-        &self,
-        _card: crate::a2a::domain::AgentCard,
-        _base_url: &str,
-        _trust_level: TrustLevel,
-        _auth_token: Option<String>,
-    ) -> crate::a2a::port::task_manager::A2AResult<()> {
-        Ok(())
-    }
-
     async fn unregister(&self, _agent_id: &str) -> crate::a2a::port::task_manager::A2AResult<()> {
         Ok(())
     }

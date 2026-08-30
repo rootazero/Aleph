@@ -190,17 +190,6 @@ mod tests {
         ) -> A2AResult<()> {
             Ok(())
         }
-
-        async fn register_with_token(
-            &self,
-            _card: AgentCard,
-            _base_url: &str,
-            _trust_level: TrustLevel,
-            _auth_token: Option<String>,
-        ) -> A2AResult<()> {
-            Ok(())
-        }
-
         async fn unregister(&self, _agent_id: &str) -> A2AResult<()> {
             Ok(())
         }
