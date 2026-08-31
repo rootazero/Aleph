@@ -174,10 +174,17 @@ pub fn tick_prompt(state: &LoopState, tokens_now: u64, now_ms: u64) -> String {
 /// User-facing reason when the iteration cap stops the loop.
 #[must_use]
 pub fn cap_reached_note(state: &LoopState) -> String {
-    format!(
-        "Loop stopped: reached the iteration cap ({} ticks).",
-        state.max_iterations.unwrap_or(0)
-    )
+    match state.max_iterations {
+        Some(max) => format!(
+            "Loop stopped: reached the iteration cap ({max} ticks)."
+        ),
+        // Caller path today always reaches this branch with max_iterations = Some
+        // (see `stop_reason_note`'s invariants). Surface a clearly-labelled
+        // fallback rather than the previous `unwrap_or(0)` which would have
+        // printed "(0 ticks).", a value the operator could mistake for a real
+        // cap.
+        None => "Loop stopped: iteration limit reached (cap unset).".to_string(),
+    }
 }
 
 /// User-facing reason when the wall-clock deadline stops the loop.
