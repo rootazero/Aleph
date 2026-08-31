@@ -348,7 +348,7 @@ codex 的 `REDUCED_STATE_FILE_NAME` + `REDUCED_TRACE_SCHEMA_VERSION`。marker �
 3. `ProjectionReconciler` 换推导 + 两处注释改写
 4. `subagent_tool::recovery` 加 `progress` + G5
 5. `qa/resume_boundary/run.sh` 两阶段；`attribute` 在修复前跑一次记录 FAIL
-6. 全量验证集 + 五条守卫逐条变异证伪，记录红的名单
+6. 全量验证集 + 六条守卫逐条变异证伪，记录红的名单
 7. 更新 `docs/reference/FEATURE_LOCATOR.md`（§4.13a 增补、附录 E.0 触发器）
 
 ---
