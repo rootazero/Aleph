@@ -130,7 +130,7 @@ pub fn reduce_disposition(markers: &[SessionEventRecord]) -> RunDisposition {
 /// an out-of-order slice would silently derive the wrong anchor and the
 /// wrong disposition — no panic, just a false answer. Pass one finds the
 /// anchor and the answered set, pass two attributes the dangling calls and
-/// (Task 2) counts progress.
+/// counts this run's progress.
 #[must_use]
 pub fn reduce_run(events: &[SessionEventRecord]) -> RunReduction {
     use std::collections::HashSet;
@@ -165,38 +165,70 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> RunReduction {
     // that owns the question. G1 (proptest) pins that.
     let disposition = reduce_disposition(&markers);
 
-    // Pass 2: attribute the dangling calls.
+    // Pass 2: attribute the dangling calls and count this run's progress.
+    //
+    // `in_scope` is the progress window: events after the anchor, or the whole
+    // log when there is no anchor. That second case is not a fallback to
+    // something looser — a log with no `RunStarted` holds exactly one run's
+    // worth of events, so the whole log IS the scope.
     let mut dangling = Vec::new();
+    let mut progress = RunProgress::default();
+    let mut answered_in_scope: HashSet<&str> = HashSet::new();
+    let mut dispatched_in_scope: Vec<&str> = Vec::new();
     for record in events {
-        if let SessionEvent::ToolCallRequested {
-            turn_id,
-            call_id,
-            name,
-            ..
-        } = &record.event
-        {
-            if answered.contains(call_id.as_str()) {
-                continue;
+        let in_scope = run_anchor.is_none_or(|anchor| record.seq > anchor);
+        if in_scope {
+            progress.last_activity_at = Some(record.created_at_ms);
+        }
+        match &record.event {
+            SessionEvent::ToolCallRequested {
+                turn_id,
+                call_id,
+                name,
+                ..
+            } => {
+                if in_scope {
+                    progress.tool_calls_dispatched += 1;
+                    dispatched_in_scope.push(call_id.as_str());
+                }
+                if !answered.contains(call_id.as_str()) {
+                    let provenance = match run_anchor {
+                        Some(anchor) if record.seq > anchor => DanglingProvenance::ThisRestart,
+                        _ => DanglingProvenance::EarlierRun,
+                    };
+                    dangling.push(DanglingCall {
+                        call_id: call_id.clone(),
+                        tool_name: name.clone(),
+                        turn_id: *turn_id,
+                        provenance,
+                    });
+                }
             }
-            let provenance = match run_anchor {
-                Some(anchor) if record.seq > anchor => DanglingProvenance::ThisRestart,
-                _ => DanglingProvenance::EarlierRun,
-            };
-            dangling.push(DanglingCall {
-                call_id: call_id.clone(),
-                tool_name: name.clone(),
-                turn_id: *turn_id,
-                provenance,
-            });
+            SessionEvent::ToolResult { call_id, .. } | SessionEvent::ToolError { call_id, .. } => {
+                if in_scope {
+                    answered_in_scope.insert(call_id.as_str());
+                }
+            }
+            SessionEvent::AssistantMessage { .. } if in_scope => {
+                progress.assistant_messages += 1;
+            }
+            _ => {}
         }
     }
+    // Answered counts DISPATCHED calls that got a receipt, not receipt events:
+    // a receipt for a call requested in an earlier run must not push this
+    // number above `dispatched`.
+    progress.tool_calls_answered = dispatched_in_scope
+        .iter()
+        .filter(|id| answered_in_scope.contains(*id))
+        .count();
 
     RunReduction {
         disposition,
         run_anchor,
         run_id,
         dangling,
-        progress: RunProgress::default(),
+        progress,
     }
 }
 
@@ -347,6 +379,58 @@ mod tests {
         assert_eq!(r.disposition, RunDisposition::Clean);
         assert_eq!(r.dangling.len(), 1);
         assert_eq!(r.dangling[0].provenance, DanglingProvenance::EarlierRun);
+    }
+
+    /// G4 — progress is scoped to the CURRENT run. A count that spans several
+    /// runs names a different set.
+    #[test]
+    fn progress_counts_only_the_current_run() {
+        let events = vec![
+            rec(1, started("a")),
+            rec(2, requested("old")),
+            rec(3, result_for("old")),
+            rec(4, assistant("run a said this")),
+            rec(5, started("b")),
+            rec(6, requested("c1")),
+            rec(7, result_for("c1")),
+            rec(8, requested("c2")),
+            rec(9, assistant("run b said this")),
+        ];
+        let p = reduce_run(&events).progress;
+        assert_eq!(p.tool_calls_dispatched, 2, "c1 and c2, not `old`");
+        assert_eq!(p.tool_calls_answered, 1, "only c1 got a receipt");
+        assert_eq!(p.assistant_messages, 1, "run a's message is not run b's");
+        assert_eq!(p.last_activity_at, Some(90), "created_at_ms of seq 9");
+    }
+
+    #[test]
+    fn answered_never_exceeds_dispatched() {
+        // A stray receipt whose request lives in an earlier run must not push
+        // `answered` above `dispatched`.
+        let events = vec![
+            rec(1, started("a")),
+            rec(2, requested("old")),
+            rec(3, started("b")),
+            rec(4, result_for("old")),
+            rec(5, requested("c1")),
+        ];
+        let p = reduce_run(&events).progress;
+        assert_eq!(p.tool_calls_dispatched, 1);
+        assert_eq!(p.tool_calls_answered, 0);
+    }
+
+    #[test]
+    fn progress_covers_the_whole_log_when_there_is_no_run_marker() {
+        let events = vec![
+            rec(1, requested("c1")),
+            rec(2, result_for("c1")),
+            rec(3, assistant("hi")),
+        ];
+        let p = reduce_run(&events).progress;
+        assert_eq!(p.tool_calls_dispatched, 1);
+        assert_eq!(p.tool_calls_answered, 1);
+        assert_eq!(p.assistant_messages, 1);
+        assert_eq!(p.last_activity_at, Some(30));
     }
 
     /// G1 — the anti-drift device. `reduce_run` must ASK
