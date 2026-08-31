@@ -37,12 +37,12 @@ use crate::i18n::{t_string, use_i18n};
 /// Not any backend's name: choosing it selects a form, not a provider. The
 /// `__` prefix keeps it apart from the protocol's backend names, the same
 /// convention generation's `__preset__` uses.
-pub(super) const CUSTOM_ROW_ID: &str = "__custom__";
+const CUSTOM_ROW_ID: &str = "__custom__";
 
 /// Which copy a row's subtitle needs. The page resolves it through i18n; this
 /// module stays pure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Subtitle {
+enum Subtitle {
     NeedsApiKey,
     SelfHosted,
     NoKeyRequired,
@@ -51,7 +51,7 @@ pub(super) enum Subtitle {
 
 /// What the page should do once a row is chosen.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum Chosen {
+enum Chosen {
     /// Select this backend (configured → edit; unconfigured → the setup state
     /// of the same panel).
     Backend(String),
@@ -88,7 +88,7 @@ fn subtitle_kind(preset: &SearchPreset) -> Subtitle {
 /// An empty query returns **every** preset, in the protocol table's own order
 /// — the contract [`PresetPicker`] declares, and the reason opening the
 /// disclosure is still browsing.
-pub(super) fn offerable(
+fn offerable(
     cfg: &SearchConfig,
     query: &str,
     copy: impl Fn(Subtitle) -> String,
@@ -130,7 +130,7 @@ pub(super) fn offerable(
 }
 
 /// What the page should do once `id` is chosen.
-pub(super) fn chosen_target(id: &str) -> Chosen {
+fn chosen_target(id: &str) -> Chosen {
     if id == CUSTOM_ROW_ID {
         Chosen::CustomForm
     } else {

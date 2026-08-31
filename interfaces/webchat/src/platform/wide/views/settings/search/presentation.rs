@@ -12,7 +12,7 @@ use crate::api::SearchBackendEntry;
 /// exist. It used to, and the answer had drifted — `jina` has a provider, a
 /// factory and a line in the config docs, and had no card here, so the only
 /// way to configure it was to hand-edit config.toml.
-pub(super) struct SearchPresentation {
+struct SearchPresentation {
     name: &'static str,
     description: &'static str,
     icon_color: &'static str,
@@ -23,7 +23,7 @@ pub(super) struct SearchPresentation {
     is_self_hosted: bool,
 }
 
-pub(super) const PRESENTATION: &[SearchPresentation] = &[
+const PRESENTATION: &[SearchPresentation] = &[
     SearchPresentation {
         name: "tavily",
         description: "AI-powered search API",
@@ -93,7 +93,7 @@ pub(super) const NEUTRAL_ICON_COLOR: &str = "#6B7280";
 /// Deliberately not a skip: a new backend with no card is a backend nobody
 /// can configure, which is the failure this whole split exists to remove. A
 /// census below asserts the fallback is unused today.
-pub(super) const UNSTYLED: SearchPresentation = SearchPresentation {
+const UNSTYLED: SearchPresentation = SearchPresentation {
     name: "",
     description: "",
     icon_color: NEUTRAL_ICON_COLOR,
@@ -117,7 +117,7 @@ pub(super) struct SearchPreset {
     pub(super) needs_engine_id: bool,
 }
 
-pub(super) fn join(preset: &'static aleph_protocol::search::SearchProviderPreset) -> SearchPreset {
+fn join(preset: &'static aleph_protocol::search::SearchProviderPreset) -> SearchPreset {
     let style = PRESENTATION
         .iter()
         .find(|p| p.name == preset.name)
