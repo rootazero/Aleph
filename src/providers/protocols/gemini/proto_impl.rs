@@ -31,6 +31,13 @@ impl GeminiProtocol {
                 |s| s.to_string(),
             );
 
+        // Defence in depth: reject non-HTTP schemes before reqwest sees the URL.
+        if let Err(e) = crate::providers::protocols::http_client::validate_provider_base_url(
+            &raw_base_url,
+        ) {
+            tracing::error!(error = %e, "Gemini provider base_url failed validation");
+        }
+
         // Normalize URL: strip trailing slashes and /v1 suffix
         // (user may have /v1 from switching between OpenAI/Anthropic protocols)
         let base_url = raw_base_url

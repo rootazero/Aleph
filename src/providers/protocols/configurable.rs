@@ -84,10 +84,31 @@ impl ConfigurableProtocol {
             "Parsing response using custom response mapping"
         );
 
-        let body = response
-            .text()
-            .await
-            .map_err(|e| AlephError::provider(format!("Failed to read response body: {e}")))?;
+        // Custom-mode response body read needs both a time bound and a size bound:
+// the shared error-body reader applies a 15s timeout, but the success path
+// here would otherwise read an arbitrarily large or stalled payload without
+// either. Both caps keep failover prompt and prevent an attacker-controlled
+// provider from stalling the turn.
+        const CUSTOM_BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+        const MAX_CUSTOM_BODY_BYTES: usize = 8 * 1024 * 1024;
+        let body = match tokio::time::timeout(CUSTOM_BODY_TIMEOUT, response.text()).await {
+            Ok(Ok(b)) if b.len() <= MAX_CUSTOM_BODY_BYTES => b,
+            Ok(Ok(b)) => {
+                return Err(AlephError::provider(format!(
+                    "Custom protocol response body exceeded {MAX_CUSTOM_BODY_BYTES} bytes"
+                )));
+            }
+            Ok(Err(e)) => {
+                return Err(AlephError::provider(format!(
+                    "Failed to read response body: {e}"
+                )));
+            }
+            Err(_) => {
+                return Err(AlephError::provider(
+                    "Custom protocol response body read timed out".to_string(),
+                ));
+            }
+        };
 
         let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
             AlephError::provider(format!(
@@ -176,6 +197,16 @@ impl ProtocolAdapter for ConfigurableProtocol {
             let base_url = self.definition.base_url.as_deref().ok_or_else(|| {
                 AlephError::invalid_config("base_url is required for custom protocols")
             })?;
+
+            // Defence in depth: reject non-HTTP schemes before reqwest sees the URL.
+            // Custom protocols come from operator-loaded YAML so the same
+            // file:// / javascript: / etc. smuggling risk as the built-in
+            // adapters applies here.
+            if let Err(e) =
+                crate::providers::protocols::http_client::validate_provider_base_url(base_url)
+            {
+                return Err(AlephError::invalid_config(e.to_string()));
+            }
 
             // Always prefer stream endpoint if available (stream-first architecture)
             let endpoint = custom

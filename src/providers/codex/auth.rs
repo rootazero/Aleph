@@ -114,12 +114,32 @@ struct CallbackParams {
 }
 
 /// Codex authentication state
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CodexAuth {
     pub access_token: String,
     pub refresh_token: Option<String>,
     pub expires_at: SystemTime,
     pub session_id: String,
+}
+
+/// Manual `Debug` so bearer credentials never leak into log output, panic
+/// messages, `tracing` field captures, or test failure dumps. The
+/// `#[derive(Debug)]` previously installed here exposed `access_token` and
+/// `refresh_token` in plaintext — the auth state is reachable from
+/// any error path that formats the provider or session, so the redacting
+/// impl is the only safe shape.
+impl std::fmt::Debug for CodexAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CodexAuth")
+            .field("access_token", &"[REDACTED]")
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("expires_at", &self.expires_at)
+            .field("session_id", &self.session_id)
+            .finish()
+    }
 }
 
 /// Safety margin subtracted from the access-token lifetime so a token is

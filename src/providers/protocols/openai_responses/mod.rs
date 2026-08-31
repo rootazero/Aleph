@@ -116,6 +116,12 @@ impl OpenAiResponsesProtocol {
                     || "https://chatgpt.com".to_string(),
                     |s| s.trim_end_matches('/').to_string(),
                 );
+            // Validate the configured base before splicing in the path.
+            if let Err(e) = crate::providers::protocols::http_client::validate_provider_base_url(
+                &base_url,
+            ) {
+                tracing::error!(error = %e, "OpenAI Responses base_url failed validation");
+            }
             format!("{base_url}{endpoint_path}")
         } else {
             // Standard OpenAI style: strip trailing /v1 to allow normalization
@@ -130,6 +136,12 @@ impl OpenAiResponsesProtocol {
                         trimmed.trim_end_matches("/v1").to_string()
                     },
                 );
+            // Validate the configured base before splicing in the path.
+            if let Err(e) = crate::providers::protocols::http_client::validate_provider_base_url(
+                &base_url,
+            ) {
+                tracing::error!(error = %e, "OpenAI Responses base_url failed validation");
+            }
             format!("{base_url}{endpoint_path}")
         }
     }
@@ -532,6 +544,17 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
                         // Append raw bytes — no UTF-8 conversion here.
                         // Conversion happens per-line when a \n is found.
                         state.line_buf.extend_from_slice(&chunk);
+                        // Bound the buffer: a provider that withholds newlines
+                        // must not let `line_buf` grow without limit. Same
+                        // cap as the shared openai_common SSE parser.
+                        if state.line_buf.len()
+                            > crate::providers::protocols::openai_common::sse::MAX_SSE_LINE_BYTES
+                        {
+                            return Err(AlephError::network(format!(
+                                "OpenAI Responses SSE line buffer exceeded {} bytes without a newline",
+                                crate::providers::protocols::openai_common::sse::MAX_SSE_LINE_BYTES
+                            )));
+                        }
                         // Loop to try parsing again with the new data
                     }
                 }

@@ -45,6 +45,13 @@ impl AnthropicProtocol {
                 |s| s.to_string(),
             );
 
+        // Defence in depth: reject non-HTTP schemes before reqwest sees the URL.
+        if let Err(e) = crate::providers::protocols::http_client::validate_provider_base_url(
+            &raw_base_url,
+        ) {
+            tracing::error!(error = %e, "Anthropic provider base_url failed validation");
+        }
+
         // Normalize URL
         let base_url = raw_base_url
             .trim_end_matches('/')

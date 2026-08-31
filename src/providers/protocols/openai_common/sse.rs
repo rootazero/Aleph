@@ -10,6 +10,13 @@ pub enum SseLine {
     Empty,
 }
 
+/// Maximum bytes the shared SSE line buffer is allowed to accumulate before
+/// a newline is observed. A misbehaving provider that omits newlines (or a
+/// malicious one that withholds them) would otherwise grow this buffer
+/// without bound until the per-turn watchdog fires — too late to fail over
+/// cleanly. 1 MiB is well above any legitimate single SSE event.
+pub(crate) const MAX_SSE_LINE_BYTES: usize = 1024 * 1024;
+
 pub fn parse_sse_line(line: &str) -> Result<Option<SseLine>> {
     let line = line.trim_end();
 
@@ -48,6 +55,18 @@ pub fn sse_event_stream(response: reqwest::Response) -> BoxStream<'static, Resul
             async move {
                 let mut buf_guard = buf.lock().unwrap_or_else(|e| e.into_inner());
                 buf_guard.extend_from_slice(&chunk);
+
+                // Bound the buffer: a provider that withholds newlines (or
+                // hands us a deliberately unbounded payload) must not let
+                // `buf_guard` grow without limit. Surface a typed network
+                // error so the failover walk promotes it to a retry.
+                if buf_guard.len() > MAX_SSE_LINE_BYTES {
+                    return Err(AlephError::network(format!(
+                        "SSE line buffer exceeded {} bytes without a newline; \
+                         provider is sending malformed or hostile stream",
+                        MAX_SSE_LINE_BYTES
+                    )));
+                }
 
                 let mut events = Vec::new();
 

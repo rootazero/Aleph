@@ -36,6 +36,18 @@ impl OpenAiProtocol {
                 |s| s.to_string(),
             );
 
+        // Defence in depth: reject non-HTTP schemes before they reach reqwest.
+        // The value is operator config / a preset, but a typo or tampered
+        // preset must not smuggle `file://`, `javascript:`, etc. into the URL
+        // parser. Host-level filtering (loopback / RFC1918 / cloud metadata)
+        // is intentionally left to the operator's network policy.
+        if let Err(e) = crate::providers::protocols::http_client::validate_provider_base_url(
+            &raw_base_url,
+        ) {
+            tracing::error!(error = %e, "OpenAI provider base_url failed validation");
+            return raw_base_url;
+        }
+
         // Detect API version from the URL (v1 or v3)
         let is_v3_api = raw_base_url.contains("/v3") || raw_base_url.contains("/api/v3");
 

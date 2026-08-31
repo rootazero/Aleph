@@ -56,6 +56,49 @@ pub(crate) async fn read_error_body(response: reqwest::Response) -> String {
     bounded_body_read(response.text(), ERROR_BODY_READ_TIMEOUT).await
 }
 
+/// Validate that a configured `base_url` parses as an `http(s)` URL before
+/// the protocol adapters splice it into a final endpoint.
+///
+/// `base_url` is operator config (`[providers.<name>].base_url`) or a preset
+/// string baked into the binary. Defending in depth here means rejecting
+/// non-HTTP schemes (`file://`, `javascript:`, `gopher://`, etc.) which reqwest
+/// cannot service but which a typo or a tampered preset could otherwise smuggle
+/// into the URL parser. Host-level filtering (loopback, RFC1918, cloud
+/// metadata IPs) is left to the operator's network policy: requiring it here
+/// would break legitimate localhost proxies (`Ollama` on
+/// `http://localhost:11434`) and internal HTTPS-terminating relays with no
+/// benefit beyond what an egress firewall already provides.
+pub(crate) fn validate_provider_base_url(raw: &str) -> Result<reqwest::Url, InvalidBaseUrl> {
+    let parsed = reqwest::Url::parse(raw).map_err(|e| InvalidBaseUrl {
+        url: raw.to_string(),
+        reason: format!("not a parseable URL: {e}"),
+    })?;
+    match parsed.scheme() {
+        "http" | "https" => Ok(parsed),
+        other => Err(InvalidBaseUrl {
+            url: raw.to_string(),
+            reason: format!("unsupported scheme '{other}'; expected http or https"),
+        }),
+    }
+}
+
+/// Error returned by [`validate_provider_base_url`]. Surfaced at provider
+/// construction so a misconfigured preset or `aleph.toml` entry fails fast
+/// with a usable message instead of silently routing to a non-HTTP URL.
+#[derive(Debug)]
+pub(crate) struct InvalidBaseUrl {
+    pub url: String,
+    pub reason: String,
+}
+
+impl std::fmt::Display for InvalidBaseUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid provider base_url '{}': {}", self.url, self.reason)
+    }
+}
+
+impl std::error::Error for InvalidBaseUrl {}
+
 /// Transport-agnostic timeout wrapper, split out so the bound is unit-testable
 /// without a live socket. Mirrors the previous `unwrap_or_default()` on a read
 /// error (empty body); a timeout yields a marker so the surfaced error says the
