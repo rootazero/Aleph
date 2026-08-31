@@ -658,6 +658,11 @@ pub(super) fn ProviderDetailPanel(
                                  move || {
                                     let has_backend = config.get().backends.iter().any(|b| b.name == sel_name_for_row2);
                                     if has_backend {
+                                        // Reuse the name already resolved above rather than
+                                        // re-reading `selected` with a defaulting unwrap: nothing
+                                        // selected must read as "unknown", not as the empty-string
+                                        // row that `deletable("", dp)` answers `true` for.
+                                        let sel_name_for_delete = sel_name_for_row2.clone();
                                         view! {
                                             <div class="flex flex-col gap-2">
                                                 <div class="flex flex-row gap-3">
@@ -678,8 +683,7 @@ pub(super) fn ProviderDetailPanel(
                                                         Some(view! {
                                                             {move || {
                                                                 let cfg = config.get();
-                                                                let name = selected.get().unwrap_or_default();
-                                                                if !deletable(&name, &cfg.default_provider) {
+                                                                if !deletable(&sel_name_for_delete, &cfg.default_provider) {
                                                                     // Say the server's refusal before the click: a
                                                                     // button that only fails after being pressed
                                                                     // does not tell the operator what to do next.
