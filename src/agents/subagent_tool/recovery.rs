@@ -27,7 +27,8 @@
 //!   already reported an id it has never seen. A sensor must not create what it
 //!   measures, and a boot pass over every session's log would cost the whole
 //!   database to serve a case that mostly does not happen. One `get_events` per
-//!   tool call serves every unknown id in that call.
+//!   tool call classifies every unknown id in that call, plus one more per
+//!   interrupted id on the detail face (`resolve_forgotten`'s enrichment loop).
 //!
 //! What this module does **not** do: restart anything. Per R7 the decision to
 //! re-run an interrupted child is the model's — this reports what is known and
