@@ -384,6 +384,15 @@ fn resolve_enrolled_node(store: &SecurityStore, q: &str) -> Option<String> {
 /// back to enrolled-but-offline device records — a node visible in the fleet
 /// view must be removable whether or not it is currently connected (offline
 /// removals report `evicted: false`).
+///
+/// **Contract**: `Ok(DeregisterOutcome{..})` means the *online* session (if
+/// any) was evicted. The `device_removed` field reports whether the
+/// long-lived enrolled-device record was also revoked in the security store.
+/// Revocation failure is logged at `warn!` and surfaces as
+/// `device_removed: false`, but does **not** fail the RPC: callers that need
+/// hard revocation guarantees must check `device_removed` and treat a `false`
+/// value as a partial state (the node's next reconnect could re-mint a
+/// matching device entry because the store still believes it is enrolled).
 pub fn deregister_node(
     registry: &crate::cluster::NodeRegistry,
     store: &SecurityStore,

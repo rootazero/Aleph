@@ -184,12 +184,6 @@ impl ContentIndex {
         text: &str,
     ) -> Result<IndexOutcome, IndexError> {
         let chunks = chunk_lines(text, DEFAULT_CHUNK_LINES);
-        if chunks.is_empty() {
-            return Ok(IndexOutcome {
-                sections: 0,
-                previews: Vec::new(),
-            });
-        }
 
         let mut conn = self.lock();
         let tx = conn.transaction()?;
@@ -203,6 +197,11 @@ impl ContentIndex {
             // fusion and double-counting sections. The replace is session-scoped
             // too — two sessions can legitimately hold the same `source` label
             // (tool names repeat), and one must not evict the other's chunks.
+            //
+            // The DELETE runs even when `chunks` is empty so an empty-text
+            // re-index (e.g. a retry whose body came back blank) clears
+            // stale rows instead of leaving the previous content reachable
+            // via `search()`.
             tx.execute(
                 "DELETE FROM chunks WHERE source = ?1 AND session_id = ?2",
                 params![source, session_id],
@@ -211,6 +210,13 @@ impl ContentIndex {
                 "DELETE FROM chunks_tri WHERE source = ?1 AND session_id = ?2",
                 params![source, session_id],
             )?;
+            if chunks.is_empty() {
+                tx.commit()?;
+                return Ok(IndexOutcome {
+                    sections: 0,
+                    previews: Vec::new(),
+                });
+            }
             let mut stmt = tx.prepare(
                 "INSERT INTO chunks (title, body, source, chunk_no, session_id) \
                  VALUES (?1, ?2, ?3, ?4, ?5)",

@@ -6,9 +6,6 @@
 //!
 //! Example TOML:
 //! ```toml
-//! [secrets_config]
-//! default_provider = "local"
-//!
 //! [secret_providers.local]
 //! type = "local_vault"
 //!
@@ -16,7 +13,20 @@
 //! type = "1password"
 //! account = "my.1password.com"
 //! service_account_token_env = "OP_SERVICE_ACCOUNT_TOKEN"
+//!
+//! [secrets_config.virtual_keys]
+//! "openai" = "OPENAI_API_KEY"
+//!
+//! [[secrets_config.custom_leak_patterns]]
+//! name = "Internal API Token"
+//! pattern = "internal-[a-z0-9]{32}"
 //! ```
+//!
+//! Note: a `default_provider` selector is intentionally NOT exposed at the
+//! `[secrets_config]` level. Provider selection for a given `{{secret:...}}`
+//! reference is decided by the secret-name prefix (e.g. `op://...` routes to
+//! the 1Password provider). A top-level selector without a wired consumer
+//! would be a documented-but-dead key.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

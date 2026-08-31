@@ -66,12 +66,29 @@ pub(crate) fn outcome_from_str(s: &str) -> ApprovalOutcome {
         // this arm catches it. Warn so an operator can see the drift, and
         // classify it as `Unavailable` so it is refused without being recorded
         // as something the user did.
+        //
+        // Rate-limit the warning using the same pattern as B5-02 — a node whose
+        // center drifts (or sends malformed outcomes in a flood) would otherwise
+        // emit one warn! per call, swamping the log. Process-wide counter is
+        // sufficient because a node process holds at most one `ApprovalSlot`.
         other => {
-            tracing::warn!(
-                outcome = %other,
-                "node approval got an outcome string it does not recognize; \
-                 fail-closed to Unavailable (drift, not a refusal)"
-            );
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static DRIFT_COUNTER: AtomicU64 = AtomicU64::new(0);
+            const WARN_EVERY: u64 = 100;
+            let n = DRIFT_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
+            if n == 1 || n.is_multiple_of(WARN_EVERY) {
+                tracing::warn!(
+                    outcome = %other,
+                    count = n,
+                    "node approval got an outcome string it does not recognize; \
+                     fail-closed to Unavailable (drift, not a refusal)"
+                );
+            } else {
+                tracing::debug!(
+                    outcome = %other,
+                    "node approval got an outcome string it does not recognize (drift)"
+                );
+            }
             ApprovalOutcome::Unavailable
         }
     }

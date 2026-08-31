@@ -381,6 +381,21 @@ impl Config {
         // Kept at debug! to avoid spamming warn! every boot — the count is
         // observable via the existing rule-list RPC if a deeper signal is
         // needed.
+        //
+        // Runtime guard: if a future config author sets `is_builtin = true`
+        // on a rule without also wiring the dispatch path in
+        // `tool_metadata`, that rule will silently never fire. Catch it
+        // here instead of letting it rot as a "rule defined but never read"
+        // gap.
+        for rule in &self.rules {
+            debug_assert!(
+                !rule.is_builtin,
+                "rule (regex `{}`) has is_builtin=true but merge_builtin_rules \
+                 is a no-op; builtin rule injection requires wiring the \
+                 dispatch path in tool_metadata — see the doc on this method",
+                rule.regex,
+            );
+        }
         debug!(
             user_rules_count = self.rules.len(),
             "Processing user-defined routing rules (AI-first mode)"
