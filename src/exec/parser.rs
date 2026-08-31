@@ -25,6 +25,11 @@ fn contains_unquoted_subshell(command: &str) -> bool {
     /// Whitespace doesn't update it; quotes reset the relevant context via the
     /// in_single / in_double checks at the `(` arm. Escape consumes the next char
     /// without updating (the backslash itself is the new last_significant).
+    // Most recent non-whitespace, non-quote char in the *current* quoting
+    // context. Whitespace doesn't update it; quotes reset the relevant
+    // context via the in_single / in_double checks at the `(` arm.
+    // Escape consumes the next char without updating (the backslash itself
+    // is the new last_significant).
     let mut last_significant: char = '\0';
 
     for ch in command.chars() {

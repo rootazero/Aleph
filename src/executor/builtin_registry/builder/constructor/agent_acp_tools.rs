@@ -21,7 +21,7 @@ use crate::tool_metadata::{ToolSource, UnifiedTool};
 /// named constant makes the invariant searchable and testable — a future
 /// contributor who flips this to `Some(cwd)` introduces a semantic name,
 /// not just a parameter change.
-const BOOT_PROJECT_DIR: Option<&str> = None;
+const BOOT_PROJECT_DIR: Option<&std::path::Path> = None;
 
 #[allow(clippy::type_complexity)]
 impl BuiltinToolRegistry {
