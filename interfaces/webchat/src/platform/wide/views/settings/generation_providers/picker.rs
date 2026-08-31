@@ -231,6 +231,11 @@ mod tests {
             |q| offerable(&catalog(), &providers, GenerationType::Image, q),
             "stability-ai",
         );
+        assert_eq!(
+            ids(&offerable(&catalog(), &providers, GenerationType::Image, "")),
+            ["openai-dalle", "stability-ai"],
+            "configuring one preset must not drop its siblings from the offer"
+        );
     }
 
     #[test]
@@ -243,6 +248,9 @@ mod tests {
             |q| offerable(&catalog(), &[], GenerationType::Image, q),
             "stability-ai",
         );
+        let narrowed = offerable(&catalog(), &[], GenerationType::Image, "stab");
+        assert_eq!(ids(&narrowed), ["stability-ai"]);
+        assert!(!narrowed[0].configured);
     }
 
     #[test]
