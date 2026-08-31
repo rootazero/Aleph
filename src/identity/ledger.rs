@@ -40,15 +40,13 @@
 //! failure (mint → declare → activate; declare → mark), and the caller awaits
 //! the outcome instead of assuming it.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use tokio::sync::{mpsc, oneshot};
 
 use super::keystore::{AgentIdentityRow, AgentKeystore, KeyError};
 use super::record::{LedgerRecord, NewRecord};
 use super::verify::{verify_chain, ChainReport};
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AtomicU64, Ordering};
 
 /// Buffered appends before producers start waiting. Sized like the audit
 /// channel; the writer's per-record work is a signature plus one insert.
