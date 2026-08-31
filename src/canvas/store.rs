@@ -771,6 +771,54 @@ mod tests {
         drop(dir);
     }
 
+    /// The post-state cap check is taken from a simulated id set, not a
+    /// fold that re-checks the ORIGINAL doc for every op. A doc sitting
+    /// at `MAX_SHAPES - 1` plus a batch `[UpsertShape s_new, UpsertShape
+    /// s_new]` lands as `MAX_SHAPES` — both ops target the same new id, so
+    /// the post-state set has exactly one new entry. The old shape counted
+    /// the duplicate as two additions and rejected the batch.
+    #[tokio::test]
+    async fn duplicate_upserts_in_one_batch_count_as_one_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CanvasStore::new(dir.path().to_path_buf());
+        let doc = store.create(None, None, None).await.unwrap();
+
+        // Seed the doc at exactly MAX_SHAPES - 1.
+        let almost_full = CanvasDoc {
+            shapes: (0..MAX_SHAPES - 1)
+                .map(|i| note(&format!("s{i}"), "x"))
+                .collect(),
+            ..doc.clone()
+        };
+        std::fs::write(
+            dir.path().join(&doc.id).join("doc.json"),
+            serde_json::to_string(&almost_full).unwrap(),
+        )
+        .unwrap();
+
+        let r = store
+            .apply(
+                &doc.id,
+                doc.revision,
+                vec![upsert_note("s_new"), upsert_note("s_new")],
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(r, doc.revision + 1);
+        let after = store.get(&doc.id).await.unwrap();
+        assert_eq!(
+            after.shapes.len(),
+            MAX_SHAPES,
+            "duplicate upsert counts as one shape, not two"
+        );
+        assert!(
+            after.shapes.iter().any(|s| s.id() == "s_new"),
+            "the new id landed exactly once"
+        );
+        drop(dir);
+    }
+
     #[tokio::test]
     async fn create_persists_owner_and_project_scope() {
         let dir = tempfile::tempdir().unwrap();
