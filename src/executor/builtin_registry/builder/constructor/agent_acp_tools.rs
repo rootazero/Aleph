@@ -13,6 +13,16 @@ use tracing::{info, warn};
 use super::{BuiltinToolConfig, BuiltinToolRegistry};
 use crate::tool_metadata::{ToolSource, UnifiedTool};
 
+/// `project_dir` argument for the boot-time `register_from_dirs` call below.
+///
+/// MUST stay `None`: passing `Some(cwd)` re-opens the B1-03 regression
+/// (project agents loaded into the process-global registry instead of being
+/// scoped per-run via `lookup_with_overlay`). Extracting the literal into a
+/// named constant makes the invariant searchable and testable — a future
+/// contributor who flips this to `Some(cwd)` introduces a semantic name,
+/// not just a parameter change.
+const BOOT_PROJECT_DIR: Option<&str> = None;
+
 #[allow(clippy::type_complexity)]
 impl BuiltinToolRegistry {
     /// Build agent-management, ACP, and A2A tools and register their schemas.
@@ -49,7 +59,7 @@ impl BuiltinToolRegistry {
                 // B1-03: pass `None` for project_dir at boot. Project agents
                 // are scoped per-run via lookup_with_overlay, not loaded into
                 // the process-global registry.
-                if let Err(e) = reg.register_from_dirs(&home, None) {
+                if let Err(e) = reg.register_from_dirs(&home, BOOT_PROJECT_DIR) {
                     warn!(error = %e, "agent catalog: failed to load user agent defs; degrades to builtins-only");
                 }
             }
