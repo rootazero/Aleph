@@ -53,11 +53,31 @@ impl MediaPipeline {
             })?;
         }
 
-        // 1. Policy check (file size if path)
+        // 1. Policy check (file size if path).
+        //
+        // SECURITY: `cache.rs::safe_fetch` enforces the size cap only on URL
+        // inputs, so this is the ONLY size gate for `MediaInput::FilePath`.
+        // The previous impl silently swallowed I/O errors (`unwrap_or(false)`
+        // and `if let Ok(...)`), so a metadata failure (permission, sandbox
+        // quirk, or TOCTOU) bypassed policy entirely and the provider opened
+        // the file unrestricted — a DoS / OOM vector. Propagate errors: if
+        // we cannot prove the file is small enough, refuse it.
         if let MediaInput::FilePath { path } = input {
-            if tokio::fs::try_exists(path).await.unwrap_or(false) {
-                if let Ok(metadata) = tokio::fs::metadata(path).await {
+            match tokio::fs::metadata(path).await {
+                Ok(metadata) => {
                     self.policy.check_size(media_type, metadata.len())?;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    // File missing — let the provider surface the not-found.
+                }
+                Err(e) => {
+                    return Err(MediaError::ProviderError {
+                        media_type,
+                        provider: "policy".to_string(),
+                        source: anyhow::anyhow!(
+                            "cannot stat FilePath {path:?} for size policy: {e}"
+                        ),
+                    });
                 }
             }
         }

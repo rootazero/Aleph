@@ -489,7 +489,14 @@ pub(crate) fn register_memory_extension_if_declared(
 ) {
     if manifest.memory_manifest.is_some() {
         let ext = McpMemoryExtension::new_unbound(manifest.name.clone(), server_id);
-        registry.register_mcp(Arc::new(ext));
+        if let Err(e) = registry.register_mcp(Arc::new(ext)) {
+            warn!(
+                plugin = %manifest.name,
+                error = %e,
+                "failed to register McpMemoryExtension (duplicate or invalid plugin name)"
+            );
+            return;
+        }
         info!(
             plugin = %manifest.name,
             "registered McpMemoryExtension (unbound) for plugin with [memory] section"

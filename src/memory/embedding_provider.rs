@@ -2,9 +2,10 @@
 //!
 //! All embeddings go through remote OpenAI-compatible APIs.
 
-use crate::config::types::memory::EmbeddingProviderConfig;
+use crate::config::types::memory::{EmbeddingPreset, EmbeddingProviderConfig};
 use crate::error::AlephError;
 use crate::sync_primitives::Arc;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
 /// Abstract embedding provider
@@ -26,7 +27,94 @@ pub trait EmbeddingProvider: Send + Sync {
     fn provider_id(&self) -> &str;
 }
 
-/// Truncate embedding to target dimension and L2 normalize.
+/// Validate `api_base` against SSRF and cleartext-HTTPS policy before any
+/// outbound traffic is constructed.
+///
+/// Rules:
+/// - `EmbeddingPreset::Ollama` is the only preset that allows `http://` and
+///   loopback addresses. The model runs on the operator's machine.
+/// - Every other preset (OpenAI / SiliconFlow / Jina / Mistral / Custom) must
+///   use `https://`. Bearer credentials and embedding bodies transit in
+///   cleartext otherwise.
+/// - IP literals, RFC1918 ranges, link-local (169.254/16, fe80::/10), and
+///   loopback non-`localhost` names are rejected for every preset. Without
+///   this guard, a corrupted config row can repoint the client at e.g.
+///   `http://169.254.169.254/` and exfiltrate the `Authorization` header.
+fn validate_api_base(api_base: &str, preset: &EmbeddingPreset) -> Result<(), AlephError> {
+    let parsed = url::Url::parse(api_base).map_err(|e| {
+        AlephError::config(format!(
+            "Embedding api_base {api_base:?} is not a valid URL: {e}"
+        ))
+    })?;
+
+    let scheme = parsed.scheme();
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| AlephError::config(format!("Embedding api_base {api_base:?} has no host")))?;
+
+    let is_loopback_name = host.eq_ignore_ascii_case("localhost")
+        || host.eq_ignore_ascii_case("ip6-localhost")
+        || host.eq_ignore_ascii_case("ip6-loopback");
+
+    let is_private_ip = match parsed.host() {
+        Some(url::Host::Ipv4(addr)) => is_private_v4(addr),
+        Some(url::Host::Ipv6(addr)) => is_private_v6(&addr),
+        Some(url::Host::Domain(_)) => false,
+        None => true,
+    };
+
+    match preset {
+        EmbeddingPreset::Ollama => {
+            // Ollama: allow http only against loopback; require https otherwise.
+            if scheme == "http" && !(is_loopback_name || matches!(parsed.host(), Some(url::Host::Ipv4(a)) if a.is_loopback())) {
+                return Err(AlephError::config(format!(
+                    "Embedding Ollama preset requires api_base to be https:// or http://localhost; got {api_base:?}"
+                )));
+            }
+            if scheme != "http" && scheme != "https" {
+                return Err(AlephError::config(format!(
+                    "Embedding api_base scheme must be http or https; got {scheme:?}"
+                )));
+            }
+        }
+        _ => {
+            if scheme != "https" {
+                return Err(AlephError::config(format!(
+                    "Embedding preset {preset} requires https:// api_base; got {scheme:?}"
+                )));
+            }
+            if is_loopback_name || is_private_ip {
+                return Err(AlephError::config(format!(
+                    "Embedding preset {preset} api_base {api_base:?} targets a loopback or private address"
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn is_private_v4(addr: Ipv4Addr) -> bool {
+    addr.is_loopback()
+        || addr.is_link_local()
+        || addr.is_private()
+        || addr.is_unspecified()
+        || addr.is_multicast()
+        // 169.254.0.0/16 (link-local) is covered by `is_link_local()`; cloud
+        // metadata 169.254.169.254 is therefore already rejected.
+        // Carrier-grade NAT 100.64.0.0/10
+        || matches!(addr.octets(), [100, b, _, _] if (64..=127).contains(&b))
+}
+
+fn is_private_v6(addr: &Ipv6Addr) -> bool {
+    addr.is_loopback()
+        || addr.is_unspecified()
+        || addr.is_multicast()
+        // Unique-local fc00::/7
+        || (addr.segments()[0] & 0xfe00) == 0xfc00
+        // fe80::/10 link-local
+        || (addr.segments()[0] & 0xffc0) == 0xfe80
+}
 ///
 /// Used when a remote model returns vectors larger than the configured
 /// storage dimension. Borrowed from `OpenViking`'s design.
@@ -74,6 +162,8 @@ impl RemoteEmbeddingProvider {
         // API key is populated from vault at runtime
         // rust-doctor-disable-next-line excessive-clone
         let api_key = config.api_key.clone().unwrap_or_default();
+
+        validate_api_base(&config.api_base, &config.preset)?;
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_millis(config.timeout_ms))

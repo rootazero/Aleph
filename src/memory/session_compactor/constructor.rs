@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::{SessionCompactor, SessionCompactorConfig};
 use crate::memory::store::MemoryBackend;
 use crate::providers::AiProvider;
@@ -14,6 +16,7 @@ impl SessionCompactor {
             raw_memory_writer: None,
             capture_registry: None,
             project_scoped: false,
+            compress_locks: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
 

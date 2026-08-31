@@ -434,6 +434,26 @@ impl DreamStage for FeedbackDistillStage {
     }
 }
 
+/// Fence tag constants for `<correction_candidate>` blocks.
+///
+/// Must stay in lockstep with the docstring of [`build_feedback_distill_prompt`]
+/// (which references both tags by name) and with the regression test at
+/// `injection_in_correction_stays_within_fence`.
+const FENCE_OPEN: &str = "<correction_candidate>";
+const FENCE_CLOSE: &str = "</correction_candidate>";
+
+/// Neutralise fence tags inside user-supplied correction content.
+///
+/// "Half a fence is worse than no fence" (§2): a correction body that itself
+/// contains `</correction_candidate>` would close the data region early and
+/// have whatever followed read as instructions. The tags are structure; the
+/// body is content, and content never gets to emit structure. Mirrors the
+/// `fence_safe` helper in `tool_failure_distill`.
+fn fence_safe(body: &str) -> String {
+    body.replace(FENCE_CLOSE, "[/fence]")
+        .replace(FENCE_OPEN, "[fence]")
+}
+
 /// Build the LLM prompt for `FeedbackDistill` with code-injected candidates and
 /// an injection-resistant fence around each user-supplied correction.
 #[must_use]
@@ -465,11 +485,11 @@ pub fn build_feedback_distill_prompt(
             _ => ("low".into(), None),
         };
         corrections_block.push_str(&format!(
-            "fact_id: {}\nseverity_hint: {}\nsuggested_rule: {}\n<correction_candidate>\n{}\n</correction_candidate>\n\n",
+            "fact_id: {}\nseverity_hint: {}\nsuggested_rule: {}\n{FENCE_OPEN}\n{}\n{FENCE_CLOSE}\n\n",
             c.id,
             severity,
             suggested_rule.unwrap_or_else(|| "(none)".into()),
-            c.content,
+            fence_safe(&c.content),
         ));
     }
 

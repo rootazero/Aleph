@@ -9,7 +9,7 @@ use crate::error::AlephError;
 use crate::memory::notes::canonicalize_category;
 use crate::memory::notes::indexer::{NoteIndexer, CATEGORY_DIRS};
 use crate::memory::notes::ingest::plan::{ApplyReport, PageOp};
-use crate::memory::notes::note::{sanitize_title, KnowledgeNote, Relation};
+use crate::memory::notes::note::{sanitize_title, sanitize_wikilink_target, KnowledgeNote, Relation};
 use crate::memory::notes::store::NoteStore;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -295,7 +295,16 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                     content_hash: String::new(),
                     ..Default::default()
                 };
-                let summary_trimmed: String = summary.chars().take(120).collect();
+                let summary_trimmed: String = if summary.chars().count() > 120 {
+                    // Visible marker so downstream retrieval and human readers
+                    // can distinguish "summary was short" from "summary was
+                    // clipped" — the previous silent take(120) produced
+                    // truncated text that looked authoritative.
+                    let cut: String = summary.chars().take(120).collect();
+                    format!("{cut}\u{2026} [truncated]")
+                } else {
+                    summary.to_string()
+                };
                 if !summary_trimmed.is_empty() {
                     note.facts.insert(
                         0,
@@ -609,6 +618,18 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
             Err(_) => return Ok(false),
         };
         let safe = sanitize_title(&filename)?;
+        // SECURITY: `link_target` is LLM-supplied. The previous code passed it
+        // verbatim into `indexer.append_to_note`, which formats it as `[[…]]`
+        // in the body. A planner emitting `links: ["../../etc/passwd"]` or
+        // text containing `]` / `|` produced malformed or hostile markdown
+        // that flows back through retrieval to the LLM prompt. Sanitize the
+        // link as a filename first (rejects path traversal), then strip the
+        // markdown-significant chars so the resulting `[[…]]` cannot be
+        // escaped-out.
+        let safe_target = match sanitize_title(link_target) {
+            Ok(s) => sanitize_wikilink_target(&s),
+            Err(_) => return Ok(false),
+        };
         let disk = self
             .memory_dir
             .join(self.agent_id)
@@ -623,7 +644,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                     self.agent_id,
                     note_path,
                     &Vec::<String>::new(),
-                    &[link_target.to_string()],
+                    &[safe_target],
                 )
                 .await?;
             Ok(true)

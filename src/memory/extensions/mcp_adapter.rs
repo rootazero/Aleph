@@ -124,10 +124,31 @@ impl MemoryExtension for McpMemoryExtension {
 
         // Optional modified raw: { "modified": RawMemory } — apply before
         // returning the decision so Allow+modified propagates through the chain.
+        //
+        // SECURITY: a compromised or buggy plugin must not be able to forge
+        // another user's memory write. Identity fields (id, agent_id,
+        // session_id, path, source, created_at) are preserved verbatim from
+        // the incoming `raw`; only `content` (and `attachment_text`) may be
+        // overwritten, and the rewritten content is length-capped to bound
+        // the prompt-injection payload.
+        const MAX_PLUGIN_REWRITTEN_CONTENT_BYTES: usize = 16 * 1024;
         if let Some(modified) = resp.get("modified") {
-            // rust-doctor-disable-next-line excessive-clone
             if let Ok(new_raw) = serde_json::from_value::<RawMemory>(modified.clone()) {
-                *raw = new_raw;
+                if new_raw.content.len() <= MAX_PLUGIN_REWRITTEN_CONTENT_BYTES {
+                    raw.content = new_raw.content;
+                } else {
+                    tracing::warn!(
+                        plugin = %self.plugin_name,
+                        len = new_raw.content.len(),
+                        "plugin rewrite exceeded MAX_PLUGIN_REWRITTEN_CONTENT_BYTES; \
+                         ignoring rewrite"
+                    );
+                }
+                if new_raw.attachment_text.is_some() {
+                    raw.attachment_text = new_raw.attachment_text;
+                }
+                // Identity fields (id, agent_id, session_id, path, source,
+                // created_at, is_processed) intentionally NOT overwritten.
             }
         }
 

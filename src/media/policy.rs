@@ -135,13 +135,17 @@ impl MediaPolicy {
                 }
             }
             MediaType::Unknown => {
-                // Apply a conservative default limit for unknown media types
-                // to prevent unbounded file processing
-                const DEFAULT_MAX_BYTES: u64 = 100 * 1024 * 1024; // 100 MB
-                if file_size_bytes > DEFAULT_MAX_BYTES {
+                // SECURITY (P1): previously this branch hard-coded a 100 MB
+                // ceiling regardless of operator config, and the ceiling was
+                // HIGHER than the image (20 MB) / document (50 MB) caps. A
+                // caller could declare `media_type: MediaType::Unknown` to
+                // claim a higher quota. Read the operator-configured ceiling
+                // instead.
+                if file_size_bytes > self.max_unknown_bytes {
                     return Err(MediaError::SizeLimitExceeded {
                         message: format!(
-                            "Unknown media type size {file_size_bytes} bytes exceeds default limit of {DEFAULT_MAX_BYTES} bytes"
+                            "Unknown media type size {file_size_bytes} bytes exceeds configured limit of {} bytes",
+                            self.max_unknown_bytes
                         ),
                     });
                 }
