@@ -1485,10 +1485,17 @@ async fn handle_connection(
                                                                 req.params.as_ref(),
                                                                 &rpc_channel_for_node,
                                                             ) {
-                                                                let _ = ctx.event_bus.publish_json(&TopicEvent::new(
+                                                                if let Err(e) = ctx.event_bus.publish_json(&TopicEvent::new(
                                                                     "node.connected",
                                                                     serde_json::json!({"node_id": node_id, "name": &claim.device_name, "conn_id": &conn_id}),
-                                                                ));
+                                                                )) {
+                                                                tracing::warn!(
+                                                                    error = %e,
+                                                                    node_id = %node_id,
+                                                                    conn_id = %conn_id,
+                                                                    "failed to publish node.connected event"
+                                                                );
+                                                            }
                                                                 // Stamp last_seen so the offline half of
                                                                 // environments.list stays honest.
                                                                 if let Some(store) = ctx.security_store.as_ref() {
@@ -1608,7 +1615,13 @@ async fn handle_connection(
                                                             drop(conns);
                                                             ctx.presence.upsert(conn_id.clone(), presence_entry);
                                                             ctx.state_versions.bump_presence();
-                                                            let _ = ctx.event_bus.publish_json(&TopicEvent::new("presence.joined", serde_json::json!({"conn_id": &conn_id})).with_state_version(ctx.state_versions.snapshot()));
+                                                            if let Err(e) = ctx.event_bus.publish_json(&TopicEvent::new("presence.joined", serde_json::json!({"conn_id": &conn_id})).with_state_version(ctx.state_versions.snapshot())) {
+                                                                tracing::warn!(
+                                                                    error = %e,
+                                                                    conn_id = %conn_id,
+                                                                    "failed to publish presence.joined event"
+                                                                );
+                                                            }
                                                         }
                                                     }
 
@@ -2015,20 +2028,33 @@ async fn handle_connection(
                     );
                 }
             }
-            let _ = ctx.event_bus.publish_json(&TopicEvent::new(
+            if let Err(e) = ctx.event_bus.publish_json(&TopicEvent::new(
                 "node.disconnected",
                 serde_json::json!({"node_id": node_id, "name": name, "conn_id": &conn_id}),
-            ));
+            )) {
+                tracing::warn!(
+                    error = %e,
+                    node_id = %node_id,
+                    conn_id = %conn_id,
+                    "failed to publish node.disconnected event"
+                );
+            }
         }
     }
 
     // Remove presence and emit departure event
     if let Some(_entry) = ctx.presence.remove(&conn_id) {
         ctx.state_versions.bump_presence();
-        let _ = ctx.event_bus.publish_json(
+        if let Err(e) = ctx.event_bus.publish_json(
             &TopicEvent::new("presence.left", serde_json::json!({"conn_id": &conn_id}))
                 .with_state_version(ctx.state_versions.snapshot()),
-        );
+        ) {
+            tracing::warn!(
+                error = %e,
+                conn_id = %conn_id,
+                "failed to publish presence.left event"
+            );
+        }
     }
 
     // Remove subscriptions for this connection

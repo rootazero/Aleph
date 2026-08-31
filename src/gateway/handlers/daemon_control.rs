@@ -68,6 +68,27 @@ const fn default_lines() -> usize {
     50
 }
 
+/// Hard cap on the number of log lines returned per request. Without this an
+/// admin-tier caller can request `lines = usize::MAX` and the server will
+/// happily encode and ship the entire log history over the WS frame, which
+/// is a trivial OOM / RST vector. The cap mirrors the values that have to be
+/// sane regardless of `params.lines`.
+const MAX_LOG_LINES: usize = 10_000;
+
+/// Hard cap on the per-line byte length returned to the client. A single
+/// multi-MB stack-trace line would otherwise blow out the JSON-RPC frame
+/// size and force a fragmented response — truncate at the byte boundary so
+/// the operator still sees the leading context but the wire format stays
+/// bounded.
+const MAX_LOG_LINE_BYTES: usize = 4 * 1024;
+
+/// Hard cap on the number of bytes read off disk for `daemon.logs`. Without
+/// this `tokio::fs::read_to_string` will happily load a multi-GB file into
+/// heap; cap at the largest size we are willing to read in a single request
+/// (4 MiB) and reject anything larger with a clear error. The operator can
+/// request a smaller window via `lines` and a level-scoped filter.
+const MAX_LOG_FILE_BYTES: u64 = 4 * 1024 * 1024;
+
 /// Handle daemon.logs — return recent log lines
 pub async fn handle_logs(request: JsonRpcRequest) -> JsonRpcResponse {
     let params: LogsParams = request
@@ -79,44 +100,81 @@ pub async fn handle_logs(request: JsonRpcRequest) -> JsonRpcResponse {
             level: None,
         });
 
+    // Cap `lines` BEFORE any I/O so the bound is enforced even when the
+    // caller supplies the maximum `usize` value.
+    let requested_lines = params.lines.min(MAX_LOG_LINES);
+
     let log_dir = log_directory();
     let log_file = find_latest_log(&log_dir);
 
     match log_file {
-        Some(path) => match tokio::fs::read_to_string(&path).await {
-            Ok(content) => {
-                let mut lines: Vec<&str> = content.lines().collect();
-
-                // Filter by level if specified
-                if let Some(ref level) = params.level {
-                    let level_upper = level.to_uppercase();
-                    // Match level as a standalone word to avoid partial matches
-                    // (e.g., "ERROR" shouldn't match "WARN" or "INFO").
-                    lines.retain(|line| {
-                        line.contains(&format!(" {level_upper} "))
-                            || line.contains(&format!("[{level_upper}]"))
-                            || line.ends_with(&format!(" {level_upper}"))
-                    });
+        Some(path) => {
+            // Reject log files above the byte cap up front. `metadata()` is
+            // a cheap stat call that avoids pulling the whole file into
+            // memory before we decide to read it.
+            match tokio::fs::metadata(&path).await {
+                Ok(md) if md.len() > MAX_LOG_FILE_BYTES => {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INTERNAL_ERROR,
+                        format!(
+                            "log file too large to serve ({} bytes > {} cap); \
+                             pass a smaller `lines` or filter by `level`",
+                            md.len(),
+                            MAX_LOG_FILE_BYTES
+                        ),
+                    );
                 }
-
-                // Take last N lines
-                let start = lines.len().saturating_sub(params.lines);
-                let result: Vec<String> = lines[start..].iter().map(|s| s.to_string()).collect();
-
-                JsonRpcResponse::success(
-                    request.id,
-                    json!({
-                        "logs": result,
-                        "file": path.display().to_string(),
-                    }),
-                )
+                Ok(_) => {}
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INTERNAL_ERROR,
+                        format!("Failed to stat log file: {e}"),
+                    );
+                }
             }
-            Err(e) => JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to read log file: {e}"),
-            ),
-        },
+
+            match tokio::fs::read_to_string(&path).await {
+                Ok(content) => {
+                    let mut lines: Vec<&str> = content.lines().collect();
+
+                    // Filter by level if specified
+                    if let Some(ref level) = params.level {
+                        let level_upper = level.to_uppercase();
+                        // Match level as a standalone word to avoid partial matches
+                        // (e.g., "ERROR" shouldn't match "WARN" or "INFO").
+                        lines.retain(|line| {
+                            line.contains(&format!(" {level_upper} "))
+                                || line.contains(&format!("[{level_upper}]"))
+                                || line.ends_with(&format!(" {level_upper}"))
+                        });
+                    }
+
+                    // Take last N lines (bounded by `requested_lines`)
+                    let start = lines.len().saturating_sub(requested_lines);
+                    let result: Vec<String> = lines[start..]
+                        .iter()
+                        .map(|s| truncate_line_bytes(s, MAX_LOG_LINE_BYTES))
+                        .collect();
+
+                    JsonRpcResponse::success(
+                        request.id,
+                        json!({
+                            "logs": result,
+                            "file": path.display().to_string(),
+                            "truncated_per_line_bytes": MAX_LOG_LINE_BYTES,
+                            "max_lines": MAX_LOG_LINES,
+                        }),
+                    )
+                }
+                Err(e) => JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to read log file: {e}"),
+                ),
+            }
+        }
         None => JsonRpcResponse::success(
             request.id,
             json!({
@@ -126,6 +184,22 @@ pub async fn handle_logs(request: JsonRpcRequest) -> JsonRpcResponse {
             }),
         ),
     }
+}
+
+/// Truncate `s` to at most `max_bytes` bytes, respecting the nearest valid
+/// UTF-8 boundary so the JSON encoder never emits a partial codepoint.
+fn truncate_line_bytes(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut out = String::with_capacity(end + 1);
+    out.push_str(&s[..end]);
+    out.push('…');
+    out
 }
 
 /// Get the log directory path.
@@ -198,5 +272,21 @@ mod tests {
 
         // Cleanup
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn truncate_line_bytes_respects_utf8_boundaries() {
+        // 4-byte emoji at the cap boundary: must not split a codepoint.
+        let s = format!("{}🚀 tail", "x".repeat(MAX_LOG_LINE_BYTES - 2));
+        let truncated = truncate_line_bytes(&s, MAX_LOG_LINE_BYTES);
+        assert!(truncated.ends_with('…'));
+        // The string after truncation must round-trip through valid UTF-8.
+        let _ = std::str::from_utf8(truncated.as_bytes()).unwrap();
+    }
+
+    #[test]
+    fn truncate_line_bytes_short_passes_through() {
+        let s = "short line";
+        assert_eq!(truncate_line_bytes(s, 64), s);
     }
 }

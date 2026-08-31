@@ -49,6 +49,31 @@ pub(crate) fn remember<V>(
     }
 }
 
+/// Drop a single key from the insertion-order cache, keeping `order` and
+/// `map` consistent so a future `remember` of the same key starts a fresh
+/// insertion slot rather than double-booking the eviction queue. Idempotent:
+/// forgetting an absent key is a no-op.
+///
+/// Used by `gateway::event_visibility::{forget_session, forget_team}` to
+/// invalidate cached ownership / scope pairs after the source row mutates
+/// — without it the cache keeps serving pre-mutation data until FIFO
+/// eviction, which is exactly the bug the forget arm closes.
+pub(crate) fn forget<V>(
+    order: &mut VecDeque<String>,
+    map: &mut HashMap<String, V>,
+    key: &str,
+) {
+    if map.remove(key).is_some() {
+        // The same key may have been re-inserted multiple times while live
+        // (`remember` deduplicates), so only ONE slot in the queue belongs
+        // to it. Remove the first match and leave any later duplicates
+        // alone — they are unreachable from `map.remove` and harmless.
+        if let Some(pos) = order.iter().position(|k| k == key) {
+            order.remove(pos);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
