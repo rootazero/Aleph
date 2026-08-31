@@ -210,13 +210,23 @@ impl Drop for RetireOnAbandon {
         }
         // `Drop` cannot await. Off-loading to the runtime is the same
         // best-effort posture as publishing with no bus wired: outside a
-        // runtime there is no client holding a card either.
+        // runtime there is no client holding a card either. We still log so
+        // a stray orphan is visible — silent loss is what makes the next
+        // `register`'s sweep look surprising.
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            tracing::debug!(
+                session = %self.session_key,
+                "ask: orphan cleanup skipped — no current tokio runtime; entry will be reaped by the next register sweep"
+            );
             return;
         };
         let manager = Arc::clone(&self.manager);
         let session_key = std::mem::take(&mut self.session_key);
-        handle.spawn(async move {
+        // `Handle::spawn` returns a `JoinHandle`, not a `Result`; on a runtime
+        // that is shutting down the spawn still produces a handle and the
+        // future fails with `JoinError` on the receive side. Drop the handle —
+        // the next `register`'s sweep is the backstop for the rare aborted case.
+        let _join = handle.spawn(async move {
             manager.cancel_abandoned(&session_key).await;
         });
     }

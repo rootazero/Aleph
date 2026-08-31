@@ -314,20 +314,32 @@ impl CanvasStore {
                 }
             }
         }
-        // Drop the per-canvas lock BEFORE the directory removal — a
-        // canvas with many assets can take a noticeable amount of
-        // wall time to `remove_dir_all`, and holding the per-canvas
-        // mutex across that syscall blocks every other operation
-        // on the same canvas. The guard's only purpose at this
-        // point was to gate racing applies; once we've decided to
-        // delete, racing applies are harmless (they'll find the
-        // directory gone and the guard's `existing_mut()` returns
-        // `None`, so they bail with NotFound).
+        // KEEP the per-canvas lock through `remove_dir_all`. The previous
+        // shape dropped the guard first to avoid blocking other ops on the
+        // same canvas during a many-asset removal, but `remove_dir_all` is
+        // an awaited syscall — dropping the guard before awaiting lets a
+        // racing `apply` acquire the lock, read the (still-present) doc,
+        // and `commit` (which calls `create_dir_all` + `atomic_write_file`).
+        // If the commit lands AFTER `remove_dir_all` finishes, the new
+        // doc.json survives — the canvas "resurrects" after delete returned
+        // Ok, which is the silent state corruption this gate exists to
+        // prevent. With the lock held, racing applies wait, read the
+        // removed doc as `None`, and bail with NotFound. `remove_dir_all`
+        // failing with NotFound (an operator-`rm`'d dir, or — before this
+        // change — a racing concurrent delete) is treated as success: the
+        // canvas is gone either way.
         let dir = self.root.join(id);
-        drop(guard);
-        tokio::fs::remove_dir_all(&dir)
-            .await
-            .map_err(|e| CanvasError::Internal(format!("failed to delete canvas {id}: {e}")))?;
+        match tokio::fs::remove_dir_all(&dir).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(CanvasError::Internal(format!(
+                    "failed to delete canvas {id}: {e}"
+                )));
+            }
+        }
+        // Guard drops when this scope ends; releasing it explicitly would
+        // do nothing different.
         Ok(())
     }
 
@@ -759,6 +771,54 @@ mod tests {
         drop(dir);
     }
 
+    /// The post-state cap check is taken from a simulated id set, not a
+    /// fold that re-checks the ORIGINAL doc for every op. A doc sitting
+    /// at `MAX_SHAPES - 1` plus a batch `[UpsertShape s_new, UpsertShape
+    /// s_new]` lands as `MAX_SHAPES` — both ops target the same new id, so
+    /// the post-state set has exactly one new entry. The old shape counted
+    /// the duplicate as two additions and rejected the batch.
+    #[tokio::test]
+    async fn duplicate_upserts_in_one_batch_count_as_one_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CanvasStore::new(dir.path().to_path_buf());
+        let doc = store.create(None, None, None).await.unwrap();
+
+        // Seed the doc at exactly MAX_SHAPES - 1.
+        let almost_full = CanvasDoc {
+            shapes: (0..MAX_SHAPES - 1)
+                .map(|i| note(&format!("s{i}"), "x"))
+                .collect(),
+            ..doc.clone()
+        };
+        std::fs::write(
+            dir.path().join(&doc.id).join("doc.json"),
+            serde_json::to_string(&almost_full).unwrap(),
+        )
+        .unwrap();
+
+        let r = store
+            .apply(
+                &doc.id,
+                doc.revision,
+                vec![upsert_note("s_new"), upsert_note("s_new")],
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(r, doc.revision + 1);
+        let after = store.get(&doc.id).await.unwrap();
+        assert_eq!(
+            after.shapes.len(),
+            MAX_SHAPES,
+            "duplicate upsert counts as one shape, not two"
+        );
+        assert!(
+            after.shapes.iter().any(|s| s.id() == "s_new"),
+            "the new id landed exactly once"
+        );
+        drop(dir);
+    }
+
     #[tokio::test]
     async fn create_persists_owner_and_project_scope() {
         let dir = tempfile::tempdir().unwrap();
@@ -965,6 +1025,45 @@ mod tests {
             CanvasError::NotFound(_)
         ));
         assert!(store.list().await.is_empty());
+        drop(dir);
+    }
+
+    /// The lock is held THROUGH `remove_dir_all` — a racing `apply` must
+    /// either lose the lock race to `delete` (and read a gone doc, returning
+    /// NotFound) or be serialized AFTER the delete and only land its commit
+    /// inside a directory that is then reaped. Either way, no doc.json may
+    /// survive a delete that returned Ok.
+    #[tokio::test]
+    async fn a_concurrent_apply_during_delete_never_resurrects_the_canvas() {
+        use std::sync::Arc;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CanvasStore::new(dir.path().to_path_buf()));
+        let doc = store.create(None, None, None).await.unwrap();
+        let base = doc.revision;
+
+        let store_c = Arc::clone(&store);
+        let id = doc.id.clone();
+        let deleter = tokio::spawn(async move { store_c.delete(&id).await });
+        let store_a = Arc::clone(&store);
+        let id_a = doc.id.clone();
+        let applier = tokio::spawn(async move {
+            store_a
+                .apply(&id_a, base, vec![upsert_note("n_after_delete")], None)
+                .await
+        });
+        let _ = deleter.await.unwrap();
+        let apply_result = applier.await.unwrap();
+
+        // Whatever order they ran in, the disk must show "no canvas".
+        assert!(
+            !dir.path().join(&doc.id).exists(),
+            "doc.json must not survive delete even when apply races it: {apply_result:?}"
+        );
+        // `get` agrees with the disk.
+        assert!(matches!(
+            store.get(&doc.id).await.unwrap_err(),
+            CanvasError::NotFound(_)
+        ));
         drop(dir);
     }
 }

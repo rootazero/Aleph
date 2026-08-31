@@ -83,25 +83,31 @@ pub(super) fn apply_ops(doc: &mut CanvasDoc, ops: &[CanvasOp]) -> Result<(), Can
     // discards its lock on Err) could not roll the half-applied
     // state back, so a rejected batch would persist partial edits
     // through the guard's drop.
-    let post_shape_count = ops
-        .iter()
-        .fold(doc.shapes.len(), |count, op| match op {
+    //
+    // The count is taken by simulating the batch on a side set of ids.
+    // The older shape folded over `ops` and re-checked membership against
+    // `doc.shapes` for every step — but `doc.shapes` is the ORIGINAL
+    // doc, never the accumulating state, so the fold mis-counts when
+    // the batch targets the same id twice: a duplicate `UpsertShape`
+    // of a NEW id is counted as two additions (off by +1), and a
+    // duplicate `DeleteShape` of an existing id is counted as two
+    // removals (off by -1). A doc sitting at `MAX_SHAPES - 1` with a
+    // batch `[UpsertShape s_new, UpsertShape s_new]` was rejected as
+    // `MAX_SHAPES + 1` when the actual outcome is exactly `MAX_SHAPES`.
+    let mut simulated: std::collections::HashSet<&str> =
+        doc.shapes.iter().map(|s| s.id()).collect();
+    for op in ops {
+        match op {
             CanvasOp::UpsertShape { shape } => {
-                if doc.shapes.iter().any(|s| s.id() == shape.id()) {
-                    count // upsert replaces, no count change
-                } else {
-                    count + 1
-                }
+                simulated.insert(shape.id());
             }
             CanvasOp::DeleteShape { id } => {
-                if doc.shapes.iter().any(|s| s.id() == id) {
-                    count - 1
-                } else {
-                    count
-                }
+                simulated.remove(id.as_str());
             }
-            _ => count,
-        });
+            _ => {}
+        }
+    }
+    let post_shape_count = simulated.len();
     if post_shape_count > MAX_SHAPES {
         return Err(CanvasError::Invalid(format!(
             "{post_shape_count} shapes would exceed the {MAX_SHAPES}-shape document cap"

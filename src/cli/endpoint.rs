@@ -109,6 +109,18 @@ pub fn read_endpoint(data_dir: &Path) -> std::io::Result<Option<IpcEndpoint>> {
             format!(".ipc-endpoint.json exceeds size limit (> {MAX_ENDPOINT_FILE_SIZE} bytes)"),
         ));
     }
+    // An empty file is the result of either a crashed half-write (which
+    // `write_atomic` is supposed to make impossible — readers always see a
+    // complete file or no file — but legacy installs may have inherited one
+    // from a pre-atomic version, or an operator may have truncated the
+    // file). Both cases should behave like "no endpoint" rather than a
+    // JSON parse error surfacing to the caller: the IPC channel has no
+    // useful information either way, and the next `start` overwrites the
+    // file. Matches the version-mismatch branch below on purpose.
+    if bytes.is_empty() {
+        tracing::debug!(".ipc-endpoint.json is empty; treating as missing");
+        return Ok(None);
+    }
     let ep: IpcEndpoint = serde_json::from_slice(&bytes)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     if ep.version != CURRENT_ENDPOINT_VERSION {
@@ -155,6 +167,40 @@ mod tests {
     fn read_returns_none_when_missing() {
         let dir = tempfile::tempdir().unwrap();
         assert!(read_endpoint(dir.path()).unwrap().is_none());
+    }
+
+    /// Regression: a 0-byte endpoint file is the signature of either a
+    /// pre-atomic half-write legacy install or an operator-truncated file.
+    /// Both should surface as "no endpoint" to keep `forward_to_server`'s
+    /// friendly "server is initializing or crashed" path, not a confusing
+    /// JSON parse error.
+    #[test]
+    fn read_returns_none_when_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(endpoint_path(dir.path()), b"").unwrap();
+        assert!(
+            read_endpoint(dir.path()).unwrap().is_none(),
+            "empty .ipc-endpoint.json must read as Ok(None)"
+        );
+    }
+
+    /// Regression: a version-mismatched endpoint file is the result of an
+    /// in-flight upgrade. `read_endpoint` returns Ok(None) so the next
+    /// `start` overwrites the file cleanly rather than every status/IPC
+    /// call hard-erroring during the transition.
+    #[test]
+    fn read_returns_none_for_unsupported_version() {
+        let dir = tempfile::tempdir().unwrap();
+        // Schema-valid JSON for IpcEndpoint but version != CURRENT.
+        std::fs::write(
+            endpoint_path(dir.path()),
+            br#"{"version":999,"url":"http://127.0.0.1:9000","pid":1,"started_at":"2026-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert!(
+            read_endpoint(dir.path()).unwrap().is_none(),
+            "unsupported endpoint version must read as Ok(None)"
+        );
     }
 
     #[test]

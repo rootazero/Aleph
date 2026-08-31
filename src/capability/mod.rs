@@ -41,6 +41,7 @@
 //! ("waiting for: sessionPersistence") in Rust's shape — no plugin tree, no
 //! topological boot, just the sentence a reader needs.
 
+use crate::sync_primitives::Arc;
 use std::sync::OnceLock;
 
 /// The membership rule that decides what belongs in this module's roster.
@@ -243,7 +244,7 @@ impl<T: 'static> MutableCapabilitySlot<T> {
     pub fn update(&'static self, v: T) -> bool {
         match self.value.get() {
             Some(cell) => {
-                cell.store(std::sync::Arc::new(v));
+                cell.store(Arc::new(v));
                 true
             }
             None => false,
@@ -251,7 +252,7 @@ impl<T: 'static> MutableCapabilitySlot<T> {
     }
 
     #[inline]
-    pub fn load(&self) -> Option<arc_swap::Guard<std::sync::Arc<T>>> {
+    pub fn load(&self) -> Option<arc_swap::Guard<Arc<T>>> {
         self.value.get().map(arc_swap::ArcSwap::load)
     }
 
