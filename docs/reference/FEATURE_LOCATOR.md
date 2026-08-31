@@ -1900,7 +1900,26 @@ SearXNG 是唯一能指向 mock 的后端：九个里七个把 endpoint 写死�
 - cap 值不在 `exa.rs` 里写字面量（那会是 `SNIPPET_MAX_CHARS` 的第二份表述），而是新增 `SearchOptions::snippet_budget_chars`，由工具面填。`None` = 不加 cap ⇒ 其它调用者的请求体逐字节不变。
 - 传的是 **budget + 1**：正好要 600 的话，「这页就 600 字」和「这页被切在 600」变成同一个观测值，那条建议读者 `web_fetch` 取全文的 note 会对**真的更长**的页面永久沉默。多一个字符把那个信号留住。
 - 送出前 `clamp(1..=10_000)`。
-- **剩余风险如实记下**：没有真 key，证不到 Exa 真接受这个请求体。两个官方源一致 + 只动一条臂 + clamp 是能买到的全部；用户裁定接受。顺带一个缓冲：真错了的话 Exa 会在非 `full_content` 搜索上恒 400，而上面那套健康记忆会把它自动降级，链路降质而不是每次付一次超时。
+- ~~**剩余风险如实记下**：没有真 key，证不到 Exa 真接受这个请求体。~~ **已用真 key 实盘关闭（2026-08-31，`81706dcbc`）**——见下方「实盘复核」。留着这条划掉的原文，是因为当时那个判断在当时是对的：能买到的全部就是两个官方源 + 只动一条臂 + clamp。
+
+**实盘复核（2026-08-31，`81706dcbc`，真 key）**
+
+探针**走 `ExaProvider::search` 本身**，不是手搓一份 curl JSON——后者会是同一事实的第二份表述，可能自己是对的而 `build_request` 序列化出别的东西。四条臂，同一 query、同一进程：
+
+| 臂 | 请求体的 `contents.text` | 每条结果的 `snippet` 字符数 |
+|---|---|---|
+| CONTROL（改动前的形状） | `true` | 16926 / 16926 / 8505 |
+| 工具面实际发的 | `{"maxCharacters": 601}` | 601 / 601 / 601 |
+| clamp 的上落点 | `{"maxCharacters": 10000}` | 10000 / 8505 |
+| clamp 的下落点 | `{"maxCharacters": 1}` | 1 / 1 |
+
+CONTROL 是**归因臂**：没有它，capped 臂上的任何 4xx 分不出「key 坏了」「没网」和「形状错了」三种解释。三件事一次说清——形状被**接受**（不 400）、被**兑现**（16926 → 601，不是「收下了但忽略」那种报成功的 no-op，判据 §11）、`clamp` 的两个落点都合法（10000 那条同时证明常量本身没写高）。第二行 8505 短于 cap 是对的：那一页本来就没那么长。
+
+⚠️ 这条**不做成常驻装置**。它要一把真 key、每次跑都计费，做成测试就是一条只有一个人跑得动的守卫——恒绿和没装上长一个样（判据 §2）。Exa 侧的常驻覆盖仍然是 `providers/capability_census.rs` 的源码级 census + `qa/web_search order` 那次带无效 key 的真实 `api.exa.ai` 往返。要复跑：临时 integration test 从 vault 取 `search:exa`（`SharedTokenManager::try_load_token_from_db` 之后才能 `get_secret`），跑完删掉。
+
+**回归清扫（2026-08-31，`81706dcbc`）**——上一轮只跑了 `demote` 一个阶段就交接，这轮把欠的补齐：`qa/web_search` 六阶段 `reach/order/degrade/empty/fanout/demote` 全跑，**31 条断言 0 FAIL**，六份日志里的 `binary:` 时间戳同为本次构建（排除「共享 target 跑上一棵树的二进制」那种幻影绿）。`cargo clippy --workspace --all-targets` 仓库侧 **0 warning**（先 `just _stage-shell-placeholders`；13 个 crate 全部 Checking/Compiling 过，不是缓存空转），`cargo test -p alephcore --lib` 17835/0、`--bins` 94/0、`-p aleph-panel --lib --no-run` 与 `check -p aleph-desktop-macos` 均绿。
+
+`SearchOptions` 新增字段的跨 crate 面也一并结掉：它**不在** wire 上——`shared/` `interfaces/` `desktop/` 零引用（由 `--workspace --all-targets` 编译通过实证，比 grep 强），没有 `JsonSchema`，生产代码里没有任何一处序列化它，且字段带 `skip_serializing_if = "Option::is_none"` ⇒ 即便被序列化，`None` 的输出也与该字段存在之前逐字节相同。
 
 **变异（Exa 侧五条已执行，2026-09-01）**：cap 从不生效 / 正文臂也被 cap / clamp 拿掉 / 工具面改成正好 budget / 工具面什么都不声明——五条各自只红在预期的那一条（或那两条）上。
 
@@ -5287,6 +5306,7 @@ round-2 结尾留了三条，本轮全部收掉。共同形状：**三条都不�
 - **同一个动词的两张脸要共用判定、但不必共用行为** —— 失败记忆：`fan_out`（调用方点名后端）**记录**失败却**不**重排（点名是指令不是偏好），主链两样都做；而「这个错误算不算数」收在 `counts_against_health` 一个函数里，两张脸不可能分头回答 → §3.18 第二轮遗留收尾
 
 - **「验不了」有时是「查错了地方」——一条重访条件也会写错** —— Exa 的 `contents.text.maxCharacters` 被记为「无法离线验证该参数形态，等一把真 key」而搁置一整轮；实际上 vendor 的 OpenAPI spec + 文档页两个独立源就把 `oneOf { boolean, object }` 钉死了，**而且只看一个源会漏掉第二种死法**（该字段的文档区间 `1..=10000`，越界同样 400 ⇒ 送出前 `clamp`）。接手一张「刻意不做」清单时，**先问那条重访条件问的是不是对的东西**，不只是问它满足了没有 → §3.18 第二轮遗留收尾
+- **一个离线权威源只能定「它收不收」，定不了「它兑不兑现」** —— 上一条把「等一把真 key」判为错的重访条件，那是对的**但只对一半**：OpenAPI spec 能钉死 `contents.text` 的 `oneOf` 形状和 `1..=10000` 区间，钉不死「Exa 拿到 `maxCharacters` 之后真的截断」。一个收下参数却忽略它的 API 就是判据 §11 的报成功的 no-op，而它的观测面和成功完全一样——**唯一分得开的是把带 cap 和不带 cap 的两次答案放在一起量**（实测 16926 → 601）。所以真 key 那一跑不是多余的，只是它证的**不是**上一轮以为它要证的那件事。配套：实盘臂必须带一条**归因臂**（不带 cap 的原形状），否则任何 4xx 分不出 key / 网络 / 形状三种解释 → §3.18 实盘复核
 - **一个服务端上限要比调用方保留的多要一个单位，否则「被截断了」这个信号自己消失** —— 让 Exa 只返回 `SNIPPET_MAX_CHARS` 个字符，「这页正好这么长」和「这页被切在这里」就成了同一个观测值，`snippets_clamped`（那条建议读者去 `web_fetch` 取全文的 note）会对**真的更长**的页面永久沉默。要 `budget + 1`。配套：这个数字归**渲染它的那一层**所有（`SearchOptions::snippet_budget_chars`，`None` = 不加 cap），provider 里写字面量就是同一事实的第二份 → §3.18 第二轮遗留收尾
 - **一个两臂的真机阶段不许假设哪一臂先跑** —— `qa/busy_input/mock_anthropic.py` 按**全局** turn 计数器索引 spec 列表，而 strategy-planner / 起标题 / 压缩这些不带工具面的旁路调用**也推进它**（这句话就写在那个文件的模块 doc 里）。既有两臂阶段全部按内容归因、与顺序无关，所以第一个顺序敏感的阶段（`demote`）首跑就红在自己的假设上——机制是对的。修法是**从证据里推顺序**（哪个 arm 出现在失败后端那唯一一条请求日志里），不是把顺序倒过来 → 附录 E.10 · §3.18
 
