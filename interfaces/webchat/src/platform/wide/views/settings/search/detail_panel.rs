@@ -12,6 +12,17 @@ use leptos::task::spawn_local;
 // Detail Panel (Right Side)
 // ============================================================================
 
+/// Whether this backend can be deleted.
+///
+/// Mirrors the server-side rule in `search_config.delete` verbatim: the
+/// default provider cannot be deleted until a different default is chosen.
+/// Duplicating the check here turns that refusal into a disabled state
+/// instead of a failed round trip — the server check remains authoritative,
+/// this only says it earlier.
+fn deletable(name: &str, default_provider: &str) -> bool {
+    default_provider.is_empty() || name != default_provider
+}
+
 #[component]
 pub(super) fn ProviderDetailPanel(
     config: RwSignal<SearchConfig>,
@@ -663,22 +674,44 @@ pub(super) fn ProviderDetailPanel(
                                                     } else {
                                                         None
                                                     }}
-                                                    {if !is_active && is_custom {
+                                                    {if is_custom {
                                                         Some(view! {
-                                                            {move || if confirming.get() {
-                                                                view! {
-                                                                    <ConfirmButton confirming=confirming on_confirm=on_confirm_delete width_class="flex-1" />
-                                                                }.into_any()
-                                                            } else {
-                                                                view! {
-                                                                    <button
-                                                                        on:click=move |_| confirming.set(true)
-                                                                        prop:disabled=move || deleting.get()
-                                                                        class="flex-1 px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger text-sm font-medium rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50"
-                                                                    >
-                                                                        {move || if deleting.get() { t_string!(i18n, settings.search.deleting).to_string() } else { t_string!(i18n, common.delete).to_string() }}
-                                                                    </button>
-                                                                }.into_any()
+                                                            {move || {
+                                                                let cfg = config.get();
+                                                                let name = selected.get().unwrap_or_default();
+                                                                if !deletable(&name, &cfg.default_provider) {
+                                                                    // Say the server's refusal before the click: a
+                                                                    // button that only fails after being pressed
+                                                                    // does not tell the operator what to do next.
+                                                                    return view! {
+                                                                        <div class="flex-1 flex flex-col gap-1">
+                                                                            <button
+                                                                                prop:disabled=true
+                                                                                class="w-full px-4 py-2.5 border border-border text-text-tertiary text-sm font-medium rounded-lg cursor-not-allowed opacity-60"
+                                                                            >
+                                                                                {t!(i18n, common.delete)}
+                                                                            </button>
+                                                                            <span class="text-xs text-text-tertiary">
+                                                                                {t!(i18n, settings.search.cannot_delete_default)}
+                                                                            </span>
+                                                                        </div>
+                                                                    }.into_any();
+                                                                }
+                                                                if confirming.get() {
+                                                                    view! {
+                                                                        <ConfirmButton confirming=confirming on_confirm=on_confirm_delete width_class="flex-1" />
+                                                                    }.into_any()
+                                                                } else {
+                                                                    view! {
+                                                                        <button
+                                                                            on:click=move |_| confirming.set(true)
+                                                                            prop:disabled=move || deleting.get()
+                                                                            class="flex-1 px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger text-sm font-medium rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50"
+                                                                        >
+                                                                            {move || if deleting.get() { t_string!(i18n, settings.search.deleting).to_string() } else { t_string!(i18n, common.delete).to_string() }}
+                                                                        </button>
+                                                                    }.into_any()
+                                                                }
                                                             }}
                                                         })
                                                     } else {
@@ -700,6 +733,30 @@ pub(super) fn ProviderDetailPanel(
                 }.into_any()
             }}
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_default_provider_cannot_be_deleted() {
+        assert!(!deletable("tavily", "tavily"));
+    }
+
+    #[test]
+    fn a_non_default_provider_can_be_deleted() {
+        assert!(deletable("brave", "tavily"));
+    }
+
+    /// An empty default should not lock every delete button — an empty
+    /// `default_provider` means "no default chosen yet", not "everyone is
+    /// the default". Criterion E.0 §8: an empty string is only entitled to
+    /// say "I don't know".
+    #[test]
+    fn an_empty_default_does_not_lock_every_row() {
+        assert!(deletable("tavily", ""));
     }
 }
 
