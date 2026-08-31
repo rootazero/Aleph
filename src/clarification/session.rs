@@ -346,14 +346,29 @@ impl ClarificationManager {
             .read()
             .await
             .iter()
-            .filter(|(_, e)| e.is_live())
-            .map(|(session_key, e)| {
-                let current = e.current().unwrap_or_else(|| {
-                    e.request
-                        .first()
-                        .expect("a ClarificationRequest built by a constructor is never empty")
-                });
-                PendingClarification {
+            .filter_map(|(session_key, e)| {
+                if !e.is_live() {
+                    return None;
+                }
+                // `current()` is `None` only when the cursor has run past the
+                // last question. For a registered entry that means an answer
+                // was pushed beyond the request — the live liveness gate does
+                // not catch it, but it should never happen: `resolve_many`
+                // breaks the per-reply loop on `current() == None` and removes
+                // the entry on `Complete`. If we ever DO see it, the entry is
+                // structurally broken and showing its `questions` view to a
+                // Panel would publish a card with a cursor that contradicts
+                // the answers; filter it out and let the next sweep reap it.
+                let current = e.current().or_else(|| {
+                    tracing::warn!(
+                        session = %session_key,
+                        cursor = e.answers.len(),
+                        total = e.request.len(),
+                        "list_pending: cursor past end of question list — filtering broken entry"
+                    );
+                    None
+                })?;
+                Some(PendingClarification {
                     session_key: session_key.clone(),
                     question: current.prompt.clone(),
                     options: current.options.iter().map(|o| o.label.clone()).collect(),
@@ -364,7 +379,7 @@ impl ClarificationManager {
                         .map(ClarificationQuestionView::from)
                         .collect(),
                     answered: e.answers.len(),
-                }
+                })
             })
             .collect();
         out.sort_unstable_by(|a, b| a.session_key.cmp(&b.session_key));
