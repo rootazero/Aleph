@@ -18,6 +18,7 @@ mod detail_panel;
 mod fetch_section;
 mod global_settings;
 mod list;
+mod picker;
 mod presentation;
 
 use add_custom::AddCustomSearchProviderPanel;

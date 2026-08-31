@@ -147,6 +147,20 @@ pub(super) fn find_backend<'a>(
     backends.iter().find(|b| b.name == name)
 }
 
+/// The preset grid and the chat catalogue rank through the **same** matcher.
+///
+/// `search_aliases` stays at its default empty slice: search backend ids have
+/// no vendor aliases, and declaring an empty alias set is an honest answer,
+/// not a placeholder.
+impl aleph_protocol::providers::Searchable for SearchPreset {
+    fn search_id(&self) -> &str {
+        self.name
+    }
+    fn search_display_name(&self) -> &str {
+        self.display_name
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
