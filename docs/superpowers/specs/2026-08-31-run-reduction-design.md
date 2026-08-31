@@ -200,7 +200,7 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> RunReduction;
 - `Provenance::ThisRestart` → 现有措辞不变
 - `Provenance::EarlierRun` → 「这个会话更早的一次 run 结束时没有记下这个调用的结果」
 
-两句都必须含四个语义要点：`OUTCOME UNKNOWN` / 显式否定「失败」/ 点名工具 / 副作用可能已落地。由**同一组断言**在两条臂上各查一遍（判据 #14：闸的两个方向都要问）。
+两句都必须含五个语义要点：`OUTCOME UNKNOWN` / 显式否定「失败」/ 点名工具 / 副作用可能已落地 / 核实现状后再决定是否重做。由**同一组断言**在两条臂上各查一遍（判据 #14：闸的两个方向都要问）。
 
 **`repairs_for` 对两种归属都出修复事件**，只是措辞不同——不是「只修本次的、旧的留着不管」。理由：旧悬空一旦不修，`build_prompt` 会把它的 `tool_use` 块当孤儿丢掉，模型从此看不见那次调用发生过；而它的副作用可能仍然在磁盘上。缺的读起来像「还没有值」，那正是判据 #17 要防的。
 
@@ -247,7 +247,7 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> RunReduction;
 | G1 | proptest `∀log. reduce_run(log).disposition == reduce_disposition(markers_of(log))` | 「什么算中断」只有一处字面表达 | 给 `reduce_run` 加捷径（「有 dangling 就算 Interrupted」）→ 必须红 |
 | G2 | 归属分流，夹具用**可达**形状 `[Started(a), Req(c1), Started(b), Req(c2)]`（run a 崩溃 → 当时 `[resume] enabled = false` 故无修复 → 用户发新消息起 run b → b 也崩）→ `c1.run_anchor == None` ∧ `c2.run_anchor == Some(seq_b)`，两句 repair 文本不同 | 旧悬空不再被说成「本次重启」 | 把 `run_anchor` 恒设成 `Some(anchor)`（即今天的行为）→ 必须红。**这条同时是「今天那个缺陷真的存在过」的证据** |
 | G2b | 不变量违反形状 `[Started(a), Req(c1), Finished(a), Started(b)]`——一次**干净结束**的 run 却留下悬空调用，即 §1.3 那条默契被打破 | 该形状被归约如实报出（`c1.run_anchor == None`），不被静默吞掉也不被误报成本次重启 | 把「Finished 之前的悬空」过滤掉 → 必须红。⚠️ 这条**不**做 fail-closed 拒绝（§8.2 已裁），只保证事实不丢 |
-| G3 | 两句 repair 文本**各自**含四个语义要点 | 闸的两个方向都问 | 任一臂删掉任一要点 → 必须红。断言语义不断言字节：`!contains("failed")` 会被文本自己的否定句命中，§4.13a 记着第一版就是这么错红的 |
+| G3 | 两句 repair 文本**各自**含五个语义要点 | 闸的两个方向都问 | 任一臂删掉任一要点 → 必须红。断言语义不断言字节：`!contains("failed")` 会被文本自己的否定句命中，§4.13a 记着第一版就是这么错红的 |
 | G4 | `RunProgress` 四字段各一条 | 进展是真数出来的 | 把 `tool_calls_answered` 的源换成 `dispatched` → 必须红**且只红这一条**（判据 #18） |
 | G5 | 计数 mock：`list_from_log` 的 `get_events` 调用次数 == 1 | 目录面没有多出 N 次子会话读 | 在 `to_list_row` 里加一次子会话加载 → 必须红。刻意断言「调用没有发生」，判据 #4 的反向用法 |
 
@@ -401,7 +401,7 @@ grep -rn "ScanVerdict" src/ tests/ --include="*.rs" \
 | **G2** | provenance 匹配被恒定替换为 `DanglingProvenance::ThisRestart` | 3 条命名测试（`dangling_calls_are_attributed_to_their_own_run`、`a_dangling_call_under_a_finished_run_is_reported_as_earlier`、`a_log_with_no_run_marker_attributes_to_earlier_not_this_restart`） | 同 3 条，无多无少 | 相符 |
 | **G2b** | pass 2 只收 `record.seq > anchor` 的悬空，静默丢弃 `EarlierRun` 情形 | `a_dangling_call_under_a_finished_run_is_reported_as_earlier`（仅此） | 同上 **+** `dangling_calls_are_attributed_to_their_own_run`（长度断言 `left:1,right:2`）**+** `a_log_with_no_run_marker_attributes_to_earlier_not_this_restart`（越界 panic，`r.dangling[0]` 在空 vec 上取值）| **否——更强**（1→3）|
 | **G3-A** | `EarlierRun` 的引导句被折叠成与 `ThisRestart` 相同的文本 | `repairs_speak_a_different_sentence_per_provenance` 在 "an earlier run in this session" 断言处红 | 同上，panic 位置与断言文本精确匹配 | 相符 |
-| **G3-B** | 共享结尾删掉 "side effects" 三词 | 同一测试，`assert_four_points` 红，两臂（`EarlierRun`/`ThisRestart`）均受影响 | 同一测试在第一臂（`EarlierRun`，`c1`）panic；第二臂结构上保证同样失败（两臂共用同一段 `boundary_repair_text` 格式化代码，断言 panic-on-first-failure 未继续跑到第二臂）| 相符（前臂实测 · 后臂结构推断）|
+| **G3-B** | 共享结尾删掉 "side effects" 三词 | 同一测试，`assert_five_points`（当时名为 `assert_four_points`，查四点）红，两臂（`EarlierRun`/`ThisRestart`）均受影响 | 同一测试在第一臂（`EarlierRun`，`c1`）panic；第二臂结构上保证同样失败（两臂共用同一段 `boundary_repair_text` 格式化代码，断言 panic-on-first-failure 未继续跑到第二臂）| 相符（前臂实测 · 后臂结构推断）|
 | **G4** | `progress.tool_calls_answered` 的来源换成 `progress.tool_calls_dispatched` | `progress_counts_only_the_current_run`、`answered_never_exceeds_dispatched` | 同 2 条，无多无少 | 相符 |
 | **G5-A** | `list_from_log` 在 sidecar 循环前多插一次 `get_events(child_session, ...)`（结果丢弃）| `the_directory_face_reads_only_the_parent_log` | 同上，计数断言 `left:2, right:1` | 相符 |
 | **G5-B** | `resolve_forgotten` 末尾的 `progress` 补全循环整段删除 | `the_detail_face_loads_the_childs_progress` | 同上，`progress: None` 未被填充 | 相符 |
