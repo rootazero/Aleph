@@ -109,6 +109,18 @@ pub fn read_endpoint(data_dir: &Path) -> std::io::Result<Option<IpcEndpoint>> {
             format!(".ipc-endpoint.json exceeds size limit (> {MAX_ENDPOINT_FILE_SIZE} bytes)"),
         ));
     }
+    // An empty file is the result of either a crashed half-write (which
+    // `write_atomic` is supposed to make impossible — readers always see a
+    // complete file or no file — but legacy installs may have inherited one
+    // from a pre-atomic version, or an operator may have truncated the
+    // file). Both cases should behave like "no endpoint" rather than a
+    // JSON parse error surfacing to the caller: the IPC channel has no
+    // useful information either way, and the next `start` overwrites the
+    // file. Matches the version-mismatch branch below on purpose.
+    if bytes.is_empty() {
+        tracing::debug!(".ipc-endpoint.json is empty; treating as missing");
+        return Ok(None);
+    }
     let ep: IpcEndpoint = serde_json::from_slice(&bytes)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     if ep.version != CURRENT_ENDPOINT_VERSION {
