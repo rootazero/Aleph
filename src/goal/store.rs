@@ -2231,21 +2231,17 @@ mod tests {
         let (store, _d) = temp_store();
         // Build a Complete goal as if it had been serialized before the
         // `completed_at_ms` field landed: status=Complete, completed_at_ms=None.
-        let legacy = pursuing("legacy-s", 5).with_status(GoalStatus::Complete, 1_000);
+        let complete = pursuing("legacy-s", 5).with_status(GoalStatus::Complete, 1_000);
+        let complete_json = serde_json::to_string(&complete).unwrap();
         // `with_status` always sets `completed_at_ms` for the (false,true)
-        // arm — reach the legacy shape by deserializing a JSON payload that
-        // pre-dates the field, mirroring a real upgrade row.
-        let legacy_json = serde_json::to_string(&legacy).unwrap();
-        let legacy: Goal = serde_json::from_str(&legacy_json).unwrap_or_else(|_| {
-            // Field is in the type now, so the synthesized shape always
-            // carries it; for a strict legacy row, drop the field via
-            // serde_json::Value and re-parse.
-            let mut v: serde_json::Value = serde_json::from_str(&legacy_json).unwrap();
-            v.as_object_mut()
-                .unwrap()
-                .remove("completed_at_ms");
-            serde_json::from_value(v).unwrap()
-        });
+        // arm — reach the legacy shape by stripping the field via
+        // `serde_json::Value` and re-parsing, mirroring a real upgrade row
+        // that pre-dates the field.
+        let mut v: serde_json::Value = serde_json::from_str(&complete_json).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .remove("completed_at_ms");
+        let legacy: Goal = serde_json::from_value(v).unwrap();
         assert!(legacy.completed_at_ms.is_none());
         assert_eq!(legacy.status, GoalStatus::Complete);
 
