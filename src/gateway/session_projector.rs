@@ -139,8 +139,11 @@ fn peer_echo_frame(
 /// observed failure behind it. If one ever shows up, this is the place.
 ///
 /// Fails closed: an unreadable event log is reported as retired, so the failure
-/// mode is a missing projection row (best-effort display, back-filled by
-/// `ProjectionReconciler`) rather than resurrected content.
+/// mode is a missing projection row rather than resurrected content. That is
+/// not always a recoverable miss: `ProjectionReconciler` only back-fills a
+/// session whose run marker reads as interrupted, so if this session's run
+/// then finishes cleanly, the row is gone from the display for good — see the
+/// module doc.
 async fn event_retired(id: &SessionId, seq: u64) -> bool {
     match crate::session::store::is_event_retired(id, seq).await {
         Ok(retired) => retired,
