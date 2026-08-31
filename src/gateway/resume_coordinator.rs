@@ -23,6 +23,9 @@ use crate::gateway::agent_instance::{AgentInstance, AgentRegistry};
 use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::execution_engine::{RunRequest, UNATTENDED_KEY};
 use crate::session::events::{now_ms, RunOutcome, SessionEvent, SessionEventRecord};
+use crate::session::reduction::{
+    reduce_disposition, reduce_run, DanglingProvenance, RunDisposition, RunReduction,
+};
 use crate::session::service::SessionId;
 use crate::session::store::SessionEventStore;
 
@@ -152,38 +155,6 @@ pub fn has_own_scheduler(key: &SessionId) -> bool {
     )
 }
 
-/// Classification of one session's run-marker tail.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ScanVerdict {
-    /// Newest marker is `RunFinished` — nothing to do.
-    Clean,
-    /// Interrupted; the `usize` is the count of trailing consecutive
-    /// `RunStarted` events (the crash-loop attempt counter).
-    Interrupted { trailing_starts: usize },
-}
-
-/// Classify a session's run markers (already in `seq` order, as returned by
-/// `load_run_markers`). Counts the trailing run of consecutive `RunStarted`
-/// events — events after the last `RunFinished`, or all of them if there is
-/// no `RunFinished`.
-pub(crate) fn classify_markers(markers: &[SessionEventRecord]) -> ScanVerdict {
-    let mut trailing_starts = 0usize;
-    for record in markers.iter().rev() {
-        match &record.event {
-            SessionEvent::RunStarted { .. } => trailing_starts += 1,
-            SessionEvent::RunFinished { .. } => break,
-            // load_run_markers only ever returns run markers, but be
-            // defensive: a non-marker breaks the trailing run.
-            _ => break,
-        }
-    }
-    if trailing_starts == 0 {
-        ScanVerdict::Clean
-    } else {
-        ScanVerdict::Interrupted { trailing_starts }
-    }
-}
-
 /// Extract `project_root` from the most recent `RunStarted` marker.
 /// Returns `None` for legacy logs or when the original run was not
 /// project-scoped, so the caller falls back to the agent's default
@@ -250,78 +221,55 @@ pub(crate) fn resume_metadata(
     metadata
 }
 
-/// The text a dangling tool call is answered with on resume.
-///
-/// The wording is the whole point. This used to read `"interrupted by server
-/// restart"`, which the model reads as a verdict — *the call failed* — and the
-/// rational response to a failed call is to issue it again. But a dangling call
-/// is precisely the case where **nobody knows** whether it ran:
-/// `ToolCallRequested` is emitted and `await`ed to disk in `harness::agent::act`
-/// *immediately before* dispatch, and the two things that can still stop a call
-/// after that point — a guardrail `Block` and an approval denial — both write
-/// their own answer event. So "requested, never answered" means the call was at
-/// or past the dispatch line, and its side effects may well have landed.
-///
-/// Aleph's own criterion for this shape says a mechanism that only records
-/// "done" cannot tell "never did it" from "did it and lost the receipt". This
-/// module cannot close that gap by itself — nothing stamps the crossing of the
-/// irreversible boundary — so the honest move is to stop pretending it can, and
-/// hand the model the epistemic state instead of a wrong conclusion.
+/// The sentence a dangling call is answered with.
 ///
 /// Deliberately **not** a safety-level classifier. `ToolSafetyLevel` exists and
-/// could sort read-only calls from destructive ones, but reaching it here means
-/// a seventh constructor parameter on `ResumeCoordinator`, and deciding "is this
-/// safe to redo?" from a tool name and its arguments is exactly the reasoning
-/// R7 reserves for the model. State the fact; let it judge.
-fn boundary_repair_text(tool: &str) -> String {
+/// could sort read-only calls from destructive ones, but deciding "is this safe
+/// to redo?" from a tool name and its arguments is exactly the reasoning R7
+/// reserves for the model. State the fact; let it judge.
+///
+/// Two arms because there are two true sentences. Everything after the lead-in
+/// is shared, so the four semantic points cannot drift apart between them.
+fn boundary_repair_text(tool: &str, provenance: DanglingProvenance) -> String {
+    let lead = match provenance {
+        DanglingProvenance::ThisRestart => format!(
+            "the server restarted after this `{tool}` call was dispatched but before its \
+             result was recorded"
+        ),
+        DanglingProvenance::EarlierRun => format!(
+            "an earlier run in this session ended without recording the result of this \
+             `{tool}` call"
+        ),
+    };
     format!(
-        "OUTCOME UNKNOWN — the server restarted after this `{tool}` call was dispatched but \
-         before its result was recorded. This is NOT a report that the call failed: it may \
-         have completed, and any side effects it has (file writes, commands, network calls, \
+        "OUTCOME UNKNOWN — {lead}. This is NOT a report that the call failed: it may have \
+         completed, and any side effects it has (file writes, commands, network calls, \
          external state) have already landed. Verify the current state before deciding \
          whether to repeat it."
     )
 }
 
-/// Walk a full session event log and answer every `ToolCallRequested` whose
-/// `call_id` has no matching `ToolResult` or `ToolError`. The returned events
-/// are ready to append to the log; the caller emits them in order. An
-/// already-answered call yields nothing.
+/// Turn a reduction's dangling set into appendable answer events.
 ///
-/// The answer is shaped as `ToolError` because there is no result to hand back
-/// — the alternative, a synthetic `ToolResult`, would make an invented payload
-/// indistinguishable from the tool's real output. What the event carries is
-/// [`boundary_repair_text`]; see there for why the wording matters more than the
-/// shape.
-pub(crate) fn compute_boundary_repairs(events: &[SessionEventRecord]) -> Vec<SessionEvent> {
-    use std::collections::HashSet;
-
-    let mut answered: HashSet<&str> = HashSet::new();
-    for record in events {
-        match &record.event {
-            SessionEvent::ToolResult { call_id, .. } | SessionEvent::ToolError { call_id, .. } => {
-                answered.insert(call_id.as_str());
-            }
-            _ => {}
-        }
-    }
-
+/// **Both provenances get an event.** Leaving the older ones unanswered is not
+/// the cheaper option: `build_prompt` drops an orphan `tool_use` whose result
+/// never arrives, so the model stops seeing that the call ever happened — while
+/// its side effects may still be on disk. A missing row reads as "there was no
+/// value"; that is the reading this whole repair exists to prevent.
+///
+/// The answer is shaped as `ToolError` because there is no result to hand back:
+/// a synthetic `ToolResult` would make an invented payload indistinguishable
+/// from the tool's real output.
+pub(crate) fn repairs_for(reduction: &RunReduction) -> Vec<SessionEvent> {
     let at = now_ms();
-    events
+    reduction
+        .dangling
         .iter()
-        .filter_map(|record| match &record.event {
-            SessionEvent::ToolCallRequested {
-                turn_id,
-                call_id,
-                name,
-                ..
-            } if !answered.contains(call_id.as_str()) => Some(SessionEvent::ToolError {
-                turn_id: *turn_id,
-                call_id: call_id.clone(),
-                error: boundary_repair_text(name),
-                at,
-            }),
-            _ => None,
+        .map(|call| SessionEvent::ToolError {
+            turn_id: call.turn_id,
+            call_id: call.call_id.clone(),
+            error: boundary_repair_text(&call.tool_name, call.provenance),
+            at,
         })
         .collect()
 }
@@ -525,15 +473,15 @@ impl ResumeCoordinator {
             return;
         };
         report.scanned += 1;
-        match classify_markers(markers) {
-            ScanVerdict::Clean => {
+        match reduce_disposition(markers) {
+            RunDisposition::Clean => {
                 report.skipped += 1;
             }
             // Not ours to resume: the team dispatcher / cron / heartbeat
             // each recover their own interrupted work, and a second driver
             // on top of that is a duplicate run, not a safety net. Close
             // the dangling marker so the next boot does not re-decide this.
-            ScanVerdict::Interrupted { .. } if has_own_scheduler(session_id) => {
+            RunDisposition::Interrupted { .. } if has_own_scheduler(session_id) => {
                 tracing::info!(
                     session = ?session_id,
                     "resume: session has its own scheduler; handing recovery back to it"
@@ -541,7 +489,7 @@ impl ResumeCoordinator {
                 self.close_delegated_marker(session_id).await;
                 report.delegated += 1;
             }
-            ScanVerdict::Interrupted { trailing_starts } => {
+            RunDisposition::Interrupted { trailing_starts } => {
                 let project_root = latest_project_root(markers);
                 self.handle_interrupted(session_id, markers, trailing_starts, project_root, report)
                     .await;
@@ -608,7 +556,7 @@ impl ResumeCoordinator {
         project_root: Option<std::path::PathBuf>,
         report: &mut ResumeReport,
     ) {
-        // The dangling RunStarted is the last marker (classify_markers
+        // The dangling RunStarted is the last marker (reduce_disposition
         // guarantees `markers` is non-empty here).
         let Some(last) = markers.last() else {
             return;
@@ -765,7 +713,7 @@ impl ResumeCoordinator {
         session_id: &SessionId,
     ) -> Result<(), crate::session::service::SessionError> {
         let events = self.event_store.load_all_events(session_id).await?;
-        let repairs = compute_boundary_repairs(&events);
+        let repairs = repairs_for(&reduce_run(&events));
         if repairs.is_empty() {
             return Ok(());
         }
@@ -1040,7 +988,7 @@ mod tests {
     #[test]
     fn classify_clean_when_last_marker_is_finished() {
         let markers = vec![rec(1, run_started(10), 10), rec(2, run_finished(20), 20)];
-        assert_eq!(classify_markers(&markers), ScanVerdict::Clean);
+        assert_eq!(reduce_disposition(&markers), RunDisposition::Clean);
     }
 
     #[test]
@@ -1051,8 +999,8 @@ mod tests {
             rec(3, run_started(30), 30),
         ];
         assert_eq!(
-            classify_markers(&markers),
-            ScanVerdict::Interrupted { trailing_starts: 1 }
+            reduce_disposition(&markers),
+            RunDisposition::Interrupted { trailing_starts: 1 }
         );
     }
 
@@ -1066,8 +1014,8 @@ mod tests {
             rec(4, run_started(40), 40),
         ];
         assert_eq!(
-            classify_markers(&markers),
-            ScanVerdict::Interrupted { trailing_starts: 3 }
+            reduce_disposition(&markers),
+            RunDisposition::Interrupted { trailing_starts: 3 }
         );
     }
 
@@ -1075,60 +1023,76 @@ mod tests {
     fn classify_interrupted_when_no_finish_at_all() {
         let markers = vec![rec(1, run_started(10), 10)];
         assert_eq!(
-            classify_markers(&markers),
-            ScanVerdict::Interrupted { trailing_starts: 1 }
+            reduce_disposition(&markers),
+            RunDisposition::Interrupted { trailing_starts: 1 }
+        );
+    }
+
+    /// G3 — both arms must carry all four semantic points. Asserting on
+    /// MEANING, not bytes: `!contains("failed")` gets hit by the text's own
+    /// negation sentence, which is how the first version of this guard went
+    /// red for the wrong reason (§4.13a).
+    fn assert_four_points(error: &str, tool: &str) {
+        assert!(
+            error.contains("OUTCOME UNKNOWN"),
+            "must state the outcome is unknown, got: {error}"
+        );
+        assert!(
+            error.contains("NOT a report that the call failed"),
+            "must explicitly deny that the call failed, got: {error}"
+        );
+        assert!(
+            error.contains(tool),
+            "must name the tool so the model knows what to verify, got: {error}"
+        );
+        assert!(
+            error.contains("side effects"),
+            "must warn that side effects may have landed, got: {error}"
         );
     }
 
     #[test]
-    fn repair_yields_one_tool_error_per_dangling_call() {
+    fn repairs_speak_a_different_sentence_per_provenance() {
         let events = vec![
-            rec(1, tool_requested("c1"), 1),
-            rec(2, tool_result("c1"), 2),
-            rec(3, tool_requested("c2"), 3),
-            // c2 never answered → one repair.
+            rec(1, run_started(10), 10),
+            rec(2, tool_requested("c1"), 20),
+            rec(3, run_started(30), 30),
+            rec(4, tool_requested("c2"), 40),
         ];
-        let repairs = compute_boundary_repairs(&events);
-        assert_eq!(repairs.len(), 1);
-        match &repairs[0] {
-            SessionEvent::ToolError { call_id, error, .. } => {
-                assert_eq!(call_id, "c2");
-                // Assert on meaning, not bytes. The defect this replaced was a
-                // text that read as a verdict ("interrupted by server restart"),
-                // which the model answers by re-issuing a call whose side
-                // effects may already have landed.
-                assert!(
-                    error.contains("OUTCOME UNKNOWN"),
-                    "repair must state the outcome is unknown, got: {error}"
-                );
-                assert!(
-                    error.contains("bash_exec"),
-                    "repair must name the tool so the model knows what to verify, got: {error}"
-                );
-                // The failure claim must be explicitly negated, not merely
-                // absent. "OUTCOME UNKNOWN" alone still leaves a model free to
-                // read the `ToolError` envelope as a failure and re-issue the
-                // call; the sentence that stops it is the one saying so.
-                assert!(
-                    error.contains("NOT a report that the call failed"),
-                    "repair must explicitly deny that the call failed, got: {error}"
-                );
-                assert!(
-                    error.contains("side effects"),
-                    "repair must warn that side effects may have landed, got: {error}"
-                );
-            }
-            other => panic!("expected ToolError, got {other:?}"),
+        let repairs = repairs_for(&reduce_run(&events));
+        assert_eq!(repairs.len(), 2, "BOTH provenances get a repair event");
+
+        let mut texts = Vec::new();
+        for ev in &repairs {
+            let SessionEvent::ToolError { call_id, error, .. } = ev else {
+                panic!("expected ToolError, got {ev:?}");
+            };
+            assert_four_points(error, "bash_exec");
+            texts.push((call_id.clone(), error.clone()));
         }
+        assert_eq!(texts[0].0, "c1");
+        assert!(
+            texts[0].1.contains("an earlier run in this session"),
+            "the older dangle must not be blamed on this restart, got: {}",
+            texts[0].1
+        );
+        assert_eq!(texts[1].0, "c2");
+        assert!(
+            texts[1].1.contains("the server restarted"),
+            "this run's dangle must say so, got: {}",
+            texts[1].1
+        );
+        assert_ne!(texts[0].1, texts[1].1, "two provenances, two sentences");
     }
 
     #[test]
-    fn repair_yields_nothing_when_all_calls_answered() {
+    fn repairs_are_empty_when_every_call_is_answered() {
         let events = vec![
-            rec(1, tool_requested("c1"), 1),
-            rec(2, tool_result("c1"), 2),
+            rec(1, run_started(10), 10),
+            rec(2, tool_requested("c1"), 20),
+            rec(3, tool_result("c1"), 30),
         ];
-        assert!(compute_boundary_repairs(&events).is_empty());
+        assert!(repairs_for(&reduce_run(&events)).is_empty());
     }
 
     /// `latest_project_root` walks the marker list from newest to oldest
@@ -1268,20 +1232,21 @@ mod tests {
     }
 
     #[test]
-    fn repair_treats_tool_error_as_an_answer() {
+    fn a_tool_error_counts_as_an_answer() {
         let events = vec![
-            rec(1, tool_requested("c1"), 1),
+            rec(1, run_started(10), 10),
+            rec(2, tool_requested("c1"), 20),
             rec(
-                2,
+                3,
                 SessionEvent::ToolError {
                     turn_id: TurnId::new_v4(),
                     call_id: "c1".into(),
                     error: "prior failure".into(),
-                    at: 2,
+                    at: 30,
                 },
-                2,
+                30,
             ),
         ];
-        assert!(compute_boundary_repairs(&events).is_empty());
+        assert!(repairs_for(&reduce_run(&events)).is_empty());
     }
 }

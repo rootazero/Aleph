@@ -16,10 +16,10 @@
 
 use std::collections::HashSet;
 
-use crate::gateway::resume_coordinator::{classify_markers, ScanVerdict};
 use crate::gateway::session_projector::project_event;
 use crate::gateway::session_store::SessionStore;
 use crate::session::projection::parse_source_seq;
+use crate::session::reduction::{reduce_disposition, RunDisposition};
 use crate::session::service::SessionId;
 use crate::session::store::SessionEventStore;
 use crate::sync_primitives::Arc;
@@ -74,9 +74,9 @@ impl ProjectionReconciler {
 
         for (session_id, markers) in groups {
             report.scanned += 1;
-            match classify_markers(&markers) {
-                ScanVerdict::Clean => report.skipped_clean += 1,
-                ScanVerdict::Interrupted { .. } => {
+            match reduce_disposition(&markers) {
+                RunDisposition::Clean => report.skipped_clean += 1,
+                RunDisposition::Interrupted { .. } => {
                     self.reconcile_session(&session_id, &mut report).await;
                 }
             }
