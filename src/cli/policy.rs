@@ -247,6 +247,57 @@ mod tests {
         assert_eq!(result.unwrap_err().to_string(), "boom");
     }
 
+    /// Live-server case: orphaned=false, pid is real. The message must
+    /// name the holder PID so the operator knows which process to stop,
+    /// and must not say "orphaned".
+    #[test]
+    fn lock_held_error_display_for_live_holder() {
+        let err = LockHeldError {
+            pid: 1234,
+            lock_path: std::path::PathBuf::from("/tmp/aleph.lock"),
+            orphaned: false,
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("server is running"), "{msg}");
+        assert!(msg.contains("PID 1234"), "{msg}");
+        assert!(!msg.contains("orphaned"), "{msg}");
+        assert!(!msg.contains("holder unknown"), "{msg}");
+    }
+
+    /// Orphaned-but-known case: pid is set, process_matches returned false
+    /// (the lock is held by a dead PID). The message must read "orphaned"
+    /// and still show the (dead) PID for operator forensics.
+    #[test]
+    fn lock_held_error_display_for_orphaned_with_pid() {
+        let err = LockHeldError {
+            pid: 5678,
+            lock_path: std::path::PathBuf::from("/tmp/aleph.lock"),
+            orphaned: true,
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("orphaned lock detected"), "{msg}");
+        assert!(msg.contains("PID 5678"), "{msg}");
+        assert!(!msg.contains("holder unknown"), "{msg}");
+    }
+
+    /// Holder-unknown case: pid is 0, sidecar was unreadable. The message
+    /// must NOT print "PID 0" (it is never a real process) — instead it
+    /// says "holder unknown" while still labelling the lock as orphaned.
+    /// This is the M2 contract from review-results/cli.md.
+    #[test]
+    fn lock_held_error_display_when_holder_unknown() {
+        let err = LockHeldError {
+            pid: 0,
+            lock_path: std::path::PathBuf::from("/tmp/aleph.lock"),
+            orphaned: true,
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("orphaned lock detected"), "{msg}");
+        assert!(msg.contains("holder unknown"), "{msg}");
+        assert!(!msg.contains("(PID 0)"), "{msg}");
+        assert!(!msg.contains("PID 0)"), "{msg}");
+    }
+
     #[test]
     fn with_policy_lock_only_acquires_when_free() {
         let dir = tempfile::tempdir().unwrap();
