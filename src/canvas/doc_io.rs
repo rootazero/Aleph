@@ -20,6 +20,8 @@ use std::sync::{Arc, Weak};
 
 use aleph_protocol::canvas::CanvasDoc;
 
+use crate::sync_primitives::Mutex;
+
 use super::store::CanvasError;
 
 /// Prune dead slots once the table reaches this size.
@@ -33,7 +35,7 @@ const PRUNE_AT: usize = 128;
 /// Per-canvas-id write locks for `doc.json`.
 #[derive(Debug, Default)]
 pub(super) struct DocLocks {
-    slots: std::sync::Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>,
+    slots: Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>,
 }
 
 impl DocLocks {
