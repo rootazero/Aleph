@@ -107,6 +107,9 @@ graphify-out/
 # Agent-tool worktree / review scratch dirs (stray source copies + run reports)
 .claire/
 .context/
+# Raw audit dumps from agent review runs (large machine-generated JSON;
+# curated summaries belong in review-results/, which IS tracked)
+.review/
 # Pi coding-agent session/task state (per-machine, regenerated on each run)
 .pi/
 # Local third-party reference source cache

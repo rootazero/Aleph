@@ -20,6 +20,16 @@ struct ScrapeRequest<'a> {
 
 #[derive(Deserialize, Default)]
 pub(crate) struct FirecrawlScrapeResponse {
+    /// Firecrawl v2 envelope (`{"success": bool, "data": {...}, "error": "..."}`)
+    /// uses a top-level `success` to flag failure modes that still arrive over
+    /// HTTP 200 (auth required, quota exhausted, page blocked). Without this
+    /// arm the parser would silently drop the `error` field and the caller
+    /// would surface a misleading "no markdown" — see
+    /// `firecrawl_scrape_response_ignores_success_field` in the audit notes.
+    #[serde(default)]
+    success: bool,
+    #[serde(default)]
+    error: Option<String>,
     #[serde(default)]
     data: ScrapeData,
 }
@@ -30,8 +40,19 @@ struct ScrapeData {
     markdown: Option<String>,
 }
 
-pub(crate) fn map_scrape(resp: FirecrawlScrapeResponse) -> Option<String> {
-    resp.data.markdown.filter(|m| !m.is_empty())
+pub(crate) fn map_scrape(resp: FirecrawlScrapeResponse) -> Result<Option<String>> {
+    // Firecrawl returns HTTP 200 even when `success=false` (documented
+    // behaviour for quota / auth / blocked-page outcomes). Surface the
+    // upstream error verbatim before falling through to the markdown
+    // extraction so the operator / agent sees the actual reason instead of
+    // a generic "no markdown".
+    if !resp.success {
+        return Err(AlephError::provider(format!(
+            "firecrawl scrape failed: {}",
+            resp.error.unwrap_or_else(|| "unspecified".to_string())
+        )));
+    }
+    Ok(resp.data.markdown.filter(|m| !m.is_empty()))
 }
 
 /// Fetch provider backed by Firecrawl's `/v2/scrape`. Config (base_url + token)
@@ -73,11 +94,17 @@ impl FirecrawlFetchProvider {
 #[async_trait]
 impl FetchProvider for FirecrawlFetchProvider {
     async fn fetch(&self, url: &str) -> Result<String> {
-        // SSRF contract: caller (WebFetchTool) has already validated `url`
-        // against the operator's SsrfPolicy. We do NOT re-validate here so
-        // the operator's policy is authoritative and we avoid a second DNS
-        // resolution that would widen the rebinding TOCTOU window. See
-        // `FetchProvider::fetch` doc comment.
+        // SSRF contract: caller is responsible for SSRF validation. Today
+        // the only live caller is `handle_test` in
+        // `gateway/handlers/fetch_config.rs`, which passes a hardcoded
+        // `https://example.com` and cannot leak. The agent-facing
+        // `WebFetchTool` path deliberately bypasses providers at the entry
+        // point (BT-D-R4-22 in `web_fetch/mod.rs`) until the SSRF DNS pin
+        // can be threaded into a provider's own `reqwest` client. When that
+        // gap closes, the `SsrfPolicy::validate_url_async` gate belongs on
+        // the CALLER, not on the provider — providers stay one-way HTTP
+        // wrappers. See `FetchProvider::fetch` doc comment for the full
+        // rationale.
         // Same funnel the search providers use: it is the only place a
         // `reqwest` failure becomes an `AlephError`, and the only place the
         // bearer token is scrubbed out of the message on the way.
@@ -110,7 +137,10 @@ impl FetchProvider for FirecrawlFetchProvider {
         let parsed: FirecrawlScrapeResponse = serde_json::from_slice(&body_bytes).map_err(|e| {
             AlephError::provider(format!("Failed to parse firecrawl response: {e}"))
         })?;
-        map_scrape(parsed)
+        // `map_scrape` now bubbles the upstream `success:false` reason up
+        // before the "no markdown" arm so quota / auth / blocked-page
+        // outcomes don't look like a benign empty payload.
+        map_scrape(parsed)?
             .ok_or_else(|| AlephError::provider("firecrawl scrape returned no markdown"))
     }
     fn name(&self) -> &str {
@@ -129,13 +159,29 @@ mod tests {
     fn maps_markdown_from_scrape_response() {
         let json = r##"{"success":true,"data":{"markdown":"# Hello\n\nbody"}}"##;
         let parsed: FirecrawlScrapeResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(map_scrape(parsed).as_deref(), Some("# Hello\n\nbody"));
+        assert_eq!(map_scrape(parsed).unwrap().as_deref(), Some("# Hello\n\nbody"));
     }
 
     #[test]
     fn missing_markdown_maps_to_none() {
         let json = r#"{"success":true,"data":{}}"#;
         let parsed: FirecrawlScrapeResponse = serde_json::from_str(json).unwrap();
-        assert!(map_scrape(parsed).is_none());
+        assert!(map_scrape(parsed).unwrap().is_none());
+    }
+
+    #[test]
+    fn success_false_surfaces_upstream_error() {
+        // HTTP 200 with success=false (quota / auth / blocked-page) must
+        // surface the upstream `error` field verbatim, not collapse into
+        // the misleading "no markdown" arm.
+        let json =
+            r#"{"success":false,"error":"page requires authentication","data":{"markdown":""}}"#;
+        let parsed: FirecrawlScrapeResponse = serde_json::from_str(json).unwrap();
+        let err = map_scrape(parsed).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("page requires authentication"),
+            "expected upstream error in message, got: {msg}"
+        );
     }
 }

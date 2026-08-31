@@ -156,7 +156,7 @@ use crate::gateway::session_store::SessionStore;
 use crate::gateway::visibility::owner_and_scope_visible_to;
 use crate::sync_primitives::Arc;
 use crate::teams::TeamStore;
-use crate::utils::fifo_cache::remember;
+use crate::utils::fifo_cache::{forget, remember};
 use aleph_protocol::team_topic::team_topic_id;
 
 /// Which session (if any) a delivered event frame is attributable to, keyed
@@ -1147,6 +1147,32 @@ impl EventVisibilityIndex {
         let mut inner = self.team_owners.write().await;
         let TeamOwnerCache { order, map } = &mut *inner;
         remember(order, map, team_id, (owner, scope), MAX_CACHED_TEAM_OWNERS);
+    }
+
+    /// Drop the cached ownership / scope for `session_key` so the next
+    /// `session_admits` call falls through to `SessionStore::get_metadata`
+    /// and re-derives the truth. Required after any session row mutation
+    /// (`sessions.delete`, `sessions.patch`, `sessions.compaction.restore`,
+    /// `sessions.set_project_root`) that may change `owner_user_id` or
+    /// `scope_id` — without it the cache keeps serving the pre-mutation
+    /// pair until FIFO eviction.
+    ///
+    /// Idempotent: dropping a missing key is a no-op. Never wired into the
+    /// per-frame read path.
+    pub async fn forget_session(&self, session_key: &str) {
+        let mut inner = self.owners.write().await;
+        let OwnershipCache { order, map } = &mut *inner;
+        forget(order, map, session_key);
+    }
+
+    /// Drop the cached team ownership for `team_id` so the next
+    /// `team_admits` call falls through to `TeamStore::get_team` and
+    /// re-derives the truth. Required after any team row mutation that may
+    /// change `owner_user_id` or `scope_id`.
+    pub async fn forget_team(&self, team_id: &str) {
+        let mut inner = self.team_owners.write().await;
+        let TeamOwnerCache { order, map } = &mut *inner;
+        forget(order, map, team_id);
     }
 
     #[cfg(test)]

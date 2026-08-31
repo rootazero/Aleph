@@ -12,6 +12,19 @@ pub struct FetchRegistry {
 
 impl FetchRegistry {
     pub fn from_config(cfg: &FetchConfigInternal, ctx: &FetchBuildCtx) -> Self {
+        // Self-gate on the top-level `enabled` flag. Without this, any caller
+        // of `from_config` (now or future) would silently get a populated
+        // registry when the operator set `[fetch].enabled = false` — the
+        // external gate in
+        // `executor/builtin_registry/builder/constructor/mod.rs` masked this
+        // today, but the registry API contract is broken if the registry
+        // itself does not respect its own config knob.
+        if !cfg.enabled {
+            return Self {
+                providers: HashMap::new(),
+                order: Vec::new(),
+            };
+        }
         let factories = FetchProviderFactoryRegistry::with_defaults();
         let mut providers: HashMap<String, Arc<dyn FetchProvider>> = HashMap::new();
         for (name, backend) in &cfg.backends {
@@ -29,13 +42,14 @@ impl FetchRegistry {
         // Strategy V: Firecrawl shares the [search] config (Decision A) and needs
         // no [fetch] backend entry. Derive it from search when not already built.
         //
-        // KNOWN LIMITATION: there is no per-fetch-backend disable gate. The
-        // synthetic entry below is hardcoded `enabled: true`; the only way to
-        // suppress the auto-built Firecrawl provider is the top-level
-        // `[fetch].enabled = false`, which disables all fetch backends at once.
-        // Operators that want Firecrawl for search but not for fetch currently
-        // cannot express this; future work may add a per-fetch-backend
-        // `enabled` flag in `FetchBackendConfig`.
+        // KNOWN LIMITATION: there is no per-fetch-backend disable gate on the
+        // search side (`SearchBackendConfig` has no `enabled` field). The
+        // synthetic entry below is therefore built with `enabled: true` to
+        // honour the operator's `[fetch].enabled = true` top-level knob — an
+        // operator who wants Firecrawl for search but NOT for fetch currently
+        // cannot express this without disabling fetch entirely. Once a
+        // per-fetch override lands on `FetchConfigInternal`, replace this with
+        // the dedicated opt-in.
         if !providers.contains_key("firecrawl") {
             if let Some(factory) = factories.get("firecrawl") {
                 let synthetic = FetchBackendConfig {
@@ -44,7 +58,7 @@ impl FetchRegistry {
                     base_url: None,
                     timeout_seconds: None,
                     verified: false,
-                    enabled: true,
+                    enabled: cfg.enabled,
                 };
                 if let Ok(Some(p)) = factory.build(&synthetic, ctx) {
                     providers.insert("firecrawl".to_string(), p);
@@ -249,5 +263,45 @@ mod tests {
         let sel = FetchRegistry::from_config(&cfg, &ctx).select();
         let names: Vec<&str> = sel.iter().map(|p| p.name()).collect();
         assert_eq!(names, vec!["crawl4ai", "firecrawl"]);
+    }
+
+    /// The top-level `[fetch].enabled = false` knob must short-circuit
+    /// `from_config` itself, not depend on every caller to gate the call.
+    /// The executor-side constructor still gates today, but the registry's
+    /// own contract requires it.
+    #[test]
+    fn disabled_fetch_returns_empty_registry() {
+        let search = search_with_firecrawl();
+        let resolve = |k: &str| -> Option<String> {
+            (k == "search:firecrawl").then(|| "fc-token".to_string())
+        };
+        let ctx = FetchBuildCtx {
+            search: Some(&search),
+            resolve_secret: &resolve,
+        };
+        let mut backends = HashMap::new();
+        backends.insert(
+            "crawl4ai".into(),
+            FetchBackendConfig {
+                provider_type: "crawl4ai".into(),
+                api_key: None,
+                base_url: Some("http://x:11235".into()),
+                timeout_seconds: Some(60),
+                verified: false,
+                enabled: true,
+            },
+        );
+        let cfg = FetchConfigInternal {
+            enabled: false,
+            default_provider: "crawl4ai".into(),
+            fallback_providers: None,
+            backends,
+        };
+        let reg = FetchRegistry::from_config(&cfg, &ctx);
+        assert!(
+            reg.select().is_empty(),
+            "from_config must respect the top-level enabled gate"
+        );
+        assert!(reg.is_empty());
     }
 }

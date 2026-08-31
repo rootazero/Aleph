@@ -11,9 +11,8 @@ pub mod types;
 pub use types::{Cadence, LoopState, LoopStatus};
 
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Mutex, MutexGuard};
 use std::collections::HashMap;
-use std::sync::Mutex;
 
 /// How long past its scheduled wake an in-flight tick may stay unconfirmed
 /// before the registry treats it as dead and lets a new tick be claimed. A
@@ -83,7 +82,7 @@ pub struct LoopRegistry {
 }
 
 impl LoopRegistry {
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, LoopState>> {
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, LoopState>> {
         // Poison-safe (project rule P7): recover the guard rather than panic.
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }

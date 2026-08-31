@@ -111,9 +111,7 @@ impl GroupChatExecutor {
                 // persona produces N×M log lines (N rounds × M occurrences per
                 // round) and drowns the tracing output.
                 let first_miss = self
-                    .provider_fallback_warned
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .lock_provider_fallback_warned()
                     .insert((persona.id.clone(), provider_name.clone()));
                 if first_miss {
                     tracing::warn!(
@@ -126,6 +124,25 @@ impl GroupChatExecutor {
             }
         }
         self.default_provider.current()
+    }
+
+    /// Lock the provider-fallback-warned dedupe set, logging on poisoning.
+    ///
+    /// Same rationale as `Orchestrator::lock_sessions_map`: a poisoned mutex
+    /// indicates a thread panicked mid-insert; we recover rather than crash
+    /// the long-running executor, but we log so the poisoning is visible.
+    fn lock_provider_fallback_warned(
+        &self,
+    ) -> crate::sync_primitives::MutexGuard<'_, std::collections::HashSet<(String, String)>>
+    {
+        self.provider_fallback_warned.lock().unwrap_or_else(|poisoned| {
+            tracing::error!(
+                subsystem = "group_chat",
+                event = "provider_fallback_warned_mutex_poisoned",
+                "provider-fallback-warned mutex was poisoned; recovering but state may be inconsistent"
+            );
+            poisoned.into_inner()
+        })
     }
 
     /// Persist a conversation turn to the database (best-effort).
@@ -222,11 +239,15 @@ impl GroupChatExecutor {
         let mut staged_turns: Vec<(u32, u32, Speaker, String)> = Vec::new();
         // persistence sequence: user=0, coordinator=1, persona_0=2, persona_1=3, ...
         let mut persist_seq: u32 = 0;
+        // Bind the user-turn text into a local so the commit phase can clone
+        // it without re-indexing `staged_turns[0]` (which trips clippy's
+        // pedantic `indexing_slicing` even though the bound is static).
+        let user_turn_text = user_message.to_string();
         staged_turns.push((
             round,
             persist_seq,
             Speaker::System,
-            user_message.to_string(),
+            user_turn_text.clone(),
         ));
         persist_seq = persist_seq.saturating_add(1);
 
@@ -450,10 +471,7 @@ impl GroupChatExecutor {
         session.add_turn(
             round,
             Speaker::System,
-            // Safe: staged_turns[0] is the user turn we pushed at the top of
-            // this function. Cloning avoids moving out of the Vec while we
-            // still need to iterate it for persistence below.
-            staged_turns[0].3.clone(),
+            user_turn_text.clone(),
         );
         for p in &prepared {
             let speaker = Speaker::Persona {

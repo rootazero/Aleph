@@ -131,7 +131,13 @@ impl GroupChatSession {
     /// not return `Result` because the single production caller
     /// (`executor::execute_round`) already gates on Active upstream (M3 in
     /// review/group_chat-statics).
-    pub fn add_turn(&mut self, round: u32, speaker: Speaker, content: String) {
+    ///
+    /// Visibility is `pub(crate)` so external callers cannot bypass the
+    /// Active-status / monotonic-round gates that `execute_round` enforces.
+    /// Internal callers (the executor and module tests) can still invoke it
+    /// directly; downstream channel implementations must go through
+    /// `GroupChatOrchestrator::execute_round`.
+    pub(crate) fn add_turn(&mut self, round: u32, speaker: Speaker, content: String) {
         if self.status != GroupChatStatus::Active {
             tracing::debug!(
                 subsystem = "group_chat",

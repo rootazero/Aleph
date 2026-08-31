@@ -50,9 +50,7 @@
 //! was connected. The gate now lives inside `resolve_secret` rather than at
 //! its callers, so a third caller inherits it without knowing it exists.
 
-use std::sync::RwLock;
-
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, RwLock};
 
 /// Lookup a named secret and return its plaintext value.
 ///

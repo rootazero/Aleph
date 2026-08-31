@@ -86,7 +86,21 @@ impl StreamRegistry {
                 opened: Instant::now(),
                 // Resolved HERE, at the single mint point, the same shape
                 // `teams::broadcast::register_fanout` uses for tree run ids.
-                owner: crate::scope::ambient_owner(),
+                //
+                // `ambient_owner` is `CALLER_USER` → `scope.owner_user_id`,
+                // which in a project room is the room CREATOR identically for
+                // every member. A voice stream opened from inside a tool call
+                // within a project room would therefore be attributed to
+                // whoever created the room, not the actual speaker — and
+                // `voice.transcribe.delta` classifies ByUserId from this
+                // stamp, so a member's STT deltas would reach only the
+                // creator. Prefer `ambient_room_author` (which reads the
+                // room author's seeded TURN_CONTEXT value) so a member's
+                // stream lands on their own connection. Falls through to
+                // `ambient_owner` outside a project room, matching the
+                // existing semantics for personal / org sessions.
+                owner: crate::scope::ambient_room_author()
+                    .or_else(crate::scope::ambient_owner),
             },
         );
         id

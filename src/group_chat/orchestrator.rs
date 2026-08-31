@@ -177,9 +177,7 @@ impl GroupChatOrchestrator {
         // `SessionEntry`).
         let cancel = session.cancel_token.clone();
         let handle = Arc::new(tokio::sync::Mutex::new(session));
-        self.sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        self.lock_sessions_map()
             .insert(session_id.clone(), SessionEntry {
                 handle: Arc::clone(&handle),
                 cancel,
@@ -221,9 +219,7 @@ impl GroupChatOrchestrator {
     /// The caller should drop the orchestrator lock before awaiting the
     /// session lock.
     pub fn get_session(&self, session_id: &str) -> Option<SharedSession> {
-        self.sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        self.lock_sessions_map()
             .get(session_id)
             .map(|e| Arc::clone(&e.handle))
     }
@@ -293,9 +289,7 @@ impl GroupChatOrchestrator {
     /// out so `end_session`'s atomicity is visible (lock dropped before await).
     fn remove_session(&self, session_id: &str) -> Option<RemovedSession> {
         let (session_id, entry) = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .lock_sessions_map()
             .remove_entry(session_id)?;
         Some(RemovedSession {
             session_id,
@@ -319,12 +313,29 @@ impl GroupChatOrchestrator {
     ///
     /// The caller can then lock each session individually to inspect status.
     pub fn all_sessions(&self) -> Vec<(String, SharedSession)> {
-        self.sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        self.lock_sessions_map()
             .iter()
             .map(|(id, e)| (id.clone(), Arc::clone(&e.handle)))
             .collect()
+    }
+
+    /// Lock the sessions map, logging if the mutex was poisoned.
+    ///
+    /// A poisoned mutex indicates another thread panicked while holding
+    /// the lock; the map contents are then potentially in an inconsistent
+    /// state. Recovering is sometimes the right call (long-running servers
+    /// can't afford to take the orchestrator down on a downstream panic),
+    /// but the recovery must be auditable so on-call engineers can
+    /// correlate the failure with subsequent state divergence.
+    fn lock_sessions_map(&self) -> std::sync::MutexGuard<'_, HashMap<String, SessionEntry>> {
+        self.sessions.lock().unwrap_or_else(|poisoned| {
+            tracing::error!(
+                subsystem = "group_chat",
+                event = "sessions_mutex_poisoned",
+                "orchestrator sessions mutex was poisoned; recovering but state may be inconsistent"
+            );
+            poisoned.into_inner()
+        })
     }
 }
 

@@ -643,7 +643,9 @@ impl AgentHarness {
                             .iter()
                             .rposition(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
                             .unwrap_or(0);
-                        let errors = events[last_assistant_idx..]
+                        let errors = events
+                            .get(last_assistant_idx..)
+                            .unwrap_or(&[])
                             .iter()
                             .filter(|r| matches!(r.event, SessionEvent::ToolError { .. }))
                             .count();
@@ -952,7 +954,20 @@ pub(crate) fn tool_use_blocks(tool_calls: &[NativeToolCall]) -> Vec<Value> {
                 "input": c.arguments,
             });
             if let Some(sig) = &c.thought_signature {
-                block["thought_signature"] = Value::String(sig.clone());
+                // `block` is constructed above via `serde_json::json!({...})`
+                // which always produces an Object, but encoding that
+                // assumption into a `Value` index expression trips
+                // `clippy::indexing_slicing` (whose `Index` impl on
+                // `Value` panics on non-Object) and obscures the contract
+                // for future code that might let `block` come from a
+                // non-Object source. Use the explicit `Object` accessor so
+                // the contract is locally visible and the panic surface
+                // would at least be a labeled expect rather than an opaque
+                // index panic.
+                let obj = block
+                    .as_object_mut()
+                    .expect("block built from json!{{...}} must be an Object");
+                obj.insert("thought_signature".into(), Value::String(sig.clone()));
             }
             block
         })

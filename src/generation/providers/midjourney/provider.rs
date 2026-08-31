@@ -121,14 +121,35 @@ impl MidjourneyProvider {
         )
     }
 
-    /// Get the URL for fetching task status
-    pub(crate) fn task_url(&self, task_id: &str) -> String {
-        format!(
+    /// Get the URL for fetching task status.
+    ///
+    /// `task_id` originates in the Midjourney proxy's response and is forwarded
+    /// verbatim into a URL path segment. A malicious or compromised upstream
+    /// could return a value containing `/`, `?`, or `&` and silently redirect
+    /// the request to a sibling endpoint. Mirror the google-veo allow-list +
+    /// length-cap pattern (`google_veo/provider.rs::operation_url`): reject any
+    /// task id outside `[A-Za-z0-9_-]` or longer than 256 chars rather than
+    /// emitting a request we know is malformed.
+    pub(crate) fn task_url(&self, task_id: &str) -> GenerationResult<String> {
+        const MAX_TASK_ID_LEN: usize = 256;
+        let valid = !task_id.is_empty()
+            && task_id.len() <= MAX_TASK_ID_LEN
+            && task_id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if !valid {
+            return Err(GenerationError::provider(
+                format!("invalid midjourney task_id: {task_id:?}"),
+                None,
+                "midjourney",
+            ));
+        }
+        Ok(format!(
             "{}/{}/mj/task/{}/fetch",
             self.endpoint,
             self.mode.as_path(),
             task_id
-        )
+        ))
     }
 }
 

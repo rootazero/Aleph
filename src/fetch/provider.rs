@@ -13,10 +13,19 @@ pub trait FetchProvider: Send + Sync {
     /// invoking `fetch`. Providers do not re-validate — they trust the
     /// caller's gate. This keeps the operator's policy authoritative and
     /// avoids redundant DNS resolutions (which would otherwise widen the
-    /// DNS-rebinding TOCTOU window). The production caller is
-    /// [`crate::builtin_tools::web_fetch`], which performs this check at
-    /// the entry point; the gateway health-check caller uses a hardcoded
-    /// `https://example.com` so it cannot leak.
+    /// DNS-rebinding TOCTOU window).
+    ///
+    /// **Production callers today**: [`crate::builtin_tools::web_fetch`]
+    /// deliberately bypasses the configured fetch providers at the entry
+    /// point (BT-D-R4-22 in `web_fetch/mod.rs`) because the SSRF DNS pin
+    /// cannot yet be threaded into a provider's own `reqwest` client. The
+    /// only live caller of `FetchProvider::fetch` is the user-invoked
+    /// connection-test RPC in
+    /// `gateway/handlers/fetch_config.rs::handle_test`, which passes a
+    /// hardcoded `https://example.com` and cannot leak. When the agent-facing
+    /// path returns to providers (DNS pin plumbing lands), the
+    /// `SsrfPolicy::validate_url_async` gate belongs on the CALLER, not on
+    /// the provider — providers stay one-way HTTP wrappers.
     async fn fetch(&self, url: &str) -> Result<String>;
 
     /// Stable provider name (matches the `[fetch].backends` key).

@@ -1,0 +1,27 @@
+{
+  "module": "src/goal",
+  "findings": [
+    {
+      "severity": "P1",
+      "title": "Legacy Complete goals falsely re-fire settle-notify on any field edit",
+      "file": "src/goal/store.rs",
+      "line": 1130,
+      "category": "logic",
+      "description": "settle_stamp falls back to updated_at_ms when completed_at_ms is None. Any tool-side update changes the stamp and re-pokes watcher.",
+      "trigger": "Pre-completed_at_ms Complete goals + tool update",
+      "suggested_fix": "Migrate legacy or use dedicated settle_completion_stamp",
+      "confidence": "high"
+    },
+    {
+      "severity": "P3",
+      "title": "Lazy elapsed-wait-barrier clear is not persisted when dirty=false",
+      "file": "src/goal/store.rs",
+      "line": 316,
+      "category": "logic",
+      "description": "try_claim_continuation lazy self-clear updates local goal but dirty only tracks baseline+workspace. Idle+dirty=false branch doesn't persist.",
+      "trigger": "Rare: stale-grace re-claim path",
+      "suggested_fix": "Widen dirty to include waiting_until_ms or always persist",
+      "confidence": "high"
+    }
+  ]
+}

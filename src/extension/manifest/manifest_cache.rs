@@ -34,8 +34,9 @@
 //! worst case — small enough to keep in memory without a cap.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::SystemTime;
+
+use crate::sync_primitives::Mutex;
 
 use lru::LruCache;
 

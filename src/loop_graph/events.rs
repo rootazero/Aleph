@@ -169,6 +169,11 @@ impl TopologyEventBus {
     /// the audit layer reads this to decide whether to surface a warning to
     /// the operator. Resetting the counter is intentionally not provided — a
     /// dropped event is dropped, the counter is monotonic.
+    //
+    // Not yet wired to a caller — the planned audit-warning consumer has not
+    // landed. Marked allow(dead_code) so future removal is a deliberate
+    // decision (when a consumer materialises the lint goes away naturally).
+    #[allow(dead_code)]
     #[must_use]
     pub fn dropped_events(&self) -> u64 {
         self.dropped_events.load(Ordering::Acquire)
@@ -186,6 +191,11 @@ impl TopologyEventBus {
     /// Record `n` events dropped by a subscriber's lag. Called by
     /// `spawn_event_persister` (and any future subscriber) when it observes a
     /// `RecvError::Lagged(n)` from `broadcast::Receiver::recv`.
+    //
+    // Companion to `dropped_events`: no live caller today (the persister
+    // currently does not call this), but the audit-warning consumer planned
+    // for `dropped_events` will also use this path. See allow on the getter.
+    #[allow(dead_code)]
     pub fn record_lag(&self, n: u64) {
         self.dropped_events.fetch_add(n, Ordering::AcqRel);
     }

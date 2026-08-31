@@ -43,9 +43,21 @@ fn sanitize_generated_at(raw: &str) -> Option<String> {
         let is_date_or_time_field = i < 19;
         let is_separator = matches!(i, 4 | 7 | 10 | 13 | 16);
         let is_tz_open = i == 19;
-        let is_accepted_elsewhere = DELIMITER_BYTES.contains(b)
-            || b.is_ascii_digit()
-            || (is_tz_open && matches!(b, b'.' | b'+' | b'-' | b'Z'));
+        // At the TZ-open slot (position 19, the byte right after the
+        // `T...:...:SS` time block) the structural grammar is rigid: only
+        // `.` (fractional-second prefix), `+`/`-` (offset sign), or `Z`
+        // (UTC) are allowed. The broader `is_accepted_elsewhere` check
+        // also accepts DELIMITER_BYTES (including `:` and `T`) and ASCII
+        // digits, which would let a wire value like
+        // `2024-01-15T12:00:00:` or `2024-01-15T12:00:000` slip past.
+        // Restrict position 19 to the strict whitelist so a hostile
+        // publisher cannot smuggle a non-RFC3339 tail past the slot check.
+        if is_tz_open && !matches!(b, b'.' | b'+' | b'-' | b'Z') {
+            return None;
+        }
+        let is_accepted_elsewhere = is_tz_open
+            || DELIMITER_BYTES.contains(b)
+            || b.is_ascii_digit();
         // Whitespace anywhere is fatal — the publisher's payload should be
         // tight, and trimming opens the door to look-alike padding attacks.
         if b.is_ascii_whitespace() {

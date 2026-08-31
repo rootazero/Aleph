@@ -7,7 +7,14 @@
 use crate::error::ErrorClass;
 
 /// Outcome of a guardrail evaluation.
+///
+/// `#[non_exhaustive]` guards against downstream match-statements breaking
+/// when a new variant is added (e.g. a future `Quarantine` or `Defer` outcome).
+/// External callers should add a wildcard arm or use the `is_*` helpers
+/// below; adding a variant without `#[non_exhaustive]` is a breaking change
+/// for every external match.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum GuardrailDecision {
     /// Content is fine — pass through unchanged.
     Allow,
@@ -32,11 +39,29 @@ pub enum GuardrailDecision {
     Warn { reason: String },
 }
 
+/// `#[non_exhaustive]` keeps the field set open for growth — future audit
+/// metadata, confidence score, or rule id can be added without breaking
+/// downstream destructuring. External callers should construct via
+/// [`Replacement::new`] and access fields through methods rather than via
+/// struct-literal destructuring.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Replacement {
     pub text: String,
     /// Human-readable label of the rule that fired (used in audit + tracing).
     pub source: String,
+}
+
+impl Replacement {
+    /// Construct a new `Replacement`. Preferred over struct-literal
+    /// initialization so future field additions stay source-compatible.
+    #[must_use]
+    pub fn new(text: impl Into<String>, source: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            source: source.into(),
+        }
+    }
 }
 
 impl GuardrailDecision {

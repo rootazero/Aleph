@@ -31,8 +31,14 @@ impl FetchProviderFactory for Crawl4aiFetchFactory {
         backend: &FetchBackendConfig,
         ctx: &FetchBuildCtx,
     ) -> Result<Option<Arc<dyn FetchProvider>>> {
-        // token: backend.api_key (inline) else vault `fetch:crawl4ai`
-        // (back-compat `web_fetch:crawl4ai`).
+        // Token precedence:
+        // 1. `backend.api_key` — only set programmatically by `handle_test`
+        //    in `gateway/handlers/fetch_config.rs`. The field is
+        //    `#[serde(default, skip_serializing)]` on `FetchBackendConfig`,
+        //    so operators CANNOT populate it in `config.toml` — the vault
+        //    lookup below is the only production source.
+        // 2. Vault key `fetch:crawl4ai`.
+        // 3. Vault key `web_fetch:crawl4ai` (back-compat alias).
         let token = backend
             .api_key
             .clone()

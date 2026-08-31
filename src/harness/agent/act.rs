@@ -385,7 +385,6 @@ impl AgentHarness {
         if let (Some(canonical), Some(claims)) = (canonical, claims) {
             if self
                 .can_parallel_dispatch(&tool_calls, canonical, claims)
-                .await
             {
                 return self
                     .act_parallel(
@@ -695,7 +694,7 @@ impl AgentHarness {
     /// `canonical` / `claims` are the per-call canonical arg signatures and
     /// concurrency claims pre-computed by `act()`, aligned by index with
     /// `tool_calls`.
-    async fn can_parallel_dispatch(
+    fn can_parallel_dispatch(
         &self,
         tool_calls: &[NativeToolCall],
         canonical: &[String],

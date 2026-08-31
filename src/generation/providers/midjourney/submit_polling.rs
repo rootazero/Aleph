@@ -113,7 +113,7 @@ impl SubmitPolling for MidjourneyProvider {
 
     /// Poll for task completion
     async fn poll_task(&self, task_id: &str) -> GenerationResult<TaskResponse> {
-        let url = self.task_url(task_id);
+        let url = self.task_url(task_id)?;
         let mut attempts = 0;
 
         loop {

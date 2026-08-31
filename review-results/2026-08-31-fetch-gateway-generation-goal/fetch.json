@@ -1,0 +1,115 @@
+{
+  "module": "src/fetch",
+  "findings": [
+    {
+      "severity": "P1",
+      "title": "Provider doc claims production caller is web_fetch, but web_fetch skips providers entirely",
+      "file": "src/fetch/provider.rs",
+      "line": 21,
+      "category": "wiring",
+      "description": "src/fetch/provider.rs:18-22 states production caller is web_fetch, but WebFetchTool deliberately SKIPS invoking configured fetch providers (BT-D-R4-22). Only real production invocation is handle_test with hardcoded https://example.com.",
+      "trigger": "Future code trusting the doc and removing SSRF gate",
+      "suggested_fix": "Rewrite doc to describe actual call surface",
+      "confidence": "high"
+    },
+    {
+      "severity": "P1",
+      "title": "Firecrawl scrape response ignores top-level success field, losing error details",
+      "file": "src/fetch/providers/firecrawl.rs",
+      "line": 22,
+      "category": "logic",
+      "description": "FirecrawlScrapeResponse only deserializes data. v2 envelope has success: bool, error: String. When 200 with success=false, caller gets misleading 'no markdown' error.",
+      "trigger": "Firecrawl returns 200 with success=false",
+      "suggested_fix": "Add success: bool and error: Option<String> fields; reject success==false",
+      "confidence": "high"
+    },
+    {
+      "severity": "P1",
+      "title": "FetchRegistry::from_config never reads the enabled field",
+      "file": "src/fetch/registry.rs",
+      "line": 21,
+      "category": "wiring",
+      "description": "cfg.enabled never consulted; Firecrawl auto-build hardcodes enabled=true. External gate in constructor/mod.rs:67-73 hides this but registry API contract broken.",
+      "trigger": "Any future caller invoking from_config without manual enabled check",
+      "suggested_fix": "Add early-return `if !cfg.enabled { return empty registry }`",
+      "confidence": "high"
+    },
+    {
+      "severity": "P1",
+      "title": "Operators cannot disable Firecrawl for fetch without disabling all of fetch",
+      "file": "src/fetch/registry.rs",
+      "line": 59,
+      "category": "wiring",
+      "description": "Firecrawl auto-build hardcodes enabled=true. SearchBackendConfig has no enabled field. Operator cannot run search firecrawl + non-firecrawl fetch.",
+      "trigger": "Operator configures [search].backends.firecrawl but wants fetch without firecrawl",
+      "suggested_fix": "Thread enabled: cfg.enabled into synthetic FetchBackendConfig",
+      "confidence": "high"
+    },
+    {
+      "severity": "P1",
+      "title": "Misleading SSRF contract comment in firecrawl.rs",
+      "file": "src/fetch/providers/firecrawl.rs",
+      "line": 78,
+      "category": "security",
+      "description": "Doc claims caller is WebFetchTool which has validated URL \u2014 but WebFetchTool doesn't invoke providers at all today.",
+      "trigger": "Future code trusting doc",
+      "suggested_fix": "Replace comment with accurate call surface description",
+      "confidence": "high"
+    },
+    {
+      "severity": "P2",
+      "title": "FetchProvider::is_available() is dead code; sync is_healthy() lies",
+      "file": "src/fetch/provider.rs",
+      "line": 25,
+      "category": "wiring",
+      "description": "is_available() declared but never invoked. Both impls are degenerate (always true).",
+      "trigger": "Future filter by is_available()",
+      "suggested_fix": "Remove from trait OR make it meaningful with cached health check",
+      "confidence": "high"
+    },
+    {
+      "severity": "P2",
+      "title": "FetchRegistry::is_empty() is dead code",
+      "file": "src/fetch/registry.rs",
+      "line": 99,
+      "category": "wiring",
+      "description": "Not invoked outside test module",
+      "trigger": "None",
+      "suggested_fix": "Delete or add real consumer",
+      "confidence": "high"
+    },
+    {
+      "severity": "P2",
+      "title": "Factory token-precedence comment suggests inline api_key works",
+      "file": "src/fetch/factory.rs",
+      "line": 29,
+      "category": "wiring",
+      "description": "Doc reads like operator can put token in [fetch].backends.crawl4ai.api_key, which serializes nowhere",
+      "trigger": "Confused operator",
+      "suggested_fix": "Update comment to reflect in-memory only",
+      "confidence": "high"
+    },
+    {
+      "severity": "P2",
+      "title": "Crawl4aiFetchProvider::from_backend silently drops explicit timeout=0",
+      "file": "src/fetch/providers/crawl4ai.rs",
+      "line": 18,
+      "category": "logic",
+      "description": "unwrap_or(60) produces 60 for both None and Some(0)",
+      "trigger": "Operator sets timeout_seconds=Some(0)",
+      "suggested_fix": "Push b.timeout_seconds through as-is",
+      "confidence": "medium"
+    },
+    {
+      "severity": "P3",
+      "title": "FirecrawlFetchProvider clones base_url and api_key unnecessarily",
+      "file": "src/fetch/providers/firecrawl.rs",
+      "line": 56,
+      "category": "performance",
+      "description": "Holds String instead of Arc<str>",
+      "trigger": "Future re-enablement",
+      "suggested_fix": "Defer",
+      "confidence": "low"
+    }
+  ]
+}

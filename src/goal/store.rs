@@ -315,8 +315,17 @@ impl GoalStore {
             }
             _ => goal,
         };
+        // `dirty` covers every field the lazy self-clear / baseline seed /
+        // workspace stamp above may have changed. Without the `waiting_until_ms`
+        // arm, an elapsed barrier whose clear is the ONLY change in this claim
+        // would be lost when neither baseline nor workspace mutated — the row
+        // would carry a still-pending wait into the next render and prompt
+        // assembly would re-show "parked (waiting)" until FIFO eviction
+        // re-read the stored value. Including the barrier change here means
+        // the Idle-return path persists the clear as the comment claims.
         let dirty = goal.baseline_captured != current.baseline_captured
-            || goal.workspace != current.workspace;
+            || goal.workspace != current.workspace
+            || goal.waiting_until_ms != current.waiting_until_ms;
         // Budget enforcement needs the live total; without one (or without a
         // budget at all) pass 0 so only the iteration/deadline caps apply.
         let tokens_now = if goal.token_budget.is_some() {
@@ -1124,15 +1133,32 @@ impl GoalStore {
     }
 }
 
-/// The settle-notify stamp: the instant this goal transitioned INTO `Complete`
-/// (legacy rows fall back to `updated_at_ms`). Single-sourced so claim and
-/// release can never derive different keys for the same completion.
+/// The settle-notify stamp: a per-completion key so the watcher can claim
+/// exactly once per genuine transition INTO `Complete`.
+///
+/// Two arms, deliberately distinct:
+///
+/// 1. `completed_at_ms` set: stamps the goal + the completion instant. Each
+///    fresh transition INTO `Complete` (a `Complete → Active → Complete`
+///    reset cycle) bumps `completed_at_ms`, so a renewed completion mints a
+///    new stamp and the watcher fires again — the documented behaviour.
+///
+/// 2. `completed_at_ms` is `None` (legacy rows persisted before the field
+///    landed): stamps a stable `legacy@<id>` key. Falling back to
+///    `updated_at_ms` would be wrong — every `with_note` /
+///    `with_lesson_appended` bumps `updated_at_ms`, so the stamp would change
+///    on any tool-side edit and `try_claim_settle_notify`'s `WHERE stamp !=
+///    excluded.stamp` would re-fire on a completion that already settled.
+///    The legacy arm therefore fires settle-notify exactly once per goal
+///    (the first claim wins, subsequent claims see the same stamp and
+///    return `changed=0`). New `Complete` goals always carry
+///    `completed_at_ms` — see [`GoalStatus`]`'s `(false, true)` transition
+///    in [`types::Goal::with_status`] — so this arm only governs upgrades.
 fn settle_stamp(goal: &Goal) -> String {
-    format!(
-        "{}@{}",
-        goal.id,
-        goal.completed_at_ms.unwrap_or(goal.updated_at_ms)
-    )
+    match goal.completed_at_ms {
+        Some(ms) => format!("{}@{}", goal.id, ms),
+        None => format!("legacy@{}", goal.id),
+    }
 }
 
 #[cfg(test)]
@@ -2190,6 +2216,57 @@ mod tests {
         let redone = reopened.with_status(GoalStatus::Complete, 5_000);
         assert_eq!(redone.completed_at_ms, Some(5_000));
         assert!(store.try_claim_settle_notify(&redone).unwrap());
+    }
+
+    /// Regression (legacy Complete rows): a goal persisted before
+    /// `completed_at_ms` was added carries `status=Complete` with
+    /// `completed_at_ms=None`. The old `settle_stamp` fell back to
+    /// `updated_at_ms`, so any tool-side edit (lesson/note) re-minted a
+    /// fresh stamp and false-fired the watcher for an already-settled
+    /// completion. The new `settle_stamp` arms a stable per-goal key for
+    /// this shape — so a legacy Complete goal fires settle-notify at most
+    /// once and stays silent on every subsequent field edit.
+    #[test]
+    fn legacy_complete_goal_does_not_refire_on_post_completion_field_edits() {
+        let (store, _d) = temp_store();
+        // Build a Complete goal as if it had been serialized before the
+        // `completed_at_ms` field landed: status=Complete, completed_at_ms=None.
+        let complete = pursuing("legacy-s", 5).with_status(GoalStatus::Complete, 1_000);
+        let complete_json = serde_json::to_string(&complete).unwrap();
+        // `with_status` always sets `completed_at_ms` for the (false,true)
+        // arm — reach the legacy shape by stripping the field via
+        // `serde_json::Value` and re-parsing, mirroring a real upgrade row
+        // that pre-dates the field.
+        let mut v: serde_json::Value = serde_json::from_str(&complete_json).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .remove("completed_at_ms");
+        let legacy: Goal = serde_json::from_value(v).unwrap();
+        assert!(legacy.completed_at_ms.is_none());
+        assert_eq!(legacy.status, GoalStatus::Complete);
+
+        store.put(&legacy).unwrap();
+        assert!(
+            store.try_claim_settle_notify(&legacy).unwrap(),
+            "the first claim on a legacy Complete row still fires"
+        );
+        assert!(
+            !store.try_claim_settle_notify(&legacy).unwrap(),
+            "re-observing the same legacy completion must stay silent"
+        );
+
+        // A tool-side edit (lesson/note) bumps `updated_at_ms` but must NOT
+        // mint a new stamp — that is exactly the false-fire the old fallback
+        // allowed.
+        let edited = legacy
+            .clone()
+            .with_lesson_appended("lesson X".into(), 2_000)
+            .with_note(Some("post-mortem".into()), 3_000);
+        store.put(&edited).unwrap();
+        assert!(
+            !store.try_claim_settle_notify(&edited).unwrap(),
+            "post-completion field edits on a legacy Complete goal must NOT re-fire"
+        );
     }
 
     #[test]

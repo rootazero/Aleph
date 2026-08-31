@@ -8,7 +8,36 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
+
+/// Wall-clock time in milliseconds since the Unix epoch, with a pre-epoch
+/// detector that fires `error!` once per process.
+///
+/// A pre-epoch wall clock (NTP misconfig, VM resume from suspend, manual
+/// clock rollback) collapses every approval timestamp to 0: every card is
+/// stamped "born 1970" and either auto-expires (`0 < created_at`) or
+/// auto-lives forever, depending on direction. The expiry math is
+/// deliberately wall-clock here (the field is on the wire — see
+/// `ExecApprovalRecord::expires_at_ms`), so the only safe posture is to
+/// surface the problem loudly; silent fallback to 0 makes the worst class
+/// of bug invisible.
+fn now_ms_or_warn() -> u64 {
+    static PRE_EPOCH_LOGGED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => d.as_millis() as u64,
+        Err(_) => {
+            if !PRE_EPOCH_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                error!(
+                    "wall clock reads pre-Unix-epoch; approval timestamps will \
+                     collapse to 0 until the clock is corrected (NTP, VM resume, \
+                     or manual rollback)"
+                );
+            }
+            0
+        }
+    }
+}
 
 use super::decision::ExecApprovalRequest;
 use super::socket::ApprovalDecisionType;
@@ -119,10 +148,7 @@ impl ExecApprovalRecord {
     /// Create from `ExecApprovalRequest`
     #[must_use]
     pub fn from_request(request: &ExecApprovalRequest, timeout_ms: u64) -> Self {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        let now = now_ms_or_warn();
 
         let executable = request
             .analysis
@@ -192,10 +218,7 @@ impl ExecApprovalRecord {
         if self.expires_at_ms == 0 {
             return false;
         }
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        let now = now_ms_or_warn();
         now > self.expires_at_ms
     }
 
@@ -353,10 +376,7 @@ impl ExecApprovalManager {
         // the record was created. `expires_at_ms == 0` is the no-expiry
         // sentinel: the caller waits indefinitely (notify + wait, ruled
         // 2026-08-28).
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        let now_ms = now_ms_or_warn();
         let timeout = if record.expires_at_ms == 0 {
             None
         } else {
@@ -540,12 +560,7 @@ impl ExecApprovalManager {
         if decision == ApprovalDecisionType::Deny {
             entry.record.deny_reason = deny_reason;
         }
-        entry.record.resolved_at_ms = Some(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
-        );
+        entry.record.resolved_at_ms = Some(now_ms_or_warn());
 
         // Callers proved the receiver is still open under this same lock
         // (`is_live`), so the send delivers — no silent drop to a zombie.

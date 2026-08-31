@@ -189,7 +189,7 @@ mod tests {
         let provider = MidjourneyProvider::new("test-key").unwrap();
 
         assert_eq!(
-            provider.task_url("abc123"),
+            provider.task_url("abc123").unwrap(),
             "https://ai.t8star.cn/mj-fast/mj/task/abc123/fetch"
         );
     }
@@ -202,9 +202,34 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            provider.task_url("task-001"),
+            provider.task_url("task-001").unwrap(),
             "https://custom.api.com/mj-fast/mj/task/task-001/fetch"
         );
+    }
+
+    #[test]
+    fn test_task_url_rejects_traversal_and_query_specials() {
+        let provider = MidjourneyProvider::new("test-key").unwrap();
+        // Forward slash, query separator, fragment, and empty / dot-only ids
+        // must all be rejected so the upstream-supplied task id cannot
+        // silently rewrite the URL.
+        let too_long = "x".repeat(257);
+        let bad_ids: Vec<&str> = [
+            "../admin",
+            "abc?injected=1",
+            "abc#frag",
+            ".",
+            "",
+        ]
+        .into_iter()
+        .chain(std::iter::once(too_long.as_str()))
+        .collect();
+        for bad in bad_ids {
+            assert!(
+                provider.task_url(bad).is_err(),
+                "task_id {bad:?} should be rejected"
+            );
+        }
     }
 
     // === Trait implementation tests ===

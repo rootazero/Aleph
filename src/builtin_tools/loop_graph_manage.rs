@@ -1365,6 +1365,17 @@ fn render_diff_line(d: &crate::loop_graph::TopologyDiff) -> String {
             edge_kind.as_str(),
             changed_fields.join(", ")
         ),
+        // Forward-compat: snapshot from a newer build (or hand-edited JSON)
+        // that names an EdgeKind this build does not know. The diff says
+        // "unknown kind" rather than substituting the documentation-only
+        // Feeds verb, so the operator sees the real gap.
+        D::EdgeUnknown {
+            from_id,
+            to_id,
+            raw_kind,
+        } => format!(
+            "? 边 {from_id} -> {to_id}（未识别的 EdgeKind: {raw_kind}，可能需升级后重新构建快照）"
+        ),
     }
 }
 

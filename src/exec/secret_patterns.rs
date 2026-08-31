@@ -96,7 +96,14 @@ pub(crate) fn secret_masker_patterns() -> Vec<SecretPattern> {
                     replacement: "xox*-***REDACTED***",
                 },
                 SecretPattern {
-                    regex: Regex::new(r"[MN][A-Za-z\d]{23,}\.[\w-]{6}\.[\w-]{27}").unwrap(),
+                    // Discord bot tokens: <id>.<timestamp>.<hmac>, three dot-separated
+                    // segments. The leading `[MN]` plus 24-char body is the user-id
+                    // segment, the middle is the timestamp base64, the trailing is the
+                    // HMAC. Word-boundary anchored on both sides so an in-string
+                    // coincidence (`"id: Mxxxxxxxxxx.xxxxxx.xxxxxx"` mid-base64) is not
+                    // over-redacted — the masker cost on a false match is just
+                    // "this word is gone" but the leak path Block arm refuses the LLM.
+                    regex: Regex::new(r"\b[MN][A-Za-z\d]{23,}\.[\w-]{6,7}\.[\w-]{27,}\b").unwrap(),
                     replacement: "***DISCORD_TOKEN_REDACTED***",
                 },
             ]
@@ -154,6 +161,11 @@ pub(crate) fn leak_detector_assets() -> LeakDetectorAssets {
                 LeakPatternDef {
                     name: "private_key",
                     regex: Regex::new(r"-----BEGIN[A-Z ]*PRIVATE KEY-----").unwrap(),
+                    action: super::leak_detector::LeakAction::Block,
+                },
+                LeakPatternDef {
+                    name: "discord_bot_token",
+                    regex: Regex::new(r"\b[MN][A-Za-z\d]{23,}\.[\w-]{6,7}\.[\w-]{27,}\b").unwrap(),
                     action: super::leak_detector::LeakAction::Block,
                 },
                 LeakPatternDef {

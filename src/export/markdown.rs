@@ -56,19 +56,97 @@ pub(super) fn escape_attr(s: &str) -> String {
 }
 
 /// Allowlist link/image destinations; neutralise everything else.
+///
+/// Three classes of input are caught here, all of which can otherwise ride
+/// past a naive `split_once(':')` check:
+///
+/// 1. **Protocol-relative** — `//evil.com/path` has no scheme byte at all,
+///    so `split_once(':')` returns `None` and the URL is treated as a benign
+///    relative link. The browser resolves `//` against the document's
+///    scheme/origin, so an exported page served at `https://you/` would
+///    follow this as `https://evil.com/path`. Anchor it to a literal `#` so
+///    it cannot navigate.
+/// 2. **Percent-encoded scheme** — `javascript%3Aalert(1)` has no literal
+///    `:` so the scheme allowlist never fires; the browser percent-decodes
+///    the URL before applying the same-origin policy. Percent-decode the
+///    scheme portion before comparison.
+/// 3. **Whitespace / control bytes** — ` javascript:alert(1)` (leading
+///    space) and `java\0script:` (NUL) historically slipped past denylists.
+///    The trim+control-strip below neutralises both: a URL that survives
+///    the strip with no scheme-bearing prefix is, by construction, either
+///    a true relative URL or a hostile one, and only the former is safe to
+///    forward.
 fn sanitize_link_url(url: &str) -> String {
     let trimmed = url.trim();
-    if let Some((scheme, _)) = trimmed.split_once(':') {
-        let scheme = scheme.to_lowercase();
-        if scheme == "http" || scheme == "https" || scheme == "mailto" {
+    // Strip ASCII whitespace + control chars from the head so a URL like
+    // "\tjavascript:alert(1)" doesn't get past the scheme check by hiding
+    // its scheme behind an invisible prefix.
+    let head_stripped = trimmed.trim_start_matches(|c: char| {
+        c.is_whitespace() || (c as u32) < 0x20 || c == '\u{7f}'
+    });
+    // Protocol-relative: starts with `//` after stripping. Resolve it as a
+    // same-document anchor so a browser cannot navigate to a foreign host.
+    if head_stripped.starts_with("//") {
+        return "#disallowed-protocol-relative".into();
+    }
+    if let Some((raw_scheme, _)) = head_stripped.split_once(':') {
+        // Percent-decode before lowering so encoded forms (e.g. `JaVa%53cript`)
+        // do not bypass the allowlist. Anything not in ASCII alnum/% is
+        // already invalid in a scheme per RFC 3986 and would only appear
+        // here as an evasion attempt.
+        let decoded = percent_decode_scheme(raw_scheme).to_lowercase();
+        if decoded == "http" || decoded == "https" || decoded == "mailto" {
             return trimmed.to_string();
         }
         // Disallowed scheme: render as a no-op anchor instead. The scheme is
         // echoed back for debuggability and is escaped by the HTML writer.
-        return format!("#disallowed-{scheme}");
+        return format!("#disallowed-{decoded}");
     }
     // Relative URLs carry no scheme and cannot execute.
     trimmed.to_string()
+}
+
+/// Percent-decode a string per RFC 3986 §2.1 + §2.4. Only the printable ASCII
+/// subset is decoded — anything else is left untouched so a malformed input
+/// cannot trigger a decode-into-multibyte surprise.
+fn percent_decode_scheme(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        // Attempt percent decode at this position.
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (hex_digit(bytes[i + 1]), hex_digit(bytes[i + 2])) {
+                let v = (hi << 4) | lo;
+                if (0x20..0x7f).contains(&v) {
+                    out.push(v as char);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        // Advance one full UTF-8 char. `s.is_char_boundary(i)` guards against
+        // panicking if a prior percent decode landed mid-multibyte sequence.
+        if s.is_char_boundary(i) {
+            let ch = s[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+        } else {
+            // Shouldn't happen because we only ever advance by 1 byte (ASCII
+            // pass-through) or 3 bytes (consumed `%xx`), but stay defensive.
+            i += 1;
+        }
+    }
+    out
+}
+
+fn hex_digit(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// Rewrite link and image destinations before they reach the HTML writer.
