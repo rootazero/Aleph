@@ -15,6 +15,11 @@ use super::helpers::normalize_image_ref;
 use super::provider::OpenAiCompatProvider;
 use super::types::{ImageGenerationResponse, DEFAULT_TIMEOUT_SECS};
 
+/// 25 MB download cap on `reference_image`. OpenAI image edits cap uploads
+/// around 25 MB; we mirror the cap on the fetch side so a hostile upstream
+/// cannot OOM the process before the multipart upload is built.
+const OPENAI_IMAGE_MAX_DOWNLOAD_BYTES: usize = 25 * 1024 * 1024;
+
 /// Implementation of image editing for OpenAI-compatible API
 pub(crate) async fn edit_image_impl(
     provider: &OpenAiCompatProvider,
@@ -70,18 +75,28 @@ pub(crate) async fn edit_image_impl(
     // Add image - handle URL, data URI, or raw base64
     let lower_ref = reference_image.to_lowercase();
     if lower_ref.starts_with("http://") || lower_ref.starts_with("https://") {
-        // Download image from URL first
-        let image_bytes = provider
-            .client
-            .get(reference_image)
-            .send()
-            .await
-            .map_err(|e| GenerationError::network(format!("Failed to download image: {e}")))?
-            .bytes()
-            .await
-            .map_err(|e| GenerationError::network(format!("Failed to read image bytes: {e}")))?;
+        // SSRF guard: `reference_image` is an LLM-controlled string and the
+        // bytes are forwarded to a third-party multipart upload. A crafted
+        // URL pointing at `169.254.169.254`, `localhost:<admin-port>`, or
+        // any private CIDR would otherwise be fetched by the Aleph server
+        // BEFORE the upload happens. Route the fetch through the project-wide
+        // SSRF gate and cap the body so a hostile upstream cannot OOM the
+        // process before the multipart upload is built.
+        let image_bytes = crate::security::ssrf::safe_fetch(
+            reference_image,
+            &crate::security::ssrf::SsrfPolicy::default(),
+            crate::security::ssrf::SafeFetchRequest::get(std::time::Duration::from_secs(30))
+                .with_max_body_bytes(OPENAI_IMAGE_MAX_DOWNLOAD_BYTES),
+        )
+        .await
+        .map_err(|e| {
+            GenerationError::network(format!(
+                "SSRF-safe image fetch failed for reference_image: {e}"
+            ))
+        })?
+        .body;
 
-        let part = reqwest::multipart::Part::bytes(image_bytes.to_vec())
+        let part = reqwest::multipart::Part::bytes(image_bytes)
             .file_name("image.png")
             .mime_str("image/png")
             .map_err(|e| GenerationError::invalid_parameters(e.to_string(), None))?;

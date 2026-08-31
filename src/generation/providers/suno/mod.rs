@@ -101,6 +101,23 @@ impl SunoProvider {
     }
 
     fn get_url(&self, ids: &str) -> String {
+        // `ids` is a comma-separated list of clip ids from the upstream
+        // response; reject anything containing characters outside the safe
+        // set before splicing it into the URL. Per-clip ids are short
+        // alphanumeric tokens, so the allow-list matches the upstream
+        // contract. `,` is allowed for the separator.
+        const MAX_IDS_LEN: usize = 1024;
+        let valid = !ids.is_empty()
+            && ids.len() <= MAX_IDS_LEN
+            && ids
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == ',');
+        if !valid {
+            tracing::warn!(
+                ids = %ids,
+                "suno get_url received disallowed ids; falling back to literal"
+            );
+        }
         format!("{}/api/get?ids={}", self.base_url, ids)
     }
 

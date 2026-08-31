@@ -28,6 +28,7 @@ use crate::generation::{
     GenerationData, GenerationError, GenerationMetadata, GenerationOutput, GenerationProvider,
     GenerationRequest, GenerationResult, GenerationType,
 };
+use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
 use base64::Engine as _;
 use reqwest::{multipart, Client};
 use std::future::Future;
@@ -113,10 +114,18 @@ impl OpenAiWhisperProvider {
     ///
     /// Resolution order:
     /// 1. `params.reference_audio` is a `data:` URL → decode the base64 payload.
-    /// 2. `params.reference_audio` is an `http(s)://` URL → fetch it.
+    /// 2. `params.reference_audio` is an `http(s)://` URL → fetch it through the
+    ///    project-wide SSRF gate (`crate::security::ssrf::safe_fetch`).
     /// 3. `params.reference_audio` is otherwise treated as a local path.
     /// 4. Fall back to `request.prompt` as a local path (mirrors
     ///    `GenerationRequest::transcription(path)`).
+    ///
+    /// `reference_audio` is an LLM-controlled string and the upload ends up on
+    /// a third-party host (OpenAI), so the URL branch must validate the host
+    /// against the operator's `SsrfPolicy` BEFORE bytes leave the process.
+    /// Without this gate a crafted URL pointing at `169.254.169.254`,
+    /// `localhost:<admin-port>`, or any private CIDR is fetched by the Aleph
+    /// server before the bytes are uploaded upstream.
     async fn load_audio(
         &self,
         request: &GenerationRequest,
@@ -126,22 +135,22 @@ impl OpenAiWhisperProvider {
                 return decode_data_url(rest);
             }
             if source.starts_with("http://") || source.starts_with("https://") {
-                let bytes = self
-                    .client
-                    .get(source)
-                    .send()
-                    .await
-                    .map_err(|e| GenerationError::network(format!("Failed to fetch audio: {e}")))?
-                    .error_for_status()
-                    .map_err(|e| {
-                        GenerationError::network(format!("Audio URL returned error: {e}"))
-                    })?
-                    .bytes()
-                    .await
-                    .map_err(|e| {
-                        GenerationError::network(format!("Failed to read audio bytes: {e}"))
-                    })?
-                    .to_vec();
+                // 25 MB upload cap (Whisper) — mirror it on the fetch side so a
+                // hostile upstream cannot OOM the process before the multipart
+                // upload even starts.
+                let bytes = safe_fetch(
+                    source,
+                    &SsrfPolicy::default(),
+                    SafeFetchRequest::get(Duration::from_secs(30))
+                        .with_max_body_bytes(MAX_AUDIO_BYTES as usize),
+                )
+                .await
+                .map_err(|e| {
+                    GenerationError::network(format!(
+                        "SSRF-safe audio fetch failed for reference_audio: {e}"
+                    ))
+                })?
+                .body;
                 let name = source
                     .rsplit('/')
                     .next()

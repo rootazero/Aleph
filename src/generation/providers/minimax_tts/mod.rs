@@ -436,14 +436,47 @@ fn resolve_endpoint(base: &str) -> String {
 /// Append a `GroupId` query parameter when one is supplied and the endpoint
 /// doesn't already carry one. `MiniMax` accounts whose API key is already
 /// group-scoped can omit it. Pure for unit testing.
+///
+/// `group_id` originates in `request.params.extra["group_id"]` — an
+/// LLM-controlled string. Earlier this was format-interpolated raw into the
+/// URL, so a value containing `&` or `#` would either break the URL or
+/// silently append attacker-controlled query parameters. Percent-encode the
+/// value with a non-userinfo set and additionally validate the charset so a
+/// clearly-hostile payload is rejected up front rather than masked by the
+/// encoding.
 fn append_group_id(endpoint: &str, group_id: Option<&str>) -> String {
     match group_id.map(str::trim).filter(|s| !s.is_empty()) {
         Some(gid) if !endpoint.contains("GroupId=") => {
+            if !is_safe_group_id(gid) {
+                tracing::warn!(
+                    group_id = %gid,
+                    "MiniMax group_id contains disallowed characters; ignoring"
+                );
+                return endpoint.to_string();
+            }
             let sep = if endpoint.contains('?') { '&' } else { '?' };
-            format!("{endpoint}{sep}GroupId={gid}")
+            format!(
+                "{endpoint}{sep}GroupId={}",
+                percent_encoding::utf8_percent_encode(
+                    gid,
+                    percent_encoding::NON_ALPHANUMERIC
+                )
+            )
         }
         _ => endpoint.to_string(),
     }
+}
+
+/// MiniMax group ids are short alphanumeric tokens; reject anything that
+/// could double as a query-string fragment (`&`, `=`, `#`) or path separator
+/// (`/`) before percent-encoding. This is belt-and-suspenders against a
+/// caller passing the raw extra map through.
+fn is_safe_group_id(gid: &str) -> bool {
+    !gid.is_empty()
+        && gid.len() <= 64
+        && gid
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Build the `MiniMax` T2A request body. Pure for unit testing.
