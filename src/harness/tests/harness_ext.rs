@@ -17,7 +17,10 @@ use crate::session::events::{SessionEvent, SessionEventRecord};
 use crate::session::service::SessionId;
 
 /// One-shot turn driver, available only in the harness test tree.
-#[allow(async_fn_in_trait)]
+#[allow(
+    async_fn_in_trait,
+    reason = "test-only trait with a single concrete implementor; dyn dispatch is never used so the Send-bound / object-safety footgun of async-fn-in-trait does not apply"
+)]
 pub(crate) trait AgentHarnessTestExt {
     /// One Think→Act turn; returns whether the session should continue.
     async fn run_turn(
