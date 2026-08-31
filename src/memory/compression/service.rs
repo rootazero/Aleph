@@ -1442,7 +1442,7 @@ mod tests {
         }
 
         let reg = Arc::new(MemoryExtensionRegistry::new());
-        reg.register(Arc::new(ContribExt));
+        reg.register(Arc::new(ContribExt)).unwrap();
 
         let (service, database, _tmp) = create_test_service_with_tempdir().await;
         let service = service
@@ -1456,10 +1456,14 @@ mod tests {
         service.compress_to_notes("default").await.unwrap();
 
         let captured = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        assert_eq!(
-            captured.as_deref(),
-            Some("CONTRIB"),
-            "the on_pre_compress contribution must reach ingest_batch as extra_context"
+        // The registry wraps contributions in an untrusted-data fence; this
+        // test owns reachability, not the fence wording (which
+        // `registry::tests` pins against the consts that produce it).
+        let captured = captured.expect("ingest_batch must receive extra_context");
+        assert!(
+            captured.contains("CONTRIB"),
+            "the on_pre_compress contribution must reach ingest_batch as \
+             extra_context, got: {captured}"
         );
     }
 

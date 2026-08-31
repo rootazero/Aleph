@@ -9,7 +9,9 @@ use crate::error::AlephError;
 use crate::memory::notes::canonicalize_category;
 use crate::memory::notes::indexer::{NoteIndexer, CATEGORY_DIRS};
 use crate::memory::notes::ingest::plan::{ApplyReport, PageOp};
-use crate::memory::notes::note::{sanitize_title, sanitize_wikilink_target, KnowledgeNote, Relation};
+use crate::memory::notes::note::{
+    sanitize_title, sanitize_wikilink_target, KnowledgeNote, Relation,
+};
 use crate::memory::notes::store::NoteStore;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -626,10 +628,22 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
         // link as a filename first (rejects path traversal), then strip the
         // markdown-significant chars so the resulting `[[…]]` cannot be
         // escaped-out.
-        let safe_target = match sanitize_title(link_target) {
-            Ok(s) => sanitize_wikilink_target(&s),
-            Err(_) => return Ok(false),
-        };
+        //
+        // Per SEGMENT: a link target is `category/name`, and `sanitize_title`
+        // is a *filename* sanitizer that strips `/`. Running it over the whole
+        // target collapsed `reference/bar` to `referencebar` — a silently
+        // rewritten edge. Splitting first keeps every defence (the `..`
+        // rejection and the character stripping both run on each segment,
+        // so `../../etc/passwd` still fails closed) while a legitimate
+        // two-segment target survives intact.
+        let mut safe_segments = Vec::new();
+        for segment in link_target.split('/') {
+            match sanitize_title(segment) {
+                Ok(s) => safe_segments.push(sanitize_wikilink_target(&s)),
+                Err(_) => return Ok(false),
+            }
+        }
+        let safe_target = safe_segments.join("/");
         let disk = self
             .memory_dir
             .join(self.agent_id)

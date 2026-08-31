@@ -186,7 +186,7 @@ mod tests {
         let store_inner = Arc::new(FakeStore(Mutex::new(Vec::new())));
         let store: Arc<dyn RawMemoryStore> = store_inner.clone();
         let reg = MemoryExtensionRegistry::new();
-        reg.register(Arc::new(StubProducer(3)));
+        reg.register(Arc::new(StubProducer(3))).unwrap();
         let scheduler = MemoryProducerScheduler::new(Arc::new(reg), store.clone());
 
         scheduler.run_once().await.unwrap();
@@ -211,8 +211,8 @@ mod tests {
         let store_inner = Arc::new(FakeStore(Mutex::new(Vec::new())));
         let store: Arc<dyn RawMemoryStore> = store_inner.clone();
         let reg = MemoryExtensionRegistry::new();
-        reg.register(Arc::new(StubProducer(2)));
-        reg.register(Arc::new(BlockingCapture));
+        reg.register(Arc::new(StubProducer(2))).unwrap();
+        reg.register(Arc::new(BlockingCapture)).unwrap();
         let scheduler = MemoryProducerScheduler::new(Arc::new(reg), store.clone());
         scheduler.run_once().await.unwrap();
         // Producer emitted 2 memories; capture chain blocks them all.

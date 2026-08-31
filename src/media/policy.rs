@@ -32,6 +32,17 @@ pub struct MediaPolicy {
     /// Maximum document pages (default: 200).
     #[serde(default = "default_max_document_pages")]
     pub max_document_pages: u32,
+
+    /// Maximum file size in bytes for media whose type could not be detected
+    /// (default: 100 MB).
+    ///
+    /// The default preserves the constant this field replaced. Note it is
+    /// still higher than the image (20 MB) and document (50 MB) caps, so a
+    /// caller declaring `MediaType::Unknown` can claim a larger quota than a
+    /// declared image — closing that gap is an operator decision, made by
+    /// lowering this value in config.
+    #[serde(default = "default_max_unknown_bytes")]
+    pub max_unknown_bytes: u64,
 }
 
 const fn default_max_image_bytes() -> u64 {
@@ -52,6 +63,9 @@ const fn default_max_document_bytes() -> u64 {
 const fn default_max_document_pages() -> u32 {
     200
 }
+const fn default_max_unknown_bytes() -> u64 {
+    100 * 1024 * 1024
+}
 
 impl Default for MediaPolicy {
     fn default() -> Self {
@@ -62,6 +76,7 @@ impl Default for MediaPolicy {
             max_video_bytes: default_max_video_bytes(),
             max_document_bytes: default_max_document_bytes(),
             max_document_pages: default_max_document_pages(),
+            max_unknown_bytes: default_max_unknown_bytes(),
         }
     }
 }
