@@ -142,7 +142,7 @@ async fn build_memory_user_message_invokes_on_retrieve_extension() {
     let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Hybrid);
     let rec = Arc::new(Recorder(Mutex::new(0)));
     let reg = MemoryExtensionRegistry::new();
-    reg.register(rec.clone());
+    reg.register(rec.clone()).unwrap();
     let provider = provider.with_extensions(Arc::new(reg));
 
     // Empty envelope → still invokes on_retrieve before the emptiness check.
@@ -183,7 +183,7 @@ async fn tools_mode_skips_on_retrieve_dispatch() {
     let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Tools);
     let rec = Arc::new(Recorder(Mutex::new(0)));
     let reg = MemoryExtensionRegistry::new();
-    reg.register(rec.clone());
+    reg.register(rec.clone()).unwrap();
     let provider = provider.with_extensions(Arc::new(reg));
 
     let out = provider

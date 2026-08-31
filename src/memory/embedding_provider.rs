@@ -5,7 +5,7 @@
 use crate::config::types::memory::{EmbeddingPreset, EmbeddingProviderConfig};
 use crate::error::AlephError;
 use crate::sync_primitives::Arc;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
 /// Abstract embedding provider
@@ -48,9 +48,9 @@ fn validate_api_base(api_base: &str, preset: &EmbeddingPreset) -> Result<(), Ale
     })?;
 
     let scheme = parsed.scheme();
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| AlephError::config(format!("Embedding api_base {api_base:?} has no host")))?;
+    let host = parsed.host_str().ok_or_else(|| {
+        AlephError::config(format!("Embedding api_base {api_base:?} has no host"))
+    })?;
 
     let is_loopback_name = host.eq_ignore_ascii_case("localhost")
         || host.eq_ignore_ascii_case("ip6-localhost")
@@ -66,7 +66,10 @@ fn validate_api_base(api_base: &str, preset: &EmbeddingPreset) -> Result<(), Ale
     match preset {
         EmbeddingPreset::Ollama => {
             // Ollama: allow http only against loopback; require https otherwise.
-            if scheme == "http" && !(is_loopback_name || matches!(parsed.host(), Some(url::Host::Ipv4(a)) if a.is_loopback())) {
+            if scheme == "http"
+                && !(is_loopback_name
+                    || matches!(parsed.host(), Some(url::Host::Ipv4(a)) if a.is_loopback()))
+            {
                 return Err(AlephError::config(format!(
                     "Embedding Ollama preset requires api_base to be https:// or http://localhost; got {api_base:?}"
                 )));

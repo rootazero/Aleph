@@ -325,7 +325,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let reg = MemoryExtensionRegistry::new();
         reg.register(std::sync::Arc::new(EnvelopeRelevanceFloorExtension::new(
             0.0,
-        )));
+        )))
+        .expect("first registration into a fresh registry cannot collide");
         std::sync::Arc::new(reg)
     };
 

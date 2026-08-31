@@ -110,7 +110,7 @@ async fn capture_filter_blocks_raw_memory_end_to_end() {
 
     let reg = {
         let r = MemoryExtensionRegistry::new();
-        r.register(Arc::new(Blocker));
+        r.register(Arc::new(Blocker)).unwrap();
         Arc::new(r)
     };
 
@@ -137,7 +137,7 @@ async fn producer_scheduler_run_once_persists_through_chain() {
 
     let reg = {
         let r = MemoryExtensionRegistry::new();
-        r.register(Arc::new(StubProducer(2)));
+        r.register(Arc::new(StubProducer(2))).unwrap();
         Arc::new(r)
     };
 
@@ -156,8 +156,8 @@ async fn producer_scheduler_with_blocking_capture_persists_nothing() {
 
     let reg = {
         let r = MemoryExtensionRegistry::new();
-        r.register(Arc::new(StubProducer(3)));
-        r.register(Arc::new(Blocker));
+        r.register(Arc::new(StubProducer(3))).unwrap();
+        r.register(Arc::new(Blocker)).unwrap();
         Arc::new(r)
     };
 
@@ -178,6 +178,7 @@ async fn envelope_floor_extension_is_registerable() {
     // src/memory/extensions/first_party.rs (4 tests), and Task 5 verifies the
     // provider calls on_retrieve on registered extensions.
     let reg = MemoryExtensionRegistry::new();
-    reg.register(Arc::new(EnvelopeRelevanceFloorExtension::new(0.5)));
+    reg.register(Arc::new(EnvelopeRelevanceFloorExtension::new(0.5)))
+        .unwrap();
     assert_eq!(reg.len(), 1);
 }
