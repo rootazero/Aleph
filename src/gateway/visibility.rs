@@ -98,9 +98,15 @@ pub fn visible_owner_filter() -> Option<String> {
 /// has execution-side readers — `goal_wait::rehydrate_owner_scope` and
 /// `cron::executor` both rebuild the run's scope from it through
 /// `ScopeAttribution::from_persisted` — so it is a live field, not a stub. The
-/// loop's copy currently has NO reader at all; it is carried forward across
-/// state transitions (`looping::mod`) and read by nobody, which is the one most
-/// likely to be mistaken for a broken wire.
+/// loop's copy has no execution-side reader of its own; it is otherwise
+/// carried forward across state transitions (`looping::mod`), which is the
+/// one most likely to be mistaken for a broken wire. (Kanban is a second
+/// ratified exception, via multiuser-teamchat-p3 §B1:
+/// [`crate::gateway::handlers::kanban`] reads both `LoopState::scope_id` and
+/// `Goal::scope_id`, but only behind an EXPLICIT `scope_id` ask on
+/// `loop.list`/`goal.list` — gated first by [`project_visible`] on the
+/// queried scope; the unfiltered list still calls this very predicate and
+/// stays owner-only.)
 ///
 /// None of that is a severed wire, and none of it should be "reconnected" here.
 /// Widening these predicates would make one member's pursuit appear in another

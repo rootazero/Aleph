@@ -217,7 +217,10 @@ pub(super) fn load_gateway_config(
 }
 
 /// Initialize the session store backend based on configuration.
-/// Defaults to `SQLite`; "file" enables the JSON/JSONL file backend.
+/// Selects by string: `"file"` enables the JSON/JSONL file backend, any
+/// other value selects `SQLite`. That describes THIS FUNCTION; the SHIPPED
+/// default is `"file"` (`config::types::general::default_session_store_backend`),
+/// so the file branch is the one a stock install takes.
 /// Returns the trait object and an optional owned `SessionManager` for `SQLite`
 /// so the caller can attach raw-memory writer and event bus before wrapping.
 pub(super) async fn initialize_session_store(

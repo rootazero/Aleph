@@ -2,6 +2,8 @@
 //!
 //! Contains `run_agent_loop` (the think-act two-step loop).
 
+mod author_census;
+mod flow_scope_census;
 mod inner;
 mod project_context;
 #[cfg(test)]
@@ -20,6 +22,7 @@ use super::{ExecutionError, RunRequest};
 use crate::extension::HookEvent;
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::event_emitter::EventEmitter;
+use crate::projects::binding::ClaimSource;
 
 use crate::executor::ToolRegistry;
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
@@ -49,22 +52,56 @@ use super::engine::ExecutionEngine;
 ///
 /// `handlers::agent::resolve_attribution` already asks this question for ONE
 /// producer, the Panel's `agent.run` / `chat.send`, and keeps asking it there
-/// because it can also *refuse*: a non-member gets `ProjectNotFound`, the same
-/// refusal a named foreign project gets. This function cannot refuse — it runs
-/// after admission, on a request that is already going to execute — so it only
-/// corrects the filing. The six producers that never pass through that handler
-/// (the channel inbound router, cron, heartbeat, the teams dispatcher,
-/// `session_send`, A2A) get the correction here.
+/// because it can also *refuse*: for an arm-1 room a non-member gets
+/// `ProjectNotFound`, the same refusal a named foreign project gets. This
+/// function cannot refuse — it runs after admission, on a request that is
+/// already going to execute — so it only corrects the filing. The six
+/// producers that never pass through that handler (the channel inbound router,
+/// cron, heartbeat, the teams dispatcher, `session_send`, A2A) get the
+/// correction here.
 ///
 /// Only the scope is replaced. `owner_user_id` still names whoever spoke: for a
 /// project-scoped row visibility is decided by the roster
 /// ([`crate::gateway::visibility::owner_and_scope_visible_to`]), so overwriting
 /// the owner would buy nothing and lose the attribution.
 ///
-/// A catalogue failure reads as "not a room", matching
-/// `handlers::agent::room_claiming`'s ruling for the same lookup: a degraded
-/// SQLite must not turn into a mis-scoped turn *or* a refused one. The cost is
-/// bounded — the row is then stamped the way it is stamped today.
+/// A catalogue failure reads as "not a room" — a degraded SQLite must not turn
+/// into a mis-scoped turn *or* a refused one. That ruling is not made here: it
+/// is made once, in [`crate::projects::ProjectStore::room_claiming`], because
+/// this path and the admission path had always made it identically and a
+/// ruling two callers share must not be written twice.
+///
+/// The upgrade — replacing a producer's own stamp with the room's — passes a
+/// roster gate first, but **only for a room discovered through arm 2** (a
+/// bound channel conversation). Arm 1 (an explicit `projects.room_session`
+/// claim) is a declaration, not an inference — a room is opened by an
+/// operator or the Panel deliberately naming this session key as the room's
+/// conversation — so it outranks the producer's stamp unconditionally, same
+/// as before this gate existed. That is load-bearing for this very path: the
+/// six producers here include cron/A2A re-opening a room's session, whose
+/// stamped `owner_user_id` is legitimately the legacy owner and is never on
+/// any roster, and the channel inbound router continuing a claimed
+/// conversation, whose stamped owner may be a member nobody re-adds on every
+/// turn. Gating arm 1 would silently demote those runs to personal.
+///
+/// Arm 2 has no equivalent declaration: a channel conversation is bound by an
+/// operator, but *being in that conversation* is not — anyone in the
+/// Telegram group could otherwise ride the binding into the room's scope.
+/// The stamp's own `owner_user_id` is used as the actor because there is no
+/// ambient caller here, unlike the admission path. A caller the roster does
+/// not admit keeps its producer's own stamp rather than being silently
+/// dropped into the room: being in the channel conversation must not be
+/// equivalent to being on the roster, and this is the only place downstream
+/// of the channel inbound router that ever asks.
+///
+/// The admission twin reaches the same verdict for arm 2 by a different route
+/// — it falls through to its personal arm — and that agreement is deliberate,
+/// because the two are reachable by the *same* principal in the *same*
+/// conversation through two different doors: through the channel, which lands
+/// here, or with the same channel-shaped session key on `agent.run` /
+/// `chat.send`, which lands there. `handlers::agent::resolve_attribution`'s
+/// `None` arm carries the other half of this argument, and
+/// `the_two_room_claim_twins_agree_on_which_project_governs` pins the pair.
 pub(super) fn request_scope(request: &RunRequest) -> Option<crate::scope::ScopeAttribution> {
     scope_for_session(&request.metadata, &request.session_key)
 }
@@ -90,11 +127,21 @@ pub(super) fn scope_for_session(
     session_key: &crate::routing::session_key::SessionKey,
 ) -> Option<crate::scope::ScopeAttribution> {
     let stamped = crate::scope::scope_from_metadata(metadata);
-    let Some(pid) = room_claiming(session_key) else {
+    let Some((pid, source)) = crate::projects::ProjectStore::shared().room_claiming(session_key)
+    else {
         return stamped;
     };
     let mut attr = stamped?;
-    attr.scope = crate::scope::ScopeId::Project(pid);
+    let target = crate::scope::ScopeId::Project(pid.clone());
+    if attr.scope == target {
+        return Some(attr);
+    }
+    if source == ClaimSource::BoundConversation
+        && !crate::gateway::visibility::project_visible_to(&pid, Some(&attr.owner_user_id))
+    {
+        return Some(attr);
+    }
+    attr.scope = target;
     Some(attr)
 }
 
@@ -107,61 +154,84 @@ pub(super) fn scope_for_session(
 /// about a session a room has already claimed. The rule then read "not a room"
 /// and let one member's message steer another member's in-flight run: the exact
 /// thing it exists to forbid, silently, and only on the channel/cron/A2A paths.
+///
+/// The room half is asked of [`crate::projects::ProjectStore::room_claiming`]
+/// directly rather than read off [`request_scope`]'s verdict, because
+/// `request_scope` applies arm 2's roster gate and that gate answers a
+/// *different* question: whether to hand an off-roster speaker the room's DATA
+/// scope. Here an off-roster speaker steering a member's in-flight turn is
+/// WORSE, not better, so the predicate is "is this session claimed by a room",
+/// full stop. `request_scope` is still ORed in for the other direction — a
+/// project-scoped session no room has claimed keeps the protection it has
+/// today — so this can only add cases, never remove one.
 pub(super) fn request_is_in_a_room(request: &RunRequest) -> bool {
+    if crate::projects::ProjectStore::shared()
+        .room_claiming(&request.session_key)
+        .is_some()
+    {
+        return true;
+    }
     matches!(
         request_scope(request).map(|a| a.scope),
         Some(crate::scope::ScopeId::Project(_))
     )
 }
 
-/// The corrected attribution rendered back into the two wire strings
-/// [`crate::orchestrator::FlowRequest`] carries.
+/// The two strings [`crate::orchestrator::FlowRequest`] carries for this run's
+/// scope attribution — derived from [`request_scope`], never read back out of
+/// `request.metadata`.
 ///
-/// `FlowRequest` has no metadata map, so it forwards owner and scope as two
-/// explicit strings — and `Orchestrator::dispatch` rebuilds the harness-side
-/// scope task-local from exactly those two strings inside its `tokio::spawn`
-/// (task-locals do not cross a spawn, so the corrected one established by
-/// [`with_request_scope`] does not reach the loop). That makes the literal
-/// building those strings the **fourth reader** of this correction, and it read
-/// `request.metadata` verbatim — the uncorrected producer stamp.
+/// This is the FOURTH reader of `request_scope` (`src/gateway/CLAUDE.md` 地雷 Q
+/// names the other three: the session row, the loop's task-local, the sidebar
+/// recency touch), and it is the boundary where the room upgrade used to be
+/// lost. The raw keys hold whatever the PRODUCER stamped — for a channel turn
+/// that is `personal:<speaker>` — and `request_scope` is the only thing that
+/// turns that into the room's scope when the conversation is bound. Reading
+/// the keys directly here handed the un-upgraded pair to
+/// `orchestrator::dispatch`, which re-seeds the scope task-local inside its
+/// `tokio::spawn`, so the session row was filed under the room while
+/// everything downstream of the spawn — the memory partition, the
+/// `<room_context>` roster (`harness_bridge::prompt_build` reads this very
+/// task-local and its comment claims it equals what `request_scope`
+/// resolved), and the transcript's speaker attribution — ran personal.
 ///
-/// The consequence is the disagreement [`request_scope`] exists to prevent,
-/// relocated one layer down: the session row, the roster predicate and every
-/// read path compose the partition from `Project(P)` while everything the run
-/// *writes* (`remember`, `note_manage`, compaction) composes it from
-/// `Personal(<speaker>)`, because `memory::project_scope` reads
-/// `scope::current_scope()`. Nothing errors. The only symptom is that the agent
-/// does not remember what was said in the room, and only for the six producers
-/// that need the correction in the first place — the Panel path, which is
-/// corrected upstream in `handlers::agent::resolve_attribution`, looks fine.
+/// `FlowRequest` carries strings rather than a `ScopeAttribution`, because it
+/// has no metadata map. That is a reason to CONVERT here, not a reason to read
+/// a different source: `ScopeId::render` is the same call
+/// [`crate::scope::stamp_metadata`] makes, so `dispatch`'s rebuild — a map of
+/// these two keys fed back through [`crate::scope::scope_from_metadata`] —
+/// parses back exactly the attribution this returned, including its
+/// fail-closed `None`.
 ///
-/// Rendering through [`crate::scope::ScopeAttribution`] rather than copying the
-/// map entries is what makes the fourth reader inherit the correction by
-/// construction instead of by anyone remembering it exists.
-pub(super) fn request_scope_strings(request: &RunRequest) -> (Option<String>, Option<String>) {
-    match request_scope(request) {
-        Some(attr) => (Some(attr.owner_user_id), Some(attr.scope.render())),
-        None => (None, None),
-    }
-}
-
-/// The project that has claimed `session_key` as its room conversation.
+/// The two strings ride inside [`crate::scope::FlowScope`], whose fields are
+/// private and whose only non-empty constructor takes a `ScopeAttribution`.
+/// That makes ONE spelling of the raw read a compile error at the
+/// `FlowRequest` site: a pair lifted out of `request.metadata` is
+/// `(Option<String>, Option<String>)` and does not fit the field. It does not
+/// make every spelling one. `ScopeAttribution::from_persisted` takes exactly
+/// that pair and yields the type this constructor accepts, so metadata still
+/// reaches the site in one public call — measured, compiling, with every
+/// lexical layer green. See that type's doc; the bound is stated in full in
+/// `flow_scope_census`'s module doc.
 ///
-/// Twin of `handlers::agent::room_claiming`, deliberately not shared with it:
-/// that one lives on the admission path and its `None` feeds a branch that may
-/// refuse, this one lives after admission and its `None` means "leave the
-/// producer's stamp alone". Both read the same column through the same store
-/// method, which is the part that must not be duplicated.
-fn room_claiming(session_key: &crate::routing::session_key::SessionKey) -> Option<String> {
-    match crate::projects::ProjectStore::shared()
-        .project_for_session_key(&session_key.to_key_string())
-    {
-        Ok(pid) => pid,
-        Err(e) => {
-            tracing::warn!(error = %e, "projects: room claim lookup failed; leaving the producer's scope stamp alone");
-            None
-        }
-    }
+/// A named function rather than two inline expressions: the property that must
+/// NOT change is that an off-roster speaker in a bound conversation is
+/// projected to the same pair the raw read produced, and a test that
+/// re-derived the projection to check that would be measuring its own copy.
+/// `flow_scope_census` keeps the site honest lexically;
+/// `tests::the_flow_request_projection_carries_the_room_upgrade` and
+/// `tests::the_projection_round_trips_through_the_dispatch_rebuild` keep this
+/// function honest behaviourally: they are the only two that go red when a
+/// re-resolution here LOSES the room upgrade, whatever spelling it uses. A
+/// re-resolution that KEEPS it is neither theirs nor layer 3's counts: those
+/// count OCCURRENCES, not answers, and a fork that agrees adds none of them.
+/// One thing objects — `flow_scope_census`'s layer 5, the requirement that
+/// this body CALL `request_scope` — and a fork that leaves a dead call
+/// standing beside its own resolution still passes even that. Both halves are
+/// measured in
+/// `flow_scope_census::tests::the_projection_body_must_call_request_scope`.
+fn request_scope_strings(request: &RunRequest) -> crate::scope::FlowScope {
+    crate::scope::FlowScope::resolved(request_scope(request).as_ref())
 }
 
 /// Establishes this run's scope attribution (owner/scope) and this turn's

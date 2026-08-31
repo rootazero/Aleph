@@ -388,6 +388,10 @@ mod tests {
             "room roster add / remove",
         ),
         (
+            "src/gateway/handlers/projects_channel.rs",
+            "room bound to / released from a channel conversation",
+        ),
+        (
             "src/gateway/handlers/pairing.rs",
             "channel sender approve / revoke",
         ),
@@ -412,24 +416,24 @@ mod tests {
         // stayed red, which is the census working. Verbs below are the ones
         // each `authority_change` actually records, not a summary of the file.
         (
-            "src/gateway/handlers/gateway_token.rs",
-            "shared token rotated / paired devices revoked",
+            "src/gateway/handlers/cluster.rs",
+            "cluster node device credential mint (enroll) / revoke (deregister)",
         ),
         (
             "src/gateway/handlers/config.rs",
-            "config sections applied (config.patch)",
+            "config section rewritten (may touch auth / provider keys / channel wiring)",
         ),
         (
             "src/gateway/handlers/daemon_control.rs",
-            "graceful shutdown requested",
+            "daemon shutdown requested (ends every connected session)",
+        ),
+        (
+            "src/gateway/handlers/gateway_token.rs",
+            "shared gateway token rotated / every paired device revoked",
         ),
         (
             "src/gateway/handlers/secrets.rs",
-            "vault secret stored / deleted",
-        ),
-        (
-            "src/gateway/handlers/cluster.rs",
-            "cluster node enrolled / deregistered",
+            "vault secret set / delete (key name only)",
         ),
     ];
 

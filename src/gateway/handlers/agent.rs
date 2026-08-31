@@ -19,6 +19,7 @@ use super::super::execution_engine::RunRequest;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::super::router::{AgentRouter, SessionKey};
 use super::parse_params;
+use crate::projects::binding::ClaimSource;
 
 /// A file attachment sent with a message
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -613,43 +614,98 @@ async fn resolve_attribution(
         // decided above (and refused if foreign), so this adds no second
         // answer to a question that has one.
         None => {
-            if let Some(pid) = room_claiming(session_key) {
-                // Visibility still decides. A key claimed by a room the caller
-                // is not on the roster of gets the same refusal a named foreign
-                // project gets — the shape must not depend on how the caller
-                // spelled it.
-                if !crate::gateway::visibility::project_visible(&pid) {
-                    return Err(BuildRunError::ProjectNotFound(pid));
+            // Which project may govern this turn FOR THIS CALLER. The two
+            // arms of a room's claim are gated differently, and the asymmetry
+            // is the point — see each arm.
+            let governing = match crate::projects::ProjectStore::shared()
+                .room_claiming(session_key)
+            {
+                // Arm 1 — an explicit `projects.room_session` claim naming
+                // this exact key. Visibility still decides, and a caller the
+                // roster does not admit gets the same refusal a NAMED foreign
+                // project gets: for a room that declared this key its own, the
+                // refusal shape must not depend on how the caller spelled it,
+                // or the two spellings become an existence oracle.
+                //
+                // The refusal is load-bearing in the other direction too. This
+                // key IS the room's own conversation, so falling through to
+                // the personal arm below is exactly the permanent mis-stamp
+                // the comment above describes: `personal:<first speaker>` on
+                // the room's own row, forever.
+                Some((pid, ClaimSource::ExplicitClaim)) => {
+                    if !crate::gateway::visibility::project_visible(&pid) {
+                        return Err(BuildRunError::ProjectNotFound(pid));
+                    }
+                    Some(pid)
                 }
-                return Ok(Some(crate::scope::ScopeAttribution {
+                // Arm 2 — a channel conversation an operator bound to a room.
+                // A caller the roster does not admit falls through to the
+                // personal arm, exactly as if nothing had claimed the key.
+                //
+                // NOT arm 1's ruling, deliberately. Arm 1 is a declaration
+                // about this key; arm 2 is an inference from a conversation,
+                // and the SAME principal in the SAME conversation speaking
+                // through the CHANNEL never reaches this function at all —
+                // `inbound_router/executor.rs` stamps `personal:<speaker>` and
+                // `run_loop::request_scope`'s roster gate leaves it alone.
+                // Refusing here would answer one question two different ways
+                // depending on which door the caller came through, and would
+                // answer it by handing them a project id they never typed —
+                // telling them, on a room they cannot see, that this
+                // conversation is bound to it. Falling through says nothing:
+                // a bound conversation and an unbound one become
+                // indistinguishable, which is one existence oracle fewer than
+                // the refusal.
+                //
+                // The permanent-mis-stamp hazard arm 1's refusal prevents is
+                // not prevented here by refusing — but that claim holds only
+                // FOR A PRINCIPAL WHO CAN REACH THE CHANNEL DOOR, and the
+                // scope of it is the point. For someone in the bound
+                // conversation, whatever this row ends up stamped
+                // `request_scope` stamps identically when they speak through
+                // the channel, so refusing here closes one of two doors and
+                // protects nothing.
+                //
+                // It does NOT hold for a principal authenticated to this
+                // deployment who is *not* in that conversation and merely
+                // knows its (channel, peer_kind, peer_id). They have no
+                // channel door. Before the two readers were converged they
+                // were refused here, so no run and no row; now they are
+                // admitted personally, the run reaches
+                // `ensure_session_under_request_scope` unconditionally, and
+                // the row IS created stamped `personal:<them>` — permanently,
+                // since `stamp_attribution` is create-only and
+                // `attribution_backfill` heals only NULL/NULL rows. The
+                // population that can win that race widens accordingly.
+                //
+                // That is a real consequence and it is deliberately not
+                // answered by refusing here: refusing would still leave the
+                // conversation's own members able to do the same thing, and
+                // would cost the existence oracle above. The fix belongs at
+                // `ensure_session_under_request_scope`, which uses one
+                // attribution to answer two different questions (routed to
+                // Task 13); this comment exists so the next reader inherits
+                // the premise at its real width rather than as a general law.
+                //
+                // The cross-file claim about `request_scope`'s roster gate is
+                // pinned by
+                // `run_loop::tests::the_two_room_claim_twins_agree_on_which_project_governs`.
+                Some((pid, ClaimSource::BoundConversation)) => {
+                    crate::gateway::visibility::project_visible(&pid).then_some(pid)
+                }
+                None => None,
+            };
+            match governing {
+                Some(pid) => Ok(Some(crate::scope::ScopeAttribution {
                     owner_user_id: user.clone().unwrap_or_else(|| {
                         crate::gateway::security::store::OWNER_USER_ID.to_string()
                     }),
                     scope: crate::scope::ScopeId::Project(pid),
-                }));
+                })),
+                None => Ok(user
+                    .as_deref()
+                    .map(crate::scope::ScopeAttribution::personal)),
             }
-            Ok(user
-                .as_deref()
-                .map(crate::scope::ScopeAttribution::personal))
-        }
-    }
-}
-
-/// The project that has claimed `session_key` as its room conversation.
-///
-/// A store failure reads as "not a room" rather than propagating, matching
-/// [`bound_workspace_of`]'s ruling for the same store: a degraded catalogue
-/// must not turn into a refused turn. The cost of that choice is bounded —
-/// the row is then stamped personal, which is what happens today anyway — and
-/// the alternative would make a SQLite hiccup look like a permissions failure.
-fn room_claiming(session_key: &SessionKey) -> Option<String> {
-    match crate::projects::ProjectStore::shared()
-        .project_for_session_key(&session_key.to_key_string())
-    {
-        Ok(pid) => pid,
-        Err(e) => {
-            tracing::warn!(error = %e, "projects: room claim lookup failed; treating as not-a-room");
-            None
         }
     }
 }
@@ -2089,8 +2145,12 @@ mod tests {
         assert!(err.contains("config-tier"), "unexpected error: {err}");
     }
 
-    /// Config-tier ("operator") and absent-role (trusted local) callers may
-    /// choose a working directory; absent role exercises the existing default.
+    /// Config-tier ("operator") callers may choose a working directory. Does
+    /// NOT cover an absent role — this test only ever scopes `CALLER_ROLE` to
+    /// `Some("operator")` below. An absent role is refused (unless loopback)
+    /// as of `546984c2b`; that path is pinned in `caller_identity`'s own
+    /// tests (`an_unscoped_ambient_caller_may_not_choose_a_directory`), not
+    /// here.
     #[tokio::test]
     async fn config_tier_caller_may_choose_project_root() {
         let router = Arc::new(AgentRouter::new());
@@ -2369,16 +2429,23 @@ mod tests {
             ..base_params()
         };
 
+        // Config-tier: this test is about tier-1-vs-tier-2 precedence, not
+        // about the `project_root` gate itself, so it needs a role the gate
+        // admits (`caller_may_choose_directory` no longer treats an absent
+        // role as admitted — see `caller_may_choose_directory_as`).
         let request = crate::gateway::caller_identity::CALLER_USER
             .scope(
                 Some("u-alice".to_string()),
-                build_run_request(
-                    "run-explicit".to_string(),
-                    &session_key,
-                    params,
-                    None,
-                    None,
-                    &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                crate::gateway::caller_identity::CALLER_ROLE.scope(
+                    Some("operator".to_string()),
+                    build_run_request(
+                        "run-explicit".to_string(),
+                        &session_key,
+                        params,
+                        None,
+                        None,
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
                 ),
             )
             .await
@@ -2893,6 +2960,290 @@ mod tests {
                 .await
                 .expect_err("a non-member must not open the room's conversation");
             assert!(matches!(err, BuildRunError::ProjectNotFound(_)));
+        }
+
+        /// Ruling U's second `room_claiming` arm: a room bound to a channel
+        /// conversation — never claimed via `projects.room_session` — must
+        /// admit a roster member's very first message with no `project_id` on
+        /// the request. This is the exact gap the long comment on
+        /// `resolve_attribution`'s `None` arm documents: a room bound *before*
+        /// anyone has spoken in it, whose first message arrives via
+        /// `chat.send`/`agent.run` rather than through the bound channel.
+        #[tokio::test]
+        async fn a_bound_conversation_keeps_its_room_scope_without_a_project_id() {
+            let (store, _pid, _tmp, _guard) = room();
+            let shared = ProjectStore::shared();
+            let p = shared
+                .create("bound-conversation-room", Some("u-alice"), None)
+                .unwrap();
+            shared.add_member(&p.id, "u-bob").unwrap();
+            shared
+                .bind_conversation(
+                    &p.id,
+                    "telegram",
+                    aleph_protocol::projects::BindingPeerKind::Group,
+                    "C-admission",
+                    Some("u-alice"),
+                    None,
+                )
+                .unwrap();
+            let key = SessionKey::group(
+                "main",
+                "telegram",
+                crate::routing::session_key::PeerKind::Group,
+                "C-admission",
+            );
+
+            let req = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    build_run_request(
+                        "r-bound".into(),
+                        &key,
+                        // No `project_id` — the whole point.
+                        params(None),
+                        None,
+                        Some(&store),
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
+                )
+                .await
+                .expect("a member on the roster may speak in the bound conversation");
+
+            assert_eq!(
+                stamped(&req),
+                (Some("u-bob"), Some(format!("project:{}", p.id).as_str())),
+                "a conversation bound before anyone spoke must take the room scope \
+                 on its first message, even though nothing ever claimed the session \
+                 key itself"
+            );
+        }
+
+        /// Arm 2 does **not** copy arm 1's refusal, and the asymmetry is the
+        /// whole point of this pair.
+        ///
+        /// A non-member reaching a bound channel conversation through
+        /// admission is admitted PERSONALLY — exactly the run they would get
+        /// if nothing had ever been bound to that conversation. The same
+        /// principal, in the same Telegram group, speaking through the
+        /// CHANNEL, gets precisely that already: the inbound router stamps
+        /// `personal:<speaker>` and `run_loop::request_scope`'s roster gate
+        /// leaves it alone. Refusing here answered one question two different
+        /// ways depending on which door the caller came through — and answered
+        /// it by naming a project id the caller never typed, on a room they
+        /// cannot see.
+        ///
+        /// So the oracle argument runs the other way for arm 2 than it does
+        /// for arm 1. Arm 1 must refuse identically however the room was
+        /// spelled ([`a_claimed_room_key_still_refuses_a_non_member`]); arm 2
+        /// must be *silent*, which it is only by falling through — a bound
+        /// conversation and an unbound one then produce byte-identical runs
+        /// for a caller the roster does not admit. That is asserted below
+        /// against a genuinely unbound key, not merely described.
+        ///
+        /// The refusal for an explicitly NAMED foreign project is unchanged
+        /// and is re-asserted here, because it is the thing arm 2's fall-
+        /// through must not be mistaken for having relaxed.
+        #[tokio::test]
+        async fn a_bound_conversation_admits_a_non_member_personally() {
+            let (store, _pid, _tmp, _guard) = room();
+            let shared = ProjectStore::shared();
+            let p = shared
+                .create("closed-bound-room", Some("u-alice"), None)
+                .unwrap();
+            shared
+                .bind_conversation(
+                    &p.id,
+                    "telegram",
+                    aleph_protocol::projects::BindingPeerKind::Group,
+                    "C-admission-2",
+                    Some("u-alice"),
+                    None,
+                )
+                .unwrap();
+            let key = SessionKey::group(
+                "main",
+                "telegram",
+                crate::routing::session_key::PeerKind::Group,
+                "C-admission-2",
+            );
+
+            let admitted = CALLER_USER
+                .scope(
+                    Some("u-carol".to_string()),
+                    build_run_request(
+                        "r-bound-2".into(),
+                        &key,
+                        params(None),
+                        None,
+                        Some(&store),
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
+                )
+                .await
+                .expect(
+                    "a non-member reaching a bound conversation must get the same \
+                     personal run the channel door already gives them, not a refusal",
+                );
+            assert_eq!(
+                stamped(&admitted),
+                (Some("u-carol"), Some("personal:u-carol")),
+                "the room the caller cannot see must not govern this turn — and must \
+                 not refuse it either"
+            );
+
+            // The silence, asserted rather than described: a conversation
+            // NOTHING is bound to produces the identical stamp.
+            let unbound_key = SessionKey::group(
+                "main",
+                "telegram",
+                crate::routing::session_key::PeerKind::Group,
+                "C-not-bound-at-all",
+            );
+            let baseline = CALLER_USER
+                .scope(
+                    Some("u-carol".to_string()),
+                    build_run_request(
+                        "r-bound-2b".into(),
+                        &unbound_key,
+                        params(None),
+                        None,
+                        Some(&store),
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
+                )
+                .await
+                .expect("an unbound conversation is an ordinary personal turn");
+            assert_eq!(
+                stamped(&admitted),
+                stamped(&baseline),
+                "for a caller the roster does not admit, a bound conversation must be \
+                 indistinguishable from an unbound one: the old refusal disclosed both \
+                 that this conversation is bound AND the id of the room it is bound to"
+            );
+
+            // Unchanged: a NAMED project the caller cannot reach is still one
+            // refusal with no oracle. Reusing the same bound key on purpose —
+            // an explicit `project_id` short-circuits `resolve_attribution`'s
+            // Path 2 before the claim lookup runs at all, so this pins that
+            // arm 2's fall-through did not relax the named case.
+            let unknown = CALLER_USER
+                .scope(
+                    Some("u-carol".to_string()),
+                    build_run_request(
+                        "r-bound-3".into(),
+                        &key,
+                        params(Some("p-never-minted")),
+                        None,
+                        Some(&store),
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
+                )
+                .await
+                .expect_err("an unminted id must be refused");
+            assert!(
+                matches!(unknown, BuildRunError::ProjectNotFound(ref id) if id == "p-never-minted")
+            );
+            let foreign = CALLER_USER
+                .scope(
+                    Some("u-carol".to_string()),
+                    build_run_request(
+                        "r-bound-4".into(),
+                        &key,
+                        params(Some(&p.id)),
+                        None,
+                        Some(&store),
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
+                )
+                .await
+                .expect_err("a named room the caller is not on must still be refused");
+            assert!(matches!(foreign, BuildRunError::ProjectNotFound(ref id) if *id == p.id));
+
+            // Building a request creates no session row either way.
+            assert!(store.get_metadata(&key).await.unwrap().is_none());
+        }
+
+        /// The asymmetry stated as one claim, so a later reader cannot "fix"
+        /// arm 1 and arm 2 into agreement by symmetry without a named test
+        /// going red.
+        ///
+        /// Same principal, same non-membership, two keys — and two different
+        /// answers, on purpose. Arm 1's key IS the room's own conversation, so
+        /// falling through would stamp the room's own row
+        /// `personal:<first speaker>` permanently (`stamp_attribution` is
+        /// create-only; `attribution_backfill` heals only NULL/NULL rows).
+        /// Arm 2's key belongs to a channel conversation whose real traffic
+        /// arrives through a door that stamps it personally anyway, so
+        /// refusing buys nothing and costs an existence oracle.
+        #[tokio::test]
+        async fn the_two_claim_arms_are_gated_differently_for_the_same_non_member() {
+            let (store, _pid, _tmp, _guard) = room();
+            let shared = ProjectStore::shared();
+
+            let claimed_room = shared.create("arm1-room", Some("u-alice"), None).unwrap();
+            let claimed_key = SessionKey::project_room("main", &claimed_room.id);
+            shared
+                .claim_session_key(&claimed_room.id, &claimed_key.to_key_string())
+                .unwrap();
+
+            let bound_room = shared.create("arm2-room", Some("u-alice"), None).unwrap();
+            shared
+                .bind_conversation(
+                    &bound_room.id,
+                    "telegram",
+                    aleph_protocol::projects::BindingPeerKind::Group,
+                    "C-asymmetry",
+                    Some("u-alice"),
+                    None,
+                )
+                .unwrap();
+            let bound_key = SessionKey::group(
+                "main",
+                "telegram",
+                crate::routing::session_key::PeerKind::Group,
+                "C-asymmetry",
+            );
+
+            let arm1 = CALLER_USER
+                .scope(
+                    Some("u-carol".to_string()),
+                    build_run_request(
+                        "r-arm1".into(),
+                        &claimed_key,
+                        params(None),
+                        None,
+                        Some(&store),
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
+                )
+                .await;
+            let arm2 = CALLER_USER
+                .scope(
+                    Some("u-carol".to_string()),
+                    build_run_request(
+                        "r-arm2".into(),
+                        &bound_key,
+                        params(None),
+                        None,
+                        Some(&store),
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
+                )
+                .await;
+
+            assert!(
+                matches!(arm1, Err(BuildRunError::ProjectNotFound(ref id)) if *id == claimed_room.id),
+                "arm 1 is a declaration about THIS key: refusing is what keeps the \
+                 room's own row from being stamped personal forever"
+            );
+            let arm2 = arm2.expect("arm 2 must not refuse");
+            assert_eq!(
+                stamped(&arm2),
+                (Some("u-carol"), Some("personal:u-carol")),
+                "arm 2 is an inference from a conversation, and the same principal in \
+                 the same conversation gets exactly this through the channel door"
+            );
         }
 
         #[tokio::test]

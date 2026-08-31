@@ -316,6 +316,14 @@ impl InboundMessageRouter {
         // P0 sender→user link (`pairing_store`), not any task-local — channel
         // dispatch runs outside `process_request`'s task tree. An unlinked
         // peer (`None`) stamps nothing — legacy owner semantics.
+        //
+        // The same resolved principal is ALSO this turn's author. Scope names
+        // the room, author names whoever is typing, and in a group they differ:
+        // without the second stamp `run_loop::with_request_scope` falls back to
+        // the session owner, so the guard audit's `actor_user` and
+        // `nudges::speaker_label` both name whoever spoke FIRST in that group
+        // rather than the person who just spoke. A DM is accidentally correct
+        // (owner == speaker), which is why only groups were wrong.
         if let Some(user) = self
             .pairing_store
             .sender_user(ctx.message.channel_id.as_str(), &ctx.sender_normalized)
@@ -324,6 +332,10 @@ impl InboundMessageRouter {
             crate::scope::stamp_metadata(
                 &mut metadata,
                 &crate::scope::ScopeAttribution::personal(&user),
+            );
+            metadata.insert(
+                crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string(),
+                user,
             );
         }
         // Stamp the channel's busy-input policy so the execution engine's busy

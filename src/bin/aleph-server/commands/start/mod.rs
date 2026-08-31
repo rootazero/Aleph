@@ -2055,6 +2055,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         &project_store,
         &auth_bundle.security_store,
         &event_bus,
+        &session_store,
         args.daemon,
     );
 
