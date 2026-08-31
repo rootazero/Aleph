@@ -215,14 +215,18 @@ mod tests {
     #[test]
     fn empty_query_offers_every_row_in_the_servers_order() {
         // The whole argument for putting the catalogue behind a button: opening
-        // it is still browsing. If this ever filters on an empty query, the
-        // page stops being able to tell you which providers exist.
+        // it is still browsing.
         let catalog = vec![
             key_entry("openai"),
             key_entry("moonshot"),
             key_entry("groq"),
         ];
-        assert_eq!(ids(&pickable(&catalog, "")), ["openai", "moonshot", "groq"]);
+        crate::components::preset_picker::contract::empty_query_offers_everything(
+            |q| pickable(&catalog, q).iter().map(as_row).collect(),
+            &["openai", "moonshot", "groq"],
+        );
+        // A whitespace-only query is not a keyword either — it must not be
+        // treated as narrowing the list to nothing.
         assert_eq!(
             ids(&pickable(&catalog, "   ")),
             ["openai", "moonshot", "groq"]
@@ -274,6 +278,12 @@ mod tests {
         let mut configured = key_entry("moonshot");
         configured.models = vec!["kimi-k2".to_string()];
         let catalog = vec![key_entry("openai"), configured];
+        crate::components::preset_picker::contract::configured_rows_stay_offered_and_marked(
+            |q| pickable(&catalog, q).iter().map(as_row).collect(),
+            "moonshot",
+        );
+        // Also findable by a keyword search, not only by browsing an empty
+        // query.
         assert_eq!(ids(&pickable(&catalog, "moonshot")), ["moonshot"]);
     }
 
@@ -289,6 +299,12 @@ mod tests {
 
         let deleted = key_entry("moonshot");
         assert!(!is_configured(&deleted));
-        assert_eq!(ids(&pickable(&[deleted], "moonshot")), ["moonshot"]);
+        let catalog = vec![deleted];
+        crate::components::preset_picker::contract::deleted_row_returns_to_the_picker(
+            |q| pickable(&catalog, q).iter().map(as_row).collect(),
+            "moonshot",
+        );
+        // Also findable by keyword, not only by browsing an empty query.
+        assert_eq!(ids(&pickable(&catalog, "moonshot")), ["moonshot"]);
     }
 }

@@ -177,11 +177,10 @@ mod tests {
     #[test]
     fn an_empty_query_offers_every_preset_in_the_category() {
         // The whole argument for putting the catalogue behind a button: opening
-        // it is still browsing. If this ever filters on an empty query, the tab
-        // stops being able to tell you which providers exist.
-        assert_eq!(
-            ids(&offerable(&catalog(), &[], GenerationType::Image, "")),
-            ["openai-dalle", "stability-ai"]
+        // it is still browsing.
+        crate::components::preset_picker::contract::empty_query_offers_everything(
+            |q| offerable(&catalog(), &[], GenerationType::Image, q),
+            &["openai-dalle", "stability-ai"],
         );
     }
 
@@ -228,15 +227,9 @@ mod tests {
             listed(&catalog(), &providers, GenerationType::Image).len(),
             1
         );
-        let offered = offerable(&catalog(), &providers, GenerationType::Image, "");
-        assert_eq!(ids(&offered), ["openai-dalle", "stability-ai"]);
-        assert!(
-            offered
-                .iter()
-                .find(|r| r.id == "stability-ai")
-                .unwrap()
-                .configured,
-            "offered but unmarked reads as 'not set up yet'"
+        crate::components::preset_picker::contract::configured_rows_stay_offered_and_marked(
+            |q| offerable(&catalog(), &providers, GenerationType::Image, q),
+            "stability-ai",
         );
     }
 
@@ -246,9 +239,10 @@ mod tests {
         assert_eq!(listed(&catalog(), &before, GenerationType::Image).len(), 1);
         // Delete empties the config list; the preset must remain offerable.
         assert!(listed(&catalog(), &[], GenerationType::Image).is_empty());
-        let offered = offerable(&catalog(), &[], GenerationType::Image, "stab");
-        assert_eq!(ids(&offered), ["stability-ai"]);
-        assert!(!offered[0].configured);
+        crate::components::preset_picker::contract::deleted_row_returns_to_the_picker(
+            |q| offerable(&catalog(), &[], GenerationType::Image, q),
+            "stability-ai",
+        );
     }
 
     #[test]
