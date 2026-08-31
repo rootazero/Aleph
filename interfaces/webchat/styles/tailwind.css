@@ -1482,12 +1482,28 @@ html.theme-switching::view-transition-new(root) {
   --color-surface-raised: var(--mat-raised);
 }
 
-/* macOS: let the always-on vibrancy show behind our semi-opaque aurora in every
-   mode (faint, controlled 通透感). Non-macOS: paint an opaque ground so the
-   semi-opaque aurora has something solid to sit on. */
-html[data-platform="macos"],
-html[data-platform="macos"] body { background-color: transparent; }
-html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-ground); }
+/* === Window-chrome rules are keyed on the SHELL, not on the OS ===========
+   Everything below that reads `[data-shell="aleph-tauri"][data-platform="macos"]`
+   describes the macOS desktop window, not the macOS operating system: that
+   window is built `transparent(true)` with a vibrancy material behind it and
+   carries `TitleBarStyle::Overlay`, so the traffic lights float over the top-
+   left of the *content* and every chrome glyph steps around them.
+
+   `data-platform` alone cannot say that. `baseline-probe.js` resolves it from
+   the user agent whenever no host declared one, so it reads `macos` in a plain
+   Chrome or Safari on a Mac just as it does inside the app — and a browser has
+   neither a transparent window nor overlay traffic lights. The pair is the
+   fact; `platform_host.rs` has a test that keeps them together.
+
+   macOS shell: let the always-on vibrancy show behind our semi-opaque aurora in
+   every mode (faint, controlled 通透感). Everywhere else — every browser, macOS
+   included, and the Win/Linux shells — nothing sits behind the page, so paint an
+   opaque ground for the semi-opaque aurora to rest on. Default first, shell
+   override second: the two-attribute selector outspecifies the bare `body`, so
+   source order is not load-bearing. */
+body { background-color: var(--aleph-solid-ground); }
+html[data-shell="aleph-tauri"][data-platform="macos"],
+html[data-shell="aleph-tauri"][data-platform="macos"] body { background-color: transparent; }
 
 /* --- The drifting light-field, fixed behind the whole shell --- */
 .aleph-shell {
@@ -1563,13 +1579,13 @@ html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-gro
   -webkit-backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
 }
 
-/* Brand row — hugs the top of the sidebar by default. On macOS the row
-   is padded down to clear the overlay traffic lights (and the fixed
-   sidebar-toggle that sits in the same band, next to them). Web + Tauri
-   Win/Linux carry their own inline collapse button inside the brand row,
-   so the row stays tight against the top edge. */
+/* Brand row — hugs the top of the sidebar by default. In the macOS shell the
+   row is padded down to clear the overlay traffic lights (and the fixed
+   sidebar-toggle that sits in the same band, next to them). Every browser
+   (macOS included) and the Win/Linux shells carry their own inline collapse
+   button inside the brand row, so the row stays tight against the top edge. */
 .aleph-sidebar-head { padding-top: 0.85rem; }
-html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
+html[data-shell="aleph-tauri"][data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 
 /* The ℵ wordmark tile. A diagonal sheen sweeps across on hover — the
    animation only exists during :hover, so it costs nothing at rest. */
@@ -1999,19 +2015,21 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 /* === Title-row layout tokens ====================================
    `--aleph-chrome-y` is the y-coordinate (from the window's top edge)
    where every chrome glyph centers its vertical midline:
-     • macOS  → traffic-light midline (≈15 px) so the left collapse
+     • macOS shell → traffic-light midline (≈15 px) so the left collapse
        toggle, right workspace toggle, notification bell, and the
        workspace pane's "WORKSPACE · …" label all sit on the same row
        as the OS overlay traffic lights.
      • Other  → sidebar brand logo midline (≈28 px). The `aleph-mark`
        tile is 28 × 28 inside `.aleph-sidebar-head` whose top padding
        is 0.85 rem = 13.6 px → logo center ≈ 27.6 px; rounded to 28 px.
+       "Other" includes a browser ON macOS: the traffic lights belong to
+       the shell's window, not to the operating system.
 
    `--aleph-band-h` is the height of the global `<main>` drag band
    that reserves space for the macOS overlay-titlebar chrome row.
-   Web + Tauri Win/Linux already have system-level top chrome (browser
-   tab bar / native title bar) so the band is 0 there — only macOS
-   needs to carve out room inside the panel itself.
+   Browsers and the Win/Linux shells already have system-level top chrome
+   (browser tab bar / native title bar) so the band is 0 there — only the
+   macOS shell needs to carve out room inside the panel itself.
 
    `.aleph-chrome-top` positions a 28 × 28 button so its center lands
    on the chrome row (when used by fixed-positioned chrome anchored
@@ -2031,7 +2049,7 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
        `%` resolves to the same pixel column. */
     --aleph-workspace-w: 40%;
 }
-html[data-platform="macos"] {
+html[data-shell="aleph-tauri"][data-platform="macos"] {
     --aleph-chrome-y: 15px;
     --aleph-band-h: 30px;
     --aleph-content-top: 2.45rem;
@@ -2102,7 +2120,7 @@ html[data-platform="macos"] {
     pointer-events: none;
     background: transparent;
 }
-html[data-platform="macos"] .aleph-main-drag-band {
+html[data-shell="aleph-tauri"][data-platform="macos"] .aleph-main-drag-band {
     pointer-events: auto;
     -webkit-app-region: drag;
 }
@@ -2110,11 +2128,12 @@ html[data-platform="macos"] .aleph-main-drag-band {
 /* Fixed top-left sidebar toggle — pinned to the window, not the sidebar,
    so it remains clickable when the sidebar slides off-screen.
 
-   Visibility model:
-   • macOS Tauri: always visible, vertically centred on the traffic-light
+   Visibility model — keyed on the SHELL, not on the OS (a browser on macOS
+   has no traffic lights to sit beside):
+   • macOS shell: always visible, vertically centred on the traffic-light
      midline (via `aleph-chrome-top`). The fixed toggle is the only
      collapse control there; the inline brand-row variant is hidden.
-   • Web + Tauri Win/Linux: only visible when the sidebar is collapsed.
+   • Browsers + Tauri Win/Linux: only visible when the sidebar is collapsed.
      While the sidebar is open, the inline collapse button in the brand
      row handles it; this fixed one takes over as soon as the sidebar
      slides away. Centred on the brand-logo midline (≈28 px). */
@@ -2163,20 +2182,35 @@ html[data-platform="macos"] .aleph-main-drag-band {
    overlay traffic lights (~60 px wide). Vertical position comes from
    the shared `--aleph-chrome-y` variable so the toggle, bell, right
    toggle, and workspace label all line up on the same y-baseline. */
-html[data-platform="macos"] .aleph-shell .aleph-sidebar-toggle {
+html[data-shell="aleph-tauri"][data-platform="macos"] .aleph-shell .aleph-sidebar-toggle {
     display: flex;
     left: 72px;
 }
 
 /* Inline collapse button — lives inside the brand row next to ThemeToggle.
-   Visible on web + Tauri Win/Linux; hidden on macOS (the fixed toggle
-   above is the only collapse control there). */
+   Visible in every browser (macOS included) and in the Tauri Win/Linux shells;
+   hidden only in the macOS shell, where the fixed toggle above sits beside the
+   overlay traffic lights and is the sole collapse control. */
+/* Brand-row geometry, declared once because two rules subtract it. The
+   collapse button is a fixed px square today, so it does not follow
+   --control-ui-text-scale; the gap beside it is a rem and does. The theme popover below offsets itself by exactly their sum,
+   and a literal on either side drifts from the other the moment the a11y font
+   scale leaves 1 — which is what `right: -1.875rem` (a flat 30px * scale) did.
+   `.aleph-sidebar-head-actions` carries the gap in CSS rather than a `gap-1`
+   utility in `mode_sidebar.rs` so both halves of the sum have one writer. */
+.aleph-sidebar-head {
+    --aleph-brand-toggle-size: 26px;
+    --aleph-brand-actions-gap: 0.25rem;
+}
+.aleph-sidebar-head-actions {
+    gap: var(--aleph-brand-actions-gap);
+}
 .aleph-sidebar-inline-toggle {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 26px;
-    height: 26px;
+    width: var(--aleph-brand-toggle-size);
+    height: var(--aleph-brand-toggle-size);
     padding: 0;
     background: transparent;
     color: var(--color-text-secondary);
@@ -2197,22 +2231,23 @@ html[data-platform="macos"] .aleph-shell .aleph-sidebar-toggle {
     outline: 2px solid var(--color-primary);
     outline-offset: 1px;
 }
-html[data-platform="macos"] .aleph-sidebar-inline-toggle {
+html[data-shell="aleph-tauri"][data-platform="macos"] .aleph-sidebar-inline-toggle {
     display: none;
 }
 
-/* Theme popover lives inside ThemeToggle's `.relative` wrapper, which on
-   web + Tauri Win/Linux sits before the inline collapse button in the
-   brand row. Its trigger right edge is therefore 30 px (button 26 + gap 4)
+/* Theme popover lives inside ThemeToggle's `.relative` wrapper, which in
+   every browser and in the Tauri Win/Linux shells sits before the inline
+   collapse button in the brand row. Its trigger right edge is therefore one button plus one gap
    shy of the brand row's content right edge — anchoring the popover to
    `right: 0` of the trigger would push it past the sidebar's left edge.
-   Shift it back so its right edge meets the brand row's right edge. On
-   macOS the inline button is `display: none` and the trigger sits flush
-   right again, so reset the offset there. */
+   Shift it back by that exact sum, derived from the two tokens above rather
+   than restated as a number, so the two cannot disagree under a non-default
+   a11y text scale. In the macOS shell the inline button is `display: none`
+   and the trigger sits flush right again, so reset the offset there. */
 .aleph-sidebar-head .theme-picker-popover {
-    right: -1.875rem;
+    right: calc(-1 * (var(--aleph-brand-toggle-size) + var(--aleph-brand-actions-gap)));
 }
-html[data-platform="macos"] .aleph-sidebar-head .theme-picker-popover {
+html[data-shell="aleph-tauri"][data-platform="macos"] .aleph-sidebar-head .theme-picker-popover {
     right: 0;
 }
 
@@ -2303,10 +2338,10 @@ input, textarea, [contenteditable="true"], [contenteditable=""] {
   padding: 6px 8px;
   pointer-events: none;
 }
-/* macOS: always clear the top-right chrome (workspace toggle + notification
-   bell), which is anchored to the chat surface's right edge regardless of
-   sidebar state. */
-html[data-platform="macos"] .aleph-roster-wrap {
+/* macOS shell: always clear the top-right chrome (workspace toggle +
+   notification bell), which is anchored to the chat surface's right edge
+   regardless of sidebar state. */
+html[data-shell="aleph-tauri"][data-platform="macos"] .aleph-roster-wrap {
   padding-right: 96px;
 }
 /* When the sidebar is collapsed the fixed sidebar toggle
@@ -2314,10 +2349,10 @@ html[data-platform="macos"] .aleph-roster-wrap {
    must start past it so the first avatar doesn't cover the button. The toggle's
    x differs by platform, so the left clearance does too:
 
-   • Web / Win / Linux: toggle at `left: 10px`, 28px wide → right edge 38px, so
-     content starts at 38 + 8px gap = 46px.
-   • macOS: toggle at `left: 72px` (clears the overlay traffic lights), 28px
-     wide → right edge 100px, so content starts at 100 + 8px = 108px.
+   • Browsers (macOS included) / Win / Linux shells: toggle at `left: 10px`,
+     28px wide → right edge 38px, so content starts at 38 + 8px gap = 46px.
+   • macOS shell: toggle at `left: 72px` (clears the overlay traffic lights),
+     28px wide → right edge 100px, so content starts at 100 + 8px = 108px.
 
    With the sidebar expanded the chat surface starts at the sidebar's right edge
    so the toggle floats over the SIDEBAR, not the chat — the roster then hugs
@@ -2325,7 +2360,7 @@ html[data-platform="macos"] .aleph-roster-wrap {
 .aleph-shell.sidebar-collapsed .aleph-roster-wrap {
   padding-left: 46px;
 }
-html[data-platform="macos"] .aleph-shell.sidebar-collapsed .aleph-roster-wrap {
+html[data-shell="aleph-tauri"][data-platform="macos"] .aleph-shell.sidebar-collapsed .aleph-roster-wrap {
   padding-left: 108px;
 }
 /* Width swap: default (narrow) shows the cluster; >=700px shows the pill bar.

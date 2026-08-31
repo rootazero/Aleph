@@ -90,12 +90,27 @@ struct RevealGate {
 /// absent on a shell-hosted page — a reader that has to distinguish "Windows"
 /// from "the marker did not run" has no way to.
 ///
-/// This is NOT the only writer. `baseline-probe.js` resolves and writes the
-/// same attribute before the WASM boots, because this script is an
-/// `initialization_script` and therefore runs before page scripts only for
-/// SAME-ORIGIN pages — a panel-only shell pointed at a remote Gateway does not
-/// get it until `on_page_load`, which is too late. The two agree by
-/// construction: the probe keeps a value it finds already set.
+/// This is NOT the only writer. `baseline-probe.js` resolves and writes
+/// `data-platform` before the WASM boots, because **a plain browser never runs
+/// this script at all** — nothing declares the attribute there. The two agree
+/// by construction: the probe keeps a value it finds already set.
+///
+/// That "plain browser" reason is the whole reason, and it is worth stating
+/// what the reason is NOT. This comment used to say the injection runs before
+/// page scripts "only for same-origin pages", so a panel-only shell pointed at
+/// a remote Gateway would not get the marker until `on_page_load`. That was
+/// never measured, and it is false: `initialization_script` becomes a
+/// `WKUserScript(AtDocumentStart)` on the webview's user content controller
+/// (tauri → tauri-runtime-wry → `wry::wkwebview::init`), and a user script has
+/// no origin concept — there is no gate anywhere on that path. Measured
+/// 2026-08-31 on tauri 2.11.2 / wry 0.55.1: driven against a genuinely
+/// non-loopback origin, `data-shell` and `data-platform` are both already set
+/// when the page's own first inline `<script>` runs. What *is* origin-scoped
+/// is the capability ACL — see [`grant_remote_drag`], which is what actually
+/// fixed the undraggable remote window in 4c31bfea4. The claim is now pinned
+/// by `qa/webview_compat/run.sh macos` (`marker-origin`) rather than asserted
+/// here; Windows and Linux take the same unconditional path in wry but have
+/// not been run.
 ///
 /// The `alephShell.pickDirectory` / `alephShell.createProjectDirectory`
 /// bridge that used to live here was removed: the directory picker now
@@ -419,15 +434,20 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
                 external_link::route(url)
             }
         })
-        // `SHELL_MARKER_JS` (which sets `data-platform=macos`) is injected via
-        // `initialization_script`, but that runs reliably only for same-origin
-        // pages (custom protocol + loopback). A panel-only shell pointed at a
-        // *remote* Gateway loads the Panel from a foreign origin where the init
-        // script does not run — leaving `data-platform` unset, so the Panel's
-        // macOS `-webkit-app-region: drag` band never activates and the
-        // frameless window can't be dragged (full app is unaffected: it loads
-        // the loopback Panel). Re-assert the marker on every page-load via
-        // `eval` (host→webview, origin-independent). Idempotent same-origin.
+        // Re-assert the marker on every page load via `eval` (host→webview,
+        // origin-independent) and put the update banner back after a reload.
+        //
+        // The eval is belt-and-braces for the marker, NOT the delivery path —
+        // do not reason about attribute timing from it. `initialization_script`
+        // already lands `SHELL_MARKER_JS` at document start on every origin,
+        // remote included (see `SHELL_MARKER_JS`'s doc for the measurement).
+        // This event is far too late to be a delivery path anyway: removing the
+        // init-script leg and keeping only this one was measured on 2026-08-31
+        // to leave `data-shell` unset through `window.onload` — `Finished` maps
+        // to `didFinishNavigation`, which fires *after* the load event. So the
+        // eval is worth its two lines only because it is free and covers the
+        // platforms this repo has not run; it could never have carried the
+        // marker on its own.
         .on_page_load(|window, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Finished {
                 let _ = window.eval(SHELL_MARKER_JS);

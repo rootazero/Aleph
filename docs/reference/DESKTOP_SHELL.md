@@ -237,12 +237,49 @@ lifecycle. Windows and Linux keep their chromeless look with no menu.
 
 Phase 2 is a CSS/theme-layer pass on `interfaces/webchat/`:
 
-- **Vibrant theme** — a fourth theme mode (System / Light / Dark / Vibrant).
-  Vibrant pairs the dark palette with translucent surfaces. It engages only
-  inside the macOS shell (`data-platform="macos"`, injected by the shell);
-  elsewhere it degrades silently to the solid dark theme.
+- **Theme modes** — `ThemeMode` is `System / Light / Dark`, and that is the
+  whole set (`appearance.rs::ThemeMode::ALL`). This bullet used to describe a
+  fourth mode, *Vibrant*, that paired the dark palette with translucent
+  surfaces and engaged only inside the macOS shell. Vibrant was superseded by
+  *Glass*, and Glass has since been retired too; both survive only as legacy
+  `localStorage` values (`"translucent"`, `"glass"`) that
+  `legacy_glass_migration` rewrites to dark + liquid material on first boot.
+  Translucency is now a material choice, not a mode.
 - **Transparent titlebar** — the shell injects `data-shell` / `data-platform`
   flags; the Panel's `.app-titlebar` leaves room for the macOS traffic lights.
+  **The two flags are not interchangeable.** `data-platform` answers *which
+  WebView engine is rendering*, and `baseline-probe.js` resolves it from the
+  user agent when no host declared one — so it reads `macos` in a plain browser
+  on a Mac exactly as it does in the shell. Only `data-shell="aleph-tauri"`
+  says the document is inside a Tauri window. Window chrome (the overlay
+  traffic lights, the transparent window behind the vibrancy, the `<main>`
+  drag band) therefore keys on **both**:
+  `html[data-shell="aleph-tauri"][data-platform="macos"]`. Keying it on
+  `data-platform` alone is what put the sidebar collapse toggle 72 px from the
+  left of a browser window that has no traffic lights to clear;
+  `platform_host.rs::stylesheet_never_keys_window_chrome_on_the_os_alone`
+  keeps the pair together — over every `interfaces/webchat/styles/*.css`,
+  derived from the directory, because naming one file left `ios.css` unscanned.
+
+  **`data-shell` is there in time, and that was measured, not reasoned.**
+  Gating chrome on a second attribute is only safe if the attribute arrives
+  before first paint, and for a panel-only shell pointed at a *remote* Gateway
+  the source comments claimed it did not — that `initialization_script` runs
+  "only for same-origin pages" and a foreign origin waits for the
+  `on_page_load` re-assert. That claim entered the tree in `4c31bfea4`, a
+  commit that fixed a real undraggable-window bug with **two** changes at once;
+  only the other one (`grant_remote_drag`, which grants the remote origin the
+  `core:window:allow-start-dragging` capability — the ACL *is* origin-scoped)
+  was load-bearing. The injection is not gated: it becomes a
+  `WKUserScript(AtDocumentStart)` on the webview's user content controller, and
+  a user script has no origin concept. Measured 2026-08-31 against a genuinely
+  non-loopback origin: `data-shell` and `data-platform` are both set when the page's own
+  first inline `<script>` runs. Mutating the init-script leg away leaves them
+  unset through `window.onload` (`PageLoadEvent::Finished` maps to
+  `didFinishNavigation`, which fires after `load`), which is what the flash
+  would have looked like had the claim been true.
+  Pinned by `qa/webview_compat/run.sh macos`, scenario `marker-origin`.
+  Windows and Linux take the same unconditional path in wry but have not been run.
 - **Typography** — an explicit `-apple-system` / SF system font stack.
 - **Motion** — one converged ease-out curve; `prefers-reduced-motion` honored.
 - **Depth** — soft, layered shadow tokens.

@@ -13,15 +13,15 @@
 # Every assertion therefore prints the value it actually read.
 #
 # One more asymmetry worth knowing before you file anything against the
-# `flat-on-linux` / `wkwebview-baseline` manual steps below: the shell's
-# platform marker (`SHELL_MARKER_JS` in desktop/shell/src/main.rs) is three
-# `#[cfg(target_os = ...)]` arms, and this repo has only ever been built and
-# tested on Windows — so only the `windows` arm has ever even been *compiled*,
-# let alone mutation-tested. The `macos` arm and the `not(any(macos, windows))`
-# (linux) arm are unverified in the strongest sense: never built, never run,
-# never falsified. If `data-platform` is missing or wrong on Linux, that arm
-# has never been proven to work at all — don't assume your install is broken
-# before assuming the arm itself might be.
+# `flat-on-linux` manual step below: the shell's platform marker
+# (`SHELL_MARKER_JS` in desktop/shell/src/main.rs) is three
+# `#[cfg(target_os = ...)]` arms, and an arm is only as verified as the machine
+# it was run on. The `macos` arm is now measured — `marker-origin` below drives
+# it against a foreign origin and asserts the attribute it writes. The
+# `not(any(macos, windows))` (linux) arm is still unverified in the strongest
+# sense: never built, never run, never falsified. If `data-platform` is missing
+# or wrong on Linux, that arm has never been proven to work at all — don't
+# assume your install is broken before assuming the arm itself might be.
 set -uo pipefail
 
 PLATFORM="${1:-}"
@@ -145,6 +145,85 @@ if [ "$PLATFORM" = "macos" ]; then
     skipit "min-system-version" "no app bundle at $APP — set ALEPH_APP"
   fi
   skipit "install-refusal below 13.3" "requires a machine running macOS < 13.3; NOT VERIFIED anywhere"
+
+  # ── marker-origin ───────────────────────────────────────────────────────
+  # Does `SHELL_MARKER_JS` reach a document served from an origin the shell did
+  # NOT serve — and does it get there BEFORE the page's own first script?
+  #
+  # This block exists because that answer was once asserted in a comment and
+  # never measured. Commit 4c31bfea4 fixed a real bug (the remote panel-only
+  # shell's frameless window would not drag) with two changes at once: the
+  # capability grant that actually fixed it, and an `on_page_load` re-eval
+  # justified by "the init script does not run on a foreign origin". Only the
+  # first was load-bearing; the second's justification was never tested, and it
+  # propagated into four comments and cost a later round a wrong conclusion
+  # about a startup layout flash. So measure it rather than argue it.
+  #
+  # Two absences are SKIP, never PASS — "I could not ask" is not "the answer is
+  # yes": no LAN address (loopback is not a foreign origin, so the question
+  # cannot be posed at all) and no panel-only shell binary.
+  LANIP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)
+  SHELLBIN="${ALEPH_SHELL_BIN:-target/debug/aleph-desktop-shell}"
+  if [ -z "$LANIP" ]; then
+    skipit "marker-origin" "no LAN address on en0/en1 — a loopback origin is not foreign to the webview, so this cannot be asked here"
+  elif [ ! -x "$SHELLBIN" ]; then
+    skipit "marker-origin" "no shell binary at $SHELLBIN — build the panel-only variant: (cd desktop/shell && cargo build --no-default-features)"
+  elif ! command -v strings >/dev/null 2>&1; then
+    skipit "marker-origin" "no \`strings\` on PATH — cannot tell the panel-only binary from the full app, and guessing the wrong one turns a real answer into a misleading FAIL"
+  elif [ "$(strings "$SHELLBIN" 2>/dev/null | grep -c 'desktop-shell-panel')" -eq 0 ]; then
+    skipit "marker-origin" "$SHELLBIN is the FULL app (it would supervise a bundled daemon and never navigate to the fake Gateway); rebuild with --no-default-features"
+  else
+    MO_DIR=$(mktemp -d)
+    mkdir -p "$MO_DIR/home/.aleph"
+    python3 qa/webview_compat/foreign_origin_gateway.py > "$MO_DIR/reports.log" 2>&1 &
+    MO_SRV=$!
+    # Take the port from the fixture's own post-bind announcement rather than
+    # picking one here. A port this script chose can already be held by a stray
+    # server from an earlier run — which answers /ready, so the readiness check
+    # goes green while the shell talks to that other process and this run's
+    # report log stays empty.
+    MO_PORT=""
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      MO_PORT=$(sed -n 's/^listening on 0\.0\.0\.0:\([0-9][0-9]*\)$/\1/p' "$MO_DIR/reports.log" 2>/dev/null | head -1)
+      [ -n "$MO_PORT" ] && break
+      sleep 0.5
+    done
+    printf 'http://%s:%s' "$LANIP" "$MO_PORT" > "$MO_DIR/home/.aleph/.desktop-shell-panel-target"
+    # The shell only navigates to a target whose /ready answers; prove the
+    # fixture is up before blaming the shell for not arriving.
+    if [ -z "$MO_PORT" ]; then
+      bad "marker-origin: the fixture Gateway bound a port" \
+          "$(tail -3 "$MO_DIR/reports.log" 2>/dev/null | tr '\n' ' ')"
+    elif ! curl -sS -o /dev/null -m 3 "http://$LANIP:$MO_PORT/ready" 2>/dev/null; then
+      skipit "marker-origin" "the fixture Gateway bound $MO_PORT but did not answer on http://$LANIP:$MO_PORT — the firewall refused the LAN bind"
+    else
+      HOME="$MO_DIR/home" "$SHELLBIN" > "$MO_DIR/shell.log" 2>&1 &
+      MO_SHELL=$!
+      sleep 20
+      kill "$MO_SHELL" 2>/dev/null; sleep 1; kill -9 "$MO_SHELL" 2>/dev/null
+      first=$(grep -m1 'phase=1-inline-head' "$MO_DIR/reports.log" 2>/dev/null)
+      echo "        observed phases:"
+      grep '^REPORT' "$MO_DIR/reports.log" 2>/dev/null | sed 's/^/          /' || true
+      if [ -z "$first" ]; then
+        bad "marker-origin: the shell loaded the foreign-origin page" \
+            "no phase-1 report arrived; shell log tail: $(tail -3 "$MO_DIR/shell.log" 2>/dev/null | tr '\n' ' ')"
+      else
+        ok "marker-origin: the shell loaded the foreign-origin page"
+        case "$first" in
+          *shell=aleph-tauri*) ok "marker-origin: data-shell is set before the page's first inline script" ;;
+          *) bad "marker-origin: data-shell is set before the page's first inline script" \
+                 "$first — a stylesheet keyed on [data-shell=\"aleph-tauri\"] would flash unstyled here" ;;
+        esac
+        case "$first" in
+          *platform=macos*) ok "marker-origin: data-platform is set there too" ;;
+          *) bad "marker-origin: data-platform is set there too" "$first" ;;
+        esac
+      fi
+    fi
+    kill "$MO_SRV" 2>/dev/null
+    [ -n "${KEEP:-}" ] && echo "        kept: $MO_DIR" || rm -rf "$MO_DIR"
+  fi
+
 
   echo "  MANUAL  wkwebview-baseline: in the Panel's inspector, all four must be true:"
   echo "          CSS.supports('color','oklch(0 0 0)')"

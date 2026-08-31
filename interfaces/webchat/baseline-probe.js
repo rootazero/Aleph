@@ -4,13 +4,21 @@
  * the WASM (module scripts are deferred, so ordering is guaranteed). Three jobs,
  * in this order — the ordering is load-bearing, see the spec section 4.3:
  *
- *   1. Resolve and WRITE data-platform. It cannot simply be read: the shell's
- *      SHELL_MARKER_JS is an `initialization_script`, which runs before page
- *      scripts only for SAME-ORIGIN pages. A panel-only shell pointed at a
- *      remote Gateway re-asserts the marker from `on_page_load`, which fires at
- *      PageLoadEvent::Finished — AFTER this script. A plain browser never gets
- *      the marker at all. So this script owns the resolution and everything
- *      else (platform_host.rs) is a pure reader.
+ *   1. Resolve and WRITE data-platform. It cannot simply be read: a plain
+ *      browser never gets the shell's SHELL_MARKER_JS at all, so nothing
+ *      declares the attribute there. So this script owns the resolution and
+ *      everything else (platform_host.rs) is a pure reader.
+ *
+ *      Inside the shell the marker IS already present when this runs — on
+ *      every origin, remote Gateways included, because an
+ *      `initialization_script` is a document-start user script with no origin
+ *      concept (measured 2026-08-31; pinned by `qa/webview_compat/run.sh
+ *      macos`, scenario `marker-origin`). This comment used to claim the
+ *      opposite — that a remote origin had to wait for the shell's
+ *      `on_page_load` re-assert, which lands after this script. That claim was
+ *      never measured and is false, and it is why `resolvePlatform` keeps a
+ *      declared value rather than overwriting it: the shell's answer is the
+ *      authority whenever there is one, and it is there in time.
  *   2. Compute data-flat, which drives the glass degradation. Depends on 1.
  *   3. Probe the CSS baseline and, on failure, replace the page.
  *

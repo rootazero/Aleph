@@ -361,12 +361,13 @@ fn AppContent() -> impl IntoView {
 
             // Fixed top-left collapse button — anchored to the window so it
             // stays clickable when the sidebar slides off-screen. Visibility
-            // (see tailwind.css):
-            //   • macOS Tauri: always visible, vertically centred with the
+            // (see tailwind.css) is keyed on the SHELL, not on the OS — a
+            // browser on macOS has no overlay traffic lights to sit beside:
+            //   • macOS shell: always visible, vertically centred with the
             //     overlay traffic lights.
-            //   • Web + Tauri Win/Linux: only visible when the sidebar is
-            //     collapsed; while expanded, the inline brand-row button in
-            //     SidebarBrand handles it.
+            //   • Browsers (macOS included) + Tauri Win/Linux: only visible
+            //     when the sidebar is collapsed; while expanded, the inline
+            //     brand-row button in SidebarBrand handles it.
             // `data-tauri-drag-region="false"` opts out of the parent drag
             // strip so clicks aren't swallowed by the window-drag handler.
             <Show when=not_phone>

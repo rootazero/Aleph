@@ -179,10 +179,12 @@ pub fn ModeSidebar() -> impl IntoView {
 
 /// Brand row pinned to the top of the left column — the ℵ wordmark on the
 /// left, the theme picker + inline sidebar-collapse button on the right.
-/// On macOS the row is padded down (via `.aleph-sidebar-head`) so it clears
-/// the overlay traffic lights and the fixed top-left toggle that lives
-/// alongside them. On web / Tauri Win/Linux the row hugs the top and carries
-/// its own inline collapse button instead.
+/// Inside the macOS shell the row is padded down (via `.aleph-sidebar-head`)
+/// so it clears the overlay traffic lights and the fixed top-left toggle that
+/// lives alongside them. In a browser — macOS included, the traffic lights
+/// belong to the shell's window and not to the OS — and in the Tauri
+/// Win/Linux shells the row hugs the top and carries its own inline collapse
+/// button instead.
 #[component]
 fn SidebarBrand() -> impl IntoView {
     let mem = expect_context::<MemoryState>();
@@ -207,13 +209,14 @@ fn SidebarBrand() -> impl IntoView {
                 <span class="text-[15px] font-semibold tracking-tight">"Aleph"</span>
             </div>
             <div
-                class="aleph-no-drag flex items-center gap-1"
+                class="aleph-sidebar-head-actions aleph-no-drag flex items-center"
                 data-tauri-drag-region="false"
             >
                 <ThemeToggle />
-                // Inline collapse button — visible on web + Tauri Win/Linux.
-                // Hidden on macOS via CSS (the fixed top-left toggle next to
-                // the overlay traffic lights covers it).
+                // Inline collapse button — visible in every browser (macOS
+                // included) and in the Tauri Win/Linux shells. Hidden via CSS
+                // only inside the macOS shell, where the fixed top-left toggle
+                // next to the overlay traffic lights covers it.
                 <button
                     type="button"
                     class="aleph-sidebar-inline-toggle aleph-no-drag"

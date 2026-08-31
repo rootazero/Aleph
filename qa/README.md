@@ -121,6 +121,20 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # then answers each checkpoint out-of-band with `probe.py`
                                  # (the FILE on disk and the TOOL face — never the RPC being
                                  # driven).
+
+./qa/webview_compat/run.sh macos # br negotiation + Range + the macOS shell's own facts.
+                                 # `marker-origin` is the automated one: it points a
+                                 # panel-only shell at a fake Gateway bound to this
+                                 # machine's LAN address — a genuinely foreign origin to
+                                 # the webview — and asserts `data-shell` is already set
+                                 # when the served page's FIRST inline <script> runs. The
+                                 # comments used to claim the opposite, unmeasured, and a
+                                 # later round drew a wrong conclusion from them. Needs
+                                 # `(cd desktop/shell && cargo build --no-default-features)`;
+                                 # a full-app binary or a missing LAN address is a SKIP,
+                                 # never a PASS.
+./qa/webview_compat/run.sh linux # the WebKitGTK half; its `flat-on-linux` step is manual and
+                                 # that platform's SHELL_MARKER_JS arm is still unrun
 ```
 
 `plugins` uses a **short scratch root under `/tmp`** rather than `$TMPDIR` like

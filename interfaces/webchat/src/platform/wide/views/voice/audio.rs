@@ -169,9 +169,19 @@ pub(crate) enum MicError {
 }
 
 /// Is the Panel running inside the native desktop shell? The shell injects
-/// `data-shell="aleph-tauri"` on `<html>` for every document it loads (including
-/// the remote-served Panel), so this is reliable where `window.__TAURI__` is not
-/// (Tauri does not inject its globals into a remotely-navigated origin).
+/// `data-shell="aleph-tauri"` on `<html>` for every document it loads —
+/// including the remote-served Panel, and there before the page's own first
+/// script (measured 2026-08-31; `qa/webview_compat/run.sh macos`, scenario
+/// `marker-origin`).
+///
+/// Prefer it over `window.__TAURI__` because it is *our* marker: one writer,
+/// one spelling, and it carries the platform alongside. The reason is NOT that
+/// Tauri withholds its globals from a remotely-navigated origin — this doc used
+/// to say that, and the same measurement shows `window.__TAURI_INTERNALS__` is
+/// defined on a remote origin too (Tauri's own init scripts take the same
+/// document-start path). What a remote origin does not get is the *capability*
+/// that lets an `invoke` succeed, which is a different fact and not one this
+/// predicate is asking about.
 ///
 /// The distinction matters for a mic *denial*: in the shell, wry auto-grants the
 /// webview capture request, so a denial is an OS-level (macOS TCC) refusal a
