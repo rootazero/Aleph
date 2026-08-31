@@ -1,0 +1,115 @@
+{
+  "module": "src/generation",
+  "findings": [
+    {
+      "severity": "P1",
+      "title": "SSRF: user-supplied URL fetched directly in openai_whisper provider",
+      "file": "src/generation/providers/openai_whisper/mod.rs",
+      "line": 130,
+      "category": "security",
+      "description": "reference_audio URL fetched via self.client.get(source).send() with no SSRF guard. Aleph ships hardened SSRF engine in src/security/ssrf/.",
+      "trigger": "Call provider.generate with reference_audio pointing at internal host",
+      "suggested_fix": "Replace with crate::security::ssrf::safe_fetch using SafeFetchPolicy::default()",
+      "confidence": "high"
+    },
+    {
+      "severity": "P1",
+      "title": "SSRF: openai_compat edit_image_impl fetches user-supplied reference_image URL",
+      "file": "src/fetch/providers/openai_compat/edit.rs",
+      "line": 73,
+      "category": "security",
+      "description": "edit_image_impl fetches reference_image without SSRF guard. Reachable via pub trait.",
+      "trigger": "provider.edit_image(request) with internal URL",
+      "suggested_fix": "Route through ssrf::safe_fetch with size cap",
+      "confidence": "high"
+    },
+    {
+      "severity": "P2",
+      "title": "Inconsistent URL-path validation across providers",
+      "file": "src/generation/providers/midjourney/provider.rs",
+      "line": 125,
+      "category": "security",
+      "description": "google_veo validates operation_name but midjourney/openai_compat/suno accept task/clip ids verbatim into URL paths",
+      "trigger": "Malicious upstream returns path-special chars",
+      "suggested_fix": "Apply allow-list + length cap to all provider task_url/poll_url/get_url",
+      "confidence": "medium"
+    },
+    {
+      "severity": "P2",
+      "title": "URL injection via group_id in MiniMax TTS",
+      "file": "src/generation/providers/minimax_tts/mod.rs",
+      "line": 391,
+      "category": "security",
+      "description": "append_group_id builds URL with format!(\"{}{sep}GroupId={gid}\") where gid is user-controlled and NOT URL-encoded",
+      "trigger": "params.extra[\"group_id\"] with & or # chars",
+      "suggested_fix": "URL-encode and validate charset",
+      "confidence": "high"
+    },
+    {
+      "severity": "P2",
+      "title": "clippy::indexing_slicing false-positives (informational)",
+      "file": "src/generation/providers/openai_compat/edit.rs",
+      "line": 327,
+      "category": "logic",
+      "description": "11 false positives \u2014 all guarded by is_empty/length checks",
+      "trigger": "n/a",
+      "suggested_fix": "None",
+      "confidence": "high"
+    },
+    {
+      "severity": "P2",
+      "title": "unreachable! comment references non-existent function",
+      "file": "src/generation/providers/deepgram_stt/mod.rs",
+      "line": 199,
+      "category": "error",
+      "description": "Cites load_audio (in openai_whisper) but local helper is load_local",
+      "trigger": "Maintenance",
+      "suggested_fix": "Update message",
+      "confidence": "high"
+    },
+    {
+      "severity": "P3",
+      "title": "parse_generation_requests pub-exported but no production caller",
+      "file": "src/generation/response_parser.rs",
+      "line": 75,
+      "category": "wiring",
+      "description": "[GENERATE:type:provider:model:prompt] tagger wired to nothing",
+      "trigger": "LLM emits tag",
+      "suggested_fix": "Wire or remove",
+      "confidence": "medium"
+    },
+    {
+      "severity": "P3",
+      "title": "GenerationProvider::edit_image trait has no production caller",
+      "file": "src/generation/mod.rs",
+      "line": 324,
+      "category": "wiring",
+      "description": "Loaded foot-gun (SSRF P1) with no consumer",
+      "trigger": "Future tool wiring",
+      "suggested_fix": "Tighten default; apply SSRF fix",
+      "confidence": "high"
+    },
+    {
+      "severity": "P3",
+      "title": "voice_catalog CATALOG_GENERATED_AT may drift",
+      "file": "src/generation/voice_catalog.rs",
+      "line": 39,
+      "category": "wiring",
+      "description": "Manually bumped; no automated check",
+      "trigger": "Provider updates voice list",
+      "suggested_fix": "Hash-based fixture test",
+      "confidence": "medium"
+    },
+    {
+      "severity": "P3",
+      "title": "Fal provider name can collide with registry canonical-index",
+      "file": "src/generation/providers/fal/mod.rs",
+      "line": 47,
+      "category": "wiring",
+      "description": "canonical_index keyed by user-configured name; collisions possible",
+      "trigger": "Two configs with same name",
+      "suggested_fix": "Key by factory-issued type or document policy",
+      "confidence": "medium"
+    }
+  ]
+}

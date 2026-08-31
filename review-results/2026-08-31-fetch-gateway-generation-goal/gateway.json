@@ -1,0 +1,93 @@
+{
+  "module": "src/gateway",
+  "findings": [
+    {
+      "severity": "P1",
+      "title": "Stale ownership cache after session row change",
+      "file": "src/gateway/event_visibility.rs",
+      "line": 1013,
+      "category": "logic",
+      "description": "EventVisibilityIndex::session_admits caches SessionOwnership but has NO invalidation when sessions are mutated (delete, patch, restore).",
+      "trigger": "Any session row change followed by event within cache lifetime",
+      "suggested_fix": "Add invalidate(session_key) and invalidate_team(team_id) methods; wire from modify handlers",
+      "confidence": "high"
+    },
+    {
+      "severity": "P1",
+      "title": "handle_logs reads entire log file into memory unbounded",
+      "file": "src/gateway/handlers/daemon_control.rs",
+      "line": 84,
+      "category": "error",
+      "description": "tokio::fs::read_to_string reads WHOLE log with no size cap. params.lines accepts arbitrary usize up to usize::MAX. OOM DoS.",
+      "trigger": "Large log file or huge params.lines",
+      "suggested_fix": "Cap params.lines, bound file read by streaming tail",
+      "confidence": "high"
+    },
+    {
+      "severity": "P1",
+      "title": "Voice stream mint uses ambient_owner which is room creator in project rooms",
+      "file": "src/gateway/voice/streaming/relay.rs",
+      "line": 89,
+      "category": "security",
+      "description": "StreamRegistry::insert captures ambient_owner() = CALLER_USER \u2192 falls back to scope.owner_user_id (room creator in project rooms). Voice stream attributed to creator instead of member.",
+      "trigger": "Voice stream opened from tool context within project room",
+      "suggested_fix": "Use ambient_actor() (prefers room_author) or accept explicit author param",
+      "confidence": "high"
+    },
+    {
+      "severity": "P2",
+      "title": "Swallowed event_bus publish errors",
+      "file": "src/gateway/server/handler.rs",
+      "line": 1488,
+      "category": "error",
+      "description": "let _ = ctx.event_bus.publish_json(...) silently drops failures (node.connected, presence.joined, etc.)",
+      "trigger": "Event bus full/lagged",
+      "suggested_fix": "Replace with if let Err tracing::warn!",
+      "confidence": "high"
+    },
+    {
+      "severity": "P2",
+      "title": "sessions.patch leaves ownership cache stale (sub-case of P1 #1)",
+      "file": "src/gateway/handlers/session/db_handlers/modify.rs",
+      "line": 445,
+      "category": "logic",
+      "description": "handle_patch_db mutates metadata without invalidating EventVisibilityIndex cache",
+      "trigger": "Any patch changing ownership/scope_id",
+      "suggested_fix": "Call event_visibility.invalidate after writes",
+      "confidence": "high"
+    },
+    {
+      "severity": "P3",
+      "title": "Unbounded subscription patterns per connection",
+      "file": "src/gateway/event_bus.rs",
+      "line": 300,
+      "category": "performance",
+      "description": "TopicFilter::add_subscription dedupes exact matches but no upper bound on distinct patterns",
+      "trigger": "Authenticated client submits many unique patterns",
+      "suggested_fix": "Cap distinct subscriptions per connection",
+      "confidence": "high"
+    },
+    {
+      "severity": "P3",
+      "title": "note_frame cache misses on transient-row frames cause store-query storm",
+      "file": "src/gateway/event_visibility.rs",
+      "line": 1064,
+      "category": "performance",
+      "description": "Brand-new conversation where first frames arrive before session row is written",
+      "trigger": "",
+      "suggested_fix": "Documented and intentional; consider short-lived negative cache",
+      "confidence": "medium"
+    },
+    {
+      "severity": "P3",
+      "title": "handle_logs returns Vec<String> over JSON-RPC, no byte-size cap",
+      "file": "src/gateway/handlers/daemon_control.rs",
+      "line": 100,
+      "category": "performance",
+      "description": "Multi-MB JSON response",
+      "trigger": "Many lines or long lines",
+      "suggested_fix": "Same as #2; truncate long lines",
+      "confidence": "high"
+    }
+  ]
+}
