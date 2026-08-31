@@ -11,41 +11,58 @@ const DISALLOWED_CHARS: &[char] = &['`', '\n', '\r'];
 
 /// Check for subshell substitution and process substitution patterns outside of quoted strings.
 /// Detects `$(...)`, `<(...)`, and `>(...)` which can be used to inject arbitrary commands.
+///
+/// Whitespace and shell operators between the trigger (`$`, `<`, `>`) and the opening
+/// paren are transparent: `cmd $ (echo hi)` is a subshell as much as `$(echo hi)`.
+/// Without this, the scanner would be *less* strict than bash itself, which rejects
+/// `echo $ (whoami)` as a syntax error — a defense-in-depth parser should never be
+/// the layer that lets a shape through that bash also rejects.
 fn contains_unquoted_subshell(command: &str) -> bool {
     let mut in_single = false;
     let mut in_double = false;
     let mut escaped = false;
-    let mut prev = '\0';
+    /// Most recent non-whitespace, non-quote char in the *current* quoting context.
+    /// Whitespace doesn't update it; quotes reset the relevant context via the
+    /// in_single / in_double checks at the `(` arm. Escape consumes the next char
+    /// without updating (the backslash itself is the new last_significant).
+    let mut last_significant: char = '\0';
 
     for ch in command.chars() {
         if escaped {
             escaped = false;
-            prev = ch;
+            last_significant = ch;
             continue;
         }
 
         match ch {
             '\\' if !in_single => {
                 escaped = true;
-                prev = ch;
                 continue;
             }
             '\'' if !in_double => {
                 in_single = !in_single;
+                last_significant = ch;
             }
             '"' if !in_single => {
                 in_double = !in_double;
+                last_significant = ch;
             }
             '(' if !in_single
                 // $( — subshell substitution
                 // <( or >( — process substitution (executes arbitrary commands)
-                && (prev == '$' || prev == '<' || prev == '>') =>
+                && (last_significant == '$'
+                    || last_significant == '<'
+                    || last_significant == '>') =>
             {
                 return true;
             }
-            _ => {}
+            c if c.is_whitespace() => {
+                // Whitespace is transparent for the subshell lookahead.
+            }
+            _ => {
+                last_significant = ch;
+            }
         }
-        prev = ch;
     }
     false
 }
