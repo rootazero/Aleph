@@ -3,8 +3,9 @@
 //!
 //! P1 made `session_events` the SSOT and materialised the `messages`
 //! projection asynchronously via `MessageProjector`. On a hard crash *during* a
-//! run, events durably in `session_events` may not have been drained to
-//! `transcript.jsonl` — the Panel display loses those rows. This reconciler
+//! run, events durably in `session_events` may not have been drained to the
+//! read projection — `transcript.jsonl` on the file backend, the `messages`
+//! table on SQLite — and the Panel display loses those rows. This reconciler
 //! runs at boot, asks [`crate::session::reduction::reduce_disposition`] about
 //! the run markers it loads from the event store to find interrupted
 //! sessions, and re-projects the un-materialised tail through the same
