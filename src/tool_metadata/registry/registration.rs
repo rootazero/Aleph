@@ -240,7 +240,16 @@ impl ToolRegistrar {
             // Generate routing regex for flat namespace
             .with_routing_regex(format!(r"^/{}\s*", regex::escape(&skill.id)))
             .with_routing_intent_type("skills")
-            .with_routing_capabilities(vec!["skills".to_string(), "memory".to_string()])
+            // Surface the skill body as the routing-system-prompt so the
+            // `CommandContext::Skill.instructions` field actually carries
+            // something the harness can inject. `description` is the closest
+            // proxy we have on the legacy `SkillInfo` shape — `SkillInfo`
+            // carries no separate `instructions` field. The downstream
+            // `parse.rs:139` reader uses this as the slash-mode skill body;
+            // leaving it empty made every `/<skill>` invocation silently
+            // run with no system guidance, which is a wiring gap, not a
+            // feature.
+            .with_routing_system_prompt(&skill.description)
             .with_routing_strip_prefix(true);
 
             // Register with automatic conflict resolution. Channel visibility is
