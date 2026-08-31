@@ -112,6 +112,27 @@ pub struct SearchOptions {
     /// caller would have to be told which wins.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<String>,
+
+    /// How much of a snippet the caller will actually keep, in characters.
+    /// `None` = no bound, which is what every caller but the tool face wants.
+    ///
+    /// Exists because one backend can honour it *server-side*: Exa has no
+    /// snippet field at all, only whole page bodies, so without a cap it
+    /// downloads and bills for an entire page per result and the caller keeps
+    /// a paragraph. Asking Exa for the caller's budget makes the cost match
+    /// what is used.
+    ///
+    /// It is a number the **caller** owns, not a `[search]` knob: the bound
+    /// belongs to whoever renders the snippet, and a provider hardcoding it
+    /// would be that same fact written down twice — which only stays true
+    /// until one of them changes.
+    ///
+    /// Callers should pass their budget **plus one**. A backend told to
+    /// return exactly the budget makes "the page was this long" and "the page
+    /// was cut here" the same observation, and the note that offers to fetch
+    /// the rest would stop firing for a page that really does have more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snippet_budget_chars: Option<usize>,
 }
 
 const fn default_safe_search() -> bool {
@@ -139,6 +160,7 @@ impl Default for SearchOptions {
             include_domains: Vec::new(),
             exclude_domains: Vec::new(),
             providers: Vec::new(),
+            snippet_budget_chars: None,
         }
     }
 }
@@ -346,6 +368,7 @@ mod tests {
             include_domains: vec![],
             exclude_domains: vec![],
             providers: vec![],
+            snippet_budget_chars: None,
         };
 
         assert_eq!(options.language.unwrap(), "zh-CN");

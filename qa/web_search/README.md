@@ -1,6 +1,6 @@
 # qa/web_search — the web search face on a real wire
 
-Five phases, each one claim:
+Six phases, each one claim:
 
 | phase | claim | why an in-process test cannot make it |
 |---|---|---|
@@ -8,6 +8,7 @@ Five phases, each one claim:
 | `order` | when a request needs a dimension only one backend can carry, that backend is asked first | `ordered_candidates` is unit-tested with mock providers. Whether the sorted list is the one a booted server's registry actually walks is a different question, and it is settled by which backend received a request. |
 | `degrade` | a dimension nobody configured can express is reported to the model, not dropped | the note is generated in the registry; whether it survives the tool face, the result mapping and the tool-output pipeline into the model's next request is a claim about four layers. |
 | `empty` | a backend answering "zero results" does not end the chain | the shape that shipped for four rounds: a default provider returning `[]` stopped eight others and the SERP fallback from ever being asked. |
+| `demote` | a backend that failed on the previous search is not asked again on the next one, while a live backend answers | `ordered_candidates` is unit-tested against mock providers whose ask counters the test can read. On a real wire the answer is byte-identical either way — the chain has always failed over — so the only observable difference is how many HTTP requests the dead backend received, which needs a real backend that records them. |
 | `fanout` | naming two backends asks both, concurrently, and merges their answers into one set | the merge is unit-tested over hand-built vectors. Whether two *configured* backends are both dispatched, and whether the same page found by both collapses to one row on the way to the model, is a claim about the registry, the url normaliser, the tool face and the tool-output pipeline together. Its `fallback_providers` is deliberately empty, so a chain run could never reach the second backend — that is what makes it a claim about fan-out rather than about failover. |
 
 Every phase anchors before it negates. `"answered after" not in output` and
@@ -47,6 +48,15 @@ trailing slash on the other). Both of those choices are load-bearing:
   while the summary said `alpha+bravo`, which made per-row attribution useless
   in precisely the situation it was added for.
 
+`demote` is the phase whose green is easiest to fake. Both of its backends are
+mock SearXNG instances configured under different names (`dead` / `live`), so
+they declare **identical** capabilities, and its searches ask for no dimension
+at all — leaving recent health as the only thing in `ordered_candidates` that
+can separate them. A phase where capability could also explain the order would
+be reporting a green about the wrong mechanism. And the assertion is a request
+count, not the answer: an answer produced by asking the dead backend again and
+failing over reads exactly like one produced by not asking it.
+
 `order` is the one phase that reaches the network: Exa's endpoint is fixed at
 `api.exa.ai` and its key here is deliberately invalid. The phase does not
 depend on what happens out there — an auth failure and an unreachable host are
@@ -76,6 +86,12 @@ to be proved, not assumed. Break the fix and the phase must go red:
   the `order` phase's domains arm while its control arm stays green. Written
   down rather than performed, so it is a claim about this fixture that nobody
   has tested yet.
+* **not run** — dropping the `note_failure` call from the chain's error arm
+  should fail `demote` on exactly two assertions (the dead backend's request
+  count, and the second arm's "reports no failure") while both anchors stay
+  green. The equivalent mutation *has* been performed at the source level
+  against `a_backend_that_failed_is_not_reached_again_while_one_ahead_answers`;
+  that it also reddens this fixture is so far only a claim.
 
 ### An instrument that lied on this fixture's first run
 
@@ -95,6 +111,7 @@ substrings, where the encoding does not matter.
 ./qa/web_search/run.sh degrade
 ./qa/web_search/run.sh empty
 ./qa/web_search/run.sh fanout
+./qa/web_search/run.sh demote
 
 KEEP=1 ./qa/web_search/run.sh reach    # keep the scratch dir
 SKIP_BUILD=1 ./qa/web_search/run.sh …  # reuse the binary already built

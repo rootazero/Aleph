@@ -44,6 +44,13 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/web_search/run.sh degrade  # a dimension no configured backend can express is
                                 # reported in the answer's notes, not dropped
 ./qa/web_search/run.sh empty    # a zero-result answer does not end the chain
+./qa/web_search/run.sh fanout   # naming two backends asks both and merges the two
+                                # answers; its fallback chain is deliberately empty
+                                # so failover could not produce the same green
+./qa/web_search/run.sh demote   # a backend that failed on the previous search is
+                                # not asked again on the next one. Asserted on the
+                                # dead backend's request count, not on the answer:
+                                # ask-and-fail-over and don't-ask read identically
 
 ./qa/announce/run.sh outlive     # a background bash job outlives its run -> a fresh run is driven
 ./qa/announce/run.sh collected   # the model collected it itself -> no turn is spent

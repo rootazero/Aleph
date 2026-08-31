@@ -12,7 +12,12 @@ hardcode their endpoint, and the ninth (firecrawl) needs a credential; only
 searxng takes a `base_url` and no API key. So the fixture proves the wiring,
 not the nine backends — see README.md.
 
-Usage:  mock_searxng.py PORT LOG_PATH [--empty] [--shared]
+Usage:  mock_searxng.py PORT LOG_PATH [--empty] [--shared] [--fail]
+
+  --fail   log the request, then answer 503. The log entry is the point: the
+           `demote` phase's claim is about how many times a failing backend was
+           *asked*, and a backend that is never reached leaves no line here.
+           Distinct from `--empty`, which is a backend that answered.
 
   --empty  answer every query with zero results and no unresponsive engines.
            That is an *answer*, not an error: the provider promotes
@@ -38,6 +43,7 @@ PORT = int(sys.argv[1])
 LOG = sys.argv[2]
 EMPTY = "--empty" in sys.argv[3:]
 SHARED = "--shared" in sys.argv[3:]
+FAIL = "--fail" in sys.argv[3:]
 # Distinguishable per instance so a driver can tell which backend answered
 # from the result text alone.
 TAG = f"port{PORT}"
@@ -66,6 +72,14 @@ class Handler(BaseHTTPRequestHandler):
         with open(LOG, "a", encoding="utf-8") as fh:
             fh.write(parsed.query + "\n")
             fh.flush()
+
+        if FAIL:
+            # Logged above, refused here: "it was asked" and "it answered" are
+            # two different facts and this phase needs to count the first one.
+            self.send_response(503)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
 
         first_url = SHARED_URL if SHARED else f"https://example.invalid/{TAG}/1"
         results = (
@@ -99,5 +113,5 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     open(LOG, "w", encoding="utf-8").close()
-    print(f"mock searxng on {PORT} -> {LOG} (empty={EMPTY})", flush=True)
+    print(f"mock searxng on {PORT} -> {LOG} (empty={EMPTY} fail={FAIL})", flush=True)
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
