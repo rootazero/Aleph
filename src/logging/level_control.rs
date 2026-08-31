@@ -83,13 +83,13 @@ impl LogLevel {
     }
 
     /// Convert from u8. Out-of-range values (memory corruption, ABI mismatch
-    /// across hot-reload) fall back to `Info` and emit a single warn.
-    ///
-    /// On fallback, the atomic is also rewritten to `Info` so the stored
-    /// value and the reported value agree; otherwise subsequent `get_log_level`
-    /// calls would re-hit the corrupt byte, re-warn (suppressed by the
-    /// once-guard) and keep returning `Info` while the atomic remained
-    /// permanently out of range — masking the corruption indefinitely.
+    /// across hot-reload) fall back to `Info`. **Pure**: no side effects on
+    /// the global atomic — self-healing is performed by `get_log_level` via
+    /// a CAS, which is the only place a write is needed (see
+    /// `try_self_heal`). Embedding a `store` here would let `set_log_level`'s
+    /// freshly-CAS'd valid value be clobbered back to `Info` if the prior
+    /// value was corrupt — leaving the reported level lying about the live
+    /// filter the setter just installed.
     fn from_u8(value: u8) -> Self {
         match value {
             0 => Self::Error,
@@ -97,11 +97,7 @@ impl LogLevel {
             2 => Self::Info,
             3 => Self::Debug,
             4 => Self::Trace,
-            _ => {
-                warn_invalid_level_once(value);
-                CURRENT_LOG_LEVEL.store(LogLevel::Info.to_u8(), Ordering::Release);
-                Self::Info
-            }
+            _ => Self::Info,
         }
     }
 }
@@ -181,7 +177,26 @@ pub fn get_log_level() -> LogLevel {
     // reported level matches the EnvFilter the logging backend actually uses.
     // `init_log_level` is idempotent (guarded by `Once`).
     init_log_level();
-    LogLevel::from_u8(CURRENT_LOG_LEVEL.load(Ordering::Acquire))
+    let raw = CURRENT_LOG_LEVEL.load(Ordering::Acquire);
+    try_self_heal(raw);
+    LogLevel::from_u8(raw)
+}
+
+/// Self-heal a corrupt atomic: if the stored byte is out of range (memory
+/// corruption / ABI mismatch across hot-reload), atomically rewrite it to
+/// `Info` via CAS so concurrent setters cannot have their freshly-installed
+/// value clobbered back to `Info`. Warns once via [`warn_invalid_level_once`].
+fn try_self_heal(raw: u8) {
+    if raw <= 4 {
+        return;
+    }
+    let info_u8 = LogLevel::Info.to_u8();
+    if CURRENT_LOG_LEVEL
+        .compare_exchange(raw, info_u8, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        warn_invalid_level_once(raw);
+    }
 }
 
 /// Set the log level dynamically.
@@ -335,5 +350,42 @@ mod tests {
     #[test]
     fn test_default_log_level() {
         assert_eq!(LogLevel::default(), LogLevel::Info);
+    }
+
+    /// Regression: `set_log_level(Trace)` followed by `get_log_level()` must
+    /// return `Trace` even if the atomic was seeded with an out-of-range u8
+    /// before the call. Previously, `from_u8`'s self-heal `store` ran
+    /// *after* `set_log_level`'s CAS and clobbered the freshly-written
+    /// Trace back to Info — leaving the live filter at Trace but the
+    /// reported level at Info.
+    #[test]
+    fn test_set_log_level_overwrites_corrupt_atomic_state() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let prev = get_log_level();
+        // Seed a corrupt byte (out of the documented 0..=4 range).
+        CURRENT_LOG_LEVEL.store(99, Ordering::Release);
+        // Calling get_log_level first triggers self-heal: atomic -> Info.
+        // This is the path under test — if self-heal clobbers a concurrent
+        // setter's write, this assertion will fail.
+        let _ = set_log_level(LogLevel::Trace);
+        assert_eq!(get_log_level(), LogLevel::Trace, "set value must survive");
+        // Restore for parallel-test safety.
+        let _ = set_log_level(prev);
+    }
+
+    /// Regression: `get_log_level` self-heals the atomic so a single
+    /// subsequent read no longer reports the corrupt byte.
+    #[test]
+    fn test_get_log_level_selfheals_corrupt_atomic() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let prev = get_log_level();
+        CURRENT_LOG_LEVEL.store(77, Ordering::Release);
+        assert_eq!(get_log_level(), LogLevel::Info, "corrupt read falls back to Info");
+        assert_eq!(
+            CURRENT_LOG_LEVEL.load(Ordering::Acquire),
+            LogLevel::Info.to_u8(),
+            "self-heal rewrites the atomic"
+        );
+        let _ = set_log_level(prev);
     }
 }
