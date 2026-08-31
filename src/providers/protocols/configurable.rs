@@ -93,7 +93,7 @@ impl ConfigurableProtocol {
         const MAX_CUSTOM_BODY_BYTES: usize = 8 * 1024 * 1024;
         let body = match tokio::time::timeout(CUSTOM_BODY_TIMEOUT, response.text()).await {
             Ok(Ok(b)) if b.len() <= MAX_CUSTOM_BODY_BYTES => b,
-            Ok(Ok(b)) => {
+            Ok(Ok(_b)) => {
                 return Err(AlephError::provider(format!(
                     "Custom protocol response body exceeded {MAX_CUSTOM_BODY_BYTES} bytes"
                 )));

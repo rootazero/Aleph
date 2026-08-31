@@ -550,10 +550,12 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
                         if state.line_buf.len()
                             > crate::providers::protocols::openai_common::sse::MAX_SSE_LINE_BYTES
                         {
-                            return Err(AlephError::network(format!(
+                            state.pending.push_back(Err(AlephError::network(format!(
                                 "OpenAI Responses SSE line buffer exceeded {} bytes without a newline",
                                 crate::providers::protocols::openai_common::sse::MAX_SSE_LINE_BYTES
-                            )));
+                            ))));
+                            state.done = true;
+                            continue;
                         }
                         // Loop to try parsing again with the new data
                     }

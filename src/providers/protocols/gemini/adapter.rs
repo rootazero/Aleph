@@ -359,14 +359,18 @@ impl ProtocolAdapter for GeminiProtocol {
                         // Conversion happens per-line when a \n is found.
                         state.line_buf.extend_from_slice(&chunk);
                         // Bound the buffer: a provider that withholds newlines
-                        // must not let `line_buf` grow without limit.
+                        // must not let `line_buf` grow without limit. Surface
+                        // the violation as a queued error so the stream can
+                        // shut down through its normal pending-drain path.
                         if state.line_buf.len()
                             > crate::providers::protocols::openai_common::sse::MAX_SSE_LINE_BYTES
                         {
-                            return Err(AlephError::network(format!(
+                            state.pending.push_back(Err(AlephError::network(format!(
                                 "Gemini SSE line buffer exceeded {} bytes without a newline",
                                 crate::providers::protocols::openai_common::sse::MAX_SSE_LINE_BYTES
-                            )));
+                            ))));
+                            state.done = true;
+                            continue;
                         }
                     }
                 }
