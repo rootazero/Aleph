@@ -123,12 +123,23 @@ pub fn reduce_disposition(markers: &[SessionEventRecord]) -> RunDisposition {
 
 /// Reduce a session's event log to its run state.
 ///
-/// Two passes, and no assumption that `events` is sorted by `seq`:
-/// pass one finds the anchor and the answered set, pass two attributes the
-/// dangling calls and (Task 2) counts progress.
+/// Two passes. `events` must be in ascending `seq` order — the same
+/// precondition [`reduce_disposition`] states for `markers`: pass one takes
+/// the anchor as the `seq` of the `RunStarted` last *encountered* in the
+/// slice, and pass two's provenance split compares against it by `seq`, so
+/// an out-of-order slice would silently derive the wrong anchor and the
+/// wrong disposition — no panic, just a false answer. Pass one finds the
+/// anchor and the answered set, pass two attributes the dangling calls and
+/// (Task 2) counts progress.
 #[must_use]
 pub fn reduce_run(events: &[SessionEventRecord]) -> RunReduction {
     use std::collections::HashSet;
+
+    debug_assert!(
+        events.windows(2).all(|w| w[0].seq <= w[1].seq),
+        "reduce_run requires `events` in ascending seq order; the anchor and the \
+         disposition are both derived from iteration order"
+    );
 
     // Pass 1: the anchor, the run id, and every call id that got an answer.
     let mut run_anchor: Option<EventSeq> = None;
@@ -334,6 +345,7 @@ mod tests {
         let r = reduce_run(&events);
         assert_eq!(r.run_anchor, None);
         assert_eq!(r.disposition, RunDisposition::Clean);
+        assert_eq!(r.dangling.len(), 1);
         assert_eq!(r.dangling[0].provenance, DanglingProvenance::EarlierRun);
     }
 
