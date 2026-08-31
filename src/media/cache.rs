@@ -210,7 +210,29 @@ impl MediaCache {
 
     /// Read a cached file and return its base64-encoded content.
     pub async fn to_base64(cached: &CachedMedia) -> Result<String, CacheError> {
-        let bytes = tokio::fs::read(&cached.local_path).await?;
+        // SECURITY: the docstring on `resolve_local_path` promises TOCTOU is
+        // closed by `O_NOFOLLOW` at the call site. The previous impl used
+        // `tokio::fs::read`, which follows symlinks. If an attacker plants a
+        // symlink at the resolved path between the safe-path check and the
+        // read, they can read arbitrary files. Open via `OpenOptions` with
+        // `O_NOFOLLOW` so the kernel itself refuses to follow a symlink at
+        // the leaf path.
+        use tokio::io::AsyncReadExt as _;
+
+        let mut options = tokio::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        let mut file = options
+            .open(&cached.local_path)
+            .await
+            .map_err(CacheError::Io)?;
+        let mut bytes = Vec::with_capacity(cached.size as usize);
+        file.read_to_end(&mut bytes)
+            .await
+            .map_err(CacheError::Io)?;
         Ok(BASE64.encode(&bytes))
     }
 
@@ -630,6 +652,11 @@ async fn write_private(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> 
     {
         // Inherent on tokio's OpenOptions — no `OpenOptionsExt` import needed.
         options.mode(0o600);
+        // SECURITY: refuse to follow a symlink at the leaf path. The
+        // safe-path check in `resolve_local_path` is a TOCTOU window; this
+        // flag closes it at the kernel boundary. Same defense as
+        // `to_base64` (P0 finding #1).
+        options.custom_flags(libc::O_NOFOLLOW);
     }
     let mut file = options.open(path).await?;
     file.write_all(bytes).await?;

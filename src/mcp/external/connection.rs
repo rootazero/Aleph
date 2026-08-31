@@ -754,15 +754,22 @@ impl McpServerConnection {
 
                 let description = t.description.unwrap_or_default();
                 let description = crate::mcp::tool_sanitize::truncate_description(&description);
-                if let Some(marker) = crate::mcp::scan_description_for_injection(&description) {
+                let description = if let Some(marker) =
+                    crate::mcp::scan_description_for_injection(&description)
+                {
                     tracing::warn!(
                         server = %self.name,
                         tool = %t.name,
                         marker,
                         "MCP tool description matches a prompt-injection heuristic; \
-                         tool is still surfaced but flagged for review"
+                         redacting description body"
                     );
-                }
+                    format!(
+                        "[description redacted: prompt-injection heuristic matched: {marker}]"
+                    )
+                } else {
+                    description
+                };
                 // Behavioral hints (MCP `ToolAnnotations`) are consumed
                 // conservatively: read-only/idempotent only relax scheduling
                 // when explicitly true; an explicit destructive hint routes

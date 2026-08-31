@@ -11,8 +11,11 @@
 //!   chunk compressible messages, generate d0 summaries, and trigger hierarchical
 //!   condensation (d0→d1→d2) when fanout thresholds are met.
 
+use std::collections::HashMap;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex as TokioMutex;
 
 use crate::memory::extensions::MemoryExtensionRegistry;
 use crate::memory::store::raw_memory::RawMemoryStore;
@@ -113,6 +116,15 @@ pub struct SessionCompactor {
     /// written under the active project's composed agent id so a session's
     /// recall stays project-local. Default-off → base id → unchanged.
     pub(crate) project_scoped: bool,
+    /// Per-`(session_id, agent_id)` lock map. Two concurrent runs sharing
+    /// the same agent id would otherwise derive the same `next_seq` from
+    /// `count_valid_facts_at_depth` and race the UNIQUE constraint on the
+    /// `path = d{depth}/{next_seq}` insert. The lock is acquired once at
+    /// the start of `post_turn_compress` and held across the whole function
+    /// body so `next_seq` derivation, insert, and any dependent reads stay
+    /// serialised. Mirrors the `ingest_locks` pattern used by
+    /// `CompressionService`.
+    pub(crate) compress_locks: TokioMutex<HashMap<(String, String), Arc<TokioMutex<()>>>>,
 }
 
 // ---------------------------------------------------------------------------

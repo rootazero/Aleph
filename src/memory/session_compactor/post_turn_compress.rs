@@ -80,6 +80,20 @@ impl SessionCompactor {
             self.project_scoped,
             project_root,
         );
+
+        // Acquire per-(session_id, agent_id) lock for the whole function body.
+        // Two concurrent sessions that share an agent_id would otherwise derive
+        // the same `next_seq` from `count_valid_facts_at_depth` and race the
+        // UNIQUE constraint on the `path = d{depth}/{next_seq}` insert. The
+        // lock map is lazy — first caller creates the per-key Mutex, subsequent
+        // callers clone the Arc. Mirrors `CompressionService::ingest_locks`.
+        let per_key_lock = {
+            let mut map = self.compress_locks.lock().await;
+            map.entry((session_id.clone(), agent_id.clone()))
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        let _per_key_guard = per_key_lock.lock().await;
         let ratio = self.config.token_estimate_ratio;
 
         let raw_messages = agent.get_history(session_key, None).await;

@@ -49,6 +49,15 @@ pub fn truncate_description(description: &str) -> String {
     s
 }
 
+/// Maximum recursion depth allowed when normalizing a tool schema.
+///
+/// Hostile MCP servers can ship deeply nested `anyOf`/`oneOf`/`allOf` chains
+/// (or recursive `$defs`) that would otherwise overflow the Rust stack while
+/// parsing a `tools/list` response — a low-effort DoS on every Aleph
+/// process that talks to that server. The cap is well beyond any real-world
+/// schema and falls back to a sanitized scalar object on overflow.
+pub const MAX_SCHEMA_DEPTH: usize = 32;
+
 /// Normalize an external MCP tool's input schema into a form every strict
 /// provider accepts, returning a new [`Value`] (the input is consumed).
 ///
@@ -71,14 +80,27 @@ pub fn truncate_description(description: &str) -> String {
 /// schemas.
 #[must_use]
 pub fn normalize_tool_schema(schema: Value) -> Value {
-    normalize_node(schema)
+    normalize_node(schema, 0)
 }
 
-fn normalize_node(node: Value) -> Value {
+fn normalize_node(node: Value, depth: usize) -> Value {
     let Value::Object(obj) = node else {
         // Scalars and bare arrays are not schema objects; leave untouched.
         return node;
     };
+
+    // SECURITY: refuse to descend past `MAX_SCHEMA_DEPTH`. Replace with a
+    // sanitized leaf so the resulting schema remains syntactically valid
+    // even if it loses some structure. This bounds the stack frame count
+    // on adversarially deep `anyOf` chains or self-referential `$defs`.
+    if depth >= MAX_SCHEMA_DEPTH {
+        return Value::Object({
+            let mut m = Map::new();
+            m.insert("type".to_string(), Value::String("object".to_string()));
+            m
+        });
+    }
+    let next_depth = depth + 1;
 
     let mut out = Map::with_capacity(obj.len());
 
@@ -86,19 +108,19 @@ fn normalize_node(node: Value) -> Value {
         match key.as_str() {
             // Maps of sub-schemas: normalize each value.
             "properties" | "patternProperties" | "$defs" | "definitions" => {
-                out.insert(key, normalize_schema_map(value));
+                out.insert(key, normalize_schema_map(value, next_depth));
             }
             // Single sub-schema, or (for `items`) possibly a tuple of them.
             "items" | "prefixItems" => {
-                out.insert(key, normalize_schema_or_array(value));
+                out.insert(key, normalize_schema_or_array(value, next_depth));
             }
             // `additionalProperties` is either a bool or a sub-schema.
             "additionalProperties" | "not" | "if" | "then" | "else" => {
-                out.insert(key, normalize_schema_or_passthrough(value));
+                out.insert(key, normalize_schema_or_passthrough(value, next_depth));
             }
             // Combinators: arrays of sub-schemas.
             "anyOf" | "oneOf" | "allOf" => {
-                out.insert(key, normalize_schema_array(value));
+                out.insert(key, normalize_schema_array(value, next_depth));
             }
             // Rewrite legacy ref pointers.
             "$ref" => {
@@ -165,35 +187,35 @@ fn repair_object_shape(out: &mut Map<String, Value>) {
     }
 }
 
-fn normalize_schema_map(value: Value) -> Value {
+fn normalize_schema_map(value: Value, depth: usize) -> Value {
     match value {
         Value::Object(map) => Value::Object(
             map.into_iter()
-                .map(|(k, v)| (k, normalize_node(v)))
+                .map(|(k, v)| (k, normalize_node(v, depth)))
                 .collect(),
         ),
         other => other,
     }
 }
 
-fn normalize_schema_array(value: Value) -> Value {
+fn normalize_schema_array(value: Value, depth: usize) -> Value {
     match value {
-        Value::Array(items) => Value::Array(items.into_iter().map(normalize_node).collect()),
+        Value::Array(items) => Value::Array(items.into_iter().map(|v| normalize_node(v, depth)).collect()),
         other => other,
     }
 }
 
-fn normalize_schema_or_array(value: Value) -> Value {
+fn normalize_schema_or_array(value: Value, depth: usize) -> Value {
     match value {
-        Value::Array(items) => Value::Array(items.into_iter().map(normalize_node).collect()),
-        Value::Object(_) => normalize_node(value),
+        Value::Array(items) => Value::Array(items.into_iter().map(|v| normalize_node(v, depth)).collect()),
+        Value::Object(_) => normalize_node(value, depth),
         other => other,
     }
 }
 
-fn normalize_schema_or_passthrough(value: Value) -> Value {
+fn normalize_schema_or_passthrough(value: Value, depth: usize) -> Value {
     match value {
-        Value::Object(_) => normalize_node(value),
+        Value::Object(_) => normalize_node(value, depth),
         other => other, // bool (additionalProperties: false) or absent
     }
 }

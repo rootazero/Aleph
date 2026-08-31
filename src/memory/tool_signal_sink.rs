@@ -35,6 +35,7 @@ use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 
+use crate::memory::content_scanner::{scan_content, ScanVerdict};
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 
 /// Fire-and-forget sink for per-tool-invocation signals.
@@ -106,6 +107,29 @@ impl ToolSignalSink for RawMemoryToolSink {
                 format!("tool {tool_name} failed in {duration_ms}ms: {trimmed}")
             }
             (false, None) => format!("tool {tool_name} failed in {duration_ms}ms"),
+        };
+
+        // The constructed `content` is the verbatim evidence the distiller
+        // shows the model at nightly dream time. A malicious or corrupted
+        // `tool_name` / error string can therefore become a prompt-injection
+        // vector into the dream-stage LLM. Run the same content_scanner
+        // used everywhere else in the memory pipeline; if it rejects the
+        // row, replace the body with a sanitized placeholder so the failure
+        // signal still lands but the suspicious payload does not.
+        let content = match scan_content(&content) {
+            ScanVerdict::Clean => content,
+            ScanVerdict::Rejected { reason, pattern } => {
+                tracing::warn!(
+                    tool = %tool_name,
+                    agent = %self.agent_id,
+                    session = %self.session_id,
+                    pattern,
+                    %reason,
+                    "tool signal content rejected by content_scanner; \
+                     persisting redacted placeholder"
+                );
+                format!("tool {tool_name} failed in {duration_ms}ms: [content redacted: {reason}]")
+            }
         };
 
         let raw = RawMemory::new(

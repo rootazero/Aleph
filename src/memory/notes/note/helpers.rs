@@ -196,3 +196,15 @@ pub fn sanitize_title(title: &str) -> Result<String, crate::error::AlephError> {
     }
     Ok(cleaned)
 }
+
+/// Strip markdown-significant characters from a wikilink target after
+/// `sanitize_title` has already removed path-traversal hazards. Obsidian-style
+/// `[[target|alias]]` allows `|` as a separator; we strip both `|` and `]`
+/// (and the bracket pair used to delimit the wikilink) so a malicious
+/// `link_target` cannot break out of the `[[…]]` wrapping in the rendered
+/// body. The stripped chars are dropped silently — the link is then
+/// unambiguous to the markdown reader and to the link extractor.
+#[must_use]
+pub fn sanitize_wikilink_target(s: &str) -> String {
+    s.replace(['|', ']', '[', '\n', '\r', '\0'], "")
+}
