@@ -25,7 +25,12 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 /// Default warning multiplier applied when no policy is configured.
-const DEFAULT_WARNING_MULTIPLIER: f64 = 2.0;
+///
+/// Re-exported from `crate::config::types::policies::metrics` so a single
+/// change to the canonical policy default propagates here and keeps
+/// `StageTimer`'s pre-init fallback in lock-step with any operator
+/// configuration that lands at `Config::load`.
+pub(crate) use crate::config::types::policies::metrics::DEFAULT_WARNING_MULTIPLIER;
 
 /// Live metrics knobs sourced from `[policies.metrics]` at config load.
 ///

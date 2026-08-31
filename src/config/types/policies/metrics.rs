@@ -42,8 +42,15 @@ impl Default for MetricsPolicy {
     }
 }
 
+/// Canonical default for `MetricsPolicy::warning_multiplier`. Exposed so
+/// other modules (e.g. `crate::metrics`) can source their compiled-time
+/// fallback from the same definition instead of duplicating the literal —
+/// the metrics runtime's pre-init `StageTimer` uses this to avoid drifting
+/// from any operator-configured default.
+pub(crate) const DEFAULT_WARNING_MULTIPLIER: f64 = 2.0;
+
 const fn default_warning_multiplier() -> f64 {
-    2.0
+    DEFAULT_WARNING_MULTIPLIER
 }
 
 const fn default_enable_logging() -> bool {
