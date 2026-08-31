@@ -3,13 +3,15 @@
 //!
 //! # Why one component and not one per page
 //!
-//! Two settings pages ship a catalogue that outgrew its left panel: chat (56
-//! rows) and generation (44 across five modality tabs). Written twice, "which
-//! row does Enter take" gets two answers and nobody ever compares them — the
-//! same failure the shared matcher in [`aleph_protocol::providers::search`] was
-//! introduced to end one layer down. This owns the half that has nothing to do
-//! with any particular catalogue: disclosure state, the highlight,
-//! ↑/↓/Enter/Esc, scrolling the lit row into view, and the empty state.
+//! Three settings pages ship a catalogue that outgrew its left panel: chat
+//! (56 rows), generation (44 across five modality tabs), and search (nine
+//! presets plus the custom-endpoint action). Written per page, "which row
+//! does Enter take" gets a different answer on each and nobody ever compares
+//! them — the same failure the shared matcher in
+//! [`aleph_protocol::providers::search`] was introduced to end one layer
+//! down. This owns the half that has nothing to do with any particular
+//! catalogue: disclosure state, the highlight, ↑/↓/Enter/Esc, scrolling the
+//! lit row into view, and the empty state.
 //!
 //! The embedding page deliberately does **not** use this. Its five rows carry
 //! `model · <n>d`, and the dimension is what decides whether the vectors
@@ -57,13 +59,16 @@ use crate::components::provider_badge::{BadgeState, ProviderBadges};
 use crate::components::provider_row_card::{ProviderRowCard, RowDot};
 use crate::i18n::{t, t_string, use_i18n};
 
-/// Picker contract assertions shared by the four catalogue pages.
+/// Picker contract assertions shared today by three catalogue pages: chat,
+/// generation, and search.
 ///
-/// These three used to be written **once per page**: this module's docs say
-/// "an empty query must return every offerable row", and the only guarantee
-/// was each page's author remembering to copy a same-named test. Four pages
-/// meant four answers, and nobody compared them. 判据 E.0 §9: when one verb has
-/// several faces, the criterion must use the **same derivation** on every face.
+/// These three assertions used to be written **once per page**: this
+/// module's docs say "an empty query must return every offerable row", and
+/// the only guarantee was each page's author remembering to copy a
+/// same-named test. Written per page, "which row does Enter take" got a
+/// different answer on each, and nobody compared them. 判据 E.0 §9: when one
+/// verb has several faces, the criterion must use the **same derivation** on
+/// every face.
 #[cfg(test)]
 pub mod contract;
 

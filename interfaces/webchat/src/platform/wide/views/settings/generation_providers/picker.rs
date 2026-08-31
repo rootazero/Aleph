@@ -2,11 +2,11 @@
 //! "add a provider" disclosure.
 //!
 //! The interaction is [`crate::components::preset_picker`], shared with the
-//! chat providers page. This module owns the partition — which rows the panel
-//! lists, which rows the picker offers, and what choosing one selects. All
-//! three live together because they are one decision: written in three places
-//! they drift, and a row that is neither listed nor offered is unreachable
-//! without any code failing.
+//! chat providers and search pages. This module owns the partition — which
+//! rows the panel lists, which rows the picker offers, and what choosing one
+//! selects. All three live together because they are one decision: written in
+//! three places they drift, and a row that is neither listed nor offered is
+//! unreachable without any code failing.
 //!
 //! # Why this catalogue is hideable and the embedding one is not
 //!

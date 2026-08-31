@@ -3,8 +3,8 @@
 //!
 //! The interaction — disclosure state, search box, ↑/↓/Enter/Esc, scrolling the
 //! lit row into view — is [`crate::components::preset_picker`], shared with the
-//! generation page. This module owns only the half that is specific to
-//! `providers.catalog`.
+//! generation and search pages. This module owns only the half that is
+//! specific to `providers.catalog`.
 //!
 //! # Why the catalogue moved behind a button
 //!

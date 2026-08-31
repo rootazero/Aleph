@@ -1,5 +1,7 @@
 //! The three contracts a picker partition function must satisfy — one shared
-//! derivation across all four catalogue pages.
+//! derivation across the three catalogue pages that use it today (chat,
+//! generation, search). The embedding and rerank pages are expected to join
+//! later; they do not yet.
 //!
 //! Each corresponds to a real, possible silent failure:
 //!
@@ -60,8 +62,11 @@ pub fn configured_rows_stay_offered_and_marked(
 /// After deletion the row returns to the picker, and `configured` becomes
 /// false.
 ///
-/// `after_delete` is the **post-deletion** offer closure (the caller builds it
-/// from an emptied configured list).
+/// `after_delete` is the **post-deletion** offer closure. Most callers build
+/// it from a configured list with the row's entry removed; the chat catalogue
+/// instead derives `configured` from a field on the row itself, so its
+/// closure builds a catalogue entry that was simply never configured. Either
+/// way, this only checks that `configured` reads false.
 pub fn deleted_row_returns_to_the_picker(after_delete: impl Fn(&str) -> Vec<PickerRow>, id: &str) {
     let rows = after_delete("");
     let row = rows.iter().find(|r| r.id == id).unwrap_or_else(|| {
