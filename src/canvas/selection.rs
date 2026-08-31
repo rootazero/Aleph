@@ -17,9 +17,10 @@
 //! a compile error here, not a discipline).
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
 
 use aleph_protocol::canvas::MAX_SHAPES;
+
+use crate::sync_primitives::{Mutex, OnceLock};
 
 /// Hard ceiling on live selection entries (one per canvas).
 ///
