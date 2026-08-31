@@ -67,6 +67,22 @@ impl ExtensionManager {
         if loader.is_loaded(plugin_id) {
             return Ok(()); // another task loaded it while we waited
         }
+        // Re-check status under the loader write lock: a concurrent disable
+        // between the read-lock check above and this point must not be
+        // raced past. Without this re-check, a plugin disabled mid-call is
+        // still loaded into the runtime and stays reachable from MCP / tool
+        // dispatch until the next disable-flush sweep.
+        {
+            let registry = self.plugin_registry.read().await;
+            match registry.get_plugin(plugin_id) {
+                Some(record) if record.status.is_active() => {}
+                _ => {
+                    return Err(ExtensionError::Runtime(format!(
+                        "Plugin '{plugin_id}' was disabled while loading"
+                    )));
+                }
+            }
+        }
         let mem_reg_snapshot = self
             .memory_registry
             .read()
