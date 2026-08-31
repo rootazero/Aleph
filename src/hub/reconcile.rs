@@ -118,20 +118,25 @@ pub fn mark_installed_state(
     // means we can't safely attribute the installed state to any single
     // catalog entry.
     let mut by_name: HashMap<(String, String), Vec<&ExtensionEntry>> = HashMap::new();
+    // Parallel MCP facade-id index: the MCP branch below would otherwise do
+    // an O(installed) linear scan per catalog entry, turning this loop into
+    // O(catalog × installed). The façade id is unique per install, so a
+    // single HashMap lookup suffices.
+    let mut by_mcp_facade: HashMap<String, &ExtensionEntry> = HashMap::new();
     for e in installed {
         by_name
             .entry((e.kind.as_str().to_string(), e.name.trim().to_lowercase()))
             .or_default()
             .push(e);
+        if e.kind == ExtensionKind::Mcp {
+            by_mcp_facade.insert(e.id.clone(), e);
+        }
     }
 
     for e in catalog.iter_mut() {
         let enabled = if e.kind == ExtensionKind::Mcp {
             let expected = format!("local:mcp:{}", mcp_server_id(&e.id));
-            installed
-                .iter()
-                .find(|ie| ie.id == expected)
-                .map(|ie| ie.enabled)
+            by_mcp_facade.get(&expected).map(|ie| ie.enabled)
         } else {
             let key = (e.kind.as_str().to_string(), e.name.trim().to_lowercase());
             match by_name.get(&key) {

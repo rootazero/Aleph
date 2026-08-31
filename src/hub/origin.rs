@@ -238,6 +238,21 @@ pub fn forget_installed(
         .map(|o| o.entry_id.clone())
         .collect();
     let doomed: Vec<String> = if !exact.is_empty() {
+        // Two catalog entries that share a `local_ref` (e.g. a hub-managed
+        // MCP server id and a user-installed one with the same id) would
+        // both be wiped by an unscoped exact-match delete. Mirror the
+        // leaf-match guard below: when multiple rows point at the same
+        // backend, surface the ambiguity to the operator and skip rather
+        // than silently deleting all of them.
+        if exact.len() > 1 {
+            tracing::warn!(
+                kind = kind.as_str(),
+                backend = %backend,
+                candidates = %exact.join(","),
+                "forget_installed: exact match is ambiguous across multiple ledger rows; skipping"
+            );
+            return Ok(0);
+        }
         exact
     } else {
         let leaf_matches: Vec<String> = all

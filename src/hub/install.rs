@@ -99,8 +99,27 @@ pub struct InstallContext<'a> {
 }
 
 /// Deterministic MCP server id derived from the hub entry id.
+///
+/// Restrict the output to a strict `[A-Za-z0-9_-]` whitelist. The previous
+/// implementation only translated `:` and `/` to `_`; everything else
+/// (whitespace, quotes, control chars, non-ASCII) survived verbatim,
+/// producing id strings that downstream MCP config writers and shell
+/// argv builders have to special-case defensively. The hub catalog already
+/// rejects empty / non-`local:` ids in `HubCatalogArtifact::validate`, so
+/// the only inputs that reach this function today are well-formed ASCII;
+/// the whitelist is a contract for the worst-case future schema change
+/// (or a hand-edited catalog that slipped past validation) rather than a
+/// runtime fix for a known attack.
 pub(crate) fn mcp_server_id(entry_id: &str) -> String {
-    entry_id.replace([':', '/'], "_")
+    let mut out = String::with_capacity(entry_id.len());
+    for c in entry_id.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+    }
+    out
 }
 
 /// True if `command` resolves on PATH (PATHEXT-aware via `which`). Used to
@@ -200,6 +219,25 @@ pub fn install_git_skill(
     if let Err(e) = crate::bundled::copy_skill_leaf(&src_leaf, &staging) {
         let _ = std::fs::remove_dir_all(&staging);
         return Err(e.to_string());
+    }
+    // Re-verify the staged copy BEFORE the rename so a same-user actor that
+    // swapped the cache leaf between the up-front verify above and the
+    // recursive `copy_skill_leaf` cannot defeat the pin. The staged
+    // directory is freshly minted by us (`.staging/<nonce>`) so the only
+    // way this re-verify fails is if the source leaf itself was swapped
+    // mid-copy. This narrows the TOCTOU window from "the whole copy pass"
+    // to "between `verify_plugin_integrity(src_leaf)` and the first
+    // `read_dir` inside `copy_skill_leaf`" — still not a true atomic
+    // guarantee, but a strict improvement and catches the common case of
+    // the cache subdirectory being rewritten between verify and copy.
+    if let Err(e) = crate::extension::marketplace::installer::verify_plugin_integrity(
+        &staging,
+        sha256.as_deref(),
+    ) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(format!(
+            "staged skill failed post-copy integrity re-check (cache may have been tampered with): {e}"
+        ));
     }
     if let Err(e) = std::fs::rename(&staging, &target) {
         let _ = std::fs::remove_dir_all(&staging);
@@ -371,7 +409,25 @@ pub async fn run_install(
                 &ctx.secret_refs,
                 &ctx.plain_values,
             )?;
-            mcp.add_server(cfg).await.map_err(|e| e.to_string())?;
+            mcp.add_server(cfg)
+                .await
+                .map_err(|e| {
+                    // The caller surfaces this string verbatim in the
+                    // install reply, which loses the typed `McpError`
+                    // chain. Log the full error here so operators can
+                    // still recover the source cause from the tracing
+                    // pipeline; the string returned is the user-facing
+                    // summary. A future refactor should change the
+                    // `run_install` return type to carry the typed error
+                    // up rather than collapsing it to a string.
+                    tracing::error!(
+                        subsystem = "hub",
+                        error = %e,
+                        error_debug = ?e,
+                        "failed to register MCP server with runtime registry"
+                    );
+                    e.to_string()
+                })?;
             Ok(InstallOutcome::Mcp { id })
         }
         InstallSpec::OciImage { .. } => {
