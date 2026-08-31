@@ -37,6 +37,8 @@ ARM_DOMAINS = "QA_ARM_DOMAINS"
 ARM_PLAIN = "QA_ARM_PLAIN"
 ARM_FANOUT = "QA_ARM_FANOUT"
 ARM_SOLO = "QA_ARM_SOLO"
+ARM_DEMOTE_1 = "QA_ARM_DEMOTE_ONE"
+ARM_DEMOTE_2 = "QA_ARM_DEMOTE_TWO"
 
 rc = 0
 
@@ -221,6 +223,65 @@ def main():
             "answered after" not in plain,
             "with no dimension asked for, the default backend was asked first",
             plain[:400],
+        )
+        return
+
+    if PHASE == "demote":
+        # Two searches against one dead backend (`dead`, 503) in front of one
+        # live backend (`live`). The claim is not "the answer is still right" —
+        # it was right before this change too, because the chain always failed
+        # over. The claim is that the second search does not pay the dead
+        # backend's round trip again, and the only place that shows is how many
+        # requests the dead backend received.
+        one = wait_for(lambda t: ARM_DEMOTE_1 in t)
+        two = wait_for(lambda t: ARM_DEMOTE_2 in t)
+        if one is None or two is None:
+            check(False, "both arms ran", f"{len(tool_results())} tool_result(s)")
+            return
+        check("QA result 1" in one, "the first-written arm got results", one[:160])
+        check("QA result 1" in two, "the second-written arm got results", two[:160])
+
+        # The effect, not the call. An answer produced by asking the dead
+        # backend again and failing over is byte-identical to one produced by
+        # skipping it; only the backend's own log can tell them apart.
+        dead, live = requests_to(SEARX_LOGS[0]), requests_to(SEARX_LOGS[1])
+        check(
+            len(dead) == 1,
+            "the dead backend was asked exactly once across both searches",
+            f"{len(dead)} request(s): {'; '.join(dead)[:200]}",
+        )
+        check(
+            len(live) == 2,
+            "while the live backend answered both",
+            f"{len(live)} request(s)",
+        )
+        if len(dead) != 1:
+            return
+
+        # WHICH arm ran first is not ours to assume, and this fixture's first
+        # run is where that was learned: the mock provider indexes its spec
+        # list off a GLOBAL turn counter that side-channel calls (strategy
+        # planning, titling) also advance, so `spec[0]` need not be the first
+        # tool turn — and on the run that taught us this, it was not. Every
+        # other two-arm phase asserts per-arm content, which is order-free, so
+        # nothing had caught it. Read the order off the dead backend's one
+        # request, which is the same log the counts above come from.
+        marked = [m for m in (ARM_DEMOTE_1, ARM_DEMOTE_2) if m in dead[0]]
+        if len(marked) != 1:
+            check(False, "the dead backend's one request names exactly one arm", dead[0][:200])
+            return
+        by_arm = {ARM_DEMOTE_1: one, ARM_DEMOTE_2: two}
+        first = by_arm.pop(marked[0])
+        second = next(iter(by_arm.values()))
+        check(
+            "answered after" in first,
+            "the search that reached the dead backend reports its failure",
+            first[:400],
+        )
+        check(
+            "answered after" not in second,
+            "and the one that did not reports no failure, because nothing failed",
+            second[:400],
         )
         return
 

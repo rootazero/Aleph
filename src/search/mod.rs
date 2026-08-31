@@ -1,4 +1,5 @@
 mod factory;
+mod health;
 pub(crate) mod merge;
 pub(crate) mod notes;
 mod options;

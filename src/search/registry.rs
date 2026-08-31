@@ -1,4 +1,5 @@
 use crate::error::{AlephError, Result};
+use crate::search::health::ProviderHealth;
 use crate::search::notes::{
     all_empty, answered_after_failures, degraded, fanout_partial, merged_duplicates,
 };
@@ -85,6 +86,11 @@ pub struct SearchRegistry {
     /// disables this last-resort branch (controlled by
     /// `SearchConfigInternal.web_fetch_fallback`, default-true).
     web_fetch_fallback: Option<Arc<WebFetchSerpFallback>>,
+    /// Which backends failed recently. Read only by [`Self::ordered_candidates`],
+    /// as a sort key within a capability group — never as permission to skip
+    /// one. See [`crate::search::health`] for why that distinction is the
+    /// whole design.
+    health: ProviderHealth,
 }
 
 impl SearchRegistry {
@@ -96,6 +102,7 @@ impl SearchRegistry {
             fallback_providers: Vec::new(),
             config_defaults: None,
             web_fetch_fallback: None,
+            health: ProviderHealth::new(),
         }
     }
 
@@ -405,11 +412,24 @@ impl SearchRegistry {
 
     /// Default first, then fallbacks in configuration order, then stably
     /// reordered so providers that can carry every requested dimension come
-    /// first.
+    /// first, and within that group so a backend that failed recently is
+    /// tried after one that did not.
     ///
     /// Stable on purpose: within a group the configured order survives, so the
     /// same query reaches the same backend on every call. An unstable sort
     /// would trade that for nothing anyone asked for.
+    ///
+    /// **Capability outranks health, and that ranking is load-bearing.** The
+    /// other way round, one failure from the only backend that declares a
+    /// dimension hands the query to a backend that cannot carry it, which
+    /// answers and says so — a note that is true (`searxng` really has no
+    /// domain parameter) while the actual reason (the capable backend was
+    /// demoted) appears nowhere. That is a silently worse answer wearing a
+    /// truthful explanation. Health may only break ties between backends that
+    /// are equally able to answer this request.
+    ///
+    /// Nothing here is skipped: see [`crate::search::health`] for why a
+    /// demotion and a gate are different designs.
     fn ordered_candidates(&self, options: &SearchOptions) -> Vec<String> {
         let want = Self::requested(options);
         // An order-preserving seen-set, not `Vec::dedup` — `dedup` only
@@ -424,13 +444,33 @@ impl SearchRegistry {
             .filter(|n| self.providers.contains_key(n))
             .filter(|n| seen.insert(n.clone()))
             .collect();
+        // Read health once per name rather than once per comparison, which
+        // also gives the log line below something to say without a second
+        // pass over the map.
+        let degraded: std::collections::HashSet<String> = names
+            .iter()
+            .filter(|n| self.health.is_degraded(n))
+            .cloned()
+            .collect();
         names.sort_by_key(|n| {
             let have = self.providers[n].capabilities(options);
             let satisfies = (!want.domain_filter || have.domain_filter)
                 && (!want.recency || have.recency)
                 && (!want.full_content || have.full_content);
-            usize::from(!satisfies)
+            (usize::from(!satisfies), usize::from(degraded.contains(n)))
         });
+        if !degraded.is_empty() {
+            // The configured order is no longer literally the order tried, so
+            // "why did the second backend answer?" needs one more fact than
+            // the config file to answer.
+            let mut names: Vec<&str> = degraded.iter().map(String::as_str).collect();
+            names.sort_unstable();
+            log::info!(
+                target: "search",
+                "demoted after a recent failure (still asked if those ahead do not answer): {}",
+                names.join(", ")
+            );
+        }
         names
     }
 
@@ -504,6 +544,12 @@ impl SearchRegistry {
                 }
                 Err(e) => {
                     let kind = classify_search_error(&e);
+                    // Named backends are an instruction, so health never
+                    // reorders or skips them — but a failure is a failure
+                    // whichever face observed it, and the chain would
+                    // otherwise never learn about a backend that is only ever
+                    // reached by name.
+                    self.health.note_failure(&name, &e);
                     log::warn!(target: "search", "provider={name} kind={kind} {e}");
                     errors.push(format!("{name} [{kind}] {e}"));
                 }
@@ -607,6 +653,10 @@ impl SearchRegistry {
         for provider_name in self.ordered_candidates(options) {
             let provider = &self.providers[&provider_name];
             if !provider.is_available() {
+                // Not recorded against health: this costs no round trip, and
+                // `is_available` will keep answering false until the operator
+                // fixes the configuration, so a demotion would buy nothing and
+                // expire on a timer that has nothing to do with the cause.
                 let msg = format!("{provider_name} [unavailable] missing configuration");
                 log::warn!("{msg}");
                 errors.push(msg);
@@ -634,10 +684,20 @@ impl SearchRegistry {
                     // disagree about what exists. Keep trying the rest of
                     // the chain (and the SERP fallback below) instead of
                     // treating an empty answer as the final word.
+                    //
+                    // Deliberately no `note_failure` here, and the absence is
+                    // the point: a backend that says "I found nothing" gave a
+                    // real answer to this query, so demoting it would push a
+                    // working backend behind the others on the strength of one
+                    // unlucky search term. (The SERP fallback *does* cool a
+                    // mirror down on zero results — its mirrors are scrapers,
+                    // where an empty page means the parser stopped matching,
+                    // not that the web is empty. Same word, different fact.)
                     empty.push(provider_name);
                 }
                 Err(e) => {
                     let kind = classify_search_error(&e);
+                    self.health.note_failure(&provider_name, &e);
                     let msg = format!("{provider_name} [{kind}] {e}");
                     log::warn!(
                         target: "search",
@@ -800,6 +860,14 @@ mod tests {
         /// is the case merging exists for; `with_own_pages` makes them
         /// disagree instead.
         host: String,
+        /// Fail with `Cancelled` rather than a network error, so a test can
+        /// tell "the caller went away" from "the backend misbehaved".
+        cancelled: bool,
+        /// How many times this backend was actually asked. Ordering tests
+        /// assert on this rather than on the returned results: a demoted
+        /// backend that still gets a request has not been demoted, and the
+        /// answer looks identical either way.
+        asks: crate::sync_primitives::AtomicUsize,
     }
 
     impl MockProvider {
@@ -810,7 +878,25 @@ mod tests {
                 result_count,
                 capabilities: SearchCapabilities::default(),
                 host: "example.com".to_string(),
+                cancelled: false,
+                asks: crate::sync_primitives::AtomicUsize::new(0),
             }
+        }
+
+        /// Fail as a cancellation instead of a network error.
+        fn cancelling(mut self) -> Self {
+            self.cancelled = true;
+            self
+        }
+
+        /// Declares `recency` support, for capability-ordering tests.
+        fn with_recency(mut self) -> Self {
+            self.capabilities.recency = true;
+            self
+        }
+
+        fn asks(&self) -> usize {
+            self.asks.load(crate::sync_primitives::Ordering::Relaxed)
         }
 
         /// Declares `domain_filter` support, for capability-ordering tests.
@@ -842,8 +928,14 @@ mod tests {
         }
 
         async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
+            self.asks
+                .fetch_add(1, crate::sync_primitives::Ordering::Relaxed);
             if self.should_fail {
-                return Err(AlephError::network("Mock provider failure"));
+                return Err(if self.cancelled {
+                    AlephError::Cancelled
+                } else {
+                    AlephError::network("Mock provider failure")
+                });
             }
 
             let mut results = Vec::new();
@@ -1778,5 +1870,185 @@ mod tests {
             "silently dropping the dimension is the failure this note exists to prevent: {:?}",
             answer.notes
         );
+    }
+
+    // ---- health: a recent failure demotes, it never silences -------------
+
+    /// Two-backend chain: `first` is the default, `second` the fallback.
+    /// Returns the registry; the callers keep their own `Arc`s so they can
+    /// read each mock's ask counter afterwards.
+    fn chain(first: &Arc<MockProvider>, second: &Arc<MockProvider>) -> SearchRegistry {
+        let (a, b) = (first.name.clone(), second.name.clone());
+        let mut registry = SearchRegistry::new(a.clone());
+        registry.add_provider(a, Arc::clone(first) as Arc<dyn SearchProvider>);
+        registry.add_provider(b.clone(), Arc::clone(second) as Arc<dyn SearchProvider>);
+        registry.set_fallback_providers(vec![b]);
+        registry
+    }
+
+    /// The anti-vacuous one: with nobody degraded the order must be exactly
+    /// what it was before health existed, so the guards below are measuring
+    /// the demotion rather than some incidental reshuffle.
+    #[tokio::test]
+    async fn health_moves_nothing_until_something_has_failed() {
+        let a = Arc::new(MockProvider::new("a", false, 1));
+        let b = Arc::new(MockProvider::new("b", false, 1));
+        let registry = chain(&a, &b);
+        let options = SearchOptions::default();
+
+        assert_eq!(
+            registry.ordered_candidates(&options),
+            vec!["a".to_string(), "b".to_string()],
+            "an all-healthy chain must be the configured order, untouched"
+        );
+
+        registry
+            .health
+            .note_failure("a", &AlephError::rate_limit("429"));
+        assert_eq!(
+            registry.ordered_candidates(&options),
+            vec!["b".to_string(), "a".to_string()],
+            "the backend that just refused goes last in its group"
+        );
+
+        registry.health.clear();
+        assert_eq!(
+            registry.ordered_candidates(&options),
+            vec!["a".to_string(), "b".to_string()],
+            "and comes back once the demotion has expired"
+        );
+    }
+
+    /// The whole point: a dead backend at the head of the configured order
+    /// stops costing a full timeout on every subsequent search.
+    ///
+    /// Asserted on the mock's ask counter, not on the answer — a demoted
+    /// backend that is still being asked produces a byte-identical answer,
+    /// so the results cannot tell the two apart.
+    #[tokio::test]
+    async fn a_backend_that_failed_is_not_reached_again_while_one_ahead_answers() {
+        let bad = Arc::new(MockProvider::new("bad", true, 0));
+        let good = Arc::new(MockProvider::new("good", false, 2));
+        let registry = chain(&bad, &good);
+        let options = SearchOptions::default();
+
+        let first = registry.search("q", &options).await.unwrap();
+        assert_eq!(first.provider, "good");
+        assert_eq!(bad.asks(), 1, "the first search pays the failure once");
+        assert!(
+            first.notes.iter().any(|n| n.contains("failed")),
+            "{:?}",
+            first.notes
+        );
+
+        let second = registry.search("q", &options).await.unwrap();
+        assert_eq!(second.provider, "good");
+        assert_eq!(
+            bad.asks(),
+            1,
+            "the second search must not pay it again while `good` answers"
+        );
+        assert_eq!(good.asks(), 2);
+        assert!(
+            !second.notes.iter().any(|n| n.contains("failed")),
+            "nothing failed this time, so the answer must not say it did: {:?}",
+            second.notes
+        );
+    }
+
+    /// Load-bearing: capability outranks health.
+    ///
+    /// `capable` is the only backend that can express the requested
+    /// dimension, and it has just failed. If health were allowed to move it,
+    /// `plain` would answer, drop the dimension, and explain itself with a
+    /// note naming its own missing parameter — true, and pointing at the
+    /// wrong cause. A demotion must never buy a worse answer.
+    #[tokio::test]
+    async fn a_recent_failure_does_not_outrank_the_only_backend_that_can_carry_the_request() {
+        let capable = Arc::new(MockProvider::new("capable", true, 0).with_recency());
+        let plain = Arc::new(MockProvider::new("plain", false, 2));
+        let registry = chain(&capable, &plain);
+        let asks_for_recency = SearchOptions {
+            recency: Some(crate::search::Recency::Week),
+            ..Default::default()
+        };
+
+        registry.search("q", &asks_for_recency).await.unwrap();
+        assert_eq!(capable.asks(), 1);
+        registry.search("q", &asks_for_recency).await.unwrap();
+        assert_eq!(
+            capable.asks(),
+            2,
+            "health may only break ties inside a capability group"
+        );
+        assert!(
+            registry.health.is_degraded("capable"),
+            "the failure was recorded — it just is not allowed to win here"
+        );
+    }
+
+    /// "I found nothing" is an answer to this query, not a fault in the
+    /// backend. Demoting on it would push a working backend behind the others
+    /// on the strength of one unlucky search term.
+    #[tokio::test]
+    async fn a_backend_that_found_nothing_is_not_demoted() {
+        let quiet = Arc::new(MockProvider::new("quiet", false, 0));
+        let other = Arc::new(MockProvider::new("other", false, 2));
+        let registry = chain(&quiet, &other);
+        let options = SearchOptions::default();
+
+        registry.search("q", &options).await.unwrap();
+        registry.search("q", &options).await.unwrap();
+        assert_eq!(quiet.asks(), 2, "an empty answer is still an answer");
+        assert!(!registry.health.is_degraded("quiet"));
+    }
+
+    /// A cancellation reports that the *caller* went away mid-flight. Letting
+    /// it demote would mean a user who interrupts twice reorders the chain.
+    #[tokio::test]
+    async fn a_cancelled_attempt_does_not_demote_the_backend() {
+        let interrupted = Arc::new(MockProvider::new("interrupted", true, 0).cancelling());
+        let other = Arc::new(MockProvider::new("other", false, 2));
+        let registry = chain(&interrupted, &other);
+        let options = SearchOptions::default();
+
+        registry.search("q", &options).await.unwrap();
+        registry.search("q", &options).await.unwrap();
+        assert_eq!(
+            interrupted.asks(),
+            2,
+            "the caller walking away says nothing about the backend"
+        );
+        assert!(!registry.health.is_degraded("interrupted"));
+    }
+
+    /// The two faces of the same verb: the fan-out **records** what it saw,
+    /// so a backend only ever reached by name still teaches the chain — but
+    /// it is never reordered or skipped, because naming a backend is an
+    /// instruction and not a preference.
+    #[tokio::test]
+    async fn naming_a_backend_asks_it_however_it_last_behaved() {
+        let flaky = Arc::new(MockProvider::new("flaky", true, 0));
+        let good = Arc::new(MockProvider::new("good", false, 2).with_own_pages());
+        let registry = chain(&flaky, &good);
+        let named = SearchOptions {
+            providers: vec!["flaky".to_string(), "good".to_string()],
+            ..Default::default()
+        };
+
+        registry.search("q", &named).await.unwrap();
+        assert_eq!(flaky.asks(), 1);
+        assert!(
+            registry.health.is_degraded("flaky"),
+            "a failure is a failure whichever face observed it"
+        );
+
+        let answer = registry.search("q", &named).await.unwrap();
+        assert_eq!(
+            flaky.asks(),
+            2,
+            "a named backend is asked whatever its health"
+        );
+        assert_eq!(answer.provider, "good");
     }
 }

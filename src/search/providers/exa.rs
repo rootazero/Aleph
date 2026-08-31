@@ -30,8 +30,38 @@ struct ExaRequest {
 
 #[derive(Serialize)]
 struct ExaContents {
-    text: bool,
+    text: ExaText,
 }
+
+/// Exa's `contents.text` is `oneOf { boolean, object }` — the object form
+/// takes `maxCharacters` (documented as an integer in `1..=10000`).
+///
+/// Untagged so each variant serialises as the wire spells it: `true`, or
+/// `{"maxCharacters": N}`.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum ExaText {
+    /// Always constructed as `true`. `false` would mean *no* text, and
+    /// `contents.text` is Exa's only text source — there is no snippet field
+    /// to fall back to, so a result without it is a title and a url.
+    Whole(bool),
+    /// Return at most this much of the page. The saving is Exa's: without it
+    /// Exa retrieves (and bills for) a whole page per result while the caller
+    /// keeps a paragraph.
+    Capped {
+        #[serde(rename = "maxCharacters")]
+        max_characters: usize,
+    },
+}
+
+/// The largest `maxCharacters` Exa documents.
+///
+/// Clamped rather than trusted: the value arrives from a caller's snippet
+/// budget, and a budget above this ceiling would turn a request that works
+/// into a 400 — the one failure mode worth spending a `clamp` to rule out,
+/// because it would take the backend out on every search rather than degrade
+/// one answer.
+const MAX_CHARACTERS_CEILING: usize = 10_000;
 
 #[derive(Deserialize)]
 struct ExaResponse {
@@ -80,10 +110,37 @@ impl ExaProvider {
         ExaRequest {
             query: query.to_string(),
             num_results: options.validated_max_results(),
-            contents: ExaContents { text: true },
+            contents: ExaContents {
+                text: Self::text_request(options),
+            },
             include_domains: options.include_domains.clone(),
             exclude_domains: options.exclude_domains.clone(),
         }
+    }
+
+    /// How much page text to ask Exa for.
+    ///
+    /// Exa has no snippet field: `contents.text` is a whole page body, and it
+    /// used to be requested in full on every search. A caller that did not ask
+    /// for `full_content` keeps one paragraph of that and discards the rest —
+    /// paid for, transferred, and thrown away, once per result.
+    fn text_request(options: &SearchOptions) -> ExaText {
+        // Asked for bodies: ask for the whole body. The caller's snippet
+        // budget is about snippets, and the body budget on the other side
+        // (20 000 chars) is above what this field accepts anyway, so capping
+        // here could only shorten something the caller explicitly wanted.
+        if options.include_full_content {
+            return ExaText::Whole(true);
+        }
+        options.snippet_budget_chars.map_or(
+            // No budget declared — every caller but the tool face. Unchanged
+            // behaviour: a caller that has not said what it keeps has not
+            // given us the right to shorten the answer.
+            ExaText::Whole(true),
+            |budget| ExaText::Capped {
+                max_characters: budget.clamp(1, MAX_CHARACTERS_CEILING),
+            },
+        )
     }
 }
 
@@ -124,7 +181,9 @@ impl SearchProvider for ExaProvider {
             recency: false,      // ExaRequest has no freshness field
             // `contents.text` is always requested (it is Exa's only text
             // source) and reaches `full_content` when the caller asks for
-            // bodies. The bit was `false` while the body was being dropped
+            // bodies — uncapped in that case, which is what makes this bit
+            // true rather than "true but truncated". The bit was `false`
+            // while the body was being dropped
             // on the floor, which hid Exa from every `full_content` request
             // it could in fact have answered.
             full_content: true,
@@ -295,6 +354,70 @@ mod tests {
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].url, "https://kept.test");
         assert_eq!(kept[0].title, "");
+    }
+
+    fn text_field(options: &SearchOptions) -> serde_json::Value {
+        serde_json::to_value(ExaProvider::build_request("q", options)).unwrap()["contents"]["text"]
+            .clone()
+    }
+
+    /// The saving. Without a declared budget Exa returns a whole page per
+    /// result and the tool face keeps 600 characters of it; the rest was
+    /// Exa's bill and our latency.
+    #[test]
+    fn a_declared_snippet_budget_becomes_a_server_side_cap() {
+        let capped = text_field(&SearchOptions {
+            snippet_budget_chars: Some(601),
+            ..Default::default()
+        });
+        assert_eq!(capped, serde_json::json!({ "maxCharacters": 601 }));
+    }
+
+    /// A caller that asked for page bodies must still get them whole: the
+    /// snippet budget describes a snippet, and capping the body here would
+    /// silently shorten the thing `full_content` exists to deliver.
+    #[test]
+    fn asking_for_bodies_still_asks_exa_for_the_whole_page() {
+        let body_request = text_field(&SearchOptions {
+            include_full_content: true,
+            snippet_budget_chars: Some(601),
+            ..Default::default()
+        });
+        assert_eq!(body_request, serde_json::json!(true));
+    }
+
+    /// Every caller but the tool face declares no budget, and for them the
+    /// request has to be byte-identical to what it was before this field
+    /// existed — a default that silently shortened answers would be a change
+    /// nobody asked for wearing an opt-in's clothes.
+    #[test]
+    fn no_declared_budget_is_the_request_that_shipped_before() {
+        assert_eq!(
+            text_field(&SearchOptions::default()),
+            serde_json::json!(true)
+        );
+    }
+
+    /// `maxCharacters` is documented as `1..=10000`. A caller's budget is not
+    /// obliged to know that, and an out-of-range value would not shorten an
+    /// answer — it would 400 the whole backend on every search.
+    #[test]
+    fn a_budget_outside_what_exa_accepts_is_clamped_not_forwarded() {
+        assert_eq!(
+            text_field(&SearchOptions {
+                snippet_budget_chars: Some(50_000),
+                ..Default::default()
+            }),
+            serde_json::json!({ "maxCharacters": MAX_CHARACTERS_CEILING })
+        );
+        assert_eq!(
+            text_field(&SearchOptions {
+                snippet_budget_chars: Some(0),
+                ..Default::default()
+            }),
+            serde_json::json!({ "maxCharacters": 1 }),
+            "zero is not a legal value for this field either"
+        );
     }
 
     #[test]

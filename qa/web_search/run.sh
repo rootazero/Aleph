@@ -6,6 +6,7 @@
 #   ./qa/web_search/run.sh degrade   # a dimension nobody can express is reported, not dropped in silence
 #   ./qa/web_search/run.sh empty     # a zero-result answer does not end the chain
 #   ./qa/web_search/run.sh fanout    # two named backends are both asked and their answers merge
+#   ./qa/web_search/run.sh demote    # a backend that just failed is not asked again on the next search
 #
 #   KEEP=1 ./qa/web_search/run.sh reach     # keep the scratch dir for post-mortem
 #
@@ -41,8 +42,8 @@ SEARX_A_PORT="${SEARX_A_PORT:-18823}"
 SEARX_B_PORT="${SEARX_B_PORT:-18824}"
 
 case "$PHASE" in
-  reach|order|degrade|empty|fanout) ;;
-  *) echo "unknown phase: $PHASE (reach|order|degrade|empty|fanout)" >&2; exit 64 ;;
+  reach|order|degrade|empty|fanout|demote) ;;
+  *) echo "unknown phase: $PHASE (reach|order|degrade|empty|fanout|demote)" >&2; exit 64 ;;
 esac
 
 # Build BEFORE HOME is redirected: cargo's registry, git cache and rustup
@@ -121,6 +122,16 @@ case "$PHASE" in
       --searxng "empty=$SEARX_A_PORT" --searxng "full=$SEARX_B_PORT" \
       --default empty --fallback full || exit 1
     ;;
+  demote)
+    # A dead backend (503) as the default, a live one as its fallback. Both are
+    # searxng, so they declare identical capabilities and the request asks for
+    # no dimension — which leaves recent health as the only thing that can
+    # reorder them. That is deliberate: a phase where capability could also
+    # explain the order would not be measuring health.
+    python3 "$HERE/patch_search.py" "$CONFIG" \
+      --searxng "dead=$SEARX_A_PORT" --searxng "live=$SEARX_B_PORT" \
+      --default dead --fallback live || exit 1
+    ;;
   fanout)
     # Two backends, and deliberately NO fallback wiring between them: the
     # claim is that naming both on the tool face asks both, which must not be
@@ -146,6 +157,13 @@ elif phase == "degrade":
             "input": {"query": "QA_ARM_DEGRADE rust", "domains": ["example.invalid"]}}
 elif phase == "empty":
     spec = {"name": "search", "input": {"query": "QA_ARM_EMPTY rust"}}
+elif phase == "demote":
+    # Two identical plain searches. The second one is the measurement; the
+    # first exists to make the backend fail once.
+    spec = [
+        {"name": "search", "input": {"query": "QA_ARM_DEMOTE_ONE rust"}},
+        {"name": "search", "input": {"query": "QA_ARM_DEMOTE_TWO rust"}},
+    ]
 elif phase == "fanout":
     # Two arms. The first names both backends; the second names one, and is
     # the control — without it a green on "both logs have a request" could be
@@ -169,9 +187,10 @@ say "start mock backends"
 SHARED_FLAG=""
 [ "$PHASE" = "fanout" ] && SHARED_FLAG="--shared"
 python3 "$HERE/mock_searxng.py" "$SEARX_A_PORT" "$SEARX_A_LOG" \
-  $([ "$PHASE" = "empty" ] && echo --empty) $SHARED_FLAG >"$QA_ROOT/searxng-a.out" 2>&1 &
+  $([ "$PHASE" = "empty" ] && echo --empty) \
+  $([ "$PHASE" = "demote" ] && echo --fail) $SHARED_FLAG >"$QA_ROOT/searxng-a.out" 2>&1 &
 SEARX_A_PID=$!
-if [ "$PHASE" = "empty" ] || [ "$PHASE" = "fanout" ]; then
+if [ "$PHASE" = "empty" ] || [ "$PHASE" = "fanout" ] || [ "$PHASE" = "demote" ]; then
   python3 "$HERE/mock_searxng.py" "$SEARX_B_PORT" "$SEARX_B_LOG" $SHARED_FLAG \
     >"$QA_ROOT/searxng-b.out" 2>&1 &
   SEARX_B_PID=$!
@@ -202,7 +221,7 @@ if [ "$PHASE" = "empty" ]; then
   QA_EXPECT_TAG="port$SEARX_B_PORT" python3 "$HERE/drive_search.py" \
     "ws://127.0.0.1:$GATEWAY_PORT/ws" "$PHASE" "$QA_ROOT/requests.jsonl" \
     "$SEARX_A_LOG" "$SEARX_B_LOG" || RC=$?
-elif [ "$PHASE" = "fanout" ]; then
+elif [ "$PHASE" = "fanout" ] || [ "$PHASE" = "demote" ]; then
   python3 "$HERE/drive_search.py" \
     "ws://127.0.0.1:$GATEWAY_PORT/ws" "$PHASE" "$QA_ROOT/requests.jsonl" \
     "$SEARX_A_LOG" "$SEARX_B_LOG" || RC=$?
@@ -214,7 +233,7 @@ fi
 
 say "backend request log"
 echo "--- searxng A ---"; cat "$SEARX_A_LOG" 2>/dev/null | head -10
-{ [ "$PHASE" = "empty" ] || [ "$PHASE" = "fanout" ]; } && \
+{ [ "$PHASE" = "empty" ] || [ "$PHASE" = "fanout" ] || [ "$PHASE" = "demote" ]; } && \
   { echo "--- searxng B ---"; cat "$SEARX_B_LOG" 2>/dev/null | head -10; }
 
 exit "$RC"

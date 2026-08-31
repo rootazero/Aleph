@@ -78,6 +78,17 @@ impl SearchArgs {
         if !self.providers.is_empty() {
             options.providers.clone_from(&self.providers);
         }
+        // Tell the backends the bound this face is going to apply anyway.
+        // Most cannot act on it and ignore it; Exa can honour it server-side,
+        // where the difference is a whole page body per result that it
+        // otherwise retrieves, bills for and hands us to throw away.
+        //
+        // Plus one, deliberately: told to return exactly the budget, a backend
+        // makes "this page was 600 characters" and "this page was cut at 600"
+        // the same observation, and `snippets_clamped` — the note that offers
+        // the reader `web_fetch` for the rest — would stop firing for pages
+        // that really do have more. One extra character keeps that signal.
+        options.snippet_budget_chars = Some(SNIPPET_MAX_CHARS + 1);
         options
     }
 }
@@ -326,6 +337,25 @@ impl AlephTool for SearchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The budget travels, and it travels one character wide of the clamp.
+    /// A backend told to return exactly `SNIPPET_MAX_CHARS` would make a
+    /// full-length page indistinguishable from a truncated one, and the note
+    /// pointing the reader at `web_fetch` would go quiet for the pages that
+    /// most need it.
+    #[test]
+    fn the_face_declares_the_snippet_bound_it_is_going_to_apply() {
+        let options = SearchArgs {
+            query: "q".to_string(),
+            ..Default::default()
+        }
+        .to_options(&SearchOptions::default());
+        assert_eq!(options.snippet_budget_chars, Some(SNIPPET_MAX_CHARS + 1));
+        assert!(
+            options.snippet_budget_chars > Some(SNIPPET_MAX_CHARS),
+            "asking for exactly the budget hides whether anything was cut"
+        );
+    }
 
     #[test]
     fn test_search_args_limit_omitted_defers_to_config() {
