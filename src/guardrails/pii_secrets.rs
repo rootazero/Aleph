@@ -192,9 +192,9 @@ impl PiiSecretsGuardrail {
         resolver_ref: Option<&'a dyn AsyncSecretResolver>,
         warnings: &'a mut Vec<String>,
         sources: &'a mut Vec<String>,
+        nodes: &'a mut u32,
     ) -> BoxFuture<'a, Result<Value, GuardrailDecision>> {
-        let mut nodes: u32 = 0;
-        self.scan_tool_args_at_depth(value, resolver_ref, warnings, sources, 0, &mut nodes)
+        self.scan_tool_args_at_depth(value, resolver_ref, warnings, sources, 0, nodes)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -388,8 +388,13 @@ impl ToolCallGuardrail for PiiSecretsGuardrail {
             .map(|a| a.as_ref() as &dyn AsyncSecretResolver);
         let mut warnings = Vec::new();
         let mut sources = Vec::new();
+        // The node counter lives in caller-owned storage because the
+        // returned BoxFuture borrows `&mut nodes`; a `let mut nodes` local
+        // here would be dropped before the awaited future, tripping
+        // E0515 (returning value referencing local variable).
+        let mut nodes: u32 = 0;
         let resolved = match self
-            .scan_tool_args(args, resolver_ref, &mut warnings, &mut sources)
+            .scan_tool_args(args, resolver_ref, &mut warnings, &mut sources, &mut nodes)
             .await
         {
             Ok(v) => v,
