@@ -59,6 +59,36 @@ pub fn all_empty(n: usize) -> String {
     )
 }
 
+/// Some of the named backends did not answer, and the rest did.
+///
+/// Distinct from [`answered_after_failures`] on purpose: that one is about a
+/// chain, where an earlier backend failing is invisible bookkeeping because a
+/// later one produced the whole answer. Here every named backend was supposed
+/// to contribute, so a missing one means the answer is narrower than the
+/// caller asked for — and the caller, having named the backends, is the one
+/// person who can act on which of them is down.
+#[must_use]
+pub fn fanout_partial(answered: usize, asked: usize) -> String {
+    format!(
+        "{answered} of {asked} named backend(s) answered; the rest failed and their errors are \
+         in the server log under target=search"
+    )
+}
+
+/// The same page came back from more than one backend.
+///
+/// Says how many, because it is the difference between "you asked for ten and
+/// got seven because the backends agree a lot" and "you asked for ten and
+/// there are only seven pages". Names the field that survives the merge so
+/// the reader can see which backend each kept result came from.
+#[must_use]
+pub fn merged_duplicates(n: usize) -> String {
+    format!(
+        "{n} result(s) were returned by more than one backend and merged; each result's \
+         `provider` names the backend it came from"
+    )
+}
+
 /// Snippets were cut to fit the tool's budget.
 ///
 /// Names the count and the bound so the reader can tell "one long page was
@@ -101,6 +131,8 @@ mod tests {
             all_empty(3),
             snippets_clamped(4, 600),
             full_content_truncated(2, 20_000),
+            fanout_partial(2, 3),
+            merged_duplicates(4),
         ];
         for (i, a) in all.iter().enumerate() {
             for b in all.iter().skip(i + 1) {

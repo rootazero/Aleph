@@ -1744,10 +1744,10 @@ SSOT（`unicode_guard::is_invisible_char`）长出了零宽与方向标记，补
 
 ### 3.18 Web 搜索面：七个字段两个写入点，与十五个等着它们的译码器 (Web Search Face · 2026-08-31)
 
-- **口语关键词**：web 搜索、`search` 工具、Tavily / SearXNG / Brave / Exa / Jina、时效性 / recency / 新鲜度、域名过滤 / site:、full_content、provider 覆写、搜索后端排序、搜索降级说明
-- **锚点**：`src/search/options.rs`（`Recency` 四词表 + 每 provider 映射器）· `src/search/provider.rs`（`SearchCapabilities`）· `src/search/providers/capability_census.rs`（源码级守卫）· `src/search/registry.rs`（能力感知排序 · 空结果续链 · 显式 provider · `SearchAnswer`）· `src/search/notes.rs`（省略与降级的单一源）· `src/builtin_tools/search.rs`（工具面）· `shared/protocol/src/search/`（后端清单单一源）· `interfaces/webchat/.../settings/search.rs`（卡片派生）· 真机 `qa/web_search/`
-- **职责**：把 `SearchOptions` 的七个字段接到模型够得到的工具面上，让接不上的维度**出声**而不是静默消失，并消灭「哪些后端存在」的三份清单。
-- **状态**：✅ 本轮落地（15 任务计划 `docs/superpowers/plans/2026-08-30-web-search-face.md`，spec `docs/superpowers/specs/2026-08-30-web-search-face-design.md`）。
+- **口语关键词**：web 搜索、`search` 工具、Tavily / SearXNG / Brave / Exa / Jina、时效性 / recency / 新鲜度、域名过滤 / site:、full_content、provider 覆写、**多后端扇出 / 合并去重 / URL 归一化**、**搜索后端连接测试**、**凭据脱敏**、搜索后端排序、搜索降级说明
+- **锚点**：`src/search/options.rs`（`Recency` 四词表 + 每 provider 映射器 + `providers` 列表）· `src/search/provider.rs`（`SearchCapabilities`，**签名吃 `&SearchOptions`**）· `src/search/providers/capability_census.rs`（源码级守卫，**三态 `Declared`**）· `src/search/providers/base.rs`（**HTTP 错误单一漏斗 `send` + 脱敏 + `retain_usable`**）· `src/search/registry.rs`（能力感知排序 · 空结果续链 · **`fan_out` / `attributed`** · `SearchAnswer`）· **`src/search/merge.rs`（结果身份：URL 归一化 + 按名次交错）** · `src/search/notes.rs`（省略与降级的单一源）· `src/builtin_tools/search.rs`（工具面）· `shared/protocol/src/search/`（后端清单单一源）· **`src/gateway/handlers/search_config/test.rs`（连接测试 → factory）** · `interfaces/webchat/.../settings/search.rs`（卡片派生）· 真机 `qa/web_search/`
+- **职责**：把 `SearchOptions` 的字段接到模型够得到的工具面上，让接不上的维度**出声**而不是静默消失，消灭「哪些后端存在」与「怎么从配置造一个后端」的重复表述，并让一次调用能问多个后端、把它们的答案合成一个集合。
+- **状态**：✅ 两轮落地（第一轮 15 任务计划 `docs/superpowers/plans/2026-08-30-web-search-face.md`，spec 同日；第二轮 2026-09-01，见下方「第二轮」）。
 
 **开工时的缺口（四条，全部是既有判据的新实例）**
 
@@ -1794,6 +1794,71 @@ SSOT（`unicode_guard::is_invisible_char`）长出了零宽与方向标记，补
 **真机装置的边界（写进 `qa/web_search/README.md`，不只写在这里）**
 
 SearXNG 是唯一能指向 mock 的后端：九个里七个把 endpoint 写死，第九个（firecrawl）要一个这里没有的凭据。所以四个阶段证明的是**接线**——参数到达 provider 的请求构造器、registry 的排序与 failover、notes 到达模型——而**不是**另外八个后端各自的请求构造器，后者由 `capability_census` 在源码级覆盖。两者互补，谁也不能替代谁：census 看不见一条 wire，装置看不见九分之八的后端。
+
+---
+
+### 第二轮（2026-09-01）：能力位是请求的函数 · HTTP 错误单一漏斗 · 扇出与合并
+
+对照 `pi-web-access`（TS，20+ 后端）。**架构不移植**——它的 `classifyProviderError` 弱于既有 `classify_search_error`，它的能力自陈与降级出声两样都没有；可移植的只有三件事：`provider:"all"` 扇出、`redactCredential` 跨全部 provider、逐字段校验的响应解析。三件都落地了，且都做成了比参考实现更强的形态（裸 URL 去重 → 归一化去重；字符串替换脱敏 → 结构性单一漏斗）。**刻意不追后端数**：第一轮的重访条件（「某个维度**所有**现有 provider 都不支持时」）今天仍不满足。
+
+**七个缺口（全部实证，非推测）**
+
+| # | 缺陷 | 形状 |
+|---|---|---|
+| A | `search.test` RPC 是 factory 的**第二实现**——358 行九臂 `match` 直接 `XxxProvider::new()`，尾臂 `_ => "Unknown provider type"`，并从记忆里复述了一遍 factory 的必填字段规则 | 同一事实的两份表述 |
+| B | Exa 把**整页正文塞进 `snippet`**（`contents.text` 恒开、`full_content` 硬编码 `None`）⇒ 每条结果都触发 600 字截断，answer 逐条建议「用 `web_fetch` 取全文」——而全文刚被这次调用下载并丢弃 | 错的标签比缺的贵 |
+| C | 六个 provider 的逐结果 `title: String` 必填。**serde 不逐字段降级**：一条 vendor 返回 `null` 标题的结果让**整份**文档解析失败 ⇒ 后端报「解析错误」，链路把它当宕机跳过 | serde 全或无 |
+| D | 无跨后端扇出/合并；`SearchResult::provider` 从第一轮起零消费者（第一轮写下的重访条件正是「合并落地那天」） | 两端完整而中间没线 |
+| E | Bing `Recency::Year` **静默丢弃**——`bing_freshness` 对 `Year` 答 `None`，而 Bing 声明 `recency: true` ⇒ 排序把它排**第一**、`degradation_notes` 不出声。这条缺陷**写在它自己的注释里**活过了整个第一轮 | 一个声明的粒度比它兑现的粒度粗 |
+| F | 凭据脱敏是 `google.rs` 的**私有**答案（`sanitize_api_key` + 分叉的 `check_status_google`），另外八个走共享 helper 的一点脱敏都没有；且 `check_status` 丢弃响应正文 ⇒ 模型收到的只有「400 Bad Request」，不指任何杠杆 | 一个动词有几张脸 |
+| G | `web_fetch_fallback.rs` 的注释「5 min matches the `SearchRegistry` provider-test cache TTL」——`SearchRegistry` **没有**这个 TTL，从来没有过 | 描述的不是事实而是另一个子系统的行为 |
+
+**本轮的形状与判据**
+
+- **能力位是**请求**的函数，不是后端的属性**：`capabilities(&self, options: &SearchOptions)`。Bing 的 `recency` 现在是 `options.bing_freshness().is_some()`——**与 `search` 实际发送的是同一个表达式**，所以排序键与降级 note 共用同一次推导。census 的 `declared_bit` 随之从二态变三态（`Always` / `Never` / `Conditional(expr)`），且 `Conditional` **自带第二条义务**：表达式必须点名它那个维度的 mapper，否则「条件式」就成了关掉 census 的后门（守卫 `a_conditional_bit_must_name_the_mapper_it_derives_from`，另有一条反空转断言：找不到任何条件式声明就红，而不是空过）。
+- **HTTP 错误只有一个漏斗**：`base::send(request, provider, secret)` 是九个 provider（外加 `src/fetch/providers/firecrawl.rs` 这个跨子系统消费者）**唯一**的派发口，`check_status` 降为模块私有。于是「每个 provider 都脱敏」从九份记忆变成模块的一条性质，而不是一条没人读得到的约定。⚠️ **脱敏参数刻意是必填的 `Option<&str>` 而不是默认 `None`**：每个调用点都必须回答「我有没有会漏进错误消息的凭据」，答错在调用点看得见。SearXNG 的答案是 `base_url` 里的密码（`reqwest` 的传输错误会引用 URL）。
+- **错误要指杠杆**：失败响应的正文带回前 300 字（脱敏后）。之前一个 Tavily 400 到达模型时逐字是 `tavily [provider] tavily API error: 400 Bad Request`——vendor 在正文里说了是**哪个参数**不对，而我们把它扔了。
+- **结果身份只用于去重，永不改写返回的 URL**（`merge.rs` 模块 doc 的第一条）：这样一条过激的归一化规则最多让本该分开的两条并成一条，一条过弱的规则最多留一条重复，**都不可能把一个打不开的 URL 交给读者**。这是刻意的——那些规则是关于 vendor 怎么装饰链接的启发式，而启发式会过期（D.0.5）。`utm_` 按**前缀**匹配（它是一整族），其余是少数几个单名 tracker。
+- **合并按名次交错，去重之后才截断**：拼接会把第二个后端的最佳结果埋在第一个后端的最差结果后面；先截断则会把预算花在重复上，然后报出一个比本来能给的更少的数目。
+- **命名后端是指令，一个和五个同一条规则**：`options.provider: Option<String>` → `providers: Vec<String>`（空=配置链 / 一个=只问它 / 多个=并发问 + 合并）。**一个字段三种行为**，而不是「一个 `provider` 加一个 breadth 开关」——后者是同一个概念的两个字段，还得再告诉调用者哪个赢。解析不出的名字**列全部**而不是第一个：改一个拼写错误的人不该为了发现第二个再跑一遍。
+- **部分成功就是成功**：扇出里一个后端失败会**收窄**答案而不是终结它（后端们对「存在什么」意见不同正是要问几个的理由），并由 `fanout_partial` 出声——点名后端的人正是唯一能对「哪个挂了」采取行动的人。
+- **逐结果 `provider` 用的必须是**调用者能寻址**的那个名字**：provider 自陈的是**类型**（`searxng`），registry 寻址的是**配置键**（`alpha`）。在 key==type 的常见配置上两者重合，所以唯一能把两种词汇分开的场合，恰恰就是「同一个 provider 类型的两个实例扇出」——也就是逐结果归因存在的**唯一理由**那个场合。`SearchRegistry::attributed` 在两条路径（链 + 扇出）上统一改写；SERP 兜底刻意豁免（它的 `fallback:<mirror>` 比 registry 名字说得更多）。**这条是真机装置首跑抓到的**。
+- **逐结果归因只在合并答案里出现**：单后端时它是每行重复的同一个名字，而 `provider_used` 已经说过一次了（第一轮把这个字段留在工具面之外，正是这个理由）。
+
+**实测数字（两条棘轮，均为本轮实测，非算术）**
+
+| 棘轮 | 之前 | 之后 | 归因 |
+|---|---|---|---|
+| `CATALOG_DESCRIPTION_CEILING_BYTES` | 112_608 B | **112_772 B**（+164） | 全部是 `search` 的 DESCRIPTION。两次独立测量互相印证：棘轮报总数（+164），字面量本身实测 **579 → 743 B**（差 164，正好是全部移动量 ⇒ 没有第二个 description 动过） |
+| `REGISTRY_SCHEMA_CEILING_BYTES` | 104_134 B | **104_302 B**（+168） | 守卫自己的逐工具账本点名 `search` 是唯一移动的一行：**1_882 → 2_050** |
+
+**熵减（删掉的旧代码）**
+
+- `search_config/test.rs` 九臂 `match` + 九份「API key is required for X」文案 → factory 一次调用（该文件 358 → 约 270 行，且**不再出现任何 provider 名字**）。
+- `google.rs` 的 `sanitize_api_key` + `check_status_google` 两个私有函数 CUT（连同两条只测它们自己的单测），并入 `base::send`。
+- `base::check_status` 从 `pub(crate)` 降为私有——这是「所有 provider 都走漏斗」这句话的**结构性**保证，不是约定。
+
+**真机实测（`qa/web_search/`，五阶段 25 条断言）**
+
+新增 `fanout` 阶段（11 条，首跑抓到上面那条归因缺陷，修好后 11/11）；原四阶段回归 14/14 全过。⚠️ **首跑同时产生了一条假 FAIL**：逐行归因的断言最初写成 `'"provider"' in text`，而 tool_result 的内容是**被 JSON 编码成字符串**的 JSON 文档，字段在载荷里长成 `provider\":\"alpha` ⇒ 断言报了一个就在眼前的字段「不存在」。一个真 FAIL 和一个假 FAIL 并排出现在同一次运行里，肉眼分不出来——现在结构性断言一律先 parse。
+
+**变异（三条已执行）**
+
+| 变异 | 预期 | 实测 |
+|---|---|---|
+| Bing 的 `recency` 改回字面量 `true` | 三条红：单元事实、排序效果、census 的反空转 | 正是这三条（`346 passed; 3 failed`） |
+| Bing 的 `recency` 改成 `!matches!(1, 2)`（条件式但不点名 mapper） | census 的条件式义务红 | 红，且失败信息**逐字引用了那个表达式** ⇒ 说明解析器到达了它声称到达的地方，而不是死在之前；顺带证明了逗号在 `matches!` 里没有把表达式截断 |
+| `merge_by_rank` 的去重关掉 | `fanout` 只红在两条合并断言上 | 正是这两条（4 行 vs 期望 3 行、note 缺席），锚点 / 两条派发断言 / 归因断言 / 整个对照臂全绿 |
+
+**刻意不做（附重访条件）**
+
+1. **扩后端表**（bocha / kimi / xai-grok / gemini / search1api…）——第一轮的重访条件（某维度**所有**现有 provider 都不支持）今天仍不满足；本轮反而给 Exa 补上了 `full_content`，可达维度更多了。
+2. **`site:` 查询折叠**——同第一轮。
+3. **provider 健康跟踪 / 熔断**——**本轮新发现的不对称**：last-resort 的 `WebFetchSerpFallback` 有 `MIRROR_COOLDOWN` 逐镜像冷却，而每次搜索都要走的**主链一个都没有**，于是一个被限流的后端每次搜索都要付一次完整超时。孪生子系统一边有判据另一边没有。**没做**是因为它引入「没问过」这个第三状态，而「没问过」被读成「答了空」正是 fail-closed 判据点名的反转；需要它自己一轮，且必须让被跳过的后端**出声**。**重访**：当一次搜索的 p50 延迟被死后端主导，或链上出现第三个后端时。
+4. **Exa 的 `contents.text.maxCharacters`**——Exa 每次都返回整页正文，不要 `full_content` 时我们只留 600 字，其余是 Exa 的账单和延迟。**没做**是因为无法离线验证该参数形态，猜错会把一个正常工作的 provider 打成 400。**重访**：手上有一把真 Exa key 可以验一次请求时。
+5. **逐结果的「几个后端都找到了它」计数**——合并时是免费的信息，但今天没有消费者，会是又一个零消费者字段（R10）。**重访**：出现一个按共识排序的面时。
+6. **`retain_usable` 丢弃数的载体**——今天只有 WARN 日志。给它一条 note 要把 `SearchProvider::search` 的返回类型加宽，波及九个 provider + 兜底 + registry，只为送一个**读者只有运维**的数字，而运维有日志。**重访**：某个后端被实测丢掉可观比例时。
+7. **`multi_grep`**（2026-08-29 裁定，两轮复核维持）。
 
 ## 4. Loop 层
 
@@ -5003,6 +5068,16 @@ round-2 结尾留了三条，本轮全部收掉。共同形状：**三条都不�
 - **一张「危险清单」和一条「日常用法必须仍然放行」的守卫是同一笔改动的两半，而且只有第二半会告诉你清单长过头了** —— 设备类加到能拦住 `dd of=/dev/rdisk0` 是对的，加到能拦住 `> /dev/null` 就不再是地板而是停机，**两者之间没有任何报错**。方法论一句：**这类清单的覆盖率要实测不要推演**——推演出来的绕过约一半是假的（本仓实测 `sudo`/`env`/`timeout`/`xargs`/`bash -c` 五种"需要 AST 才能递归"的包装其实早就命中），而候选清单里**必须同时放良性样本**，否则你会用一次静默的假阳性换掉一条绕过，且只有前者用户会踩到 → 附录 D.3.29
 - **一个谓词只有一个消费者时，它的两半会被迫共用一句话——而那句话通常对其中一半是假的** —— `UsageEntry::is_idle` ＝ `never_used ‖ idle_days≥N`，于是唯一的消费者只能写一个标题，它选的 `"N extension(s) idle for 30+ days"` 对 never-used 行**没有可引用的时长**（`idle_days` 正是 `None`）⇒ 装机十分钟的机器把整套 bundled skill 报成月度休眠。判据：**看一个 `‖` 谓词的下游能不能分别描述两条臂**；不能就拆成互斥的两个，别让措辞去掩盖类型上的合并 → §5.24 ① · 附录 D.3.30
 - **一张清单如果附带一个动作邀请，它列的每一行都必须真的能被那个动作作用** —— 上一条的第二半，且更贵：清理报告列出 bundled skill，而 `remove_skill` 对它们返回 `PermissionDenied` ⇒ 报告邀请了一个必然失败的动作，且在全新装机上那批就是清单的绝大多数（第一印象＝53 件删不掉的东西）。判据：**这一行，被我建议的那个动词作用会成功吗**；答不了就说明缺一个"可作用性"的位（`UsageEntry::removable`），而它必须从**真正拒绝的那段代码**推导，不是从 id 或路径猜 → §5.24 ①
+- **一个能力声明的粒度比它兑现的粒度粗，多出来的那一格就是一次静默放宽** —— 而且失效方向是**反的**：声明得越自信排得越靠前。`SearchCapabilities.recency` 是 per-provider 的 `bool`，而 Bing 的真相是 per-**value** 的（`freshness` 有 Day/Week/Month、没有 Year）⇒ 一个 `Recency::Year` 请求被排到 Bing **最前面**、约束被丢掉、`degradation_notes` 一个字不说，看起来和一次真正被过滤的答案逐字节相同。**这条缺陷写在它自己的注释里活了整整一轮**。修法是让声明吃请求（`capabilities(&self, options)`）并**由发送方那个 mapper 自己推导**（`options.bing_freshness().is_some()`），排序键与 note 于是共用一次推导。判据：**问「这个位在什么情况下是假的」，如果答案里出现了一个请求字段，那它就不是一个属性** → §3.18 第二轮 E
+- **一个源码级守卫加出「条件式」这个第三态时，条件式必须自带第二条义务，否则它就是关掉守卫的后门** —— `capability_census` 的 `Declared::Conditional(expr)` 记为「会发送」，于是任何表达式都能买到沉默（`recency: false || true`）。义务是「表达式必须点名它那个维度的 mapper」，再加**一条反空转断言**（一个条件式都找不到就红，而不是空过）。⚠️ 表达式的边界要**按嵌套深度**找逗号——`matches!(a, b)` 里的逗号会把一个朴素的 `split(',')` 截断成 `matches!(options.recency`，而那**仍然解析成条件式**，所以截断从结果上完全看不出来 → §3.18 第二轮
+- **serde 不逐字段降级：一条结果的一个必填 `String`，能让整份响应解析失败** —— 而它读起来像**后端宕机**：`google [provider] Failed to parse google response` 与限流、5xx 在链路眼里是同一种事，下一个后端接手，没有任何一处说「其实拿到了十条、只有一条是畸形的」。修法是逐结果字段一律 `Option<String>` + `#[serde(default)]`（**`default` 只治缺失，`null` 要 `Option` 才治得了**），再由**一个**过滤器决定什么叫可用——判据是 **url 是结果的身份，title 不是**：没有 url 的不是「更小的答案」而是「不是答案」，没有 title 的照留 → §3.18 第二轮 C · 同族 [PLUGIN_SYSTEM.md](PLUGIN_SYSTEM.md) 的 `Option<String>` 全或无
+- **一条跨切面的规则如果只有一个实现者，它就没有第二个人找得到** —— 凭据脱敏是 `google.rs` 的私有 `sanitize_api_key` + 一份分叉的 `check_status`（因为 Google CSE 是唯一把 key 放进 query string 的后端），而另外八个走共享 helper 的**一点脱敏都没有**。修法不是「把 helper 也加上脱敏」而是**把派发口收敛成一个**（`base::send`）并把旧入口降为私有——「每个 provider 都脱敏」于是从九份记忆变成模块的一条性质。⚠️ **脱敏参数刻意必填**（`Option<&str>` 无默认）：每个调用点被迫回答「我有没有会漏进错误消息的凭据」，答错在调用点看得见而不是埋在 helper 里 → §3.18 第二轮 F
+- **一个只报状态码、丢掉响应正文的错误，名不了任何杠杆** —— `tavily [provider] tavily API error: 400 Bad Request` 到达模型时，vendor 在正文里说的「是哪个参数不对」已经被扔了。带回**有界且脱敏**的正文摘录（300 字）。同族：**读不出正文** ≠ **正文是空的**，两者对诊断的人意思不同，别合流 → §3.18 第二轮 F
+- **同一件事的两种词汇，只在一个恰好重合的常见配置下看不出来** —— provider 自陈**类型**（`searxng`），registry 寻址**配置键**（`alpha`）；key==type 的配置上两者相同。唯一能分开它们的场合，恰恰就是「同一类型的两个实例扇出」——也就是逐结果归因**存在的唯一理由**那个场合，于是 `provider_used: "alpha+bravo"` 配上每一行都写着 `searxng`。**赢的必须是可寻址的那个名字**，因为类型还能从配置里查回来、实例不能从答案里查回来。这条是真机装置首跑抓到的 → §3.18 第二轮
+- **一次归一化如果只用来判「是不是同一个」、绝不改写交出去的值，那么规则写错的代价就有界** —— 过激最多并掉一对该分开的，过弱最多留一条重复，**都不可能交出一个打不开的 URL**。这是启发式（vendor 怎么装饰链接）能被接受的前提；反过来，任何"归一化之后就用归一化的结果"的设计都没有这条保护。⚠️ 配套：**解析不出来的 URL 是它自己的身份**，不是空串——共用一个空 key 会把互不相干的结果并成一行 → §3.18 第二轮 D
+- **合并要在去重之后才截断** —— 先截断会把预算花在重复上，然后报出一个比本来能给的更少的数目；而拼接（而非按名次交错）会把第二个后端的最佳结果埋在第一个后端的最差结果后面 → §3.18 第二轮 D
+- **一个 provider 无条件索取它并不打算使用的东西，代价会伪装成别的缺陷** —— Exa 恒开 `contents.text` 再把整页正文塞进 `snippet`，于是工具面的 600 字截断在**每一条**结果上开火，answer 逐条建议「用 `web_fetch` 取全文」——而全文刚被这次调用下载并丢弃。**错的标签比缺的贵**：读者会照着那个杠杆去做一次毫无意义的抓取。配套判据：**截断只有在文本真的没了的时候才值得报**（同一条结果已经带着 body 时不算损失）→ §3.18 第二轮 B
+- **一个 RPC 的「测试连接」按钮若自己造 provider，它就是 factory 的第二实现** —— 九臂 `match` + 九份「API key is required for X」文案，尾臂 `_ => "Unknown provider type"`：第十个后端会拿到 provider、factory、配置形状和 Panel 卡片，然后按钮告诉运维「未知类型」，而**唯一**发现漂移的机件是那条尾臂、且它是说给运维听的不是说给构建听的。修法是走 factory，拒绝理由从**表单字段所派生的同一张预设表**里取 → §3.18 第二轮 A
 
 ### 附录 E.4 · 网关 · 通道 · 投递（`src/gateway/`）
 

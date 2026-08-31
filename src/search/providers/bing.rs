@@ -1,5 +1,5 @@
 use crate::error::{AlephError, Result};
-use crate::search::providers::base::{build_client, check_status, parse_json};
+use crate::search::providers::base::{build_client, parse_json, retain_usable, send};
 use crate::search::{SearchCapabilities, SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -27,10 +27,19 @@ struct BingWebPages {
     value: Vec<BingWebPage>,
 }
 
+/// Every field is optional on the wire.
+///
+/// Not politeness: serde does not degrade field by field, so a single item a
+/// vendor returned with a `null` title used to make the **whole** document
+/// fail to deserialize — the backend reported a parse error and the chain
+/// moved on as if it were down. `base::retain_usable` decides afterwards what
+/// is usable (a url), which is one filter instead of one per provider.
 #[derive(Deserialize)]
 struct BingWebPage {
-    name: String,
-    url: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
     #[serde(default)]
     snippet: Option<String>,
 }
@@ -67,18 +76,18 @@ impl SearchProvider for BingProvider {
             params.push(("freshness", freshness.to_string()));
         }
 
-        let response = self
-            .client
-            .get("https://api.bing.microsoft.com/v7.0/search")
-            .header("Ocp-Apim-Subscription-Key", &self.api_key)
-            .query(&params)
-            .timeout(std::time::Duration::from_secs(options.validated_timeout()))
-            .send()
-            .await
-            .map_err(|e| AlephError::network(e.to_string()))?;
-
-        let response = check_status(response, NAME)?;
-        let bing_response: BingResponse = parse_json(response, NAME).await?;
+        let secret = Some(self.api_key.as_str());
+        let response = send(
+            self.client
+                .get("https://api.bing.microsoft.com/v7.0/search")
+                .header("Ocp-Apim-Subscription-Key", &self.api_key)
+                .query(&params)
+                .timeout(std::time::Duration::from_secs(options.validated_timeout())),
+            NAME,
+            secret,
+        )
+        .await?;
+        let bing_response: BingResponse = parse_json(response, NAME, secret).await?;
 
         let results = bing_response
             .web_pages
@@ -87,8 +96,8 @@ impl SearchProvider for BingProvider {
             .into_iter()
             .take(options.validated_max_results())
             .map(|page| SearchResult {
-                title: page.name,
-                url: page.url,
+                title: page.name.unwrap_or_default(),
+                url: page.url.unwrap_or_default(),
                 snippet: page.snippet.unwrap_or_default(),
                 relevance_score: None,
                 full_content: None,
@@ -97,7 +106,7 @@ impl SearchProvider for BingProvider {
             })
             .collect();
 
-        Ok(results)
+        Ok(retain_usable(NAME, results))
     }
 
     fn name(&self) -> &str {
@@ -108,16 +117,19 @@ impl SearchProvider for BingProvider {
         !self.api_key.is_empty()
     }
 
-    fn capabilities(&self) -> SearchCapabilities {
+    fn capabilities(&self, options: &SearchOptions) -> SearchCapabilities {
         SearchCapabilities {
             domain_filter: false,
-            // Bing's `freshness` covers Day/Week/Month but has no Year
-            // bucket (see `SearchOptions::bing_freshness`), so this bit is
-            // true for three of the four `Recency` values; `Year` degrades
-            // silently to an unconstrained search. If that ever needs
-            // fixing, Bing's documented `freshness=YYYY-MM-DD..YYYY-MM-DD`
-            // range form is the way, not a synthesized date.
-            recency: true,
+            // Bing's `freshness` covers Day/Week/Month and has no Year
+            // bucket, so this bit is a property of the *request*, not of
+            // the backend. Derived from the same mapper `search` sends
+            // (`bing_freshness`) rather than re-stated as a second match:
+            // a `Recency::Year` request now sorts Bing behind a backend
+            // that can carry it, and if Bing answers anyway the caller is
+            // told the axis was dropped. It used to declare a flat `true`
+            // with this fact in a comment, which put Bing *first* for the
+            // one value it cannot express.
+            recency: options.bing_freshness().is_some(),
             full_content: false,
         }
     }
@@ -169,5 +181,38 @@ mod tests {
     fn test_bing_provider_rejects_empty_key() {
         let result = BingProvider::new("");
         assert!(result.is_err());
+    }
+
+    /// Bing's `freshness` has no `Year`, and the capability bit has to say so
+    /// *for that request*.
+    ///
+    /// It used to be a flat `true` with the gap written in a comment, which
+    /// is worse than not declaring it at all: the registry sorts a backend
+    /// that claims the dimension to the **front**, so a `Recency::Year`
+    /// search went to Bing first and came back unconstrained, with no note,
+    /// looking exactly like a filtered answer. The bit is now the same
+    /// expression the request builder decides on.
+    #[test]
+    fn the_recency_bit_is_false_for_the_one_bucket_bing_cannot_express() {
+        let provider = BingProvider::new("k").unwrap();
+        let with = |r: Option<crate::search::Recency>| SearchOptions {
+            recency: r,
+            ..Default::default()
+        };
+        use crate::search::Recency::{Day, Month, Week, Year};
+        for r in [Day, Week, Month] {
+            assert!(
+                provider.capabilities(&with(Some(r))).recency,
+                "bing carries {r:?}"
+            );
+        }
+        assert!(
+            !provider.capabilities(&with(Some(Year))).recency,
+            "bing has no Year bucket, so it must not claim the dimension for one"
+        );
+        // No constraint asked for: nothing is being dropped, so nothing is
+        // owed a note either way. The bit follows the mapper, which sends
+        // nothing.
+        assert!(!provider.capabilities(&with(None)).recency);
     }
 }

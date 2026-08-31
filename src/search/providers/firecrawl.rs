@@ -1,5 +1,5 @@
 use crate::error::{AlephError, Result};
-use crate::search::providers::base::{build_client, check_status, parse_json};
+use crate::search::providers::base::{build_client, parse_json, retain_usable, send};
 use crate::search::{SearchCapabilities, SearchOptions, SearchProvider, SearchResult};
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -130,22 +130,22 @@ impl SearchProvider for FirecrawlProvider {
             },
         };
 
-        let response = self
-            .client
-            .post(format!("{}/v2/search", self.base_url))
-            .bearer_auth(self.api_key.as_ref())
-            .json(&request_body)
-            .timeout(std::time::Duration::from_secs(options.validated_timeout()))
-            .send()
-            .await
-            .map_err(|e| AlephError::network(e.to_string()))?;
+        let secret = Some(self.api_key.as_ref());
+        let response = send(
+            self.client
+                .post(format!("{}/v2/search", self.base_url))
+                .bearer_auth(self.api_key.as_ref())
+                .json(&request_body)
+                .timeout(std::time::Duration::from_secs(options.validated_timeout())),
+            NAME,
+            secret,
+        )
+        .await?;
+        let firecrawl_response: FirecrawlResponse = parse_json(response, NAME, secret).await?;
 
-        let response = check_status(response, NAME)?;
-        let firecrawl_response: FirecrawlResponse = parse_json(response, NAME).await?;
-
-        Ok(Self::map_response(
-            firecrawl_response,
-            options.validated_max_results(),
+        Ok(retain_usable(
+            NAME,
+            Self::map_response(firecrawl_response, options.validated_max_results()),
         ))
     }
 
@@ -157,7 +157,7 @@ impl SearchProvider for FirecrawlProvider {
         !self.api_key.is_empty()
     }
 
-    fn capabilities(&self) -> SearchCapabilities {
+    fn capabilities(&self, _options: &SearchOptions) -> SearchCapabilities {
         SearchCapabilities {
             domain_filter: false,
             recency: true,

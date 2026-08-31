@@ -27,7 +27,7 @@ import websockets
 
 URL, PHASE, LLM_LOG = sys.argv[1], sys.argv[2], sys.argv[3]
 SEARX_LOGS = sys.argv[4:]
-BUDGET = float(60 if PHASE in ("reach", "degrade", "empty") else 120)
+BUDGET = float(60 if PHASE in ("reach", "degrade", "empty") else 120)  # two-arm phases get 120
 
 # Markers carried in the query text, because `SearchOutput` echoes `query`.
 # Attribution by content, never by turn number: a run opens with a
@@ -35,6 +35,8 @@ BUDGET = float(60 if PHASE in ("reach", "degrade", "empty") else 120)
 # tool call, so "turn 2 holds turn 1's result" is false.
 ARM_DOMAINS = "QA_ARM_DOMAINS"
 ARM_PLAIN = "QA_ARM_PLAIN"
+ARM_FANOUT = "QA_ARM_FANOUT"
+ARM_SOLO = "QA_ARM_SOLO"
 
 rc = 0
 
@@ -86,6 +88,28 @@ def wait_for(predicate):
                 return text
         time.sleep(0.5)
     return None
+
+
+def payload(text):
+    """The `SearchOutput` inside a tool_result, as a dict.
+
+    A tool_result's content is the JSON document *encoded as a JSON string*,
+    so a naive substring test sees `provider\\":\\"alpha` and a check written
+    for `"provider"` reports a missing field that is right there. That is how
+    this fixture's first run reported a false FAIL next to a true one — the
+    instrument and the defect were both real, and only parsing tells them
+    apart. Phases asserting on structure (counts, per-row fields) use this;
+    the substring phases above are asserting on prose, where it does not
+    matter.
+    """
+    for _ in range(2):
+        if isinstance(text, dict):
+            return text
+        try:
+            text = json.loads(text)
+        except (TypeError, ValueError):
+            return None
+    return text if isinstance(text, dict) else None
 
 
 def requests_to(path):
@@ -221,6 +245,82 @@ def main():
             bool(tag) and tag in hit,
             f"and the results came from the backend that had any ({tag or 'no tag given'})",
             hit[:200],
+        )
+        return
+
+    if PHASE == "fanout":
+        merged = wait_for(lambda t: ARM_FANOUT in t)
+        if merged is None:
+            check(False, "the fan-out arm ran", f"{len(tool_results())} tool_result(s)")
+            return
+        check("QA result 1" in merged, "the fan-out arm got results", merged[:200])
+
+        first, second = requests_to(SEARX_LOGS[0]), requests_to(SEARX_LOGS[1])
+        check(bool(first), "the first named backend was asked", f"{len(first)} request(s)")
+        check(
+            bool(second),
+            "and so was the second — naming two backends asks both",
+            f"{len(second)} request(s)",
+        )
+        # `fallback_providers` is empty in this phase's config, so a chain run
+        # could never have reached `bravo`. That is what makes the line above
+        # a claim about fan-out rather than about failover.
+        check(
+            "alpha" in merged and "bravo" in merged,
+            "the answer names both backends as having answered",
+            merged[:400],
+        )
+        # The shared page arrives from the two instances under two spellings
+        # that differ by a tracking parameter, a `www.` and a trailing slash.
+        # Collapsing them is url normalisation; keeping both would be string
+        # equality, and the count is the only place the difference shows.
+        check(
+            "merged" in merged,
+            "the same page found by both backends was merged, and the answer says so",
+            merged[:400],
+        )
+        out = payload(merged)
+        rows = out.get("results", []) if out else []
+        check(
+            len(rows) == 3,
+            "one row for the shared page, both distinct pages kept",
+            f"{len(rows)} row(s): {[r.get('url') for r in rows]}",
+        )
+        # Per-result attribution is the field the previous round left off the
+        # tool face for want of a consumer. A merged set is that consumer —
+        # and the names have to be the ones the caller used, not the provider
+        # type shared by both instances, or the field cannot tell them apart.
+        got = sorted({r.get("provider") for r in rows})
+        check(
+            got == ["alpha", "bravo"],
+            "each merged row names the backend the caller named",
+            f"row providers: {got}",
+        )
+
+        # Control: same config, same two backends, one of them named. If the
+        # assertions above were satisfied by "every configured backend is
+        # always asked", this arm would trip too.
+        before_second = len(requests_to(SEARX_LOGS[1]))
+        solo = wait_for(lambda t: ARM_SOLO in t)
+        if solo is None:
+            check(False, "the control arm ran", f"{len(tool_results())} tool_result(s)")
+            return
+        check("QA result 1" in solo, "the control arm got results", solo[:200])
+        check(
+            "bravo" not in solo,
+            "naming one backend asks one backend",
+            solo[:300],
+        )
+        check(
+            len(requests_to(SEARX_LOGS[1])) == before_second,
+            "and the backend that was not named received no further request",
+            f"{before_second} -> {len(requests_to(SEARX_LOGS[1]))}",
+        )
+        solo_rows = (payload(solo) or {}).get("results", [])
+        check(
+            bool(solo_rows) and all("provider" not in r for r in solo_rows),
+            "with one backend, per-result attribution is omitted rather than repeated",
+            f"{len(solo_rows)} row(s), providers: {[r.get('provider') for r in solo_rows]}",
         )
         return
 

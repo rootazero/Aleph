@@ -1,5 +1,5 @@
 use crate::error::{AlephError, Result};
-use crate::search::providers::base::{build_client, check_status, parse_json};
+use crate::search::providers::base::{build_client, parse_json, retain_usable, send};
 use crate::search::{SearchCapabilities, SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -27,10 +27,19 @@ struct BraveWeb {
     results: Vec<BraveResult>,
 }
 
+/// Every field is optional on the wire.
+///
+/// Not politeness: serde does not degrade field by field, so a single item a
+/// vendor returned with a `null` title used to make the **whole** document
+/// fail to deserialize — the backend reported a parse error and the chain
+/// moved on as if it were down. `base::retain_usable` decides afterwards what
+/// is usable (a url), which is one filter instead of one per provider.
 #[derive(Deserialize)]
 struct BraveResult {
-    title: String,
-    url: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
     #[serde(default)]
     description: Option<String>,
 }
@@ -69,18 +78,18 @@ impl SearchProvider for BraveProvider {
             params.push(("freshness", freshness.to_string()));
         }
 
-        let response = self
-            .client
-            .get("https://api.search.brave.com/res/v1/web/search")
-            .header("X-Subscription-Token", &self.api_key)
-            .query(&params)
-            .timeout(std::time::Duration::from_secs(options.validated_timeout()))
-            .send()
-            .await
-            .map_err(|e| AlephError::network(e.to_string()))?;
-
-        let response = check_status(response, NAME)?;
-        let brave_response: BraveResponse = parse_json(response, NAME).await?;
+        let secret = Some(self.api_key.as_str());
+        let response = send(
+            self.client
+                .get("https://api.search.brave.com/res/v1/web/search")
+                .header("X-Subscription-Token", &self.api_key)
+                .query(&params)
+                .timeout(std::time::Duration::from_secs(options.validated_timeout())),
+            NAME,
+            secret,
+        )
+        .await?;
+        let brave_response: BraveResponse = parse_json(response, NAME, secret).await?;
 
         let results = brave_response
             .web
@@ -89,8 +98,8 @@ impl SearchProvider for BraveProvider {
             .into_iter()
             .take(options.validated_max_results())
             .map(|r| SearchResult {
-                title: r.title,
-                url: r.url,
+                title: r.title.unwrap_or_default(),
+                url: r.url.unwrap_or_default(),
                 snippet: r.description.unwrap_or_default(),
                 relevance_score: None,
                 full_content: None,
@@ -99,7 +108,7 @@ impl SearchProvider for BraveProvider {
             })
             .collect();
 
-        Ok(results)
+        Ok(retain_usable(NAME, results))
     }
 
     fn name(&self) -> &str {
@@ -110,7 +119,7 @@ impl SearchProvider for BraveProvider {
         !self.api_key.is_empty()
     }
 
-    fn capabilities(&self) -> SearchCapabilities {
+    fn capabilities(&self, _options: &SearchOptions) -> SearchCapabilities {
         SearchCapabilities {
             domain_filter: false,
             recency: true,

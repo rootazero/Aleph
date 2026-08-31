@@ -5,6 +5,7 @@
 #   ./qa/web_search/run.sh order     # a backend that can carry the asked-for dimension is asked first
 #   ./qa/web_search/run.sh degrade   # a dimension nobody can express is reported, not dropped in silence
 #   ./qa/web_search/run.sh empty     # a zero-result answer does not end the chain
+#   ./qa/web_search/run.sh fanout    # two named backends are both asked and their answers merge
 #
 #   KEEP=1 ./qa/web_search/run.sh reach     # keep the scratch dir for post-mortem
 #
@@ -40,8 +41,8 @@ SEARX_A_PORT="${SEARX_A_PORT:-18823}"
 SEARX_B_PORT="${SEARX_B_PORT:-18824}"
 
 case "$PHASE" in
-  reach|order|degrade|empty) ;;
-  *) echo "unknown phase: $PHASE (reach|order|degrade|empty)" >&2; exit 64 ;;
+  reach|order|degrade|empty|fanout) ;;
+  *) echo "unknown phase: $PHASE (reach|order|degrade|empty|fanout)" >&2; exit 64 ;;
 esac
 
 # Build BEFORE HOME is redirected: cargo's registry, git cache and rustup
@@ -120,6 +121,15 @@ case "$PHASE" in
       --searxng "empty=$SEARX_A_PORT" --searxng "full=$SEARX_B_PORT" \
       --default empty --fallback full || exit 1
     ;;
+  fanout)
+    # Two backends, and deliberately NO fallback wiring between them: the
+    # claim is that naming both on the tool face asks both, which must not be
+    # confusable with the chain falling through from one to the other. With
+    # `fallback_providers` empty, a chain run would only ever reach `alpha`.
+    python3 "$HERE/patch_search.py" "$CONFIG" \
+      --searxng "alpha=$SEARX_A_PORT" --searxng "bravo=$SEARX_B_PORT" \
+      --default alpha || exit 1
+    ;;
 esac
 
 say "write the turn's tool plan"
@@ -136,6 +146,16 @@ elif phase == "degrade":
             "input": {"query": "QA_ARM_DEGRADE rust", "domains": ["example.invalid"]}}
 elif phase == "empty":
     spec = {"name": "search", "input": {"query": "QA_ARM_EMPTY rust"}}
+elif phase == "fanout":
+    # Two arms. The first names both backends; the second names one, and is
+    # the control — without it a green on "both logs have a request" could be
+    # produced by anything that asks every configured backend.
+    spec = [
+        {"name": "search",
+         "input": {"query": "QA_ARM_FANOUT rust", "providers": ["alpha", "bravo"]}},
+        {"name": "search",
+         "input": {"query": "QA_ARM_SOLO rust", "providers": ["alpha"]}},
+    ]
 else:
     spec = [
         {"name": "search",
@@ -146,11 +166,14 @@ json.dump(spec, open(out, "w"))
 PY
 
 say "start mock backends"
+SHARED_FLAG=""
+[ "$PHASE" = "fanout" ] && SHARED_FLAG="--shared"
 python3 "$HERE/mock_searxng.py" "$SEARX_A_PORT" "$SEARX_A_LOG" \
-  $([ "$PHASE" = "empty" ] && echo --empty) >"$QA_ROOT/searxng-a.out" 2>&1 &
+  $([ "$PHASE" = "empty" ] && echo --empty) $SHARED_FLAG >"$QA_ROOT/searxng-a.out" 2>&1 &
 SEARX_A_PID=$!
-if [ "$PHASE" = "empty" ]; then
-  python3 "$HERE/mock_searxng.py" "$SEARX_B_PORT" "$SEARX_B_LOG" >"$QA_ROOT/searxng-b.out" 2>&1 &
+if [ "$PHASE" = "empty" ] || [ "$PHASE" = "fanout" ]; then
+  python3 "$HERE/mock_searxng.py" "$SEARX_B_PORT" "$SEARX_B_LOG" $SHARED_FLAG \
+    >"$QA_ROOT/searxng-b.out" 2>&1 &
   SEARX_B_PID=$!
 fi
 
@@ -179,6 +202,10 @@ if [ "$PHASE" = "empty" ]; then
   QA_EXPECT_TAG="port$SEARX_B_PORT" python3 "$HERE/drive_search.py" \
     "ws://127.0.0.1:$GATEWAY_PORT/ws" "$PHASE" "$QA_ROOT/requests.jsonl" \
     "$SEARX_A_LOG" "$SEARX_B_LOG" || RC=$?
+elif [ "$PHASE" = "fanout" ]; then
+  python3 "$HERE/drive_search.py" \
+    "ws://127.0.0.1:$GATEWAY_PORT/ws" "$PHASE" "$QA_ROOT/requests.jsonl" \
+    "$SEARX_A_LOG" "$SEARX_B_LOG" || RC=$?
 else
   python3 "$HERE/drive_search.py" \
     "ws://127.0.0.1:$GATEWAY_PORT/ws" "$PHASE" "$QA_ROOT/requests.jsonl" \
@@ -187,6 +214,7 @@ fi
 
 say "backend request log"
 echo "--- searxng A ---"; cat "$SEARX_A_LOG" 2>/dev/null | head -10
-[ "$PHASE" = "empty" ] && { echo "--- searxng B ---"; cat "$SEARX_B_LOG" 2>/dev/null | head -10; }
+{ [ "$PHASE" = "empty" ] || [ "$PHASE" = "fanout" ]; } && \
+  { echo "--- searxng B ---"; cat "$SEARX_B_LOG" 2>/dev/null | head -10; }
 
 exit "$RC"

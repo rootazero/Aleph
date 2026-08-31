@@ -1,8 +1,8 @@
 use crate::error::{AlephError, Result};
-use crate::search::providers::base::build_client;
+use crate::search::providers::base::{build_client, parse_json, retain_usable, send};
 use crate::search::{SearchCapabilities, SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
-use reqwest::{Client, Response, StatusCode};
+use reqwest::Client;
 use serde::Deserialize;
 
 /// Google Custom Search Engine provider
@@ -23,43 +23,21 @@ struct GoogleResponse {
     items: Option<Vec<GoogleItem>>,
 }
 
+/// Every field is optional on the wire.
+///
+/// Not politeness: serde does not degrade field by field, so a single item a
+/// vendor returned with a `null` title used to make the **whole** document
+/// fail to deserialize — the backend reported a parse error and the chain
+/// moved on as if it were down. `base::retain_usable` decides afterwards what
+/// is usable (a url), which is one filter instead of one per provider.
 #[derive(Deserialize)]
 struct GoogleItem {
-    title: String,
-    link: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    link: Option<String>,
     #[serde(default)]
     snippet: Option<String>,
-}
-
-/// Sanitize a message by replacing occurrences of the API key.
-fn sanitize_api_key(msg: String, key: &str) -> String {
-    if key.is_empty() {
-        return msg;
-    }
-    msg.replace(key, "***REDACTED***")
-}
-
-/// Check HTTP response status with API-key sanitization in error messages.
-fn check_status_google(response: Response, provider_name: &str, api_key: &str) -> Result<Response> {
-    let status = response.status();
-    if status.is_success() {
-        Ok(response)
-    } else if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-        let msg = sanitize_api_key(format!("{provider_name} API error: {status}"), api_key);
-        Err(AlephError::authentication(provider_name, msg))
-    } else if status == StatusCode::TOO_MANY_REQUESTS {
-        // Google CSE returns 429 on daily-quota / per-100s-quota exhaustion.
-        // Mirror base `check_status` so this surfaces as RateLimitError
-        // (kind=rate-limit) instead of a generic provider error.
-        let msg = sanitize_api_key(
-            format!("{provider_name} API error: {status} (rate limited)"),
-            api_key,
-        );
-        Err(AlephError::rate_limit(msg))
-    } else {
-        let msg = sanitize_api_key(format!("{provider_name} API error: {status}"), api_key);
-        Err(AlephError::provider(msg))
-    }
 }
 
 impl GoogleProvider {
@@ -105,24 +83,23 @@ impl SearchProvider for GoogleProvider {
         if let Some(restrict) = options.google_date_restrict() {
             params.push(("dateRestrict", restrict.to_string()));
         }
-        let response = self
-            .client
-            .get("https://www.googleapis.com/customsearch/v1")
-            .query(&params)
-            .timeout(std::time::Duration::from_secs(options.validated_timeout()))
-            .send()
-            .await
-            .map_err(|e| {
-                let msg = sanitize_api_key(e.to_string(), &self.api_key);
-                AlephError::network(msg)
-            })?;
-
-        let response = check_status_google(response, NAME, &self.api_key)?;
-
-        let google_response: GoogleResponse = response.json().await.map_err(|e| {
-            let msg = sanitize_api_key(e.to_string(), &self.api_key);
-            AlephError::provider(format!("Failed to parse Google response: {msg}"))
-        })?;
+        // Google CSE is the one backend that puts its key in the query
+        // string, so `reqwest`'s error text quotes it. That used to be this
+        // file's private problem (`sanitize_api_key` + a forked
+        // `check_status_google`), which meant the rule existed nowhere the
+        // next provider would find it and the other eight had no redaction at
+        // all. `base::send` owns it now.
+        let secret = Some(self.api_key.as_str());
+        let response = send(
+            self.client
+                .get("https://www.googleapis.com/customsearch/v1")
+                .query(&params)
+                .timeout(std::time::Duration::from_secs(options.validated_timeout())),
+            NAME,
+            secret,
+        )
+        .await?;
+        let google_response: GoogleResponse = parse_json(response, NAME, secret).await?;
 
         let results = google_response
             .items
@@ -130,8 +107,8 @@ impl SearchProvider for GoogleProvider {
             .into_iter()
             .take(options.validated_max_results())
             .map(|item| SearchResult {
-                title: item.title,
-                url: item.link,
+                title: item.title.unwrap_or_default(),
+                url: item.link.unwrap_or_default(),
                 snippet: item.snippet.unwrap_or_default(),
                 relevance_score: None,
                 full_content: None,
@@ -140,7 +117,7 @@ impl SearchProvider for GoogleProvider {
             })
             .collect();
 
-        Ok(results)
+        Ok(retain_usable(NAME, results))
     }
 
     fn name(&self) -> &str {
@@ -151,7 +128,7 @@ impl SearchProvider for GoogleProvider {
         !self.api_key.is_empty() && !self.engine_id.is_empty()
     }
 
-    fn capabilities(&self) -> SearchCapabilities {
+    fn capabilities(&self, _options: &SearchOptions) -> SearchCapabilities {
         SearchCapabilities {
             domain_filter: false,
             recency: true,
@@ -216,18 +193,59 @@ mod tests {
         assert!(result2.is_err());
     }
 
+    /// Google CSE is the reason `base::send` takes a secret at all: it is the
+    /// one backend whose credential travels in the query string, so every
+    /// `reqwest` error and every logged URL quotes it. The redaction itself is
+    /// tested where it lives (`base::redaction_replaces_every_occurrence...`);
+    /// what has to be pinned *here* is the fact that makes it necessary — if
+    /// this ever moved to a header, the reason would be gone and so should the
+    /// `Some(secret)` at the call site.
     #[test]
-    fn test_sanitize_api_key() {
-        let msg = "error for key=SECRET123".to_string();
-        let sanitized = sanitize_api_key(msg, "SECRET123");
-        assert!(!sanitized.contains("SECRET123"));
-        assert!(sanitized.contains("***REDACTED***"));
+    fn the_api_key_travels_in_the_query_string_which_is_why_it_needs_redacting() {
+        let params: Vec<(&str, String)> = vec![
+            ("key", "SECRET123".to_string()),
+            ("cx", "engine".to_string()),
+        ];
+        let url =
+            reqwest::Url::parse_with_params("https://www.googleapis.com/customsearch/v1", &params)
+                .expect("url");
+        assert!(
+            url.as_str().contains("SECRET123"),
+            "the key is in the url, so an error quoting the url leaks it: {url}"
+        );
     }
 
+    /// A result item Google returned without a title must not take the other
+    /// nine with it. serde is all-or-nothing per document, so a single
+    /// required `String` used to turn one odd item into "google [provider]
+    /// Failed to parse google response" — indistinguishable, from the chain's
+    /// point of view, from the backend being down.
     #[test]
-    fn test_sanitize_api_key_empty_key() {
-        let msg = "some error".to_string();
-        let sanitized = sanitize_api_key(msg.clone(), "");
-        assert_eq!(sanitized, msg);
+    fn one_item_without_a_title_does_not_fail_the_whole_document() {
+        let body = r#"{"items":[
+            {"title":"ok","link":"https://a.test","snippet":"s"},
+            {"link":"https://b.test"},
+            {"title":"no link"}
+        ]}"#;
+        let parsed: GoogleResponse = serde_json::from_str(body).expect("parses");
+        let items = parsed.items.expect("items");
+        assert_eq!(items.len(), 3, "every item survives deserialization");
+        let mapped: Vec<SearchResult> = items
+            .into_iter()
+            .map(|item| SearchResult {
+                title: item.title.unwrap_or_default(),
+                url: item.link.unwrap_or_default(),
+                snippet: item.snippet.unwrap_or_default(),
+                relevance_score: None,
+                full_content: None,
+                published_date: None,
+                provider: Some(NAME.to_string()),
+            })
+            .collect();
+        // The one with no link is the only one dropped: a url is a result's
+        // identity, a title is not.
+        let kept = crate::search::providers::base::retain_usable(NAME, mapped);
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[1].title, "", "a missing title is kept as empty");
     }
 }

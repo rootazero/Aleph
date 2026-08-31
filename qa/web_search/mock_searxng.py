@@ -12,13 +12,22 @@ hardcode their endpoint, and the ninth (firecrawl) needs a credential; only
 searxng takes a `base_url` and no API key. So the fixture proves the wiring,
 not the nine backends — see README.md.
 
-Usage:  mock_searxng.py PORT LOG_PATH [--empty]
+Usage:  mock_searxng.py PORT LOG_PATH [--empty] [--shared]
 
   --empty  answer every query with zero results and no unresponsive engines.
            That is an *answer*, not an error: the provider promotes
            "0 results + unresponsive engines" to a typed error, and this
            fixture needs the other case — the one where a backend legitimately
            found nothing and the chain must keep going.
+
+  --shared make the FIRST result a page every `--shared` instance also
+           returns, under a url each instance spells differently (one adds a
+           tracking parameter, the other a `www.` and a trailing slash). The
+           second result stays instance-specific. That is the shape a fan-out
+           merge has to get right: the same page found twice must collapse to
+           one row while the two distinct pages both survive, and it has to
+           happen through url normalisation rather than string equality —
+           which is exactly what two real backends do to one link.
 """
 import json
 import sys
@@ -28,9 +37,19 @@ from urllib.parse import urlparse
 PORT = int(sys.argv[1])
 LOG = sys.argv[2]
 EMPTY = "--empty" in sys.argv[3:]
+SHARED = "--shared" in sys.argv[3:]
 # Distinguishable per instance so a driver can tell which backend answered
 # from the result text alone.
 TAG = f"port{PORT}"
+
+# Two spellings of one url, handed out by whichever instance answers first.
+# Neither is a string match for the other, so a merge that collapses them has
+# gone through normalisation; a merge that keeps both has not.
+SHARED_SPELLINGS = [
+    "https://example.invalid/shared/page?utm_source=qa&utm_campaign=fanout",
+    "https://www.example.invalid/shared/page/",
+]
+SHARED_URL = SHARED_SPELLINGS[PORT % len(SHARED_SPELLINGS)]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -48,13 +67,14 @@ class Handler(BaseHTTPRequestHandler):
             fh.write(parsed.query + "\n")
             fh.flush()
 
+        first_url = SHARED_URL if SHARED else f"https://example.invalid/{TAG}/1"
         results = (
             []
             if EMPTY
             else [
                 {
                     "title": f"QA result 1 from {TAG}",
-                    "url": f"https://example.invalid/{TAG}/1",
+                    "url": first_url,
                     "content": f"QA snippet one from {TAG}.",
                 },
                 {

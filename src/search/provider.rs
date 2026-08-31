@@ -62,9 +62,23 @@ pub trait SearchProvider: Send + Sync {
     /// Returns `false` if API key is missing or invalid
     fn is_available(&self) -> bool;
 
-    /// What this provider can express. Default: nothing — see
-    /// [`SearchCapabilities`] for why the default is not "everything".
-    fn capabilities(&self) -> SearchCapabilities {
+    /// What this provider can express **for this request**. Default: nothing
+    /// — see [`SearchCapabilities`] for why the default is not "everything".
+    ///
+    /// Takes the options because a bit is not always a property of the
+    /// backend alone: Bing's `freshness` covers three of the four `Recency`
+    /// buckets and has no spelling for the fourth, so "does Bing carry
+    /// recency" only has an answer once you know *which* recency. Before this
+    /// parameter that fact lived in a comment above a hardcoded `true`, and a
+    /// `Recency::Year` request was routed to Bing *first* — it declared the
+    /// dimension — and then dropped it without a note, which is the exact
+    /// failure the notes exist to prevent.
+    ///
+    /// A conditional bit must be derived from the same mapper that decides
+    /// what goes on the wire (`options.bing_freshness().is_some()`), never
+    /// re-stated as a second `match`; `capability_census.rs` asserts that.
+    fn capabilities(&self, options: &SearchOptions) -> SearchCapabilities {
+        let _ = options;
         SearchCapabilities::default()
     }
 }
