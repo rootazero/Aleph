@@ -350,3 +350,61 @@ codex 的 `REDUCED_STATE_FILE_NAME` + `REDUCED_TRACE_SCHEMA_VERSION`。marker �
 5. `qa/resume_boundary/run.sh` 两阶段；`attribute` 在修复前跑一次记录 FAIL
 6. 全量验证集 + 五条守卫逐条变异证伪，记录红的名单
 7. 更新 `docs/reference/FEATURE_LOCATOR.md`（§4.13a 增补、附录 E.0 触发器）
+
+---
+
+## 11. 全量验证与守卫证伪记录（Task 7）
+
+### 11.1 最小可信验证集
+
+| 命令 | 结果 |
+|---|---|
+| `cargo test -p alephcore --lib` | 首次跑 3 红；`git submodule update --init --recursive` 后重跑仅 1 红，且该红与本轮改动无关（原因见下）——17854 passed, 1 failed, 17 ignored |
+| `cargo test -p alephcore --bins` | 94 passed, 0 failed（含 `src/bin/aleph-server/commands/start/mod.rs` 的 boot census；`ProjectionReconciler` 构造签名本轮未变，未受影响）|
+| `cargo test -p alephcore --features test-helpers --test '*' --no-run` | 编译通过，0 error，0 warning |
+| `just _stage-shell-placeholders && cargo clippy --workspace --all-targets` | 0 warning, 0 error（约 6 分钟，`dev` profile 全 workspace）|
+
+`--lib` 首跑 3 红的成因逐条核实：
+
+1. `extension::validation::tests::every_bundled_plugin_passes_the_installers_own_validation`、`gateway::execution_engine::btw_wire_tests::no_shipped_command_word_resolves_as_a_side_question` — 本 worktree 的 `skills/`、`plugins/` 两个 git submodule 未初始化（`git submodule status` 两行都带 `-` 前缀）。两条守卫自己的 panic 文本已经指名根因并给出修法（"this checkout has not initialised them...run `git submodule update --init --recursive`"）。执行后两条转绿，未改任何代码，属本机检出状态问题，非本轮引入。
+2. `harness::tests::budget::the_harness_line_budget_does_not_grow` — `src/harness/` 现测得 5246 budgeted lines，超冻结上限（`CEILING`）5233。`git diff $(git merge-base run-reduction main) HEAD -- src/harness/` 为空——本轮六个任务对 `src/harness/` 零改动，`CEILING` 常量与被测行数在本轮开始前即与 `main`（`8bed67331`）完全一致。这条红是从 `main` 继承的既有状态，不是本轮引入；Task 7 不持有修复产品代码的授权（且 R10 禁止改 `src/harness/`），如实上报，不处理。
+
+### 11.2 QA 装置独立复跑
+
+两阶段均由本任务（与撰写夹具的 task6-qa 不同的 agent）独立复跑，均 PASS：
+
+- `crash`：rc=0，`PASS (1 repair text chunk(s) reached the model)`；先行的 `assert-dangling` 自检报 `ok: 1 dangling call(s): ['toolu_2']`。
+- `attribute`：rc=0，`PASS (2 repair text chunk(s) reached the model)`（约 4 分钟）；两次 `assert-dangling` 自检分别报 `ok: 1 dangling call(s)`、`ok: 2 dangling call(s): ['toolu_2', 'toolu_3']`。
+
+### 11.3 删除符号消费者计数（修正后的排除表）
+
+Task 7 brief 原排除表有误——把 `ScanVerdict` 当成全仓库唯一的同名类型处理。实际存在两个同名不同物：`src/memory/content_scanner.rs::ScanVerdict`（内存内容扫描，`enum { Clean, Rejected }`）与 `src/skill/guard.rs::ScanVerdict`（技能目录扫描，`struct { level, findings }`，消费者在 `src/skill/mod.rs`、`src/builtin_tools/remember.rs`）。用修正后的排除表复查：
+
+```
+grep -rn "classify_markers\|compute_boundary_repairs" src/ tests/ interfaces/ shared/ --include="*.rs"
+→ 仅 src/session/reduction.rs 模块文档两处历史提及（有意保留，说明「取代了什么」）
+
+grep -rn "ScanVerdict" src/ tests/ --include="*.rs" \
+  | grep -v "src/memory/content_scanner.rs" | grep -v "src/skill/" | grep -v "src/builtin_tools/remember.rs"
+→ 零命中
+```
+
+无第四个消费者。另用未过滤的 `grep -rln "ScanVerdict" src/ tests/` 核对：命中文件恰好是 `content_scanner.rs`、`skill/mod.rs`、`skill/guard.rs`、`remember.rs` 四个，与排除表逐一对应，排除表完整、没有漏项。
+
+### 11.4 六条守卫的证伪结果汇总
+
+来源：Task 1 Step 6（`task-1-report.md`）、Task 2 Step 5（`task-2-report.md`）、Task 3 Step 6（`task-3-report.md`）、Task 5 Step 6（`task-5-report.md`）、Task 6 Step 6（`task-6-report.md`）。
+
+| 守卫 | 变异 | 预期红 | 实测红 | 相符？ |
+|---|---|---|---|---|
+| **G1** | `reduce_disposition(&markers)` 换成「有 dangling 就算 `Interrupted{1}`」的捷径（pass 2 提到前面） | `reduce_run_asks_reduce_disposition`（仅此） | 同上 **+** `a_log_with_no_run_marker_attributes_to_earlier_not_this_restart`；proptest 缩到最小反例 `tags=[2]`（`left: Interrupted{1}, right: Clean`） | **否——更强**（1→2）|
+| **G2** | provenance 匹配被恒定替换为 `DanglingProvenance::ThisRestart` | 3 条命名测试（`dangling_calls_are_attributed_to_their_own_run`、`a_dangling_call_under_a_finished_run_is_reported_as_earlier`、`a_log_with_no_run_marker_attributes_to_earlier_not_this_restart`） | 同 3 条，无多无少 | 相符 |
+| **G2b** | pass 2 只收 `record.seq > anchor` 的悬空，静默丢弃 `EarlierRun` 情形 | `a_dangling_call_under_a_finished_run_is_reported_as_earlier`（仅此） | 同上 **+** `dangling_calls_are_attributed_to_their_own_run`（长度断言 `left:1,right:2`）**+** `a_log_with_no_run_marker_attributes_to_earlier_not_this_restart`（越界 panic，`r.dangling[0]` 在空 vec 上取值）| **否——更强**（1→3）|
+| **G3-A** | `EarlierRun` 的引导句被折叠成与 `ThisRestart` 相同的文本 | `repairs_speak_a_different_sentence_per_provenance` 在 "an earlier run in this session" 断言处红 | 同上，panic 位置与断言文本精确匹配 | 相符 |
+| **G3-B** | 共享结尾删掉 "side effects" 三词 | 同一测试，`assert_four_points` 红，两臂（`EarlierRun`/`ThisRestart`）均受影响 | 同一测试在第一臂（`EarlierRun`，`c1`）panic；第二臂结构上保证同样失败（两臂共用同一段 `boundary_repair_text` 格式化代码，断言 panic-on-first-failure 未继续跑到第二臂）| 相符 |
+| **G4** | `progress.tool_calls_answered` 的来源换成 `progress.tool_calls_dispatched` | `progress_counts_only_the_current_run`、`answered_never_exceeds_dispatched` | 同 2 条，无多无少 | 相符 |
+| **G5-A** | `list_from_log` 在 sidecar 循环前多插一次 `get_events(child_session, ...)`（结果丢弃）| `the_directory_face_reads_only_the_parent_log` | 同上，计数断言 `left:2, right:1` | 相符 |
+| **G5-B** | `resolve_forgotten` 末尾的 `progress` 补全循环整段删除 | `the_detail_face_loads_the_childs_progress` | 同上，`progress: None` 未被填充 | 相符 |
+| **QA 装置**（`attribute`，跑在 `merge-base(run-reduction, main)=8bed67331` 即修复前的树）| 修复前的 `boundary_repair_text(tool: &str)` 不带 provenance 参数，两次悬空统一说 "the server restarted" | FAIL，"the dangle left by the EARLIER run was blamed on this restart"（§1.4 所述缺陷）| FAIL，文本逐字匹配；`KEEP=1` 复核确认两次悬空读到的都是同一句 "OUTCOME UNKNOWN — the server restarted..." | 相符 |
+
+九行里两行"不符"——**G1** 与 **G2b**——方向完全一致：守卫比预测更强（分别 1→2、1→3），从未出现更弱。这不是缺陷，但也不是"预测对了"：判据 #18 要求任何预期/实测不符都先怀疑守卫而非变异，这里的正确读法是**预测过窄**——当初只想到了一条会被打中的测试，实际还有别的测试同样依赖同一条不变量（G1 的第二条测试覆盖"无 `RunStarted` 时的悬空"边界；G2b 的两条追加测试分别覆盖长度不变量和越界这两种"静默丢弃"的具体表现形式）。九行里没有一行"预期红、实测未红"——判据 #18 最担心的那种伪装成绿的守卫，这一轮没有出现。六条守卫（G1、G2、G2b、G3、G4、G5）连同 QA 装置对 G2/§1.4 的真机复现，均经过了真实的、非恒真的证伪。
