@@ -128,6 +128,16 @@ pub enum TopologyDiff {
         edge_kind: EdgeKind,
         changed_fields: Vec<String>,
     },
+    /// Edge whose stored kind string could not be parsed as a known
+    /// `EdgeKind` variant. Surfaces cross-build snapshot diffs (newer build
+    /// writing a kind this build does not yet know) without mislabelling
+    /// the change as `EdgeKind::Feeds` — the previous fallback wrongly
+    /// attributed unknown kinds to the documentation-only `Feeds` verb.
+    EdgeUnknown {
+        from_id: String,
+        to_id: String,
+        raw_kind: String,
+    },
 }
 
 /// Storage for the snapshot history. Same pattern as `LoopGraphStore`: own
@@ -402,34 +412,46 @@ fn diff_inner(a: &Snapshot, b: &Snapshot) -> Vec<TopologyDiff> {
 
     // Edges: same shape.
     for (key, eb) in &be {
-        let kind = EdgeKind::parse(key.2).unwrap_or(EdgeKind::Feeds);
-        match ae.get(key) {
-            None => out.push(TopologyDiff::EdgeAdded {
+        match EdgeKind::parse(key.2) {
+            Some(kind) => match ae.get(key) {
+                None => out.push(TopologyDiff::EdgeAdded {
+                    from_id: key.0.to_string(),
+                    to_id: key.1.to_string(),
+                    edge_kind: kind,
+                }),
+                Some(ea) => {
+                    let changed = edge_diff_fields(ea, eb);
+                    if !changed.is_empty() {
+                        out.push(TopologyDiff::EdgeModified {
+                            from_id: key.0.to_string(),
+                            to_id: key.1.to_string(),
+                            edge_kind: kind,
+                            changed_fields: changed,
+                        });
+                    }
+                }
+            },
+            None => out.push(TopologyDiff::EdgeUnknown {
                 from_id: key.0.to_string(),
                 to_id: key.1.to_string(),
-                edge_kind: kind,
+                raw_kind: key.2.to_string(),
             }),
-            Some(ea) => {
-                let changed = edge_diff_fields(ea, eb);
-                if !changed.is_empty() {
-                    out.push(TopologyDiff::EdgeModified {
-                        from_id: key.0.to_string(),
-                        to_id: key.1.to_string(),
-                        edge_kind: kind,
-                        changed_fields: changed,
-                    });
-                }
-            }
         }
     }
     for key in ae.keys() {
         if !be.contains_key(key) {
-            let kind = EdgeKind::parse(key.2).unwrap_or(EdgeKind::Feeds);
-            out.push(TopologyDiff::EdgeRemoved {
-                from_id: key.0.to_string(),
-                to_id: key.1.to_string(),
-                edge_kind: kind,
-            });
+            match EdgeKind::parse(key.2) {
+                Some(kind) => out.push(TopologyDiff::EdgeRemoved {
+                    from_id: key.0.to_string(),
+                    to_id: key.1.to_string(),
+                    edge_kind: kind,
+                }),
+                None => out.push(TopologyDiff::EdgeUnknown {
+                    from_id: key.0.to_string(),
+                    to_id: key.1.to_string(),
+                    raw_kind: key.2.to_string(),
+                }),
+            }
         }
     }
 
@@ -495,6 +517,17 @@ fn diff_sort_key(d: &TopologyDiff) -> (u8, String, String, String, String) {
             from_id.clone(),
             to_id.clone(),
             edge_kind.as_str().to_string(),
+            String::new(),
+        ),
+        TopologyDiff::EdgeUnknown {
+            from_id,
+            to_id,
+            raw_kind,
+        } => (
+            6,
+            from_id.clone(),
+            to_id.clone(),
+            raw_kind.clone(),
             String::new(),
         ),
     }
@@ -696,6 +729,7 @@ mod tests {
                 TopologyDiff::EdgeAdded { .. } => "edge_added",
                 TopologyDiff::EdgeRemoved { .. } => "edge_removed",
                 TopologyDiff::EdgeModified { .. } => "edge_modified",
+                TopologyDiff::EdgeUnknown { .. } => "edge_unknown",
             })
             .collect();
         assert!(kinds.contains(&"removed"), "{kinds:?}");
