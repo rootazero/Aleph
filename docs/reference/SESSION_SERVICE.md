@@ -68,7 +68,7 @@ The asymmetry is the point. Clearing is erasure: leaving the content searchable 
 3. Write a `SessionWoken { prior_head }` event into the log.
 4. Return a new `SessionHandle`.
 
-Crash recovery reads the **run** markers, not the turn markers: a run that never finished surfaces as one or more trailing `RunStarted` events with no `RunFinished` after the last of them, which `gateway::resume_coordinator::classify_markers` counts (the count doubles as the crash-loop attempt counter). `ResumeCoordinator` then repairs the boundary — a synthetic `ToolError` per dangling tool call — and re-triggers each surviving candidate.
+Crash recovery reads the **run** markers, not the turn markers: a run that never finished surfaces as one or more trailing `RunStarted` events with no `RunFinished` after the last of them, which `session::reduction::reduce_disposition` counts (the count doubles as the crash-loop attempt counter). `ResumeCoordinator` then repairs the boundary — a synthetic `ToolError` per dangling tool call — and re-triggers each surviving candidate.
 
 There is deliberately no `TurnEnded` marker to pair with `TurnStarted`; a turn ends when the next one opens or when the run does. An earlier version of this section described the crash predicate in terms of that pair, which no code ever emitted, so every turn matched "crashed mid-turn" — and cited an integration test (`tests/session_wake_recovery.rs`) that does not exist. Both are gone.
 

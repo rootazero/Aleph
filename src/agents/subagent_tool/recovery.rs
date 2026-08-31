@@ -249,13 +249,19 @@ pub(crate) fn to_json(request_id: &str, recovered: &Recovered) -> Value {
                 .to_string();
             if let Some(p) = progress {
                 use std::fmt::Write as _;
+                let calls_word = if p.tool_calls_dispatched == 1 { "call" } else { "calls" };
+                let messages_word = if p.assistant_messages == 1 { "message" } else { "messages" };
                 let _ = write!(
                     note,
-                    " Before it stopped it had dispatched {} tool calls, {} of which recorded a \
-                     result, and produced {} assistant messages. Read the child transcript to \
+                    " Before it stopped it had dispatched {} tool {}, {} of which recorded a \
+                     result, and produced {} assistant {}. Read the child transcript to \
                      judge what is done — this is a report of what happened, not a verdict on \
                      what is left.",
-                    p.tool_calls_dispatched, p.tool_calls_answered, p.assistant_messages
+                    p.tool_calls_dispatched,
+                    calls_word,
+                    p.tool_calls_answered,
+                    p.assistant_messages,
+                    messages_word
                 );
             }
             json!({

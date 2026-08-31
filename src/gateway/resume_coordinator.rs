@@ -3,7 +3,9 @@
 //! Cycle 6 of the long-task hardening directive. See
 //! `docs/superpowers/specs/2026-05-21-mid-run-trajectory-resume-design.md`.
 //!
-//! A run is **interrupted** iff a session's event log ends with one or more
+//! A run is **interrupted** iff its run-marker sequence (every `RunStarted`
+//! and `RunFinished` in the log, in `seq` order — see
+//! `session::reduction::reduce_disposition`) ends with one or more
 //! `RunStarted` events and no `RunFinished` after the last one. This module
 //! scans for that shape, repairs the crash boundary (synthetic `ToolError`
 //! for each dangling tool call), and re-triggers each surviving candidate.

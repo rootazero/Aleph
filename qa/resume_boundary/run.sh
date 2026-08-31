@@ -56,15 +56,11 @@ esac
 qa_redirect_home "$QA_ROOT"
 mkdir -p "$ALEPH_HOME"
 CONFIG="$ALEPH_HOME/config.toml"
-# The durable event log. A single sqlite file — despite what some boot-time
-# log lines call it ("...sessions/session_events.db"), the connection is
-# actually opened at `SessionManagerConfig::default().db_path`
-# (`src/gateway/session_manager/mod.rs`), which resolves through
-# `get_sessions_db_path()` / `aleph_protocol::paths::data_dir()`
-# (`shared/protocol/src/paths.rs`) to `<ALEPH_HOME>/data/sessions.db`, and
-# `migrate_add_session_events` adds the `session_events` table to THAT file.
-# `qa/busy_input/lib.py::SessionLog` already reads this exact path in every
-# other fixture here.
+# The durable event log: a single sqlite file, opened at
+# `SessionManagerConfig::default().db_path` (`src/gateway/session_manager/mod.rs`),
+# which resolves through `get_sessions_db_path()` (`src/utils/paths.rs`) to
+# `<ALEPH_HOME>/data/sessions.db`. `qa/busy_input/lib.py::SessionLog` already
+# reads this exact path in every other fixture here.
 EVENTS_DB="$ALEPH_HOME/data/sessions.db"
 REQUEST_LOG="$QA_ROOT/request_log.jsonl"
 SESSION_FILE="$QA_ROOT/session_key.txt"

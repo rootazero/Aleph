@@ -291,8 +291,9 @@ async fn handle_delete_db_inner(
             // Retire the SSOT event log before the projection — same ordering
             // as `chat.clear`. Deleting the `messages` rows alone would leave
             // the conversation alive in `session_events`: still replayed by the
-            // model, still searchable, and re-materialised into a brand-new
-            // transcript by `ProjectionReconciler` at the next boot.
+            // model, still searchable, and — when its run reads as interrupted
+            // (`session::reduction::reduce_disposition`) — re-materialised into
+            // a brand-new transcript by `ProjectionReconciler` at the next boot.
             //
             // Retire rather than physically purge, even though this is the
             // strongest deletion a user can perform: retirement already removes
@@ -1202,7 +1203,8 @@ mod tests {
     /// Deleting a conversation must delete the conversation — not just the
     /// transcript the Panel happens to read. The event log is the SSOT: leaving
     /// it live keeps the content replayable by the model, searchable via BM25,
-    /// and re-materialisable by `ProjectionReconciler` at the next boot.
+    /// and — when its run reads as interrupted — re-materialisable by
+    /// `ProjectionReconciler` at the next boot.
     #[tokio::test]
     async fn delete_retires_the_event_log_so_nothing_replays_or_searches() {
         let events = crate::session::store::install_test_event_store();

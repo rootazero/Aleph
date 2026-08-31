@@ -86,10 +86,11 @@ pub struct RunProgress {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunReduction {
     pub disposition: RunDisposition,
-    /// `seq` of the last `RunStarted`. A **seq**, not an index: `reduce_run` is
-    /// fed both whole logs (`load_all_events`) and pages
-    /// (`get_events(id, from, to)`), and an index means different things in
-    /// the two while a seq means the same thing in both.
+    /// `seq` of the last `RunStarted`. A **seq**, not an index: today every
+    /// call site hands `reduce_run` a full log (`load_all_events`, or
+    /// `get_events(id, None, None)`) rather than a page, but a seq stays
+    /// meaningful regardless of how the caller sliced `events`, while an
+    /// index would silently mean a different position.
     pub run_anchor: Option<EventSeq>,
     /// `run_id` of the last `RunStarted`.
     pub run_id: Option<String>,
@@ -109,9 +110,14 @@ pub fn reduce_disposition(markers: &[SessionEventRecord]) -> RunDisposition {
         match &record.event {
             SessionEvent::RunStarted { .. } => trailing_starts += 1,
             SessionEvent::RunFinished { .. } => break,
-            // `load_run_markers` only ever returns run markers, but a caller
-            // may hand a full log: a non-marker breaks the trailing run.
-            _ => break,
+            // Precondition violation, not an input shape: `reduce_run` filters to
+            // markers before calling here. A non-marker means the caller passed a
+            // raw log, whose tail is almost always the dangling ToolCallRequested
+            // — which would read as `Clean` and hide an interrupted run.
+            _ => {
+                debug_assert!(false, "reduce_disposition requires a marker-only slice");
+                break;
+            }
         }
     }
     if trailing_starts == 0 {

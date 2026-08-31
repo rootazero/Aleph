@@ -456,7 +456,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     } else {
         alephcore::session::store::decline_global_session_event_store(
             "the session_events SQLite service could not be built: opening or \
-             migrating `<config_dir>/data/sessions/session_events.db` failed \
+             migrating `<data_dir>/sessions.db` failed \
              (`build_sqlite_session_service` logs which of the two). \
              `recall_events` search and boot-time resume are unavailable.",
         );
@@ -470,7 +470,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         alephcore::session::service::decline_global_session_service(
             "the session_events SQLite service could not be built, so there is \
              no actor pipeline to publish: opening or migrating \
-             `<config_dir>/data/sessions/session_events.db` failed \
+             `<data_dir>/sessions.db` failed \
              (`build_sqlite_session_service` logs which of the two). Edge-path \
              callers fall back to writing the transcript directly.",
         );

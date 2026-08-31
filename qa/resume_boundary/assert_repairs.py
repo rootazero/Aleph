@@ -20,6 +20,7 @@ FOUR_POINTS = [
     "OUTCOME UNKNOWN",
     "NOT a report that the call failed",
     "side effects",
+    "Verify the current state before deciding",
 ]
 THIS_RESTART = "the server restarted"
 EARLIER_RUN = "an earlier run in this session"
