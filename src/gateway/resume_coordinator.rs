@@ -231,7 +231,7 @@ pub(crate) fn resume_metadata(
 /// reserves for the model. State the fact; let it judge.
 ///
 /// Two arms because there are two true sentences. Everything after the lead-in
-/// is shared, so the four semantic points cannot drift apart between them.
+/// is shared, so the five semantic points cannot drift apart between them.
 fn boundary_repair_text(tool: &str, provenance: DanglingProvenance) -> String {
     let lead = match provenance {
         DanglingProvenance::ThisRestart => format!(
@@ -1030,11 +1030,11 @@ mod tests {
         );
     }
 
-    /// G3 — both arms must carry all four semantic points. Asserting on
+    /// G3 — both arms must carry all five semantic points. Asserting on
     /// MEANING, not bytes: `!contains("failed")` gets hit by the text's own
     /// negation sentence, which is how the first version of this guard went
     /// red for the wrong reason (§4.13a).
-    fn assert_four_points(error: &str, tool: &str) {
+    fn assert_five_points(error: &str, tool: &str) {
         assert!(
             error.contains("OUTCOME UNKNOWN"),
             "must state the outcome is unknown, got: {error}"
@@ -1050,6 +1050,10 @@ mod tests {
         assert!(
             error.contains("side effects"),
             "must warn that side effects may have landed, got: {error}"
+        );
+        assert!(
+            error.contains("Verify the current state before deciding"),
+            "must tell the model to verify current state before redoing, got: {error}"
         );
     }
 
@@ -1069,7 +1073,7 @@ mod tests {
             let SessionEvent::ToolError { call_id, error, .. } = ev else {
                 panic!("expected ToolError, got {ev:?}");
             };
-            assert_four_points(error, "bash_exec");
+            assert_five_points(error, "bash_exec");
             texts.push((call_id.clone(), error.clone()));
         }
         assert_eq!(texts[0].0, "c1");

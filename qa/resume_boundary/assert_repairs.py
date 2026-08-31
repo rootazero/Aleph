@@ -5,7 +5,7 @@
 `boundary_repair_text` for both provenances. This script does not repeat
 that — it reads `$REQUEST_LOG`, the mock provider's record of every request
 body it actually received, and checks that the repair text (a) reached the
-model at all and (b) still carries its four semantic points once it got
+model at all and (b) still carries all five semantic points once it got
 there. `--stage attribute` additionally checks that the two dangles in that
 scenario were NOT both attributed to this restart — the exact defect this
 round's design spec (§1.4) fixes, and the one the `attribute` stage exists to
@@ -16,11 +16,17 @@ import json
 import pathlib
 import sys
 
-FOUR_POINTS = [
+FIVE_POINTS = [
     "OUTCOME UNKNOWN",
     "NOT a report that the call failed",
     "side effects",
     "Verify the current state before deciding",
+    # The tool name. This fixture always dispatches `bash` (tool_spec.json,
+    # written by run.sh) — unlike resume_coordinator.rs's own
+    # `assert_five_points`, which checks this generically via `contains(tool)`,
+    # this literal is fixture-specific and would need updating if the QA
+    # scenario ever dispatches a different tool.
+    "`bash`",
 ]
 THIS_RESTART = "the server restarted"
 EARLIER_RUN = "an earlier run in this session"
@@ -75,7 +81,7 @@ def main():
 
     failures = []
     for text in texts:
-        for point in FOUR_POINTS:
+        for point in FIVE_POINTS:
             if point not in text:
                 failures.append(f"missing {point!r} in: {text[:200]}")
 
