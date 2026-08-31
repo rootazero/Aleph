@@ -194,11 +194,18 @@ pub fn ask_user_frame(
     request: &ClarificationRequest,
     cursor: usize,
 ) -> GatewayEventFrame {
-    let current = request.questions.get(cursor).unwrap_or_else(|| {
-        request
-            .first()
-            .expect("a ClarificationRequest built by a constructor is never empty")
-    });
+    let current = match request.questions.get(cursor).or_else(|| request.first()) {
+        Some(c) => c,
+        // The constructor invariant guarantees the request is non-empty, so
+        // the cursor-past-end fallback is the only path that can return a
+        // question. Reaching this arm means the request was hand-rolled via
+        // struct literal inside the crate (the public constructors all
+        // validate non-empty) — an internal invariant break that we surface
+        // here rather than masking.
+        None => unreachable!(
+            "a ClarificationRequest built by a constructor is never empty"
+        ),
+    };
     GatewayEventFrame::AskUser {
         run_id: run_id.to_string(),
         // The run's emitter owns the stream sequence counter and an
@@ -346,14 +353,29 @@ impl ClarificationManager {
             .read()
             .await
             .iter()
-            .filter(|(_, e)| e.is_live())
-            .map(|(session_key, e)| {
-                let current = e.current().unwrap_or_else(|| {
-                    e.request
-                        .first()
-                        .expect("a ClarificationRequest built by a constructor is never empty")
-                });
-                PendingClarification {
+            .filter_map(|(session_key, e)| {
+                if !e.is_live() {
+                    return None;
+                }
+                // `current()` is `None` only when the cursor has run past the
+                // last question. For a registered entry that means an answer
+                // was pushed beyond the request — the live liveness gate does
+                // not catch it, but it should never happen: `resolve_many`
+                // breaks the per-reply loop on `current() == None` and removes
+                // the entry on `Complete`. If we ever DO see it, the entry is
+                // structurally broken and showing its `questions` view to a
+                // Panel would publish a card with a cursor that contradicts
+                // the answers; filter it out and let the next sweep reap it.
+                let current = e.current().or_else(|| {
+                    tracing::warn!(
+                        session = %session_key,
+                        cursor = e.answers.len(),
+                        total = e.request.len(),
+                        "list_pending: cursor past end of question list — filtering broken entry"
+                    );
+                    None
+                })?;
+                Some(PendingClarification {
                     session_key: session_key.clone(),
                     question: current.prompt.clone(),
                     options: current.options.iter().map(|o| o.label.clone()).collect(),
@@ -364,7 +386,7 @@ impl ClarificationManager {
                         .map(ClarificationQuestionView::from)
                         .collect(),
                     answered: e.answers.len(),
-                }
+                })
             })
             .collect();
         out.sort_unstable_by(|a, b| a.session_key.cmp(&b.session_key));
