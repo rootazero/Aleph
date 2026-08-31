@@ -1,5 +1,5 @@
 use crate::error::{AlephError, Result};
-use crate::search::providers::base::{build_client, check_status};
+use crate::search::providers::base::{build_client, retain_usable, send};
 use crate::search::{SearchCapabilities, SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -58,24 +58,25 @@ impl SearchProvider for DuckDuckGoProvider {
             params.push(("df", df.to_string()));
         }
 
-        let response = self
-            .client
-            .get(ENDPOINT)
-            .query(&params)
-            .header("User-Agent", USER_AGENT)
-            .header("Accept", "text/html")
-            .timeout(std::time::Duration::from_secs(options.validated_timeout()))
-            .send()
-            .await
-            .map_err(|e| AlephError::network(e.to_string()))?;
-
-        let response = check_status(response, NAME)?;
+        // No credential: DDG's HTML endpoint is unauthenticated, so there is
+        // nothing an error message could leak.
+        let response = send(
+            self.client
+                .get(ENDPOINT)
+                .query(&params)
+                .header("User-Agent", USER_AGENT)
+                .header("Accept", "text/html")
+                .timeout(std::time::Duration::from_secs(options.validated_timeout())),
+            NAME,
+            None,
+        )
+        .await?;
         let body = response
             .text()
             .await
             .map_err(|e| AlephError::provider(format!("Failed to read {NAME} body: {e}")))?;
 
-        let results = parse_ddg_html(&body, options.validated_max_results());
+        let results = retain_usable(NAME, parse_ddg_html(&body, options.validated_max_results()));
 
         // Mirror the SearXNG dead-engine treatment: an empty HTML parse on
         // a 200 OK page almost always means DDG served a challenge / 0-result
@@ -100,7 +101,7 @@ impl SearchProvider for DuckDuckGoProvider {
         true
     }
 
-    fn capabilities(&self) -> SearchCapabilities {
+    fn capabilities(&self, _options: &SearchOptions) -> SearchCapabilities {
         SearchCapabilities {
             domain_filter: false,
             recency: true,

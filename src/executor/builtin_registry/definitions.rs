@@ -2400,11 +2400,21 @@ mod tests {
     /// one `grep -r` across a repository carrying `node_modules/` routinely
     /// returns tens of KB of matches nobody asked for — per call, in the
     /// context window, forever. 3 KB of constants against that is not close.
-/// 2026-08-31: 111_856 -> 112_346 B (+490) for `search`'s parameters.
+    /// 2026-08-31: 111_856 -> 112_346 B (+490) for `search`'s parameters.
     /// Measured twice, and the two agree: the ratchet reports the totals
     /// (111_856 -> 112_346), and the literal itself measures 89 -> 579 bytes.
     /// `search` is not in the printed "largest" five, so the attribution comes
     /// from the second measurement rather than from reading the diff.
+    ///
+    /// 2026-09-01: 112_608 -> 112_772 B (+164), again all `search`, for the
+    /// `provider` -> `providers` widening (one backend, or several asked at
+    /// once and merged) plus the sentence saying what the second backend
+    /// costs. Measured twice and the two agree, the same way: the ratchet
+    /// reports the totals, and the literal measures 579 -> 743 bytes — a
+    /// delta of exactly 164, which is the whole move, so nothing else's
+    /// description changed. The clause about quota is not decoration: a
+    /// parameter whose cost the model cannot see is one it will reach for on
+    /// a lookup, where the second backend buys nothing.
     ///
     /// ⚠️ On the merge tree that combines this round's search-parameter
     /// additions with the channel-rooms branch, neither 112_118 (the value
@@ -2462,7 +2472,7 @@ mod tests {
     /// exactly the failure mode this constant's own rule warns about.
     /// A future round that adds bytes MUST re-run the ratchet and copy the
     /// printed total, not compute it from prior deltas.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 112_608;
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 112_772;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -2859,7 +2869,7 @@ mod tests {
     /// believing it had constrained one.
     ///
     /// Set flush against the measurement, as the rule above requires.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 104_134;
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 104_302;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -2930,7 +2940,7 @@ mod tests {
         ("recall_events", 553),
         ("remember", 1907),
         ("scratchpad", 4014),
-        ("search", 1882),
+        ("search", 2050),
         ("self_config", 3553),
         ("self_manage", 328),
         ("session_list", 931),

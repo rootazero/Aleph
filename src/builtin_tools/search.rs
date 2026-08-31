@@ -39,10 +39,13 @@ pub struct SearchArgs {
     /// when the answer is in the page rather than in the summary of it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub full_content: Option<bool>,
-    /// Ask exactly this backend instead of the configured chain. Naming one
-    /// that is not configured fails rather than answering from another.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
+    /// Ask exactly these backends instead of the configured chain. One name
+    /// asks that backend alone; two or more ask all of them at once and merge
+    /// the answers, dropping pages more than one of them returned. Naming a
+    /// backend that is not configured fails rather than answering from
+    /// another.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<String>,
 }
 
 impl SearchArgs {
@@ -72,8 +75,8 @@ impl SearchArgs {
         if let Some(full_content) = self.full_content {
             options.include_full_content = full_content;
         }
-        if let Some(provider) = &self.provider {
-            options.provider = Some(provider.clone());
+        if !self.providers.is_empty() {
+            options.providers.clone_from(&self.providers);
         }
         options
     }
@@ -113,6 +116,17 @@ pub struct SearchResult {
     pub published_date: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub full_content: Option<String>,
+    /// Which backend returned this result.
+    ///
+    /// Present only when the call asked more than one backend. With a single
+    /// one it would be the same name on every row — `provider_used` already
+    /// says it once — and the previous round left the field off the tool face
+    /// for exactly that reason, writing down that it would arrive when a
+    /// merge gave it a first consumer. This is that consumer: in a merged set
+    /// the rows come from different places and "who found this" is not
+    /// recoverable from anything else in the answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 /// Output from search tool containing results and original query
@@ -136,14 +150,26 @@ pub struct SearchOutput {
 /// A clamp nobody announces reads exactly like a page that was short: the
 /// model cannot tell "this is all there is" from "there is more, fetch the
 /// url". Both bounds therefore return a note rather than quietly cutting.
-fn render_results(results: Vec<crate::search::SearchResult>) -> (Vec<SearchResult>, Vec<String>) {
+fn render_results(
+    results: Vec<crate::search::SearchResult>,
+    attribute_each_result: bool,
+) -> (Vec<SearchResult>, Vec<String>) {
     let mut clamped_snippets = 0usize;
     let mut clamped_bodies = 0usize;
     let mapped = results
         .into_iter()
         .map(|r| {
+            // A snippet cut off a result that also carries its page body is
+            // not a loss: the text is right there, one field down. Counting
+            // it would emit `snippets_clamped`, whose lever is "fetch the url
+            // with web_fetch" — the one move that buys the reader nothing
+            // here. Backends that return only bodies (Exa) would otherwise
+            // make that wrong note fire on every single result.
+            let carries_body = r.full_content.is_some();
             let snippet = if r.snippet.chars().count() > SNIPPET_MAX_CHARS {
-                clamped_snippets += 1;
+                if !carries_body {
+                    clamped_snippets += 1;
+                }
                 truncate_chars(&r.snippet, SNIPPET_MAX_CHARS).to_string()
             } else {
                 r.snippet
@@ -163,6 +189,7 @@ fn render_results(results: Vec<crate::search::SearchResult>) -> (Vec<SearchResul
                 relevance_score: r.relevance_score,
                 published_date: r.published_date,
                 full_content,
+                provider: attribute_each_result.then_some(r.provider).flatten(),
             }
         })
         .collect();
@@ -211,8 +238,10 @@ impl SearchTool {
          preferences, not guarantees: a backend that cannot express one still \
          answers, and the reply's notes say which dimension was dropped. \
          `full_content` returns whole page bodies instead of snippets — expensive, \
-         so use it only when a summary will not do. `provider` asks exactly one \
-         configured backend and fails rather than answering from another.";
+         so use it only when a summary will not do. `providers` asks exactly the \
+         backends you name and fails rather than answering from another; naming two \
+         or more asks them all at once and merges the answers, which spends one \
+         call's quota per backend — breadth for a research question, waste for a lookup.";
 
     /// Create with a `SearchRegistry`, the only way in.
     ///
@@ -237,7 +266,11 @@ impl SearchTool {
 
         match self.registry.search(&args.query, &options).await {
             Ok(answer) => {
-                let (results, clamp_notes) = render_results(answer.results);
+                // Attribute per result only for a merged answer: with one
+                // backend the name is the same on every row and
+                // `provider_used` has already said it.
+                let (results, clamp_notes) =
+                    render_results(answer.results, options.providers.len() > 1);
                 // The registry's notes first: which backend answered and what
                 // it could not express frames everything below it.
                 let mut notes = answer.notes;
@@ -346,6 +379,70 @@ mod tests {
         assert!(
             named >= 5,
             "the description must actually name the parameters; it named {named}"
+        );
+    }
+
+    fn body(len: usize) -> String {
+        "x".repeat(len)
+    }
+
+    /// A snippet cut short is worth a note only when the text is actually
+    /// gone. When the same result carries its page body, `snippets_clamped`
+    /// would tell the reader to `web_fetch` the url for text they already
+    /// have — the wrong lever, printed on every result of every Exa search.
+    #[test]
+    fn a_clamped_snippet_is_not_reported_when_the_body_came_with_it() {
+        let with_body = crate::search::SearchResult {
+            full_content: Some(body(100)),
+            ..crate::search::SearchResult::new("t", "https://x.test", body(SNIPPET_MAX_CHARS + 1))
+        };
+        let (rendered, notes) = render_results(vec![with_body], false);
+        assert_eq!(rendered[0].snippet.chars().count(), SNIPPET_MAX_CHARS);
+        assert!(
+            !notes.iter().any(|n| n.contains("snippet")),
+            "the body is right there: {notes:?}"
+        );
+
+        // Without a body the clamp is a real loss and keeps its note.
+        let bare =
+            crate::search::SearchResult::new("t", "https://x.test", body(SNIPPET_MAX_CHARS + 1));
+        let (_, notes) = render_results(vec![bare], false);
+        assert!(notes.iter().any(|n| n.contains("snippet")), "{notes:?}");
+    }
+
+    /// Per-result attribution is information only in a merged answer. With
+    /// one backend it is the same name on every row and `provider_used` has
+    /// already said it once.
+    #[test]
+    fn results_are_attributed_only_when_several_backends_were_asked() {
+        let r = crate::search::SearchResult {
+            provider: Some("exa".into()),
+            ..crate::search::SearchResult::new("t", "https://x.test", "s")
+        };
+        let (single, _) = render_results(vec![r.clone()], false);
+        assert!(single[0].provider.is_none());
+        let (merged, _) = render_results(vec![r], true);
+        assert_eq!(merged[0].provider.as_deref(), Some("exa"));
+    }
+
+    /// An omitted `providers` must stay empty, which is what selects the
+    /// operator's configured chain. A default of "the first configured
+    /// backend" invented here would be a second answer to a question
+    /// `[search].default_provider` already owns.
+    #[test]
+    fn an_omitted_providers_list_leaves_the_configured_chain_in_charge() {
+        let args: SearchArgs = serde_json::from_str(r#"{"query": "q"}"#).unwrap();
+        assert!(args.providers.is_empty());
+        assert!(args
+            .to_options(&SearchOptions::default())
+            .providers
+            .is_empty());
+
+        let named: SearchArgs =
+            serde_json::from_str(r#"{"query":"q","providers":["exa","tavily"]}"#).unwrap();
+        assert_eq!(
+            named.to_options(&SearchOptions::default()).providers,
+            vec!["exa".to_string(), "tavily".to_string()]
         );
     }
 

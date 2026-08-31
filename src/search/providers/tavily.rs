@@ -1,5 +1,5 @@
 use crate::error::{AlephError, Result};
-use crate::search::providers::base::{build_client, check_status, parse_json};
+use crate::search::providers::base::{build_client, parse_json, retain_usable, send};
 use crate::search::{SearchCapabilities, SearchOptions, SearchProvider, SearchResult};
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -52,11 +52,21 @@ struct TavilyResponse {
     results: Vec<TavilyResult>,
 }
 
+/// Every field is optional on the wire.
+///
+/// Not politeness: serde does not degrade field by field, so a single item a
+/// vendor returned with a `null` title used to make the **whole** document
+/// fail to deserialize — the backend reported a parse error and the chain
+/// moved on as if it were down. `base::retain_usable` decides afterwards what
+/// is usable (a url), which is one filter instead of one per provider.
 #[derive(Deserialize)]
 struct TavilyResult {
-    title: String,
-    url: String,
-    content: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    content: Option<String>,
     #[serde(default)]
     score: Option<f32>,
     #[serde(default)]
@@ -107,26 +117,28 @@ impl SearchProvider for TavilyProvider {
     async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
         let request_body = Self::build_request(&self.api_key, query, options);
 
-        let response = self
-            .client
-            .post("https://api.tavily.com/search")
-            .json(&request_body)
-            .timeout(std::time::Duration::from_secs(options.validated_timeout()))
-            .send()
-            .await
-            .map_err(|e| AlephError::network(e.to_string()))?;
-
-        let response = check_status(response, NAME)?;
-        let tavily_response: TavilyResponse = parse_json(response, NAME).await?;
+        // Tavily takes its key in the JSON body, so it can come back in a
+        // validation error's echo of the request.
+        let secret = Some(&*self.api_key);
+        let response = send(
+            self.client
+                .post("https://api.tavily.com/search")
+                .json(&request_body)
+                .timeout(std::time::Duration::from_secs(options.validated_timeout())),
+            NAME,
+            secret,
+        )
+        .await?;
+        let tavily_response: TavilyResponse = parse_json(response, NAME, secret).await?;
 
         let results = tavily_response
             .results
             .into_iter()
             .take(options.validated_max_results())
             .map(|r| SearchResult {
-                title: r.title,
-                url: r.url,
-                snippet: r.content,
+                title: r.title.unwrap_or_default(),
+                url: r.url.unwrap_or_default(),
+                snippet: r.content.unwrap_or_default(),
                 relevance_score: r.score,
                 full_content: r.raw_content,
                 published_date: r.published_date,
@@ -134,7 +146,7 @@ impl SearchProvider for TavilyProvider {
             })
             .collect();
 
-        Ok(results)
+        Ok(retain_usable(NAME, results))
     }
 
     fn name(&self) -> &str {
@@ -145,7 +157,7 @@ impl SearchProvider for TavilyProvider {
         !self.api_key.is_empty()
     }
 
-    fn capabilities(&self) -> SearchCapabilities {
+    fn capabilities(&self, _options: &SearchOptions) -> SearchCapabilities {
         SearchCapabilities {
             domain_filter: true, // include_domains / exclude_domains
             recency: true,       // tavily_days -> `days`

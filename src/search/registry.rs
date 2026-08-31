@@ -1,5 +1,7 @@
 use crate::error::{AlephError, Result};
-use crate::search::notes::{all_empty, answered_after_failures, degraded};
+use crate::search::notes::{
+    all_empty, answered_after_failures, degraded, fanout_partial, merged_duplicates,
+};
 use crate::search::{
     SearchCapabilities, SearchOptions, SearchProvider, SearchResult, WebFetchSerpFallback,
 };
@@ -341,6 +343,36 @@ impl SearchRegistry {
         .collect()
     }
 
+    /// Re-tag a backend's results with the name it is **configured** under.
+    ///
+    /// Each provider stamps `SearchResult::provider` with its own `NAME`,
+    /// which is the provider *type* (`"searxng"`). The registry addresses
+    /// backends by their configuration key (`[search.backends.alpha]`), and so
+    /// does everything a caller can act on: `providers` on the tool face, the
+    /// `provider_used` summary, every note. On the overwhelmingly common
+    /// config where the key equals the type the two coincide, which is why
+    /// this went unnoticed until a fan-out over two SearXNG instances
+    /// answered `provider_used: "alpha+bravo"` with every row saying
+    /// `provider: "searxng"` — two vocabularies for one fact, and the row
+    /// attribution useless in the one situation it exists for.
+    ///
+    /// The registry's name wins because it is the addressable one. The type
+    /// is still in the operator's config; the instance is not recoverable
+    /// from anything else in the answer.
+    ///
+    /// Not applied to the SERP fallback: it tags results `fallback:<mirror>`,
+    /// which is strictly more than its registry name would say, and its
+    /// mirrors are not configured backends anyone can name.
+    fn attributed(name: &str, results: Vec<SearchResult>) -> Vec<SearchResult> {
+        results
+            .into_iter()
+            .map(|mut r| {
+                r.provider = Some(name.to_string());
+                r
+            })
+            .collect()
+    }
+
     /// Assemble the answer a backend just produced, with the notes it owes.
     ///
     /// One place, because the three points that can produce an answer (a named
@@ -393,13 +425,131 @@ impl SearchRegistry {
             .filter(|n| seen.insert(n.clone()))
             .collect();
         names.sort_by_key(|n| {
-            let have = self.providers[n].capabilities();
+            let have = self.providers[n].capabilities(options);
             let satisfies = (!want.domain_filter || have.domain_filter)
                 && (!want.recency || have.recency)
                 && (!want.full_content || have.full_content);
             usize::from(!satisfies)
         });
         names
+    }
+
+    /// Resolve the backends a caller named, or say which names are not there.
+    ///
+    /// One rule for one name and for five: a name that resolves to nothing is
+    /// a configuration mistake the caller can fix, and answering it from some
+    /// other backend would be answering a question nobody asked. The error
+    /// lists *all* the unresolved names rather than the first, because a
+    /// caller fixing a typo should not have to re-run to discover the second
+    /// one.
+    fn resolve_named(&self, names: &[String]) -> Result<Vec<(String, &Arc<dyn SearchProvider>)>> {
+        let mut resolved = Vec::with_capacity(names.len());
+        let mut missing: Vec<&str> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for name in names {
+            if !seen.insert(name.as_str()) {
+                continue; // naming a backend twice asks it once
+            }
+            match self.providers.get(name).filter(|p| p.is_available()) {
+                Some(p) => resolved.push((name.clone(), p)),
+                None => missing.push(name.as_str()),
+            }
+        }
+        if !missing.is_empty() {
+            let mut known: Vec<&str> = self.providers.keys().map(String::as_str).collect();
+            known.sort_unstable();
+            return Err(AlephError::invalid_config(format!(
+                "search provider(s) {} not configured or not available; configured: {}",
+                missing
+                    .iter()
+                    .map(|n| format!("'{n}'"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                known.join(", ")
+            )));
+        }
+        Ok(resolved)
+    }
+
+    /// Ask every named backend at once and merge what comes back.
+    ///
+    /// Concurrent because the alternative is paying each backend's latency in
+    /// series for an answer that is only interesting as a whole; `join_all`
+    /// rather than spawned tasks because these futures borrow the registry
+    /// and the options, and nothing here outlives the call.
+    ///
+    /// Partial success is success: backends disagree about what exists, which
+    /// is the reason to ask several, so one of them failing narrows the
+    /// answer instead of ending it. Only *nobody* answering is an `Err`, and
+    /// it carries the same `name [kind] message` report the chain produces.
+    async fn fan_out(&self, query: &str, options: &SearchOptions) -> Result<SearchAnswer> {
+        let named = self.resolve_named(&options.providers)?;
+        let asked = named.len();
+
+        let outcomes = futures::future::join_all(
+            named
+                .iter()
+                .map(|(name, p)| async move { (name.clone(), p.search(query, options).await) }),
+        )
+        .await;
+
+        let mut answered: Vec<String> = Vec::new();
+        let mut per_backend: Vec<Vec<SearchResult>> = Vec::new();
+        let mut errors: Vec<String> = Vec::new();
+        for (name, outcome) in outcomes {
+            match outcome {
+                Ok(results) => {
+                    per_backend.push(Self::attributed(&name, results));
+                    answered.push(name);
+                }
+                Err(e) => {
+                    let kind = classify_search_error(&e);
+                    log::warn!(target: "search", "provider={name} kind={kind} {e}");
+                    errors.push(format!("{name} [{kind}] {e}"));
+                }
+            }
+        }
+
+        if answered.is_empty() {
+            let mut lines = vec!["All named search providers failed:".to_string()];
+            lines.extend(errors);
+            return Err(AlephError::provider(lines.join("\n")));
+        }
+
+        let (results, duplicates) =
+            crate::search::merge::merge_by_rank(per_backend, options.validated_max_results());
+
+        // Degradation is per backend, not per answer: with several of them a
+        // dimension can be honoured by one and dropped by another, and the
+        // merged set is then filtered on that axis only in part. Each backend
+        // that could not carry a requested dimension says so under its own
+        // name, using the same sentence the chain uses.
+        let mut notes: Vec<String> = Vec::new();
+        for name in &answered {
+            notes.extend(Self::degradation_notes(
+                options,
+                name,
+                self.providers[name].capabilities(options),
+            ));
+        }
+        if answered.len() < asked {
+            notes.push(fanout_partial(answered.len(), asked));
+        }
+        if duplicates > 0 {
+            notes.push(merged_duplicates(duplicates));
+        }
+        if results.is_empty() {
+            notes.push(all_empty(answered.len()));
+        }
+
+        Ok(SearchAnswer {
+            results,
+            // Not one name any more. Joined rather than "several backends"
+            // because `provider_used` is read to answer "who said this", and
+            // the per-result `provider` fields it summarises are these names.
+            provider: answered.join("+"),
+            notes,
+        })
     }
 
     /// Set fallback providers
@@ -413,12 +563,13 @@ impl SearchRegistry {
         self.providers.get(name)
     }
 
-    /// Execute search, honouring an explicit provider or falling back through
-    /// the configured chain.
+    /// Execute search, honouring explicitly named backends or falling back
+    /// through the configured chain.
     ///
-    /// When `options.provider` names a backend, only that backend is
-    /// consulted: an unknown or unavailable name is a hard failure, never a
-    /// silent fallback to a backend the caller did not choose. Otherwise the
+    /// When `options.providers` names backends, only those are consulted: an
+    /// unknown or unavailable name is a hard failure, never a silent fallback
+    /// to a backend the caller did not choose. Naming several asks all of
+    /// them concurrently and merges the answers (`fan_out`). Otherwise the
     /// candidates are the default provider, then `fallback_providers`,
     /// stably reordered so a backend that can carry every dimension this
     /// request asks for goes first. A backend answering with zero results
@@ -432,30 +583,13 @@ impl SearchRegistry {
     /// and an empty result set said out loud as an answer rather than left to
     /// read as a failure.
     pub async fn search(&self, query: &str, options: &SearchOptions) -> Result<SearchAnswer> {
-        // Naming a provider is an instruction, not a preference: resolve and
-        // delegate to it alone, without touching the fallback chain below.
-        if let Some(name) = &options.provider {
-            let Some(p) = self.providers.get(name).filter(|p| p.is_available()) else {
-                let mut known: Vec<&str> = self.providers.keys().map(String::as_str).collect();
-                known.sort_unstable();
-                return Err(AlephError::invalid_config(format!(
-                    "search provider '{name}' is not configured or not available; \
-                     configured: {}",
-                    known.join(", ")
-                )));
-            };
-            let results = p.search(query, options).await?;
-            // A named backend is the whole chain: nothing failed ahead of it,
-            // and its empty answer is still an answer from the one backend
-            // that was asked.
-            return Ok(Self::answer(
-                options,
-                name.clone(),
-                p.capabilities(),
-                results,
-                0,
-                1,
-            ));
+        // Naming backends is an instruction, not a preference: resolve them
+        // and delegate, without touching the fallback chain below. One name
+        // is the degenerate fan-out — same resolution rule, same failure
+        // rule, so "you named a backend that is not there" cannot come out
+        // differently depending on how many you named.
+        if !options.providers.is_empty() {
+            return self.fan_out(query, options).await;
         }
 
         let mut errors: Vec<String> = Vec::new();
@@ -483,7 +617,8 @@ impl SearchRegistry {
                     if provider_name != self.default_provider {
                         log::info!("Search succeeded with fallback provider '{provider_name}'");
                     }
-                    let have = provider.capabilities();
+                    let have = provider.capabilities(options);
+                    let results = Self::attributed(&provider_name, results);
                     return Ok(Self::answer(
                         options,
                         provider_name,
@@ -577,7 +712,7 @@ impl SearchRegistry {
             Some(first) => {
                 // Somebody answered — with nothing. `empty` is in chain order,
                 // so the first entry is the backend whose answer this is.
-                let have = self.providers[first].capabilities();
+                let have = self.providers[first].capabilities(options);
                 Ok(Self::answer(
                     options,
                     first.clone(),
@@ -660,6 +795,11 @@ mod tests {
         should_fail: bool,
         result_count: usize,
         capabilities: SearchCapabilities,
+        /// Host the mock's urls are minted under. Defaults to a shared one so
+        /// two mocks look like two backends that found the same pages, which
+        /// is the case merging exists for; `with_own_pages` makes them
+        /// disagree instead.
+        host: String,
     }
 
     impl MockProvider {
@@ -669,12 +809,20 @@ mod tests {
                 should_fail,
                 result_count,
                 capabilities: SearchCapabilities::default(),
+                host: "example.com".to_string(),
             }
         }
 
         /// Declares `domain_filter` support, for capability-ordering tests.
         fn with_domain_filter(mut self) -> Self {
             self.capabilities.domain_filter = true;
+            self
+        }
+
+        /// Mint urls under this backend's own host, so its results are
+        /// distinct from another mock's.
+        fn with_own_pages(mut self) -> Self {
+            self.host = format!("{}.test", self.name);
             self
         }
     }
@@ -689,7 +837,7 @@ mod tests {
             true
         }
 
-        fn capabilities(&self) -> SearchCapabilities {
+        fn capabilities(&self, _options: &SearchOptions) -> SearchCapabilities {
             self.capabilities
         }
 
@@ -702,7 +850,7 @@ mod tests {
             for i in 0..self.result_count.min(options.max_results) {
                 results.push(SearchResult {
                     title: format!("{} - Result {}", query, i + 1),
-                    url: format!("https://example.com/{}", i + 1),
+                    url: format!("https://{}/{}", self.host, i + 1),
                     snippet: format!("Snippet for result {}", i + 1),
                     full_content: None,
                     published_date: None,
@@ -1241,7 +1389,7 @@ mod tests {
         let mut reg = SearchRegistry::new("a");
         reg.add_provider("a".into(), Arc::new(MockProvider::new("a", false, 3)));
         let opts = SearchOptions {
-            provider: Some("nope".into()),
+            providers: vec!["nope".into()],
             ..Default::default()
         };
         let err = reg.search("q", &opts).await.unwrap_err().to_string();
@@ -1259,12 +1407,332 @@ mod tests {
         reg.add_provider("b".into(), Arc::new(MockProvider::new("b", false, 3)));
         reg.set_fallback_providers(vec!["b".into()]);
         let opts = SearchOptions {
-            provider: Some("a".into()),
+            providers: vec!["a".into()],
             ..Default::default()
         };
         assert!(
             reg.search("q", &opts).await.is_err(),
             "must not silently use b"
+        );
+    }
+
+    /// The request-aware capability bit has to reach the *sort*, not just the
+    /// note — otherwise the backend that cannot express the constraint is
+    /// still the one that gets asked first, and the note is an apology
+    /// attached to the wrong answer.
+    ///
+    /// Uses the real `BingProvider` because Bing is the live instance of a
+    /// bit that depends on the request. `ordered_candidates` touches no
+    /// network: it reads capabilities and sorts.
+    #[test]
+    fn a_backend_sorts_behind_for_the_one_recency_value_it_cannot_express() {
+        use crate::search::providers::BingProvider;
+        let mut reg = SearchRegistry::new("bing");
+        reg.add_provider("bing".into(), Arc::new(BingProvider::new("k").unwrap()));
+        reg.add_provider(
+            "everything".into(),
+            Arc::new(MockProvider {
+                capabilities: SearchCapabilities {
+                    domain_filter: true,
+                    recency: true,
+                    full_content: true,
+                },
+                ..MockProvider::new("everything", false, 1)
+            }),
+        );
+        reg.set_fallback_providers(vec!["everything".into()]);
+
+        let order = |r: Option<crate::search::Recency>| {
+            reg.ordered_candidates(&SearchOptions {
+                recency: r,
+                ..Default::default()
+            })
+        };
+        assert_eq!(
+            order(Some(crate::search::Recency::Week))[0],
+            "bing",
+            "bing is the configured default and carries Week, so it stays first"
+        );
+        assert_eq!(
+            order(Some(crate::search::Recency::Year))[0],
+            "everything",
+            "for the bucket bing cannot express, a backend that can goes first"
+        );
+    }
+
+    // ─── Fan-out across several named backends (Round-2) ─────────────────
+
+    /// Naming two backends asks both and returns one set — the point of the
+    /// feature. Interleaved by rank, so neither backend's best result is
+    /// buried behind the other's worst.
+    #[tokio::test]
+    async fn naming_several_backends_asks_all_of_them_and_merges_the_answers() {
+        let mut reg = SearchRegistry::new("a");
+        reg.add_provider(
+            "a".into(),
+            Arc::new(MockProvider::new("a", false, 2).with_own_pages()),
+        );
+        reg.add_provider(
+            "b".into(),
+            Arc::new(MockProvider::new("b", false, 2).with_own_pages()),
+        );
+        let opts = SearchOptions {
+            providers: vec!["a".into(), "b".into()],
+            max_results: 10,
+            ..Default::default()
+        };
+        let answer = reg.search("q", &opts).await.unwrap();
+        assert_eq!(answer.results.len(), 4);
+        assert_eq!(answer.provider, "a+b");
+        let by_provider: Vec<&str> = answer
+            .results
+            .iter()
+            .map(|r| r.provider.as_deref().unwrap_or("?"))
+            .collect();
+        assert_eq!(
+            by_provider,
+            vec!["a", "b", "a", "b"],
+            "rank-interleaved, not concatenated"
+        );
+    }
+
+    /// Two backends that found the same page produce one row, and the answer
+    /// says how many it collapsed — otherwise "I asked for four and got two"
+    /// is indistinguishable from "there are only two".
+    #[tokio::test]
+    async fn pages_both_backends_found_are_merged_and_counted() {
+        let mut reg = SearchRegistry::new("a");
+        // Both mocks mint the same urls: the same two pages, found twice.
+        reg.add_provider("a".into(), Arc::new(MockProvider::new("a", false, 2)));
+        reg.add_provider("b".into(), Arc::new(MockProvider::new("b", false, 2)));
+        let opts = SearchOptions {
+            providers: vec!["a".into(), "b".into()],
+            max_results: 10,
+            ..Default::default()
+        };
+        let answer = reg.search("q", &opts).await.unwrap();
+        assert_eq!(answer.results.len(), 2);
+        assert!(
+            answer.notes.iter().any(|n| n.contains("merged")),
+            "the merge has to be said out loud: {:?}",
+            answer.notes
+        );
+    }
+
+    /// Backends disagree about what exists — that is why a caller asks
+    /// several. One of them failing narrows the answer; it does not end it.
+    #[tokio::test]
+    async fn one_backend_failing_narrows_the_answer_rather_than_ending_it() {
+        let mut reg = SearchRegistry::new("a");
+        reg.add_provider("a".into(), Arc::new(MockProvider::new("a", true, 0)));
+        reg.add_provider(
+            "b".into(),
+            Arc::new(MockProvider::new("b", false, 2).with_own_pages()),
+        );
+        let opts = SearchOptions {
+            providers: vec!["a".into(), "b".into()],
+            ..Default::default()
+        };
+        let answer = reg.search("q", &opts).await.unwrap();
+        assert_eq!(answer.results.len(), 2);
+        assert_eq!(answer.provider, "b");
+        assert!(
+            answer.notes.iter().any(|n| n.contains("1 of 2")),
+            "a caller who named two backends is the one person who can act on \
+             which of them is down: {:?}",
+            answer.notes
+        );
+    }
+
+    /// Every named backend failing is still a failure, reported in the same
+    /// `name [kind] message` shape the chain uses.
+    #[tokio::test]
+    async fn every_named_backend_failing_is_an_error_not_an_empty_answer() {
+        let mut reg = SearchRegistry::new("a");
+        reg.add_provider("a".into(), Arc::new(MockProvider::new("a", true, 0)));
+        reg.add_provider("b".into(), Arc::new(MockProvider::new("b", true, 0)));
+        let err = reg
+            .search(
+                "q",
+                &SearchOptions {
+                    providers: vec!["a".into(), "b".into()],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("a ["), "{err}");
+        assert!(err.contains("b ["), "{err}");
+    }
+
+    /// One unresolvable name fails the whole call even when the others are
+    /// fine: the caller asked for those backends, and answering with a subset
+    /// while reporting success is the confident wrong answer this rule
+    /// exists to prevent. Both missing names are listed so a caller fixing a
+    /// typo does not have to re-run to find the second one.
+    #[tokio::test]
+    async fn an_unknown_name_among_several_fails_the_call_and_lists_them_all() {
+        let mut reg = SearchRegistry::new("a");
+        reg.add_provider("a".into(), Arc::new(MockProvider::new("a", false, 2)));
+        let err = reg
+            .search(
+                "q",
+                &SearchOptions {
+                    providers: vec!["a".into(), "nope".into(), "alsonope".into()],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("nope"), "{err}");
+        assert!(err.contains("alsonope"), "{err}");
+        assert!(
+            err.contains("configured: a"),
+            "the error must list what IS configured: {err}"
+        );
+    }
+
+    /// Naming a backend twice asks it once. Without the dedup its quota is
+    /// spent twice and every one of its results arrives as its own duplicate,
+    /// which would then be reported as backends agreeing.
+    #[tokio::test]
+    async fn naming_the_same_backend_twice_asks_it_once() {
+        let mut reg = SearchRegistry::new("a");
+        reg.add_provider("a".into(), Arc::new(MockProvider::new("a", false, 2)));
+        let answer = reg
+            .search(
+                "q",
+                &SearchOptions {
+                    providers: vec!["a".into(), "a".into()],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(answer.provider, "a");
+        assert!(
+            !answer.notes.iter().any(|n| n.contains("merged")),
+            "asking one backend cannot produce cross-backend duplicates: {:?}",
+            answer.notes
+        );
+    }
+
+    /// Rows and the summary have to name backends in the same vocabulary.
+    ///
+    /// Providers stamp their own *type* (`searxng`); callers address the
+    /// *configuration key* (`alpha`). They coincide on the usual config, so a
+    /// fan-out over two instances of one provider type is the first place the
+    /// difference shows — and it is the exact case per-row attribution exists
+    /// for. Caught by `qa/web_search/run.sh fanout` on its first run, with
+    /// `provider_used: "alpha+bravo"` over rows all saying `searxng`.
+    #[tokio::test]
+    async fn rows_name_the_backend_the_caller_named_not_the_provider_type() {
+        let mut reg = SearchRegistry::new("alpha");
+        // Both mocks report their own name as `shared-type`, standing in for
+        // two backends of one provider type.
+        reg.add_provider(
+            "alpha".into(),
+            Arc::new(MockProvider {
+                name: "shared-type".into(),
+                ..MockProvider::new("alpha", false, 1).with_own_pages()
+            }),
+        );
+        reg.add_provider(
+            "bravo".into(),
+            Arc::new(MockProvider {
+                name: "shared-type".into(),
+                host: "bravo.test".into(),
+                ..MockProvider::new("bravo", false, 1)
+            }),
+        );
+        let answer = reg
+            .search(
+                "q",
+                &SearchOptions {
+                    providers: vec!["alpha".into(), "bravo".into()],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let mut names: Vec<&str> = answer
+            .results
+            .iter()
+            .map(|r| r.provider.as_deref().unwrap_or("?"))
+            .collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            vec!["alpha", "bravo"],
+            "rows must use the names `provider_used` ({}) and `providers` use",
+            answer.provider
+        );
+    }
+
+    /// The chain path uses the same vocabulary: a backend configured under a
+    /// name that is not its provider type must be reported under the name.
+    #[tokio::test]
+    async fn the_chain_also_reports_the_configured_name() {
+        let mut reg = SearchRegistry::new("primary");
+        reg.add_provider(
+            "primary".into(),
+            Arc::new(MockProvider {
+                name: "shared-type".into(),
+                ..MockProvider::new("primary", false, 1)
+            }),
+        );
+        let answer = reg.search("q", &SearchOptions::default()).await.unwrap();
+        assert_eq!(answer.provider, "primary");
+        assert_eq!(answer.results[0].provider.as_deref(), Some("primary"));
+    }
+
+    /// A dimension is dropped per backend, not per answer: in a merged set
+    /// one half can be domain-filtered and the other not, and a single note
+    /// naming one backend would describe the wrong half of the results.
+    #[tokio::test]
+    async fn each_backend_that_cannot_carry_a_dimension_says_so_under_its_own_name() {
+        // Names chosen so neither appears inside the note's own prose: the
+        // first draft called the capable backend `filtered`, and the note
+        // about the OTHER backend ends "unfiltered on that axis" — the
+        // assertion matched its own sentence and reported a defect that was
+        // not there.
+        let mut reg = SearchRegistry::new("alpha");
+        reg.add_provider(
+            "alpha".into(),
+            Arc::new(
+                MockProvider::new("alpha", false, 1)
+                    .with_domain_filter()
+                    .with_own_pages(),
+            ),
+        );
+        reg.add_provider(
+            "bravo".into(),
+            Arc::new(MockProvider::new("bravo", false, 1).with_own_pages()),
+        );
+        let answer = reg
+            .search(
+                "q",
+                &SearchOptions {
+                    providers: vec!["alpha".into(), "bravo".into()],
+                    include_domains: vec!["docs.rs".into()],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let degraded: Vec<&String> = answer
+            .notes
+            .iter()
+            .filter(|n| n.contains("was not applied"))
+            .collect();
+        assert_eq!(degraded.len(), 1, "{:?}", answer.notes);
+        assert!(degraded[0].contains("`bravo`"), "{}", degraded[0]);
+        assert!(
+            !degraded[0].contains("`alpha`"),
+            "the backend that DID filter must not be named as having dropped it: {}",
+            degraded[0]
         );
     }
 

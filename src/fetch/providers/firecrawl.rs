@@ -1,6 +1,6 @@
 use crate::error::{AlephError, Result};
 use crate::fetch::FetchProvider;
-use crate::search::providers::base::build_client;
+use crate::search::providers::base::{build_client, send};
 use crate::utils::reqwest_limit::bytes_with_limit;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -78,18 +78,21 @@ impl FetchProvider for FirecrawlFetchProvider {
         // the operator's policy is authoritative and we avoid a second DNS
         // resolution that would widen the rebinding TOCTOU window. See
         // `FetchProvider::fetch` doc comment.
-        let resp = self
-            .client
-            .post(format!("{}/v2/scrape", self.base_url))
-            .bearer_auth(&self.api_key)
-            .json(&ScrapeRequest {
-                url,
-                formats: ["markdown"],
-            })
-            .send()
-            .await
-            .map_err(|e| AlephError::network(e.to_string()))?;
-        let resp = crate::search::providers::base::check_status(resp, NAME)?;
+        // Same funnel the search providers use: it is the only place a
+        // `reqwest` failure becomes an `AlephError`, and the only place the
+        // bearer token is scrubbed out of the message on the way.
+        let resp = send(
+            self.client
+                .post(format!("{}/v2/scrape", self.base_url))
+                .bearer_auth(&self.api_key)
+                .json(&ScrapeRequest {
+                    url,
+                    formats: ["markdown"],
+                }),
+            NAME,
+            Some(self.api_key.as_str()),
+        )
+        .await?;
         // Bound body size before deserializing to avoid OOM on hostile /
         // misconfigured upstreams that return arbitrarily large responses.
         let body_bytes = bytes_with_limit(resp, MAX_RESPONSE_BYTES)

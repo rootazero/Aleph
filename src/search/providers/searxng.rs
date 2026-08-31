@@ -1,5 +1,5 @@
 use crate::error::{AlephError, Result};
-use crate::search::providers::base::{build_client, check_status, parse_json};
+use crate::search::providers::base::{build_client, parse_json, retain_usable, send};
 use crate::search::{SearchCapabilities, SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -54,6 +54,12 @@ fn build_params(
 #[derive(Debug)]
 pub struct SearxngProvider {
     base_url: String,
+    /// The password embedded in `base_url`, when the operator put one there
+    /// (`https://user:pass@searx.example`). `reqwest` quotes the URL it was
+    /// given in transport errors, so without this the password would reach
+    /// the server log and the model's `tool_result` on every connection
+    /// failure. `None` for the overwhelmingly common credential-free URL.
+    url_password: Option<String>,
     client: Client,
     /// Comma-separated upstream engines to pin (None = instance default set).
     engines: Option<String>,
@@ -75,10 +81,19 @@ struct SearxngResponse {
     unresponsive_engines: Vec<(String, String)>,
 }
 
+/// Every field is optional on the wire.
+///
+/// Not politeness: serde does not degrade field by field, so a single item a
+/// vendor returned with a `null` title used to make the **whole** document
+/// fail to deserialize — the backend reported a parse error and the chain
+/// moved on as if it were down. `base::retain_usable` decides afterwards what
+/// is usable (a url), which is one filter instead of one per provider.
 #[derive(Deserialize)]
 struct SearxngResult {
-    title: String,
-    url: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
     #[serde(default)]
     content: Option<String>,
 }
@@ -102,8 +117,14 @@ impl SearxngProvider {
             ));
         }
 
+        let url_password = url::Url::parse(&trimmed)
+            .ok()
+            .and_then(|u| u.password().map(str::to_string))
+            .filter(|p| !p.is_empty());
+
         Ok(Self {
             base_url: trimmed,
+            url_password,
             client: build_client()?,
             engines: engines.filter(|s| !s.is_empty()),
             min_interval: resolve_min_interval(min_request_interval_ms),
@@ -141,17 +162,17 @@ impl SearchProvider for SearxngProvider {
         // the upstream engines (see `throttle` / `DEFAULT_MIN_INTERVAL_MS`).
         self.throttle().await;
 
-        let response = self
-            .client
-            .get(&url)
-            .query(&params)
-            .timeout(std::time::Duration::from_secs(options.validated_timeout()))
-            .send()
-            .await
-            .map_err(|e| AlephError::network(e.to_string()))?;
-
-        let response = check_status(response, NAME)?;
-        let searxng_response: SearxngResponse = parse_json(response, NAME).await?;
+        let secret = self.url_password.as_deref();
+        let response = send(
+            self.client
+                .get(&url)
+                .query(&params)
+                .timeout(std::time::Duration::from_secs(options.validated_timeout())),
+            NAME,
+            secret,
+        )
+        .await?;
+        let searxng_response: SearxngResponse = parse_json(response, NAME, secret).await?;
 
         // SearXNG returns `200 OK` with `"results": []` even when every
         // backend engine is suspended/CAPTCHA-blocked. Silently returning
@@ -179,8 +200,8 @@ impl SearchProvider for SearxngProvider {
             .into_iter()
             .take(options.validated_max_results())
             .map(|r| SearchResult {
-                title: r.title,
-                url: r.url,
+                title: r.title.unwrap_or_default(),
+                url: r.url.unwrap_or_default(),
                 snippet: r.content.unwrap_or_default(),
                 relevance_score: None,
                 full_content: None,
@@ -189,7 +210,7 @@ impl SearchProvider for SearxngProvider {
             })
             .collect();
 
-        Ok(results)
+        Ok(retain_usable(NAME, results))
     }
 
     fn name(&self) -> &str {
@@ -200,7 +221,7 @@ impl SearchProvider for SearxngProvider {
         !self.base_url.is_empty()
     }
 
-    fn capabilities(&self) -> SearchCapabilities {
+    fn capabilities(&self, _options: &SearchOptions) -> SearchCapabilities {
         SearchCapabilities {
             domain_filter: false,
             recency: true,

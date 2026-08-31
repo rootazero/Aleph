@@ -1,5 +1,5 @@
 use crate::error::{AlephError, Result};
-use crate::search::providers::base::{build_client, check_status, parse_json};
+use crate::search::providers::base::{build_client, parse_json, retain_usable, send};
 use crate::search::{SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -30,10 +30,19 @@ struct JinaResponse {
     message: Option<String>,
 }
 
+/// Every field is optional on the wire.
+///
+/// Not politeness: serde does not degrade field by field, so a single item a
+/// vendor returned with a `null` title used to make the **whole** document
+/// fail to deserialize — the backend reported a parse error and the chain
+/// moved on as if it were down. `base::retain_usable` decides afterwards what
+/// is usable (a url), which is one filter instead of one per provider.
 #[derive(Deserialize)]
 struct JinaResult {
-    title: String,
-    url: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
     #[serde(default)]
     description: Option<String>,
 }
@@ -57,23 +66,23 @@ impl SearchProvider for JinaProvider {
         // s.jina.ai takes the query as the path segment — let reqwest's
         // query() handle percent-encoding via a single ?q= parameter is also
         // accepted by the API and avoids manual encoding.
-        let response = self
-            .client
-            .get(ENDPOINT)
-            .header("Accept", "application/json")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            // `no-content` skips full-page markdown extraction — we only
-            // need title/url/snippet for LLM ranking and the no-content
-            // mode is dramatically cheaper on Jina credits.
-            .header("X-Respond-With", "no-content")
-            .query(&[("q", query)])
-            .timeout(std::time::Duration::from_secs(options.validated_timeout()))
-            .send()
-            .await
-            .map_err(|e| AlephError::network(e.to_string()))?;
-
-        let response = check_status(response, NAME)?;
-        let jina_response: JinaResponse = parse_json(response, NAME).await?;
+        let secret = Some(self.api_key.as_str());
+        let response = send(
+            self.client
+                .get(ENDPOINT)
+                .header("Accept", "application/json")
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                // `no-content` skips full-page markdown extraction — we only
+                // need title/url/snippet for LLM ranking and the no-content
+                // mode is dramatically cheaper on Jina credits.
+                .header("X-Respond-With", "no-content")
+                .query(&[("q", query)])
+                .timeout(std::time::Duration::from_secs(options.validated_timeout())),
+            NAME,
+            secret,
+        )
+        .await?;
+        let jina_response: JinaResponse = parse_json(response, NAME, secret).await?;
 
         let data = jina_response.data.unwrap_or_default();
         if data.is_empty() {
@@ -93,8 +102,8 @@ impl SearchProvider for JinaProvider {
             .into_iter()
             .take(options.validated_max_results())
             .map(|r| SearchResult {
-                title: r.title,
-                url: r.url,
+                title: r.title.unwrap_or_default(),
+                url: r.url.unwrap_or_default(),
                 snippet: r.description.unwrap_or_default(),
                 relevance_score: None,
                 full_content: None,
@@ -103,7 +112,7 @@ impl SearchProvider for JinaProvider {
             })
             .collect();
 
-        Ok(results)
+        Ok(retain_usable(NAME, results))
     }
 
     fn name(&self) -> &str {
@@ -178,7 +187,7 @@ mod tests {
         let parsed: JinaResponse = serde_json::from_str(body).expect("parses");
         let data = parsed.data.expect("data present");
         assert_eq!(data.len(), 2);
-        assert_eq!(data[0].title, "Foo");
+        assert_eq!(data[0].title.as_deref(), Some("Foo"));
         assert_eq!(data[0].description.as_deref(), Some("snippet here"));
         assert!(data[1].description.is_none());
     }

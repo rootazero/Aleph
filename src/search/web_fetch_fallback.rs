@@ -37,7 +37,7 @@
 //!   mechanical iteration over a fixed list.
 
 use crate::error::{AlephError, Result};
-use crate::search::providers::base::{build_client, check_status};
+use crate::search::providers::base::{build_client, retain_usable, send};
 use crate::search::providers::duckduckgo::{parse_ddg_html, parse_ddg_lite_html};
 use crate::search::{SearchOptions, SearchResult};
 use crate::sync_primitives::{Mutex, MutexGuard};
@@ -46,10 +46,13 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 /// Time a mirror is silenced after returning an error or zero results.
-/// 5 min matches the `SearchRegistry` provider-test cache TTL — a value
-/// long enough that the next agent iteration won't re-probe a dead
-/// mirror, short enough that a 15-min outage recovers automatically
-/// without process restart.
+///
+/// Long enough that the next agent iteration won't re-probe a dead mirror,
+/// short enough that a 15-minute outage recovers automatically without a
+/// process restart. This used to claim it "matches the `SearchRegistry`
+/// provider-test cache TTL" — there is no such TTL and there never was, so
+/// the number was being justified by a fact about another module that did
+/// not hold. It is a standalone choice; change it on its own merits.
 const MIRROR_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 
 /// How the fallback parses the HTTP body from each mirror.
@@ -202,17 +205,18 @@ impl WebFetchSerpFallback {
         query: &str,
         options: &SearchOptions,
     ) -> Result<Vec<SearchResult>> {
-        let response = self
-            .client
-            .get(mirror.endpoint)
-            .query(&[("q", query)])
-            .header("User-Agent", mirror.user_agent)
-            .header("Accept", "text/html")
-            .timeout(Duration::from_secs(options.validated_timeout()))
-            .send()
-            .await
-            .map_err(|e| AlephError::network(e.to_string()))?;
-        let response = check_status(response, mirror.name)?;
+        // Mirrors are unauthenticated, so there is no secret to redact.
+        let response = send(
+            self.client
+                .get(mirror.endpoint)
+                .query(&[("q", query)])
+                .header("User-Agent", mirror.user_agent)
+                .header("Accept", "text/html")
+                .timeout(Duration::from_secs(options.validated_timeout())),
+            mirror.name,
+            None,
+        )
+        .await?;
         let body = response.text().await.map_err(|e| {
             AlephError::provider(format!("Failed to read {} body: {}", mirror.name, e))
         })?;
@@ -232,7 +236,7 @@ impl WebFetchSerpFallback {
                 r
             })
             .collect();
-        Ok(attributed)
+        Ok(retain_usable(mirror.name, attributed))
     }
 
     fn is_cooling_down(&self, name: &'static str) -> bool {
