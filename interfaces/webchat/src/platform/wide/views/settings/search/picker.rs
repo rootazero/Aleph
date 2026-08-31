@@ -261,6 +261,15 @@ mod tests {
 
     #[test]
     fn deleting_a_backend_returns_its_row_to_the_picker() {
+        // A real before: configured, and marked as such.
+        let before = cfg("tavily", vec![backend("tavily")]);
+        crate::components::preset_picker::contract::configured_rows_stay_offered_and_marked(
+            |q| offerable(&before, q, copy),
+            "tavily",
+        );
+        // The after: the same backend, deleted. Without the before above,
+        // `!row.configured` would hold trivially for a config that was never
+        // populated in the first place.
         let after = cfg("", vec![]);
         crate::components::preset_picker::contract::deleted_row_returns_to_the_picker(
             |q| offerable(&after, q, copy),
