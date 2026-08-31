@@ -75,7 +75,7 @@ async fn seed_history(
     // (log already non-empty) the turns are already persisted — re-seeding
     // would duplicate the whole history. The new user turn below always runs.
     let existing = service
-        .get_events(session_id, None, Some(2))
+        .get_events(session_id, None, Some(1))
         .await
         .map(|e| !e.is_empty())
         .unwrap_or_else(|e| {

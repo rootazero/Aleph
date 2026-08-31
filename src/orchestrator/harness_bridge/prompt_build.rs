@@ -143,6 +143,12 @@ impl AgentHarnessRunner {
 
         let mut out = Vec::new();
         let mut total = 0usize;
+        // Hard byte cap: even before the char-level truncation, refuse to
+        // allocate a String from a pathologically large file. `per_file_max_chars`
+        // is the documented upper bound in characters; the 4× factor covers the
+        // UTF-8 worst case without giving an attacker a way to OOM the run by
+        // pointing at a multi-gigabyte file.
+        const MAX_FILE_BYTES: usize = 4 * 1024 * 1024;
         for raw in &cfg.paths {
             if total >= total_max_chars {
                 tracing::warn!(
@@ -152,6 +158,16 @@ impl AgentHarnessRunner {
                 break;
             }
             let path = std::path::Path::new(raw);
+            // Reject `..` components in relative paths so an entry like
+            // `../../etc/passwd` cannot escape the workspace root. Absolute
+            // paths are operator-controlled and intentionally still allowed.
+            if !path.is_absolute() && path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+                tracing::warn!(
+                    path = %raw,
+                    "[prompt.extra_files] relative path contains '..'; refusing"
+                );
+                continue;
+            }
             let resolved = if path.is_absolute() {
                 path.to_path_buf()
             } else {
@@ -160,13 +176,33 @@ impl AgentHarnessRunner {
                     None => path.to_path_buf(),
                 }
             };
-            let content = match std::fs::read_to_string(&resolved) {
-                Ok(c) => c,
+            let bytes = match std::fs::read(&resolved) {
+                Ok(b) => b,
                 Err(e) => {
                     tracing::debug!(
                         path = %resolved.display(),
                         error = %e,
                         "[prompt.extra_files] unreadable; skipping"
+                    );
+                    continue;
+                }
+            };
+            if bytes.len() > MAX_FILE_BYTES {
+                tracing::warn!(
+                    path = %resolved.display(),
+                    size = bytes.len(),
+                    limit = MAX_FILE_BYTES,
+                    "[prompt.extra_files] file exceeds hard byte cap; skipping"
+                );
+                continue;
+            }
+            let content = match String::from_utf8(bytes) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::debug!(
+                        path = %resolved.display(),
+                        error = %e,
+                        "[prompt.extra_files] not valid UTF-8; skipping"
                     );
                     continue;
                 }
@@ -370,12 +406,16 @@ impl AgentHarnessRunner {
                 crate::thinker::identity_files::IdentityFilesConfig::for_context_window(budget)
             },
         );
-        let identity_files = crate::discovery::aleph_agents_dir().ok().map(|agents_dir| {
-            crate::thinker::identity_files::IdentityFiles::load(
-                &agents_dir.join(agent_id),
-                &identity_cfg,
-            )
-        });
+        let identity_files = if is_safe_agent_path_component(agent_id) {
+            crate::discovery::aleph_agents_dir().ok().map(|agents_dir| {
+                crate::thinker::identity_files::IdentityFiles::load(
+                    &agents_dir.join(agent_id),
+                    &identity_cfg,
+                )
+            })
+        } else {
+            None
+        };
         let has_identity = identity_files
             .as_ref()
             .is_some_and(|f| f.files.iter().any(|file| file.content.is_some()));
@@ -1007,10 +1047,25 @@ pub(crate) fn last_user_query(input: &FlowInput) -> String {
 /// not the orchestrator's `AgentRegistry`; their identity still loads by agent_id
 /// from this directory, so an on-disk dir is sufficient proof the agent is real —
 /// the orchestrator trusts the gateway's prior `AgentInstance` resolution.
+///
+/// `agent_id` is taken from a request, so it is treated as untrusted: any
+/// `..` or path-separator escape that would let it break out of the agents
+/// directory is rejected here before the path is constructed.
 pub(crate) fn agent_identity_dir_exists(agent_id: &str) -> bool {
+    if !is_safe_agent_path_component(agent_id) {
+        return false;
+    }
     crate::discovery::aleph_agents_dir()
         .map(|dir| dir.join(agent_id).is_dir())
         .unwrap_or(false)
+}
+
+/// Reject any value that would let `agent_id` escape `~/.aleph/agents/` when
+/// passed to `Path::join`: empty, `.`, `..`, or anything containing a path
+/// separator. Request-borne identifiers must satisfy it; anything else is
+/// silently treated as a non-existent agent.
+fn is_safe_agent_path_component(s: &str) -> bool {
+    !s.is_empty() && s != "." && s != ".." && !s.contains('/') && !s.contains('\\')
 }
 
 #[cfg(test)]
