@@ -164,7 +164,13 @@ pub(super) fn SearchPicker(
             selected.set(Some(name));
         }
         Chosen::CustomForm => {
-            selected.set(None);
+            // Deliberately leaves `selected` untouched: the right pane routes
+            // on `show_add_form` alone, so clearing it here only matters for
+            // whatever renders next once the form closes -- and that should
+            // be whatever was selected before, not the placeholder. Cancel
+            // and save both flip `show_add_form` back to `false` without
+            // touching `selected` either (see `mod.rs`'s `on_cancel` and
+            // `on_added`).
             show_add_form.set(true);
         }
     };
