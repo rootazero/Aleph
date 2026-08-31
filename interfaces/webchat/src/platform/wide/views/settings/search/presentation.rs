@@ -1,3 +1,14 @@
+//! The identity⋈styling join: which backends exist comes from
+//! `aleph_protocol::search::CONFIGURABLE_SEARCH_PROVIDERS`, how a card looks
+//! -- icon color, self-hosted framing, description copy -- comes from this
+//! file.
+//!
+//! [`join`] merges the two per backend name. A name the protocol advertises
+//! but this file has not been taught about yet falls back to [`UNSTYLED`]
+//! rather than being skipped: a backend with no card is a backend nobody can
+//! configure, which is the failure `every_advertised_provider_has_a_card`
+//! below exists to catch.
+
 use crate::api::SearchBackendEntry;
 
 // ============================================================================
