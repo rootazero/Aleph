@@ -2450,7 +2450,19 @@ mod tests {
     /// oracle that sees the full total. The figure below is what the ratchet
     /// printed on this commit; a future round that adds bytes must run the
     /// ratchet first and copy the new number, not compute it from deltas.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 112_346;
+    ///
+    /// 2026-08-31 (post-merge re-measurement): on the tree integrating
+    /// `origin/main` (channel-rooms) into the local search round, the ratchet
+    /// reports **112_608 B** total (93_012 catalog + 16_613 registry-only +
+    /// 1_039 injected + 1_944 bridge). Largest five: `desktop` (13_689),
+    /// `bash` (4_796), `agent_identity` (3_663), `remember` (2_686),
+    /// `goal` (2_314). The 112_346 value carried over from the search round
+    /// was 262 B short of this tree's measured total — the two branches'
+    /// independent edits to shared description strings account for the gap,
+    /// exactly the failure mode this constant's own rule warns about.
+    /// A future round that adds bytes MUST re-run the ratchet and copy the
+    /// printed total, not compute it from prior deltas.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 112_608;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
