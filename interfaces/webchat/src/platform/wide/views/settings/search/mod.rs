@@ -25,7 +25,8 @@ use add_custom::AddCustomSearchProviderPanel;
 use detail_panel::ProviderDetailPanel;
 use fetch_section::FetchProvidersSection;
 use global_settings::GlobalSettings;
-use list::{CustomSearchProvidersList, PresetGrid};
+use list::ConfiguredList;
+use picker::SearchPicker;
 
 use crate::api::{SearchConfig, SearchConfigApi};
 use crate::context::DashboardState;
@@ -59,6 +60,22 @@ pub fn SearchView() -> impl IntoView {
     let error = RwSignal::new(Option::<String>::None);
     let selected = RwSignal::new(Option::<String>::None);
     let show_add_form = RwSignal::new(false);
+    let picker_open = RwSignal::new(false);
+    // Seed it open **once**, after the first load: an instance with nothing
+    // configured should not land on a collapsed button. A seed rather than a
+    // derived predicate -- a signal that recomputed would snap back open
+    // every time the operator closed it while still configuring their first
+    // provider.
+    let seeded = RwSignal::new(false);
+    Effect::new(move |_| {
+        if loading.get() || seeded.get_untracked() {
+            return;
+        }
+        seeded.set(true);
+        if config.get_untracked().backends.is_empty() {
+            picker_open.set(true);
+        }
+    });
 
     // Load config on mount
     spawn_local(async move {
@@ -107,24 +124,16 @@ pub fn SearchView() -> impl IntoView {
                         </div>
                     })}
 
-                    // Preset grid
-                    <PresetGrid config=config selected=selected show_add_form=show_add_form />
+                    // Configured backends -- one list, preset and custom alike.
+                    <ConfiguredList config=config selected=selected show_add_form=show_add_form />
 
-                    // Custom providers (not matching any preset)
-                    <CustomSearchProvidersList config=config selected=selected show_add_form=show_add_form />
-
-                    // Add Custom Provider button
-                    <div class="pt-2">
-                        <button
-                            on:click=move |_| {
-                                show_add_form.set(true);
-                                selected.set(None);
-                            }
-                            class="w-full px-4 py-3 border-2 border-dashed border-border rounded-lg text-text-secondary hover:border-primary hover:text-primary transition-colors"
-                        >
-                            {t!(i18n, settings.search.add_custom)}
-                        </button>
-                    </div>
+                    // Catalogue: nine presets plus the custom endpoint, behind one button.
+                    <SearchPicker
+                        config=config
+                        selected=selected
+                        show_add_form=show_add_form
+                        open=picker_open
+                    />
 
                     // Global search settings
                     <GlobalSettings config=config loading=loading />

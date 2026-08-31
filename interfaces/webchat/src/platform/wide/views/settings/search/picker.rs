@@ -26,7 +26,7 @@
 
 use leptos::prelude::*;
 
-use super::presentation::{presets, SearchPreset};
+use super::presentation::{presets, SearchPreset, NEUTRAL_ICON_COLOR};
 use crate::api::{SearchBackendEntry, SearchConfig};
 use crate::components::preset_picker::{PickerRow, PresetPicker};
 use crate::components::provider_badge::BadgeState;
@@ -104,7 +104,7 @@ pub(super) fn offerable(
         .map(|preset| {
             let backend = cfg.backends.iter().find(|b| b.name == preset.name);
             PickerRow {
-                configured: backend.is_some(),
+                configured: is_configured(&cfg.backends, preset.name),
                 badge: BadgeState {
                     is_default: !cfg.default_provider.is_empty()
                         && cfg.default_provider == preset.name,
@@ -123,7 +123,7 @@ pub(super) fn offerable(
         id: CUSTOM_ROW_ID.to_string(),
         name: copy(Subtitle::CustomEndpoint),
         subtitle: String::new(),
-        icon_color: "#6B7280".to_string(),
+        icon_color: NEUTRAL_ICON_COLOR.to_string(),
         icon_glyph: Some("+".to_string()),
         configured: false,
         badge: BadgeState {

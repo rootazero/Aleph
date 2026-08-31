@@ -80,6 +80,13 @@ pub(super) const PRESENTATION: &[SearchPresentation] = &[
     },
 ];
 
+/// Icon color for a backend with no brand color of its own: the protocol's
+/// unstyled fallback, and any backend name that never appears in the preset
+/// table at all (an operator's own custom endpoint). `list.rs` and
+/// `picker.rs` both draw rows for that second case and share this constant
+/// instead of each carrying their own copy of the literal.
+pub(super) const NEUTRAL_ICON_COLOR: &str = "#6B7280";
+
 /// Neutral styling for a backend the protocol advertises and this table has
 /// not been taught about yet.
 ///
@@ -89,7 +96,7 @@ pub(super) const PRESENTATION: &[SearchPresentation] = &[
 pub(super) const UNSTYLED: SearchPresentation = SearchPresentation {
     name: "",
     description: "",
-    icon_color: "#6B7280",
+    icon_color: NEUTRAL_ICON_COLOR,
     is_self_hosted: false,
 };
 
