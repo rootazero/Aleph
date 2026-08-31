@@ -72,10 +72,10 @@ impl MediaPipeline {
                 }
                 Err(e) => {
                     return Err(MediaError::ProviderError {
-                        media_type,
                         provider: "policy".to_string(),
-                        source: anyhow::anyhow!(
-                            "cannot stat FilePath {path:?} for size policy: {e}"
+                        message: format!(
+                            "cannot stat FilePath {path:?} for {} size policy: {e}",
+                            media_type.category()
                         ),
                     });
                 }

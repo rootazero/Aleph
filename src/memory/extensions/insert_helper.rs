@@ -133,7 +133,7 @@ mod tests {
         let store_inner = Arc::new(FakeStore(Mutex::new(Vec::new())));
         let store: Arc<dyn RawMemoryStore> = store_inner.clone();
         let reg = MemoryExtensionRegistry::new();
-        reg.register(Arc::new(BlockExt));
+        reg.register(Arc::new(BlockExt)).unwrap();
         let reg = Arc::new(reg);
         let d = insert_with_capture_filter(&store, &reg, &ctx(), raw())
             .await
@@ -147,7 +147,7 @@ mod tests {
         let store_inner = Arc::new(FakeStore(Mutex::new(Vec::new())));
         let store: Arc<dyn RawMemoryStore> = store_inner.clone();
         let reg = MemoryExtensionRegistry::new();
-        reg.register(Arc::new(PrefixExt));
+        reg.register(Arc::new(PrefixExt)).unwrap();
         let reg = Arc::new(reg);
         let d = insert_with_capture_filter(&store, &reg, &ctx(), raw())
             .await

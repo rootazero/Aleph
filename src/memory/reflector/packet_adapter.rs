@@ -181,10 +181,10 @@ mod tests {
 
         assert!(ctx
             .user_prompt
-            .contains("[path=reference/rust score=0.910]"));
+            .contains("<retrieved_note path=\"reference/rust\" score=\"0.910\">"));
         assert!(ctx
             .user_prompt
-            .contains("[path=reference/ownership score=0.730]"));
+            .contains("<retrieved_note path=\"reference/ownership\" score=\"0.730\">"));
         assert_eq!(ctx.note_lookup.len(), 2);
         assert_eq!(
             ctx.note_lookup.get("reference/rust").unwrap().title,

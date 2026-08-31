@@ -138,7 +138,7 @@ impl MemoryExtension for McpMemoryExtension {
                     raw.content = new_raw.content;
                 } else {
                     tracing::warn!(
-                        plugin = %self.plugin_name,
+                        plugin = %self.name,
                         len = new_raw.content.len(),
                         "plugin rewrite exceeded MAX_PLUGIN_REWRITTEN_CONTENT_BYTES; \
                          ignoring rewrite"
