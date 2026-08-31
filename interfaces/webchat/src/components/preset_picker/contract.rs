@@ -64,10 +64,9 @@ pub fn configured_rows_stay_offered_and_marked(
 /// from an emptied configured list).
 pub fn deleted_row_returns_to_the_picker(after_delete: impl Fn(&str) -> Vec<PickerRow>, id: &str) {
     let rows = after_delete("");
-    let row = rows
-        .iter()
-        .find(|r| r.id == id)
-        .unwrap_or_else(|| panic!("deleted row {id} is unreachable — it can never be set up again"));
+    let row = rows.iter().find(|r| r.id == id).unwrap_or_else(|| {
+        panic!("deleted row {id} is unreachable — it can never be set up again")
+    });
     assert!(
         !row.configured,
         "row {id} was deleted but still marked configured"

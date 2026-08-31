@@ -247,7 +247,10 @@ mod tests {
     fn a_configured_backend_is_listed_and_still_offered() {
         let c = cfg("tavily", vec![backend("tavily")]);
         assert_eq!(
-            listed(&c).iter().map(|b| b.name.clone()).collect::<Vec<_>>(),
+            listed(&c)
+                .iter()
+                .map(|b| b.name.clone())
+                .collect::<Vec<_>>(),
             ["tavily"]
         );
         crate::components::preset_picker::contract::configured_rows_stay_offered_and_marked(
@@ -296,7 +299,10 @@ mod tests {
         let c = cfg("tavily", vec![backend("tavily")]);
         let rows = offerable(&c, "", copy);
         let custom = rows.iter().find(|r| r.id == CUSTOM_ROW_ID).unwrap();
-        assert!(!custom.configured, "the custom row is an action, not a backend");
+        assert!(
+            !custom.configured,
+            "the custom row is an action, not a backend"
+        );
     }
 
     /// A backend not in the preset table (the operator's own) must also show
@@ -306,7 +312,10 @@ mod tests {
     fn a_custom_backend_is_listed_next_to_the_presets() {
         let c = cfg("tavily", vec![backend("tavily"), backend("my-searx")]);
         assert_eq!(
-            listed(&c).iter().map(|b| b.name.clone()).collect::<Vec<_>>(),
+            listed(&c)
+                .iter()
+                .map(|b| b.name.clone())
+                .collect::<Vec<_>>(),
             ["tavily", "my-searx"]
         );
     }
@@ -315,12 +324,18 @@ mod tests {
     fn subtitles_come_from_the_protocols_requirement_flags() {
         let c = cfg("", vec![]);
         let rows = offerable(&c, "", copy);
-        let sub = |id: &str| {
-            rows.iter().find(|r| r.id == id).unwrap().subtitle.clone()
-        };
+        let sub = |id: &str| rows.iter().find(|r| r.id == id).unwrap().subtitle.clone();
         assert_eq!(sub("tavily"), "needs-key", "tavily needs an API key");
-        assert_eq!(sub("searxng"), "self-hosted", "searxng is run by the operator");
-        assert_eq!(sub("duckduckgo"), "no-key", "duckduckgo needs no credential");
+        assert_eq!(
+            sub("searxng"),
+            "self-hosted",
+            "searxng is run by the operator"
+        );
+        assert_eq!(
+            sub("duckduckgo"),
+            "no-key",
+            "duckduckgo needs no credential"
+        );
     }
 
     #[test]
@@ -335,6 +350,9 @@ mod tests {
     #[test]
     fn choosing_any_backend_row_selects_it_by_name() {
         assert_eq!(chosen_target("tavily"), Chosen::Backend("tavily".into()));
-        assert_eq!(chosen_target("my-searx"), Chosen::Backend("my-searx".into()));
+        assert_eq!(
+            chosen_target("my-searx"),
+            Chosen::Backend("my-searx".into())
+        );
     }
 }

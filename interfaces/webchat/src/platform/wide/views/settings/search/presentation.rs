@@ -168,7 +168,6 @@ impl aleph_protocol::providers::Searchable for SearchPreset {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
