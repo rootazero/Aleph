@@ -158,7 +158,27 @@ impl GuardrailRegistry {
         events: Vec<SessionEventRecord>,
         tail_start: usize,
     ) -> SessionInputScreen {
-        let blocking = events[tail_start.min(events.len())..]
+        // Fail-closed on stale tail_start: if the caller hands us a tail index
+        // past the end of the event log, the slice below silently degrades to
+        // an empty scan and every Block on a user paste would degrade to
+        // redaction (the redact-only fallback for the *boundary grace* path).
+        // That is a fail-open: the user-supplied paste proceeds. Reject the
+        // call explicitly so the orchestrator can decide between retrying
+        // (after refresh) and ending the turn.
+        if tail_start > events.len() {
+            tracing::error!(
+                subsystem = "guardrails",
+                event = "screen_session_input_tail_out_of_range",
+                tail_start = tail_start,
+                events_len = events.len(),
+                "caller-supplied tail_start exceeds event log length; refusing to scan"
+            );
+            return SessionInputScreen::Blocked(format!(
+                "tail_start ({tail_start}) exceeds event log length ({})",
+                events.len()
+            ));
+        }
+        let blocking = events[tail_start..]
             .iter()
             .enumerate()
             .rev()
@@ -304,11 +324,35 @@ impl GuardrailRegistry {
                 GuardrailDecision::Block { .. } => return d,
             }
         }
-        settle_chain(
-            rewritten,
-            warns,
-            serde_json::to_string(&current).unwrap_or_else(|_| args.to_string()),
-        )
+        // Serializing the (possibly rewritten) args is the registry's contract with
+        // its caller: the result lands in `Replacement.text` so the harness can
+        // hand the rewritten args to the tool. If a rewrite happened but the
+        // rewritten `Value` cannot be re-serialized to JSON (e.g. non-finite
+        // floats, exotic map keys), falling back to `args.to_string()` would
+        // silently hand the tool the ORIGINAL un-sanitized payload — a
+        // fail-OPEN that defeats the entire guardrail pipeline. Fail-closed
+        // instead: refuse the call so the agent sees a Block and can retry
+        // with a serializable payload. The caller
+        // (`AgentHarness::apply_tool_call_guardrail`) already classifies a
+        // serialization-induced block as terminal.
+        let text = match serde_json::to_string(&current) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(
+                    subsystem = "guardrails",
+                    error = %e,
+                    tool = tool_name,
+                    rewritten = rewritten,
+                    "guardrail-rewritten tool args failed to serialize; refusing to pass un-sanitized args"
+                );
+                return GuardrailDecision::Block {
+                    reason: "guardrail serialization failed; refusing to pass un-sanitized args"
+                        .to_string(),
+                    class: crate::error::ErrorClass::Unexpected,
+                };
+            }
+        };
+        settle_chain(rewritten, warns, text)
     }
 }
 

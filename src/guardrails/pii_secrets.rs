@@ -29,6 +29,15 @@ const NAME: &str = "pii_secrets";
 /// Maximum recursion depth for [`PiiSecretsGuardrail::scan_tool_args`]. See
 /// the doc comment on the function for the DoS rationale.
 const MAX_SCAN_DEPTH: u32 = 32;
+/// Branching-width cap on tool-arg scans. Bounds the number of JSON nodes
+/// visited per scan so a pathologically shallow-but-wide input (e.g. a
+/// single object holding a 1M-element array of short strings) cannot
+/// exhaust memory or starve the orchestrator. Mirrors `MAX_SCAN_DEPTH`'s
+/// rationale (cap rather than scan a partial tree) but on a different
+/// axis: depth vs total node count. Legitimate tool args stay well under
+/// this bound; an attacker would need to construct a payload whose
+/// legitimate use-case is indistinguishable from the attack to bypass it.
+const MAX_SCAN_NODES: u32 = 65_536;
 
 pub struct PiiSecretsGuardrail {
     guard: Arc<RuntimeSecurityGuard>,
@@ -111,8 +120,14 @@ impl PiiSecretsGuardrail {
                     }
                     _ => "resolution_failed",
                 };
+                // `error = %e` was deliberately dropped: `SecretError`'s
+                // `Display` impl echoes the user-supplied placeholder name
+                // verbatim, and the Block-reason arm above was hardened to
+                // strip the name to prevent vault-namespace enumeration. The
+                // audit field below carries the pre-classified variant only;
+                // the raw error (with name) is logged via a separate
+                // elevated-access debug! path that operators must opt into.
                 tracing::warn!(
-                    error = %e,
                     secret_kind = "vault",
                     variant = variant,
                     "secret resolution failed during guardrail evaluation"
@@ -178,9 +193,11 @@ impl PiiSecretsGuardrail {
         warnings: &'a mut Vec<String>,
         sources: &'a mut Vec<String>,
     ) -> BoxFuture<'a, Result<Value, GuardrailDecision>> {
-        self.scan_tool_args_at_depth(value, resolver_ref, warnings, sources, 0)
+        let mut nodes: u32 = 0;
+        self.scan_tool_args_at_depth(value, resolver_ref, warnings, sources, 0, &mut nodes)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn scan_tool_args_at_depth<'a>(
         &'a self,
         value: &'a Value,
@@ -188,6 +205,7 @@ impl PiiSecretsGuardrail {
         warnings: &'a mut Vec<String>,
         sources: &'a mut Vec<String>,
         depth: u32,
+        nodes: &'a mut u32,
     ) -> BoxFuture<'a, Result<Value, GuardrailDecision>> {
         Box::pin(async move {
             if depth > MAX_SCAN_DEPTH {
@@ -200,6 +218,28 @@ impl PiiSecretsGuardrail {
                 return Err(GuardrailDecision::Block {
                     reason: format!(
                         "tool call arguments nested deeper than {MAX_SCAN_DEPTH} levels"
+                    ),
+                    class: ErrorClass::Unexpected,
+                });
+            }
+            // The depth cap does NOT bound branching width: a single
+            // `{ "items": [<1M short strings>] }` payload recurses 2 levels
+            // deep (object -> array -> string) and processes every leaf.
+            // Count visited nodes at every entry so a wide-but-shallow
+            // adversarial payload cannot exhaust memory on the tool
+            // dispatch hot path. The counter increments once per recursion
+            // entry; legitimate tool args are well under the bound.
+            *nodes = nodes.saturating_add(1);
+            if *nodes > MAX_SCAN_NODES {
+                tracing::warn!(
+                    subsystem = "guardrails",
+                    nodes = *nodes,
+                    max = MAX_SCAN_NODES,
+                    "tool-arg scan node budget exceeded; failing closed"
+                );
+                return Err(GuardrailDecision::Block {
+                    reason: format!(
+                        "tool call arguments contain more than {MAX_SCAN_NODES} JSON nodes"
                     ),
                     class: ErrorClass::Unexpected,
                 });
@@ -219,6 +259,7 @@ impl PiiSecretsGuardrail {
                                 warnings,
                                 sources,
                                 depth + 1,
+                                nodes,
                             )
                             .await?,
                         );
@@ -238,6 +279,7 @@ impl PiiSecretsGuardrail {
                                 warnings,
                                 sources,
                                 depth + 1,
+                                nodes,
                             )
                             .await?;
                         out.insert(new_key, new_val);
