@@ -59,11 +59,6 @@ pub(super) enum Chosen {
     CustomForm,
 }
 
-/// Whether the operator already has a backend configured under this name.
-pub(super) fn is_configured(backends: &[SearchBackendEntry], name: &str) -> bool {
-    backends.iter().any(|b| b.name == name)
-}
-
 /// The rows the left panel lists: **every** configured backend, preset and
 /// custom alike.
 ///
@@ -104,7 +99,7 @@ pub(super) fn offerable(
         .map(|preset| {
             let backend = cfg.backends.iter().find(|b| b.name == preset.name);
             PickerRow {
-                configured: is_configured(&cfg.backends, preset.name),
+                configured: backend.is_some(),
                 badge: BadgeState {
                     is_default: !cfg.default_provider.is_empty()
                         && cfg.default_provider == preset.name,

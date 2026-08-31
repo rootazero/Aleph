@@ -1415,8 +1415,6 @@
       "connection_successful": "连接成功",
       "crawl4ai_desc": "自托管的 URL → Markdown 抓取器",
       "custom_id_placeholder": "例如 my-searxng、custom-search",
-      "custom_providers": "自定义提供商",
-      "custom_search_provider": "自定义搜索提供商",
       "default": "默认",
       "deleting": "删除中...",
       "description": "配置搜索和检索设置",

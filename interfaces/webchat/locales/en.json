@@ -1415,8 +1415,6 @@
       "connection_successful": "Connection successful",
       "crawl4ai_desc": "Self-hosted URL → Markdown scraper",
       "custom_id_placeholder": "e.g., my-searxng, custom-search",
-      "custom_providers": "Custom Providers",
-      "custom_search_provider": "Custom search provider",
       "default": "Default",
       "deleting": "Deleting...",
       "description": "Configure search and retrieval settings",
