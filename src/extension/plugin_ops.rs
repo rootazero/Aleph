@@ -628,6 +628,13 @@ impl ExtensionManager {
             // rather than merely moved — see `projection.rs` for why the
             // derivation may not be written twice.
             self.republish_plugin_projections().await;
+            // Re-mirror the durable plugin store into the loader. Without
+            // this, the loader's `plugin_settings` map carries the pre-toggle
+            // view: a plugin disabled via `set_plugin_enabled(_, false)` is
+            // hidden from the active-tool index but its config snapshot
+            // remains in the loader until the next `load_all` or `reload`
+            // re-publishes it.
+            self.publish_plugin_settings().await;
         }
 
         changed || preference_changed
