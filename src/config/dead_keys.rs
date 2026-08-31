@@ -60,6 +60,12 @@ struct Tolerated {
     path: &'static str,
     /// Why this path is not dead.
     why: &'static str,
+    /// True when the field was *removed from the schema on purpose* (i.e. an
+    /// operator's old TOML still parses but the knob no longer exists).
+    /// These are surfaced at info! in the load summary so the operator
+    /// sees the line and can remove it; non-retired tolerated keys stay at
+    /// debug! because they are legitimately read elsewhere.
+    retired: bool,
 }
 
 /// Paths that are ignored by `Config`'s schema on purpose.
@@ -75,12 +81,14 @@ const TOLERATED: &[Tolerated] = &[
         path: "gateway",
         why: "read by GatewayConfig::load_default (src/gateway/config.rs) out of this same file; \
               `Config` has no `gateway` field by design",
+        retired: false,
     },
     Tolerated {
         path: "security.ssrf",
         why: "read by Config::apply_security_ssrf_overrides (src/config/load.rs), a raw-TOML \
               bridge — `ShellSecurityConfig` has no `ssrf` field, so serde ignores what the \
               bridge honours",
+        retired: false,
     },
     // ---- Retired: knobs removed with their config kept parsing on purpose.
     // `[agent]` and `[cowork]` were removed entirely in 2026-08-17 wire audit
@@ -94,20 +102,24 @@ const TOLERATED: &[Tolerated] = &[
         path: "agent",
         why: "the whole [agent] section was retired in the 2026-08-17 wire audit (config-002); \
               reported at the root because serde no longer descends into it",
+        retired: true,
     },
     Tolerated {
         path: "cowork",
         why: "the whole [cowork] section was retired in the 2026-08-17 wire audit (config-007); \
               reported at the root because serde no longer descends into it",
+        retired: true,
     },
     Tolerated {
         path: "profiles.*.cache_strategy",
         why: "retired — prompt caching is decided by the protocol adapters, there is no dial; \
               see src/config/types/profile.rs",
+        retired: true,
     },
     Tolerated {
         path: "profiles.*.system_prompt",
         why: "retired — AGENTS.md is the persona overlay; see src/config/types/profile.rs",
+        retired: true,
     },
     Tolerated {
         path: "agents.*.system_prompt",
@@ -115,19 +127,23 @@ const TOLERATED: &[Tolerated] = &[
               readers; real injection is via SoulLayer/ProfileLayer/IdentityFilesLayer reading \
               SOUL.md/AGENTS.md/IDENTITY.md each turn. See \
               src/gateway/agent_instance.rs::from_resolved.",
+        retired: true,
     },
     Tolerated {
         path: "profiles.*.tools",
         why: "retired — the live tool gate is AgentInstanceConfig.tool_whitelist (sourced from \
               agent.skills); see src/config/types/profile.rs",
+        retired: true,
     },
     Tolerated {
         path: "desktop.presence",
         why: "reporter removed 2026-08-09; see the module doc of src/config/types/desktop.rs",
+        retired: true,
     },
     Tolerated {
         path: "desktop.mic_level",
         why: "reporter removed 2026-08-09; see the module doc of src/config/types/desktop.rs",
+        retired: true,
     },
     // These two shipped in `CompoundIngestConfig` from the day the section was
     // written and were read by nothing for their whole life. Note what that
@@ -140,10 +156,12 @@ const TOLERATED: &[Tolerated] = &[
     Tolerated {
         path: "memory.compound_ingest.replan_on_hash_conflict",
         why: "retired 2026-08-23 — the hash-conflict replan is exactly one attempt, decided in               src/memory/notes/ingest/ingestor/batch.rs; this knob never reached it",
+        retired: true,
     },
     Tolerated {
         path: "memory.compound_ingest.failure_cooldown_seconds",
         why: "retired 2026-08-23 — a failed ingest defers its raw rows for RETRY_GRACE_SECS               (src/memory/compression/service.rs); this knob never reached anything",
+        retired: true,
     },
 ];
 
@@ -167,10 +185,24 @@ where
         if path.is_empty() {
             return;
         }
-        if let Some(why) = tolerated_reason(&path) {
-            debug!(key = %path, reason = why, "Config key is ignored on purpose");
-        } else {
-            dead.push(path);
+        match tolerated_entry(&path) {
+            Some(entry) if entry.retired => {
+                // Surface retired keys at info! so the operator sees the
+                // line in the load summary and can remove it from their TOML.
+                // Non-retired tolerated keys (foreign-owned sections) stay at
+                // debug! because they are legitimately read elsewhere.
+                tracing::info!(
+                    key = %path,
+                    reason = entry.why,
+                    "Config key was retired; remove it from your TOML"
+                );
+            }
+            Some(entry) => {
+                debug!(key = %path, reason = entry.why, "Config key is ignored on purpose");
+            }
+            None => {
+                dead.push(path);
+            }
         }
     })?;
 
@@ -184,10 +216,14 @@ where
 
 /// The reason `path` is tolerated, or `None` when nothing reads it.
 fn tolerated_reason(path: &str) -> Option<&'static str> {
+    tolerated_entry(path).map(|entry| entry.why)
+}
+
+/// The matched tolerated entry for `path`, or `None` when nothing reads it.
+fn tolerated_entry(path: &str) -> Option<&'static Tolerated> {
     TOLERATED
         .iter()
         .find(|entry| covers(entry.path, path))
-        .map(|entry| entry.why)
 }
 
 /// Does `pattern` cover `path` — same segments, `*` matching any one of them,

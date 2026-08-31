@@ -5,7 +5,25 @@
 use crate::config::Config;
 use crate::error::{AlephError, Result};
 use chrono::NaiveTime;
+use std::sync::OnceLock;
 use tracing::{debug, error, info, warn};
+
+/// Cached set of known search-provider type strings.
+///
+/// `ProviderFactoryRegistry::with_defaults()` rebuilds the full factory map
+/// on every call (each `register` is a heap allocation). The result is
+/// invariant across the process lifetime, so we build it once and reuse the
+/// sorted `Vec<&'static str>` for every `validate_search_config` invocation
+/// (load, patcher commit, rollback pre-check).
+fn known_search_provider_types() -> &'static [&'static str] {
+    static CACHE: OnceLock<Vec<&'static str>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let registry = crate::search::ProviderFactoryRegistry::with_defaults();
+        let mut v: Vec<&'static str> = registry.known_provider_types();
+        v.sort();
+        v
+    })
+}
 
 /// Load-time normalization: when `general.default_provider` names a provider
 /// that does not exist in `providers`, fall back to a deterministically-chosen
@@ -525,8 +543,7 @@ impl Config {
                 // *before* vault injection (e.g. `engine_id` for Google,
                 // `base_url` for SearXNG) are still enforced here as hard
                 // errors — they're typos in TOML, not missing secrets.
-                let factory_registry = crate::search::ProviderFactoryRegistry::with_defaults();
-                let known_types = factory_registry.known_provider_types();
+                let known_types: &'static [&'static str] = known_search_provider_types();
                 for (backend_name, backend_config) in &search_config.backends {
                     let provider_type = backend_config.provider_type.as_str();
 
