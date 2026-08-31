@@ -214,11 +214,6 @@ where
     Ok((value, dead))
 }
 
-/// The reason `path` is tolerated, or `None` when nothing reads it.
-fn tolerated_reason(path: &str) -> Option<&'static str> {
-    tolerated_entry(path).map(|entry| entry.why)
-}
-
 /// The matched tolerated entry for `path`, or `None` when nothing reads it.
 fn tolerated_entry(path: &str) -> Option<&'static Tolerated> {
     TOLERATED
