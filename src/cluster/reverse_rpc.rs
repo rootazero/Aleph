@@ -303,7 +303,14 @@ impl ReverseRpcChannel {
         // command the center has now told its caller "timed out".
         //
         // `OUTBOUND_PUSH_BUDGET_MS` caps the enqueue half regardless of the
-        // caller's `timeout_ms`; the response window gets whatever remains.
+        // caller's `timeout_ms`; the response_deadline is set at call start
+        // to `now + timeout_ms` (the *full* caller budget), independent of
+        // how much outbound actually consumed. The total call wall-time is
+        // therefore bounded by `timeout_ms` for outbound plus a separate
+        // `timeout_ms` for the response wait, not by a single shared
+        // budget. This is a deliberate split: a slow enqueue is already an
+        // error (`OutboundWedged`), so the response half does not need to
+        // "subtract" anything from a shared clock.
         let outbound_budget = Duration::from_millis(timeout_ms.min(OUTBOUND_PUSH_BUDGET_MS));
         let outbound_deadline = tokio::time::Instant::now() + outbound_budget;
         let response_deadline = tokio::time::Instant::now() + budget;

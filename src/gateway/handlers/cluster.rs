@@ -103,6 +103,19 @@ pub async fn handle_cluster_deregister(
 
     match deregister_node(&ctx.node_registry, &ctx.security_store, &params.node) {
         Ok(outcome) => {
+            // Partial-state signal: the online session was evicted but the
+            // long-lived device record was not. The node can re-enroll on its
+            // next backoff because the security store still believes it is
+            // enrolled. Surface this at WARN, not INFO, so operators see it in
+            // the same place they'd notice any other authority-change anomaly.
+            if outcome.evicted && !outcome.device_removed {
+                tracing::warn!(
+                    node = %params.node,
+                    node_id = %outcome.node_id,
+                    "cluster.deregister: partial state — online session evicted but \
+                     device record NOT revoked; node may self-revive on next backoff",
+                );
+            }
             if let Some(log) = crate::security::audit::global() {
                 log.log(crate::security::audit::AuditEntry::authority_change(
                     crate::gateway::caller_identity::current_caller_user(),
