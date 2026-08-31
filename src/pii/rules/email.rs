@@ -9,7 +9,12 @@ static EMAIL_RE: OnceLock<Regex> = OnceLock::new();
 
 fn email_regex() -> &'static Regex {
     EMAIL_RE.get_or_init(|| {
-        Regex::new(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+        // TLD upper bound 63 matches RFC 1035's max DNS label length and
+        // caps the backtracking the unbounded `{2,}` could otherwise do on
+        // malformed inputs (the engine is linear-time, but the greedy
+        // `[A-Za-z0-9.\-]+` plus unanchored `{2,}` can still exhibit quadratic
+        // degradation on pathological text). Real TLDs never approach this.
+        Regex::new(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,63}")
             // rust-doctor-disable-next-line unwrap-in-production
             .expect("static email regex compiles")
     })
