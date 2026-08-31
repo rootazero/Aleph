@@ -5,6 +5,7 @@
 //! the inputs and interpret the outputs of Coordinator and Persona LLM invocations.
 
 use super::protocol::{CoordinatorPlan, GroupChatError, Persona, RespondentPlan};
+use crate::utils::text_format::truncate_chars;
 
 /// Maximum number of characters from a persona's `system_prompt` to include
 /// in the coordinator prompt (to keep token usage reasonable).
@@ -49,7 +50,7 @@ pub fn build_coordinator_prompt(
     }
     prompt.push_str("Available personas:\n");
     for p in personas {
-        let truncated = truncate_str(&p.system_prompt, SYSTEM_PROMPT_TRUNCATE_LEN);
+        let truncated = truncate_chars(&p.system_prompt, SYSTEM_PROMPT_TRUNCATE_LEN);
         prompt.push_str(&format!(
             "- id=\"{}\" name=\"{}\" prompt=\"{}\"\n",
             quote_field(&p.id),
@@ -102,7 +103,7 @@ pub fn parse_coordinator_plan(raw: &str) -> Result<CoordinatorPlan, GroupChatErr
     serde_json::from_str(trimmed).map_err(|e| {
         GroupChatError::CoordinatorPlanParseError(format!(
             "{e} — raw input: {}",
-            truncate_str(raw, 200)
+            truncate_chars(raw, 200)
         ))
     })
 }
@@ -191,9 +192,7 @@ pub fn build_persona_prompt(
 /// Truncate a string to at most `max_len` characters.
 ///
 /// Uses char counting to avoid panicking on multi-byte UTF-8 boundaries.
-fn truncate_str(s: &str, max_len: usize) -> &str {
-    crate::utils::text_format::truncate_chars(s, max_len)
-}
+
 
 /// Strip markdown code fences (` ```json ... ``` `) from LLM output.
 fn strip_markdown_fences(s: &str) -> &str {
