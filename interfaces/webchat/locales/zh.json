@@ -1402,7 +1402,6 @@
       "working_directory": "工作目录"
     },
     "search": {
-      "add_custom": "+ 添加自定义提供商",
       "add_custom_provider": "添加自定义提供商",
       "add_provider": "添加提供商",
       "adding": "添加中...",

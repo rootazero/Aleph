@@ -1402,7 +1402,6 @@
       "working_directory": "Working Directory"
     },
     "search": {
-      "add_custom": "+ Add Custom Provider",
       "add_custom_provider": "Add Custom Provider",
       "add_provider": "Add Provider",
       "adding": "Adding...",
