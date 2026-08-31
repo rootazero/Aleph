@@ -367,15 +367,23 @@ impl ManifestAdapter for ClaudeCodeTomlAdapter {
     }
 
     fn parse(&self, plugin_dir: &Path) -> anyhow::Result<AdapterOutput> {
-        let manifest = parse_cc_plugin_toml_sync(plugin_dir)
+        // Read the manifest file ONCE. Previously this called
+        // parse_cc_plugin_toml_sync (which reads + parses) and then
+        // re-read + re-parsed the same file below to extract capabilities
+        // from the raw TOML — every plugin directory was hit twice on
+        // boot. Read the content once and reuse it for both the typed
+        // manifest parse and the raw component-extraction parse.
+        let toml_path = plugin_dir.join(CC_PLUGIN_TOML);
+        let content = std::fs::read_to_string(&toml_path)?;
+        let manifest = parse_cc_plugin_toml_content(&content, plugin_dir)
             .map_err(|e| anyhow::anyhow!("CC TOML parse error: {e}"))?;
 
         let plugin_id = manifest.id.clone();
         let mut capabilities = Vec::new();
 
-        // Read component paths from the raw TOML to get skills/agents/hooks/mcp paths
-        let toml_path = plugin_dir.join(CC_PLUGIN_TOML);
-        let content = std::fs::read_to_string(&toml_path)?;
+        // Reuse the already-read content for the raw-TyPath extraction;
+        // the structured manifest does not surface component paths in
+        // the shape component_source::resolve_* needs.
         let raw: CcPluginToml =
             toml::from_str(&content).map_err(|e| anyhow::anyhow!("TOML re-parse error: {e}"))?;
 
