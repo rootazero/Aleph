@@ -194,11 +194,18 @@ pub fn ask_user_frame(
     request: &ClarificationRequest,
     cursor: usize,
 ) -> GatewayEventFrame {
-    let current = request.questions.get(cursor).unwrap_or_else(|| {
-        request
-            .first()
-            .expect("a ClarificationRequest built by a constructor is never empty")
-    });
+    let current = match request.questions.get(cursor).or_else(|| request.first()) {
+        Some(c) => c,
+        // The constructor invariant guarantees the request is non-empty, so
+        // the cursor-past-end fallback is the only path that can return a
+        // question. Reaching this arm means the request was hand-rolled via
+        // struct literal inside the crate (the public constructors all
+        // validate non-empty) — an internal invariant break that we surface
+        // here rather than masking.
+        None => unreachable!(
+            "a ClarificationRequest built by a constructor is never empty"
+        ),
+    };
     GatewayEventFrame::AskUser {
         run_id: run_id.to_string(),
         // The run's emitter owns the stream sequence counter and an
