@@ -132,6 +132,13 @@ pub struct SpawnerBase {
     /// operator's flash sibling, not the main reasoning model. `None` keeps the
     /// child summarizing on its own LLM.
     pub cheap_summary_provider: Option<Arc<dyn AiProvider>>,
+    /// The parent runner's verifier chain, shared with the child so a
+    /// subagent that enters a tool-call death loop is caught by the same
+    /// structural watchdog as the parent (ToolLoopVerifier, StopHookVerifier,
+    /// etc.). `None` keeps the child on the legacy no-verifier path —
+    /// matching pre-2026-09 behaviour but explicitly opted-in rather than
+    /// the silent default of `verifier_chain: None` that this audit fixed.
+    pub verifier_chain: Option<Arc<crate::verification::VerifierChain>>,
 }
 
 /// Per-spawn configuration. All lifetimes are scoped to a single `spawn` call.
@@ -880,7 +887,14 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             tools: scoped_tools,
             llm,
             robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
-            verifier_chain: None,
+            // Forward the parent's verifier chain so a subagent that enters
+            // a tool-call death loop is caught by the same structural
+            // watchdog as the parent (ToolLoopVerifier, StopHookVerifier,
+            // etc.). Falling back to None preserves the pre-2026-09 behaviour
+            // for callers that don't thread a chain through SpawnerBase —
+            // the iteration cap (`resolve_max_iterations`) is the last
+            // line of defence in that case.
+            verifier_chain: base.verifier_chain.clone(),
             context_budget,
             context_compactor,
             preflight_pipeline,

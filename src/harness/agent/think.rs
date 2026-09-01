@@ -15,7 +15,8 @@ use crate::session::events::{MessageContent, SessionEvent, SessionEventRecord, T
 use crate::session::service::SessionId;
 use crate::thinker::nudges::{MAX_OUTPUT_TOKENS_RESUME_NUDGE, MAX_STEPS_HINT};
 use crate::verification::{
-    hash_tool_args, ToolCallSummary, TurnVerifyContext, VerifierVerdict, TOOL_HISTORY_WINDOW,
+    hash_tool_args, ToolCallSummary, TurnVerifyContext, VerifierVerdict, STOP_REASON_END_TURN,
+    TOOL_HISTORY_WINDOW,
 };
 
 /// Bridges a borrowed [`HarnessCallback`] into the provider layer's
@@ -932,7 +933,10 @@ impl AgentHarness {
                 args_hash: hash_tool_args(&tc.arguments),
             });
         }
-        let stop_reason = response.tool_calls.is_empty().then_some("end_turn");
+        let stop_reason = response
+            .tool_calls
+            .is_empty()
+            .then_some(STOP_REASON_END_TURN);
         let session_key = session_id.to_key_string();
         let verdict = self
             .run_verifiers(
