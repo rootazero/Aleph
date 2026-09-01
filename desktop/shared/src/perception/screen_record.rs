@@ -938,7 +938,7 @@ fn wf_recorder_record(
     // SAFETY: `child.id()` is the pid of a child of this very process, still
     // owned by the `Child` handle (so it cannot have been reaped and its pid
     // reused). `SIGINT` to it is wf-recorder's documented stop path.
-    #[allow(clippy::cast_possible_wrap)]
+    #[allow(clippy::cast_possible_wrap, reason = "`Child::id()` returns `u32` on unix and `pid_t` is `i32`; the cast can wrap only for pid values > i32::MAX, which the kernel never assigns on Linux/macOS")]
     unsafe {
         libc::kill(child.id() as libc::pid_t, libc::SIGINT);
     }

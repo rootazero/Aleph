@@ -80,7 +80,7 @@ pub fn is_spawn_failure(e: &DesktopError) -> bool {
 /// Build the command here and add arguments, not flags.
 #[must_use]
 pub fn hidden_command(program: &str) -> Command {
-    #[allow(unused_mut)]
+    #[allow(unused_mut, reason = "`cmd` is reassigned on Windows via `creation_flags`; on Unix the binding stays immutable so clippy complains unless we annotate")]
     let mut cmd = Command::new(program);
     #[cfg(windows)]
     {
@@ -93,7 +93,7 @@ pub fn hidden_command(program: &str) -> Command {
 /// already run inside `spawn_blocking`.
 #[must_use]
 pub fn hidden_std_command(program: &str) -> std::process::Command {
-    #[allow(unused_mut)]
+    #[allow(unused_mut, reason = "`cmd` is reassigned on Windows via `creation_flags`; on Unix the binding stays immutable so clippy complains unless we annotate")]
     let mut cmd = std::process::Command::new(program);
     #[cfg(windows)]
     {

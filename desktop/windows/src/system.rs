@@ -442,8 +442,7 @@ $null = $nodes.Item(1).AppendChild($template.CreateTextNode($env:ALEPH_TOAST_BOD
                 use windows::Win32::UI::Input::KeyboardAndMouse::GetLastInputInfo;
 
                 #[repr(C)]
-                #[allow(non_snake_case, clippy::upper_case_acronyms)]
-                // Win32 ABI struct — name & field casing must match the Win32 header.
+                #[allow(non_snake_case, clippy::upper_case_acronyms, reason = "Win32 ABI struct — name & field casing must match the Win32 header; renaming would diverge from the C declaration and break the bind contract")]
                 struct LASTINPUTINFO {
                     cbSize: u32,
                     dwTime: u32,

@@ -61,7 +61,7 @@ fn build_script_cmd(language: ScriptLanguage, source: &str) -> Result<Command> {
             c.arg("-c").arg(source);
             c
         }
-        #[allow(unreachable_patterns)]
+        #[allow(unreachable_patterns, reason = "the match is shared across macOS / Windows / Linux builds; PowerShell only matches on Windows where it has a real arm — macOS would never reach it but the compiler cannot prove that across cfg")]
         ScriptLanguage::PowerShell => {
             return Err(DesktopError::NotImplemented(
                 "PowerShell is not available on macOS".into(),

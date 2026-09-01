@@ -68,6 +68,10 @@ pub fn write_text(text: &str) -> Result<()> {
     // Snapshot the prior text BEFORE clearing so we can restore on failure.
     // `NSPasteboard` does not expose an atomic "declare-and-write"; the only
     // safe sequence is snapshot → clear → set → (on fail) restore.
+    //
+    // SAFETY: `pb` is the general pasteboard and `NSPasteboardTypeString` is
+    // a framework constant; `stringForType` returns `nil` (→ `None`) when the
+    // pasteboard has no string, so no allocation / lifetime invariant is at risk.
     let prior_text: Option<String> = unsafe {
         pb.stringForType(NSPasteboardTypeString)
             .map(|s| s.to_string())
@@ -87,6 +91,9 @@ pub fn write_text(text: &str) -> Result<()> {
         // leaving the user with whatever the OS gave them.
         if let Some(prior) = prior_text.as_deref() {
             let restore_ns = NSString::from_str(prior);
+            // SAFETY: same invariant as the `setString_forType` above —
+            // `pb` is the general pasteboard, `restore_ns` a live `NSString`,
+            // `NSPasteboardTypeString` a framework constant.
             let restored = unsafe { pb.setString_forType(&restore_ns, NSPasteboardTypeString) };
             if !restored {
                 tracing::warn!(
