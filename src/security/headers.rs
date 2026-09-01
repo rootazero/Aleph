@@ -122,6 +122,28 @@ fn inject_security_headers(headers: &mut http::HeaderMap, is_static: bool) {
         if let Ok(value) = HeaderValue::from_str(CSP_VALUE) {
             headers.insert(http::header::CONTENT_SECURITY_POLICY, value);
         }
+    } else if let Some(existing) = headers.get(http::header::CONTENT_SECURITY_POLICY) {
+        // Defense-in-depth: a handler that emits a CSP less restrictive than
+        // the default would land on the wire untouched. The layer cannot
+        // *tighten* an already-set policy without breaking legitimate use
+        // cases (the Panel artifact route sets a strict superset that drops
+        // the default's `script-src 'unsafe-inline'`, for example), but it
+        // can surface a permissive policy in the audit trail so a future
+        // refactor that loosens a handler's CSP shows up at runtime rather
+        // than silently. The two tells: a `default-src *` (or `*` anywhere)
+        // and missing `frame-ancestors`.
+        if let Ok(s) = existing.to_str() {
+            let suspicious = s.contains("* ") || s.contains(" *;") || s.ends_with(" *");
+            let missing_frame_ancestors = !s.contains("frame-ancestors");
+            if suspicious || missing_frame_ancestors {
+                tracing::warn!(
+                    csp = %s,
+                    suspicious_wildcard = suspicious,
+                    missing_frame_ancestors = missing_frame_ancestors,
+                    "handler-supplied CSP observed; verify it is at least as restrictive as the layer default"
+                );
+            }
+        }
     }
 
     let entries: &[(&str, &str)] = &[
