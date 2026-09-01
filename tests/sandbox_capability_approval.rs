@@ -290,31 +290,54 @@ async fn elevated_network_triggers_approval_and_proceeds_on_approve() {
 }
 
 #[tokio::test]
-async fn elevated_subprocess_denied_by_approval_returns_error() {
-    // Subprocess spawn is outside the strict baseline. Gate denies → the
-    // sandbox must refuse with `CapabilityDenied` and never call the driver.
+async fn subprocess_spawn_is_gated_exactly_where_the_baseline_says_it_is() {
+    // Whether spawning a subprocess is an ESCALATION is a platform decision,
+    // and it has exactly one owner: `SandboxCapabilities::session_baseline()`,
+    // which admits spawn everywhere except Linux. That is deliberate — the
+    // macOS fork ban only ever stopped compound shell commands, never
+    // `rm -rf`, so it bought no containment while putting an approval card in
+    // front of nearly every ordinary command.
+    //
+    // This test asks that constant rather than restating `cfg!(target_os)`.
+    // The version before it hardcoded the Linux answer, so once the ban was
+    // lifted it failed on macOS and Windows while describing itself as an
+    // approval-gate defect — the test was the stale half, and a second copy of
+    // the platform rule is what let the two disagree.
+    let baseline_admits_spawn = SandboxCapabilities::session_baseline().spawn_subprocess;
     let (sandbox, runs, approvals, _last_mem, _last_net, _tmp) =
         build_test_sandbox(ApprovalOutcome::Denied);
 
-    let err = sandbox
-        .execute(spawn_cmd(test_session()))
-        .await
-        .expect_err("denied spawn capability must surface an error");
+    let result = sandbox.execute(spawn_cmd(test_session())).await;
 
-    assert!(
-        matches!(err, SandboxError::CapabilityDenied { .. }),
-        "expected CapabilityDenied, got {err:?}"
-    );
-    assert_eq!(
-        *approvals.read().await,
-        1,
-        "approval gate must be consulted for elevated caps"
-    );
-    assert_eq!(
-        *runs.read().await,
-        0,
-        "driver must not run when approval is denied"
-    );
+    if baseline_admits_spawn {
+        // Within baseline ⇒ step 3 is skipped entirely. Note what is asserted:
+        // not merely that it succeeded, but that the gate was never asked —
+        // a denial that never runs cannot be mistaken for a grant.
+        let output = result.expect("spawn is within this platform's baseline");
+        assert_eq!(output.exit_code, Some(0));
+        assert_eq!(
+            *approvals.read().await,
+            0,
+            "gate consulted for a capability already inside the baseline"
+        );
+        assert_eq!(*runs.read().await, 1, "driver should have run");
+    } else {
+        let err = result.expect_err("denied spawn capability must surface an error");
+        assert!(
+            matches!(err, SandboxError::CapabilityDenied { .. }),
+            "expected CapabilityDenied, got {err:?}"
+        );
+        assert_eq!(
+            *approvals.read().await,
+            1,
+            "approval gate must be consulted for elevated caps"
+        );
+        assert_eq!(
+            *runs.read().await,
+            0,
+            "driver must not run when approval is denied"
+        );
+    }
 }
 
 #[tokio::test]
