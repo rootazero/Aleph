@@ -42,6 +42,55 @@ pub(crate) fn sanitize_key_for_dir(key: &str) -> String {
     }
 }
 
+/// Best-effort inverse of [`sanitize_key_for_dir`] for a directory name.
+///
+/// On POSIX this is the identity, because the forward map only touches
+/// characters (`/`, `\\`, NUL) a session key cannot contain — so the directory
+/// name IS the key and every reader that treats it as one is right.
+///
+/// On Windows it is not. The forward map also sends `:` to `_`, and `:` is the
+/// key's own separator, so `agent:main:main:s1` lands on disk as
+/// `agent_main_main_s1` and the projection is lossy. Anything that reads a
+/// directory name AS a key is therefore wrong on Windows and right on POSIX,
+/// which is why it stayed invisible: `migration::rebuild_metadata_from_transcript`
+/// parses the directory name with `SessionKey::from_key_string` to recover the
+/// agent id and the session type, and on Windows that parse fails on every
+/// session the store ever wrote — so a repaired `main` session came back
+/// labelled `ephemeral`. A wrong label is worse than a missing one.
+///
+/// There is no exact inverse (an agent id may legitimately contain `_`), so
+/// this does not guess: it proposes the one candidate `_` -> `:` and accepts it
+/// only when the candidate parses as a real [`SessionKey`] AND projects back
+/// onto the exact directory name it came from. A name that fails either test is
+/// returned unchanged, which is the pre-existing behaviour — this can recover a
+/// key or decline, never corrupt one.
+///
+/// Lives beside the forward map on purpose: two functions that must remain each
+/// other's inverse belong to one reader.
+pub(crate) fn key_from_dir_name(name: &str) -> String {
+    #[cfg(not(windows))]
+    {
+        name.to_string()
+    }
+    #[cfg(windows)]
+    {
+        use crate::routing::session_key::SessionKey;
+        // A name that still has `:` was never sanitized (or came from a POSIX
+        // copy); it is already a key and must not be rewritten.
+        if name.contains(':') || !name.contains('_') {
+            return name.to_string();
+        }
+        let candidate = name.replace('_', ":");
+        if SessionKey::from_key_string(&candidate).is_some()
+            && sanitize_key_for_dir(&candidate) == name
+        {
+            candidate
+        } else {
+            name.to_string()
+        }
+    }
+}
+
 /// Read the epoch of a session directory `name` given the already-sanitized
 /// base `pattern`. Returns `Some(n)` only when `name` is `pattern` followed by
 /// a distinct `<sep>s{n}` epoch segment; `None` for the epoch-0 base dir or an
@@ -1488,6 +1537,44 @@ mod epoch_tests {
             ..Default::default()
         };
         (FileSessionStore::new(config).expect("store"), dir)
+    }
+
+    /// The contract `key_from_dir_name` exists for, stated as one property
+    /// that must hold on BOTH platforms: whatever `sanitize_key_for_dir` wrote
+    /// on disk, reading it back yields the key again. On POSIX both halves are
+    /// the identity; on Windows the forward half is lossy and the inverse has
+    /// to earn its answer. A platform-conditional assertion here would have
+    /// been a way of writing the Windows defect down instead of fixing it.
+    #[test]
+    fn a_sanitized_dir_name_reads_back_as_its_key() {
+        for key in [
+            "agent:main:main:s1",
+            "agent:main:main",
+            "agent:main:ephemeral:seed-noreseed",
+        ] {
+            assert_eq!(
+                key_from_dir_name(&sanitize_key_for_dir(key)),
+                key,
+                "round trip failed for {key}"
+            );
+        }
+    }
+
+    /// It declines rather than guesses. `_` is legal inside an agent id, so
+    /// there is no exact inverse; a name whose `_`->`:` reading is not a real
+    /// session key comes back untouched — the behaviour every caller had
+    /// before this function existed.
+    #[test]
+    fn a_dir_name_that_is_not_a_disguised_key_is_returned_unchanged() {
+        for name in [
+            "stale-name",
+            "not_a_session_key",
+            ".archive",
+            // Already a key: must not be rewritten on any platform.
+            "agent:main:main:s1",
+        ] {
+            assert_eq!(key_from_dir_name(name), name, "rewrote {name}");
+        }
     }
 
     // The epoch parser must read `s{n}` regardless of whether the base and its

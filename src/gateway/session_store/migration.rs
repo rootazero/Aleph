@@ -637,7 +637,15 @@ async fn rebuild_metadata_from_transcript(
     // Derive what the key encodes; a key that doesn't parse (shouldn't happen
     // for a dir the store itself created) still yields a listable session,
     // just with fallback agent/type labels.
-    let parsed = crate::gateway::router::SessionKey::from_key_string(dir_name);
+    //
+    // The directory name is not the key on every platform:
+    // `sanitize_key_for_dir` maps `:` -> `_` on Windows, and `:` is the key's
+    // own separator, so on Windows this parse used to fail for EVERY session
+    // the store had ever written and a repaired `main` session came back
+    // labelled `ephemeral`. `key_from_dir_name` is the guarded inverse — it
+    // recovers the key or declines, and is the identity on POSIX.
+    let key = crate::gateway::session_store::file_backend::key_from_dir_name(dir_name);
+    let parsed = crate::gateway::router::SessionKey::from_key_string(&key);
     let (agent_id, session_type) = match &parsed {
         Some(crate::gateway::router::SessionKey::Main { agent_id, .. }) => {
             (agent_id.clone(), "main")
@@ -694,7 +702,7 @@ async fn rebuild_metadata_from_transcript(
     });
 
     Ok(Some(SessionMetadata {
-        key: dir_name.to_string(),
+        key,
         agent_id,
         session_type: session_type.to_string(),
         created_at,
