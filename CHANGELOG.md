@@ -193,7 +193,11 @@ call site — it is at the type that let the two answers look alike.
   different keys that land on the same directory name, because `_` is legal
   inside an agent id. Nothing reading only the name can separate them.
   So the reader keeps the fallback labels, and the property lives beside the
-  forward map where the next person to want an inverse will find it. The real
+  forward map where the next person to want an inverse will find it. The
+  repair test asks `sanitize_key_for_dir` and the key parser what to expect
+  instead of asserting the POSIX answer on every platform — carrying its own
+  copy of the platform rule is what made it fail on Windows both times this
+  code moved. The real
   fix is a reversible forward map — percent-escaping `:` rather than collapsing
   it — plus a rename migration for existing directories, which is a change of
   its own and not a repair to the reader.

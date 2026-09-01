@@ -939,9 +939,29 @@ mod repair_tests {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(repaired.key, "agent:main:main:s1");
-        assert_eq!(repaired.agent_id, "main");
-        assert_eq!(repaired.session_type, "main");
+        // The repaired key is the DIRECTORY NAME, which is the session key on
+        // POSIX and its lossy projection on Windows — `sanitize_key_for_dir`
+        // sends `:` to `_` there and nothing can undo that (see
+        // `file_backend::two_real_keys_collide_on_one_windows_dir_name`). So
+        // the expectation is derived from the forward map that owns the rule,
+        // not restated as a `cfg!(windows)` of its own: a second copy of a
+        // platform rule is how the two come to disagree.
+        let dir_name =
+            crate::gateway::session_store::file_backend::sanitize_key_for_dir("agent:main:main:s1");
+        assert_eq!(repaired.key, dir_name);
+        // Same reason for the labels: they are read off whatever that key
+        // parses as, so where the name survives the projection they are the
+        // real ones, and where it does not they are the documented fallback.
+        // Asked of the parser rather than assumed, so this says the same thing
+        // the production code does.
+        let (want_agent, want_type) =
+            if crate::gateway::router::SessionKey::from_key_string(&dir_name).is_some() {
+                ("main", "main")
+            } else {
+                ("main", "ephemeral")
+            };
+        assert_eq!(repaired.agent_id, want_agent);
+        assert_eq!(repaired.session_type, want_type);
         assert_eq!(repaired.message_count, 2);
         assert_eq!(
             repaired.derived_title.as_deref(),
