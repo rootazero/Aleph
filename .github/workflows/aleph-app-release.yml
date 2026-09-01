@@ -64,6 +64,25 @@ jobs:
         if: startsWith(matrix.os, 'windows')
         run: choco install protoc -y
 
+      # The 26.9.1 cycle put the ubuntu *test* job over this runner's 16 GB —
+      # not a plateau near the floor but a decline into exit 143 — and this leg
+      # links the same tree twice (`--release` daemon, then the Tauri bundle).
+      # It has not died yet; a swapfile is the cheap way to keep it that way,
+      # since an OOM here costs the whole ~30-minute matrix and, with
+      # publish=on, leaves a tag with no assets under it. /mnt is the roomy
+      # ephemeral volume on GitHub's Linux runners.
+      - name: Enlarge swap (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          set -euo pipefail
+          sudo swapoff -a || true
+          sudo rm -f /mnt/swapfile /swapfile
+          sudo fallocate -l 16G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+
       # The daemon needs xcb/X11/etc.; Tauri needs the WebView + GTK headers.
       - name: Install Linux system libraries
         if: startsWith(matrix.os, 'ubuntu')
