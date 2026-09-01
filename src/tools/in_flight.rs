@@ -25,7 +25,8 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+
+use crate::sync_primitives::Arc;
 
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Mutex;

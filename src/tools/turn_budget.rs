@@ -15,10 +15,9 @@
 //! so dropping them adds little value while costing more recall.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
-use crate::sync_primitives::Mutex;
+use crate::sync_primitives::{Arc, Mutex};
 
 /// Default per-turn budget. Mirrors hermes' `MAX_TURN_BUDGET_CHARS=200_000`,
 /// converted to ~50 000 tokens at the standard ~4 chars/token ratio.

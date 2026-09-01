@@ -83,8 +83,12 @@ pub struct ToolFailureGroup {
 /// [`crate::harness::agent::prompt::build_prompt`]'s lookup: walk
 /// backwards from the `ToolError` to find the most recent
 /// `ToolCallRequested` with a matching `call_id`. If no matching request
-/// is found (truncated tail, replay edge case) the call is recorded
-/// under `"unknown"` so the LLM still sees the kind tally.
+/// is found (truncated tail, replay edge case) the row is dropped from the
+/// tally entirely — surfacing a row under `"unknown"` would render as
+/// `- unknown × 3 (rate_limited)` in the LLM-facing summary, which gives
+/// the model no actionable handle to climb the ladder on. Drop-and-count-
+/// on-resolved matches the policy in `redundant_calls.rs` /
+/// `no_progress.rs` for orphan events.
 #[must_use]
 pub fn aggregate_failures(events: &[SessionEventRecord]) -> Vec<ToolFailureGroup> {
     let mut counts: HashMap<(String, ToolErrorKind), usize> = HashMap::new();
@@ -93,8 +97,10 @@ pub fn aggregate_failures(events: &[SessionEventRecord]) -> Vec<ToolFailureGroup
         let SessionEvent::ToolError { call_id, error, .. } = &record.event else {
             continue;
         };
+        let Some(tool) = resolve_tool_name(events, idx, call_id) else {
+            continue;
+        };
         let kind = classify_error_str(error);
-        let tool = resolve_tool_name(events, idx, call_id).unwrap_or("unknown");
         *counts.entry((tool.to_string(), kind)).or_insert(0) += 1;
     }
 
@@ -366,6 +372,31 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].count, 3);
         assert_eq!(groups[0].kind, ToolErrorKind::RateLimited);
+    }
+
+    #[test]
+    fn orphan_tool_errors_are_dropped_not_attributed_to_unknown() {
+        // A `ToolError` with no matching `ToolCallRequested` in the visible
+        // window (truncated tail, replay edge) used to be tallied under
+        // `"unknown"` so the LLM saw a row like `- unknown × 3
+        // (rate_limited)`. That gave the model no actionable handle, so the
+        // tally now drops the row entirely — the failures still counted
+        // exist only because their request was visible.
+        let events = vec![
+            terr("c_orphan", "HTTP 429 rate limit"),
+            terr("c_orphan", "HTTP 429 rate limit"),
+            terr("c_orphan", "HTTP 429 rate limit"),
+            tcr("c_resolved", "search"),
+            terr("c_resolved", "HTTP 429 rate limit"),
+        ];
+        let groups = aggregate_failures(&events);
+        // Orphan rows dropped; only the resolved row survives.
+        assert_eq!(groups.len(), 1, "{groups:?}");
+        assert_eq!(groups[0].tool, "search");
+        assert_eq!(groups[0].count, 1);
+        // Summary threshold is 3 — below threshold means no reminder emitted
+        // even with three orphans, because the orphans do not contribute.
+        assert!(render_run_summary(&events).is_none());
     }
 
     #[test]

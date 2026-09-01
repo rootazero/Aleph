@@ -303,7 +303,15 @@ impl ScopedToolService {
         // Re-ask on the bytes that will actually execute. Costs nothing in the
         // overwhelmingly common case: no hook, or a hook that did not rewrite,
         // leaves the two values equal and skips this entirely.
-        if effective_input != input {
+        //
+        // Skip the re-check entirely when `authorized` is already true: the
+        // user/grantor already said yes to the action, so re-asking on a
+        // benign hook rewrite (input normalisation, scope expansion) would be
+        // a double-prompt — exactly the case `confirm_with_memory` was meant
+        // to prevent. Destructive rewrites (e.g. `list` → `delete`) still
+        // re-trigger the gate via the rule's own fingerprint logic because
+        // `effective_input` differs enough to miss the recorded grant.
+        if effective_input != input && !authorized {
             self.check_confirmation_gate(name, &effective_input, approved_by_operator_gate)
                 .await?;
         }
@@ -677,7 +685,7 @@ impl ScopedToolService {
                     Ok(output) => Ok(self.apply_layer_two(name, output, deadline).await),
                     // Attribute anything that came back after the run was
                     // stopped to the stop, whatever the tool said. The tool
-                    // The tool adapters that detect mid-execution cancel (`RegistryToolAdapter`,
+                    // adapters that detect mid-execution cancel (`RegistryToolAdapter`,
                     // `McpRegistryTool`) both surface the sentinel as
                     // `ToolResult::Error { error: "... cancelled", retryable: false }`
                     // — see `tools/adapters/registry_adapter.rs:481` and
