@@ -20,7 +20,7 @@
 |---|------|------------|
 | **R1** | 大脑与四肢绝对分离 | 严禁在 `src` 中直接调用平台系统 API（AppKit / Vision / CoreGraphics / windows-rs）；核心只定义能力契约 (Trait)，物理实现由原生 Bridge (Swift / 其他) 经 IPC 提供。**例外·进程隔离内核**：restricted-token / job-object / AppContainer / 完整性级别 / SID·ACL 与本地 PID 探测**必须由 spawn 子进程的父进程就地发起**，无法经 IPC 桥委托 ⇒ `src/sandbox/*` 与 `builtin_tools/desktop/session_lock.rs` 的平台 FFI（`cfg(windows)` 门控）是**立意之外的合法开口**，非违规——R1 针对的是桌面 UI / 屏幕 / Vision **四肢** → [SANDBOX.md](docs/reference/SANDBOX.md) |
 | **R2** | UI 逻辑唯一源 | 严禁在原生 Bridge 中实现有业务逻辑的设置页 / 表单 / 列表；复杂业务 UI 一律在 Leptos (WASM) Panel，Bridge 只做系统 API 调用与桥接 |
-| **R3** | 核心轻量化 | 严禁为单一非核心功能往 core 引入沉重三方库；优先实现为 Skill (Python/Bash) 或 MCP Server。**内核只调度，不搬砖** |
+| **R3** | 核心轻量化 | 严禁为单一非核心功能往 core 引入沉重三方库；优先实现为 Skill (Python/Bash) 或 MCP Server。**内核只调度，不搬砖**。**例外·运行时定位（2026-09-01 用户裁定）**：「跑别人 agent 的运行时」是 Aleph 的**核心定位**——为它引入的重量不属"单一非核心功能"，此条不挡路；但仍须逐项答出**为什么这一块不能是 Skill / MCP**，且不得据此绕开下方禁用清单 |
 | **R4** | Interface 层禁止业务逻辑 | Channel / Bot / CLI / Panel 不做数据持久化、记忆检索或任务规划——纯 I/O：输入转 JSON-RPC 发给 Server，响应渲染给用户 |
 | **R5** | AI 主动到达 | 通过用户**已有的**工作通道主动送达（多端推送 / 内联建议 / 订阅式 Daemon 触发）；不抢焦点、不弹模态，但不因此砍掉必要的交互入口 |
 | **R6** | 一核多端 | Aleph 是常驻后台服务，UI 不是必需品；Rust Core 是唯一大脑，多端通道只负责 I/O 与渲染，不参与业务推理 |
@@ -66,6 +66,7 @@
 - **`src` 中直接依赖平台 API crate**（windows-rs / core-graphics / cocoa / objc / winapi）—— 违 R1，必须走原生 Bridge IPC
 - **正则 / 规则引擎做意图识别或路由** —— 违 R7/P8，语义判断交 LLM
 - **非 serde 的序列化栈** —— 全栈 serde
+- **第二个 VT / 终端模拟器实现**（含移植 herdr 的 `pane/terminal` + `terminal/state`）—— 服务端 VT 的唯一真源是 `src/gateway/pty/screen/`；跑别人 agent 需要的能力（alt-screen / graphics / OSC 进度 / kitty keyboard）一律**扩容它**，不引第二份（2026-09-01 用户裁定；判据 §1「同一事实的两份表述」）
 
 ---
 ## ⚠️ 工程判据 — 形状名索引 (Hard-Won Criteria)
