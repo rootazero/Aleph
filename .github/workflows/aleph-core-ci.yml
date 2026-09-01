@@ -493,19 +493,11 @@ jobs:
 
       # tauri-build requires the externalBin files to exist; empty
       # placeholders satisfy `cargo check` / `clippy` without a daemon build.
+      # Shared with the justfile recipe and the rust-doctor workflow: three
+      # copies of this derivation existed and the third was missing entirely.
       - name: Stage externalBin placeholders
         shell: bash
-        run: |
-          triple="$(rustc -vV | sed -n 's/host: //p')"
-          mkdir -p desktop/shell/binaries
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            touch "desktop/shell/binaries/aleph-server-$triple.exe"
-          else
-            touch "desktop/shell/binaries/aleph-server-$triple"
-          fi
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            touch "desktop/shell/binaries/AlephBridge-$triple"
-          fi
+        run: bash scripts/stage_shell_placeholders.sh
 
       - name: Check
         run: cargo check -p aleph-desktop-shell

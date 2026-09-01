@@ -66,6 +66,15 @@ jobs:
             libssl-dev libwayland-dev libpipewire-0.3-dev libdbus-1-dev \
             libdrm-dev libgbm-dev libegl-dev libxdo-dev clang libclang-dev
 
+      # `aleph-desktop-shell` is a workspace member, so any workspace-wide
+      # clippy compiles it — and `tauri-build` fails outright when a file named
+      # in `externalBin` is missing. That is the third and last reason this job
+      # reported "Clippy exited with status 101" a minute in; the placeholders
+      # are empty files it never executes.
+      - name: Stage externalBin placeholders
+        shell: bash
+        run: bash scripts/stage_shell_placeholders.sh
+
       # The npm launcher resolves the prebuilt binary for the runner rather
       # than compiling rust-doctor from source on every run. The version is
       # pinned: a CI gate whose rule set moves on its own fails builds for

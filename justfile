@@ -93,16 +93,11 @@ _stage-shell-binaries profile:
 # Create empty externalBin placeholders so `cargo check` / `clippy` of the
 # shell crate pass without a full daemon build (tauri-build requires the
 # externalBin files to exist). `touch` leaves any real staged binary intact.
+#
+# The derivation lives in scripts/stage_shell_placeholders.sh, because CI needs
+# the same three lines and copies of it had already started to drift.
 _stage-shell-placeholders:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    triple="$(rustc -vV | sed -n 's/host: //p')"
-    ext=""; [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* ]] && ext=".exe"
-    mkdir -p {{shell_dir}}/binaries
-    touch "{{shell_dir}}/binaries/aleph-server-$triple$ext"
-    if [[ "$OSTYPE" == darwin* ]]; then
-        touch "{{shell_dir}}/binaries/AlephBridge-$triple"
-    fi
+    bash scripts/stage_shell_placeholders.sh {{shell_dir}}
 
 # Run the desktop app in dev mode (rebuilds + stages the daemon first)
 shell-dev: build-debug
