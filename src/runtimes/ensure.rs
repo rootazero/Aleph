@@ -4,7 +4,8 @@
 //! needs a runtime that may not be installed.
 
 use crate::error::AlephError;
-use crate::runtimes::bootstrap::{self, BootstrapResult};
+use crate::runtimes::bootstrap::{self, BootstrapError, BootstrapResult};
+use crate::runtimes::post_install;
 use crate::runtimes::ledger::{
     now_secs, CapabilityEntry, CapabilityLedger, CapabilitySource, CapabilityStatus,
 };
@@ -174,6 +175,26 @@ async fn ensure_capability_recursive(
     // Run bootstrap (async dispatcher)
     let bootstrap_result = match bootstrap::install(capability).await {
         Ok(result) => result,
+        Err(BootstrapError::PostInstall(post_install::PostInstallError::SubcommandFailed {
+            stderr,
+        })) => {
+            // RUN-002: route post-install subcommand failures through
+            // `runtime_error` so the user sees the three-line actionable hint
+            // (CLI command, Panel path, install_hint) and a stderr tail.
+            // Every `BootstrapResult` failure branch below does this; the
+            // generic `Err(_)` arm does not, which historically meant a
+            // failed post-install step (uv venv, playwright install-browser,
+            // fnm alias, etc.) surfaced only "Bootstrap failed: …".
+            ledger
+                .write()
+                .await
+                .update_status(capability, CapabilityStatus::Missing);
+            return Err(runtime_error(
+                capability,
+                "post-install action failed",
+                Some(&stderr),
+            ));
+        }
         Err(e) => {
             // Reset off `Bootstrapping` so a transient dispatcher error (timeout /
             // I/O / post-install) leaves a terminal state, matching every
