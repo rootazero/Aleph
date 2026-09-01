@@ -303,9 +303,22 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
         let mut cmd = tokio::process::Command::new(&command.program);
         cmd.args(&command.args)
             .current_dir(&self.worktree_path)
-            .envs(command.env.iter())
-            .env("CARGO_TARGET_DIR", self.worktree_path.join("target"))
-            .stdin(std::process::Stdio::piped())
+            .envs(command.env.iter());
+        // SAN-006: only inject CARGO_TARGET_DIR when the child is a cargo
+        // invocation. CARGO_TARGET_DIR is cargo's optimisation hint, but a
+        // non-cargo command that reads the variable for its own purposes
+        // (custom build scripts, CI tools) would see a worktree-relative
+        // path it never expected, and could write artifacts outside the
+        // worktree. Match on the basename so `/usr/local/bin/cargo`,
+        // `./target/debug/cargo`, and `cargo` all qualify.
+        if std::path::Path::new(&command.program)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n == "cargo")
+        {
+            cmd.env("CARGO_TARGET_DIR", self.worktree_path.join("target"));
+        }
+        cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);

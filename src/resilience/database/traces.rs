@@ -106,6 +106,15 @@ fn task_trace_from_row(row: &rusqlite::Row) -> rusqlite::Result<TaskTrace> {
 ///
 /// `substr(..., 1, 200)` counts CHARACTERS in SQLite, so the preview cannot
 /// split a multi-byte codepoint the way a byte slice would.
+/// SQL LIKE pattern (with surrounding single-quotes) for synthetic
+/// MoA-advisor agent IDs. MoA `MeteringProvider` writes rows whose
+/// `$.agent_id` field has the shape `moa:<idx>:<provider>:<model>`; this
+/// constant is the single source of truth so that a rename of the prefix
+/// (e.g. `moa-advisor:`) is a one-line change. Kept SQL-quoted so it can
+/// be interpolated directly into a `LIKE '...'` clause without further
+/// escaping.
+const MOA_AGENT_ID_LIKE_PATTERN: &str = "'moa:%'";
+
 const TRACE_LIST_COLUMNS: &str = "tr.task_id, \
      COUNT(*) AS event_count, \
      MAX(tr.timestamp) AS last_timestamp, \
@@ -590,8 +599,9 @@ impl StateDatabase {
                     COALESCE(SUM(COALESCE(CAST(json_extract(event_json, '$.thinking_tokens') AS INTEGER), 0)), 0)
                 FROM task_traces
                 WHERE event_kind = 'provider_usage'
-                  AND json_extract(event_json, '$.agent_id') LIKE 'moa:%'{where_extras}
-                "#
+                  AND json_extract(event_json, '$.agent_id') LIKE {moa_like}{where_extras}
+                "#,
+                moa_like = MOA_AGENT_ID_LIKE_PATTERN,
             );
             let mut stmt = conn
                 .prepare(&sql)
