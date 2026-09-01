@@ -81,9 +81,15 @@ pub fn truncate_chars(text: &str, max_chars: usize) -> &str {
 /// Truncate so the result INCLUDING `marker` is at most `max_total_chars`.
 ///
 /// Hard cap: unlike [`truncate_with_marker`], the marker's width is reserved
-/// before cutting, so the return value never exceeds the budget. Use where the
-/// number is a real limit (a fixed-width column, an external API cap) rather
-/// than a hint. Saturates when `max_total_chars` is shorter than the marker.
+/// before cutting, so the result length never exceeds `max_total_chars` when
+/// `max_total_chars >= marker.chars().count()`. Use where the number is a real
+/// limit (a fixed-width column, an external API cap) rather than a hint.
+///
+/// **Saturates when `max_total_chars` is shorter than the marker.** In that
+/// degenerate case the marker alone is returned — it is the floor of the
+/// hard cap, not `max_total_chars - marker.chars().count()`. A caller that
+/// must stay strictly under `max_total_chars` should reject markers wider
+/// than the budget up-front, or fall back to [`truncate_chars`].
 #[must_use]
 pub fn truncate_reserving(text: &str, max_total_chars: usize, marker: &str) -> String {
     if text.chars().count() <= max_total_chars {
