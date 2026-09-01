@@ -75,6 +75,21 @@ jobs:
         shell: bash
         run: bash scripts/stage_shell_placeholders.sh
 
+      # rust-doctor runs clippy itself and reports only "Clippy exited with
+      # status 101" — the compiler's own stderr never reaches the log. Three
+      # rounds were spent guessing what that 101 was (wrong toolchain, missing
+      # protoc/X11 headers, missing externalBin placeholders — all three were
+      # real, none of them was the last one). Running the same command here
+      # first puts the actual error in the log, and warms the cache the scan
+      # then reuses, so it is not pure cost. Non-gating: this step's job is to
+      # narrate, the scan's job is to judge.
+      - name: Clippy (diagnostic — rust-doctor reports only the exit code)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy --workspace --all-targets --message-format=short 2>&1 | tail -n 80
+
       # The npm launcher resolves the prebuilt binary for the runner rather
       # than compiling rust-doctor from source on every run. The version is
       # pinned: a CI gate whose rule set moves on its own fails builds for
@@ -99,13 +114,17 @@ jobs:
           fi
 
           # `--blocking error` states the gate instead of inheriting it. This
-          # repo carries 158 `hardcoded_credential` hits and every one examined
-          # is a placeholder or prose: `sk-ant-YOUR_ANTHROPIC_API_KEY` in
-          # config.search.example.toml, and SECURITY.md quoting the very regex
-          # (`-----BEGIN PRIVATE KEY-----`) that the secret scanner matches on.
-          # Blocking main on those would train everyone to ignore the job,
-          # which is the failure mode a gate has to avoid; they stay visible as
-          # advisories in the summary and the log.
+          # repo carries ~158 `hardcoded_credential` hits and every one examined
+          # is a placeholder or prose: the Anthropic key placeholder in
+          # config.search.example.toml, and SECURITY.md quoting the very
+          # private-key regex the secret scanner matches on. Blocking main on
+          # those would train everyone to ignore the job, which is the failure
+          # mode a gate has to avoid; they stay visible as advisories in the
+          # summary and the log.
+          #
+          # (Spelling those two literals out here added two more findings to
+          # the count this paragraph is about — the rule reads its own
+          # documentation. Described, not quoted, for that reason.)
           set +e
           rust-doctor . --yes --verbose --blocking error "${scope_arguments[@]}" 2>&1 | tee scan.txt
           scan_status=${PIPESTATUS[0]}
