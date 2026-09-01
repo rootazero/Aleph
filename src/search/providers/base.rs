@@ -171,17 +171,74 @@ pub(crate) fn retain_usable(provider_name: &str, results: Vec<SearchResult>) -> 
     let before = results.len();
     let kept: Vec<SearchResult> = results
         .into_iter()
-        .filter(|r| !r.url.trim().is_empty())
+        .filter(|r| {
+            let url = r.url.trim();
+            if url.is_empty() {
+                return false;
+            }
+            // Drop any non-http(s) scheme. `javascript:`, `data:`, `file:` and
+            // `ftp:` would all survive `url::Url::parse` (which the merge layer
+            // uses as identity), but should never reach the model or any
+            // downstream fetcher. The DDG provider's `normalize_ddg_href`
+            // already enforces the same rule for its uddg redirects; this is
+            // the entry-point filter that catches the rest before they fan out.
+            match url::Url::parse(url) {
+                Ok(parsed) => matches!(parsed.scheme(), "http" | "https"),
+                Err(_) => false,
+            }
+        })
         .collect();
     let dropped = before - kept.len();
     if dropped > 0 {
         log::warn!(
             target: "search",
             "provider={provider_name} kind=unusable dropped={dropped} of={before} \
-             reason=result-has-no-url"
+             reason=result-has-no-or-non-http-url"
         );
     }
     kept
+}
+
+/// Reject an operator-configured upstream host that would turn the search
+/// registry into an SSRF vector. Called from each provider's `new()` with the
+/// URL the operator pasted into config. The check is intentionally narrower
+/// than the runtime SSRF guard: a provider's `base_url` is set once at boot
+/// (not per-request), so the cost of false positives is high — we only block
+/// the unambiguous cases (loopback / private IPs / link-local / cloud
+/// metadata / `localhost`-family hostnames) and let hostnames through. A
+/// hostname that later resolves to a blocked address is caught by the
+/// outbound guard at request time.
+pub(crate) fn reject_ssrf_target_host(
+    provider_name: &str,
+    host: &str,
+) -> Result<()> {
+    use std::net::IpAddr;
+    if let Ok(addr) = host.parse::<IpAddr>() {
+        if crate::security::ssrf::ip::is_blocked_ip(addr) {
+            return Err(AlephError::invalid_config(format!(
+                "{provider_name} base URL points at a blocked IP ({host}); \
+                 refusing to register an SSRF-targeting upstream"
+            )));
+        }
+    } else {
+        if crate::security::ssrf::hostname::is_blocked_hostname(host) {
+            return Err(AlephError::invalid_config(format!(
+                "{provider_name} base URL hostname {host:?} is on the SSRF \
+                 blocklist; refusing to register an SSRF-targeting upstream"
+            )));
+        }
+        // Legacy IP-literal encodings (hex/octal/decimal/short-form IPv4)
+        // bypass naive `IpAddr::parse` and would otherwise slip through this
+        // check to reach reqwest's resolver, which still parses them.
+        if crate::security::ssrf::hostname::is_legacy_ip_literal(host) {
+            return Err(AlephError::invalid_config(format!(
+                "{provider_name} base URL hostname {host:?} is a legacy IP \
+                 literal encoding; refusing to register an SSRF-targeting \
+                 upstream"
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

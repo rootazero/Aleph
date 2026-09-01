@@ -117,6 +117,19 @@ impl SearxngProvider {
             ));
         }
 
+        // Refuse IP-literal hosts (loopback / RFC1918 / link-local) and the
+        // blocked-hostname list. The SearXNG base URL is operator-configured,
+        // so accepting `http://127.0.0.1:8080` or `http://10.0.0.5` would turn
+        // every search through this backend into a way to query internal HTTP
+        // services. Hostnames pass through normally; the SSRF guard on outbound
+        // fetch (see `security/ssrf`) gives a second-layer check at request
+        // time for any operator who actually needs an internal SearXNG.
+        if let Ok(parsed) = url::Url::parse(&trimmed) {
+            if let Some(host) = parsed.host_str() {
+                reject_ssrf_target_host("SearXNG", host)?;
+            }
+        }
+
         let url_password = url::Url::parse(&trimmed)
             .ok()
             .and_then(|u| u.password().map(str::to_string))
@@ -141,14 +154,35 @@ impl SearxngProvider {
         if self.min_interval.is_zero() {
             return;
         }
-        let mut last = self.last_request.lock().await;
-        if let Some(prev) = *last {
-            let elapsed = prev.elapsed();
-            if elapsed < self.min_interval {
-                tokio::time::sleep(self.min_interval - elapsed).await;
-            }
+        // Compute the sleep deadline under the lock, then release it before
+        // awaiting. Holding a `tokio::sync::Mutex` across `tokio::time::sleep`
+        // serializes every concurrent search through the same backend behind
+        // the first caller's HTTP round-trip — the throttle is supposed to
+        // protect the upstream engines from *its own* request rate, not to
+        // serialize other backends. Standard release-and-await pattern.
+        let sleep_for = {
+            let last = self.last_request.lock().await;
+            last.map(|prev| {
+                let elapsed = prev.elapsed();
+                if elapsed < self.min_interval {
+                    self.min_interval - elapsed
+                } else {
+                    Duration::ZERO
+                }
+            })
+            .unwrap_or(Duration::ZERO)
+        };
+        if !sleep_for.is_zero() {
+            tokio::time::sleep(sleep_for).await;
         }
-        *last = Some(Instant::now());
+        // Re-acquire briefly to stamp the dispatch time. A second caller who
+        // raced in during the sleep will see this stamp and start a new sleep
+        // of their own — still rate-limited, but in parallel rather than
+        // serialized.
+        {
+            let mut last = self.last_request.lock().await;
+            *last = Some(Instant::now());
+        }
     }
 }
 

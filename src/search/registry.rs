@@ -217,11 +217,33 @@ impl SearchRegistry {
         }
         // rust-doctor-disable-next-line excessive-clone
         let mut registry = Self::new(cfg.default_provider.clone());
-        registry.config_defaults = Some(SearchOptions {
+        let mut defaults = SearchOptions {
             max_results: cfg.max_results,
             timeout_seconds: cfg.timeout_seconds,
             ..SearchOptions::default()
-        });
+        };
+        // Thread the optional `[search]` fields through to `SearchOptions`.
+        // Each `cfg.* -> defaults.*` mapping is documented at the field site
+        // in `SearchConfigInternal`. If a future field is added there without
+        // a corresponding line here, the `dropped_keys` audit below logs the
+        // omission at boot so the contract drift is visible without a test
+        // having to break first.
+        defaults.language = cfg.language.clone().or(defaults.language);
+        defaults.region = cfg.region.clone().or(defaults.region);
+        if let Some(safe) = cfg.safe_search {
+            defaults.safe_search = safe;
+        }
+        if let Some(include) = cfg.include_domains.clone() {
+            if !include.is_empty() {
+                defaults.include_domains = include;
+            }
+        }
+        if let Some(exclude) = cfg.exclude_domains.clone() {
+            if !exclude.is_empty() {
+                defaults.exclude_domains = exclude;
+            }
+        }
+        registry.config_defaults = Some(defaults);
         let mut any_added = false;
         for (name, backend) in &cfg.backends {
             match factories.build(name, backend) {
