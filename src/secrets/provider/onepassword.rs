@@ -67,7 +67,14 @@ impl OnePasswordProvider {
     /// (which may contain vault names, account emails, or internal debug output).
     fn classify_error(stderr: &str) -> SecretError {
         let lower = stderr.to_lowercase();
-        debug!("1Password stderr: {}", stderr.trim());
+        // Log only the stderr length and classification, not the content.
+        // 1Password's CLI routinely emits account shorthand, vault paths, and
+        // item ids in stderr that an operator turning on `RUST_LOG=debug` for
+        // unrelated diagnostics would otherwise capture verbatim — the
+        // sanitized classifier below already proves the author wanted the
+        // *content* safe to share, so the log shape should match.
+        let stderr_len = stderr.trim().len();
+        debug!("1Password stderr captured: bytes={stderr_len}");
         if lower.contains("not signed in")
             || lower.contains("session expired")
             || lower.contains("authorization prompt")
