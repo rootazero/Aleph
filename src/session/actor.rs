@@ -136,7 +136,6 @@ impl SessionActor {
             );
         }
         let _ = reply.send(Ok(seq));
-        self.idle_deadline = Instant::now() + self.idle_timeout;
     }
 
     /// Replays all persisted events and rebuilds `head_seq`.

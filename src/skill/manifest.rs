@@ -219,7 +219,7 @@ pub fn parse_skill_file(
     // where `metadata().len()` under-reported. Replaces the previous
     // metadata-then-read sequence which had a TOCTOU window between the two
     // syscalls.
-    let mut file = std::fs::File::open(path_ref).map_err(SkillParseError::Io)?;
+    let file = std::fs::File::open(path_ref).map_err(SkillParseError::Io)?;
     let meta = file.metadata().map_err(SkillParseError::Io)?;
     if meta.len() > MAX_SKILL_FILE_BYTES {
         return Err(SkillParseError::FileTooLarge {
@@ -305,8 +305,7 @@ pub fn parse_skill_content(
                 '-'
             }
         })
-        .collect::<Vec<_>>()
-        .join("-");
+        .collect::<String>();
     // An all-punctuation / whitespace-only `name:` frontmatter field would
     // collapse to an empty or single-dot id and silently become a registry
     // key that breaks path joins (`.join(".").join("SKILL.md")` matches the
