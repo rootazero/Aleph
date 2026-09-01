@@ -54,8 +54,16 @@ jobs:
       # them the scan reported "Clippy exited with status 101" and
       # "build-finished.success: false" after 62 s — a scan that cannot build
       # says nothing about the code, so both its red and its green would have
-      # been uninformative. Same list the Test and Lint jobs in
-      # aleph-core-ci.yml install.
+      # been uninformative.
+      #
+      # Two lists, and it needs both. The first is what the Test job installs.
+      # The second is the Tauri set, which no other job on this workflow's path
+      # needs: `Lint` scopes clippy to `-p alephcore -p aleph-desktop`, while
+      # this job scans `--workspace`, so it is the only one that compiles
+      # `aleph-desktop-linux` / `aleph-desktop-shell` and therefore the only one
+      # that reaches `glib-sys`. Its build script fails with "Package
+      # 'glib-2.0' ... not found" — which rust-doctor surfaced only as "Clippy
+      # exited with status 101", the reason the diagnostic step below exists.
       - name: Install system dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y \
@@ -64,13 +72,17 @@ jobs:
             libxcb-shape0-dev libxcb-xtest0-dev libxkbcommon-dev libxss-dev \
             libx11-dev libxrandr-dev libxi-dev libxtst-dev \
             libssl-dev libwayland-dev libpipewire-0.3-dev libdbus-1-dev \
-            libdrm-dev libgbm-dev libegl-dev libxdo-dev clang libclang-dev
+            libdrm-dev libgbm-dev libegl-dev libxdo-dev clang libclang-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libayatana-appindicator3-dev
 
       # `aleph-desktop-shell` is a workspace member, so any workspace-wide
       # clippy compiles it — and `tauri-build` fails outright when a file named
-      # in `externalBin` is missing. That is the third and last reason this job
-      # reported "Clippy exited with status 101" a minute in; the placeholders
-      # are empty files it never executes.
+      # in `externalBin` is missing. One of several reasons this job reported
+      # "Clippy exited with status 101" a minute in — do not read this comment
+      # as the complete list; the diagnostic step below is what enumerates them,
+      # and it earned its keep by finding the glib one after this was written.
+      # The placeholders are empty files it never executes.
       - name: Stage externalBin placeholders
         shell: bash
         run: bash scripts/stage_shell_placeholders.sh
