@@ -93,7 +93,11 @@ pub(crate) struct InvalidBaseUrl {
 
 impl std::fmt::Display for InvalidBaseUrl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "invalid provider base_url '{}': {}", self.url, self.reason)
+        write!(
+            f,
+            "invalid provider base_url '{}': {}",
+            self.url, self.reason
+        )
     }
 }
 

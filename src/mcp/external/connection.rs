@@ -764,9 +764,7 @@ impl McpServerConnection {
                         "MCP tool description matches a prompt-injection heuristic; \
                          redacting description body"
                     );
-                    format!(
-                        "[description redacted: prompt-injection heuristic matched: {marker}]"
-                    )
+                    format!("[description redacted: prompt-injection heuristic matched: {marker}]")
                 } else {
                     description
                 };

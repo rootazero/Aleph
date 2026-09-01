@@ -193,7 +193,6 @@ pub fn build_persona_prompt(
 ///
 /// Uses char counting to avoid panicking on multi-byte UTF-8 boundaries.
 
-
 /// Strip markdown code fences (` ```json ... ``` `) from LLM output.
 fn strip_markdown_fences(s: &str) -> &str {
     let s = s.trim();

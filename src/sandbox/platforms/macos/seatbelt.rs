@@ -544,9 +544,7 @@ impl SeatbeltDriver {
         if let Ok(tmpdir) = std::env::var("TMPDIR") {
             let trimmed = tmpdir.trim_end_matches('/');
             if !trimmed.is_empty() {
-                profile.push_str(
-                    "; per-user Mach TMPDIR scratch (xcrun shims, python cache, …)\n",
-                );
+                profile.push_str("; per-user Mach TMPDIR scratch (xcrun shims, python cache, …)\n");
                 // Seatbelt matches against RESOLVED paths, and `/var` is a
                 // firmlink to `/private/var` — grant both spellings, the same
                 // pattern the /tmp + /private/tmp pair above already uses.

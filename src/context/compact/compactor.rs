@@ -1533,7 +1533,10 @@ mod tests {
         );
 
         let out = deterministic_truncation(&[UnifiedMessage::tool_result_json(
-            "call-1", "file_read", payload, false,
+            "call-1",
+            "file_read",
+            payload,
+            false,
         )]);
 
         assert!(

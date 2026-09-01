@@ -1116,8 +1116,8 @@ impl Default for FlowScope {
             "premise: the two reads are independent — the derive corpus has no impl"
         );
 
-        let (_, derives) = layer1_reading(SCOPE_MOD_WITH_HANDWRITTEN_DEFAULT)
-            .expect("premise: the corpus parses");
+        let (_, derives) =
+            layer1_reading(SCOPE_MOD_WITH_HANDWRITTEN_DEFAULT).expect("premise: the corpus parses");
         assert!(
             !derives.contains("Default"),
             "the derive assertion is BLIND to a hand-written `impl Default for \

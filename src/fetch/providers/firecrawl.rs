@@ -159,7 +159,10 @@ mod tests {
     fn maps_markdown_from_scrape_response() {
         let json = r##"{"success":true,"data":{"markdown":"# Hello\n\nbody"}}"##;
         let parsed: FirecrawlScrapeResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(map_scrape(parsed).unwrap().as_deref(), Some("# Hello\n\nbody"));
+        assert_eq!(
+            map_scrape(parsed).unwrap().as_deref(),
+            Some("# Hello\n\nbody")
+        );
     }
 
     #[test]

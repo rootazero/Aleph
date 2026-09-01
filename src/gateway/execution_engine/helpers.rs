@@ -20,7 +20,9 @@ use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use super::event_drain::{emit_flow_event, emit_held_complete, hold_complete, DrainState, HeldComplete};
+use super::event_drain::{
+    emit_flow_event, emit_held_complete, hold_complete, DrainState, HeldComplete,
+};
 use super::ExecutionError;
 use crate::gateway::event_emitter::EventEmitter;
 use crate::gateway::i18n::{self, Locale};
@@ -290,7 +292,8 @@ pub async fn run_dispatch_and_drain_classified(
                         };
                     }
                     Ok(event) => {
-                        if let Err(e) = emit_flow_event(event, &emitter, &run_id, &drain_state).await
+                        if let Err(e) =
+                            emit_flow_event(event, &emitter, &run_id, &drain_state).await
                         {
                             warn!(run_id = %run_id, error = %e, "emit_flow_event failed");
                         }
@@ -800,11 +803,10 @@ mod pre_outcome_receipt_tests {
         let StreamEvent::RunComplete { summary, .. } = &events[0] else {
             panic!("expected a synthetic RunComplete, got {:?}", events[0]);
         };
-        summary
-            .final_response
-            .clone()
-            .expect("the synthetic RunComplete must carry text — OriginFanoutEmitter \
-                     mirrors only this variant, so an empty one leaves the channel silent")
+        summary.final_response.clone().expect(
+            "the synthetic RunComplete must carry text — OriginFanoutEmitter \
+                     mirrors only this variant, so an empty one leaves the channel silent",
+        )
     }
 
     /// `summary.final_response` on this path is what a bound channel receives as
@@ -850,7 +852,10 @@ mod pre_outcome_receipt_tests {
                 .user_receipt(Locale::En)
                 .1
         );
-        assert!(!text.contains("dispatch"), "internal wording leaked: {text}");
+        assert!(
+            !text.contains("dispatch"),
+            "internal wording leaked: {text}"
+        );
     }
 }
 
@@ -917,11 +922,11 @@ mod pre_outcome_summary_tests {
             &DispatchFailure::Fatal("flow: unknown agent: ghost".into()),
             Locale::En,
         );
-        let text = s
-            .final_response
-            .expect("the fallback frame must carry text — OriginFanoutEmitter \
+        let text = s.final_response.expect(
+            "the fallback frame must carry text — OriginFanoutEmitter \
                      mirrors only this variant, so an empty one leaves the \
-                     channel silent");
+                     channel silent",
+        );
         assert!(
             !text.trim().is_empty(),
             "clearing terminate_reason must not also empty the frame"

@@ -95,7 +95,10 @@ impl A2ATaskManager for TaskStore {
         let task = tasks
             .get_mut(task_id)
             .expect("invariant: task either existed or was just inserted");
-        if !matches!(task.status.state, TaskState::Submitted | TaskState::InputRequired) {
+        if !matches!(
+            task.status.state,
+            TaskState::Submitted | TaskState::InputRequired
+        ) {
             return Ok(false);
         }
         task.status = TaskStatus {

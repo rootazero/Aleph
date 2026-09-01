@@ -126,7 +126,10 @@ fn apply_description_to_identity(
         Err(e) => {
             return Err(std::io::Error::new(
                 e.kind(),
-                format!("failed to read IDENTITY.md at {}: {e}", identity_path.display()),
+                format!(
+                    "failed to read IDENTITY.md at {}: {e}",
+                    identity_path.display()
+                ),
             ));
         }
     };

@@ -359,8 +359,9 @@ impl StateDatabase {
                 })
             };
 
-            let collect_err =
-                |e: rusqlite::Error| AlephError::config(format!("Failed to collect paged traces: {e}"));
+            let collect_err = |e: rusqlite::Error| {
+                AlephError::config(format!("Failed to collect paged traces: {e}"))
+            };
 
             // Cursor rows are those ordered STRICTLY before `(ts, task_id)`
             // in the `(last_timestamp DESC, task_id DESC)` ordering. With that

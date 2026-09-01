@@ -689,8 +689,8 @@ mod tests {
         let response = handle_list_from_registry(request, &registry).await;
         let result = response.result.expect("commands.list must succeed");
 
-        let parsed: aleph_protocol::commands::CommandListResponse =
-            serde_json::from_value(result).expect(
+        let parsed: aleph_protocol::commands::CommandListResponse = serde_json::from_value(result)
+            .expect(
                 "commands.list must parse as aleph_protocol::commands::CommandListResponse; \
                  a client that cannot read this response reports an empty catalogue",
             );

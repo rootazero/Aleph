@@ -108,9 +108,11 @@ impl AcpAdapterManager {
         // previous serial loop blocked wall-clock for N × 5s on N harnesses,
         // which dragged gateway startup and health checks well beyond their
         // budget.
-        let results = futures::future::join_all(snapshot.into_iter().map(|(id, adapter)| async move {
-            (id, adapter.is_available().await)
-        }))
+        let results = futures::future::join_all(
+            snapshot
+                .into_iter()
+                .map(|(id, adapter)| async move { (id, adapter.is_available().await) }),
+        )
         .await;
         let mut available: Vec<String> = results
             .into_iter()

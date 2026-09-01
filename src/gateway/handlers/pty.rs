@@ -182,8 +182,7 @@ pub async fn handle_spawn(request: JsonRpcRequest, config: Arc<RwLock<Config>>) 
     // Named-type binding, not field inference: `TerminalConfig` is the handle
     // by which the wiring audit (`scripts/config_wiring_audit.py`) can see
     // that `[policies.terminal]` has a consumer outside src/config/.
-    let terminal: crate::config::types::policies::TerminalConfig =
-        cfg.policies.terminal.clone();
+    let terminal: crate::config::types::policies::TerminalConfig = cfg.policies.terminal.clone();
     drop(cfg); // don't hold the read lock across the spawn below
 
     // The client's cwd is a request, not an authorisation: resolve it
@@ -1220,7 +1219,10 @@ mod tests {
                 crate::gateway::caller_identity::CALLER_USER
                     .scope(
                         Some("u-bob".to_string()),
-                        handle_input(req("pty.input", json!({ "session_id": sid, "data": "id\n" }))),
+                        handle_input(req(
+                            "pty.input",
+                            json!({ "session_id": sid, "data": "id\n" }),
+                        )),
                     )
                     .await,
             ),

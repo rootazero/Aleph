@@ -307,14 +307,10 @@ impl AlephTool for SessionsListTool {
         if message_limit > 0 {
             let session_store = self.context.session_store();
             let history_futures = rows.iter().map(|row| {
-                let legacy_key =
-                    crate::gateway::router::SessionKey::from_key_string(&row.key);
+                let legacy_key = crate::gateway::router::SessionKey::from_key_string(&row.key);
                 async move {
                     let key = legacy_key?;
-                    match session_store
-                        .get_history(&key, Some(message_limit))
-                        .await
-                    {
+                    match session_store.get_history(&key, Some(message_limit)).await {
                         Ok(messages) => Some(messages),
                         Err(e) => {
                             debug!(

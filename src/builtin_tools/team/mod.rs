@@ -34,9 +34,8 @@ pub(crate) async fn require_team_auth(
     let team = store.get_team(team_id).await.map_err(|e| {
         crate::error::AlephError::other(format!("team auth: failed to load '{team_id}': {e}"))
     })?;
-    let team = team.ok_or_else(|| {
-        crate::error::AlephError::NotFound(format!("team `{team_id}` not found"))
-    })?;
+    let team = team
+        .ok_or_else(|| crate::error::AlephError::NotFound(format!("team `{team_id}` not found")))?;
     if team.leader_id == caller {
         return Ok(());
     }

@@ -243,9 +243,7 @@ async fn resolve(
         .into_iter()
         .nth(index)
         .ok_or_else(|| {
-            DesktopError::PlatformError(
-                "rank_candidates returned an out-of-range index".into(),
-            )
+            DesktopError::PlatformError("rank_candidates returned an out-of-range index".into())
         })?
         .proxy;
 

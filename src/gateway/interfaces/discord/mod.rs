@@ -807,37 +807,36 @@ impl Channel for DiscordChannel {
 
         // Parse channel ID from conversation_id
         // Handle both "dm:user_id" and direct channel IDs
-        let channel_id =
-            if message.conversation_id.as_str().starts_with("dm:") {
-                // For DMs, we need to create a DM channel first. Use
-                // `strip_prefix` instead of `[3..]` — see `resolve_channel_id`
-                // for the rationale (non-ASCII bytes straddling index 3 would
-                // otherwise panic).
-                let user_id: u64 = message
+        let channel_id = if message.conversation_id.as_str().starts_with("dm:") {
+            // For DMs, we need to create a DM channel first. Use
+            // `strip_prefix` instead of `[3..]` — see `resolve_channel_id`
+            // for the rationale (non-ASCII bytes straddling index 3 would
+            // otherwise panic).
+            let user_id: u64 = message
+                .conversation_id
+                .as_str()
+                .strip_prefix("dm:")
+                .ok_or_else(|| {
+                    ChannelError::Internal("conversation_id does not start with 'dm:'".to_string())
+                })?
+                .parse()
+                .map_err(|e| ChannelError::SendFailed(format!("Invalid user ID: {e}")))?;
+
+            let user = serenity::all::UserId::new(user_id);
+            let dm_channel = user.create_dm_channel(http).await.map_err(|e| {
+                ChannelError::SendFailed(format!("Failed to create DM channel: {e}"))
+            })?;
+
+            dm_channel.id
+        } else {
+            SerenityChannelId::new(
+                message
                     .conversation_id
                     .as_str()
-                    .strip_prefix("dm:")
-                    .ok_or_else(|| {
-                        ChannelError::Internal(
-                            "conversation_id does not start with 'dm:'".to_string(),
-                        )
-                    })?
                     .parse()
-                    .map_err(|e| ChannelError::SendFailed(format!("Invalid user ID: {e}")))?;
-
-                let user = serenity::all::UserId::new(user_id);
-                let dm_channel = user.create_dm_channel(http).await.map_err(|e| {
-                    ChannelError::SendFailed(format!("Failed to create DM channel: {e}"))
-                })?;
-
-                dm_channel.id
-            } else {
-                SerenityChannelId::new(
-                    message.conversation_id.as_str().parse().map_err(|e| {
-                        ChannelError::SendFailed(format!("Invalid channel ID: {e}"))
-                    })?,
-                )
-            };
+                    .map_err(|e| ChannelError::SendFailed(format!("Invalid channel ID: {e}")))?,
+            )
+        };
 
         // Build message
         let mut builder = CreateMessage::new().content(&message.text);

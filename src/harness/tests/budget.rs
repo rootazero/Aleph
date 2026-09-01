@@ -625,7 +625,32 @@ const BUDGETED: [&str; 12] = [
 ///     loop, and three tests in `tests/act.rs` all pin `ToolResult`. The
 ///     paragraph is kept as history, marked as such, so the next reader does
 ///     not "restore" a model-visible shape three tests are holding down.
-const CEILING: usize = 5233;
+/// +4 (5233 → 5237, 2026-09-01, release 26.9.1): two defensive fixes in
+///     `agent.rs`, minus the prose one of them arrived wrapped in.
+///
+///     The raw growth measured 5246 (+13). Seven of those thirteen were a
+///     ten-line comment explaining a three-line change — the shape R9 asks you
+///     to cut, not to budget for — so it was cut to three and the ratchet is
+///     being moved by what is left.
+///
+///     +2 `events.get(last_assistant_idx..).unwrap_or(&[])` in place of
+///     `events[last_assistant_idx..]` (the consecutive-tool-error counter).
+///     +2 `block.as_object_mut().expect(…)` in place of `block["…"] = …` when
+///     stamping Gemini's `thought_signature`. Both are `clippy::indexing_slicing`
+///     sites: neither index can be out of range today (`rposition().unwrap_or(0)`
+///     is always ≤ len; `json!({…})` is always an Object), so what the change
+///     buys is that the *next* edit to either site cannot make it panic
+///     silently — the panic surface is now a labelled `expect` or an empty
+///     slice rather than an opaque index.
+///
+///     Three questions: (1) **scaffolding** — both are bounds handling, they
+///     decide nothing about the turn; (2) **no**, a stronger model does not
+///     remove them and does not need them either — they are for the human who
+///     edits the surrounding lines, which is why the fix had to be four lines
+///     and not fourteen; (3) **consumers** — the error counter feeds the
+///     consecutive-failure guardrail, and `tool_use_blocks` is the only writer
+///     of the `thought_signature` field `parse_tool_use_block` reads back.
+const CEILING: usize = 5237;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

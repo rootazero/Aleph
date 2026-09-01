@@ -97,10 +97,13 @@ fn table() -> &'static Mutex<SelectionTable> {
 pub fn set(canvas_id: &str, shape_ids: Vec<String>) {
     table()
         .lock()
-        .unwrap_or_else(|e| { tracing::error!(
+        .unwrap_or_else(|e| {
+            tracing::error!(
                 reason = %e,
                 "canvas lock table poisoned: a previous holder panicked mid-insert; recovering"
-            ); e.into_inner() })
+            );
+            e.into_inner()
+        })
         .set(canvas_id, shape_ids);
 }
 
@@ -110,10 +113,13 @@ pub fn set(canvas_id: &str, shape_ids: Vec<String>) {
 pub fn get(canvas_id: &str) -> Vec<String> {
     table()
         .lock()
-        .unwrap_or_else(|e| { tracing::error!(
+        .unwrap_or_else(|e| {
+            tracing::error!(
                 reason = %e,
                 "canvas lock table poisoned: a previous holder panicked mid-insert; recovering"
-            ); e.into_inner() })
+            );
+            e.into_inner()
+        })
         .get(canvas_id)
 }
 

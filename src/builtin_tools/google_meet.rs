@@ -218,7 +218,10 @@ impl GoogleMeetTool {
     /// operator's SSRF policy.
     #[must_use]
     pub const fn new(bridge: Option<Arc<GoogleMeetBridge>>, ssrf_policy: SsrfPolicy) -> Self {
-        Self { bridge, ssrf_policy }
+        Self {
+            bridge,
+            ssrf_policy,
+        }
     }
 
     /// Require a string field, returning a fixable validation error naming it.
@@ -395,9 +398,11 @@ impl AlephTool for GoogleMeetTool {
         if let Some(meeting) = args.meeting.as_deref() {
             crate::security::ssrf::validate_url_async(meeting, &self.ssrf_policy)
                 .await
-                .map_err(|e| AlephError::tool(format!(
-                    "google_meet: meeting URL blocked by SSRF policy: {e}"
-                )))?;
+                .map_err(|e| {
+                    AlephError::tool(format!(
+                        "google_meet: meeting URL blocked by SSRF policy: {e}"
+                    ))
+                })?;
         }
         match self.bridge {
             Some(ref bridge) => Self::dispatch_to_bridge(bridge, &args).await,

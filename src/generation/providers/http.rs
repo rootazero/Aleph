@@ -49,10 +49,8 @@ where
     Fut: std::future::Future<Output = GenerationResult<T>>,
 {
     const MAX_ATTEMPTS: u32 = 3;
-    const BACKOFFS: [Duration; (MAX_ATTEMPTS - 1) as usize] = [
-        Duration::from_millis(250),
-        Duration::from_millis(750),
-    ];
+    const BACKOFFS: [Duration; (MAX_ATTEMPTS - 1) as usize] =
+        [Duration::from_millis(250), Duration::from_millis(750)];
     let mut attempt = 0u32;
     loop {
         match op().await {

@@ -99,8 +99,7 @@ impl StreamRegistry {
                 // stream lands on their own connection. Falls through to
                 // `ambient_owner` outside a project room, matching the
                 // existing semantics for personal / org sessions.
-                owner: crate::scope::ambient_room_author()
-                    .or_else(crate::scope::ambient_owner),
+                owner: crate::scope::ambient_room_author().or_else(crate::scope::ambient_owner),
             },
         );
         id

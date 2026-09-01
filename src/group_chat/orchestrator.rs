@@ -165,7 +165,11 @@ impl GroupChatOrchestrator {
         // several test fixtures.
         .with_max_rounds({
             let cap = self.max_rounds();
-            if cap == 0 { None } else { Some(cap) }
+            if cap == 0 {
+                None
+            } else {
+                Some(cap)
+            }
         });
         // Capture the ownership stamp BEFORE moving `session` into the Arc<Mutex>;
         // `GroupChatSession::new` reads it from `crate::scope::current_scope()`
@@ -177,11 +181,13 @@ impl GroupChatOrchestrator {
         // `SessionEntry`).
         let cancel = session.cancel_token.clone();
         let handle = Arc::new(tokio::sync::Mutex::new(session));
-        self.lock_sessions_map()
-            .insert(session_id.clone(), SessionEntry {
+        self.lock_sessions_map().insert(
+            session_id.clone(),
+            SessionEntry {
                 handle: Arc::clone(&handle),
                 cancel,
-            });
+            },
+        );
 
         // 6. Persist to database if available
         if let Some(db) = &self.db {
@@ -288,9 +294,7 @@ impl GroupChatOrchestrator {
     /// Helper: remove a session from the map and return its handle. Split
     /// out so `end_session`'s atomicity is visible (lock dropped before await).
     fn remove_session(&self, session_id: &str) -> Option<RemovedSession> {
-        let (session_id, entry) = self
-            .lock_sessions_map()
-            .remove_entry(session_id)?;
+        let (session_id, entry) = self.lock_sessions_map().remove_entry(session_id)?;
         Some(RemovedSession {
             session_id,
             handle: entry.handle,

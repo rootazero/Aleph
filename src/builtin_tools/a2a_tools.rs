@@ -323,14 +323,14 @@ impl AlephTool for A2AAgentsTool {
                     // A2AToolDeps instead of the hard-coded default.
                     &deps.ssrf_policy,
                 )
-                    .await
-                    .map_err(|e| {
-                        AlephError::tool(format!(
-                            "`url` blocked by SSRF policy ({e}); \
+                .await
+                .map_err(|e| {
+                    AlephError::tool(format!(
+                        "`url` blocked by SSRF policy ({e}); \
                              A2A `add` rejects private/loopback hosts unless \
                              the operator widens the policy"
-                        ))
-                    })?;
+                    ))
+                })?;
 
                 // Fetch the remote Agent Card so smart routing knows its skills.
                 let client = match args.token.clone() {

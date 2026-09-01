@@ -192,10 +192,8 @@ impl BuiltinToolRegistry {
                     config.session_store.clone(),
                     config.event_store.clone(),
                 );
-            let set_protocol = TeamSetProtocolTool::new(
-                Arc::clone(store),
-                current_agent_id.clone(),
-            );
+            let set_protocol =
+                TeamSetProtocolTool::new(Arc::clone(store), current_agent_id.clone());
             let member_add = TeamMemberAddTool::new(
                 Arc::clone(store),
                 Arc::clone(&agent_registry),

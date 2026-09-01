@@ -17,20 +17,54 @@ jobs:
   inspect:
     name: Inspect
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A cold clippy build of this workspace is ~25 min on a hosted runner; the
+    # previous 30 was set when the job could not build at all and died in 60 s.
+    timeout-minutes: 60
     steps:
       # Baseline scope checks the comparison ref out into a temporary worktree,
       # so the shallow default clone is not enough.
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          # rust-doctor shells out to `cargo clippy`, and alephcore embeds the
+          # `skills/` and `plugins/` submodules with `include_dir!` — a
+          # compile-time macro, so an uninitialised submodule is a build error,
+          # not a missing feature.
+          submodules: recursive
 
       # rust-doctor shells out to `cargo clippy` inside the scanned workspace.
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+
+      # `components: clippy` on the step above installs onto whatever *stable*
+      # resolves to, and `rust-toolchain.toml` pins the workspace to 1.96.0 —
+      # so cargo inside this repo used a toolchain that had no clippy, and
+      # rust-doctor exited 2 with "'cargo-clippy' is not installed for the
+      # toolchain '1.96.0-x86_64-unknown-linux-gnu'". Adding the component
+      # here runs under the override, so it lands on the pinned toolchain.
+      # `aleph-core-ci.yml`'s lint job already carries this exact workaround.
+      - name: Add clippy to the pinned toolchain
+        run: |
+          rustup show active-toolchain
+          rustup component add clippy
 
       - uses: Swatinem/rust-cache@v2
+
+      # rust-doctor's clippy leg builds alephcore, which needs protoc and the
+      # xcb/X11/wayland/dbus headers the desktop crates link against. Without
+      # them the scan reported "Clippy exited with status 101" and
+      # "build-finished.success: false" after 62 s — a scan that cannot build
+      # says nothing about the code, so both its red and its green would have
+      # been uninformative. Same list the Test and Lint jobs in
+      # aleph-core-ci.yml install.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            protobuf-compiler bubblewrap \
+            libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev \
+            libxcb-shape0-dev libxcb-xtest0-dev libxkbcommon-dev libxss-dev \
+            libx11-dev libxrandr-dev libxi-dev libxtst-dev \
+            libssl-dev libwayland-dev libpipewire-0.3-dev libdbus-1-dev \
+            libdrm-dev libgbm-dev libegl-dev libxdo-dev clang libclang-dev
 
       # The npm launcher resolves the prebuilt binary for the runner rather
       # than compiling rust-doctor from source on every run. The version is
@@ -55,17 +89,40 @@ jobs:
             scope_arguments=(--scope full)
           fi
 
+          # `--blocking error` states the gate instead of inheriting it. This
+          # repo carries 158 `hardcoded_credential` hits and every one examined
+          # is a placeholder or prose: `sk-ant-YOUR_ANTHROPIC_API_KEY` in
+          # config.search.example.toml, and SECURITY.md quoting the very regex
+          # (`-----BEGIN PRIVATE KEY-----`) that the secret scanner matches on.
+          # Blocking main on those would train everyone to ignore the job,
+          # which is the failure mode a gate has to avoid; they stay visible as
+          # advisories in the summary and the log.
           set +e
-          rust-doctor . --yes --verbose "${scope_arguments[@]}" > scan.txt 2>&1
-          scan_status=$?
+          rust-doctor . --yes --verbose --blocking error "${scope_arguments[@]}" 2>&1 | tee scan.txt
+          scan_status=${PIPESTATUS[0]}
           set -e
 
+          # The scan output used to land ONLY in the step summary. A summary is
+          # not readable from `gh run view --log`, so this job's first failure
+          # (exit 2, 0.24s, never green since it landed on 2026-08-30) reported
+          # nothing at all to anyone reading the logs. `tee` puts the same bytes
+          # in both places; the summary keeps its rendering, the log keeps the
+          # diagnosis.
+          # The summary API caps at 1024k and drops the whole upload when
+          # exceeded ("upload aborted ... got 2182k") — so the verbose scan
+          # silently lost the summary it was written for. Head-truncate to a
+          # safe margin and say so in the file; the untruncated text is in the
+          # log above, which is why `tee` comes first.
           {
             echo '## Rust Doctor'
             echo
             echo '```'
-            cat scan.txt
+            head -c 900000 scan.txt
             echo '```'
+            if [ "$(wc -c < scan.txt)" -gt 900000 ]; then
+              echo
+              echo "_Truncated at 900 kB (the step-summary limit is 1 MB); full output is in the job log._"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
           exit "$scan_status"

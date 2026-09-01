@@ -720,7 +720,10 @@ mod tests {
         fut: impl std::future::Future<Output = T>,
     ) -> T {
         crate::tools::turn_context::TURN_CONTEXT
-            .scope(turn_as(role), CALLER_USER.scope(Some(user.to_string()), fut))
+            .scope(
+                turn_as(role),
+                CALLER_USER.scope(Some(user.to_string()), fut),
+            )
             .await
     }
 
@@ -802,7 +805,10 @@ mod tests {
         })
         .await
         .expect_err("a plain member may not rebind the room");
-        assert!(err.to_string().contains("not the project owner"), "got: {err}");
+        assert!(
+            err.to_string().contains("not the project owner"),
+            "got: {err}"
+        );
         assert_eq!(
             store.get(&project.id).unwrap().unwrap().workspace_path,
             None
@@ -822,7 +828,10 @@ mod tests {
         .await
         .expect("the owner at operator tier may bind");
         assert!(
-            out.project.expect("a bound room comes back").workspace_path.is_some(),
+            out.project
+                .expect("a bound room comes back")
+                .workspace_path
+                .is_some(),
             "the receipt must show the folder it says it bound"
         );
         assert!(store

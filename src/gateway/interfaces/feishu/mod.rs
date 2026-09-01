@@ -179,9 +179,7 @@ impl Channel for FeishuChannel {
             Ok(info) => info,
             Err(e) => {
                 api_handle::withdraw(self.info.id.as_str());
-                return Err(ChannelError::AuthFailed(format!(
-                    "Bot info failed: {e}"
-                )));
+                return Err(ChannelError::AuthFailed(format!("Bot info failed: {e}")));
             }
         };
         tracing::info!("Feishu bot connected: {:?}", bot_info.app_name);

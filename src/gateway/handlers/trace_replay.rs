@@ -53,7 +53,10 @@ use crate::gateway::visibility;
 use crate::resilience::StateDatabase;
 use crate::security::audit::{AuditEntry, SecurityAuditLog};
 use crate::sync_primitives::Arc;
-use aleph_protocol::{AgentTraceListCursor, AgentTraceListPage, AgentTraceListRow, AgentTraceReplay, AgentTraceReplayEntry, AgentTraceTaskSummary};
+use aleph_protocol::{
+    AgentTraceListCursor, AgentTraceListPage, AgentTraceListRow, AgentTraceReplay,
+    AgentTraceReplayEntry, AgentTraceTaskSummary,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -309,8 +312,7 @@ pub async fn handle_list(
                 .map(|ts| (ts, "\u{10ffff}".to_string()))
         }
     };
-    match db.list_trace_tasks_paged(limit, cursor).await
-    {
+    match db.list_trace_tasks_paged(limit, cursor).await {
         Ok(tasks) => {
             // An unscoped caller (cron / in-process) resolves to `None` here
             // and is not audited, exactly as it is not filtered — the same

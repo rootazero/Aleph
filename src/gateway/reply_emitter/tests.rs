@@ -906,6 +906,10 @@ mod media_cleanup_tests {
 
         emitter.deliver_run_media().await;
 
-        assert!(!path.exists(), "{} should have been cleaned", path.display());
+        assert!(
+            !path.exists(),
+            "{} should have been cleaned",
+            path.display()
+        );
     }
 }

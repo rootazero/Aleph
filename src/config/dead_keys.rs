@@ -216,9 +216,7 @@ where
 
 /// The matched tolerated entry for `path`, or `None` when nothing reads it.
 fn tolerated_entry(path: &str) -> Option<&'static Tolerated> {
-    TOLERATED
-        .iter()
-        .find(|entry| covers(entry.path, path))
+    TOLERATED.iter().find(|entry| covers(entry.path, path))
 }
 
 /// Does `pattern` cover `path` — same segments, `*` matching any one of them,

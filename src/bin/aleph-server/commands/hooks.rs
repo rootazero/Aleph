@@ -136,14 +136,17 @@ const SHELL_METACHARS: &[char] = &[';', '&', '|', '$', '`', '>', '<', '\n', '\r'
 /// runtime instead of hanging on the CLI's inherited stdin.
 fn run_command_with_payload(command: &str, event: &str) -> CmdResult {
     if !matches!(
-        std::env::var("ALEPH_HOOK_ALLOW_SHELL_METACHARS").ok().as_deref(),
+        std::env::var("ALEPH_HOOK_ALLOW_SHELL_METACHARS")
+            .ok()
+            .as_deref(),
         Some("1") | Some("true") | Some("yes")
     ) && command.chars().any(|c| SHELL_METACHARS.contains(&c))
     {
         return Err("hook command contains shell metacharacters; \
              refusing to invoke 'sh -c' / 'cmd /C' on it. \
-             Set ALEPH_HOOK_ALLOW_SHELL_METACHARS=1 to override.".to_string()
-        .into());
+             Set ALEPH_HOOK_ALLOW_SHELL_METACHARS=1 to override."
+            .to_string()
+            .into());
     }
     let payload = synthetic_payload(event);
     println!("(stdin payload: {payload})");

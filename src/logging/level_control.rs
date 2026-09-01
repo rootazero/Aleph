@@ -380,7 +380,11 @@ mod tests {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let prev = get_log_level();
         CURRENT_LOG_LEVEL.store(77, Ordering::Release);
-        assert_eq!(get_log_level(), LogLevel::Info, "corrupt read falls back to Info");
+        assert_eq!(
+            get_log_level(),
+            LogLevel::Info,
+            "corrupt read falls back to Info"
+        );
         assert_eq!(
             CURRENT_LOG_LEVEL.load(Ordering::Acquire),
             LogLevel::Info.to_u8(),

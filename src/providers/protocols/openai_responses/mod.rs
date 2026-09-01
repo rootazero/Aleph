@@ -117,9 +117,9 @@ impl OpenAiResponsesProtocol {
                     |s| s.trim_end_matches('/').to_string(),
                 );
             // Validate the configured base before splicing in the path.
-            if let Err(e) = crate::providers::protocols::http_client::validate_provider_base_url(
-                &base_url,
-            ) {
+            if let Err(e) =
+                crate::providers::protocols::http_client::validate_provider_base_url(&base_url)
+            {
                 tracing::error!(error = %e, "OpenAI Responses base_url failed validation");
             }
             format!("{base_url}{endpoint_path}")
@@ -137,9 +137,9 @@ impl OpenAiResponsesProtocol {
                     },
                 );
             // Validate the configured base before splicing in the path.
-            if let Err(e) = crate::providers::protocols::http_client::validate_provider_base_url(
-                &base_url,
-            ) {
+            if let Err(e) =
+                crate::providers::protocols::http_client::validate_provider_base_url(&base_url)
+            {
                 tracing::error!(error = %e, "OpenAI Responses base_url failed validation");
             }
             format!("{base_url}{endpoint_path}")

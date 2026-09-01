@@ -818,7 +818,13 @@ impl ProjectStore {
                      bound_by = excluded.bound_by,
                      bound_at = excluded.bound_at",
                 rusqlite::params![
-                    project_id, channel_key, peer_kind_col, peer_key, bound_by, now, label
+                    project_id,
+                    channel_key,
+                    peer_kind_col,
+                    peer_key,
+                    bound_by,
+                    now,
+                    label
                 ],
             )
             .map_err(db_err)?;
@@ -2200,7 +2206,9 @@ mod tests {
         let (channel, kind, peer) =
             binding::conversation_of(&key).expect("a group key is a conversation");
         assert_eq!(
-            store.project_for_conversation(&channel, kind, &peer).unwrap(),
+            store
+                .project_for_conversation(&channel, kind, &peer)
+                .unwrap(),
             Some(room.id.clone()),
             "a binding written with the operator's original spelling must be \
              found by a lookup keyed on what a live SessionKey independently \

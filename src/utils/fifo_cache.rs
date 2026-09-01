@@ -58,11 +58,7 @@ pub(crate) fn remember<V>(
 /// invalidate cached ownership / scope pairs after the source row mutates
 /// — without it the cache keeps serving pre-mutation data until FIFO
 /// eviction, which is exactly the bug the forget arm closes.
-pub(crate) fn forget<V>(
-    order: &mut VecDeque<String>,
-    map: &mut HashMap<String, V>,
-    key: &str,
-) {
+pub(crate) fn forget<V>(order: &mut VecDeque<String>, map: &mut HashMap<String, V>, key: &str) {
     if map.remove(key).is_some() {
         // The same key may have been re-inserted multiple times while live
         // (`remember` deduplicates), so only ONE slot in the queue belongs

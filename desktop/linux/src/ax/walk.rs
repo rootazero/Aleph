@@ -872,11 +872,7 @@ mod tests {
         assert_eq!(MAX_NODES, 1_500);
     }
 
-    fn skeleton_node(
-        role: Role,
-        title: Option<&str>,
-        ifaces: InterfaceSet,
-    ) -> SkeletonNode {
+    fn skeleton_node(role: Role, title: Option<&str>, ifaces: InterfaceSet) -> SkeletonNode {
         SkeletonNode {
             path: "/org/a11y/atspi/accessible/0".to_string(),
             role,
@@ -895,8 +891,9 @@ mod tests {
         assert!(skeleton_node(Role::Filler, None, InterfaceSet::empty()).is_wrapper());
         assert!(skeleton_node(Role::Unknown, None, InterfaceSet::empty()).is_wrapper());
         // Geometry alone does not make a wrapper real — Component is universal.
-        assert!(skeleton_node(Role::Panel, None, InterfaceSet::new(Interface::Component))
-            .is_wrapper());
+        assert!(
+            skeleton_node(Role::Panel, None, InterfaceSet::new(Interface::Component)).is_wrapper()
+        );
     }
 
     #[test]
@@ -904,10 +901,10 @@ mod tests {
         // A labelled group is a landmark, not noise.
         assert!(!skeleton_node(Role::Panel, Some("Sidebar"), InterfaceSet::empty()).is_wrapper());
         // An icon-only clickable group is a *target* — it must pay its budget.
-        assert!(!skeleton_node(Role::Panel, None, InterfaceSet::new(Interface::Action))
-            .is_wrapper());
-        assert!(!skeleton_node(Role::Panel, None, InterfaceSet::new(Interface::Text))
-            .is_wrapper());
+        assert!(
+            !skeleton_node(Role::Panel, None, InterfaceSet::new(Interface::Action)).is_wrapper()
+        );
+        assert!(!skeleton_node(Role::Panel, None, InterfaceSet::new(Interface::Text)).is_wrapper());
     }
 
     #[test]

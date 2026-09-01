@@ -33,9 +33,7 @@ impl SystemCapability for MacOSSystem {
         tokio::task::spawn_blocking(move || workspace::launch_app(&app_name))
             .await
             .map_err(|e| {
-                aleph_desktop::DesktopError::InputFailed(format!(
-                    "launch_app task join error: {e}"
-                ))
+                aleph_desktop::DesktopError::InputFailed(format!("launch_app task join error: {e}"))
             })?
     }
 
@@ -44,9 +42,7 @@ impl SystemCapability for MacOSSystem {
         tokio::task::spawn_blocking(move || workspace::quit_app(&app_name))
             .await
             .map_err(|e| {
-                aleph_desktop::DesktopError::InputFailed(format!(
-                    "quit_app task join error: {e}"
-                ))
+                aleph_desktop::DesktopError::InputFailed(format!("quit_app task join error: {e}"))
             })?
     }
 

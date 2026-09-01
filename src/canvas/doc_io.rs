@@ -49,10 +49,13 @@ impl DocLocks {
     /// racing on the same id always end up with the same `Arc` — the check
     /// and the insert cannot interleave.
     fn slot(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
-        let mut slots = self.slots.lock().unwrap_or_else(|e| { tracing::error!(
+        let mut slots = self.slots.lock().unwrap_or_else(|e| {
+            tracing::error!(
                 reason = %e,
                 "canvas lock table poisoned: a previous holder panicked mid-insert; recovering"
-            ); e.into_inner() });
+            );
+            e.into_inner()
+        });
         if let Some(live) = slots.get(id).and_then(Weak::upgrade) {
             return live;
         }
@@ -85,10 +88,16 @@ impl DocLocks {
     /// pruning bound.
     #[cfg(test)]
     pub(super) fn slot_count(&self) -> usize {
-        self.slots.lock().unwrap_or_else(|e| { tracing::error!(
-                reason = %e,
-                "canvas lock table poisoned: a previous holder panicked mid-insert; recovering"
-            ); e.into_inner() }).len()
+        self.slots
+            .lock()
+            .unwrap_or_else(|e| {
+                tracing::error!(
+                    reason = %e,
+                    "canvas lock table poisoned: a previous holder panicked mid-insert; recovering"
+                );
+                e.into_inner()
+            })
+            .len()
     }
 }
 

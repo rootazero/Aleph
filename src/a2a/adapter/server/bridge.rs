@@ -113,10 +113,7 @@ impl A2AMessageHandler for AgentLoopBridge {
         // `create_task` + `update_status(Working)` that previously
         // allowed a concurrent delegation to also reach `execute()`.
         let context_id = Self::context_id(task_id, session_id);
-        let claimed = self
-            .task_manager
-            .claim_task(task_id, context_id)
-            .await?;
+        let claimed = self.task_manager.claim_task(task_id, context_id).await?;
         if !claimed {
             return Err(A2AError::InvalidRequest(format!(
                 "Task {task_id} is already being processed by another request"
@@ -198,10 +195,7 @@ impl A2AMessageHandler for AgentLoopBridge {
 
         // Atomically claim the task (see handle_message for rationale).
         let context_id = Self::context_id(task_id, session_id);
-        let claimed = self
-            .task_manager
-            .claim_task(task_id, context_id)
-            .await?;
+        let claimed = self.task_manager.claim_task(task_id, context_id).await?;
         if !claimed {
             return Err(A2AError::InvalidRequest(format!(
                 "Task {task_id} is already being processed by another request"

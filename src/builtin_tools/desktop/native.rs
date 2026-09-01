@@ -564,16 +564,18 @@ async fn resolve_element_token(
                 "element tokens re-resolve through the accessibility layer, which is not \
                  available on this platform right now — pass x/y from a fresh screenshot \
                  instead"
-                .to_string(),
+                    .to_string(),
             )),
         });
     };
     let result = ax
-        .query_by_role(aleph_protocol::desktop_bridge::methods::ax::QueryByRoleParams {
-            role: record.role.clone(),
-            pid: Some(record.pid),
-            max_nodes: aleph_protocol::desktop_bridge::methods::ax::DEFAULT_MAX_NODES,
-        })
+        .query_by_role(
+            aleph_protocol::desktop_bridge::methods::ax::QueryByRoleParams {
+                role: record.role.clone(),
+                pid: Some(record.pid),
+                max_nodes: aleph_protocol::desktop_bridge::methods::ax::DEFAULT_MAX_NODES,
+            },
+        )
         .await;
     let elements = match result {
         Ok(r) => r.elements,
@@ -613,9 +615,7 @@ async fn resolve_element_token(
         // under a different label would be a guess, and a click on a guess is
         // the failure mode tokens exist to prevent.
         match (&record.title, &c.title) {
-            (Some(want), Some(have))
-                if have.to_lowercase().contains(&want.to_lowercase()) =>
-            {
+            (Some(want), Some(have)) if have.to_lowercase().contains(&want.to_lowercase()) => {
                 Some(c.center)
             }
             (Some(_), _) => None,
@@ -3486,12 +3486,7 @@ mod tests {
             }
         }
 
-        fn fixture(
-            by_role: Vec<AxElement>,
-        ) -> (
-            DesktopTool,
-            Arc<TokenPlatform>,
-        ) {
+        fn fixture(by_role: Vec<AxElement>) -> (DesktopTool, Arc<TokenPlatform>) {
             let platform = Arc::new(TokenPlatform {
                 screen: TokenScreen::default(),
                 ax: TokenAx {
@@ -3499,8 +3494,8 @@ mod tests {
                     ..Default::default()
                 },
             });
-            let tool = DesktopTool::new()
-                .with_platform(platform.clone() as Arc<dyn DesktopPlatform>);
+            let tool =
+                DesktopTool::new().with_platform(platform.clone() as Arc<dyn DesktopPlatform>);
             (tool, platform)
         }
 
@@ -3635,7 +3630,13 @@ mod tests {
                 .unwrap()
                 .expect("set_value is handled");
             assert!(out.success, "{:?}", out.message);
-            let locator = platform.ax.set_value_locator.lock().unwrap().clone().unwrap();
+            let locator = platform
+                .ax
+                .set_value_locator
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap();
             assert_eq!(locator.pid, Some(pid));
             assert_eq!(locator.role.as_deref(), Some("AXButton"));
             assert_eq!(locator.title.as_deref(), Some("Save"));

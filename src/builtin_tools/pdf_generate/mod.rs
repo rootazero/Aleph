@@ -237,9 +237,11 @@ impl AlephTool for PdfGenerateTool {
                 let output_path = output_path.clone();
                 tokio::task::spawn_blocking(move || native_engine::generate(&args, &output_path))
                     .await
-                    .map_err(|e| crate::builtin_tools::error::ToolError::Execution(format!(
-                        "pdf_generate join failed: {e}"
-                    )))?
+                    .map_err(|e| {
+                        crate::builtin_tools::error::ToolError::Execution(format!(
+                            "pdf_generate join failed: {e}"
+                        ))
+                    })?
             }
             RenderEngine::Auto => {
                 if browser_engine::is_browser_engine_available(self.playwright_config.as_ref()) {
@@ -258,19 +260,25 @@ impl AlephTool for PdfGenerateTool {
                                 native_engine::generate(&args, &output_path)
                             })
                             .await
-                            .map_err(|e| crate::builtin_tools::error::ToolError::Execution(format!(
-                                "pdf_generate join failed: {e}"
-                            )))?
+                            .map_err(|e| {
+                                crate::builtin_tools::error::ToolError::Execution(format!(
+                                    "pdf_generate join failed: {e}"
+                                ))
+                            })?
                         }
                     }
                 } else {
                     info!("Chrome not available, using native PDF engine");
                     let output_path = output_path.clone();
-                    tokio::task::spawn_blocking(move || native_engine::generate(&args, &output_path))
-                        .await
-                        .map_err(|e| crate::builtin_tools::error::ToolError::Execution(format!(
+                    tokio::task::spawn_blocking(move || {
+                        native_engine::generate(&args, &output_path)
+                    })
+                    .await
+                    .map_err(|e| {
+                        crate::builtin_tools::error::ToolError::Execution(format!(
                             "pdf_generate join failed: {e}"
-                        )))?
+                        ))
+                    })?
                 }
             }
         };

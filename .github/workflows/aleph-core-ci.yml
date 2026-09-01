@@ -134,6 +134,31 @@ jobs:
                       /opt/hostedtoolcache/CodeQL || true
           df -h /
 
+      # The hosted image ships a 4 GB swapfile. That was enough while this
+      # job's memory low-water sat on a ~720 MiB plateau across three measured
+      # configurations (see the job comment above). It is not enough any more:
+      # the 26.9.1 cycle added ~58k source lines and the sampler stopped
+      # plateauing and started *declining* — 13.0 GB down to 669 MiB in five
+      # minutes, then "the runner has received a shutdown signal" / exit 143.
+      # The comment above named that exact tell and said it needs a different
+      # answer than another `-j` cap; this is that answer.
+      #
+      # /mnt is the ~70 GB ephemeral volume (and the step above has just freed
+      # a further ~25 GB from /), so 16 GB of swap costs disk this job does not
+      # spend. Swap only slows the minutes at the peak; being OOM-killed costs
+      # the whole 28-minute run.
+      - name: Enlarge swap (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo swapoff -a || true
+          sudo rm -f /mnt/swapfile /swapfile
+          sudo fallocate -l 16G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
         run: |

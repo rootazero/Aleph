@@ -2497,8 +2497,7 @@ mod tests {
         // The RPC half, evaluated exactly as `clarification.pending` /
         // `clarification.resolve` evaluate it — through the ONE predicate they
         // both call, with the actor an operator connection actually carries.
-        let rpc_admits =
-            crate::gateway::visibility::session_visible_to(&meta, OWNER_USER_ID);
+        let rpc_admits = crate::gateway::visibility::session_visible_to(&meta, OWNER_USER_ID);
 
         for topic in ["stream.ask_user", "stream.clarification_ended"] {
             let payload = serde_json::json!({ "session_key": key.to_key_string() });

@@ -222,12 +222,7 @@ fn render_window(text: &str, args: &FileReadArgs, size: u64, path: String) -> Fi
     let mut rendered: Vec<String> = Vec::new();
     let mut chars = 0usize;
     let mut stopped_on_chars = false;
-    for (idx, line) in lines
-        .get(start..line_end)
-        .unwrap_or(&[])
-        .iter()
-        .enumerate()
-    {
+    for (idx, line) in lines.get(start..line_end).unwrap_or(&[]).iter().enumerate() {
         let clamped = clamp_line(line);
         let cost = clamped.chars().count() + width + 2; // gutter + tab + newline
                                                         // Always emit at least one line, so a single over-budget line still
@@ -267,10 +262,7 @@ fn render_window(text: &str, args: &FileReadArgs, size: u64, path: String) -> Fi
         FileReadOutput {
             success: true,
             path: path.clone(),
-            content: rendered
-                .get(..kept)
-                .unwrap_or(&[])
-                .concat(),
+            content: rendered.get(..kept).unwrap_or(&[]).concat(),
             size,
             total_lines,
             returned_lines: kept as u64,

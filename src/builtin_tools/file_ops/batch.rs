@@ -124,9 +124,7 @@ pub async fn execute_batch_move(
                     // (released each loop turn) is still the right grain here.
                     match tokio::fs::rename(&path, &dest_path).await {
                         Ok(_) => {
-                            let size = tokio::fs::metadata(&dest_path)
-                                .await
-                                .map_or(0, |m| m.len());
+                            let size = tokio::fs::metadata(&dest_path).await.map_or(0, |m| m.len());
                             moved_files.push(FileInfo {
                                 name: file_name.to_string_lossy().to_string(),
                                 path: dest_path.to_string_lossy().to_string(),
@@ -278,7 +276,10 @@ pub async fn execute_organize(
         let is_dir = match tokio::fs::symlink_metadata(&path).await {
             Ok(md) => md.file_type().is_dir(),
             Err(_) => {
-                errors.push(format!("Failed to stat {}: vanished mid-walk", path.display()));
+                errors.push(format!(
+                    "Failed to stat {}: vanished mid-walk",
+                    path.display()
+                ));
                 continue;
             }
         };
@@ -342,9 +343,7 @@ pub async fn execute_organize(
         match tokio::fs::rename(&path, &dest_path).await {
             Ok(_) => {
                 *category_counts.entry(category.to_string()).or_insert(0) += 1;
-                let size = tokio::fs::metadata(&dest_path)
-                    .await
-                    .map_or(0, |m| m.len());
+                let size = tokio::fs::metadata(&dest_path).await.map_or(0, |m| m.len());
                 moved_files.push(FileInfo {
                     name: file_name.to_string_lossy().to_string(),
                     path: dest_path.to_string_lossy().to_string(),

@@ -179,28 +179,26 @@ impl AlephTool for AgentDeleteTool {
         //    bound channel (the prior single-channel reverse-lookup path) left
         //    the other channels pointing at the now-deleted agent — the inbound
         //    router would then resolve them to a ghost agent.
-        let binding_cleanup_warning = match self
-            .workspace_mgr
-            .clear_bindings_for_agent(&args.agent_id)
-        {
-            Ok(()) => None,
-            Err(e) => {
-                // Surface to BOTH logs and the tool output: the previous `warn!`
-                // left the operator blind. The TOML + registry deletes below
-                // still proceed so the agent is unreachable from the runtime,
-                // but stale bindings will resolve to the router default on the
-                // next inbound message instead of routing to this id.
-                warn!(
-                    agent_id = %args.agent_id,
-                    error = %e,
-                    "Failed to clear channel bindings for deleted agent"
-                );
-                Some(format!(
-                    "could not clear channel bindings: {e}; affected channels will \
+        let binding_cleanup_warning =
+            match self.workspace_mgr.clear_bindings_for_agent(&args.agent_id) {
+                Ok(()) => None,
+                Err(e) => {
+                    // Surface to BOTH logs and the tool output: the previous `warn!`
+                    // left the operator blind. The TOML + registry deletes below
+                    // still proceed so the agent is unreachable from the runtime,
+                    // but stale bindings will resolve to the router default on the
+                    // next inbound message instead of routing to this id.
+                    warn!(
+                        agent_id = %args.agent_id,
+                        error = %e,
+                        "Failed to clear channel bindings for deleted agent"
+                    );
+                    Some(format!(
+                        "could not clear channel bindings: {e}; affected channels will \
                      resolve to the router default on their next inbound message"
-                ))
-            }
-        };
+                    ))
+                }
+            };
 
         // 5. Remove from registry. Both variants (Instance / Lazy) mean the
         //    agent is gone; the previous API collapsed Lazy into None, which

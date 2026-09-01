@@ -351,7 +351,9 @@ impl ConversationDirectory {
                 .query(&query)
                 .send()
                 .await
-                .map_err(|e| ChannelError::ReceiveFailed(format!("{method} request failed: {e}")))?;
+                .map_err(|e| {
+                    ChannelError::ReceiveFailed(format!("{method} request failed: {e}"))
+                })?;
             let status = raw.status();
             let retry_after = super::errors::retry_after_secs(raw.headers());
             let resp: serde_json::Value = raw.json().await.map_err(|e| {

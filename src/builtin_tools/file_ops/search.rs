@@ -1,6 +1,5 @@
 //! Search operations for file system
 
-
 use std::path::Path;
 use tracing::{debug, info};
 

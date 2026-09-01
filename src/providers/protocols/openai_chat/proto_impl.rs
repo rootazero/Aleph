@@ -41,9 +41,9 @@ impl OpenAiProtocol {
         // preset must not smuggle `file://`, `javascript:`, etc. into the URL
         // parser. Host-level filtering (loopback / RFC1918 / cloud metadata)
         // is intentionally left to the operator's network policy.
-        if let Err(e) = crate::providers::protocols::http_client::validate_provider_base_url(
-            &raw_base_url,
-        ) {
+        if let Err(e) =
+            crate::providers::protocols::http_client::validate_provider_base_url(&raw_base_url)
+        {
             tracing::error!(error = %e, "OpenAI provider base_url failed validation");
             return raw_base_url;
         }

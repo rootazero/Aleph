@@ -279,9 +279,11 @@ pub fn migrate_task_traces_unique_step_index(conn: &Connection) -> Result<(), Al
             "#,
             [],
         )
-        .map_err(|e| AlephError::config(format!(
-            "Failed to dedupe task_traces before adding UNIQUE constraint: {e}"
-        )))?;
+        .map_err(|e| {
+            AlephError::config(format!(
+                "Failed to dedupe task_traces before adding UNIQUE constraint: {e}"
+            ))
+        })?;
     if deleted > 0 {
         tracing::warn!(
             deleted,

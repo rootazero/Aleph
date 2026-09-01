@@ -383,9 +383,7 @@ impl AgentHarness {
         // `can_parallel_dispatch` rejects on. Recomputing it here would be a
         // branch with no caller.
         if let (Some(canonical), Some(claims)) = (canonical, claims) {
-            if self
-                .can_parallel_dispatch(&tool_calls, canonical, claims)
-            {
+            if self.can_parallel_dispatch(&tool_calls, canonical, claims) {
                 return self
                     .act_parallel(
                         session_id,

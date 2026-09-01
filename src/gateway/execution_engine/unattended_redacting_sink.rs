@@ -118,9 +118,7 @@ pub(crate) fn mask_trace_event(masker: &SecretMasker, event: &mut LoopTraceEvent
             .as_mut()
             .is_some_and(|t| mask_in_place(masker, t)),
         LoopTraceEvent::WorktreeCreated { path } => mask_path_in_place(masker, path),
-        LoopTraceEvent::WorktreeCleanedUp { path, leaked: _ } => {
-            mask_path_in_place(masker, path)
-        }
+        LoopTraceEvent::WorktreeCleanedUp { path, leaked: _ } => mask_path_in_place(masker, path),
         LoopTraceEvent::McpScopeAttached {
             agent_id,
             references,

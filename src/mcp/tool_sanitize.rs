@@ -200,14 +200,24 @@ fn normalize_schema_map(value: Value, depth: usize) -> Value {
 
 fn normalize_schema_array(value: Value, depth: usize) -> Value {
     match value {
-        Value::Array(items) => Value::Array(items.into_iter().map(|v| normalize_node(v, depth)).collect()),
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(|v| normalize_node(v, depth))
+                .collect(),
+        ),
         other => other,
     }
 }
 
 fn normalize_schema_or_array(value: Value, depth: usize) -> Value {
     match value {
-        Value::Array(items) => Value::Array(items.into_iter().map(|v| normalize_node(v, depth)).collect()),
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(|v| normalize_node(v, depth))
+                .collect(),
+        ),
         Value::Object(_) => normalize_node(value, depth),
         other => other,
     }

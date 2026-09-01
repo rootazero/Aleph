@@ -151,9 +151,8 @@ pub async fn register_mcp_tools(
                         // lowest mutating level so the catalog reflects the
                         // fact that this tool changes state, but does not
                         // trigger the panel/cli-only gate on its own.
-                        builder = builder.with_safety_level(
-                            crate::tool_metadata::ToolSafetyLevel::Reversible,
-                        );
+                        builder = builder
+                            .with_safety_level(crate::tool_metadata::ToolSafetyLevel::Reversible);
                     }
                     disp.register_with_conflict_resolution(builder).await;
                 }

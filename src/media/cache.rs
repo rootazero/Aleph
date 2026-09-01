@@ -230,9 +230,7 @@ impl MediaCache {
             .await
             .map_err(CacheError::Io)?;
         let mut bytes = Vec::with_capacity(cached.size as usize);
-        file.read_to_end(&mut bytes)
-            .await
-            .map_err(CacheError::Io)?;
+        file.read_to_end(&mut bytes).await.map_err(CacheError::Io)?;
         Ok(BASE64.encode(&bytes))
     }
 

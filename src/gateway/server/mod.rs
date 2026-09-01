@@ -830,9 +830,8 @@ impl GatewayServer {
             // indefinitely.
             api_token: {
                 let mgr = self.shared_token_mgr.clone();
-                Arc::new(move || {
-                    mgr.as_ref().and_then(|m| m.get_current_token())
-                }) as Arc<dyn Fn() -> Option<String> + Send + Sync>
+                Arc::new(move || mgr.as_ref().and_then(|m| m.get_current_token()))
+                    as Arc<dyn Fn() -> Option<String> + Send + Sync>
             },
             execution_adapter: self.execution_adapter.clone(),
             provider_map: self.openai_provider_map.clone(),

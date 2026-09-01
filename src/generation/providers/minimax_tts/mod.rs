@@ -457,10 +457,7 @@ fn append_group_id(endpoint: &str, group_id: Option<&str>) -> String {
             let sep = if endpoint.contains('?') { '&' } else { '?' };
             format!(
                 "{endpoint}{sep}GroupId={}",
-                percent_encoding::utf8_percent_encode(
-                    gid,
-                    percent_encoding::NON_ALPHANUMERIC
-                )
+                percent_encoding::utf8_percent_encode(gid, percent_encoding::NON_ALPHANUMERIC)
             )
         }
         _ => endpoint.to_string(),

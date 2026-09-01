@@ -167,7 +167,10 @@ impl OpenAiImageProvider {
     }
 
     /// Build the API request body from a `GenerationRequest`
-    fn build_request_body(&self, request: &GenerationRequest) -> GenerationResult<ImageGenerationRequest> {
+    fn build_request_body(
+        &self,
+        request: &GenerationRequest,
+    ) -> GenerationResult<ImageGenerationRequest> {
         let model = request
             .params
             .model
@@ -182,8 +185,7 @@ impl OpenAiImageProvider {
         let size = match (request.params.width, request.params.height) {
             (Some(w), Some(h)) if w > 0 && h > 0 => {
                 let candidate = format!("{w}x{h}");
-                const ALLOWED_SIZES: &[&str] =
-                    &["1024x1024", "1024x1792", "1792x1024", "512x512"];
+                const ALLOWED_SIZES: &[&str] = &["1024x1024", "1024x1792", "1792x1024", "512x512"];
                 if !ALLOWED_SIZES.contains(&candidate.as_str()) {
                     return Err(GenerationError::unsupported_dimension(
                         format!(
@@ -406,7 +408,8 @@ impl GenerationProvider for OpenAiImageProvider {
                 })
             };
 
-            let api_response = super::http::retry_transient("openai-image.generate", attempt).await?;
+            let api_response =
+                super::http::retry_transient("openai-image.generate", attempt).await?;
 
             // Extract first image (DALL-E 3 only supports n=1)
             let first_image = api_response.data.first().ok_or_else(|| {
@@ -739,9 +742,8 @@ mod tests {
     #[test]
     fn test_build_request_body_rejects_unsupported_size() {
         let provider = OpenAiImageProvider::new("sk-test-key", None, None, None).unwrap();
-        let request = GenerationRequest::image("A test prompt").with_params(
-            GenerationParams::builder().width(512).height(768).build(),
-        );
+        let request = GenerationRequest::image("A test prompt")
+            .with_params(GenerationParams::builder().width(512).height(768).build());
 
         let err = provider.build_request_body(&request).unwrap_err();
         assert!(

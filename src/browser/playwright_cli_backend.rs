@@ -351,10 +351,12 @@ impl BrowserBackend for PlaywrightCliBackend {
         // but failed cleanup lingered in `/tmp/aleph-ss-*` indefinitely.
         // `browser_state_dir` already routes the other playwright-cli
         // state (output, config) under the data dir.
-        let mut path = super::playwright_launch::browser_state_dir("cli-screenshots")
-            .map_err(|e| BrowserError::Io(std::io::Error::other(
-                format!("failed to resolve cli-screenshots dir: {e}"),
-            )))?;
+        let mut path =
+            super::playwright_launch::browser_state_dir("cli-screenshots").map_err(|e| {
+                BrowserError::Io(std::io::Error::other(format!(
+                    "failed to resolve cli-screenshots dir: {e}"
+                )))
+            })?;
         let fname = format!("aleph-ss-{}.{ext}", uuid::Uuid::new_v4());
         path.push(fname);
         let path_str = path.to_string_lossy().to_string();
