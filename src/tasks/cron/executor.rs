@@ -23,9 +23,7 @@ use crate::tasks::cron::config::{
 use crate::tasks::cron::service::concurrency::PendingAlert;
 use crate::tasks::cron::service::timer::{AlertDispatcherFn, JobExecutorFn};
 use crate::tasks::shared::alert::failure_alert_payload;
-use crate::tasks::shared::delivery::{
-    DeliveryConfig, DeliveryEngine, DeliveryMode, DeliveryPayload,
-};
+use crate::tasks::shared::delivery::{DeliveryConfig, DeliveryEngine, DeliveryMode};
 use crate::tasks::shared::retry_hint::{classify, RetryHint};
 /// Deferred channel registry reference — set after channels are initialized.
 pub type ChannelRegistryCell = Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>;
