@@ -176,10 +176,27 @@ call site — it is at the type that let the two answers look alike.
   joined a session *key* to a path, and `:` is illegal in a Windows filename —
   production never does that, it routes every key through
   `sanitize_key_for_dir`.
+- **A worktree-isolated subagent stopped getting its own `target/` dir.**
+  `WorktreeSandbox` injects `CARGO_TARGET_DIR=<worktree>/target` so a subagent's
+  cargo builds stay out of the parent's target directory — that redirect is what
+  `subagent_spawner` documents as the point of the whole sandbox. A late review
+  pass narrowed the injection to commands whose program is `cargo`, on the
+  reasoning that another tool reading the variable might write outside the
+  worktree. Both halves are wrong. The value is an *absolute* path inside the
+  worktree, so a tool that honours it writes within the isolation boundary, not
+  outside it; and `program` is never `cargo` on any production path — every
+  caller spawns an interpreter (`code_exec` uses `language.runtime()`,
+  `code_check` and the `bash` tool hardcode `bash`) with the cargo invocation
+  living inside the shell text. So the predicate was false everywhere and the
+  feature was silently deleted. Restored unconditionally, with the reasoning
+  written at the injection site so the next narrowing has to argue with it.
 - **The Rust Doctor workflow wrote its diagnosis only to the step summary,** so
   its failures — it has never been green since it landed — said nothing at all
   to anyone reading the logs. It also checked out without submodules, which
-  `include_dir!` needs at compile time.
+  `include_dir!` needs at compile time, added clippy to a different toolchain
+  than the pinned one, ran without the system libraries or the `externalBin`
+  placeholders a workspace-wide build needs, and declared no blocking level. It
+  now runs; the score it reports is a starting number, not a passing one.
 
 ## [26.8.27]
 
