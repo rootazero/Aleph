@@ -1,0 +1,103 @@
+{
+  "schema": "findings-v1",
+  "module": "src/sandbox",
+  "baseline_score": null,
+  "tool": "manual",
+  "tool_version": "rust-doctor: timed out; rust-logic-audit + severed-wire-audit: manual",
+  "findings": [
+    {
+      "id": "SAN-001",
+      "severity": "P1",
+      "title": "deny_read_globs: regex::Regex::new used without bounded_builder — regex expansion bomb risk",
+      "file": "src/sandbox/deny_globs.rs",
+      "line": 57,
+      "category": "security",
+      "rule_id": "manual",
+      "description": "resolve_deny_read_paths_under() compiles user-supplied deny_read_globs patterns via regex::Regex::new without the 1 MiB compiled-size cap that safe_regex::bounded_builder enforces. An operator who adds a pathological pattern (e.g. '(a{1000}){1000}{1000}') to deny_read_globs exhausts process memory at sandbox startup. Every other untrusted-pattern site in the codebase (command_policy, pii, secrets, hooks, exec kernel) uses bounded_builder; deny_globs.rs is the lone exception.",
+      "trigger": "Operator adds a regex expansion bomb to [sandbox] deny_read_globs config; sandbox is restarted or policy is reloaded.",
+      "suggested_fix": "Replace `regex::Regex::new(&r)` with `crate::security::safe_regex::bounded_builder(&r).build()` in resolve_deny_read_paths_under, mirroring every other untrusted-pattern compile site. The pattern failure should be warn+drop (matching existing error handling), not panic.",
+      "confidence": "high",
+      "expert_lens": "security"
+    },
+    {
+      "id": "SAN-002",
+      "severity": "P1",
+      "title": "deny_read_paths_under: 50,000-entry walk cap may skip deep deny-pattern matches",
+      "file": "src/sandbox/deny_globs.rs",
+      "line": 62,
+      "category": "security",
+      "rule_id": "manual",
+      "description": "resolve_deny_read_paths_under() caps the directory walk at MAX_DENY_READ_WALK_ENTRIES=50000. Entries are counted during iteration; when the cap is hit, the function returns immediately. If a workspace contains >=50001 entries before reaching a secret-matching directory (e.g. .env at depth 3, .ssh at depth 5), that directory is never denied and its contents become readable. This is a policy-bypass gap, not a policy-overreach one — the severity is bounded by the need for a maliciously-large workspace.",
+      "trigger": "Attacker creates a workspace with >=50001 entries at shallower depth than the .env/.ssh/.pem directory, preventing deny-read ACLs from being stamped on the secret directories.",
+      "suggested_fix": "Three mitigations: (1) raise MAX_DENY_READ_WALK_ENTRIES substantially (500K+) and document the ceiling; (2) add a top-level file-count warning if the walk exits early; (3) consider per-directory-entry counting rather than global counting so deep secret directories are always covered regardless of breadth.",
+      "confidence": "high",
+      "expert_lens": "security"
+    },
+    {
+      "id": "SAN-003",
+      "severity": "P2",
+      "title": "rate_limit: check-then-record TOCTOU allows one extra request per concurrent burst",
+      "file": "src/sandbox/rate_limit.rs",
+      "line": 103,
+      "category": "concurrency",
+      "rule_id": "manual",
+      "description": "SandboxRateLimiter::check_and_record() checks the sliding-window count, then separately pushes the timestamp. Two concurrent requests for the same session+category can both pass the count check before either records, allowing up to burst_allow+1 requests instead of burst_allow. The check-and-record are not atomic. This is a standard TOCTOU in a non-lock-free sliding window; DashMap guards individual entries but not the read-modify-write sequence.",
+      "trigger": "Two exec-class tool calls for the same session and category arrive simultaneously (e.g. concurrent subagent fan-out). Both pass the count check; both record. The budget is exceeded by 1.",
+      "suggested_fix": "Use compare-exchange to atomically check-and-record in one operation, or hold the entry lock for the full check-and-record sequence (change DashMap entry to a Mutex-wrapped SlidingWindow rather than direct DashMap manipulation).",
+      "confidence": "high",
+      "expert_lens": "concurrency"
+    },
+    {
+      "id": "SAN-004",
+      "severity": "P2",
+      "title": "path_starts_with_normalized: non-canonical fallback has a symlink TOCTOU window",
+      "file": "src/sandbox/capabilities.rs",
+      "line": 110,
+      "category": "security",
+      "rule_id": "manual",
+      "description": "path_starts_with_normalized() canonicalizes the child path only when it exists. When the child does not exist (e.g. the target is to be created), the function falls back to a parent-chain walk using symlink_metadata. Between this check and the actual path use (profile_for -> landlock rule application), an attacker with workspace write access could replace an ancestor with a symlink pointing outside the baseline, escaping containment. The window is bounded by the time between is_within() and profile_for(), which is small but non-zero (especially if the approval gate adds human-paced latency). The code acknowledges this limitation in comments.",
+      "trigger": "Attacker creates a path like /workspace/ws/.git pointing to /etc via a symlink; requests a capability for /workspace/ws/.git/somefile which is checked before creation; the symlink resolves outside the jail when the path is later used.",
+      "suggested_fix": "Consider fail-closed: if canonicalize(child) fails but the non-canonical path passes the lexical+symlink-metadata check, reject the capability rather than passing. Add a test for the race condition.",
+      "confidence": "medium",
+      "expert_lens": "security"
+    },
+    {
+      "id": "SAN-005",
+      "severity": "P2",
+      "title": "sandbox_init: set_parent_death_signal TOCTOU between getppid and prctl",
+      "file": "src/sandbox/sandbox_init.rs",
+      "line": 310,
+      "category": "concurrency",
+      "rule_id": "manual",
+      "description": "set_parent_death_signal() calls getppid(), checks parent_pid == 1, then calls prctl(PR_SET_PDEATHSIG). If the parent dies between getppid() and prctl(), the bridge child is adopted by init (PID 1) and PR_SET_PDEATHSIG is set on the wrong process. The child bridge outlives sandbox-init and is not reaped until system shutdown. The window is a few microseconds between the two syscalls; practical severity is low.",
+      "trigger": "sandbox-init's parent (typically aleph-server) is killed by SIGKILL at the exact moment between getppid() and prctl().",
+      "suggested_fix": "Retry prctl until it succeeds or returns ESRCH (parent died), or document as a known benign orphan-leak (orphan bridge is reaped at system shutdown).",
+      "confidence": "low",
+      "expert_lens": "concurrency"
+    },
+    {
+      "id": "SAN-006",
+      "severity": "P2",
+      "title": "worktree: CARGO_TARGET_DIR injection affects ALL commands, not just cargo invocations",
+      "file": "src/sandbox/worktree.rs",
+      "line": 127,
+      "category": "security",
+      "rule_id": "manual",
+      "description": "WorktreeSandbox::execute() unconditionally injects CARGO_TARGET_DIR=<worktree>/target for every spawned command, not just cargo invocations. A non-cargo command that reads CARGO_TARGET_DIR (e.g. a custom build script or CI tool) receives a worktree-relative path instead of its expected location. This could cause build artifacts to be placed outside the worktree if the command uses CARGO_TARGET_DIR for path computation rather than just as a cargo optimization hint.",
+      "trigger": "A command running in the worktree sandbox reads CARGO_TARGET_DIR for non-cargo purposes (e.g. a custom tool that uses it as a general artifact directory hint).",
+      "suggested_fix": "Only inject CARGO_TARGET_DIR when command.program contains('cargo'), or document the injection as a worktree-only environment change so callers are aware.",
+      "confidence": "medium",
+      "expert_lens": "error"
+    }
+  ],
+  "severities_summary": { "P0": 0, "P1": 2, "P2": 4, "P3": 0 },
+  "cross_module_concerns": [
+    "exec module shares denial_ledger with sandbox module — the cross-gate denial ledger key fix (sandbox now uses denial_ledger::ledger_key instead of session_key_to_filename) has been verified as landed in denial_ledger.rs and workspace/mod.rs. Regression test explicitly pins the pre-fix behavior and proves the fix.",
+    "security::safe_regex::bounded_builder is the canonical protection for untrusted regex patterns across the codebase; deny_globs.rs is the only site using bare regex::Regex::new — a clear anomaly and the source of SAN-001.",
+    "platforms/mod.rs: Linux config fields deny_read_globs/allow_unix_sockets/dangerously_allow_all_unix_sockets/allow_local_binding are explicitly dropped with _ = (...); F-1 is documented in factory.rs but the drop means Linux operators who set these fields silently get no enforcement — worth surfacing to users.",
+    "worktree.rs sandbox path uses tokio::process::Command directly without any OS-level sandbox (seatbelt/landlock/job object). The catastrophic hardline command-policy floor is installed but no cgroup/memory/network isolation is applied — intentional per spec but worth noting for threat modeling.",
+    "hooks ordering in factory.rs: SecurityKernelHook -> CommandPolicyHook -> RateLimitHook -> ResourceGovernor. All are additive before-hooks; no later-hook dependency on prior-hook state mutation found.",
+    "SSRF allowlist in proxy/dial.rs permits an explicit internal IP literal (e.g. '169.254.169.254') if the operator allowlists it — intentional documented escape hatch, not a bug."
+  ],
+  "notes": "SCOPE: reviewed 58 .rs files (~25,500 lines). Full read: policy.rs, capabilities.rs, command.rs, factory.rs, config.rs, deny_globs.rs, protected_paths.rs, scrub.rs, command_policy/{mod.rs,normalize.rs,rules.rs}, exec_approval/{gate.rs,denial_ledger.rs,grants.rs,action.rs}, proxy/{allowlist.rs,dial.rs}, worktree.rs, sandbox_init.rs, resource_governor.rs, cgroup_v2.rs, rate_limit.rs, hooks.rs, live_tail.rs, driver.rs, platforms/mod.rs, security_kernel_hook.rs, dns.rs. PARTIALLY READ: workspace/mod.rs (first 500 of 2505 lines), platforms/common.rs (first 300 of 1065), sandbox_init.rs (first 1200 of 1384), command_policy/mod.rs (first 400 of 2623). NOT REVIEWED (module too large): workspace/mod.rs execute function (2505-line function), platforms/linux/bwrap.rs, platforms/macos/seatbelt.rs, windows_init/, proxy/{connect.rs,socks5.rs,lifecycle.rs,netns_bridge.rs}, proxy/mod.rs, denial_logger.rs, summary.rs, context.rs, windows_init/. rust-doctor timed out at 120s and again at 200s — no diagnostics or score obtained. TOOL NOTES: (1) Denial ledger cross-gate key fix verified as landed — both sandbox and confirm gates use denial_ledger::ledger_key. (2) No hardcoded secrets found in scanned files. (3) No unsafe blocks without SAFETY comments in sandbox_init.rs cgroup path — all have explicit invariant documentation. (4) spawn_subprocess=false on Linux (session_baseline) correctly uses cfg!(not(target_os=\"linux\")) — verified by test. (5) The factory.rs F-1 mitigation (warn when deny_read_globs configured on Linux) is present and correct. (6) ScrubSecrets handles injection-allowlist correctly (checks hash+len, not name — not exploitable in production). (7) LiveTail ring buffer wraps correctly. (8) cgroup PID writing uses fixed 512-byte stack buffer with NUL termination and explicit safety comments."
+}
