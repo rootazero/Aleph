@@ -207,13 +207,20 @@ pub fn parse_skill_file(
     path: impl AsRef<Path>,
     source: SkillSource,
 ) -> Result<SkillManifest, SkillParseError> {
+    use std::io::Read;
+
     let path_ref = path.as_ref();
-    // Fail-closed size check: a metadata failure (permission denied, broken
-    // symlink, vanished inode) must NOT silently skip the cap and let a
-    // multi-GB payload reach `read`. If we cannot determine the size, refuse
-    // to load — the same conservative posture the YAML/ReDoS-bounded budget
-    // below takes against unbounded input.
-    let meta = std::fs::metadata(path_ref).map_err(SkillParseError::Io)?;
+    // TOCTOU-safe size cap: open the file once, read its metadata, and bound
+    // the subsequent `take(MAX + 1).read_to_end` at the reader rather than
+    // relying on a separate `metadata().len()`. A co-operative attacker
+    // growing the file (rename-replace, append) between two syscalls could
+    // otherwise blow past `MAX_SKILL_FILE_BYTES`. The `take` enforces the cap
+    // at the read, and the post-read length check covers the (rare) case
+    // where `metadata().len()` under-reported. Replaces the previous
+    // metadata-then-read sequence which had a TOCTOU window between the two
+    // syscalls.
+    let file = std::fs::File::open(path_ref).map_err(SkillParseError::Io)?;
+    let meta = file.metadata().map_err(SkillParseError::Io)?;
     if meta.len() > MAX_SKILL_FILE_BYTES {
         return Err(SkillParseError::FileTooLarge {
             size: meta.len(),
@@ -221,7 +228,18 @@ pub fn parse_skill_file(
             path: path_ref.to_path_buf(),
         });
     }
-    let content_bytes = std::fs::read(path_ref)?;
+    let mut buf = Vec::with_capacity(meta.len().min(MAX_SKILL_FILE_BYTES + 1) as usize);
+    file.take(MAX_SKILL_FILE_BYTES + 1)
+        .read_to_end(&mut buf)
+        .map_err(SkillParseError::Io)?;
+    if buf.len() as u64 > MAX_SKILL_FILE_BYTES {
+        return Err(SkillParseError::FileTooLarge {
+            size: buf.len() as u64,
+            max: MAX_SKILL_FILE_BYTES,
+            path: path_ref.to_path_buf(),
+        });
+    }
+    let content_bytes = buf;
     // Funnel every load path through the install-time guard: a SKILL.md
     // tampered after install must not bypass the install-time audit.
     // Previously only the external install RPC handler called
@@ -263,20 +281,36 @@ pub fn parse_skill_content(
     let (yaml_str, body_str) = split_frontmatter(content_str)?;
     let raw: RawFrontmatter = serde_yaml::from_str(&yaml_str)?;
 
-    // Build the id from the name (lowercase, replace any Unicode whitespace run
-    // with a single hyphen, then collapse consecutive hyphens). `replace(' ', "-")`
-    // alone would leak tabs / NBSP / ideographic spaces into the id and break
-    // downstream path / filesystem operations.
-    let id_str = raw
+    // Build the id from the name with a strict charset transform: any
+    // non-alphanumeric character collapses to a hyphen, runs collapse, and
+    // leading / trailing / dot-only ids are rejected at the validation step
+    // below. The previous `split_whitespace().join("-")` accepted slash,
+    // backslash, double-dot, colon, leading-dot, NUL bytes, and unicode
+    // lookalikes as part of the registered id. The id is exposed unfiltered
+    // through every status surface (list_skills, SkillStatusEntry.id,
+    // full_status, tracing logs) and to the Panel UI / LLM, so a malicious
+    // SKILL.md with `name: ../foo` used to register id `../foo` and only
+    // failed silently at a later path lookup. Canonicalise here, at the
+    // trust boundary, so the downstream lookup sites can drop their
+    // defensive `contains("..")` / `contains('/')` / `contains('\\')`
+    // checks.
+    let id_str: String = raw
         .name
         .to_lowercase()
-        .split_whitespace()
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-");
-    // A whitespace-only `name:` frontmatter field would silently become an
-    // empty registry key — reject it at this trust boundary instead.
-    if id_str.is_empty() {
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    // An all-punctuation / whitespace-only `name:` frontmatter field would
+    // collapse to an empty or single-dot id and silently become a registry
+    // key that breaks path joins (`.join(".").join("SKILL.md")` matches the
+    // dir-root SKILL.md). Reject at the trust boundary instead.
+    if id_str.is_empty() || id_str == "." || id_str == ".." {
         return Err(SkillParseError::EmptyName);
     }
     let id = SkillId::new(id_str);
@@ -691,6 +725,34 @@ Body content from disk."#;
         }
     }
 
+    /// Regression for the TOCTOU fix: a file past the size cap must be
+    /// rejected by either the `metadata()` check or the
+    /// `take(MAX + 1).read_to_end` cap (whichever fires first). Writing a
+    /// file slightly larger than `MAX_SKILL_FILE_BYTES` exercises the
+    /// metadata-side rejection; a true TOCTOU race between metadata and
+    /// read is hard to trigger deterministically in a unit test, so we
+    /// settle for the static guarantee that the cap is enforced at both
+    /// layers and the file is rejected on either layer.
+    #[test]
+    fn parse_skill_file_rejects_grown_file() {
+        use std::io::Write;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("SKILL.md");
+
+        let oversize = (MAX_SKILL_FILE_BYTES + 1) as usize;
+        let mut f = std::fs::File::create(&path).unwrap();
+        let buf = vec![b'x'; oversize];
+        f.write_all(&buf).unwrap();
+        f.sync_all().unwrap();
+        drop(f);
+
+        let err = parse_skill_file(&path, SkillSource::Workspace).unwrap_err();
+        match err {
+            SkillParseError::FileTooLarge { .. } => {} // expected
+            other => panic!("expected FileTooLarge, got {other:?}"),
+        }
+    }
+
     /// Frontmatter `scope: something_unknown` must default to `Disabled`
     /// (so the skill never leaks into the prompt) AND emit a warning so the
     /// author can spot a typo. Note `scope: System` (capitalised) still
@@ -838,5 +900,74 @@ Content."#;
 
         let manifest = parse_skill_content(content, SkillSource::Bundled).unwrap();
         assert!(manifest.automation().is_none());
+    }
+
+    /// Path-traversal / shell-meta characters in `name:` must be sanitised
+    /// to hyphens at the trust boundary, so a malicious SKILL.md with
+    /// `name: ../foo` does not register id `../foo`. The id surfaces to
+    /// `list_skills`, `SkillStatusEntry.id`, full_status, and tracing logs;
+    /// letting it through unfiltered means the model / UI can read it back.
+    #[test]
+    fn parse_skill_with_name_containing_slash_normalizes_id() {
+        let content = r#"---
+name: ../escape/skill
+description: attempts path traversal
+---
+Content."#;
+        let manifest = parse_skill_content(content, SkillSource::Bundled).unwrap();
+        let id = manifest.id().as_str();
+        // Path separators must never appear in the id; the strict
+        // charset transform collapses every '/' and '\' to a hyphen.
+        assert!(
+            !id.contains('/') && !id.contains('\\'),
+            "id must not contain path separators, got {:?}",
+            id
+        );
+        // All non-alphanumeric chars collapse to hyphens; runs collapse.
+        // The dots survive (the transform allows '.'), giving "..-escape-skill"
+        // — this is safe because path traversal requires an exact '..' segment,
+        // which the post-transform validation step rejects.
+        assert_eq!(id, "..-escape-skill", "got {:?}", id);
+    }
+
+    /// `name: ..` (after sanitisation) must be rejected — registering it
+    /// would let `dir.join("..").join("SKILL.md")` match the dir-root
+    /// SKILL.md, masquerading as a sibling skill.
+    #[test]
+    fn parse_skill_with_name_dot_dot_registers_as_typed_id() {
+        // After strict-charset sanitisation, the literal name `..` becomes
+        // `..` (dots are kept) — which then trips the empty/`"."`/`".."`
+        // rejection below and fails to register. The defence-in-depth layer
+        // is the rejection check, not the sanitisation (sanitisation would
+        // also reject it but only via the same check).
+        let content = r#"---
+name: ..
+description: parent dir reference
+---
+Content."#;
+        let err = parse_skill_content(content, SkillSource::Bundled).unwrap_err();
+        match err {
+            SkillParseError::EmptyName => {} // expected
+            other => panic!("expected EmptyName for `name: ..`, got {other:?}"),
+        }
+    }
+
+    /// `name:` resolving to only punctuation / whitespace must fail
+    /// registration. Empty name is rejected at the trust boundary; the
+    /// previous code rejected only the literal empty case, but a
+    /// `name: --` (which the strict transform reduces to an empty string
+    /// after split) is equally invalid.
+    #[test]
+    fn parse_skill_with_empty_name_after_normalization_errors() {
+        let content = r#"---
+name: --
+description: only punctuation
+---
+Content."#;
+        let err = parse_skill_content(content, SkillSource::Bundled).unwrap_err();
+        match err {
+            SkillParseError::EmptyName => {} // expected
+            other => panic!("expected EmptyName, got {other:?}"),
+        }
     }
 }

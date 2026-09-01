@@ -17,7 +17,7 @@ pub const MAX_IMAGE_FILE_SIZE: u64 = 10 * 1024 * 1024;
 ///
 /// The cap is checked **before** `base64::decode` runs, so a 1 GiB base64
 /// string is rejected before the decoder allocates the decoded buffer.
-#[allow(clippy::integer_division)] // intentional: integer floor division is part of the formula
+#[allow(clippy::integer_division, reason = "intentional: integer floor division is part of the encoded-size formula (`((N / 3) + 1) * 4` is a sound upper bound for base64 of `N` bytes)")]
 pub const MAX_BASE64_ENCODED_SIZE: usize = ((MAX_IMAGE_FILE_SIZE / 3) + 1) as usize * 4;
 
 // ---------------------------------------------------------------------------

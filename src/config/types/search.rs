@@ -35,6 +35,31 @@ pub struct SearchConfigInternal {
     #[serde(default = "default_search_timeout")]
     pub timeout_seconds: u64,
 
+    /// Default language code forwarded to providers (e.g. `"zh-CN"`).
+    /// Maps to `SearchOptions::language`. `None` = no language hint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+
+    /// Default region code (ISO 3166-1 alpha-2, e.g. `"US"`).
+    /// Maps to `SearchOptions::region`. `None` = no region hint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+
+    /// Default safe-search toggle. Maps to `SearchOptions::safe_search`.
+    /// `None` = use the search-options default (`true`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safe_search: Option<bool>,
+
+    /// Default include-domain allowlist. Maps to
+    /// `SearchOptions::include_domains`. Empty = no allowlist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_domains: Option<Vec<String>>,
+
+    /// Default exclude-domain blocklist. Maps to
+    /// `SearchOptions::exclude_domains`. Empty = no blocklist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude_domains: Option<Vec<String>>,
+
     /// Backend configurations
     pub backends: HashMap<String, SearchBackendConfig>,
 
@@ -76,6 +101,32 @@ pub const fn default_search_timeout() -> u64 {
 
 pub const fn default_true() -> bool {
     true
+}
+
+/// `Default` impl for `SearchConfigInternal`.
+///
+/// Lets struct-literal construction sites use `..Default::default()` and
+/// inherit the documented per-field behaviour. Without this every new optional
+/// field would force every test fixture to be edited in lockstep, which is
+/// exactly the silent drift this `Default` is trying to prevent at the
+/// type level.
+impl Default for SearchConfigInternal {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default_provider: String::new(),
+            fallback_providers: None,
+            max_results: default_search_max_results(),
+            timeout_seconds: default_search_timeout(),
+            language: None,
+            region: None,
+            safe_search: None,
+            include_domains: None,
+            exclude_domains: None,
+            backends: std::collections::HashMap::new(),
+            web_fetch_fallback: default_web_fetch_fallback(),
+        }
+    }
 }
 
 // =============================================================================

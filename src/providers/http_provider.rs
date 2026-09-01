@@ -190,7 +190,18 @@ impl HttpProvider {
             }
         }
 
-        // Secret leak detection: scan all text content
+        // Secret leak detection: scan all text content.
+        //
+        // The `LeakDetector::new()` here intentionally has NO `register_injected`
+        // call — the InjectedSecret fingerprints are owned by
+        // `RuntimeSecurityGuard::secret_leak_detector`, which scans the same
+        // outbound payload before this provider is ever reached. The local scan
+        // is a defense-in-depth backstop for the *static* vendor-regex matches
+        // (`LEAK_PATTERNS` in `vendor_patterns.rs`) — those work without any
+        // registration. Fingerprint-based detection of a freshly-injected,
+        // non-vendor-shaped secret is the runtime_guard's responsibility, and
+        // duplicating the fingerprint set here would split the state between
+        // two detectors and silently weaken both.
         let detector = LeakDetector::new();
         let all_text = UnifiedMessage::extract_all_text(&filtered_messages);
         if let LeakDecision::Block { reason, .. } = detector.scan_outbound(&all_text) {
@@ -447,7 +458,13 @@ impl HttpProvider {
         )
         .await;
 
-        // Secret leak detection: scan inbound response TEXT only
+        // Secret leak detection: scan inbound response TEXT only.
+        //
+        // Same defense-in-depth pattern as the outbound scan above: the
+        // fingerprint-registered detector lives in RuntimeSecurityGuard; this
+        // local `LeakDetector::new()` only catches the static vendor-regex
+        // matches. If a freshly-injected, non-vendor-shaped secret echoes
+        // back, the runtime_guard pipeline is what catches it.
         let detector = LeakDetector::new();
         if let Some(ref text) = provider_response.text {
             if let LeakDecision::Block { reason, .. } = detector.scan_inbound(text) {

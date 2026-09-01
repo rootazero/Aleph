@@ -461,7 +461,7 @@ impl TeamDispatcher {
             // the lock so the row stops being claimed. See DISPATCHER-13.
             MemberRunStatus::Cancelled => {
                 let err = outcome.error.unwrap_or_else(|| "run cancelled".to_string());
-                let _ = self
+                if let Err(e) = self
                     .coord_store
                     .update_task(
                         &task_id,
@@ -471,8 +471,26 @@ impl TeamDispatcher {
                             ..Default::default()
                         },
                     )
-                    .await;
-                let _ = self.coord_store.release_lock(&task_id, &owner).await;
+                    .await
+                {
+                    tracing::warn!(
+                        task_id = %task_id,
+                        error = %e,
+                        "dispatcher: failed to mark cancelled run terminal; \
+                         lock may now leak until the TTL janitor sweeps",
+                    );
+                }
+                if let Err(e) = self.coord_store.release_lock(&task_id, &owner).await {
+                    // Fail loud: a stuck lock blocks re-dispatch silently. The
+                    // lock TTL janitor at dispatch_once step 1 is the safety
+                    // net, not a substitute.
+                    tracing::warn!(
+                        task_id = %task_id,
+                        error = %e,
+                        "dispatcher: lock release failed after cancel; \
+                         TTL janitor will recover",
+                    );
+                }
                 tracing::info!(task_id = %task_id, "dispatcher: member run cancelled; task left in Cancelled (terminal, sticky)");
             }
             MemberRunStatus::Failed | MemberRunStatus::Timeout => {

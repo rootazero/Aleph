@@ -14,6 +14,7 @@
 //! - Windows: Uses $USERPROFILE or $HOMEDRIVE+$HOMEPATH
 
 use crate::error::{AlephError, Result};
+use crate::sync_primitives::{RwLock, RwLockWriteGuard};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
@@ -615,13 +616,13 @@ fn collect_project_skills_dirs(
 /// threading the list through every call site (mirrors the `CHANNEL_CONFIG_
 /// SNAPSHOT` pattern). Empty until the first `load_all`, which is fine: plugins
 /// aren't loaded before then and `skill_read` only runs per-request afterwards.
-static PLUGIN_SKILL_DIRS: std::sync::RwLock<Vec<PathBuf>> = std::sync::RwLock::new(Vec::new());
+static PLUGIN_SKILL_DIRS: RwLock<Vec<PathBuf>> = RwLock::new(Vec::new());
 
 /// Publish the installed plugins' skill base directories for skill discovery.
 /// Called by the extension manager after every (re)load so the set stays in
 /// sync with what is actually installed. Replaces the previous set wholesale.
 pub fn publish_plugin_skill_dirs(dirs: Vec<PathBuf>) {
-    let mut guard = PLUGIN_SKILL_DIRS
+    let mut guard: RwLockWriteGuard<'_, Vec<PathBuf>> = PLUGIN_SKILL_DIRS
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *guard = dirs;
@@ -985,6 +986,15 @@ pub fn get_agent_config_dir(agent_id: &str) -> Result<PathBuf> {
 /// This handles the transition from the old flat layout where databases were
 /// stored directly in ~/.aleph/ to the new organized layout under ~/.aleph/data/.
 /// Only moves files that exist at the old location and don't exist at the new location.
+///
+/// **Concurrency note.** Two `aleph-server` processes that boot on a
+/// freshly-upgraded host simultaneously may both observe `old.exists() &&
+/// !new.exists()` and both call `rename`. POSIX `rename` is atomic and one
+/// will succeed; the loser observes `ENOENT` or `EEXIST` depending on which
+/// side lost the race. Both outcomes are tolerated and logged as INFO
+/// (`already migrated`) so the boot does not surface a warning for a benign
+/// race. The function is a one-shot boot-time migration that does not need
+/// the instance lock — the rename itself is atomic against other instances.
 pub fn migrate_legacy_db_files() {
     let Ok(config_dir) = get_config_dir() else {
         return;
@@ -994,11 +1004,40 @@ pub fn migrate_legacy_db_files() {
     for name in &["devices.db", "security.db", "pairing.db", "sessions.db"] {
         let old = config_dir.join(name);
         let new = data_dir.join(name);
-        if old.exists() && !new.exists() {
-            if let Err(e) = std::fs::rename(&old, &new) {
-                warn!("Failed to migrate {}: {}", name, e);
-            } else {
+        if !old.exists() {
+            // Either fully migrated by another instance already, or this
+            // host never had the legacy layout. Both are normal on a fresh
+            // boot and need no log line.
+            continue;
+        }
+        if new.exists() {
+            // A prior migration finished but the source was not cleaned up
+            // (e.g. partial-migration crash before atomic rename completed).
+            // The destination is authoritative; do not overwrite. Leave the
+            // source in place so an operator can inspect / archive it.
+            info!(
+                "Legacy {} remains at {}; destination already present at {}",
+                name,
+                old.display(),
+                new.display(),
+            );
+            continue;
+        }
+        match std::fs::rename(&old, &new) {
+            Ok(()) => {
                 info!("Migrated {} to {}", old.display(), new.display());
+            }
+            // Lost the race: another instance migrated between our check
+            // and our rename. The destination now exists, the source is
+            // gone. Treat as success — data is in the right place.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                info!(
+                    "Legacy {} already migrated by a concurrent process ({})",
+                    name, e
+                );
+            }
+            Err(e) => {
+                warn!("Failed to migrate {}: {}", name, e);
             }
         }
     }

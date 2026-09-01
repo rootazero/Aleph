@@ -360,29 +360,17 @@ impl LeakDetector {
         LeakDecision::Allow
     }
 
-    /// The first substring of `content` whose `(siphash, byte length)` matches a
-    /// registered secret, or `None`.
-    ///
-    /// Thin wrapper over [`Self::find_all_injected_substrings`]; retained as a
-    /// stable public-ish API for external callers that want the single-match
-    /// shape. Internally every scan goes through `find_all_injected_substrings`
-    /// so the multi-match finding (CRITICAL-1, batch 2026-08-25) is upheld
-    /// regardless of which API the caller picks.
-    #[allow(dead_code)]
-    fn find_injected_substring<'c>(&self, content: &'c str) -> Option<&'c str> {
-        self.find_all_injected_substrings(content)
-            .into_iter()
-            .next()
-    }
-
     /// Every non-overlapping substring of `content` whose `(siphash, byte
     /// length)` matches a registered secret, in left-to-right order.
     ///
     /// Two distinct injected secrets (or one echoed twice) must both surface
     /// to the caller; a single-match API would let the second pass through
     /// silently. The matcher walks each `(start, len)` pair exactly once
-    /// across all registered lengths, then dedupes overlapping windows by
-    /// keeping the lowest-start, highest-length match at each position.
+    /// across all registered lengths, then collapses overlapping windows by
+    /// *extending* the kept range rather than dropping the later match — a
+    /// later match that starts inside a kept range and ends past it is the
+    /// same secret value with a longer hash-window, and dropping it would
+    /// leave the tail of the longer secret visible in the redacted output.
     fn find_all_injected_substrings<'c>(&self, content: &'c str) -> Vec<&'c str> {
         if self.injected_lens.is_empty() {
             return Vec::new();
@@ -418,14 +406,30 @@ impl LeakDetector {
         if matches.is_empty() {
             return Vec::new();
         }
-        // Sort by start, then collapse overlapping ranges: at each position
-        // keep the longest window (covers the most bytes), and skip any
-        // window that begins inside a kept range.
+        // Sort by start ascending. Tie-break by length DESC so that when two
+        // matches share a start position the longer one is preferred. Then
+        // collapse overlaps by *extending* the current kept range rather than
+        // dropping the later match: a match that starts inside a kept range
+        // and ends past it is the same secret value with a longer hash-window
+        // — the kept range should grow to cover it. Picking earliest-start and
+        // dropping later overlaps would leave the tail of the longer secret
+        // visible in the redacted output.
         matches.sort_unstable_by_key(|&(start, end)| (start, std::cmp::Reverse(end - start)));
         let mut non_overlapping: Vec<(usize, usize)> = Vec::with_capacity(matches.len());
         let mut last_end = 0usize;
         for (start, end) in matches {
             if start < last_end {
+                // Overlap with the kept range: grow it to cover this match's
+                // tail. The kept range always started at or before this
+                // match's start (because we processed matches in start-asc
+                // order and never shrink), so the result is a single range
+                // that spans the union of both.
+                if end > last_end {
+                    last_end = end;
+                    if let Some(last) = non_overlapping.last_mut() {
+                        last.1 = end;
+                    }
+                }
                 continue;
             }
             last_end = end;

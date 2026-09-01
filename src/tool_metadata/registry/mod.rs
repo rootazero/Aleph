@@ -209,7 +209,14 @@ impl ToolCatalog {
     /// can hot-pause a tool — including its descendants' routing — without
     /// un-registering it. The health cache is invalidated so any prompt
     /// cache that referenced the tool rebuilds without it.
-    pub async fn set_inactive(&self, name: &str, active: bool) -> bool {
+    /// Set the active flag on a registered tool by canonical name. Returns
+    /// `true` if a tool was found and its value actually changed. Inactive
+    /// tools are excluded from every list / `find_best_match` query path
+    /// (the `.filter(|t| t.is_active)` chain in `query.rs`), so an operator
+    /// can hot-pause a tool — including its descendants' routing — without
+    /// un-registering it. The health cache is invalidated so any prompt
+    /// cache that referenced the tool rebuilds without it.
+    pub async fn set_active(&self, name: &str, active: bool) -> bool {
         let changed = self.state.set_active(name, active).await;
         if changed {
             self.health.invalidate_all();

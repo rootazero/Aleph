@@ -204,8 +204,8 @@ pub use crate::extension::{
 pub use crate::skill::SkillInfo;
 
 pub use crate::skill::{
-    InstallExecutor, InstallResult, SkillConfigUpdate, SkillStatusEntry, SkillStatusFilter,
-    SkillSystem, SkillsConfig,
+    InstallExecutor, InstallResult, InstallSuccess, SkillConfigUpdate, SkillInstallError,
+    SkillStatusEntry, SkillStatusFilter, SkillSystem, SkillsConfig,
 };
 
 // =============================================================================

@@ -42,6 +42,83 @@ fn from_key_recognises_the_unattributed_sentinel() {
     );
 }
 
+/// `Principal::user` is the safe construction path the untrusted-input
+/// resolvers route through: any reserved sentinel collapses to
+/// `Unattributed` rather than producing a `User(String)` whose `as_key`
+/// shares the `principal_id` row space with the sentinel variant.
+#[test]
+fn principal_user_with_unattributed_id_round_trips_to_unattributed() {
+    // The literal sentinel — the exact collision the constructor exists to
+    // prevent. Without the coercion, `Principal::user("@unattributed").as_key()`
+    // would equal `Principal::Unattributed.as_key()`, and a row written by
+    // one variant would be readable as the other via `from_key`.
+    assert_eq!(
+        Principal::user("@unattributed"),
+        Principal::Unattributed,
+        "the literal sentinel must coerce to Unattributed, not become a User with that key"
+    );
+
+    // Any `@`-prefixed id — same reservation reasoning. A future caller
+    // that stamps `author_user_id = "@admin"` should not be able to write
+    // to a `principal_id` row whose first character is `@`, because the
+    // `users.user_id` shape is `u-`-prefixed.
+    assert_eq!(Principal::user("@admin"), Principal::Unattributed);
+    assert_eq!(Principal::user("@bot"), Principal::Unattributed);
+
+    // An empty id has no user to charge; coerce it to the sentinel rather
+    // than let it ride as a zero-length `principal_id` PRIMARY KEY string
+    // (the SQLite store would happily accept it).
+    assert_eq!(Principal::user(""), Principal::Unattributed);
+
+    // A valid `u-`-prefixed id passes through unchanged — the constructor
+    // must not reject the shape it exists to protect, or every existing
+    // call site would have to grow a fallback arm.
+    assert_eq!(
+        Principal::user("u-alice"),
+        Principal::User("u-alice".to_string())
+    );
+}
+
+/// Pin the round-trip: a `User` constructed from the literal sentinel must
+/// not be distinguishable from `Unattributed` after a `from_key` round trip
+/// (the read path every `principals_in` implementation uses). This is the
+/// concrete failure mode the constructor exists to rule out: silently
+/// misreporting spend charged to a user named `@unattributed` as
+/// `Principal::Unattributed`.
+#[test]
+fn principal_user_constructor_does_not_create_a_colliding_user() {
+    // Both paths resolve to the same `principal_id` text — but only one
+    // is the sentinel variant. The constructor's coercion is what keeps
+    // them the same variant, which is what makes `from_key` round-trip
+    // safe regardless of which path wrote the row.
+    let user_via_constructor = Principal::user("@unattributed");
+    let direct_sentinel = Principal::Unattributed;
+    assert_eq!(user_via_constructor.as_key(), direct_sentinel.as_key());
+    assert_eq!(
+        user_via_constructor, direct_sentinel,
+        "the constructor must coerce, not produce a User(String) with the sentinel key"
+    );
+}
+
+/// `principal_from_metadata` routes through `Principal::user`, so an
+/// `AUTHOR_USER_KEY` stamped as the sentinel must resolve to `Unattributed`
+/// — the untrusted-input half of the same reservation.
+#[test]
+fn principal_from_metadata_author_stamped_as_unattributed_resolves_to_unattributed() {
+    let mut meta = HashMap::new();
+    meta.insert(
+        crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string(),
+        "@unattributed".to_string(),
+    );
+
+    assert_eq!(
+        principal_from_metadata(&meta),
+        Principal::Unattributed,
+        "AUTHOR_USER_KEY = \"@unattributed\" must coerce to Unattributed, not become \
+         Principal::User(\"@unattributed\")"
+    );
+}
+
 // ============================================================================
 // principal_from_metadata
 // ============================================================================

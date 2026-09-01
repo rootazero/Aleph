@@ -616,9 +616,7 @@ fn macos_focus_window(window_id: u64) -> Result<()> {
             "No application found with PID {pid}"
         )));
     };
-    #[allow(deprecated)]
-    // ActivateIgnoringOtherApps deprecated in macOS 14 but still functional.
-    //
+    #[allow(deprecated, reason = "ActivateIgnoringOtherApps deprecated in macOS 14 but still functional and is the only API that brings a backgrounded app forward; the replacement (NSWorkspace) only activates the frontmost window of the app, not the specific window we just raised")]
     // The return value is deliberately discarded: measured on macOS 27, it is
     // `true` even when the activation is refused outright and the app never
     // comes forward. Only `isActive` below distinguishes the two.

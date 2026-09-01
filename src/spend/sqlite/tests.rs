@@ -295,3 +295,51 @@ fn durability_survives_a_close_and_reopen_of_the_store() {
         "a fresh instance's cold cache must read the durable row through"
     );
 }
+
+/// Pin the new `record` shape: the UPSERT and the read-back are a single
+/// `INSERT ... RETURNING` statement, so the cache must be populated from
+/// the values that statement returned (not from a follow-up SELECT that
+/// could fail and leave the cache stale). The previous two-statement shape
+/// had a window where the row was durably written but the read-back
+/// failed; this test guards against regressing to that shape by asserting
+/// that a single `record` call both commits to the table AND populates the
+/// cache with the *accumulated* totals — which only a RETURNING round-trip
+/// can deliver without a second query.
+#[test]
+fn record_upsert_succeeds_and_cache_populated_via_returning() {
+    let ledger = ledger();
+    let alice = Principal::User("u-alice".to_string());
+
+    // First write: cache miss before, populated from RETURNING after.
+    ledger.record(&alice, 1_000, Delta::Usd(1.0)).unwrap();
+    let spent = ledger.spent_for(&alice, 1_000).unwrap();
+    assert_eq!(spent.usd, 1.0, "cache populated from RETURNING on first write");
+    assert_eq!(spent.unpriced_calls, 0);
+    assert_eq!(spent.partial_calls, 0);
+
+    // Second write on the same key+period: triggers the ON CONFLICT arm.
+    // If `record` had fallen back to UPSERT-then-SELECT and that SELECT
+    // returned the pre-update row (or no row, depending on timing), the
+    // cache could read 1.0 here instead of the correct 1.0 + 2.5 = 3.5.
+    // RETURNING delivers the post-update totals, so 3.5 is what the cache
+    // must hold.
+    ledger.record(&alice, 1_000, Delta::Usd(2.5)).unwrap();
+    let spent = ledger.spent_for(&alice, 1_000).unwrap();
+    assert_eq!(
+        spent.usd, 3.5,
+        "cache must reflect the post-update total, not the pre-update one"
+    );
+
+    // A different Delta dimension also accumulates correctly — same
+    // RETURNING contract covers all three `Delta` arms.
+    ledger
+        .record(&alice, 1_000, Delta::Partial(0.25))
+        .unwrap();
+    ledger
+        .record(&alice, 1_000, Delta::Unpriced)
+        .unwrap();
+    let spent = ledger.spent_for(&alice, 1_000).unwrap();
+    assert_eq!(spent.usd, 3.75);
+    assert_eq!(spent.unpriced_calls, 1);
+    assert_eq!(spent.partial_calls, 1);
+}

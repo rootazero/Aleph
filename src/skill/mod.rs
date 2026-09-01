@@ -29,7 +29,7 @@ pub use guard::{
 };
 pub use installer::{
     build_install_command, filter_install_specs_for_current_os, select_best_install,
-    InstallExecutor, InstallResult,
+    InstallExecutor, InstallResult, InstallSuccess, SkillInstallError,
 };
 pub use manifest::{automation_notice, parse_skill_content, parse_skill_file, SkillParseError};
 pub use preprocess::{preprocess_skill_content, SkillPreprocessContext};
@@ -79,6 +79,21 @@ struct Inner {
     cached_config_value: RwLock<Option<serde_json::Value>>,
 }
 
+/// Log a `JoinError` from `spawn_blocking`. The `JoinError` carries the panic
+/// payload (or the cancellation reason for non-panic cases); silently dropping
+/// it — the previous `let _ = tokio::task::spawn_blocking(...).await;`
+/// pattern — meant a panic inside the blocking task (try_lock poison in
+/// `with_file_lock`, a serde regression, an `unwrap` in `write_atomic`) was
+/// invisible to operators and silently dropped telemetry. Panics are logged
+/// at `error`; cancellations at `warn`.
+fn log_join_err(ctx: &'static str, err: tokio::task::JoinError) {
+    if err.is_panic() {
+        tracing::error!(error = %err, ctx, "spawn_blocking task panicked; telemetry dropped");
+    } else {
+        tracing::warn!(error = %err, ctx, "spawn_blocking task cancelled");
+    }
+}
+
 impl SkillSystem {
     /// Create a new, empty skill system.
     #[must_use]
@@ -112,10 +127,24 @@ impl SkillSystem {
     ///
     /// Each directory is scanned for SKILL.md files. The source is guessed
     /// from the path. After scanning, a snapshot is built.
+    ///
+    /// **Merge semantics, not replace.** Under startup contention
+    /// (`ExtensionManager` and a gateway RPC race calling `init` with
+    /// disjoint dir sets) the previous wholesale replacement let the second
+    /// writer silently drop the first's skill directories — the next rebuild
+    /// would then miss those skills entirely. Widening the set instead of
+    /// replacing it preserves every caller's contributions.
+    /// `ensure_dir_registered` is the idempotent single-dir variant.
     pub async fn init(&self, dirs: Vec<PathBuf>) {
         {
             let mut skill_dirs = self.inner.skill_dirs.write().await;
-            *skill_dirs = dirs;
+            let existing: std::collections::HashSet<PathBuf> =
+                skill_dirs.iter().cloned().collect();
+            for d in dirs {
+                if !existing.contains(&d) {
+                    skill_dirs.push(d);
+                }
+            }
         }
         self.rescan_dirs().await;
     }
@@ -294,17 +323,18 @@ impl SkillSystem {
     ///
     /// Prefers a dir with the flat `<dir>/<id>/SKILL.md` layout; falls back
     /// to any dir whose `.usage.json` sidecar already tracks the id (nested
-    /// plugin layouts). Returns `None` for malformed ids (traversal guard)
-    /// or when no registered dir knows the skill.
+    /// plugin layouts). Returns `None` when no registered dir knows the
+    /// skill.
+    ///
+    /// The id is canonicalised by [`manifest::parse_skill_content`] — only
+    /// ASCII alphanumerics, `.`, and `_` survive the strict-charset
+    /// transform, and the empty / `.` / `..` cases are rejected at
+    /// registration time — so no defensive traversal check is needed here.
     async fn owning_dir(&self, id: &SkillId) -> Option<PathBuf> {
         let id_str = id.as_str();
-        if id_str.contains("..") || id_str.contains('/') || id_str.contains('\\') {
-            tracing::warn!(skill_id = %id_str, "owning_dir: rejecting malformed skill id");
-            return None;
-        }
         let dirs = self.inner.skill_dirs.read().await.clone();
         let owned_id = id_str.to_string();
-        tokio::task::spawn_blocking(move || {
+        match tokio::task::spawn_blocking(move || {
             for dir in &dirs {
                 if dir.join(&owned_id).join("SKILL.md").exists() {
                     return Some(dir.clone());
@@ -318,7 +348,13 @@ impl SkillSystem {
             None
         })
         .await
-        .unwrap_or(None)
+        {
+            Ok(opt) => opt,
+            Err(e) => {
+                log_join_err("owning_dir", e);
+                None
+            }
+        }
     }
 
     /// Find the on-disk directory whose `SKILL.md` parses to `id`, without
@@ -326,14 +362,14 @@ impl SkillSystem {
     /// stores skills under `<root>/<install-slug>/SKILL.md` while the id comes
     /// from the `name:` frontmatter, so the two can differ. Scans only the
     /// immediate subdirectories of each registered root.
+    ///
+    /// The id is canonicalised by [`manifest::parse_skill_content`] — no
+    /// defensive traversal check is needed.
     async fn skill_dir_for_id(&self, id: &SkillId) -> Option<PathBuf> {
         let id_str = id.as_str();
-        if id_str.contains("..") || id_str.contains('/') || id_str.contains('\\') {
-            return None;
-        }
         let dirs = self.inner.skill_dirs.read().await.clone();
         let owned_id = id_str.to_string();
-        tokio::task::spawn_blocking(move || {
+        match tokio::task::spawn_blocking(move || {
             for root in &dirs {
                 let entries = match std::fs::read_dir(root) {
                     Ok(e) => e,
@@ -358,12 +394,18 @@ impl SkillSystem {
             None
         })
         .await
-        .unwrap_or(None)
+        {
+            Ok(opt) => opt,
+            Err(e) => {
+                log_join_err("skill_dir_for_id", e);
+                None
+            }
+        }
     }
 
     /// Locate the on-disk `SKILL.md` for a skill in the flat
     /// `<skills_dir>/<id>/SKILL.md` layout. Returns `None` for nested
-    /// (plugin) layouts and malformed ids.
+    /// (plugin) layouts.
     pub async fn locate_skill_file(&self, id: &SkillId) -> Option<PathBuf> {
         let dir = self.owning_dir(id).await?;
         let candidate = dir.join(id.as_str()).join("SKILL.md");
@@ -408,8 +450,14 @@ impl SkillSystem {
     pub async fn record_use(&self, id: &SkillId) {
         if let Some(dir) = self.owning_dir(id).await {
             let owned = id.as_str().to_string();
-            let _ =
-                tokio::task::spawn_blocking(move || usage::record_use_in_dir(dir, &owned)).await;
+            match tokio::task::spawn_blocking(move || {
+                usage::record_use_in_dir(dir, &owned);
+            })
+            .await
+            {
+                Ok(()) => {}
+                Err(e) => log_join_err("record_use", e),
+            }
         }
     }
 
@@ -438,19 +486,25 @@ impl SkillSystem {
     }
 
     /// Install a dependency for a skill.
-    pub async fn install_dependency(&self, id: &SkillId, spec_id: Option<&str>) -> InstallResult {
+    ///
+    /// Returns `Result<InstallSuccess, SkillInstallError>` (see
+    /// [`installer`]). The previous API returned a custom
+    /// `InstallResult { success: bool, ... }` struct whose `success: false`
+    /// branch was indistinguishable from success by callers that pattern
+    /// matched on `Result`; this version forces the call site to handle
+    /// errors via `?` and exposes the stdout/stderr/exit_code only on the
+    /// success branch.
+    pub async fn install_dependency(
+        &self,
+        id: &SkillId,
+        spec_id: Option<&str>,
+    ) -> Result<InstallSuccess, SkillInstallError> {
         let install_specs = {
             let registry = self.inner.registry.read().await;
             match registry.get(id) {
                 Some(m) => m.install_specs().to_vec(),
                 None => {
-                    return InstallResult {
-                        success: false,
-                        message: format!("Skill not found: {}", id.as_str()),
-                        stdout: String::new(),
-                        stderr: String::new(),
-                        exit_code: None,
-                    };
+                    return Err(SkillInstallError::SkillNotFound(id.as_str().to_string()));
                 }
             }
         };
@@ -468,21 +522,13 @@ impl SkillSystem {
         let spec = match spec {
             Some(s) => s,
             None => {
-                return InstallResult {
-                    success: false,
-                    message: "No matching install spec found".to_string(),
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    exit_code: None,
-                };
+                return Err(SkillInstallError::NoMatchingSpec(id.as_str().to_string()));
             }
         };
 
-        let result = InstallExecutor::run(&spec, &prefs).await;
-        if result.success {
-            self.rebuild_snapshot().await;
-        }
-        result
+        let result = InstallExecutor::run(&spec, &prefs).await?;
+        self.rebuild_snapshot().await;
+        Ok(result)
     }
 
     /// Remove a skill from the registry. Bundled skills cannot be removed.
@@ -931,6 +977,56 @@ Content two."#,
         assert!(names.contains(&"Skill Two"));
     }
 
+    /// Regression for the merge-not-replace fix: a second `init` call with
+    /// a disjoint dir set must widen the registered set, not overwrite it.
+    /// Previously, ExtensionManager + a gateway RPC racing on `init` at
+    /// startup would silently drop whichever dir set landed second.
+    #[tokio::test]
+    async fn init_concurrent_callers_union_dirs() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let system = SkillSystem::new();
+
+        let dir_a = tempfile::TempDir::new().unwrap();
+        let dir_b = tempfile::TempDir::new().unwrap();
+
+        // Write a SKILL.md into each dir before any init so the union is
+        // observable via list_skills() after a single rescan.
+        tokio::fs::write(
+            dir_a.path().join("SKILL.md"),
+            "---\nname: A Skill\ndescription: from dir a\n---\nA body.\n",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            dir_b.path().join("SKILL.md"),
+            "---\nname: B Skill\ndescription: from dir b\n---\nB body.\n",
+        )
+        .await
+        .unwrap();
+
+        // First init establishes dir_a in the registry.
+        system.init(vec![dir_a.path().to_path_buf()]).await;
+        // Second init with a disjoint dir must widen, not overwrite.
+        system.init(vec![dir_b.path().to_path_buf()]).await;
+
+        let names: Vec<String> = system
+            .list_skills()
+            .await
+            .iter()
+            .map(|s| s.name().to_string())
+            .collect();
+        assert!(
+            names.iter().any(|n| n == "A Skill"),
+            "A Skill must remain after merge; got {:?}",
+            names
+        );
+        assert!(
+            names.iter().any(|n| n == "B Skill"),
+            "B Skill must be visible after merge; got {:?}",
+            names
+        );
+    }
+
     #[test]
     fn guess_source_non_aleph_path_is_bundled() {
         // Paths outside .aleph/skills (e.g. system-installed) default to Bundled
@@ -1094,5 +1190,25 @@ Content two."#,
         );
         // Skill should still be there
         assert_eq!(system.list_skills().await.len(), 1);
+    }
+
+    /// Regression: `install_dependency` on a missing skill returns the new
+    /// `SkillInstallError::SkillNotFound` variant — the previous API's
+    /// `InstallResult { success: false, ... }` shape was indistinguishable
+    /// from success by callers that pattern-matched on `Result`.
+    #[tokio::test]
+    async fn install_dependency_returns_err_on_missing_skill() {
+        use crate::skill::installer::SkillInstallError;
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let system = SkillSystem::new();
+        let result = system
+            .install_dependency(&SkillId::new("missing-skill"), None)
+            .await;
+        match result {
+            Err(SkillInstallError::SkillNotFound(id)) => {
+                assert_eq!(id, "missing-skill");
+            }
+            other => panic!("expected SkillNotFound, got {other:?}"),
+        }
     }
 }

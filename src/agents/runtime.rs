@@ -184,6 +184,11 @@ pub struct AgentRuntime {
     /// so each child's compactor bills its side-channel to the flash sibling
     /// the operator already configured, not the main reasoning model.
     cheap_summary_provider: Option<Arc<dyn AiProvider>>,
+    /// The parent runner's verifier chain (ToolLoopVerifier, StopHookVerifier,
+    /// etc.), threaded into `SpawnerBase` so a subagent's Think→Act loop is
+    /// watched by the same structural watchdog as the parent — closes the
+    /// "subagent can death-loop without ever being caught" gap.
+    verifier_chain: Option<Arc<crate::verification::VerifierChain>>,
 }
 
 impl AgentRuntime {
@@ -223,6 +228,7 @@ impl AgentRuntime {
             context_budget_refiner: None,
             primary_context_window: None,
             cheap_summary_provider: None,
+            verifier_chain: None,
         }
     }
 
@@ -363,6 +369,20 @@ impl AgentRuntime {
         store: Arc<crate::routing::RoutingExperienceStore>,
     ) -> Self {
         self.routing_store = Some(store);
+        self
+    }
+
+    /// Wire the parent runner's verifier chain so spawned subagents run
+    /// under the same structural watchdogs (ToolLoopVerifier,
+    /// StopHookVerifier, …) as the parent. `None` keeps the legacy
+    /// no-verifier path — the spawner's `verifier_chain: None` — in which
+    /// case the iteration cap is the last line of defence.
+    #[must_use]
+    pub fn with_verifier_chain(
+        mut self,
+        chain: Arc<crate::verification::VerifierChain>,
+    ) -> Self {
+        self.verifier_chain = Some(chain);
         self
     }
 
@@ -593,6 +613,7 @@ impl AgentRuntime {
             context_budget_refiner: self.context_budget_refiner.clone(),
             primary_context_window: self.primary_context_window,
             cheap_summary_provider: self.cheap_summary_provider.clone(),
+            verifier_chain: self.verifier_chain.clone(),
         };
         let req = SpawnRequest {
             agent_def: &config.agent_def,

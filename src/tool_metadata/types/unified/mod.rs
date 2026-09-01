@@ -69,17 +69,20 @@ pub struct UnifiedTool {
 
     /// Whether this tool is currently active/enabled
     /// Disabled tools are excluded from routing and prompt generation.
-    pub is_active: bool,
+    /// Mutation is `pub(crate)` so the registry's lock-protected writers are
+    /// the only path that flips this bit — external callers must go through
+    /// `ToolCatalog::set_active` to keep the read-then-write contract.
+    pub(crate) is_active: bool,
 
     /// Whether this tool requires user confirmation before execution
     /// Tools with destructive operations should set this to true.
-    pub requires_confirmation: bool,
+    pub(crate) requires_confirmation: bool,
 
     /// Tool safety level for plan confirmation and rollback behavior
     ///
     /// Determines whether confirmation is required and if rollback is possible.
     #[serde(default)]
-    pub safety_level: ToolSafetyLevel,
+    pub(crate) safety_level: ToolSafetyLevel,
 
     /// Parent service name (for MCP sub-tools)
     /// e.g., "fs" for "`fs:read_file`"

@@ -10,7 +10,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::tasks::shared::delivery::DeliveryTargetConfig;
+use crate::tasks::shared::delivery::{DeliveryPayload, DeliveryTargetConfig};
 
 const fn default_alert_after() -> u32 {
     2
@@ -77,6 +77,36 @@ pub fn should_send_alert(
         streak.consecutive_errors,
         streak.last_error.unwrap_or("unknown")
     ))
+}
+
+/// Build the [`DeliveryPayload`] for a failure alert, shared by the cron and
+/// heartbeat dispatchers.
+///
+/// Both subsystems emit the same operator-facing message ("⚠️ {name}: {message}")
+/// and previously re-stated it inline — but the metadata key diverged (cron
+/// used `job_id`, heartbeat used `task_id`), so the next field addition would
+/// silently land in only one site. This helper is the single source of truth.
+#[must_use]
+pub fn failure_alert_payload(
+    source_type: &'static str,
+    task_name: &str,
+    entity_id: &str,
+    message: &str,
+) -> DeliveryPayload {
+    DeliveryPayload {
+        source_type: source_type.to_string(),
+        task_name: task_name.to_string(),
+        // Empty placeholder required by DeliveryPayload; String::new() has no
+        // heap allocation. Failure alerts are operator-targeted, not agent-
+        // routed.
+        agent_id: String::new(),
+        output: format!("⚠️ {task_name}: {message}"),
+        channel_id: None,
+        metadata: serde_json::json!({
+            "entity_id": entity_id,
+            "kind": "failure_alert",
+        }),
+    }
 }
 
 #[cfg(test)]

@@ -81,6 +81,18 @@ pub struct RestoreDiff {
     pub members_to_remove: Vec<String>,
     #[serde(default)]
     pub edges_restored: usize,
+    /// `true` if the restore had to recreate the team (because no live team
+    /// row matched the snapshot's `team_id`). When `true`, `team_id` is a
+    /// freshly-minted id, `original_team_id` carries the snapshot's
+    /// pre-delete id, and every audit anchor (`created_at`, owner
+    /// adoption window) refers to the new row, not the snapshot's.
+    #[serde(default)]
+    pub recreated_team: bool,
+    /// The snapshot's pre-delete `team_id`; populated only when the restore
+    /// recreated the team (see `recreated_team`). Absent on the common path
+    /// where the team's id is preserved verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_team_id: Option<String>,
 }
 
 // =============================================================================

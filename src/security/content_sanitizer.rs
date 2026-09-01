@@ -154,9 +154,17 @@ pub fn wrap_external_content(content: &str, source: ContentSource) -> String {
         let raw = source.as_label();
         let normalized = normalize_homoglyphs(&raw);
         let (stripped, _) = crate::security::unicode_guard::strip_invisible_chars(&normalized);
-        stripped
+        // The literal-prefix escape catches exact `<<<EXTERNAL_` bytes, but
+        // whitespace/case variants (`<<< EXTERNAL_UNTRUSTED_CONTENT >>>`),
+        // full-width/CJK angle brackets, and soft-hyphen splits still read as a
+        // boundary to the model. The body path runs `replace_forged_markers`
+        // for the same reason — the label must too, otherwise a URL or tool
+        // name containing a forged marker slips into the fence header
+        // attribute and the model reads it as a real boundary.
+        let escaped = stripped
             .replace("<<<EXTERNAL_", "<<<ESCAPED_EXTERNAL_")
-            .replace("<<<END_EXTERNAL_", "<<<ESCAPED_END_EXTERNAL_")
+            .replace("<<<END_EXTERNAL_", "<<<ESCAPED_END_EXTERNAL_");
+        replace_forged_markers(&escaped)
     };
     let scrubbed = sanitize_external_text(content);
 

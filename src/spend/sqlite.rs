@@ -33,6 +33,17 @@
 //! [`record`]: SqliteSpendLedger::record
 //! [`spent_for`]: SqliteSpendLedger::spent_for
 //! [`sweep_before`]: SqliteSpendLedger::sweep_before
+//!
+//! # Why `record` is a single UPSERT with `RETURNING`, not UPSERT-then-SELECT
+//!
+//! The two statements are folded into one so a SELECT failure after a
+//! successful UPSERT can no longer propagate out of `record` as "the cost
+//! is not reflected in the ledger" — because if the single statement
+//! errored, the cost really is not. The error path that
+//! `MeteringProvider::record_spend`'s log line fires on is now strictly
+//! the truthful one. See that function's call site and the test
+//! `record_upsert_succeeds_and_cache_populated_via_returning` for the
+//! pinning.
 
 use std::collections::HashMap;
 
@@ -116,15 +127,30 @@ impl SpendLedger for SqliteSpendLedger {
         let updated_at = chrono::Utc::now().timestamp_millis();
 
         let conn = self.store.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(
+        // Single round-trip UPSERT that returns the row's post-write
+        // values. Folding the read-back into the UPSERT closes the failure
+        // window the two-statement shape had: if the SELECT ever failed
+        // after a successful UPSERT, `record` returned an error to
+        // `MeteringProvider::record_spend`, whose log line then claimed
+        // "this call's cost is not reflected in the spend ledger" — but
+        // the cost WAS reflected, the read just lost the race. With
+        // RETURNING, any failure here is a real UPSERT failure (cost is
+        // NOT in the ledger), and the log becomes truthful.
+        //
+        // Requires SQLite >= 3.35 for RETURNING in an UPSERT. `Cargo.toml`
+        // pulls rusqlite with `bundled`, and the existing `GROUP_CONCAT(x
+        // ORDER BY y)` site in `agents/swarm/tasks/store/crud.rs` already
+        // assumes >= 3.44, so the bundled SQLite covers us here.
+        let (usd, unpriced_calls, partial_calls): (f64, i64, i64) = conn.query_row(
             "INSERT INTO spend_ledger \
              (principal_id, period_start, usd, unpriced_calls, partial_calls, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
              ON CONFLICT(principal_id, period_start) DO UPDATE SET \
-                 usd = usd + excluded.usd, \
-                 unpriced_calls = unpriced_calls + excluded.unpriced_calls, \
-                 partial_calls = partial_calls + excluded.partial_calls, \
-                 updated_at = excluded.updated_at",
+                 usd = spend_ledger.usd + excluded.usd, \
+                 unpriced_calls = spend_ledger.unpriced_calls + excluded.unpriced_calls, \
+                 partial_calls = spend_ledger.partial_calls + excluded.partial_calls, \
+                 updated_at = excluded.updated_at \
+             RETURNING usd, unpriced_calls, partial_calls",
             rusqlite::params![
                 key,
                 period_start_ms,
@@ -133,11 +159,6 @@ impl SpendLedger for SqliteSpendLedger {
                 delta_partial,
                 updated_at
             ],
-        )?;
-        let (usd, unpriced_calls, partial_calls): (f64, i64, i64) = conn.query_row(
-            "SELECT usd, unpriced_calls, partial_calls FROM spend_ledger \
-             WHERE principal_id = ?1 AND period_start = ?2",
-            rusqlite::params![key, period_start_ms],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
 

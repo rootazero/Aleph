@@ -84,6 +84,16 @@ impl FirecrawlProvider {
             ));
         }
 
+        // Refuse IP-literal / blocked-hostname upstreams — see the matching
+        // guard in `SearxngProvider::new` for the rationale. The default
+        // (`api.firecrawl.dev`) is a public hostname so this rejects only
+        // operator overrides pointing at internal infrastructure.
+        if let Ok(parsed) = url::Url::parse(&trimmed) {
+            if let Some(host) = parsed.host_str() {
+                crate::search::providers::base::reject_ssrf_target_host("Firecrawl", host)?;
+            }
+        }
+
         Ok(Self {
             api_key: Arc::from(api_key.into_boxed_str()),
             base_url: trimmed,

@@ -33,6 +33,20 @@ impl SkillId {
     pub fn new(id: impl Into<String>) -> Self {
         let id = id.into();
         debug_assert!(!id.is_empty(), "SkillId must not be empty");
+        // Defence-in-depth: reject whitespace and control characters. The
+        // strict-charset transform (alphanumerics + '.' + '_' only) lives
+        // at the manifest parser boundary; `SkillId::new` itself stays
+        // permissive because the wider codebase uses `:` for plugin IDs
+        // (e.g. `plugin:command`) and `-` for slugified display names, and
+        // changing those would break the entire plugin-id convention. The
+        // path-safety check that originally motivated this debug_assert
+        // lives in `parse_skill_content`, where ids are canonicalised
+        // before any path operation.
+        debug_assert!(
+            !id.chars().any(|c| c.is_whitespace() || c.is_control()),
+            "SkillId must not contain whitespace or control characters; got {:?}",
+            id
+        );
         Self(id)
     }
 

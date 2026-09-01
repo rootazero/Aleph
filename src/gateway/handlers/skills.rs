@@ -146,10 +146,15 @@ pub async fn handle_install_dep(request: JsonRpcRequest) -> JsonRpcResponse {
         .into_iter()
         .find(|e| e.id.as_str() == params.skill_id);
 
+    // Convert the typed Result into the existing wire-format
+    // `{result, skill}` JSON shape via the legacy `InstallResult` adapter
+    // so RPC consumers do not see a breaking change.
+    let result_json: crate::skill::InstallResult = result.into();
+
     JsonRpcResponse::success(
         request.id,
         json!({
-            "result": result,
+            "result": result_json,
             "skill": skill,
         }),
     )

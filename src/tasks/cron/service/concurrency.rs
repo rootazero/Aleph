@@ -260,7 +260,7 @@ pub async fn phase3_writeback<C: Clock>(
             id: uuid::Uuid::new_v4().to_string(),
             job_id: job_id.clone(),
             trigger_source: result.trigger_source.as_str().to_string(),
-            status: format!("{:?}", result.status).to_lowercase(),
+            status: result.status.to_string(),
             started_at: result.started_at,
             ended_at: Some(result.ended_at),
             duration_ms: Some(result.duration_ms),
@@ -272,6 +272,11 @@ pub async fn phase3_writeback<C: Clock>(
             output_summary: None,
             delivery_status: result
                 .delivery_status
+                // delivery_status is stored as an opaque label string. The
+                // Debug-derived lowercase form below is the legacy wire format;
+                // migrations to `DeliveryStatus::label()` (PascalCase) require
+                // a separate cross-version migration because existing rows are
+                // not parsed back through the enum.
                 .map(|s| format!("{s:?}").to_lowercase()),
             created_at: clock.now_ms(),
             retry_category,

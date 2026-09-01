@@ -250,6 +250,7 @@ mod tests {
             context_budget_refiner: None,
             primary_context_window: None,
             cheap_summary_provider: None,
+            verifier_chain: None,
         }
     }
 

@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::skill::SkillId;
 use crate::error::{AlephError, Result};
-use crate::skill::{InstallResult, SkillSystem};
+use crate::skill::SkillSystem;
+use crate::skill::installer::SkillInstallError;
 use crate::tools::AlephTool;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -35,17 +36,6 @@ impl SkillInstallTool {
     #[must_use]
     pub const fn new(system: SkillSystem) -> Self {
         Self { system }
-    }
-}
-
-impl From<InstallResult> for SkillInstallOutput {
-    fn from(r: InstallResult) -> Self {
-        Self {
-            success: r.success,
-            message: r.message,
-            stdout: r.stdout,
-            stderr: r.stderr,
-        }
     }
 }
 
@@ -82,10 +72,55 @@ impl AlephTool for SkillInstallTool {
         // Successful installs reshape the skill's runtime (new binaries,
         // env, eligibility) — record as a patch event so the curator /
         // status surface reflects the install activity.
-        if result.success {
-            self.system.record_patch(&skill_id).await;
+        match &result {
+            Ok(_) => {
+                self.system.record_patch(&skill_id).await;
+            }
+            Err(_) => {}
         }
 
-        Ok(SkillInstallOutput::from(result))
+        // Convert the typed Result into the existing wire-format output
+        // shape. Success populates stdout/exit-code; failure surfaces the
+        // error message in the `message` field so the model can read it.
+        let output = match result {
+            Ok(s) => SkillInstallOutput {
+                success: true,
+                message: "Successfully installed".to_string(),
+                stdout: s.stdout,
+                stderr: s.stderr,
+            },
+            Err(e) => match e {
+                SkillInstallError::SkillNotFound(id) => SkillInstallOutput {
+                    success: false,
+                    message: format!("Skill not found: {id}"),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                },
+                SkillInstallError::NoMatchingSpec(id) => SkillInstallOutput {
+                    success: false,
+                    message: format!("No matching install spec found for skill {id}"),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                },
+                SkillInstallError::ExecutionFailed {
+                    message,
+                    stderr,
+                    ..
+                } => SkillInstallOutput {
+                    success: false,
+                    message: format!("Execution failed: {message}"),
+                    stdout: String::new(),
+                    stderr,
+                },
+                SkillInstallError::Io(io) => SkillInstallOutput {
+                    success: false,
+                    message: format!("Failed to execute install command: {io}"),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                },
+            },
+        };
+
+        Ok(output)
     }
 }

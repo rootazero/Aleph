@@ -6,6 +6,13 @@
 //! Shared by `team_delegate` (synchronous, leader-driven delegation) and the
 //! autonomous [`TeamDispatcher`](super::TeamDispatcher).
 //!
+//! ## Timeouts and grace windows
+//!
+//! [`WORKTREE_CLEANUP_GRACE_MS`] is the bounded window between abort-on-timeout
+//! and the explicit worktree teardown. It is the same constant read by both
+//! the per-task teardown path and the cleanup helper, so a single edit moves
+//! both call sites.
+//!
 //! ## G2 — per-task worktree isolation
 //!
 //! Autonomous-dispatch callers may opt into wrapping each member task in a
@@ -32,6 +39,14 @@ use crate::gateway::router::SessionKey;
 use crate::sandbox::{worktree as worktree_mod, Sandbox, WorktreeHandle, WorktreeSandbox};
 use crate::sync_primitives::Arc;
 use crate::teams::types::{TeamMember, TeamMemberKind};
+
+/// Grace window between abort-on-timeout and explicit worktree teardown.
+///
+/// Long enough for a member task flushing stdout / writing tool output to
+/// release its open file descriptors before `git worktree remove --force`
+/// races them and produces ENOENT / EBUSY in member-side logs. Short enough
+/// that a misbehaving member cannot indefinitely block the dispatcher loop.
+pub const WORKTREE_CLEANUP_GRACE_MS: u64 = 250;
 
 /// Where a team member task is dispatched. Built by the caller (dispatcher
 /// or `team_delegate`) by inspecting the resolved [`TeamMember`].
@@ -495,7 +510,10 @@ pub async fn execute_member_task(
             // member-side logs. A short grace window lets the task unwind
             // before the directory disappears. The window is bounded so a
             // misbehaving member cannot indefinitely block the dispatcher.
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(
+                WORKTREE_CLEANUP_GRACE_MS,
+            ))
+            .await;
             // Keep what it produced. The per-task session is durable and the
             // messages are already written, so the same one-line read the
             // success arm uses works here too — and the NEXT attempt's

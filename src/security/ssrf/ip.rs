@@ -95,6 +95,10 @@ const fn is_multicast_or_reserved_ipv4(octets: [u8; 4]) -> bool {
 /// Handles: `::ffff:x.x.x.x` (mapped), `64:ff9b::x.x.x.x` (NAT64),
 /// `2002:xxxx::`  (6to4), `2001:0000::` (Teredo with XOR decode),
 /// `::x.x.x.x` (IPv4-compatible, deprecated).
+///
+/// Note: NAT64 is detected by prefix only and returns `Ipv4Addr::UNSPECIFIED`
+/// (0.0.0.0) so the caller in `is_blocked_ipv6` blocks the address at the v4
+/// stage via the `0.0.0.0/8` rule — see the NAT64 block comment below.
 fn extract_embedded_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
     let segments = ip.segments();
     let octets = ip.octets();
@@ -104,16 +108,17 @@ fn extract_embedded_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
         return Some(mapped);
     }
 
-    // 64:ff9b::x.x.x.x — NAT64 well-known prefix (RFC 6052 §2.1.1),
-    // also covers the locale-dependent Network-Specific Prefix variants
-    // (`64:ff9b:1::/48`, `2001:db8::/32` documentation, etc.) — RFC 6052
-    // §2.2 says the prefix family is variable and the first 32 bits
-    // (`64:ff9b:0000`) are the constant identifier. Match the upper 32
-    // bits only; the lower 64 bits hold the embedded IPv4 per the spec.
-    if segments[0] == 0x0064 && segments[1] == 0xff9b && segments[2] == 0 && segments[3] == 0 {
-        return Some(Ipv4Addr::new(
-            octets[12], octets[13], octets[14], octets[15],
-        ));
+    // 64:ff9b::x.x.x.x — NAT64 (RFC 6052 §2.1).
+    // We block the entire NAT64 prefix family unconditionally. The Well-Known
+    // Prefix `64:ff9b::/96` embeds the IPv4 in octets 12..16; the Network-Specific
+    // Prefix variants per §2.2 (e.g. NSP1 `64:ff9b:1::/48`, custom /32..96) embed
+    // it at varying positions depending on the chosen prefix length. Trying to
+    // parse the v4 out of every NSP layout is fragile and historically the source
+    // of bypasses; NAT64 is an ISP-level transition mechanism, not a route we ever
+    // want an SSRF to take, so any address matching the 32-bit NAT64 identifier is
+    // blocked outright. Caller of `is_blocked_ipv6` handles the actual block.
+    if segments[0] == 0x0064 && segments[1] == 0xff9b {
+        return Some(Ipv4Addr::UNSPECIFIED);
     }
 
     // 2002:xxxx:xxxx:: — 6to4 (RFC 3056), IPv4 in bits 16-47
@@ -411,6 +416,35 @@ mod tests {
         // 64:ff9b::10.0.0.1
         let addr: Ipv6Addr = "64:ff9b::10.0.0.1".parse().unwrap();
         assert!(is_blocked_ipv6(addr));
+    }
+
+    #[test]
+    fn blocks_nat64_wkp_public() {
+        // 64:ff9b::8.8.8.8 — WKP form, public v4. We block ALL NAT64 addresses
+        // because the transition mechanism is an ISP-level facility we do not
+        // want an SSRF to use; treat the prefix as unconditionally blocked.
+        let addr: Ipv6Addr = "64:ff9b::8.8.8.8".parse().unwrap();
+        assert!(is_blocked_ipv6(addr));
+    }
+
+    #[test]
+    fn blocks_nat64_nsp1() {
+        // NSP1 form per RFC 6052 §2.2: 64:ff9b:1::/48 — IPv4 starts at bit 48.
+        // Whether the embedded v4 is public or private, the NAT64 prefix is
+        // rejected at the prefix match before any v4 parsing is attempted.
+        let addr: Ipv6Addr = "64:ff9b:1:0:7f00:1:0:0".parse().unwrap();
+        assert!(is_blocked_ipv6(addr));
+    }
+
+    #[test]
+    fn blocks_nat64_nsp_arbitrary_prefix_length() {
+        // RFC 6052 §2.2 permits NSP prefixes from /32 through /96. A /32
+        // variant (`64:ff9b:0::/32`) embeds v4 at bits 32-63; a /96 variant
+        // (`64:ff9b::/96`) embeds v4 at bits 96-127. We reject all of them.
+        let addr_32: Ipv6Addr = "64:ff9b:c0a8:101::".parse().unwrap(); // 192.168.1.1 in bits 32-63
+        assert!(is_blocked_ipv6(addr_32));
+        let addr_96: Ipv6Addr = "64:ff9b:0:0:0:0:0808:0808".parse().unwrap(); // 8.8.8.8 at end
+        assert!(is_blocked_ipv6(addr_96));
     }
 
     #[test]

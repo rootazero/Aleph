@@ -165,6 +165,7 @@ fn is_whole_command(cmd: &str) -> bool {
     !cmd.contains('|')
         && !cmd.contains(';')
         && !cmd.contains("&&")
+        && !cmd.contains("||")
         && !cmd.contains('\n')
         && !cmd.contains("<<")
 }
@@ -232,6 +233,15 @@ mod tests {
     fn grep_as_a_pipeline_filter_is_not_steered() {
         assert!(steer("rg --files | grep -c rs").is_none());
         assert!(steer("cargo tree | grep -r serde").is_none());
+    }
+
+    /// `||` short-circuits like `&&`: only the second branch may run if the
+    /// first fails, so the whole command is not "the thing that read the
+    /// tree" — it is a fallback. Steering would mis-attribute the read.
+    #[test]
+    fn grep_after_a_or_fallback_is_not_steered() {
+        assert!(steer("cat foo || head bar").is_none());
+        assert!(steer("test -f a && cat a || cat b").is_none());
     }
 
     #[test]

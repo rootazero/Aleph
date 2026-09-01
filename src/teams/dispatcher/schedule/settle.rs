@@ -195,12 +195,19 @@ impl TeamDispatcher {
                 // the corrected run's real outcome is then never announced.
                 // Unknown provenance (rows stamped before the key existed)
                 // keeps the age rule, i.e. the previous behaviour.
-                let stamped_after_settled = anchor
+                //
+                // Cancel stamper writes `_by=NOTIFIED_BY_CANCEL` mid-write
+                // (before its status writes land); only cancel provenance
+                // gets the grace gate. Anything stamped by the settle sweep
+                // itself is safe to clear immediately, since this same
+                // sweep only stamps after observing the run fully settled.
+                let is_cancel_provenance = anchor
                     .metadata
                     .get(crate::workflow::WORKFLOW_NOTIFIED_BY_KEY)
                     .and_then(|v| v.as_str())
-                    == Some(crate::workflow::NOTIFIED_BY_SETTLE);
-                if !all_settled && (stamped_after_settled || marker_age >= REOPEN_REARM_GRACE_SECS)
+                    == Some(crate::workflow::NOTIFIED_BY_CANCEL);
+                if !all_settled
+                    && (!is_cancel_provenance || marker_age >= REOPEN_REARM_GRACE_SECS)
                 {
                     let cleared = merge_metadata_patch(
                         &anchor.metadata,

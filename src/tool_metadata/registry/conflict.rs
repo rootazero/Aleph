@@ -167,26 +167,39 @@ impl ConflictResolver {
         // The original complaint about this case was that it happened
         // *silently*; a log line answers that without the destructive remedy of
         // renaming a tool because someone else claimed its nickname.
-        for shadowed in tools
-            .values()
-            .filter(|t| t.aliases.iter().any(|a| a.to_lowercase() == name_lower))
-        {
+        //
+        // Single pass: collect both the canonical-name conflict (if any) and
+        // the shadowed-alias losers. Walking the registry twice under the
+        // write lock turned registration into an O(N*M) scan for the duration
+        // of every concurrent registrar's wait; one walk halves the critical
+        // section length without changing semantics.
+        let mut conflict: Option<ConflictInfo> = None;
+        let mut shadowed_names: Vec<String> = Vec::new();
+        for existing in tools.values() {
+            let existing_name_lower = existing.name.to_lowercase();
+            if conflict.is_none() && existing_name_lower == name_lower {
+                conflict = Some(ConflictInfo {
+                    existing_id: existing.id.clone(),
+                    existing_name: existing.name.clone(),
+                    existing_source: existing.source.clone(),
+                    existing_priority: existing.source.priority(),
+                });
+            }
+            if existing
+                .aliases
+                .iter()
+                .any(|a| a.to_lowercase() == name_lower)
+            {
+                shadowed_names.push(existing.name.clone());
+            }
+        }
+        for shadowed_name in shadowed_names {
             warn!(
                 "Tool '{}' takes over /{} from '{}', whose alias now only \
                  resolves while '{}' is inactive",
-                tool.name, name_lower, shadowed.name, tool.name
+                tool.name, name_lower, shadowed_name, tool.name
             );
         }
-
-        let conflict = tools
-            .values()
-            .find(|t| t.name.to_lowercase() == name_lower)
-            .map(|t| ConflictInfo {
-                existing_id: t.id.clone(),
-                existing_name: t.name.clone(),
-                existing_source: t.source.clone(),
-                existing_priority: t.source.priority(),
-            });
 
         if let Some(conflict) = conflict {
             let resolution = self.resolve_conflict(&tool.name, &conflict, &tool.source);
@@ -250,14 +263,16 @@ impl ConflictResolver {
         // plugin manifest with duplicate entries, or a hot-reload that
         // forgot to call `ToolCatalog::clear` can all produce a second
         // tool with the same id. Silently overwriting would lose the
-        // first registration without any observable signal — surface a
-        // warn so an operator can see the duplicate and the resolution
-        // path (last-writer-wins) keeps the system making forward
-        // progress instead of erroring out at boot.
+        // first registration without any observable signal — log both
+        // identities so an operator can see which tool displaced which,
+        // and the resolution path (last-writer-wins) keeps the system
+        // making forward progress instead of erroring out at boot.
         if let Some(prev) = tools.insert(id.clone(), tool) {
             tracing::warn!(
                 tool_id = %id,
+                prev_id = %prev.id,
                 prev_name = %prev.name,
+                prev_source = %prev.source.label(),
                 "duplicate tool id; overwriting previous registration (last-writer-wins)",
             );
         }

@@ -102,19 +102,27 @@ fn extract_from_json_code_block(response: &str) -> Option<String> {
 
     if let Some(start) = response.find(start_marker) {
         let json_start = start + start_marker.len();
-        // Skip any whitespace/newlines after ```json
+        // Skip past any trailing language-identifier characters (e.g. `c`
+        // in ` ```jsonc `, `5` in ` ```json5 `) and the first newline so
+        // the parsed content starts at the body, not at the identifier.
+        // Mirrors the `extract_from_generic_code_block` path which always
+        // advances past `\n`. Without this, ` ```jsonc\n{...}``` was
+        // returning `c\n{...}` — a wasted parse attempt and a misleading
+        // near-match in debug logs.
         let content = &response[json_start..];
-        let content_start = content.find(|c: char| !c.is_whitespace())?;
+        let after_lang = content.find('\n').map_or(content.len(), |i| i + 1);
+        let body = &content[after_lang..];
+        let content_start = body.find(|c: char| !c.is_whitespace()).unwrap_or(0);
 
         // Find closing ``` that stands on its own line (preceded only by whitespace)
         let mut search_pos = content_start;
-        while let Some(pos) = content[search_pos..].find(end_marker) {
+        while let Some(pos) = body[search_pos..].find(end_marker) {
             let abs_pos = search_pos + pos;
-            let before = &content[..abs_pos];
+            let before = &body[..abs_pos];
             let line_start = before.rfind('\n').map_or(0, |i| i + 1);
             let line_prefix = &before[line_start..];
             if line_prefix.trim().is_empty() {
-                return Some(content[content_start..abs_pos].trim().to_string());
+                return Some(body[content_start..abs_pos].trim().to_string());
             }
             search_pos = abs_pos + end_marker.len();
         }

@@ -23,8 +23,12 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 pub struct InProcessActorSessionService {
     store: Arc<dyn SessionEventStore>,
-    senders: RwLock<HashMap<SessionId, mpsc::Sender<ActorCommand>>>,
-    broadcasters: RwLock<HashMap<SessionId, broadcast::Sender<SessionEventRecord>>>,
+    // All three maps are wrapped in `Arc` so the service can be cheaply
+    // cloned (Fix #3): the cleanup task spawned inside `spawn_actor` needs
+    // a `'static + Send` handle to prune the maps after an actor exits,
+    // and tests in Fix #2 share the service across concurrent tasks.
+    senders: Arc<RwLock<HashMap<SessionId, mpsc::Sender<ActorCommand>>>>,
+    broadcasters: Arc<RwLock<HashMap<SessionId, broadcast::Sender<SessionEventRecord>>>>,
     /// Per-session mutex serialising the entire `wake()` critical section.
     ///
     /// Without this, two concurrent `wake()` calls for the same session
@@ -34,18 +38,33 @@ pub struct InProcessActorSessionService {
     /// per-key mutex for the duration of `wake()` makes the second caller
     /// wait, then re-read the now-current prior_head and skip the marker
     /// emit (it sees the freshly-spawned sender via the fast path).
-    wake_locks: Mutex<HashMap<SessionId, Arc<Mutex<()>>>>,
+    wake_locks: Arc<Mutex<HashMap<SessionId, Arc<Mutex<()>>>>>,
     idle_timeout: Duration,
     observer: Option<Arc<dyn crate::session::observer::SessionEventObserver>>,
+}
+
+// Manual `Clone` would be the same; derive sees through `Arc<_>` fields
+// and `Copy` `Duration` / `Option<Arc<_>>`.
+impl Clone for InProcessActorSessionService {
+    fn clone(&self) -> Self {
+        Self {
+            store: Arc::clone(&self.store),
+            senders: Arc::clone(&self.senders),
+            broadcasters: Arc::clone(&self.broadcasters),
+            wake_locks: Arc::clone(&self.wake_locks),
+            idle_timeout: self.idle_timeout,
+            observer: self.observer.as_ref().map(Arc::clone),
+        }
+    }
 }
 
 impl InProcessActorSessionService {
     pub fn new(store: Arc<dyn SessionEventStore>) -> Self {
         Self {
             store,
-            senders: RwLock::new(HashMap::new()),
-            broadcasters: RwLock::new(HashMap::new()),
-            wake_locks: Mutex::new(HashMap::new()),
+            senders: Arc::new(RwLock::new(HashMap::new())),
+            broadcasters: Arc::new(RwLock::new(HashMap::new())),
+            wake_locks: Arc::new(Mutex::new(HashMap::new())),
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             observer: None,
         }
@@ -76,24 +95,123 @@ impl InProcessActorSessionService {
     async fn spawn_actor(
         &self,
         id: &SessionId,
+        prior_head: Option<EventSeq>,
     ) -> Result<mpsc::Sender<ActorCommand>, SessionError> {
-        let mut senders = self.senders.write().await;
-        let mut broadcasters = self.broadcasters.write().await;
+        // Phase 1: inspect the maps under write lock and decide whether to
+        // (a) hand back an already-live sender, or (b) clear the way for a
+        // fresh actor. For the wake path (`prior_head.is_some()`) we always
+        // remove any existing sender: a concurrent `emit_event` may have
+        // created a foreign actor between `wake()`'s sender-remove and its
+        // `spawn_actor` call, and wake() must still emit SessionWoken as
+        // the next append in the log. The foreign actor is shut down
+        // below, outside the lock, before we install our replacement.
+        let to_shutdown: Option<mpsc::Sender<ActorCommand>> = {
+            let mut senders = self.senders.write().await;
+            let mut broadcasters = self.broadcasters.write().await;
 
-        // Double-check + stale sender cleanup.
-        // A sender whose receiver has been dropped (actor idle-timeout or
-        // panic) is useless — evict it before creating a replacement.
-        if let Some(sender) = senders.get(id) {
-            if !sender.is_closed() {
-                // rust-doctor-disable-next-line excessive-clone
-                return Ok(sender.clone());
+            if prior_head.is_some() {
+                // Wake path: always create a fresh actor.
+                let existing = senders.remove(id);
+                broadcasters.remove(id);
+                existing
+            } else {
+                // Normal path: double-check + stale sender cleanup.
+                if let Some(sender) = senders.get(id) {
+                    if !sender.is_closed() {
+                        // rust-doctor-disable-next-line excessive-clone
+                        return Ok(sender.clone());
+                    }
+                    senders.remove(id);
+                    broadcasters.remove(id);
+                }
+                None
             }
-            senders.remove(id);
-            broadcasters.remove(id);
+        };
+
+        // Phase 2: shut down the previous actor (best-effort) outside the
+        // maps lock so the awaited Shutdown reply does not block other
+        // operations on unrelated sessions.
+        if let Some(old_sender) = to_shutdown {
+            let (stx, srx) = oneshot::channel();
+            if old_sender.send(ActorCommand::Shutdown { reply: stx }).await.is_ok() {
+                match timeout(SHUTDOWN_GRACE, srx).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        tracing::warn!(
+                            session_id = ?id,
+                            error = %e,
+                            "spawn_actor Shutdown reply dropped"
+                        );
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            session_id = ?id,
+                            "spawn_actor Shutdown timed out — old actor may \
+                             still be running; replacing anyway"
+                        );
+                    }
+                }
+            }
         }
 
+        // Phase 3: open the new inbox + broadcaster, and — only when
+        // `wake()` is the caller — append `SessionWoken` at
+        // `prior_head + 1` directly to the store, fire the observer, and
+        // fan out on the broadcaster. Doing it here (instead of from
+        // `wake()` after spawning) removes the race window in which a
+        // concurrent `emit_event` could slip an event into the inbox of
+        // the freshly-spawned actor ahead of the SessionWoken marker.
         let (tx, rx) = mpsc::channel(COMMAND_BUFFER);
         let (bcast_tx, _) = broadcast::channel(BROADCAST_BUFFER);
+
+        if let Some(prior) = prior_head {
+            let seq = prior + 1;
+            let at = now_ms();
+            let evt = SessionEvent::SessionWoken {
+                at,
+                prior_head: prior,
+            };
+            match self.store.append(id, seq, &evt, at).await {
+                Ok(()) => {
+                    let record = SessionEventRecord {
+                        seq,
+                        event: evt,
+                        created_at_ms: at,
+                    };
+                    if let Some(obs) = &self.observer {
+                        let id_ref = id;
+                        let rec_ref = &record;
+                        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            obs.on_appended(id_ref, rec_ref);
+                        }))
+                        .is_err()
+                        {
+                            tracing::error!(
+                                session_id = ?id,
+                                seq,
+                                "SessionEventObserver panicked during \
+                                 SessionWoken emission"
+                            );
+                        }
+                    }
+                    if let Err(_record) = bcast_tx.send(record) {
+                        tracing::debug!(
+                            session_id = ?id,
+                            seq,
+                            "broadcast had no receivers during SessionWoken emission"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        session_id = ?id,
+                        error = %e,
+                        "SessionWoken append failed; falling through to fresh actor"
+                    );
+                }
+            }
+        }
+
         let actor = SessionActor::new(
             // rust-doctor-disable-next-line excessive-clone
             id.clone(),
@@ -106,12 +224,56 @@ impl InProcessActorSessionService {
             self.observer.clone(),
             self.idle_timeout,
         );
-        tokio::spawn(actor.run());
 
-        // rust-doctor-disable-next-line excessive-clone
-        senders.insert(id.clone(), tx.clone());
-        // rust-doctor-disable-next-line excessive-clone
-        broadcasters.insert(id.clone(), bcast_tx);
+        // Phase 5 (set up first so the cleanup task is wired before the
+        // actor can possibly exit): signal `done_tx` when the actor's
+        // `run()` returns. The cleanup task then removes the entry iff
+        // the entry's sender is `is_closed()` — i.e. iff the entry is
+        // still our (now-dead) actor and has NOT been replaced by a
+        // subsequent `wake()` or `spawn_actor`. Without the `is_closed`
+        // guard, a wake() racing the old actor's exit would install a
+        // fresh actor that the cleanup task then wrongly evicts.
+        let (done_tx, done_rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            actor.run().await;
+            let _ = done_tx.send(());
+        });
+
+        // Phase 4: install the new sender / broadcaster in the maps. The
+        // map write is done under the maps lock so a concurrent
+        // sender_for / wake / emit_event observes a consistent snapshot.
+        {
+            let mut senders = self.senders.write().await;
+            let mut broadcasters = self.broadcasters.write().await;
+            // rust-doctor-disable-next-line excessive-clone
+            senders.insert(id.clone(), tx.clone());
+            // rust-doctor-disable-next-line excessive-clone
+            broadcasters.insert(id.clone(), bcast_tx);
+        }
+
+        // Phase 5 (continued): spawn the map-prune task. Awaiting
+        // `done_rx` here means the cleanup happens after the actor has
+        // fully exited. The check-and-remove is performed under the
+        // maps' write locks in a single critical section to avoid a
+        // TOCTOU race where a concurrent `wake()` could replace the
+        // closed sender with a fresh one between our `is_closed()` check
+        // and our `remove()` call.
+        let cleanup_svc = self.clone();
+        let cleanup_id = id.clone();
+        tokio::spawn(async move {
+            let _ = done_rx.await;
+            let mut senders = cleanup_svc.senders.write().await;
+            let mut broadcasters = cleanup_svc.broadcasters.write().await;
+            let should_remove = match senders.get(&cleanup_id) {
+                None => false,
+                Some(s) => s.is_closed(),
+            };
+            if should_remove {
+                senders.remove(&cleanup_id);
+                broadcasters.remove(&cleanup_id);
+            }
+        });
+
         Ok(tx)
     }
 }
@@ -120,7 +282,7 @@ impl InProcessActorSessionService {
 impl SessionService for InProcessActorSessionService {
     async fn attach(&self, id: SessionId) -> Result<SessionHandle, SessionError> {
         if self.sender_for(&id).await.is_none() {
-            self.spawn_actor(&id).await?;
+            self.spawn_actor(&id, None).await?;
         }
         let head = self.store.load_head_seq(&id).await?;
         Ok(SessionHandle { id, head_seq: head })
@@ -164,7 +326,7 @@ impl SessionService for InProcessActorSessionService {
     ) -> Result<EventSeq, SessionError> {
         let sender = match self.sender_for(id).await {
             Some(s) => s,
-            None => self.spawn_actor(id).await?,
+            None => self.spawn_actor(id, None).await?,
         };
         let (tx, rx) = oneshot::channel();
         sender
@@ -198,7 +360,7 @@ impl SessionService for InProcessActorSessionService {
         }
 
         // Slow path: spawn (or re-spawn) the actor atomically.
-        self.spawn_actor(id).await?;
+        self.spawn_actor(id, None).await?;
 
         if self.sender_for(id).await.is_none() {
             return Err(SessionError::ActorShutdown);
@@ -216,9 +378,11 @@ impl SessionService for InProcessActorSessionService {
 
     async fn wake(&self, id: &SessionId) -> Result<SessionHandle, SessionError> {
         // Serialise concurrent wakes for the same session. The per-key
-        // mutex covers the entire shutdown-old / spawn-new / emit-marker
-        // sequence so two racing wake() callers cannot each spawn a fresh
-        // actor and emit duplicate SessionWoken markers.
+        // mutex covers the shutdown-old / capture-prior_head sequence so
+        // two racing wake() callers cannot each spawn a fresh actor and
+        // emit duplicate SessionWoken markers. The lock is RELEASED
+        // before `spawn_actor` (which is fast — no 5 s wait), so a
+        // second wake() does not block the full SHUTDOWN_GRACE.
         let wake_lock = {
             let mut locks = self.wake_locks.lock().await;
             locks
@@ -253,31 +417,27 @@ impl SessionService for InProcessActorSessionService {
         self.broadcasters.write().await.remove(id);
 
         // 2. Capture prior_head BEFORE spawning the new actor so the marker
-        //    records the exact head the consumer observed pre-wake.
-        let prior_head = self.store.load_head_seq(id).await?;
+        //    records the exact head the consumer observed pre-wake. We use
+        //    `.ok()` so a transient store error degrades to "no marker"
+        //    rather than failing wake(); the actor will simply come back
+        //    with whatever head the store reports.
+        let prior_head = self.store.load_head_seq(id).await.ok();
+        // Drop the wake_lock before awaiting spawn_actor; the lock only
+        // protects the shutdown + capture-prior_head critical section.
+        drop(_guard);
 
-        // 3. Spawn fresh actor — it replays from SQLite.
-        let sender = self.spawn_actor(id).await?;
+        // 3. Spawn fresh actor — spawn_actor appends SessionWoken at
+        //    `prior_head + 1` atomically with the actor's first command,
+        //    closing the race window where a concurrent `emit_event`
+        //    could land between the shutdown and the marker.
+        self.spawn_actor(id, prior_head).await?;
 
-        // 4. Emit SessionWoken marker; new_head = prior_head + 1.
-        let (tx, rx) = oneshot::channel();
-        sender
-            .send(ActorCommand::EmitEvent {
-                event: SessionEvent::SessionWoken {
-                    at: now_ms(),
-                    prior_head,
-                },
-                reply: tx,
-            })
-            .await
-            .map_err(|e| {
-                tracing::warn!(session_id = ?id, error = %e, "Wake EmitEvent send failed");
-                SessionError::ActorShutdown
-            })?;
-        let new_head = rx.await.map_err(|e| {
-            tracing::warn!(session_id = ?id, error = %e, "Wake EmitEvent reply dropped");
-            SessionError::ActorShutdown
-        })??;
+        // The new head the caller sees is `prior_head + 1` (SessionWoken
+        // appended). If SessionWoken's append failed (store error), the
+        // actor's own self-heal will resolve the next collision; the
+        // returned handle is still a correct "upper bound on observed
+        // state" for the caller.
+        let new_head = prior_head.map(|p| p + 1).unwrap_or(1);
 
         Ok(SessionHandle {
             // rust-doctor-disable-next-line excessive-clone
@@ -603,5 +763,172 @@ mod tests {
                  unbounded growth across many distinct sessions"
             );
         }
+    }
+
+    /// Fix #1 regression: when an actor exits via the idle-timeout path,
+    /// the `finish_emitted` helper extracted from the hot arm must still
+    /// fire the observer, broadcast, and reply — and persist the event
+    /// — for events processed during the drain. With `idle_timeout = 0`
+    /// the actor's first `select!` iteration either picks the inbox or
+    /// immediately fires the idle timer; either way the seeded event
+    /// must (a) increment the observer counter exactly once, and (b) be
+    /// queryable through `get_events`.
+    #[tokio::test]
+    async fn idle_timeout_zero_observer_and_persistence() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Counter(Arc<AtomicUsize>);
+        impl crate::session::observer::SessionEventObserver for Counter {
+            fn on_appended(&self, _id: &SessionId, _rec: &SessionEventRecord) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        let count = Arc::new(AtomicUsize::new(0));
+        let svc = InProcessActorSessionService::new(store)
+            .with_idle_timeout(Duration::from_millis(0))
+            .with_observer(Arc::new(Counter(count.clone())));
+        let id = sample_id("idle-zero");
+        svc.emit_event(
+            &id,
+            SessionEvent::TurnStarted {
+                turn_id: uuid::Uuid::new_v4(),
+                trigger: TurnTrigger::UserMessage,
+                at: now_ms(),
+            },
+        )
+        .await
+        .unwrap();
+        // Allow the actor to idle-out (it has now processed the event).
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            1,
+            "observer must fire on every newly appended event, even with idle_timeout=0"
+        );
+        let events = svc.get_events(&id, None, None).await.unwrap();
+        assert_eq!(events.len(), 1, "the event must be persisted");
+    }
+
+    /// Fix #2 regression: `wake()` and `emit_event` racing for the same
+    /// session must never let a foreign event land before the
+    /// `SessionWoken` marker for that wake. Pre-fix, the window between
+    /// `wake()`'s shutdown and its own `SpawnActor(...) → send(EmitEvent
+    /// { SessionWoken })` allowed a concurrent `emit_event` to insert
+    /// itself into the freshly-spawned actor's inbox first. We assert
+    /// the post-fix invariant: every `SessionWoken` in the log has
+    /// `seq == prior_head + 1` and no foreign event interleaves between
+    /// `prior_head` and the marker.
+    #[tokio::test]
+    async fn concurrent_wake_and_emit_keeps_session_woken_first() {
+        let svc = fresh_service().await;
+        let id = sample_id("race");
+        let tid = uuid::Uuid::new_v4();
+        for _ in 0..5 {
+            svc.emit_event(
+                &id,
+                SessionEvent::TurnStarted {
+                    turn_id: tid,
+                    trigger: TurnTrigger::UserMessage,
+                    at: now_ms(),
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let k = 20;
+        for _ in 0..k {
+            let svc1 = svc.clone();
+            let id1 = id.clone();
+            let wake_handle = tokio::spawn(async move { svc1.wake(&id1).await });
+            let svc2 = svc.clone();
+            let id2 = id.clone();
+            let emit_handle = tokio::spawn(async move {
+                svc2.emit_event(
+                    &id2,
+                    SessionEvent::TurnStarted {
+                        turn_id: uuid::Uuid::new_v4(),
+                        trigger: TurnTrigger::UserMessage,
+                        at: now_ms(),
+                    },
+                )
+                .await
+            });
+
+            let _ = wake_handle.await.unwrap();
+            let _ = emit_handle.await.unwrap();
+
+            let events = svc.get_events(&id, None, None).await.unwrap();
+            for ev in &events {
+                if let SessionEvent::SessionWoken { prior_head, .. } = &ev.event {
+                    let expected_seq = prior_head + 1;
+                    assert_eq!(
+                        ev.seq, expected_seq,
+                        "SessionWoken seq must equal prior_head + 1"
+                    );
+                    // No foreign event should interleave between
+                    // `prior_head` and `SessionWoken`'s seq.
+                    for other in &events {
+                        if other.seq > *prior_head && other.seq < ev.seq {
+                            panic!(
+                                "foreign event interleaved before SessionWoken: \
+                                 {:?} at seq {} (prior_head={}, woken seq={})",
+                                other.event, other.seq, prior_head, ev.seq
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fix #3 regression: an actor that reaches the idle-timeout exit
+    /// must have its `senders[id]` / `broadcasters[id]` entries pruned
+    /// by the cleanup task spawned in `spawn_actor`. Without the
+    /// cleanup, a long-running daemon that creates many distinct
+    /// sessions (subagents, ephemeral keys) accumulates entries
+    /// indefinitely — the same leak shape that was caught and fixed
+    /// for `wake_locks` (see `detach_releases_the_wake_lock_entry`).
+    #[tokio::test]
+    async fn idle_timeout_prunes_senders_and_broadcasters() {
+        let svc = fresh_service()
+            .await
+            .with_idle_timeout(Duration::from_millis(0));
+        let id = sample_id("idle-prune");
+
+        svc.emit_event(
+            &id,
+            SessionEvent::TurnStarted {
+                turn_id: uuid::Uuid::new_v4(),
+                trigger: TurnTrigger::UserMessage,
+                at: now_ms(),
+            },
+        )
+        .await
+        .unwrap();
+
+        // Verify the maps are populated immediately after emit.
+        {
+            let senders = svc.senders.read().await;
+            let broadcasters = svc.broadcasters.read().await;
+            assert!(senders.contains_key(&id));
+            assert!(broadcasters.contains_key(&id));
+        }
+
+        // Wait for the actor to idle-out and the cleanup task to prune.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let senders = svc.senders.read().await;
+        let broadcasters = svc.broadcasters.read().await;
+        assert!(
+            !senders.contains_key(&id),
+            "senders map must be pruned after actor exit"
+        );
+        assert!(
+            !broadcasters.contains_key(&id),
+            "broadcasters map must be pruned after actor exit"
+        );
     }
 }

@@ -93,7 +93,51 @@ pub fn filter_install_specs_for_current_os(specs: &[InstallSpec]) -> Vec<&Instal
         .collect()
 }
 
-/// Result of a dependency installation execution.
+/// Successful install result — populated only on the `Ok` branch of
+/// `install_dependency`. Captures stdout / stderr / exit code of the
+/// underlying package-manager invocation so callers (tool output, gateway
+/// JSON-RPC responses) can surface them verbatim.
+#[derive(Debug, Clone, Serialize)]
+pub struct InstallSuccess {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
+}
+
+/// Errors that can be returned from `install_dependency`. Models the
+/// failure modes the install path can produce — missing skill, missing
+/// spec, build/exec failure — and surfaces them as a typed
+/// `std::error::Error` so callers can use the `?` operator and propagate
+/// the cause.
+#[derive(Debug, thiserror::Error)]
+pub enum SkillInstallError {
+    /// The skill id was not found in the registry.
+    #[error("Skill not found: {0}")]
+    SkillNotFound(String),
+    /// No install spec matched the requested `spec_id` or the OS / preference
+    /// filter.
+    #[error("No matching install spec for skill {0}")]
+    NoMatchingSpec(String),
+    /// The build / execution failed: the install command could not be
+    /// assembled (e.g. the package name failed the shell-arg allowlist) or
+    /// the underlying package manager returned a non-zero exit code.
+    #[error("Execution failed: {message}")]
+    ExecutionFailed {
+        message: String,
+        stderr: String,
+        exit_code: Option<i32>,
+    },
+    /// I/O error spawning the install command.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+/// Legacy result struct kept for the existing JSON-RPC / builtin-tool wire
+/// format. New code should pattern-match on `Result<InstallSuccess,
+/// SkillInstallError>` instead; this struct exists only so the
+/// `From<InstallResult> for SkillInstallOutput` impl in
+/// `builtin_tools/skill_install.rs` and the existing gateway responses
+/// can continue to serialise without a breaking change.
 #[derive(Debug, Clone, Serialize)]
 pub struct InstallResult {
     pub success: bool,
@@ -101,6 +145,54 @@ pub struct InstallResult {
     pub stdout: String,
     pub stderr: String,
     pub exit_code: Option<i32>,
+}
+
+impl From<Result<InstallSuccess, SkillInstallError>> for InstallResult {
+    fn from(r: Result<InstallSuccess, SkillInstallError>) -> Self {
+        match r {
+            Ok(s) => Self {
+                success: true,
+                message: "Successfully installed".to_string(),
+                stdout: s.stdout,
+                stderr: s.stderr,
+                exit_code: Some(s.exit_code),
+            },
+            Err(e) => match e {
+                SkillInstallError::SkillNotFound(id) => Self {
+                    success: false,
+                    message: format!("Skill not found: {id}"),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: None,
+                },
+                SkillInstallError::NoMatchingSpec(id) => Self {
+                    success: false,
+                    message: format!("No matching install spec found for skill {id}"),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: None,
+                },
+                SkillInstallError::ExecutionFailed {
+                    message,
+                    stderr,
+                    exit_code,
+                } => Self {
+                    success: false,
+                    message: format!("Failed to install: {message}"),
+                    stdout: String::new(),
+                    stderr,
+                    exit_code,
+                },
+                SkillInstallError::Io(io) => Self {
+                    success: false,
+                    message: format!("Failed to execute install command: {io}"),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: None,
+                },
+            },
+        }
+    }
 }
 
 const fn install_kind_index(kind: &InstallKind) -> usize {
@@ -178,17 +270,23 @@ fn build_shell_command(cmd_str: &str) -> tokio::process::Command {
 pub struct InstallExecutor;
 
 impl InstallExecutor {
-    pub async fn run(spec: &InstallSpec, _prefs: &InstallPreferences) -> InstallResult {
+    /// Execute an install and return a `Result` so callers can propagate
+    /// failures via `?`. The previous signature returned
+    /// `InstallResult { success: bool, ... }` which was structurally
+    /// indistinguishable from a successful execution by callers that
+    /// pattern-matched on `Result<_, _>`.
+    pub async fn run(
+        spec: &InstallSpec,
+        _prefs: &InstallPreferences,
+    ) -> Result<InstallSuccess, SkillInstallError> {
         let cmd_str = match build_install_command(spec) {
             Some(cmd) => cmd,
             None => {
-                return InstallResult {
-                    success: false,
+                return Err(SkillInstallError::ExecutionFailed {
                     message: format!("Cannot build install command for {}", spec.package),
-                    stdout: String::new(),
                     stderr: String::new(),
                     exit_code: None,
-                };
+                });
             }
         };
 
@@ -203,33 +301,29 @@ impl InstallExecutor {
 
         match result {
             Ok(Ok(output)) => {
-                let success = output.status.success();
-                InstallResult {
-                    success,
-                    message: if success {
-                        format!("Successfully installed {}", spec.package)
-                    } else {
-                        format!("Failed to install {}", spec.package)
-                    },
-                    stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-                    exit_code: output.status.code(),
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                let exit_code = output.status.code();
+                if output.status.success() {
+                    Ok(InstallSuccess {
+                        stdout,
+                        stderr,
+                        exit_code: exit_code.unwrap_or(0),
+                    })
+                } else {
+                    Err(SkillInstallError::ExecutionFailed {
+                        message: format!("Installer exited with status {:?}", output.status),
+                        stderr,
+                        exit_code,
+                    })
                 }
             }
-            Ok(Err(e)) => InstallResult {
-                success: false,
-                message: format!("Failed to execute install command: {e}"),
-                stdout: String::new(),
-                stderr: String::new(),
-                exit_code: None,
-            },
-            Err(_) => InstallResult {
-                success: false,
+            Ok(Err(e)) => Err(SkillInstallError::Io(e)),
+            Err(_) => Err(SkillInstallError::ExecutionFailed {
                 message: "Installation timed out after 300 seconds".to_string(),
-                stdout: String::new(),
                 stderr: String::new(),
                 exit_code: None,
-            },
+            }),
         }
     }
 }
@@ -479,5 +573,42 @@ mod tests {
                 name
             );
         }
+    }
+
+    /// The legacy `InstallResult` shape is preserved via the
+    /// `From<Result<InstallSuccess, SkillInstallError>>` conversion so
+    /// existing JSON-RPC consumers do not break.
+    #[test]
+    fn install_result_from_result_ok() {
+        let r: InstallResult =
+            Ok(InstallSuccess {
+                stdout: "ok".into(),
+                stderr: String::new(),
+                exit_code: 0,
+            })
+            .into();
+        assert!(r.success);
+        assert_eq!(r.stdout, "ok");
+        assert_eq!(r.exit_code, Some(0));
+    }
+
+    #[test]
+    fn install_result_from_result_err_skill_not_found() {
+        let r: InstallResult = Err(SkillInstallError::SkillNotFound("missing".into())).into();
+        assert!(!r.success);
+        assert!(r.message.contains("Skill not found"));
+    }
+
+    #[test]
+    fn install_result_from_result_err_execution_failed() {
+        let r: InstallResult = Err(SkillInstallError::ExecutionFailed {
+            message: "boom".into(),
+            stderr: "traceback".into(),
+            exit_code: Some(1),
+        })
+        .into();
+        assert!(!r.success);
+        assert_eq!(r.exit_code, Some(1));
+        assert_eq!(r.stderr, "traceback");
     }
 }
