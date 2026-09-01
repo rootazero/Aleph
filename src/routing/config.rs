@@ -27,15 +27,14 @@ pub struct SessionConfig {
 
     /// Cross-channel identity links: `canonical_name` -> [channel:id, ...]
     ///
-    /// Note: this only takes effect on the configured-bindings routing path
-    /// (`resolve_route` / `[[bindings]]`). The zero-config fallback
-    /// (`resolve_session_key_with_agent`) does not consult it — a deployment
-    /// relying on identity links must configure bindings. Wiring it into the
-    /// fallback is a separate task: boot (`start/builder/subsystems.rs`)
-    /// threads only `dm_scope` into the gateway `RoutingConfig` that drives
-    /// the fallback; `identity_links` needs a matching field + consultation
-    /// there (`resolve_session_key_with_agent` → `SessionKey::dm`), mirroring
-    /// what `resolve_route`/`build_session_key` already does.
+    /// Consulted on both routing paths. The configured-bindings path
+    /// (`resolve_route` / `[[bindings]]`) consumes `identity_links` directly,
+    /// and the zero-config fallback (`resolve_session_key_with_agent`) gets
+    /// it via `InboundMessageRouter.route_session_config` — boot
+    /// (`start/builder/subsystems.rs`) threads the full `SessionConfig`
+    /// (including `identity_links`) into the router, which forwards it to
+    /// the fallback path. A deployment relying on identity links does not
+    /// need explicit bindings for the fallback to see them.
     #[serde(
         default,
         deserialize_with = "deserialize_identity_links_with_validation"

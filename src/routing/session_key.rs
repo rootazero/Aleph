@@ -804,8 +804,11 @@ pub fn normalize_agent_id(id: &str) -> String {
     if result.is_empty() {
         DEFAULT_AGENT_ID.to_string()
     } else if result.len() > 64 {
-        // Safe: all chars are ASCII after the filter above, so byte[64] is always a char boundary.
-        // Using chars().take() for defensive correctness against future filter changes.
+        // Safe: chars().take(64) is a *character*-based truncation, not a
+        // byte-indexed slice. The current filter above only emits ASCII, so
+        // chars and bytes are equivalent on a 64-cap, but chars().take() is
+        // what the code actually does — a future filter that admits any
+        // multi-byte UTF-8 would otherwise panic at a non-boundary index.
         result.chars().take(64).collect()
     } else {
         result
