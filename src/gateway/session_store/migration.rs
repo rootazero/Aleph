@@ -786,6 +786,7 @@ mod normalize_tests {
 #[cfg(test)]
 mod repair_tests {
     use super::*;
+    use crate::gateway::session_store::file_backend::sanitize_key_for_dir;
 
     fn msg(id: &str, role: &str, content: &str, timestamp: i64) -> MessageRecord {
         MessageRecord {
@@ -807,7 +808,12 @@ mod repair_tests {
         metadata: &str,
         messages: &[MessageRecord],
     ) -> std::path::PathBuf {
-        let dir = base.join(dir_name);
+        // `dir_name` is a session KEY, and production never joins one raw: on
+        // Windows `:` is illegal in a filename (os error 123), so `session_dir`
+        // routes every key through `sanitize_key_for_dir`. Seeding with the raw
+        // key made these four tests fail on Windows only — the fixture was
+        // building a path production cannot produce.
+        let dir = base.join(sanitize_key_for_dir(dir_name));
         tokio::fs::create_dir_all(&dir).await.unwrap();
         tokio::fs::write(dir.join("metadata.json"), metadata)
             .await
