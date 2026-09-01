@@ -151,6 +151,27 @@ call site — it is at the type that let the two answers look alike.
   continuation run — the exact duplication it exists to prevent, introduced by
   the edit whose commit message says it fixed it. The bound is a named constant
   now, because the literal reads like a count.
+- **`trace.list` answered a malformed cursor with page one, and called it
+  success.** Every field of `TraceListParams` is `#[serde(default)]`, so the
+  only way the params object fails to deserialize is a field of the wrong type
+  — and `unwrap_or_default()` turned that into "no cursor, default limit". A
+  client paging with a stale cursor shape looped on the first page forever and
+  was never told why. It is `INVALID_PARAMS` now. The integration test that
+  should have caught this had spent the move from the single-timestamp cursor
+  to the compound `{ last_timestamp, task_id }` inside that same hole: it fed
+  the compound cursor back into the `i64` key, so its "no overlap between
+  adjacent pages" assertion had been comparing page A against a second copy of
+  page A. Both cursor shapes now have a test, and so does the refusal.
+- **On Windows a repaired session came back labelled `ephemeral`.**
+  `rebuild_metadata_from_transcript` parses the *directory name* to recover the
+  key, the agent id and the session type — correct on POSIX, where
+  `sanitize_key_for_dir` is the identity, and wrong on Windows, where it maps
+  `:` (the key's own separator) to `_`. So the parse failed for every session
+  the store had ever written and the fallback labels were applied to all of
+  them. `key_from_dir_name` is the guarded inverse, living beside the forward
+  map: it proposes the one candidate and accepts it only if that candidate
+  parses as a real `SessionKey` and projects back onto the exact directory name
+  — it can recover a key or decline, never corrupt one.
 - **Four Windows-only test failures** in `session_store::migration`: the fixture
   joined a session *key* to a path, and `:` is illegal in a Windows filename —
   production never does that, it routes every key through
