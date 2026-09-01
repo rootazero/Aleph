@@ -299,11 +299,15 @@ mod tests {
     }
 
     #[test]
-    fn orphan_error_without_matching_request_falls_back_to_unknown() {
+    fn orphan_error_without_matching_request_is_dropped() {
+        // Orphan errors used to be tallied under `"unknown"` so the LLM
+        // saw a row like `- unknown × 3 (rate_limited)` — a label that
+        // gives the model no actionable handle to climb the ladder on.
+        // The tally now drops orphans entirely; only resolved rows
+        // (tool name matched to a preceding `ToolCallRequested`) survive.
         let events = vec![terr("ghost_id", "HTTP 500")];
         let groups = aggregate_failures(&events);
-        assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].tool, "unknown");
+        assert!(groups.is_empty(), "{groups:?}");
     }
 
     #[test]

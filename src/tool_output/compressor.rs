@@ -208,12 +208,6 @@ fn compress_screenshot(output: &str) -> String {
             .take(128)
             .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=')
     };
-    let prefix_has_base64_marker = || {
-        output
-            .bytes()
-            .take(128)
-            .any(|b| b == b'+' || b == b'/' || b == b'=')
-    };
     let has_base64_padding = || output.ends_with('=');
 
     // Case-insensitive data-URL detection: RFC 2397 makes mediatype case-
