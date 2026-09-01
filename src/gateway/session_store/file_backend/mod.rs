@@ -42,54 +42,38 @@ pub(crate) fn sanitize_key_for_dir(key: &str) -> String {
     }
 }
 
-/// Best-effort inverse of [`sanitize_key_for_dir`] for a directory name.
+/// A session directory name does NOT identify its session key on Windows, and
+/// nothing may treat it as one there.
 ///
-/// On POSIX this is the identity, because the forward map only touches
-/// characters (`/`, `\\`, NUL) a session key cannot contain — so the directory
-/// name IS the key and every reader that treats it as one is right.
+/// On POSIX the forward map only touches characters (`/`, `\\`, NUL) a session
+/// key cannot contain, so the name IS the key and reading it as one is right.
 ///
-/// On Windows it is not. The forward map also sends `:` to `_`, and `:` is the
-/// key's own separator, so `agent:main:main:s1` lands on disk as
-/// `agent_main_main_s1` and the projection is lossy. Anything that reads a
-/// directory name AS a key is therefore wrong on Windows and right on POSIX,
-/// which is why it stayed invisible: `migration::rebuild_metadata_from_transcript`
-/// parses the directory name with `SessionKey::from_key_string` to recover the
-/// agent id and the session type, and on Windows that parse fails on every
-/// session the store ever wrote — so a repaired `main` session came back
-/// labelled `ephemeral`. A wrong label is worse than a missing one.
+/// On Windows [`sanitize_key_for_dir`] also sends `:` — the key's own separator
+/// — to `_`, which is legal inside an agent id. The projection is therefore
+/// many-to-one and NOT invertible: `agent:main:main:s1` (a main session at
+/// epoch 1) and `agent:main_main:s1` (an agent literally named `main_main`) are
+/// different keys that both land on `agent_main_main_s1`, and the name cannot
+/// say which was written. `two_real_keys_collide_on_one_windows_dir_name` holds
+/// that fact down.
 ///
-/// There is no exact inverse (an agent id may legitimately contain `_`), so
-/// this does not guess: it proposes the one candidate `_` -> `:` and accepts it
-/// only when the candidate parses as a real [`SessionKey`] AND projects back
-/// onto the exact directory name it came from. A name that fails either test is
-/// returned unchanged, which is the pre-existing behaviour — this can recover a
-/// key or decline, never corrupt one.
+/// So there is no inverse to write, and two attempts at one have now been
+/// removed. The first proposed the all-`_`-to-`:` reading and validated it by
+/// projecting back onto the name — a test EVERY candidate passes by
+/// construction, so it accepted a wrong key with full confidence. The second
+/// enumerated the readings and required a unique one; that is sound, and it
+/// declines on the ordinary shapes above, which makes it a predicate that is
+/// false on every real input — the same thing as not being there, but shaped
+/// like a feature.
 ///
-/// Lives beside the forward map on purpose: two functions that must remain each
-/// other's inverse belong to one reader.
-pub(crate) fn key_from_dir_name(name: &str) -> String {
-    #[cfg(not(windows))]
-    {
-        name.to_string()
-    }
-    #[cfg(windows)]
-    {
-        use crate::routing::session_key::SessionKey;
-        // A name that still has `:` was never sanitized (or came from a POSIX
-        // copy); it is already a key and must not be rewritten.
-        if name.contains(':') || !name.contains('_') {
-            return name.to_string();
-        }
-        let candidate = name.replace('_', ":");
-        if SessionKey::from_key_string(&candidate).is_some()
-            && sanitize_key_for_dir(&candidate) == name
-        {
-            candidate
-        } else {
-            name.to_string()
-        }
-    }
-}
+/// The consequence is that `migration::rebuild_metadata_from_transcript` cannot
+/// label a repaired Windows session by its key, and falls back to generic
+/// agent/type labels. That is the honest answer to an unanswerable question.
+/// Making it answerable means a reversible forward map (percent-escaping `:`
+/// rather than collapsing it) plus a rename migration for existing directories
+/// — a real change, not a patch to the reader.
+///
+/// Recorded here, beside the forward map, because this is a property OF that
+/// map and the next person to need an inverse will look here first.
 
 /// Read the epoch of a session directory `name` given the already-sanitized
 /// base `pattern`. Returns `Some(n)` only when `name` is `pattern` followed by
@@ -1539,41 +1523,62 @@ mod epoch_tests {
         (FileSessionStore::new(config).expect("store"), dir)
     }
 
-    /// The contract `key_from_dir_name` exists for, stated as one property
-    /// that must hold on BOTH platforms: whatever `sanitize_key_for_dir` wrote
-    /// on disk, reading it back yields the key again. On POSIX both halves are
-    /// the identity; on Windows the forward half is lossy and the inverse has
-    /// to earn its answer. A platform-conditional assertion here would have
-    /// been a way of writing the Windows defect down instead of fixing it.
+    /// `sanitize_key_for_dir` is many-to-one on Windows, so a directory name
+    /// cannot identify the key that produced it. Two REAL keys — different
+    /// agent ids, different epochs — land on the same name.
+    ///
+    /// This is the premise for there being no inverse, and it is asserted
+    /// rather than left in prose because prose does not go red. It runs on
+    /// every platform: the collision is a property of the Windows branch of the
+    /// forward map, and a Windows-only test would leave it falsifiable only in
+    /// CI. Two inverses have already been written and removed here; the next
+    /// attempt should fail against this first.
     #[test]
-    fn a_sanitized_dir_name_reads_back_as_its_key() {
-        for key in [
-            "agent:main:main:s1",
-            "agent:main:main",
-            "agent:main:ephemeral:seed-noreseed",
-        ] {
-            assert_eq!(
-                key_from_dir_name(&sanitize_key_for_dir(key)),
-                key,
-                "round trip failed for {key}"
-            );
-        }
+    fn two_real_keys_collide_on_one_windows_dir_name() {
+        use crate::routing::session_key::SessionKey;
+        let a = "agent:main:main:s1";
+        let b = "agent:main_main:s1";
+        assert!(
+            SessionKey::from_key_string(a).is_some(),
+            "premise gone: {a} no longer parses"
+        );
+        assert!(
+            SessionKey::from_key_string(b).is_some(),
+            "premise gone: {b} no longer parses"
+        );
+        assert_ne!(
+            SessionKey::from_key_string(a),
+            SessionKey::from_key_string(b),
+            "these were supposed to be DIFFERENT keys"
+        );
+        assert_eq!(
+            sanitize_windows_style(a),
+            sanitize_windows_style(b),
+            "the collision everything above rests on is gone"
+        );
     }
 
-    /// It declines rather than guesses. `_` is legal inside an agent id, so
-    /// there is no exact inverse; a name whose `_`->`:` reading is not a real
-    /// session key comes back untouched — the behaviour every caller had
-    /// before this function existed.
+    /// What `sanitize_key_for_dir` does on its Windows branch, available on
+    /// every platform so the test above can state the Windows premise anywhere.
+    /// Deliberately not exported: production has exactly one forward map and
+    /// this must not become a second one. The test below is what stops it
+    /// drifting away from the real one.
+    fn sanitize_windows_style(key: &str) -> String {
+        key.replace(['/', '\\', '\0'], "_")
+            .replace([':', '*', '?', '"', '<', '>', '|'], "_")
+    }
+
     #[test]
-    fn a_dir_name_that_is_not_a_disguised_key_is_returned_unchanged() {
-        for name in [
-            "stale-name",
-            "not_a_session_key",
-            ".archive",
-            // Already a key: must not be rewritten on any platform.
-            "agent:main:main:s1",
-        ] {
-            assert_eq!(key_from_dir_name(name), name, "rewrote {name}");
+    fn the_local_windows_projection_agrees_with_production() {
+        let key = "agent:main:main:s1";
+        if cfg!(windows) {
+            // Same function; this is the whole guarantee.
+            assert_eq!(sanitize_key_for_dir(key), sanitize_windows_style(key));
+        } else {
+            // POSIX leaves `:` alone, which is exactly why the collision above
+            // cannot be observed through `sanitize_key_for_dir` here.
+            assert_eq!(sanitize_key_for_dir(key), key);
+            assert_eq!(sanitize_windows_style(key), "agent_main_main_s1");
         }
     }
 

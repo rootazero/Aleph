@@ -638,13 +638,19 @@ async fn rebuild_metadata_from_transcript(
     // for a dir the store itself created) still yields a listable session,
     // just with fallback agent/type labels.
     //
-    // The directory name is not the key on every platform:
-    // `sanitize_key_for_dir` maps `:` -> `_` on Windows, and `:` is the key's
-    // own separator, so on Windows this parse used to fail for EVERY session
-    // the store had ever written and a repaired `main` session came back
-    // labelled `ephemeral`. `key_from_dir_name` is the guarded inverse — it
-    // recovers the key or declines, and is the identity on POSIX.
-    let key = crate::gateway::session_store::file_backend::key_from_dir_name(dir_name);
+    // On Windows the directory name is NOT the key: `sanitize_key_for_dir`
+    // maps `:` -> `_`, `:` is the key's own separator, and `_` is legal inside
+    // an agent id — so the projection is many-to-one and this parse fails for
+    // every session the store ever wrote there. The repaired session is listed
+    // under the fallback labels below.
+    //
+    // That is the honest answer, not a gap waiting for a smarter reader. Two
+    // inverses were written here and both removed: `agent:main:main:s1` and
+    // `agent:main_main:s1` are different real keys that produce the same
+    // directory name, so no function of the name alone can tell them apart.
+    // See `file_backend::two_real_keys_collide_on_one_windows_dir_name`.
+    // Fixing it means a reversible forward map plus a rename migration.
+    let key = dir_name.to_string();
     let parsed = crate::gateway::router::SessionKey::from_key_string(&key);
     let (agent_id, session_type) = match &parsed {
         Some(crate::gateway::router::SessionKey::Main { agent_id, .. }) => {
