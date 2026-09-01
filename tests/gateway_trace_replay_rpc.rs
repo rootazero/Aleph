@@ -1,9 +1,14 @@
 //! Integration coverage for `trace.list` / `trace.get` RPC handlers.
 //!
 //! Asserts (Spec 1 / P1):
-//! - `handle_list` paginates with `limit` + `before_timestamp` cursor.
+//! - `handle_list` paginates with `limit` + a cursor.
 //! - `next_cursor` is Null when the page exhausts the result set.
-//! - Cursor advances cleanly: no row appears in both adjacent pages.
+//! - Cursor advances cleanly: no row appears in both adjacent pages — fed back
+//!   in the shape the handler actually emits, which is the compound
+//!   `before: { last_timestamp, task_id }`, not the legacy `before_timestamp`.
+//! - The legacy single-timestamp cursor still pages, so the back-compat arm
+//!   has a consumer.
+//! - A cursor of the wrong shape is refused rather than silently ignored.
 //! - `handle_get` retrieves an inserted trace by id.
 //!
 //! Note: D3 (SERVICE_UNAVAILABLE when state DB absent) is enforced at the
@@ -112,6 +117,16 @@ async fn list_returns_null_cursor_when_exhausted() {
     );
 }
 
+/// The cursor the handler emits is fed back in the key the handler reads it
+/// from. `next_cursor` is a compound `{ last_timestamp, task_id }` — required
+/// because a timestamp alone drops rows that share an epoch second — and this
+/// test used to hand that object to `before_timestamp`, which is an `i64`.
+/// The whole params object then failed to deserialize and the handler answered
+/// with `TraceListParams::default()`: no cursor, default limit, page one
+/// again, reported as success. So the assertion below was firing against a
+/// second copy of page A. Both halves are fixed: the cursor goes back in the
+/// right key here, and a params object that does not parse is now an error
+/// rather than an empty one.
 #[tokio::test]
 async fn list_cursor_advances_without_overlap() {
     let (_tmp, db) = seed_db(5).await;
@@ -121,10 +136,14 @@ async fn list_cursor_advances_without_overlap() {
     let result_a = resp_a.result.unwrap();
     let cursor = result_a["next_cursor"].clone();
     assert!(!cursor.is_null());
+    assert!(
+        cursor.get("last_timestamp").is_some() && cursor.get("task_id").is_some(),
+        "next_cursor must be the compound cursor the handler reads back, got: {cursor}"
+    );
 
     let req_b = JsonRpcRequest::with_id(
         "trace.list",
-        Some(json!({"limit": 2, "before_timestamp": cursor})),
+        Some(json!({"limit": 2, "before": cursor})),
         json!(2),
     );
     let resp_b = handle_list(req_b, db, empty_session_store(&_tmp), None).await;
@@ -136,13 +155,99 @@ async fn list_cursor_advances_without_overlap() {
         .iter()
         .map(|r| r["task_id"].as_str().unwrap())
         .collect();
-    for entry in result_b["traces"].as_array().unwrap() {
-        let bid = entry["task_id"].as_str().unwrap();
+    let b_ids: Vec<&str> = result_b["traces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["task_id"].as_str().unwrap())
+        .collect();
+    assert!(!b_ids.is_empty(), "page B must not be empty (A={a_ids:?})");
+    for bid in &b_ids {
         assert!(
-            !a_ids.contains(&bid),
+            !a_ids.contains(bid),
             "page B leaked page A row: {bid} (A={a_ids:?})"
         );
     }
+}
+
+/// The legacy single-timestamp cursor is still accepted, and this is its only
+/// consumer in the tree — without it the `before_timestamp` arm of
+/// `TraceListParams` has no caller at all and could rot unnoticed.
+///
+/// Its contract is NOT the compound cursor's. A bare timestamp cannot separate
+/// rows that share a second, so the handler widens it to
+/// `(ts, "\u{10ffff}")` — strictly before the largest possible task_id at that
+/// second — which re-serves the tie rows instead of dropping them. So the
+/// property to assert here is **no loss**, and overlap by design; asserting
+/// no-overlap would be asserting the compound cursor's contract against the
+/// arm that exists precisely because it cannot offer it.
+#[tokio::test]
+async fn legacy_before_timestamp_cursor_loses_nothing() {
+    let (_tmp, db) = seed_db(5).await;
+
+    let req_a = JsonRpcRequest::with_id("trace.list", Some(json!({"limit": 2})), json!(1));
+    let resp_a = handle_list(req_a, db.clone(), empty_session_store(&_tmp), None).await;
+    let result_a = resp_a.result.unwrap();
+    let last_ts = result_a["next_cursor"]["last_timestamp"].as_i64().unwrap();
+
+    let req_b = JsonRpcRequest::with_id(
+        "trace.list",
+        Some(json!({"limit": 2, "before_timestamp": last_ts})),
+        json!(2),
+    );
+    let resp_b = handle_list(req_b, db, empty_session_store(&_tmp), None).await;
+    let result_b = resp_b.result.unwrap();
+
+    let a_ids: Vec<&str> = result_a["traces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["task_id"].as_str().unwrap())
+        .collect();
+    let b_ids: Vec<&str> = result_b["traces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["task_id"].as_str().unwrap())
+        .collect();
+
+    // Seeded newest-first as task-4 .. task-0, so page A is [task-4, task-3]
+    // and the next unseen row is task-2. It must be on page B: a cursor that
+    // skipped it would be losing rows, which is the failure this arm's
+    // sentinel exists to avoid.
+    assert_eq!(a_ids, ["task-4", "task-3"], "unexpected page A");
+    assert!(
+        b_ids.contains(&"task-2"),
+        "legacy cursor skipped the next unseen row (A={a_ids:?}, B={b_ids:?})"
+    );
+    for entry in result_b["traces"].as_array().unwrap() {
+        assert!(
+            entry["last_timestamp"].as_i64().unwrap() <= last_ts,
+            "legacy cursor returned a row newer than the cursor: {entry}"
+        );
+    }
+}
+
+/// A cursor of the wrong shape must be refused. It used to be read as "no
+/// params": the request succeeded and returned page one, so a client paging
+/// with a stale cursor shape looped on the first page and was told nothing.
+#[tokio::test]
+async fn a_cursor_of_the_wrong_shape_is_refused_not_ignored() {
+    let (_tmp, db) = seed_db(5).await;
+
+    let req = JsonRpcRequest::with_id(
+        "trace.list",
+        // The exact mistake this file used to make: a compound cursor handed
+        // to the i64 key.
+        Some(json!({"limit": 2, "before_timestamp": {"last_timestamp": 1, "task_id": "task-1"}})),
+        json!(1),
+    );
+    let resp = handle_list(req, db, empty_session_store(&_tmp), None).await;
+    assert!(
+        !resp.is_success(),
+        "a params object that cannot deserialize must not be answered with page one: {:?}",
+        resp.result
+    );
 }
 
 #[tokio::test]

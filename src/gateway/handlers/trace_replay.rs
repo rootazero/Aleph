@@ -285,8 +285,27 @@ pub async fn handle_list(
     sessions: Arc<dyn SessionStore>,
     audit: Option<SecurityAuditLog>,
 ) -> JsonRpcResponse {
+    // A params object that does not deserialize is NOT "no params". Every
+    // field here is `#[serde(default)]`, so `{}` and a missing `params` both
+    // parse; the only way this fails is a field of the wrong TYPE — a cursor
+    // in the wrong shape, most likely. `unwrap_or_default()` answered that
+    // with `TraceListParams::default()`: no cursor and the 50-row default
+    // limit, i.e. page one again, reported as success. A caller paging through
+    // an admin enumeration would loop on the first page forever and never be
+    // told why. `gateway_trace_replay_rpc::list_cursor_advances_without_overlap`
+    // spent the change from a single-timestamp cursor to the compound one
+    // inside this hole.
     let params: TraceListParams = match request.params.as_ref() {
-        Some(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
+        Some(v) => match serde_json::from_value(v.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("trace.list: invalid params: {e}"),
+                )
+            }
+        },
         None => TraceListParams::default(),
     };
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
