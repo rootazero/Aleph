@@ -369,13 +369,14 @@ mod tests {
     /// `the_compression_layer_declines_an_already_encoded_response` above,
     /// which builds the same layer over a stub and therefore runs everywhere.
     /// It had to move: this test discovers its asset from
-    /// `ControlPlaneAssets`, `interfaces/webchat/dist/` is gitignored and
-    /// produced by `just wasm`, and on a bare checkout — including this
-    /// crate's own CI job, which runs `cargo test` with no WASM toolchain —
-    /// the embed is empty and this returns early. A test that returns early
-    /// passes, and a pass that checked nothing is shaped exactly like a pass
-    /// that checked something. The claim that the 22 MB wasm is not
-    /// double-encoded was resting on that.
+    /// `ControlPlaneAssets`, which embeds `interfaces/webchat/dist/` at compile
+    /// time. Those files are tracked precisely so a bare checkout — including
+    /// this crate's own CI job, which runs `cargo test` with no WASM toolchain —
+    /// has them; but twice now a commit has dropped them from git (033814185
+    /// 2026-08-13, 0dc1ff85a 2026-08-28) and each time the embed went empty and
+    /// this returned early. A test that returns early passes, and a pass that
+    /// checked nothing is shaped exactly like a pass that checked something.
+    /// The claim that the 22 MB wasm is not double-encoded was resting on that.
     ///
     /// What is left here still needs the asset and cannot be faked: only a
     /// real embedded `.br` sibling proves `serve_static_or_index` picks it.
