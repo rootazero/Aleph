@@ -42,6 +42,39 @@ pub(crate) fn sanitize_key_for_dir(key: &str) -> String {
     }
 }
 
+/// A session directory name does NOT identify its session key on Windows, and
+/// nothing may treat it as one there.
+///
+/// On POSIX the forward map only touches characters (`/`, `\\`, NUL) a session
+/// key cannot contain, so the name IS the key and reading it as one is right.
+///
+/// On Windows [`sanitize_key_for_dir`] also sends `:` — the key's own separator
+/// — to `_`, which is legal inside an agent id. The projection is therefore
+/// many-to-one and NOT invertible: `agent:main:main:s1` (a main session at
+/// epoch 1) and `agent:main_main:s1` (an agent literally named `main_main`) are
+/// different keys that both land on `agent_main_main_s1`, and the name cannot
+/// say which was written. `two_real_keys_collide_on_one_windows_dir_name` holds
+/// that fact down.
+///
+/// So there is no inverse to write, and two attempts at one have now been
+/// removed. The first proposed the all-`_`-to-`:` reading and validated it by
+/// projecting back onto the name — a test EVERY candidate passes by
+/// construction, so it accepted a wrong key with full confidence. The second
+/// enumerated the readings and required a unique one; that is sound, and it
+/// declines on the ordinary shapes above, which makes it a predicate that is
+/// false on every real input — the same thing as not being there, but shaped
+/// like a feature.
+///
+/// The consequence is that `migration::rebuild_metadata_from_transcript` cannot
+/// label a repaired Windows session by its key, and falls back to generic
+/// agent/type labels. That is the honest answer to an unanswerable question.
+/// Making it answerable means a reversible forward map (percent-escaping `:`
+/// rather than collapsing it) plus a rename migration for existing directories
+/// — a real change, not a patch to the reader.
+///
+/// Recorded here, beside the forward map, because this is a property OF that
+/// map and the next person to need an inverse will look here first.
+
 /// Read the epoch of a session directory `name` given the already-sanitized
 /// base `pattern`. Returns `Some(n)` only when `name` is `pattern` followed by
 /// a distinct `<sep>s{n}` epoch segment; `None` for the epoch-0 base dir or an
@@ -1488,6 +1521,65 @@ mod epoch_tests {
             ..Default::default()
         };
         (FileSessionStore::new(config).expect("store"), dir)
+    }
+
+    /// `sanitize_key_for_dir` is many-to-one on Windows, so a directory name
+    /// cannot identify the key that produced it. Two REAL keys — different
+    /// agent ids, different epochs — land on the same name.
+    ///
+    /// This is the premise for there being no inverse, and it is asserted
+    /// rather than left in prose because prose does not go red. It runs on
+    /// every platform: the collision is a property of the Windows branch of the
+    /// forward map, and a Windows-only test would leave it falsifiable only in
+    /// CI. Two inverses have already been written and removed here; the next
+    /// attempt should fail against this first.
+    #[test]
+    fn two_real_keys_collide_on_one_windows_dir_name() {
+        use crate::routing::session_key::SessionKey;
+        let a = "agent:main:main:s1";
+        let b = "agent:main_main:s1";
+        assert!(
+            SessionKey::from_key_string(a).is_some(),
+            "premise gone: {a} no longer parses"
+        );
+        assert!(
+            SessionKey::from_key_string(b).is_some(),
+            "premise gone: {b} no longer parses"
+        );
+        assert_ne!(
+            SessionKey::from_key_string(a),
+            SessionKey::from_key_string(b),
+            "these were supposed to be DIFFERENT keys"
+        );
+        assert_eq!(
+            sanitize_windows_style(a),
+            sanitize_windows_style(b),
+            "the collision everything above rests on is gone"
+        );
+    }
+
+    /// What `sanitize_key_for_dir` does on its Windows branch, available on
+    /// every platform so the test above can state the Windows premise anywhere.
+    /// Deliberately not exported: production has exactly one forward map and
+    /// this must not become a second one. The test below is what stops it
+    /// drifting away from the real one.
+    fn sanitize_windows_style(key: &str) -> String {
+        key.replace(['/', '\\', '\0'], "_")
+            .replace([':', '*', '?', '"', '<', '>', '|'], "_")
+    }
+
+    #[test]
+    fn the_local_windows_projection_agrees_with_production() {
+        let key = "agent:main:main:s1";
+        if cfg!(windows) {
+            // Same function; this is the whole guarantee.
+            assert_eq!(sanitize_key_for_dir(key), sanitize_windows_style(key));
+        } else {
+            // POSIX leaves `:` alone, which is exactly why the collision above
+            // cannot be observed through `sanitize_key_for_dir` here.
+            assert_eq!(sanitize_key_for_dir(key), key);
+            assert_eq!(sanitize_windows_style(key), "agent_main_main_s1");
+        }
     }
 
     // The epoch parser must read `s{n}` regardless of whether the base and its

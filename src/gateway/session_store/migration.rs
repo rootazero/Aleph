@@ -637,7 +637,21 @@ async fn rebuild_metadata_from_transcript(
     // Derive what the key encodes; a key that doesn't parse (shouldn't happen
     // for a dir the store itself created) still yields a listable session,
     // just with fallback agent/type labels.
-    let parsed = crate::gateway::router::SessionKey::from_key_string(dir_name);
+    //
+    // On Windows the directory name is NOT the key: `sanitize_key_for_dir`
+    // maps `:` -> `_`, `:` is the key's own separator, and `_` is legal inside
+    // an agent id — so the projection is many-to-one and this parse fails for
+    // every session the store ever wrote there. The repaired session is listed
+    // under the fallback labels below.
+    //
+    // That is the honest answer, not a gap waiting for a smarter reader. Two
+    // inverses were written here and both removed: `agent:main:main:s1` and
+    // `agent:main_main:s1` are different real keys that produce the same
+    // directory name, so no function of the name alone can tell them apart.
+    // See `file_backend::two_real_keys_collide_on_one_windows_dir_name`.
+    // Fixing it means a reversible forward map plus a rename migration.
+    let key = dir_name.to_string();
+    let parsed = crate::gateway::router::SessionKey::from_key_string(&key);
     let (agent_id, session_type) = match &parsed {
         Some(crate::gateway::router::SessionKey::Main { agent_id, .. }) => {
             (agent_id.clone(), "main")
@@ -694,7 +708,7 @@ async fn rebuild_metadata_from_transcript(
     });
 
     Ok(Some(SessionMetadata {
-        key: dir_name.to_string(),
+        key,
         agent_id,
         session_type: session_type.to_string(),
         created_at,
@@ -925,9 +939,29 @@ mod repair_tests {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(repaired.key, "agent:main:main:s1");
-        assert_eq!(repaired.agent_id, "main");
-        assert_eq!(repaired.session_type, "main");
+        // The repaired key is the DIRECTORY NAME, which is the session key on
+        // POSIX and its lossy projection on Windows — `sanitize_key_for_dir`
+        // sends `:` to `_` there and nothing can undo that (see
+        // `file_backend::two_real_keys_collide_on_one_windows_dir_name`). So
+        // the expectation is derived from the forward map that owns the rule,
+        // not restated as a `cfg!(windows)` of its own: a second copy of a
+        // platform rule is how the two come to disagree.
+        let dir_name =
+            crate::gateway::session_store::file_backend::sanitize_key_for_dir("agent:main:main:s1");
+        assert_eq!(repaired.key, dir_name);
+        // Same reason for the labels: they are read off whatever that key
+        // parses as, so where the name survives the projection they are the
+        // real ones, and where it does not they are the documented fallback.
+        // Asked of the parser rather than assumed, so this says the same thing
+        // the production code does.
+        let (want_agent, want_type) =
+            if crate::gateway::router::SessionKey::from_key_string(&dir_name).is_some() {
+                ("main", "main")
+            } else {
+                ("main", "ephemeral")
+            };
+        assert_eq!(repaired.agent_id, want_agent);
+        assert_eq!(repaired.session_type, want_type);
         assert_eq!(repaired.message_count, 2);
         assert_eq!(
             repaired.derived_title.as_deref(),

@@ -303,22 +303,27 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
         let mut cmd = tokio::process::Command::new(&command.program);
         cmd.args(&command.args)
             .current_dir(&self.worktree_path)
-            .envs(command.env.iter());
-        // SAN-006: only inject CARGO_TARGET_DIR when the child is a cargo
-        // invocation. CARGO_TARGET_DIR is cargo's optimisation hint, but a
-        // non-cargo command that reads the variable for its own purposes
-        // (custom build scripts, CI tools) would see a worktree-relative
-        // path it never expected, and could write artifacts outside the
-        // worktree. Match on the basename so `/usr/local/bin/cargo`,
-        // `./target/debug/cargo`, and `cargo` all qualify.
-        if std::path::Path::new(&command.program)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n == "cargo")
-        {
-            cmd.env("CARGO_TARGET_DIR", self.worktree_path.join("target"));
-        }
-        cmd.stdin(std::process::Stdio::piped())
+            .envs(command.env.iter())
+            // Injected unconditionally, and it has to stay that way. `program`
+            // here is never `cargo`: every caller that reaches this sandbox
+            // spawns an *interpreter* — `code_exec` uses `language.runtime()`
+            // (`bash` / `sh` / `python` / `node`), `code_check` hardcodes
+            // `bash`, and the `bash` tool likewise — with the cargo invocation
+            // living inside `args` as shell text. So a `program == "cargo"`
+            // predicate is false on every production path, and narrowing to it
+            // (SAN-006, f4a994ee2) silently deleted the redirect that
+            // `subagent_spawner` documents as the point of the whole
+            // WorktreeSandbox: keeping a subagent's cargo builds out of the
+            // parent's target dir.
+            //
+            // The stated risk of the narrowing does not exist either: the value
+            // is an ABSOLUTE path inside the worktree, so a non-cargo tool that
+            // honours it writes *within* the isolation boundary, not outside it.
+            //
+            // `isolated_subagent_command_runs_in_worktree_via_override` is the
+            // guard — it runs a shell, which is the shape that matters.
+            .env("CARGO_TARGET_DIR", self.worktree_path.join("target"))
+            .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);

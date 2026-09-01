@@ -54,8 +54,42 @@ jobs:
       # them the scan reported "Clippy exited with status 101" and
       # "build-finished.success: false" after 62 s — a scan that cannot build
       # says nothing about the code, so both its red and its green would have
-      # been uninformative. Same list the Test and Lint jobs in
-      # aleph-core-ci.yml install.
+      # been uninformative.
+      #
+      # Two lists, and it needs both. The first is what the Test job installs.
+      # The second is the Tauri set, which no other job on this workflow's path
+      # needs: `Lint` scopes clippy to `-p alephcore -p aleph-desktop`, while
+      # this job scans `--workspace`, so it is the only one that compiles
+      # `aleph-desktop-linux` / `aleph-desktop-shell` and therefore the only one
+      # that reaches `glib-sys`. Its build script fails with "Package
+      # 'glib-2.0' ... not found" — which rust-doctor surfaced only as "Clippy
+      # exited with status 101", the reason the diagnostic step below exists.
+      # `cargo clippy --workspace --all-targets` is the heaviest build in this
+      # repository — the Lint job pins `-j1` for a *narrower* command on the
+      # strength of a measured ~11.5 GB in a single rustc — and rust-doctor
+      # runs it twice (once as the diagnostic below, once inside its own scan).
+      # On a 16 GB runner that is exit 143, which is what this job did after the
+      # glib fix let it get far enough to try. Reclaim the ~25 GB of unused
+      # preinstalled SDKs, then put 16 GB of swap on /mnt, same as the test and
+      # loom jobs in aleph-core-ci.yml.
+      - name: Reclaim runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+                      /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Enlarge swap
+        run: |
+          set -euo pipefail
+          sudo swapoff -a || true
+          sudo rm -f /mnt/swapfile /swapfile
+          sudo fallocate -l 16G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+
       - name: Install system dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y \
@@ -64,7 +98,35 @@ jobs:
             libxcb-shape0-dev libxcb-xtest0-dev libxkbcommon-dev libxss-dev \
             libx11-dev libxrandr-dev libxi-dev libxtst-dev \
             libssl-dev libwayland-dev libpipewire-0.3-dev libdbus-1-dev \
-            libdrm-dev libgbm-dev libegl-dev libxdo-dev clang libclang-dev
+            libdrm-dev libgbm-dev libegl-dev libxdo-dev clang libclang-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libayatana-appindicator3-dev
+
+      # `aleph-desktop-shell` is a workspace member, so any workspace-wide
+      # clippy compiles it — and `tauri-build` fails outright when a file named
+      # in `externalBin` is missing. One of several reasons this job reported
+      # "Clippy exited with status 101" a minute in — do not read this comment
+      # as the complete list; the diagnostic step below is what enumerates them,
+      # and it earned its keep by finding the glib one after this was written.
+      # The placeholders are empty files it never executes.
+      - name: Stage externalBin placeholders
+        shell: bash
+        run: bash scripts/stage_shell_placeholders.sh
+
+      # rust-doctor runs clippy itself and reports only "Clippy exited with
+      # status 101" — the compiler's own stderr never reaches the log. Three
+      # rounds were spent guessing what that 101 was (wrong toolchain, missing
+      # protoc/X11 headers, missing externalBin placeholders — all three were
+      # real, none of them was the last one). Running the same command here
+      # first puts the actual error in the log, and warms the cache the scan
+      # then reuses, so it is not pure cost. Non-gating: this step's job is to
+      # narrate, the scan's job is to judge.
+      - name: Clippy (diagnostic — rust-doctor reports only the exit code)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy --workspace --all-targets --message-format=short 2>&1 | tail -n 80
 
       # The npm launcher resolves the prebuilt binary for the runner rather
       # than compiling rust-doctor from source on every run. The version is
@@ -90,13 +152,17 @@ jobs:
           fi
 
           # `--blocking error` states the gate instead of inheriting it. This
-          # repo carries 158 `hardcoded_credential` hits and every one examined
-          # is a placeholder or prose: `sk-ant-YOUR_ANTHROPIC_API_KEY` in
-          # config.search.example.toml, and SECURITY.md quoting the very regex
-          # (`-----BEGIN PRIVATE KEY-----`) that the secret scanner matches on.
-          # Blocking main on those would train everyone to ignore the job,
-          # which is the failure mode a gate has to avoid; they stay visible as
-          # advisories in the summary and the log.
+          # repo carries ~158 `hardcoded_credential` hits and every one examined
+          # is a placeholder or prose: the Anthropic key placeholder in
+          # config.search.example.toml, and SECURITY.md quoting the very
+          # private-key regex the secret scanner matches on. Blocking main on
+          # those would train everyone to ignore the job, which is the failure
+          # mode a gate has to avoid; they stay visible as advisories in the
+          # summary and the log.
+          #
+          # (Spelling those two literals out here added two more findings to
+          # the count this paragraph is about — the rule reads its own
+          # documentation. Described, not quoted, for that reason.)
           set +e
           rust-doctor . --yes --verbose --blocking error "${scope_arguments[@]}" 2>&1 | tee scan.txt
           scan_status=${PIPESTATUS[0]}

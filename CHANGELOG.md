@@ -7,8 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [26.9.1]
 
-Five days, 517 commits, 809 files, +98.4k/-11.4k (of which +58.2k/-10.5k is
-source). Two features and one very large sweep. First, **the terminal becomes a
+Five days, 549 commits, 822 files, +99.7k/-9.0k — of which +58.6k/-8.0k is
+source, measured against `v26.8.27` and excluding the committed Panel dist.
+Two features and one very large sweep. First, **the terminal becomes a
 first-class surface**: a VT emulator lives in the gateway, holds the screen
 server-side, and ships dirty-row patches to a canvas2d grid in the Panel —
 which means the wire carries a *screen*, not a byte stream, and every reader
@@ -119,6 +120,17 @@ call site — it is at the type that let the two answers look alike.
   becomes a panic in one subsystem and a recovered guard in the next.
 - **`looping` refunds an iteration on `Active → Paused` with an unrun tick**, so
   pausing no longer costs a turn that never happened.
+- **A test still held the pre-lift rule after the macOS fork ban was lifted.**
+  `elevated_subprocess_denied_by_approval_returns_error` asserted that a
+  subprocess-spawn capability is an escalation and gets denied — true on Linux,
+  and no longer true anywhere else, because `session_baseline()` admits spawn
+  on every non-Linux platform. The test carried its own copy of that platform
+  rule, so when the owning constant changed the two silently disagreed and the
+  test failed on macOS and Windows while reading like a defect in the approval
+  gate. It now asks `SandboxCapabilities::session_baseline().spawn_subprocess`
+  and asserts the real behaviour on both sides of that answer: denial where
+  spawn is elevated, and — where it is not — that the gate is never consulted
+  at all, so a skipped denial can never be read as a grant.
 - **The macOS shell fork ban is lifted for shells,** which never bought security
   (`(deny process-fork)` does not stop `rm -rf`, only compound commands) and did
   break every multi-command invocation; the per-user `TMPDIR` is granted.
@@ -151,14 +163,91 @@ call site — it is at the type that let the two answers look alike.
   continuation run — the exact duplication it exists to prevent, introduced by
   the edit whose commit message says it fixed it. The bound is a named constant
   now, because the literal reads like a count.
+- **`trace.list` answered a malformed cursor with page one, and called it
+  success.** Every field of `TraceListParams` is `#[serde(default)]`, so the
+  only way the params object fails to deserialize is a field of the wrong type
+  — and `unwrap_or_default()` turned that into "no cursor, default limit". A
+  client paging with a stale cursor shape looped on the first page forever and
+  was never told why. It is `INVALID_PARAMS` now. The integration test that
+  should have caught this had spent the move from the single-timestamp cursor
+  to the compound `{ last_timestamp, task_id }` inside that same hole: it fed
+  the compound cursor back into the `i64` key, so its "no overlap between
+  adjacent pages" assertion had been comparing page A against a second copy of
+  page A. Both cursor shapes now have a test, and so does the refusal.
+- **A Windows session directory name cannot identify its session key**, which
+  is now written down and asserted instead of quietly worked around.
+  `rebuild_metadata_from_transcript` parses the *directory name* to recover the
+  key, the agent id and the session type — correct on POSIX, where
+  `sanitize_key_for_dir` is the identity, and wrong on Windows, where it maps
+  `:` (the key's own separator) to `_`. So a repaired session came back under
+  fallback labels there.
+  Two inverses were written for it and both removed. The first proposed the
+  all-`_`-to-`:` reading and validated it by projecting back onto the name — a
+  test *every* candidate passes by construction, since turning some `_` into
+  `:` and mapping them back is the identity — so it returned a wrong key with
+  full confidence. The second enumerated the readings and demanded a unique
+  one; that is sound, and it declines on the ordinary shapes, which makes it a
+  predicate false on every real input: the same thing as absent, shaped like a
+  feature. The reason both fail is one fact, now pinned by
+  `two_real_keys_collide_on_one_windows_dir_name`: `agent:main:main:s1` (a main
+  session at epoch 1) and `agent:main_main:s1` (an agent named `main_main`) are
+  different keys that land on the same directory name, because `_` is legal
+  inside an agent id. Nothing reading only the name can separate them.
+  So the reader keeps the fallback labels, and the property lives beside the
+  forward map where the next person to want an inverse will find it. The
+  repair test asks `sanitize_key_for_dir` and the key parser what to expect
+  instead of asserting the POSIX answer on every platform — carrying its own
+  copy of the platform rule is what made it fail on Windows both times this
+  code moved. The real
+  fix is a reversible forward map — percent-escaping `:` rather than collapsing
+  it — plus a rename migration for existing directories, which is a change of
+  its own and not a repair to the reader.
 - **Four Windows-only test failures** in `session_store::migration`: the fixture
   joined a session *key* to a path, and `:` is illegal in a Windows filename —
   production never does that, it routes every key through
   `sanitize_key_for_dir`.
+- **`aleph-server` died at startup on Windows with `STATUS_STACK_OVERFLOW`**,
+  taking every integration test that starts a server with it — 13 of them, all
+  failing on the same line, which is what a shared fixture looks like when the
+  thing it fixtures is broken. `worker_stack_size()` raises tokio's worker and
+  blocking threads to 256 MB (debug) / 32 MB (release), and the comment above
+  it measures exactly why that is needed: `engine.execute`'s future alone is
+  ~350 KB and a debug build allocates a full-size temporary per nested future.
+  But `rt.block_on(async_main(args))` runs `async_main` on the *calling*
+  thread, and `thread_stack_size` sizes the threads tokio creates — the caller
+  is not one of them. So the one future all that reasoning was about ran on
+  whatever stack the OS gave `main`: 8 MB and growable on Linux and macOS,
+  where it survived the shallow paths and hid the problem completely, and a
+  fixed 1 MB from the PE header on Windows, where it did not. `async_main` now
+  runs on a thread sized from the same `worker_stack_size()` the workers use —
+  rather than a Windows `/STACK:` link argument, which would have put a second
+  copy of the number in a second file with nothing keeping the two equal.
+  Scope of the observation, stated precisely: what crashed is a **debug** build,
+  the one CI spawns, whose measured appetite is far larger. Whether the release
+  build shipped in the Windows app also exceeded the 1 MB main-thread stack was
+  never measured, so this is not a claim that it did — the fix removes the
+  question either way, since both profiles now get a stack chosen for them.
+- **A worktree-isolated subagent stopped getting its own `target/` dir.**
+  `WorktreeSandbox` injects `CARGO_TARGET_DIR=<worktree>/target` so a subagent's
+  cargo builds stay out of the parent's target directory — that redirect is what
+  `subagent_spawner` documents as the point of the whole sandbox. A late review
+  pass narrowed the injection to commands whose program is `cargo`, on the
+  reasoning that another tool reading the variable might write outside the
+  worktree. Both halves are wrong. The value is an *absolute* path inside the
+  worktree, so a tool that honours it writes within the isolation boundary, not
+  outside it; and `program` is never `cargo` on any production path — every
+  caller spawns an interpreter (`code_exec` uses `language.runtime()`,
+  `code_check` and the `bash` tool hardcode `bash`) with the cargo invocation
+  living inside the shell text. So the predicate was false everywhere and the
+  feature was silently deleted. Restored unconditionally, with the reasoning
+  written at the injection site so the next narrowing has to argue with it.
 - **The Rust Doctor workflow wrote its diagnosis only to the step summary,** so
   its failures — it has never been green since it landed — said nothing at all
   to anyone reading the logs. It also checked out without submodules, which
-  `include_dir!` needs at compile time.
+  `include_dir!` needs at compile time, added clippy to a different toolchain
+  than the pinned one, ran without the system libraries or the `externalBin`
+  placeholders a workspace-wide build needs, and declared no blocking level. It
+  now runs; the score it reports is a starting number, not a passing one.
 
 ## [26.8.27]
 

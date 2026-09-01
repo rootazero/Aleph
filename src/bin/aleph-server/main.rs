@@ -230,7 +230,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .enable_all()
         .thread_stack_size(worker_stack_size())
         .build()?;
-    rt.block_on(async_main(args))
+
+    // `block_on` runs `async_main` on THIS thread, and `thread_stack_size`
+    // does not reach it — it sizes the threads tokio creates, and the caller
+    // of `block_on` is not one of them. So the future the comment below sizes
+    // a stack for was the one future still running on whatever stack the OS
+    // handed `main`.
+    //
+    // On Linux and macOS that is 8 MB and grows, which was enough for the
+    // shallow paths and hid this completely. On Windows the main thread's
+    // stack is fixed in the PE header at 1 MB, and `aleph-server` died at
+    // startup with STATUS_STACK_OVERFLOW (0xc00000fd) — every one of the 13
+    // `provider_rpc_probe` tests failed identically, because each of them
+    // starts a server first.
+    //
+    // Run it on a thread we size ourselves, from the SAME function the worker
+    // threads use. Setting a Windows linker `/STACK:` instead would have put
+    // a second copy of this number in a second file with no way to keep the
+    // two agreeing.
+    let stack_size = worker_stack_size();
+    let worker = std::thread::Builder::new()
+        .name("aleph-main".to_string())
+        // `Box<dyn Error>` is not `Send`, so the message crosses the join, not
+        // the error object.
+        .stack_size(stack_size)
+        .spawn(move || rt.block_on(async_main(args)).map_err(|e| e.to_string()))?;
+    match worker.join() {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(message)) => Err(message.into()),
+        // A panic has already printed its own message and location; this only
+        // has to make the exit code non-zero rather than swallow it.
+        Err(_) => Err("aleph-server terminated abnormally".into()),
+    }
 }
 
 /// Stack size for tokio's worker and blocking threads.
