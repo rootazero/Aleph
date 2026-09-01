@@ -32,8 +32,18 @@ jobs:
 
       # rust-doctor shells out to `cargo clippy` inside the scanned workspace.
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+
+      # `components: clippy` on the step above installs onto whatever *stable*
+      # resolves to, and `rust-toolchain.toml` pins the workspace to 1.96.0 —
+      # so cargo inside this repo used a toolchain that had no clippy, and
+      # rust-doctor exited 2 with "'cargo-clippy' is not installed for the
+      # toolchain '1.96.0-x86_64-unknown-linux-gnu'". Adding the component
+      # here runs under the override, so it lands on the pinned toolchain.
+      # `aleph-core-ci.yml`'s lint job already carries this exact workaround.
+      - name: Add clippy to the pinned toolchain
+        run: |
+          rustup show active-toolchain
+          rustup component add clippy
 
       - uses: Swatinem/rust-cache@v2
 
