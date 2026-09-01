@@ -993,7 +993,12 @@ impl GroupChatBroadcaster {
     /// leave and re-enter the group (the notice was history-only).
     async fn post_system(&self, team_id: &str, text: &str) {
         publish_team_event(team_id, "system", serde_json::json!({ "text": text }));
-        let _ = self
+        // The live publish above and this durable write are two legs of one
+        // notification (per the function's own docstring). A swallowed
+        // persistence error becomes a tracer-less hole in subsequent rounds,
+        // so surface it at warn level — same as the storm-guard path above
+        // that calls into here.
+        if let Err(e) = self
             .msg_store
             .send_message(NewMessage {
                 team_id: team_id.to_string(),
@@ -1006,7 +1011,16 @@ impl GroupChatBroadcaster {
                 attachments: Vec::new(),
                 author_user_id: None,
             })
-            .await;
+            .await
+        {
+            tracing::warn!(
+                team_id,
+                %text,
+                error = %e,
+                "group-chat: failed to persist system notice; live broadcast \
+                 delivered but transcript hole will mislead later rounds",
+            );
+        }
     }
 }
 

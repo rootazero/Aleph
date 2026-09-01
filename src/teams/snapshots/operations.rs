@@ -226,6 +226,9 @@ pub async fn restore_snapshot(
         members_to_add: members_to_add.clone(),
         members_to_remove: members_to_remove.clone(),
         edges_restored: edges_to_restore,
+        // populated below once we know whether the team was recreated
+        recreated_team: false,
+        original_team_id: None,
     };
 
     if dry_run {
@@ -247,6 +250,9 @@ pub async fn restore_snapshot(
                 leader_id: payload.team.leader_id.clone(),
             })
             .await?;
+        // Mark the recreate so the diff below can surface it to the caller;
+        // every audit anchor (created_at, owner_user_id's adoption window)
+        // now refers to the new row, not the snapshot's.
         // `NewTeam` carries no protocol field and `create_team` always sets it
         // to None, so the leader-authored operating protocol — captured in
         // `payload.team.protocol` and injected verbatim into every member's
@@ -270,6 +276,7 @@ pub async fn restore_snapshot(
     } else {
         team_id.clone()
     };
+    let team_was_recreated = live_team.is_none();
 
     // 2. Members. Preserve `kind` and ACP routing fields so external CLI
     // members survive snapshot/restore round-trips.
@@ -354,8 +361,15 @@ pub async fn restore_snapshot(
 
     // Point the caller at the team the restore actually landed on (differs
     // from the snapshot's team_id only in the recreate-after-delete case).
+    // A recreate-after-delete path additionally surfaces the original id so
+    // the caller can audit the gap (every anchor — created_at, owner
+    // adoption window — refers to the new row, not the snapshot's).
     let mut diff = diff;
     diff.team_id = effective_team_id;
+    if team_was_recreated {
+        diff.recreated_team = true;
+        diff.original_team_id = Some(meta.team_id.clone());
+    }
     Ok(diff)
 }
 
