@@ -43,8 +43,15 @@ fn remove_pid_file() {
 /// Check if a process with the given PID is running
 #[cfg(unix)]
 fn is_process_running(pid: u32) -> bool {
-    // SAFETY: pid is a positive u32 cast to i32; kill(0) checks existence only.
-    unsafe { libc::kill(pid as i32, 0) == 0 }
+    // SAFETY: `kill(pid_i32, 0)` is a permission/existence probe; it sends no
+    // signal. `pid_i32` must be positive so the kernel does not interpret it
+    // as a process-group ID (which would silently target the wrong group when
+    // PIDs exceed `i32::MAX`). Mirror `send_signal`'s try_into discipline.
+    let pid_i32 = match i32::try_from(pid) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    unsafe { libc::kill(pid_i32, 0) == 0 }
 }
 
 #[cfg(not(unix))]
@@ -163,8 +170,39 @@ pub fn start(
     // If daemonize, we rely on the server to fork itself.
     // Either way, spawn and don't wait.
     match cmd.spawn() {
-        Ok(child) => {
+        Ok(mut child) => {
             let child_pid = child.id();
+
+            // Liveness probe: if the child dies immediately (port in use,
+            // missing config, panic on startup), `cmd.spawn()` still succeeds.
+            // Polling for up to ~500ms catches that before we write the PID
+            // file or report success — otherwise `daemon status` will return
+            // `Not running (stale PID N)` with no indication the start failed.
+            for _ in 0..10 {
+                if let Ok(Some(_)) = child.try_wait() {
+                    let status = child.wait().ok();
+                    let detail = status
+                        .map(|s| format!("exit status: {s:?}"))
+                        .unwrap_or_else(|| "process exited immediately".to_string());
+                    // Don't leave a stale PID file behind.
+                    remove_pid_file();
+                    let msg = format!(
+                        "spawned {} (PID {child_pid}) died before becoming ready: {detail}",
+                        binary.display()
+                    );
+                    if json {
+                        output::print_json(&serde_json::json!({
+                            "status": "error",
+                            "error": msg,
+                            "binary": binary.display().to_string(),
+                        }));
+                    } else {
+                        eprintln!("Failed to start Gateway: {msg}");
+                    }
+                    return Err(CliError::Other(msg));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
 
             // Write PID file so we can track it. Failures here are non-fatal
             // (the server is already spawned), but must be surfaced so users
@@ -289,7 +327,13 @@ pub fn stop(json: bool) -> CliResult<()> {
         }
         send_signal(pid, libc::SIGKILL);
         std::thread::sleep(std::time::Duration::from_millis(200));
-        remove_pid_file();
+        // Re-check PID ownership before removing the file: SIGKILL may have
+        // freed the PID slot before we got here, and a racing `start` could
+        // already have written a NEW PID for a fresh child. Removing
+        // unconditionally would clobber the new file.
+        if read_pid_file() == Some(pid) {
+            remove_pid_file();
+        }
 
         if json {
             output::print_json(&serde_json::json!({

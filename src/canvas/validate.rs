@@ -7,7 +7,7 @@
 //! committing, so a rejected batch never half-lands on disk.
 
 use aleph_protocol::canvas::{
-    check_title, CanvasDoc, CanvasOp, Shape, MAX_OPS_PER_APPLY, MAX_SHAPES,
+    check_title, CanvasDoc, CanvasOp, Shape, MAX_DOCUMENT_BYTES, MAX_OPS_PER_APPLY, MAX_SHAPES,
 };
 
 use super::store::CanvasError;
@@ -129,6 +129,24 @@ pub(super) fn apply_ops(doc: &mut CanvasDoc, ops: &[CanvasOp]) -> Result<(), Can
             },
             CanvasOp::DeleteDeck { id } => doc.decks.retain(|d| &d.id != id),
         }
+    }
+
+    // Document-byte budget: the per-shape / per-asset / per-op caps already
+    // stop any one field from being unbounded, but the AGGREGATE document was
+    // not capped. A member could submit 5000 shapes whose text/prompt/label
+    // fields each hold tens of KB, producing a JSON blob the server must
+    // deserialize, persist and broadcast. Check the wire-byte size after
+    // every apply so a single apply can never push the document past the
+    // budget. The cost is one JSON serialize per apply, well below the cost
+    // of writing the blob to disk.
+    let serialized = serde_json::to_vec(doc).map_err(|e| {
+        CanvasError::Internal(format!("failed to size-check canvas document: {e}"))
+    })?;
+    if serialized.len() > MAX_DOCUMENT_BYTES {
+        return Err(CanvasError::Invalid(format!(
+            "canvas document would be {} bytes after apply, exceeding the {MAX_DOCUMENT_BYTES}-byte document cap",
+            serialized.len()
+        )));
     }
     Ok(())
 }

@@ -34,7 +34,12 @@ fn get_patterns() -> &'static PiiPatterns {
         // so the entire base64 blob leaked past scrubbing. Catch it here so
         // the value is fully redacted before generic_secret runs (which then
         // does no work for Authorization: Basic ...).
-        api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|Bearer\s+[a-zA-Z0-9._\-]{8,}|Basic\s+[A-Za-z0-9+/=]{8,})\b").expect("static PII regex is valid"),
+        // Trailing `\b` is NOT used here: for short Base64 credentials like
+        // `Basic dGVzdDE=`, the final `=` is a word character, so `\b` after
+        // `=` never matches and the credential leaks past scrubbing. Use a
+        // negative lookahead instead — refuse to extend the match if another
+        // Base64 character follows (including padding `=`).
+        api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|Bearer\s+[a-zA-Z0-9._\-]{8,}|Basic\s+[A-Za-z0-9+/=]{8,})(?![A-Za-z0-9/+=])").expect("static PII regex is valid"),
         // Catch arbitrary secrets assigned to a credential-like key, regardless of
         // vendor prefix: `password=...`, `api_key: ...`, `token = "..."`, etc.
         // Preserves the key name; redacts only the value. Conservative over-match
@@ -181,5 +186,28 @@ mod tests {
         let scrubbed = scrub_pii("api_key='another secret value'");
         assert!(scrubbed.contains("api_key=[REDACTED]"), "got: {scrubbed}");
         assert!(!scrubbed.contains("another secret value"), "got: {scrubbed}");
+    }
+
+    #[test]
+    fn test_scrub_basic_auth_short_credential() {
+        // Short Base64 credential padded with `=` previously slipped past
+        // the `\b` boundary at the end of the api_key regex. Regression
+        // test: this MUST now redact the base64 blob.
+        let scrubbed = scrub_pii("Authorization: Basic dGVzdDE=");
+        assert!(scrubbed.contains("[REDACTED]"), "got: {scrubbed}");
+        assert!(!scrubbed.contains("dGVzdDE="), "got: {scrubbed}");
+
+        // Even shorter credential, no padding.
+        let scrubbed = scrub_pii("Authorization: Basic dGVzdA");
+        assert!(scrubbed.contains("[REDACTED]"), "got: {scrubbed}");
+        assert!(!scrubbed.contains("dGVzdA"), "got: {scrubbed}");
+    }
+
+    #[test]
+    fn test_scrub_bearer_token_negative_lookahead() {
+        // Bearer token must not bleed into a following Base64 char.
+        let scrubbed = scrub_pii("Authorization: Bearer abc123def==");
+        assert!(scrubbed.contains("[REDACTED]"), "got: {scrubbed}");
+        assert!(!scrubbed.contains("abc123def=="), "got: {scrubbed}");
     }
 }

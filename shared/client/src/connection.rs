@@ -221,6 +221,16 @@ pub struct AlephClient {
     /// Behind a lock because there can be more than one handshake — see
     /// [`AlephClient::role`].
     role: Arc<std::sync::Mutex<String>>,
+    /// Serialises the entire [`AlephClient::reconnect`] critical section.
+    ///
+    /// The earlier `is_connected()` early-return and the actual socket swap
+    /// were separate steps with a wide window between them: two concurrent
+    /// reconnect attempts could each pass the early-return, open a fresh
+    /// socket, and install a read loop, leaving the client with two live
+    /// generations and the pending map being cleared against the wrong one.
+    /// Holding this Tokio mutex from the early-return through the handshake
+    /// closes that TOCTOU window.
+    reconnect_lock: Arc<Mutex<()>>,
 }
 
 impl AlephClient {
@@ -279,6 +289,13 @@ impl AlephClient {
     /// negotiation failed, or the handshake was refused. The client is left
     /// disconnected and the caller may try again.
     pub async fn reconnect(&self, config: &CliConfig) -> CliResult<()> {
+        // Serialise the entire reconnect critical section: the previous
+        // version checked `is_connected()` and then opened the socket in two
+        // separate steps, letting two concurrent callers each pass the check
+        // and install a fresh read loop. Holding the lock through the whole
+        // sequence keeps `is_connected()` and the socket swap atomic with
+        // respect to other reconnect callers.
+        let _guard = self.reconnect_lock.lock().await;
         if self.is_connected() {
             return Ok(());
         }
@@ -385,6 +402,7 @@ impl AlephClient {
             url: url.to_string(),
             generation: generation.clone(),
             role: Arc::new(std::sync::Mutex::new(String::new())),
+            reconnect_lock: Arc::new(Mutex::new(())),
         };
 
         // Spawn read task with write access for responding to Server requests.

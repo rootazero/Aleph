@@ -157,8 +157,16 @@ struct PanelWebView: UIViewRepresentable {
                 guard !resolved else { return }
                 resolved = true
                 if approved {
-                    store.pin(host, fp)
-                    completionHandler(.useCredential, URLCredential(trust: trust))
+                    // pin() is now throws so a Keychain failure cannot leave
+                    // the cert silently un-pinned: fail-closed by treating a
+                    // pin failure as a decline rather than trusting the cert
+                    // through a path the operator thinks was locked down.
+                    do {
+                        try store.pin(host, fp)
+                        completionHandler(.useCredential, URLCredential(trust: trust))
+                    } catch {
+                        completionHandler(.cancelAuthenticationChallenge, nil)
+                    }
                 } else {
                     completionHandler(.cancelAuthenticationChallenge, nil)
                 }

@@ -1121,7 +1121,15 @@ pub async fn handle_catalog(
     let default_provider = config_guard.general.default_provider.clone();
 
     let entries = catalog::presets_for_modality(Modality::Chat);
-    let view = params.view();
+    let view = match params.view() {
+        Ok(v) => v,
+        Err(e) => {
+            // Unknown `view` value: fail-closed. Widening silently to `All`
+            // would have leaked rows the caller did not ask for, so return
+            // INVALID_PARAMS and let the caller fix the typo.
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, e.to_string());
+        }
+    };
 
     let mut items: Vec<CatalogEntry> = entries
         .into_iter()

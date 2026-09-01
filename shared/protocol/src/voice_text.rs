@@ -195,6 +195,14 @@ pub fn filter_transcript(text: &str) -> String {
 /// broken by a stray space. Shared by [`merge_utterance`] and the streaming
 /// decoders' committed-text accumulation, so display, wire, and lock-point
 /// joins cannot drift.
+///
+/// Punctuation that lives inside identifiers (`/`, `+`, `=`, `-`, `_`,
+/// `\`, `|`, `@`, `#`, `$`, `%`, `&`, `*`, `<`, `>`, `` ` ``, `~`) is
+/// treated as NOT breaking a word, so a streaming STT commit landing at
+/// `path/` does not turn `path/to` into `path/ to`, and `version=` does
+/// not become `version= 1`. Sentence-boundary punctuation (`.`, `,`, `!`,
+/// `?`, `;`, `:`) is still treated as breaking — the existing tests
+/// assert that behaviour.
 #[must_use]
 pub fn join_needs_space(prev: &str, next: &str) -> bool {
     let Some(a) = prev.chars().next_back() else {
@@ -203,7 +211,11 @@ pub fn join_needs_space(prev: &str, next: &str) -> bool {
     let Some(b) = next.chars().next() else {
         return false;
     };
-    (a.is_ascii_alphanumeric() || a.is_ascii_punctuation()) && b.is_ascii_alphanumeric()
+    let code_operator = matches!(
+        a,
+        '/' | '+' | '=' | '-' | '_' | '\\' | '|' | '@' | '#' | '$' | '%' | '&' | '*' | '<' | '>' | '`' | '~'
+    );
+    (a.is_ascii_alphanumeric() || a.is_ascii_punctuation()) && b.is_ascii_alphanumeric() && !code_operator
 }
 
 /// Assemble the final utterance text at the streaming lock point: the locked
@@ -344,5 +356,18 @@ mod tests {
         assert_eq!(merge_utterance("hello,", "world"), "hello, world");
         assert_eq!(merge_utterance("你好", "world"), "你好world");
         assert_eq!(merge_utterance("hello", "你好"), "hello你好");
+    }
+
+    #[test]
+    fn merge_keeps_code_operators_glued() {
+        // Streaming STT commits that land at `/`, `=`, `+`, `-`, `_`, `\`
+        // before the next fragment must not insert a space, otherwise paths,
+        // version strings, math and similar get mangled into nonsense.
+        assert_eq!(merge_utterance("path/", "to"), "path/to");
+        assert_eq!(merge_utterance("version=", "1"), "version=1");
+        assert_eq!(merge_utterance("a +", "b"), "a +b");
+        assert_eq!(merge_utterance("var_", "name"), "var_name");
+        assert_eq!(merge_utterance("user@", "host"), "user@host");
+        assert_eq!(merge_utterance("a<b", "c"), "a<b c");
     }
 }

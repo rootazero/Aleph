@@ -20,9 +20,15 @@ enum CertDecision: Equatable {
 
 /// Pinned TOFU trust store: `host:port -> SHA-256 fingerprint`. Mirrors the
 /// Rust `TrustStore` (`desktop/shell/src/cert_trust/store.rs`).
+///
+/// `pin` is fallible so the caller can surface a Keychain failure instead of
+/// silently trusting an un-pinned cert. The previous version dropped every
+/// non-success OSStatus on the floor, leaving the cert unpinned while the
+/// user believed the TOFU flow had locked it down. The contract change here
+/// is matched by `KeychainConnectionStore.save(_:)`, which already throws.
 protocol CertStore {
     func lookup(_ host: String) -> String?
-    func pin(_ host: String, _ fp: String)
+    func pin(_ host: String, _ fp: String) throws
 }
 
 /// Pure decision: compare the presented fingerprint against the pinned
@@ -51,9 +57,11 @@ func sha256Fingerprint(_ der: Data) -> String {
 
 /// Keychain-backed store. The whole `host:port -> fp` map is persisted as
 /// JSON in ONE generic-password item (mirrors `KeychainConnectionStore`'s
-/// `SecItem*` usage). Best-effort: a missing/corrupt item decodes to an
-/// empty map — fail toward "prompt", never crash, never auto-allow, same
-/// contract as the Rust `TrustStore::load`.
+/// `SecItem*` usage). Best-effort on read: a missing/corrupt item decodes to
+/// an empty map — fail toward "prompt", never crash, never auto-allow, same
+/// contract as the Rust `TrustStore::load`. Writes, by contrast, surface
+/// every non-success OSStatus via `throws` so a failed pin never silently
+/// leaves the cert unpinned.
 struct KeychainCertStore: CertStore {
     private let service = "ai.aleph.panel"
     private let account = "pinned-certs"
@@ -88,8 +96,13 @@ struct KeychainCertStore: CertStore {
         return map
     }
 
-    private func saveMap(_ map: [String: String]) {
-        guard let data = try? JSONEncoder().encode(map) else { return }
+    private func saveMap(_ map: [String: String]) throws {
+        // JSON encode of [String: String] cannot fail in practice; if a future
+        // change ever makes it fail, surface as KeychainError so the caller's
+        // error path stays consistent.
+        guard let data = try? JSONEncoder().encode(map) else {
+            throw KeychainError.unexpectedStatus(errSecInternalError)
+        }
         let updateStatus = SecItemUpdate(
             baseQuery as CFDictionary,
             [kSecValueData as String: data] as CFDictionary
@@ -99,19 +112,29 @@ struct KeychainCertStore: CertStore {
             var addQuery = baseQuery
             addQuery[kSecValueData as String] = data
             addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            SecItemAdd(addQuery as CFDictionary, nil)
+            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+            guard addStatus == errSecSuccess else {
+                throw KeychainError.unexpectedStatus(addStatus)
+            }
+            return
         }
+        // Any other status (errSecAuthFailed, errSecInteractionNotAllowed,
+        // errSecDecode, etc.) used to fall through silently. The whole point
+        // of TOFU is that the pinned fingerprint survives across launches —
+        // dropping a non-success status here meant the user re-prompted on
+        // every reconnect while believing the pin was in effect.
+        throw KeychainError.unexpectedStatus(updateStatus)
     }
 
     func lookup(_ host: String) -> String? {
         Self.io.sync { loadMap()[host] }
     }
 
-    func pin(_ host: String, _ fp: String) {
-        Self.io.sync {
+    func pin(_ host: String, _ fp: String) throws {
+        try Self.io.sync {
             var map = loadMap()
             map[host] = fp
-            saveMap(map)
+            try saveMap(map)
         }
     }
 }

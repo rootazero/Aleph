@@ -362,20 +362,40 @@ pub struct CatalogParams {
     pub view: Option<String>,
 }
 
+/// Returned when `view` carries a string that is not a recognised
+/// [`CatalogView`]. Surfaced as a JSON-RPC `INVALID_PARAMS` by the gateway
+/// so a typo or an old client can no longer silently widen the listing to
+/// `All` and reveal rows the caller never asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownCatalogView(pub String);
+
+impl std::fmt::Display for UnknownCatalogView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "unknown catalog view: {:?} (expected one of: configured, available, all)",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for UnknownCatalogView {}
+
 impl CatalogParams {
     /// Parse `view`.
     ///
     /// Absent means `configured` (the narrow default a picker wants).
-    /// An **unrecognised** string means `all`, which is the behaviour this
-    /// family has always had: a listing that answers with less than the caller
-    /// asked for is a silent functional regression, and the caller is already
-    /// past the admin gate.
-    #[must_use]
-    pub fn view(&self) -> CatalogView {
+    /// An **unrecognised** string is a parse error: widening an unknown
+    /// value to `All` would silently enlarge the response, including rows
+    /// the caller did not ask to see. The gateway surfaces this as
+    /// `INVALID_PARAMS` so the caller learns about the typo instead of
+    /// quietly getting a different listing than they expected.
+    pub fn view(&self) -> Result<CatalogView, UnknownCatalogView> {
         match self.view.as_deref() {
-            None | Some("configured") => CatalogView::Configured,
-            Some("available") => CatalogView::Available,
-            _ => CatalogView::All,
+            None | Some("configured") => Ok(CatalogView::Configured),
+            Some("available") => Ok(CatalogView::Available),
+            Some("all") => Ok(CatalogView::All),
+            Some(value) => Err(UnknownCatalogView(value.to_owned())),
         }
     }
 
@@ -666,27 +686,34 @@ mod tests {
     }
 
     #[test]
-    fn an_absent_view_is_configured_and_an_unknown_one_is_all() {
-        assert_eq!(CatalogParams::default().view(), CatalogView::Configured);
+    fn an_absent_view_is_configured_and_an_unknown_one_errors() {
+        assert_eq!(
+            CatalogParams::default().view().unwrap(),
+            CatalogView::Configured
+        );
         assert_eq!(
             CatalogParams {
                 view: Some("configured".into())
             }
-            .view(),
+            .view()
+            .unwrap(),
             CatalogView::Configured
         );
-        // Widening, not narrowing: the pre-contract handler did the same, and
-        // answering with fewer rows than before would be a silent regression.
+        assert_eq!(
+            CatalogParams::for_view(CatalogView::Available).view().unwrap(),
+            CatalogView::Available
+        );
+        // Unknown values are now a parse error, NOT silently widened to `All`:
+        // a typo or an old client used to enlarge the response to rows the
+        // caller did not ask for. The gateway surfaces this as INVALID_PARAMS.
         assert_eq!(
             CatalogParams {
                 view: Some("nonsense".into())
             }
-            .view(),
-            CatalogView::All
-        );
-        assert_eq!(
-            CatalogParams::for_view(CatalogView::Available).view(),
-            CatalogView::Available
+            .view()
+            .unwrap_err()
+            .0,
+            "nonsense"
         );
     }
 }
