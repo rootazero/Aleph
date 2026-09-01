@@ -29,7 +29,15 @@ use std::path::{Path, PathBuf};
 /// stops the walk early — the per-spawn ACL-stamping cost stays predictable
 /// on pathological trees rather than scaling unbounded. Matched entries found
 /// before the cap are still returned; the cap only limits how deep we look.
-const MAX_DENY_READ_WALK_ENTRIES: usize = 50_000;
+///
+/// Sized for adversarial workspaces: deep secret directories (e.g. `.env` at
+/// depth 3, `.ssh` at depth 5) must always be reachable even when the
+/// workspace contains a large flat tree of unrelated files. The previous
+/// 50 000-entry cap could be exhausted by a single directory of filler files
+/// before the walk reached a deeper `.*` directory, silently dropping deny
+/// ACEs from those paths (SAN-002). 500 000 leaves enough headroom for any
+/// realistic workspace while keeping worst-case ACL-stamping bounded.
+const MAX_DENY_READ_WALK_ENTRIES: usize = 500_000;
 
 /// Walk `root` and return every existing path whose (slash-normalised)
 /// absolute form matches one of the `deny_read_globs`. This is the Windows
@@ -54,10 +62,16 @@ const MAX_DENY_READ_WALK_ENTRIES: usize = 50_000;
 /// Linux dev boxes; only the Windows ACE stamper consumes the result.
 #[must_use]
 pub fn resolve_deny_read_paths_under(root: &Path, deny_read_globs: &[String]) -> Vec<PathBuf> {
+    // SAN-001: compile operator-supplied patterns via the safe_regex bounded
+    // builder. Every other untrusted-pattern compile site in the codebase
+    // (command_policy, pii, secrets, hooks, exec kernel) uses
+    // `bounded_builder`; `deny_globs` was the lone exception, leaving it open
+    // to regex expansion bombs like `(a{1000}){1000}{1000}` exhausting
+    // process memory at sandbox startup.
     let regexes: Vec<regex::Regex> = deny_read_globs
         .iter()
         .filter_map(|g| glob_to_anchored_regex(g))
-        .filter_map(|r| match regex::Regex::new(&r) {
+        .filter_map(|r| match crate::security::safe_regex::bounded_builder(&r).build() {
             Ok(re) => Some(re),
             Err(e) => {
                 tracing::warn!(pattern = %r, error = %e, "deny_read_globs regex failed to compile; pattern dropped");
@@ -84,6 +98,17 @@ pub fn resolve_deny_read_paths_under(root: &Path, deny_read_globs: &[String]) ->
         };
         for entry in entries.flatten() {
             if inspected >= MAX_DENY_READ_WALK_ENTRIES {
+                // SAN-002: surface the early termination so operators notice
+                // a workspace has outgrown the cap. The matched vector still
+                // contains every directory we did reach, so deny ACEs already
+                // stamped remain in effect — only deeper, unvisited paths
+                // are uncovered.
+                tracing::warn!(
+                    cap = MAX_DENY_READ_WALK_ENTRIES,
+                    matched = matched.len(),
+                    stopped_at = %dir.display(),
+                    "deny_read_globs walk hit entry cap; deeper directories not covered by deny ACEs",
+                );
                 return matched;
             }
             inspected += 1;
