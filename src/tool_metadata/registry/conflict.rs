@@ -250,14 +250,16 @@ impl ConflictResolver {
         // plugin manifest with duplicate entries, or a hot-reload that
         // forgot to call `ToolCatalog::clear` can all produce a second
         // tool with the same id. Silently overwriting would lose the
-        // first registration without any observable signal — surface a
-        // warn so an operator can see the duplicate and the resolution
-        // path (last-writer-wins) keeps the system making forward
-        // progress instead of erroring out at boot.
+        // first registration without any observable signal — log both
+        // identities so an operator can see which tool displaced which,
+        // and the resolution path (last-writer-wins) keeps the system
+        // making forward progress instead of erroring out at boot.
         if let Some(prev) = tools.insert(id.clone(), tool) {
             tracing::warn!(
                 tool_id = %id,
+                prev_id = %prev.id,
                 prev_name = %prev.name,
+                prev_source = %prev.source.label(),
                 "duplicate tool id; overwriting previous registration (last-writer-wins)",
             );
         }
