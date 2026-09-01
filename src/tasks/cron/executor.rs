@@ -22,11 +22,11 @@ use crate::tasks::cron::config::{
 };
 use crate::tasks::cron::service::concurrency::PendingAlert;
 use crate::tasks::cron::service::timer::{AlertDispatcherFn, JobExecutorFn};
+use crate::tasks::shared::alert::failure_alert_payload;
 use crate::tasks::shared::delivery::{
     DeliveryConfig, DeliveryEngine, DeliveryMode, DeliveryPayload,
 };
 use crate::tasks::shared::retry_hint::{classify, RetryHint};
-
 /// Deferred channel registry reference — set after channels are initialized.
 pub type ChannelRegistryCell = Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>;
 
@@ -73,24 +73,12 @@ pub fn build_cron_alert_dispatcher_fn(delivery_engine: Arc<DeliveryEngine>) -> A
         Box::pin(async move {
             for alert in alerts {
                 let target = alert.target;
-                let output = format!("⚠️ {}: {}", alert.job_name, alert.message);
-                let payload = DeliveryPayload {
-                    source_type: "cron".to_string(),
-                    task_name: alert.job_name,
-                    // rust-doctor-disable-next-line unnecessary-allocation
-                    // Empty placeholder required by DeliveryPayload; String::new() has no heap allocation.
-                    agent_id: String::new(),
-                    // Gateway targets render `output` verbatim; keep the ⚠️
-                    // prefix the previous dispatcher produced. Webhook targets
-                    // additionally receive task_name / metadata as structured
-                    // JSON fields.
-                    output,
-                    channel_id: None,
-                    metadata: serde_json::json!({
-                        "job_id": alert.job_id,
-                        "kind": "failure_alert",
-                    }),
-                };
+                let payload = failure_alert_payload(
+                    "cron",
+                    &alert.job_name,
+                    &alert.job_id,
+                    &alert.message,
+                );
                 let config = DeliveryConfig {
                     mode: DeliveryMode::Primary,
                     targets: vec![target],

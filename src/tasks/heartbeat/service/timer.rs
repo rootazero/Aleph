@@ -20,6 +20,7 @@ use crate::tasks::heartbeat::history::HeartbeatRunRecord;
 use crate::tasks::heartbeat::probe::{execute_probe, ProbeExecutor};
 use crate::tasks::heartbeat::service::state::HeartbeatServiceState;
 use crate::tasks::heartbeat::wake::{WakeQueue, WakeRequest};
+use crate::tasks::shared::alert::failure_alert_payload;
 use crate::tasks::shared::delivery::DeliveryStatus;
 use crate::tasks::shared::delivery::{DeliveryEngine, DeliveryPayload};
 
@@ -642,14 +643,12 @@ async fn deliver_alert(
     alert: PendingHeartbeatAlert,
     ctx: &TickContext,
 ) {
-    let payload = DeliveryPayload {
-        source_type: "heartbeat".into(),
-        task_name: alert.task_name.clone(),
-        agent_id: String::new(),
-        output: format!("⚠️ {}: {}", alert.task_name, alert.message),
-        channel_id: None,
-        metadata: serde_json::json!({ "task_id": task_id, "kind": "failure_alert" }),
-    };
+    let payload = failure_alert_payload(
+        "heartbeat",
+        &alert.task_name,
+        task_id,
+        &alert.message,
+    );
     let config = crate::tasks::shared::delivery::DeliveryConfig {
         mode: crate::tasks::shared::delivery::DeliveryMode::Primary,
         targets: vec![alert.target],

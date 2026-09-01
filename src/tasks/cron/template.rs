@@ -12,7 +12,7 @@ use crate::tasks::shared::clock::Clock;
 
 static ENV_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"\{\{env:(\w+)\}\}")
-        .unwrap_or_else(|_| unreachable!("ENV_RE regex is hardcoded and always valid"))
+        .expect("ENV_RE pattern compiles: hardcoded literal")
 });
 
 /// Render a prompt template with variable substitution.
