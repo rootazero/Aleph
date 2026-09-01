@@ -1236,7 +1236,7 @@ mod tests {
             max_results: 5,
             timeout_seconds: 10,
             backends,
-            web_fetch_fallback: true,
+            ..Default::default()
         };
         let registry = SearchRegistry::from_config(Some(&cfg)).expect("registry");
         assert!(
@@ -1271,7 +1271,7 @@ mod tests {
             max_results: 17,
             timeout_seconds: 42,
             backends,
-            web_fetch_fallback: false,
+            ..Default::default()
         };
         let registry = SearchRegistry::from_config(Some(&cfg)).expect("registry");
         let options = registry.default_options();
@@ -1324,7 +1324,7 @@ mod tests {
             max_results: 5,
             timeout_seconds: 10,
             backends,
-            web_fetch_fallback: false,
+            ..Default::default()
         };
         let registry = SearchRegistry::from_config(Some(&cfg)).expect("registry");
         assert_eq!(
@@ -1357,7 +1357,7 @@ mod tests {
             max_results: 5,
             timeout_seconds: 10,
             backends,
-            web_fetch_fallback: false,
+            ..Default::default()
         };
         let registry = SearchRegistry::from_config(Some(&cfg)).expect("registry");
         assert!(

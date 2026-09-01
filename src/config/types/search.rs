@@ -103,6 +103,32 @@ pub const fn default_true() -> bool {
     true
 }
 
+/// `Default` impl for `SearchConfigInternal`.
+///
+/// Lets struct-literal construction sites use `..Default::default()` and
+/// inherit the documented per-field behaviour. Without this every new optional
+/// field would force every test fixture to be edited in lockstep, which is
+/// exactly the silent drift this `Default` is trying to prevent at the
+/// type level.
+impl Default for SearchConfigInternal {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default_provider: String::new(),
+            fallback_providers: None,
+            max_results: default_search_max_results(),
+            timeout_seconds: default_search_timeout(),
+            language: None,
+            region: None,
+            safe_search: None,
+            include_domains: None,
+            exclude_domains: None,
+            backends: std::collections::HashMap::new(),
+            web_fetch_fallback: default_web_fetch_fallback(),
+        }
+    }
+}
+
 // =============================================================================
 // SearchBackendConfig
 // =============================================================================

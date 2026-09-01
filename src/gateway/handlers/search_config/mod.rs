@@ -63,7 +63,7 @@ mod tests {
                         verified: true,
                     },
                 )]),
-                web_fetch_fallback: crate::config::types::search::default_web_fetch_fallback(),
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -164,7 +164,7 @@ mod tests {
                         },
                     ),
                 ]),
-                web_fetch_fallback: crate::config::types::search::default_web_fetch_fallback(),
+                ..Default::default()
             }),
             ..Default::default()
         };

@@ -1,5 +1,7 @@
 use crate::error::{AlephError, Result};
-use crate::search::providers::base::{build_client, parse_json, retain_usable, send};
+use crate::search::providers::base::{
+    build_client, parse_json, reject_ssrf_target_host, retain_usable, send,
+};
 use crate::search::{SearchCapabilities, SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
 use reqwest::Client;
