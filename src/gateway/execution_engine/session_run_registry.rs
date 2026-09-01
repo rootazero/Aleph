@@ -49,18 +49,18 @@ impl SessionRunRegistry {
     }
 
     /// Publish the supplied (seq, running) snapshot to the injected bus.
-///
-/// **Audit fix**: the previous `broadcast_change` re-read `running_snapshot`
-/// AFTER the caller had dropped the lock. With two state transitions
-/// interleaving (e.g. claim N → release N+1 before claim's broadcast lands),
-/// the late re-read picked up `(N+1, [])` and the claim's frame was
-/// emitted with the just-claimed run already gone — the Panel saw the
-/// release shadow its own claim. Consumers reconstruct ordering from `seq`
-/// alone, so the snapshot MUST be captured atomically with the seq bump in
-/// `try_claim`/`release` and passed into this helper. The map lock is
-/// never held across `publish_frame` (which serializes and broadcasts);
-/// the seq bump + snapshot capture happens under the lock, then the lock
-/// drops and we publish.
+    ///
+    /// **Audit fix**: the previous `broadcast_change` re-read `running_snapshot`
+    /// AFTER the caller had dropped the lock. With two state transitions
+    /// interleaving (e.g. claim N → release N+1 before claim's broadcast lands),
+    /// the late re-read picked up `(N+1, [])` and the claim's frame was
+    /// emitted with the just-claimed run already gone — the Panel saw the
+    /// release shadow its own claim. Consumers reconstruct ordering from `seq`
+    /// alone, so the snapshot MUST be captured atomically with the seq bump in
+    /// `try_claim`/`release` and passed into this helper. The map lock is
+    /// never held across `publish_frame` (which serializes and broadcasts);
+    /// the seq bump + snapshot capture happens under the lock, then the lock
+    /// drops and we publish.
     fn publish_snapshot(&self, seq: u64, running: Vec<String>) {
         if let Some(bus) = self.event_bus.get() {
             let _ = bus.publish_frame(&GatewayEventFrame::RunningSetChanged { seq, running });

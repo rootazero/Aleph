@@ -202,7 +202,10 @@ mod tests {
 
     #[test]
     fn cache_lookup_returns_stored_entry() {
-        let _guard = CACHE_TEST_GUARD.lock().unwrap_or_else(|e| { tracing::error!(reason = %e, "web_fetch test guard poisoned; recovering"); e.into_inner() });
+        let _guard = CACHE_TEST_GUARD.lock().unwrap_or_else(|e| {
+            tracing::error!(reason = %e, "web_fetch test guard poisoned; recovering");
+            e.into_inner()
+        });
         cache_clear();
         let key = cache_key("https://cache-test.invalid/a", &ExtractMode::Markdown);
         assert!(cache_lookup(&key).is_none(), "fresh cache should miss");
@@ -217,7 +220,10 @@ mod tests {
 
     #[test]
     fn cache_lookup_returns_none_for_expired_entry() {
-        let _guard = CACHE_TEST_GUARD.lock().unwrap_or_else(|e| { tracing::error!(reason = %e, "web_fetch test guard poisoned; recovering"); e.into_inner() });
+        let _guard = CACHE_TEST_GUARD.lock().unwrap_or_else(|e| {
+            tracing::error!(reason = %e, "web_fetch test guard poisoned; recovering");
+            e.into_inner()
+        });
         cache_clear();
         let key = cache_key("https://cache-test.invalid/b", &ExtractMode::Markdown);
         // Direct insert with an `inserted_at` in the past — bypass
@@ -246,7 +252,10 @@ mod tests {
 
     #[test]
     fn cache_key_normalises_url_for_hit() {
-        let _guard = CACHE_TEST_GUARD.lock().unwrap_or_else(|e| { tracing::error!(reason = %e, "web_fetch test guard poisoned; recovering"); e.into_inner() });
+        let _guard = CACHE_TEST_GUARD.lock().unwrap_or_else(|e| {
+            tracing::error!(reason = %e, "web_fetch test guard poisoned; recovering");
+            e.into_inner()
+        });
         cache_clear();
         let stored = cache_key("HTTPS://Example.com:443/path", &ExtractMode::Markdown);
         cache_store(stored, dummy_result("https://example.com/path", "ok"));

@@ -409,25 +409,23 @@ pub async fn run_install(
                 &ctx.secret_refs,
                 &ctx.plain_values,
             )?;
-            mcp.add_server(cfg)
-                .await
-                .map_err(|e| {
-                    // The caller surfaces this string verbatim in the
-                    // install reply, which loses the typed `McpError`
-                    // chain. Log the full error here so operators can
-                    // still recover the source cause from the tracing
-                    // pipeline; the string returned is the user-facing
-                    // summary. A future refactor should change the
-                    // `run_install` return type to carry the typed error
-                    // up rather than collapsing it to a string.
-                    tracing::error!(
-                        subsystem = "hub",
-                        error = %e,
-                        error_debug = ?e,
-                        "failed to register MCP server with runtime registry"
-                    );
-                    e.to_string()
-                })?;
+            mcp.add_server(cfg).await.map_err(|e| {
+                // The caller surfaces this string verbatim in the
+                // install reply, which loses the typed `McpError`
+                // chain. Log the full error here so operators can
+                // still recover the source cause from the tracing
+                // pipeline; the string returned is the user-facing
+                // summary. A future refactor should change the
+                // `run_install` return type to carry the typed error
+                // up rather than collapsing it to a string.
+                tracing::error!(
+                    subsystem = "hub",
+                    error = %e,
+                    error_debug = ?e,
+                    "failed to register MCP server with runtime registry"
+                );
+                e.to_string()
+            })?;
             Ok(InstallOutcome::Mcp { id })
         }
         InstallSpec::OciImage { .. } => {

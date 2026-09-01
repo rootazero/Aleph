@@ -81,9 +81,8 @@ fn sanitize_link_url(url: &str) -> String {
     // Strip ASCII whitespace + control chars from the head so a URL like
     // "\tjavascript:alert(1)" doesn't get past the scheme check by hiding
     // its scheme behind an invisible prefix.
-    let head_stripped = trimmed.trim_start_matches(|c: char| {
-        c.is_whitespace() || (c as u32) < 0x20 || c == '\u{7f}'
-    });
+    let head_stripped = trimmed
+        .trim_start_matches(|c: char| c.is_whitespace() || (c as u32) < 0x20 || c == '\u{7f}');
     // Protocol-relative: starts with `//` after stripping. Resolve it as a
     // same-document anchor so a browser cannot navigate to a foreign host.
     if head_stripped.starts_with("//") {

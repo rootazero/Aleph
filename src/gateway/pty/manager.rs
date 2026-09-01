@@ -98,7 +98,11 @@ impl Inner {
     /// [`OWNER_RETENTION`]. Called under the same lock that inserts the
     /// session itself.
     fn remember_owner(&mut self, session_id: &str, created_by: Option<String>) {
-        if self.owners.insert(session_id.to_string(), created_by).is_none() {
+        if self
+            .owners
+            .insert(session_id.to_string(), created_by)
+            .is_none()
+        {
             self.owner_order.push_back(session_id.to_string());
         }
         while self.owner_order.len() > OWNER_RETENTION {

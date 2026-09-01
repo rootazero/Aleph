@@ -95,8 +95,16 @@ fn interpret(
 ) -> GenerationProbeOutcome {
     // Providers with no `/v1/models` endpoint: a 404 here is an artifact of
     // the probe URL, not evidence the credentials work.
-    const NO_MODELS_ENDPOINT: &[&str] =
-        &["google_veo", "veo", "elevenlabs", "bfl", "bfl_flux", "flux", "suno", "midjourney"];
+    const NO_MODELS_ENDPOINT: &[&str] = &[
+        "google_veo",
+        "veo",
+        "elevenlabs",
+        "bfl",
+        "bfl_flux",
+        "flux",
+        "suno",
+        "midjourney",
+    ];
     if matches!(status, Some(404)) && NO_MODELS_ENDPOINT.contains(&provider_type) {
         return GenerationProbeOutcome {
             success: false,

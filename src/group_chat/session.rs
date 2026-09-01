@@ -187,7 +187,7 @@ impl GroupChatSession {
     /// verbatim; anything older is collapsed into a single summary line so
     /// the coordinator prompt stays bounded (an unbounded history grew
     /// linearly with session length — a 50-round × 4-persona session pushed
-/// >100k tokens into every coordinator call). `window_rounds == 0`
+    /// >100k tokens into every coordinator call). `window_rounds == 0`
     /// > disables the window entirely and returns the full history, matching
     /// > [`Self::build_history_text`].
     #[must_use]

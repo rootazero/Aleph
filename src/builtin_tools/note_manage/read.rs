@@ -213,14 +213,17 @@ impl NoteManageTool {
                 )
             })
             .collect();
-        Ok((rows, SearchAdvisory {
-            mode: "full-text".to_string(),
-            vector_candidates: 0,
-            fts_candidates: fts_hits,
-            degraded: degraded.map(|r| r.as_str().to_string()),
-            bodies_omitted: None,
-            bodies_unreadable: (bodies_unreadable > 0).then_some(bodies_unreadable),
-        }))
+        Ok((
+            rows,
+            SearchAdvisory {
+                mode: "full-text".to_string(),
+                vector_candidates: 0,
+                fts_candidates: fts_hits,
+                degraded: degraded.map(|r| r.as_str().to_string()),
+                bodies_omitted: None,
+                bodies_unreadable: (bodies_unreadable > 0).then_some(bodies_unreadable),
+            },
+        ))
     }
 
     pub(super) async fn handle_query(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {

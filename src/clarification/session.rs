@@ -202,9 +202,7 @@ pub fn ask_user_frame(
         // struct literal inside the crate (the public constructors all
         // validate non-empty) — an internal invariant break that we surface
         // here rather than masking.
-        None => unreachable!(
-            "a ClarificationRequest built by a constructor is never empty"
-        ),
+        None => unreachable!("a ClarificationRequest built by a constructor is never empty"),
     };
     GatewayEventFrame::AskUser {
         run_id: run_id.to_string(),

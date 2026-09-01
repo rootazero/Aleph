@@ -192,23 +192,21 @@ impl IdempotencyGuard {
     pub fn prune(&self) -> usize {
         let inflight_ceiling = self.ttl.saturating_mul(2);
         let mut pruned = 0;
-        self.cache.retain(|_, entry| {
-            match entry {
-                CacheEntry::Complete(_, inserted_at) => {
-                    if inserted_at.elapsed() >= self.ttl {
-                        pruned += 1;
-                        false
-                    } else {
-                        true
-                    }
+        self.cache.retain(|_, entry| match entry {
+            CacheEntry::Complete(_, inserted_at) => {
+                if inserted_at.elapsed() >= self.ttl {
+                    pruned += 1;
+                    false
+                } else {
+                    true
                 }
-                CacheEntry::InFlight(_, started_at) => {
-                    if started_at.elapsed() >= inflight_ceiling {
-                        pruned += 1;
-                        false
-                    } else {
-                        true
-                    }
+            }
+            CacheEntry::InFlight(_, started_at) => {
+                if started_at.elapsed() >= inflight_ceiling {
+                    pruned += 1;
+                    false
+                } else {
+                    true
                 }
             }
         });

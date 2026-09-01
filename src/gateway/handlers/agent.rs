@@ -617,8 +617,7 @@ async fn resolve_attribution(
             // Which project may govern this turn FOR THIS CALLER. The two
             // arms of a room's claim are gated differently, and the asymmetry
             // is the point — see each arm.
-            let governing = match crate::projects::ProjectStore::shared()
-                .room_claiming(session_key)
+            let governing = match crate::projects::ProjectStore::shared().room_claiming(session_key)
             {
                 // Arm 1 — an explicit `projects.room_session` claim naming
                 // this exact key. Visibility still decides, and a caller the

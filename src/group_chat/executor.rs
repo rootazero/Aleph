@@ -133,8 +133,7 @@ impl GroupChatExecutor {
     /// the long-running executor, but we log so the poisoning is visible.
     fn lock_provider_fallback_warned(
         &self,
-    ) -> crate::sync_primitives::MutexGuard<'_, std::collections::HashSet<(String, String)>>
-    {
+    ) -> crate::sync_primitives::MutexGuard<'_, std::collections::HashSet<(String, String)>> {
         self.provider_fallback_warned.lock().unwrap_or_else(|poisoned| {
             tracing::error!(
                 subsystem = "group_chat",
@@ -243,12 +242,7 @@ impl GroupChatExecutor {
         // it without re-indexing `staged_turns[0]` (which trips clippy's
         // pedantic `indexing_slicing` even though the bound is static).
         let user_turn_text = user_message.to_string();
-        staged_turns.push((
-            round,
-            persist_seq,
-            Speaker::System,
-            user_turn_text.clone(),
-        ));
+        staged_turns.push((round, persist_seq, Speaker::System, user_turn_text.clone()));
         persist_seq = persist_seq.saturating_add(1);
 
         // Step 2: Build coordinator prompt and call LLM
@@ -468,11 +462,7 @@ impl GroupChatExecutor {
         // Append the user/system turn to history (matches the original
         // semantic that `add_turn` records both user prompts and persona
         // responses).
-        session.add_turn(
-            round,
-            Speaker::System,
-            user_turn_text.clone(),
-        );
+        session.add_turn(round, Speaker::System, user_turn_text.clone());
         for p in &prepared {
             let speaker = Speaker::Persona {
                 id: p.persona_id.clone(),

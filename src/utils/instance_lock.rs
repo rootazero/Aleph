@@ -324,8 +324,7 @@ mod tests {
         let result = diagnose_holder(dir.path());
         // Restore permissions so the tempdir cleanup can succeed even if the
         // assertion below fails.
-        let restore =
-            std::fs::set_permissions(&holder, std::fs::Permissions::from_mode(0o600));
+        let restore = std::fs::set_permissions(&holder, std::fs::Permissions::from_mode(0o600));
         let _ = restore;
 
         match result {

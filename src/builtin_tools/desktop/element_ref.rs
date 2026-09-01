@@ -276,10 +276,7 @@ mod tests {
         clear_all();
         let id = issue("s1", 42, records(2));
         let err = resolve("s1", &render(id, 5)).unwrap_err();
-        assert_eq!(
-            err,
-            TokenError::IndexOutOfRange { index: 5, count: 2 }
-        );
+        assert_eq!(err, TokenError::IndexOutOfRange { index: 5, count: 2 });
         let msg = err.message();
         assert!(msg.contains('5') && msg.contains('2'), "{msg}");
     }
@@ -287,7 +284,15 @@ mod tests {
     #[test]
     fn malformed_tokens_are_invalid_not_stale() {
         let _g = guard();
-        for bad in ["", "x00000001:0", "s1:0", "s00000001", "s00000001:", "szzzzzzzz:0", "s00000001: x"] {
+        for bad in [
+            "",
+            "x00000001:0",
+            "s1:0",
+            "s00000001",
+            "s00000001:",
+            "szzzzzzzz:0",
+            "s00000001: x",
+        ] {
             assert_eq!(
                 resolve("s1", bad),
                 Err(TokenError::InvalidFormat),
@@ -314,6 +319,9 @@ mod tests {
     #[test]
     fn stale_message_reads_as_an_instruction() {
         let msg = TokenError::Stale.message();
-        assert!(msg.contains("stale") && msg.contains("ax_snapshot"), "{msg}");
+        assert!(
+            msg.contains("stale") && msg.contains("ax_snapshot"),
+            "{msg}"
+        );
     }
 }

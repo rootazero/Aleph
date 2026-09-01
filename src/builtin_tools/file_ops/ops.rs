@@ -431,12 +431,7 @@ pub async fn execute_copy(
         let denied_paths = denied_paths.to_vec();
         let mut visited = std::collections::HashSet::new();
         let tally_local: CopyTally = tokio::task::spawn_blocking(move || {
-            copy_dir_recursive(
-                &from_canonical,
-                &to_canonical,
-                &denied_paths,
-                &mut visited,
-            )
+            copy_dir_recursive(&from_canonical, &to_canonical, &denied_paths, &mut visited)
         })
         .await
         .map_err(|e| ToolError::Execution(format!("Copy task join failed: {e}")))??;
@@ -661,8 +656,7 @@ fn copy_dir_recursive(
         if from_path.is_dir() {
             // Reborrow `visited` for the recursive call so the cycle-check
             // borrow above is released before we hand the reference down.
-            let sub_tally =
-                copy_dir_recursive(&from_path, &to_path, denied_paths, &mut *visited)?;
+            let sub_tally = copy_dir_recursive(&from_path, &to_path, denied_paths, &mut *visited)?;
             tally.bytes += sub_tally.bytes;
             tally.protected += sub_tally.protected;
             tally.unresolvable += sub_tally.unresolvable;

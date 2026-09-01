@@ -85,10 +85,10 @@ impl ConfigurableProtocol {
         );
 
         // Custom-mode response body read needs both a time bound and a size bound:
-// the shared error-body reader applies a 15s timeout, but the success path
-// here would otherwise read an arbitrarily large or stalled payload without
-// either. Both caps keep failover prompt and prevent an attacker-controlled
-// provider from stalling the turn.
+        // the shared error-body reader applies a 15s timeout, but the success path
+        // here would otherwise read an arbitrarily large or stalled payload without
+        // either. Both caps keep failover prompt and prevent an attacker-controlled
+        // provider from stalling the turn.
         const CUSTOM_BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
         const MAX_CUSTOM_BODY_BYTES: usize = 8 * 1024 * 1024;
         let body = match tokio::time::timeout(CUSTOM_BODY_TIMEOUT, response.text()).await {

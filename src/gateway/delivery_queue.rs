@@ -759,7 +759,8 @@ impl DeliveryStore {
             params![channel_id, message.conversation_id.as_str()],
             |r| r.get(0),
         )?;
-        let next_attempt_at = conversation_floor.map_or(next_attempt_at, |f| next_attempt_at.max(f));
+        let next_attempt_at =
+            conversation_floor.map_or(next_attempt_at, |f| next_attempt_at.max(f));
 
         conn.execute(
             "INSERT INTO outbound_deliveries

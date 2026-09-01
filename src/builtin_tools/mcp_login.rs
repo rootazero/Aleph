@@ -188,7 +188,8 @@ impl AlephToolDyn for McpLoginTool {
 
             let storage = Arc::new(OAuthStorage::new(OAuthStorage::default_path()));
             let callback = CallbackServer::new();
-            let provider = OAuthProvider::new(storage.clone(), &server_id, &url, callback.callback_url())?;
+            let provider =
+                OAuthProvider::new(storage.clone(), &server_id, &url, callback.callback_url())?;
 
             let metadata = provider.discover_metadata().await?;
 

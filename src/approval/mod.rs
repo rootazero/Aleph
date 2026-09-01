@@ -775,7 +775,10 @@ mod reminder_tests {
     #[test]
     fn the_backoff_never_decreases() {
         for w in APPROVAL_REMINDER_BACKOFF_SECS.windows(2) {
-            assert!(w[0] <= w[1], "backoff dips: {APPROVAL_REMINDER_BACKOFF_SECS:?}");
+            assert!(
+                w[0] <= w[1],
+                "backoff dips: {APPROVAL_REMINDER_BACKOFF_SECS:?}"
+            );
         }
     }
 }

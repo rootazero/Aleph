@@ -132,7 +132,10 @@ pub fn provider_deltas_to_sse(
                 // delta turned out to be a non-Usage frame. See `done_pending`
                 // lifecycle note above.
                 if done_pending {
-                    return Some((SSE_DONE.to_string(), (deltas, tracker, usage_acc, false, true)));
+                    return Some((
+                        SSE_DONE.to_string(),
+                        (deltas, tracker, usage_acc, false, true),
+                    ));
                 }
 
                 loop {
@@ -276,9 +279,8 @@ pub fn provider_deltas_to_sse(
                                     // accumulate and let `Done` handle the
                                     // final emission order.
                                     if done_pending {
-                                        let usage_frame = sse_data(&usage_chunk(
-                                            &id, created, &model, converted,
-                                        ));
+                                        let usage_frame =
+                                            sse_data(&usage_chunk(&id, created, &model, converted));
                                         let frame = format!("{usage_frame}{SSE_DONE}");
                                         return Some((
                                             frame,
@@ -332,7 +334,10 @@ pub fn provider_deltas_to_sse(
                                     // frame) can be flushed first. See the
                                     // `done_pending` lifecycle note in the
                                     // state init above.
-                                    return Some((frame, (deltas, tracker, usage_acc, true, false)));
+                                    return Some((
+                                        frame,
+                                        (deltas, tracker, usage_acc, true, false),
+                                    ));
                                 }
                                 ProviderDelta::Error(e) => {
                                     let error_frame = serde_json::json!({
@@ -342,7 +347,10 @@ pub fn provider_deltas_to_sse(
                                         }
                                     });
                                     let frame = format!("data: {error_frame}\n\n{SSE_DONE}");
-                                    return Some((frame, (deltas, tracker, usage_acc, false, true)));
+                                    return Some((
+                                        frame,
+                                        (deltas, tracker, usage_acc, false, true),
+                                    ));
                                 }
                             }
                         }

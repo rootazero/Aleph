@@ -214,16 +214,10 @@ mod tests {
         // must all be rejected so the upstream-supplied task id cannot
         // silently rewrite the URL.
         let too_long = "x".repeat(257);
-        let bad_ids: Vec<&str> = [
-            "../admin",
-            "abc?injected=1",
-            "abc#frag",
-            ".",
-            "",
-        ]
-        .into_iter()
-        .chain(std::iter::once(too_long.as_str()))
-        .collect();
+        let bad_ids: Vec<&str> = ["../admin", "abc?injected=1", "abc#frag", ".", ""]
+            .into_iter()
+            .chain(std::iter::once(too_long.as_str()))
+            .collect();
         for bad in bad_ids {
             assert!(
                 provider.task_url(bad).is_err(),

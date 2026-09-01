@@ -221,7 +221,9 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(subagent_concurrency_cap)]
     async fn updating_execution_pushes_the_new_caps_onto_the_running_runtime() {
-        use crate::agents::subagent_tool::{max_concurrent_subagents, set_max_concurrent_subagents};
+        use crate::agents::subagent_tool::{
+            max_concurrent_subagents, set_max_concurrent_subagents,
+        };
 
         let home = tempfile::tempdir().expect("tempdir");
         let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());

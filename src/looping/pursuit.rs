@@ -175,9 +175,7 @@ pub fn tick_prompt(state: &LoopState, tokens_now: u64, now_ms: u64) -> String {
 #[must_use]
 pub fn cap_reached_note(state: &LoopState) -> String {
     match state.max_iterations {
-        Some(max) => format!(
-            "Loop stopped: reached the iteration cap ({max} ticks)."
-        ),
+        Some(max) => format!("Loop stopped: reached the iteration cap ({max} ticks)."),
         // Caller path today always reaches this branch with max_iterations = Some
         // (see `stop_reason_note`'s invariants). Surface a clearly-labelled
         // fallback rather than the previous `unwrap_or(0)` which would have

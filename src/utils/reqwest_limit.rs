@@ -128,7 +128,10 @@ mod tests {
             .await;
 
         let resp = fetch(&server).await;
-        assert_eq!(bytes_with_limit(resp, 1024).await.unwrap(), Some(body.to_vec()));
+        assert_eq!(
+            bytes_with_limit(resp, 1024).await.unwrap(),
+            Some(body.to_vec())
+        );
     }
 
     /// The advertised-size boundary, asked directly.
@@ -139,7 +142,10 @@ mod tests {
     /// for what that test actually measured.
     #[test]
     fn declared_over_limit_refuses_only_strictly_above_the_cap() {
-        assert!(!declared_over_limit(None, 1024), "no header is not a refusal");
+        assert!(
+            !declared_over_limit(None, 1024),
+            "no header is not a refusal"
+        );
         assert!(!declared_over_limit(Some(0), 1024));
         assert!(
             !declared_over_limit(Some(1024), 1024),

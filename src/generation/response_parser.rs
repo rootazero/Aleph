@@ -183,8 +183,7 @@ mod tests {
     /// nesting now round-trips intact.
     #[test]
     fn test_prompt_with_brackets_round_trips() {
-        let response =
-            "[GENERATE:image:dalle:nanobanana:a cat [sitting on a chair]]";
+        let response = "[GENERATE:image:dalle:nanobanana:a cat [sitting on a chair]]";
         let result = parse_generation_requests(response).expect("static regex should be valid");
 
         assert_eq!(result.requests.len(), 1);

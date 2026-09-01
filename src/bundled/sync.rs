@@ -45,8 +45,7 @@ pub(crate) fn clone_or_update_at(
     // briefly to look up (or insert) the per-dir mutex, then drops the
     // table lock and holds only the per-dir one across the open-or-clone
     // decision so distinct checkouts stay unblocked.
-    let table = CHECKOUT_LOCKS
-        .get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let table = CHECKOUT_LOCKS.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     let per_dir_mutex = {
         let mut guard = table.lock().unwrap_or_else(|e| e.into_inner());
         guard

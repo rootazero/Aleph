@@ -32,9 +32,9 @@ impl GeminiProtocol {
             );
 
         // Defence in depth: reject non-HTTP schemes before reqwest sees the URL.
-        if let Err(e) = crate::providers::protocols::http_client::validate_provider_base_url(
-            &raw_base_url,
-        ) {
+        if let Err(e) =
+            crate::providers::protocols::http_client::validate_provider_base_url(&raw_base_url)
+        {
             tracing::error!(error = %e, "Gemini provider base_url failed validation");
         }
 

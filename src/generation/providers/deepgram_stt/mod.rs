@@ -196,7 +196,9 @@ impl GenerationProvider for DeepgramSttProvider {
                 (Some(b), _) => req.body(b),
                 (None, Some(url)) => req.json(&serde_json::json!({ "url": url })),
                 (None, None) => {
-                    unreachable!("load_local + URL branch above guarantees one of bytes or URL is present")
+                    unreachable!(
+                        "load_local + URL branch above guarantees one of bytes or URL is present"
+                    )
                 }
             };
 

@@ -62,8 +62,7 @@ impl LocalVoiceTool {
         // by most OpenAI-compatible servers. 3 s is a generous window for
         // "is the local voice stack reachable" — slower than that and the
         // operator can already see the daemon is wedged.
-        const REACHABILITY_PROBE_TIMEOUT: std::time::Duration =
-            std::time::Duration::from_secs(3);
+        const REACHABILITY_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
         // Reuse a single client across calls so the keep-alive pool
         // applies (a fresh `Client::new` per probe pays full TLS+TCP
         // setup on every status check, which the operator's

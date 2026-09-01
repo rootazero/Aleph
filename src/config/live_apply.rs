@@ -482,8 +482,7 @@ mod tests {
         // Read this module's own production half so the exemption checks below
         // cannot be satisfied by a string sitting in this very test.
         let live_apply_src = strip_comment_lines(&production_prefix(
-            &std::fs::read_to_string(root.join("src/config/live_apply.rs"))
-                .expect("live_apply.rs"),
+            &std::fs::read_to_string(root.join("src/config/live_apply.rs")).expect("live_apply.rs"),
         ));
 
         let mut files: Vec<std::path::PathBuf> = Vec::new();
@@ -565,8 +564,7 @@ mod tests {
                 // re-reads `output_mode` from the shared `Config`. Derived from
                 // that arm's source, so giving `behavior` a real handle turns
                 // this red and forces `behavior_config` to be wired.
-                if name == "behavior_config.rs"
-                    && live_apply_src.contains("\"behavior\" => true,")
+                if name == "behavior_config.rs" && live_apply_src.contains("\"behavior\" => true,")
                 {
                     continue;
                 }

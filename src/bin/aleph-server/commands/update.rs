@@ -178,10 +178,9 @@ fn run_installer() -> Result<(), Box<dyn Error>> {
             // HTTPS. To enforce hard-fail, set `SOFT_FAIL_ON_MISSING_CHECKSUMS=false`
             // and do NOT export `ALEPH_UPDATE_SOFT_FAIL`.
             if !soft_fail_enabled() {
-                return Err(format!(
-                    "failed to fetch SHA256SUMS and soft-fail disabled: {e}"
-                )
-                .into());
+                return Err(
+                    format!("failed to fetch SHA256SUMS and soft-fail disabled: {e}").into(),
+                );
             }
             eprintln!(
                 "Warning: could not fetch SHA256SUMS.txt ({e}); proceeding without verification."

@@ -291,8 +291,14 @@ mod tests {
     fn listen_url_omits_empty_language_and_model() {
         let url = build_listen_url("http://127.0.0.1:8000/", 16_000, Some(""), "  ");
         assert!(url.starts_with("ws://127.0.0.1:8000/v1/listen?"));
-        assert!(!url.contains("language="), "empty language must not ride the wire: {url}");
-        assert!(!url.contains("model="), "blank model must not ride the wire: {url}");
+        assert!(
+            !url.contains("language="),
+            "empty language must not ride the wire: {url}"
+        );
+        assert!(
+            !url.contains("model="),
+            "blank model must not ride the wire: {url}"
+        );
         // No language at all behaves like an empty one.
         let url = build_listen_url("http://h:1", 16_000, None, "");
         assert!(!url.contains("language="));

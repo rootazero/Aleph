@@ -64,7 +64,11 @@ pub async fn handle_cluster_enroll(
                         "cluster.enroll: node '{}' ({}) {}",
                         params.node_name,
                         node_id,
-                        if minted { "enrolled" } else { "reused existing enrollment" }
+                        if minted {
+                            "enrolled"
+                        } else {
+                            "reused existing enrollment"
+                        }
                     ),
                 ));
             }
@@ -121,10 +125,7 @@ pub async fn handle_cluster_deregister(
                     crate::gateway::caller_identity::current_caller_user(),
                     format!(
                         "cluster.deregister: node '{}' ({}): evicted={}, device_removed={}",
-                        params.node,
-                        outcome.node_id,
-                        outcome.evicted,
-                        outcome.device_removed
+                        params.node, outcome.node_id, outcome.evicted, outcome.device_removed
                     ),
                 ));
             }

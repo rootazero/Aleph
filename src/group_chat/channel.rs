@@ -97,7 +97,11 @@ fn parse_mention_command(args: &str) -> Option<GroupChatRequest> {
                 .chars()
                 .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
                 .collect();
-            if id.is_empty() { None } else { Some(id) }
+            if id.is_empty() {
+                None
+            } else {
+                Some(id)
+            }
         })
         .collect();
     if targets.is_empty() {

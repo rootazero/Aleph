@@ -359,7 +359,9 @@ impl StateDatabase {
                 .query_map(params![now], agent_task_from_row)
                 .map_err(|e| AlephError::config(format!("Failed to run reconcile: {e}")))?
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| AlephError::config(format!("Failed to collect reconcile rows: {e}")))?;
+                .map_err(|e| {
+                    AlephError::config(format!("Failed to collect reconcile rows: {e}"))
+                })?;
 
             Ok(rows)
         })

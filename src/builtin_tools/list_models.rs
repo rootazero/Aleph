@@ -565,25 +565,20 @@ impl crate::tools::AlephTool for ListModelsTool {
                 // map ever became a `DashMap` or similar) would defeat
                 // the type-system guarantee and the `expect` would be a
                 // silent panicking spot.
-                let mut entries: Vec<(&String, &crate::config::types::moa::MoaPreset)> = cfg
-                    .presets
-                    .iter()
-                    .filter(|(_, p)| p.enabled)
-                    .collect();
+                let mut entries: Vec<(&String, &crate::config::types::moa::MoaPreset)> =
+                    cfg.presets.iter().filter(|(_, p)| p.enabled).collect();
                 entries.sort_by(|a, b| a.0.cmp(b.0));
                 entries
                     .into_iter()
-                    .map(|(name, p)| {
-                        MoaPresetSummary {
-                            name: name.clone(),
-                            advisors: p
-                                .advisors
-                                .iter()
-                                .map(|s| format!("{}:{}", s.provider, s.model))
-                                .collect(),
-                            aggregator: format!("{}:{}", p.aggregator.provider, p.aggregator.model),
-                            is_default: cfg.default_preset.as_deref() == Some(name.as_str()),
-                        }
+                    .map(|(name, p)| MoaPresetSummary {
+                        name: name.clone(),
+                        advisors: p
+                            .advisors
+                            .iter()
+                            .map(|s| format!("{}:{}", s.provider, s.model))
+                            .collect(),
+                        aggregator: format!("{}:{}", p.aggregator.provider, p.aggregator.model),
+                        is_default: cfg.default_preset.as_deref() == Some(name.as_str()),
                     })
                     .collect()
             })

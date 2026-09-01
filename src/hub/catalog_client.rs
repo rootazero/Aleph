@@ -55,9 +55,7 @@ fn sanitize_generated_at(raw: &str) -> Option<String> {
         if is_tz_open && !matches!(b, b'.' | b'+' | b'-' | b'Z') {
             return None;
         }
-        let is_accepted_elsewhere = is_tz_open
-            || DELIMITER_BYTES.contains(b)
-            || b.is_ascii_digit();
+        let is_accepted_elsewhere = is_tz_open || DELIMITER_BYTES.contains(b) || b.is_ascii_digit();
         // Whitespace anywhere is fatal — the publisher's payload should be
         // tight, and trimming opens the door to look-alike padding attacks.
         if b.is_ascii_whitespace() {

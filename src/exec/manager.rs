@@ -1022,7 +1022,10 @@ mod tests {
         let manager = ExecApprovalManager::new();
         let record = manager.create(&mock_request(), NO_APPROVAL_TIMEOUT);
         let (id, rx, timeout) = manager.register_pending(record);
-        assert!(timeout.is_none(), "no-expiry card must not carry a deadline");
+        assert!(
+            timeout.is_none(),
+            "no-expiry card must not carry a deadline"
+        );
 
         // Two sweeps must not retire a live no-expiry card.
         manager.cleanup_expired();

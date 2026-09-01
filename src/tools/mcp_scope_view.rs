@@ -32,8 +32,7 @@ impl McpScopedToolService {
     /// dispatch. Stage II replaces this with an actual extension-runtime
     /// handle; until then, extras are reserved, not advertised.
     async fn is_extras_only(&self, name: &str) -> bool {
-        self.extras.iter().any(|t| t.name == name)
-            && self.parent.describe(name).await.is_none()
+        self.extras.iter().any(|t| t.name == name) && self.parent.describe(name).await.is_none()
     }
 }
 

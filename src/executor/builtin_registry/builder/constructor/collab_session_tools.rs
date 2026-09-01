@@ -314,13 +314,13 @@ impl BuiltinToolRegistry {
                 config.session_coordinator.as_ref(),
                 config.team_store.as_ref(),
             ) {
-                (Some(coord), Some(team_store)) => Some(
-                    crate::builtin_tools::team::SessionCollaborateTool::new(
+                (Some(coord), Some(team_store)) => {
+                    Some(crate::builtin_tools::team::SessionCollaborateTool::new(
                         Arc::clone(coord),
                         current_agent_id.clone(),
                         Arc::clone(team_store),
-                    ),
-                ),
+                    ))
+                }
                 _ => None,
             };
             let turn = config.session_coordinator.as_ref().map(|coord| {
@@ -330,13 +330,13 @@ impl BuiltinToolRegistry {
                 )
             });
             let read = match (config.session_store.as_ref(), config.team_store.as_ref()) {
-                (Some(store), Some(team_store)) => Some(
-                    crate::builtin_tools::team::SessionReadTool::new(
+                (Some(store), Some(team_store)) => {
+                    Some(crate::builtin_tools::team::SessionReadTool::new(
                         Arc::clone(store),
                         Arc::clone(team_store),
                         current_agent_id.clone(),
-                    ),
-                ),
+                    ))
+                }
                 _ => None,
             };
 
@@ -380,10 +380,7 @@ impl BuiltinToolRegistry {
         // Google Meet tool — wraps the optional out-of-core transport bridge.
         let google_meet_tool = crate::builtin_tools::google_meet::GoogleMeetTool::new(
             config.google_meet_bridge.clone(),
-            config
-                .ssrf_policy
-                .clone()
-                .unwrap_or_default(),
+            config.ssrf_policy.clone().unwrap_or_default(),
         );
 
         let skill_system = crate::skill::shared_skill_system().clone();

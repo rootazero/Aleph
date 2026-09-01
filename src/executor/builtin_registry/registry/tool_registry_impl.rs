@@ -1362,8 +1362,8 @@ impl ToolRegistry for BuiltinToolRegistry {
                 crate::builtin_tools::media_send::MediaSendTool::new(
                     crate::security::ssrf::SsrfPolicy::default(),
                 )
-                    .call_json(arguments)
-                    .await
+                .call_json(arguments)
+                .await
             }),
 
             // Deliverable publisher — reads the session from the turn context,

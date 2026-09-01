@@ -161,7 +161,11 @@ impl AgentHarnessRunner {
             // Reject `..` components in relative paths so an entry like
             // `../../etc/passwd` cannot escape the workspace root. Absolute
             // paths are operator-controlled and intentionally still allowed.
-            if !path.is_absolute() && path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            if !path.is_absolute()
+                && path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
                 tracing::warn!(
                     path = %raw,
                     "[prompt.extra_files] relative path contains '..'; refusing"

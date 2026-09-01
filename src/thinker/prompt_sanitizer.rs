@@ -361,7 +361,9 @@ mod tests {
 
         let mut supplement_hits = 0_u32;
         for cp in 0..=0x0010_FFFF_u32 {
-            let Some(c) = char::from_u32(cp) else { continue };
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
             if !supplement_format_char(c) {
                 continue;
             }

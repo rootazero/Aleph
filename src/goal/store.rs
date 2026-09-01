@@ -2238,9 +2238,7 @@ mod tests {
         // `serde_json::Value` and re-parsing, mirroring a real upgrade row
         // that pre-dates the field.
         let mut v: serde_json::Value = serde_json::from_str(&complete_json).unwrap();
-        v.as_object_mut()
-            .unwrap()
-            .remove("completed_at_ms");
+        v.as_object_mut().unwrap().remove("completed_at_ms");
         let legacy: Goal = serde_json::from_value(v).unwrap();
         assert!(legacy.completed_at_ms.is_none());
         assert_eq!(legacy.status, GoalStatus::Complete);
