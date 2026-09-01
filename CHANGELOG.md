@@ -7,8 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [26.9.1]
 
-Five days, 517 commits, 809 files, +98.4k/-11.4k (of which +58.2k/-10.5k is
-source). Two features and one very large sweep. First, **the terminal becomes a
+Five days, 549 commits, 822 files, +99.7k/-9.0k — of which +58.6k/-8.0k is
+source, measured against `v26.8.27` and excluding the committed Panel dist.
+Two features and one very large sweep. First, **the terminal becomes a
 first-class surface**: a VT emulator lives in the gateway, holds the screen
 server-side, and ships dirty-row patches to a canvas2d grid in the Panel —
 which means the wire carries a *screen*, not a byte stream, and every reader
