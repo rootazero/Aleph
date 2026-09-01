@@ -5,6 +5,152 @@ All notable changes to the Aleph project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [26.9.1]
+
+Five days, 517 commits, 809 files, +98.4k/-11.4k (of which +58.2k/-10.5k is
+source). Two features and one very large sweep. First, **the terminal becomes a
+first-class surface**: a VT emulator lives in the gateway, holds the screen
+server-side, and ships dirty-row patches to a canvas2d grid in the Panel —
+which means the wire carries a *screen*, not a byte stream, and every reader
+agrees on what geometry a frame describes. Second, **a project room can be
+bound to a channel conversation**, so a Feishu/Slack thread and an Aleph room
+are one place with one roster and one scope. Third, and largest by far: an
+**audit sweep across every subsystem** — a 40-defect hardening round against
+the openclaw reference, eight rounds of per-module logic audits, and 22
+numbered fix rounds. Underneath the sweep runs one repeated shape: a predicate
+that answered "I could not tell" with "no", and the fix is almost never at the
+call site — it is at the type that let the two answers look alike.
+
+### Added
+
+- **An embedded terminal, end to end.** A character grid with wide-glyph and
+  wrap semantics, straddled-spacer repair, scrollback with correct eviction,
+  the alternate screen buffer, resize, cursor positioning, erase, C0 and SGR —
+  parsed against a pinned `vte` API surface. The screen is held server-side and
+  published as diffs on a 16 ms cadence; the raw byte topic is retired.
+  `pty.attach` replays into a client that does gap detection, stale-frame
+  discard and attach buffering. The Panel gets a Terminal nav mode, a canvas2d
+  grid renderer, keyboard encoding, and a font stack whose shipped default
+  actually has icon glyphs.
+- **The terminal's authority is scoped, not ambient.** `pty.screen` / `pty.exit`
+  delivery and the five addressed methods are gated on session ownership; spawn
+  cwd is jailed to the registered workspaces (pinned to the resolver that reads
+  configuration, not a second copy); geometry that would abort the daemon is
+  refused; a `[policies.terminal]` session gate ships live and default-on, and
+  the switch's writer is gated and recorded.
+- **Project rooms bind to channel conversations.** `projects.channel.bind` /
+  `unbind` / `list` with one protocol author for the wire shapes, a
+  roster-gated channel-binding arm in room claiming, `session_store::rescope`
+  taking a project id rather than a rendered scope, every agent's row rescoped
+  for a bound conversation, and the room scope carried across a harness spawn.
+  Reachable from `aleph projects` on the CLI, from room settings in the Panel,
+  and from `project_manage bind_workspace`. Covered by a real-machine fixture
+  (`qa/rooms_channel_bind`).
+- **`grep` and `find` are tools.** Content search and filename discovery each
+  get their own verb over the shared `.gitignore`-aware walk, and `bash` stops
+  describing the web-search tool in its own description.
+- **One implementation of "how do I search."** There were two. Now each provider
+  *declares* what it can express and the claim is pinned to the wire; the
+  request's capability bits are a function of the request; an explicit provider
+  is honoured; the freshness vocabulary and the "what this result set is
+  missing" sentences each have exactly one owner; include/exclude domain lists
+  reach the backends that have them; one call can fan out to several backends.
+  The search tool exposes the knobs that already existed and stops discarding
+  four fields, and the Panel's provider cards are derived from the protocol's
+  single list of which backends exist.
+- **A history window that loads earlier across clients**, with the same
+  vocabulary in the protocol, the CLI, the TUI and the Panel.
+- **A repair pass for on-disk session damage.** Two already-fixed writer bugs
+  left millisecond `last_active_at` stamps that outranked every healthy session
+  in the descending sort, and torn `metadata.json` documents that made
+  `list_sessions` warn on every poll. The pass normalizes the timestamps,
+  rebuilds torn metadata from the transcript (defaults where the transcript
+  cannot answer — a zero token count reads as "unknown", an invented one would
+  read as measured), and quarantines what it cannot rebuild.
+- **`TopologyDiff::EdgeUnknown`,** so an unparseable edge kind is reported as
+  unknown rather than silently dropped from the diff.
+- **Approval that survives inattention.** A still-parked approval is re-raised
+  on a backoff schedule; an attended card waits instead of expiring; launching
+  an app is ungated for an attended operator.
+- **`SESSION_KNOBS.md`,** and a `CLAUDE.md` that stops carrying detail no single
+  reference document could say — the criteria index now holds shape names, with
+  triggers and full text in the FEATURE_LOCATOR appendices.
+
+### Fixed
+
+- **40 verified defects across five subsystems** in one openclaw-reference
+  hardening round, plus eight rounds of per-module logic audits (teams,
+  thinker, tool_metadata, tool_output, tools, utils, vision, wizard,
+  verification, workflow, resilience, looping, mcp, media, memory, harness,
+  hub, logging, loop_graph, group_chat, guardrails, generation, extension,
+  clarification, cli, canvas) and 22 numbered fix rounds. Highlights below; the
+  reports are archived under `review-results/`.
+- **SSRF and rebinding, closed as a class rather than a list.** URL fetches in
+  `generation`, `media_send`, `google_meet`, `a2a_agents` and `export` now
+  carry the policy from config instead of each deciding for itself;
+  `web_fetch` skips the provider path that reopened a DNS-rebinding TOCTOU;
+  protocol-relative and percent-encoded bypasses in `export` are closed; the
+  Discord token regex is anchored and joins the leak-detector assets; the PII
+  email regex caps its TLD quantifier so it cannot backtrack unboundedly.
+- **A failed run now reports that it failed.** The exit arm computed
+  `HarnessError::class()` and fanned all four variants into `Cancelled`, so a
+  provider auth failure rendered on every trace surface as `Info` labelled
+  "cancelled" — softer than a `HitLimit` cap and indistinguishable from the
+  user pressing stop, while the session log beside it said `Errored`. One halt
+  vocabulary now spans protocol, CLI, TUI and Panel.
+- **The transcript has one order, and it is the order the rows were recorded.**
+  Two backends each answered "what order?" separately, and two of the disagreeing
+  paths were DELETEs.
+- **`require_operator_tier` was fail-open on an absent `TurnContext`,** and the
+  justification comment for that was unconditional — it read as if the absence
+  had been considered.
+- **`caller_may_choose_directory` was constant-true.** A predicate that cannot
+  return false is not a gate; five more claims of the same shape were narrowed
+  at their own sites rather than at the readers.
+- **A session that was stopped or ended can no longer be silently resumed**, and
+  the FTS delete, the source delete and the count update happen in one
+  transaction instead of three.
+- **Idempotency keys are namespaced by `(principal, method)`,** and the connect
+  rate limit stopped locking out an entire NAT because one client behind it
+  misbehaved.
+- **`crate::sync_primitives` is now the only door.** Locks, `Arc` and atomics in
+  canvas, identity, loop_graph, extension, runtimes and the capability slots
+  were reaching past it into `std::sync` — which is how a poisoned mutex
+  becomes a panic in one subsystem and a recovered guard in the next.
+- **`looping` refunds an iteration on `Active → Paused` with an unrun tick**, so
+  pausing no longer costs a turn that never happened.
+- **The macOS shell fork ban is lifted for shells,** which never bought security
+  (`(deny process-fork)` does not stop `rm -rf`, only compound commands) and did
+  break every multi-command invocation; the per-user `TMPDIR` is granted.
+- **Panel search settings stopped acting on names it had not resolved** — an
+  unresolved delete target was treated as permitted, and the default-provider
+  refusal is now shown before the click rather than after it.
+- **The release pipeline was gated shut, for the second time.** `0dc1ff85a`
+  dropped the eight tracked files under `interfaces/webchat/dist/` with the
+  commit message "release job to take over"; no release job was taught to build
+  the WASM, and the workflow still says "pre-built and committed to git — no
+  WASM build here". `panel-dist-check` is `needs:` of every build, so every
+  release run would have failed at the first job — and, worse, `assets.rs`
+  embeds that directory at *compile* time, so any clean checkout was building
+  an `aleph-server` with an empty Panel inside it. The same removal shut the
+  pipeline for two days at `033814185` on 2026-08-13. The files are tracked
+  again and the root `.gitignore` no longer contradicts the twenty-line comment
+  in `interfaces/webchat/.gitignore` that explains why they must be.
+- **CI: the ubuntu test job stopped fitting in 16 GB.** Its own comment
+  predicted this precisely — "if this dies again the sampler will show a
+  decline rather than a plateau, and that is a different problem" — and that is
+  what the sampler shows: 13.0 GB to 669 MiB in five minutes, then exit 143.
+  16 GB of swap on the ephemeral volume, rather than another `-j` cap the
+  earlier measurements had already shown to be inert.
+- **Four Windows-only test failures** in `session_store::migration`: the fixture
+  joined a session *key* to a path, and `:` is illegal in a Windows filename —
+  production never does that, it routes every key through
+  `sanitize_key_for_dir`.
+- **The Rust Doctor workflow wrote its diagnosis only to the step summary,** so
+  its failures — it has never been green since it landed — said nothing at all
+  to anyone reading the logs. It also checked out without submodules, which
+  `include_dir!` needs at compile time.
+
 ## [26.8.27]
 
 Four days, 361 commits, 568 files, +61.5k/−5.8k (of which +40.5k/−5.7k is
