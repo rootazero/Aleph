@@ -64,6 +64,32 @@ jobs:
       # that reaches `glib-sys`. Its build script fails with "Package
       # 'glib-2.0' ... not found" — which rust-doctor surfaced only as "Clippy
       # exited with status 101", the reason the diagnostic step below exists.
+      # `cargo clippy --workspace --all-targets` is the heaviest build in this
+      # repository — the Lint job pins `-j1` for a *narrower* command on the
+      # strength of a measured ~11.5 GB in a single rustc — and rust-doctor
+      # runs it twice (once as the diagnostic below, once inside its own scan).
+      # On a 16 GB runner that is exit 143, which is what this job did after the
+      # glib fix let it get far enough to try. Reclaim the ~25 GB of unused
+      # preinstalled SDKs, then put 16 GB of swap on /mnt, same as the test and
+      # loom jobs in aleph-core-ci.yml.
+      - name: Reclaim runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+                      /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Enlarge swap
+        run: |
+          set -euo pipefail
+          sudo swapoff -a || true
+          sudo rm -f /mnt/swapfile /swapfile
+          sudo fallocate -l 16G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+
       - name: Install system dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y \

@@ -192,6 +192,16 @@ jobs:
       - name: Run sandbox tests
         run: cargo test -p alephcore --lib sandbox
 
+      # `--lib` does not reach `src/bin/`. Those 94 tests — among them the
+      # census that pins boot to installing the spend policy and the spend
+      # ledger unconditionally — had never run on a cloud machine: this
+      # workflow ran `--lib` and `--test '*'` and nothing else, so the whole
+      # binary target was a hole the shape of the thing it was meant to guard.
+      # Cheap to close (the targets are already linked for `--lib`, and the
+      # tests themselves finish in well under a second).
+      - name: Run binary-target tests
+        run: cargo test -p alephcore --bins
+
       # `--test '*'` runs every binary in tests/, rather than a hand-kept list
       # of names. The list is what let 6 of the 132 targets that existed then run
       # while the other 126 silently did not: a new tests/ file joined CI only if
@@ -268,9 +278,16 @@ jobs:
         shell: pwsh
         run: Get-PSDrive -PSProvider FileSystem
 
+      # `--no-fail-fast`, because without it cargo stops after the first test
+      # BINARY that fails and the rest never run — so a red run reports one
+      # broken target and says nothing about the others, and each fix costs a
+      # whole ~45-minute round to reveal the next one. That is how a Windows
+      # server-startup crash hid whatever follows `provider_rpc_probe`
+      # alphabetically for this entire release cycle. The exit code is
+      # unchanged: any failure still fails the step.
       - name: Run integration tests
         shell: bash
-        run: bash scripts/ci_run_with_resource_log.sh cargo test -p alephcore --features test-helpers --test '*'
+        run: bash scripts/ci_run_with_resource_log.sh cargo test -p alephcore --features test-helpers --test '*' --no-fail-fast
 
       # `always()`, or the reading dies with the failure it exists to explain.
       - name: Disk after integration tests
