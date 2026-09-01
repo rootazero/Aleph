@@ -142,6 +142,15 @@ call site — it is at the type that let the two answers look alike.
   what the sampler shows: 13.0 GB to 669 MiB in five minutes, then exit 143.
   16 GB of swap on the ephemeral volume, rather than another `-j` cap the
   earlier measurements had already shown to be inert.
+- **Every continuation re-seeded its whole history.** `seed_history` probes the
+  session log for non-emptiness with `get_events(id, from, to)` — a seq
+  *range*, where `to` is exclusive and seq allocation starts at 1, so `Some(2)`
+  is the one-event probe. A review pass read `to` as a limit and lowered it to
+  `Some(1)`, which asks for `seq < 1` and matches nothing on any log: the guard
+  answered "empty" every time and doubled the conversation context on every
+  continuation run — the exact duplication it exists to prevent, introduced by
+  the edit whose commit message says it fixed it. The bound is a named constant
+  now, because the literal reads like a count.
 - **Four Windows-only test failures** in `session_store::migration`: the fixture
   joined a session *key* to a path, and `:` is illegal in a Windows filename —
   production never does that, it routes every key through

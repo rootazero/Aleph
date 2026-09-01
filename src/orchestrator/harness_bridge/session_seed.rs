@@ -74,8 +74,23 @@ async fn seed_history(
     // Only seed prior turns into a fresh (empty) log. For a continuation
     // (log already non-empty) the turns are already persisted — re-seeding
     // would duplicate the whole history. The new user turn below always runs.
+    //
+    // `get_events(id, from, to)` takes a seq RANGE, not a limit: the store
+    // selects `seq >= from AND seq < to`, so `to` is EXCLUSIVE. Seq allocation
+    // starts at 1 (`load_head_seq` answers 0 for an empty log, and the actor
+    // hands out `head_seq + 1`), so the cheapest "is there anything at all"
+    // probe asks for `seq < 2`.
+    //
+    // Naming it, because the literal is a trap: `Some(2)` reads like "two
+    // events" to anyone who assumes a limit, and a review pass lowered it to
+    // `Some(1)` on exactly that reading. `seq < 1` matches nothing on any log,
+    // so the guard answered "empty" every time and every continuation re-seeded
+    // its whole history — the duplication this guard exists to prevent, caused
+    // by the edit that claimed to fix it.
+    // Regression covered by `tests::history_input_does_not_reseed_when_log_nonempty`.
+    const FIRST_EVENT_EXCLUSIVE_END: crate::session::events::EventSeq = 2;
     let existing = service
-        .get_events(session_id, None, Some(1))
+        .get_events(session_id, None, Some(FIRST_EVENT_EXCLUSIVE_END))
         .await
         .map(|e| !e.is_empty())
         .unwrap_or_else(|e| {
