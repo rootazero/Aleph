@@ -62,8 +62,41 @@ impl Principal {
     /// "unattributed".
     const UNATTRIBUTED_KEY: &'static str = "@unattributed";
 
+    /// The safe construction path for a [`Self::User`] principal.
+    ///
+    /// Coerces every reserved sentinel onto [`Self::Unattributed`] so the
+    /// `principal_id` row space and the `User(String)` row space can never
+    /// collide:
+    ///
+    /// - the literal [`Self::UNATTRIBUTED_KEY`] (`"@unattributed"`), which
+    ///   would otherwise write to the same ledger row as the actual
+    ///   [`Self::Unattributed`] variant (see [`Self::as_key`] /
+    ///   [`Self::from_key`]);
+    /// - any other `@`-prefixed id, since the canonical `users.user_id`
+    ///   shape is `u-`-prefixed and any `@`-prefix in production input
+    ///   (request metadata, replay rows, test fixtures) is a mis-stamp
+    ///   rather than a real user;
+    /// - an empty id, which has no user to charge and would round-trip
+    ///   through the ledger as a zero-length `principal_id` string the
+    ///   SQLite `TEXT PRIMARY KEY` happily stores alongside a real user.
+    ///
+    /// The matching in `principal_from_metadata` (the untrusted-input site)
+    /// uses this constructor verbatim; direct `Principal::User(x)` remains
+    /// legal for tests and pattern-matched unwraps, where the input is by
+    /// construction a valid `u-`-prefixed string.
+    pub fn user(id: impl Into<String>) -> Self {
+        let id = id.into();
+        if id.is_empty() || id == Self::UNATTRIBUTED_KEY || id.starts_with('@') {
+            Self::Unattributed
+        } else {
+            Self::User(id)
+        }
+    }
+
     /// The ledger's primary-key text. `"@unattributed"` cannot collide with a
-    /// real id: `users.user_id` values are `u-`-prefixed.
+    /// real id: `users.user_id` values are `u-`-prefixed, and any value
+    /// that would collide is coerced to [`Self::Unattributed`] by
+    /// [`Self::user`] before construction.
     pub fn as_key(&self) -> &str {
         match self {
             Self::User(id) => id,
@@ -518,7 +551,7 @@ pub(crate) const fn global_policy_slot() -> &'static dyn SlotStatus {
 pub fn ambient_principal() -> Principal {
     crate::scope::current_room_author()
         .or_else(crate::scope::ambient_owner)
-        .map(Principal::User)
+        .map(Principal::user)
         .unwrap_or(Principal::Unattributed)
 }
 
@@ -548,10 +581,15 @@ pub fn ambient_principal() -> Principal {
 /// is an agent id, and an agent is not a person and cannot hold a budget.
 #[must_use]
 pub fn principal_from_metadata(meta: &HashMap<String, String>) -> Principal {
+    // Routes both the author key and the scope-owner fallback through
+    // `Principal::user`, so any `"@unattributed"` (or other `@`-prefixed)
+    // string an upstream caller stamps into `AUTHOR_USER_KEY` collapses to
+    // `Unattributed` instead of writing to the same `principal_id` row
+    // space as the sentinel — silent misattribution rather than a panic.
     meta.get(crate::gateway::execution_engine::AUTHOR_USER_KEY)
         .cloned()
         .or_else(|| crate::scope::scope_from_metadata(meta).map(|attr| attr.owner_user_id))
-        .map(Principal::User)
+        .map(Principal::user)
         .unwrap_or(Principal::Unattributed)
 }
 

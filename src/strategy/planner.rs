@@ -121,13 +121,50 @@ fn build_planner_prompt(objective: &str, ctx: &PlannerContext) -> String {
 /// response and deserialize it as a `Strategy`. Returns `None` on any failure
 /// (mirrors `skill_distill::parse_distill_response`). The `goal_id` field is
 /// `#[serde(default)]` on `Strategy`, so the planner JSON need not supply it.
+///
+/// Robust to stray braces in prose: scans for the first `{`, then walks forward
+/// tracking brace depth while honoring JSON string literals and escape
+/// sequences. This survives preamble like `important for the task {` and
+/// trailing prose like `} use }` that the old `find('{')..rfind('}')` slice
+/// would silently turn into non-JSON (and then swallow via `.ok()`).
 fn parse_strategy(text: &str) -> Option<Strategy> {
-    let start = text.find('{')?;
-    let end = text.rfind('}')?;
-    if end < start {
-        return None;
+    let bytes = text.as_bytes();
+    let start = bytes.iter().position(|&b| b == b'{')?;
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut escape = false;
+    let mut end: Option<usize> = None;
+    for (i, &b) in bytes.iter().enumerate().skip(start) {
+        if escape {
+            escape = false;
+            continue;
+        }
+        match b {
+            b'\\' if in_string => escape = true,
+            b'"' => in_string = !in_string,
+            b'{' if !in_string => depth += 1,
+            b'}' if !in_string => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
     }
-    serde_json::from_str::<Strategy>(&text[start..=end]).ok()
+    let end = end?;
+    match serde_json::from_str::<Strategy>(&text[start..=end]) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            tracing::debug!(
+                error = ?e,
+                response_preview = %&text[..text.len().min(200)],
+                "strategy planner: JSON parse failed"
+            );
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -217,5 +254,71 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(s.goal_id.as_deref(), Some("goal:sess-1:abc"));
+    }
+
+    // ----------------------------------------------------------------------
+    // Brace-balance robustness tests (P2 planner bug fix):
+    // verify `parse_strategy` no longer silently drops a valid plan when the
+    // model emits stray `{` / `}` in prose around the JSON object.
+    // ----------------------------------------------------------------------
+
+    const SAMPLE_PLAN_JSON: &str = r#"{
+        "objective": "Ship X",
+        "approach": "build then verify",
+        "phases": ["build", "verify"],
+        "guardrails": ["do not refactor the unrelated logging module"],
+        "success_criteria": "X ships and tests pass"
+    }"#;
+
+    /// A stray opening brace in the preamble must NOT pull the slice left of
+    /// the real JSON (the old `find('{')..rfind('}')` collapsed on this).
+    #[test]
+    fn parse_strategy_with_stray_brace_in_preamble_extracts_valid_plan() {
+        let text = format!("important for the task {{\n{SAMPLE_PLAN_JSON}");
+        let s = parse_strategy(&text)
+            .expect("stray opening brace in preamble must be skipped");
+        assert_eq!(s.objective, "Ship X");
+        assert!(!s.is_empty());
+    }
+
+    /// A stray closing brace in trailing prose must NOT widen the slice past
+    /// the real JSON's closing brace (the old `rfind('}')` collapsed on this).
+    #[test]
+    fn parse_strategy_with_stray_brace_in_trailing_prose_extracts_valid_plan() {
+        let text = format!("{SAMPLE_PLAN_JSON} use }}");
+        let s = parse_strategy(&text)
+            .expect("stray closing brace in trailing prose must be ignored");
+        assert_eq!(s.objective, "Ship X");
+        assert!(!s.is_empty());
+    }
+
+    /// Braces inside a JSON string literal are content, not structure. A naive
+    /// brace counter that ignores string state would mis-match here.
+    #[test]
+    fn parse_strategy_with_brace_inside_json_string_extracts_valid_plan() {
+        let text = r#"{
+        "objective": "Ship X {with braces} inside",
+        "approach": "build then verify",
+        "phases": ["build", "verify"],
+        "guardrails": ["do not refactor the unrelated logging module"],
+        "success_criteria": "X ships and tests pass"
+    }"#;
+        let s = parse_strategy(text)
+            .expect("braces inside a JSON string must not affect depth tracking");
+        assert_eq!(s.objective, "Ship X {with braces} inside");
+    }
+
+    /// Unbalanced input (no matching `}`) must fail soft to `None`, matching
+    /// the old behaviour. The new scanner just has to not panic / spin.
+    #[test]
+    fn parse_strategy_with_unbalanced_brace_returns_none() {
+        let text = r#"{
+        "objective": "Ship X",
+        "approach": "build then verify",
+        "guardrails": ["do not refactor the unrelated logging module"]"#;
+        assert!(
+            parse_strategy(text).is_none(),
+            "unbalanced JSON must fail soft to None"
+        );
     }
 }

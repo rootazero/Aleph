@@ -66,6 +66,79 @@ impl SessionActor {
         }
     }
 
+    /// Common post-append success path. Used by both the hot `EmitEvent` arm
+    /// and the idle-drain arm so neither can forget the observer, the
+    /// broadcast, the reply, or the idle-deadline reset.
+    ///
+    /// The hot arm was the only site that wrapped `obs.on_appended` in
+    /// `catch_unwind`; the drain arm silently skipped observer + broadcast,
+    /// which left `MessageProjector` (and any other observer-side consumer)
+    /// out of sync with `session_events` for any event that landed during
+    /// the brief window between the idle sleep firing and `run()` returning.
+    /// Funnelling both arms through this helper closes that gap.
+    fn finish_emitted(
+        &mut self,
+        seq: EventSeq,
+        event: SessionEvent,
+        at: i64,
+        reply: oneshot::Sender<Result<EventSeq, SessionError>>,
+    ) {
+        self.head_seq = seq;
+        let record = SessionEventRecord {
+            seq,
+            event,
+            created_at_ms: at,
+        };
+        // Observer notification must not be allowed
+        // to kill the actor: a panicking observer
+        // used to strand the broadcast and the
+        // caller's reply, with the event durable
+        // in storage but neither subscriber nor
+        // caller told. `catch_unwind` is sound
+        // here because the closure only takes
+        // `&self.id` and `&record`, both
+        // `RefUnwindSafe`.
+        if let Some(obs) = &self.observer {
+            let id = &self.id;
+            let record_ref = &record;
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                obs.on_appended(id, record_ref);
+            }))
+            .is_err()
+            {
+                tracing::error!(
+                    id = ?self.id,
+                    seq,
+                    "SessionActor observer panicked; \
+                     continuing (event already durable)"
+                );
+            }
+        }
+        // Broadcast send. A `SendError` here means
+        // *zero receivers* — tokio's
+        // `broadcast::Sender::send` ONLY fails when
+        // `rx_cnt == 0`; a full
+        // `BROADCAST_BUFFER` (=256) does NOT error
+        // and instead lets the lagging receiver
+        // observe `RecvError::Lagged` on its next
+        // `recv()` (which is exactly where it can
+        // tell — the producer side cannot, which is
+        // why there is no separate "lagger" warn
+        // here). The previous `&& receiver_count >
+        // 0` guard was dead because `Err` ⇔ `rx_cnt
+        // == 0`; an audit caught it.
+        if let Err(_record) = self.broadcaster.send(record) {
+            tracing::debug!(
+                id = ?self.id,
+                seq,
+                "SessionActor broadcast had no receivers; \
+                 event is durable in the SSOT log only"
+            );
+        }
+        let _ = reply.send(Ok(seq));
+        self.idle_deadline = Instant::now() + self.idle_timeout;
+    }
+
     /// Replays all persisted events and rebuilds `head_seq`.
     async fn replay(&mut self) -> Result<(), SessionError> {
         let records = self.store.load_all_events(&self.id).await?;
@@ -109,61 +182,7 @@ impl SessionActor {
 
                         match append_result {
                             Ok(()) => {
-                                let record = SessionEventRecord {
-                                    seq,
-                                    event,
-                                    created_at_ms: at,
-                                };
-                                self.head_seq = seq;
-                                // Observer notification must not be allowed
-                                // to kill the actor: a panicking observer
-                                // used to strand the broadcast and the
-                                // caller's reply, with the event durable
-                                // in storage but neither subscriber nor
-                                // caller told. `catch_unwind` is sound
-                                // here because the closure only takes
-                                // `&self.id` and `&record`, both
-                                // `RefUnwindSafe`.
-                                if let Some(obs) = &self.observer {
-                                    let id = &self.id;
-                                    let record_ref = &record;
-                                    if std::panic::catch_unwind(
-                                        std::panic::AssertUnwindSafe(|| {
-                                            obs.on_appended(id, record_ref);
-                                        }),
-                                    )
-                                    .is_err()
-                                    {
-                                        tracing::error!(
-                                            id = ?self.id,
-                                            "SessionActor observer panicked; \
-                                             continuing (event already durable)"
-                                        );
-                                    }
-                                }
-                                // Broadcast send. A `SendError` here means
-                                // *zero receivers* — tokio's
-                                // `broadcast::Sender::send` ONLY fails when
-                                // `rx_cnt == 0`; a full
-                                // `BROADCAST_BUFFER` (=256) does NOT error
-                                // and instead lets the lagging receiver
-                                // observe `RecvError::Lagged` on its next
-                                // `recv()` (which is exactly where it can
-                                // tell — the producer side cannot, which is
-                                // why there is no separate "lagger" warn
-                                // here). The previous `&& receiver_count >
-                                // 0` guard was dead because `Err` ⇔ `rx_cnt
-                                // == 0`; an audit caught it.
-                                if let Err(_record) = self.broadcaster.send(record) {
-                                    tracing::debug!(
-                                        id = ?self.id,
-                                        seq,
-                                        "SessionActor broadcast had no receivers; \
-                                         event is durable in the SSOT log only"
-                                    );
-                                }
-                                let _ = reply.send(Ok(seq));
-                                idle_deadline = Instant::now() + self.idle_timeout;
+                                self.finish_emitted(seq, event, at, reply);
                             }
                             Err(e) => {
                                 let _ = reply.send(Err(e));
@@ -202,20 +221,34 @@ impl SessionActor {
                     while let Ok(cmd) = self.inbox.try_recv() {
                         match cmd {
                             ActorCommand::EmitEvent { event, reply } => {
-                                let seq = self.head_seq + 1;
+                                let mut seq = self.head_seq + 1;
                                 let at = now_ms();
-                                let append_result =
+                                let mut append_result =
                                     self.store.append(&self.id, seq, &event, at).await;
+                                // Self-heal on append failure (audit 4.1):
+                                // the drain arm races the hot arm and any
+                                // direct-store writer just like the hot arm
+                                // does, so a `(session_id, seq)` UNIQUE
+                                // collision must resync `head_seq` from the
+                                // store and retry ONCE — without this the
+                                // actor could exit with the collision
+                                // unresolved, wedging the session just like
+                                // the hot-arm audit fixed.
+                                if append_result.is_err() {
+                                    if let Ok(stored_head) =
+                                        self.store.load_head_seq(&self.id).await
+                                    {
+                                        self.head_seq = stored_head;
+                                        seq = self.head_seq + 1;
+                                        append_result = self
+                                            .store
+                                            .append(&self.id, seq, &event, at)
+                                            .await;
+                                    }
+                                }
                                 match append_result {
                                     Ok(()) => {
-                                        let record = SessionEventRecord {
-                                            seq,
-                                            event,
-                                            created_at_ms: at,
-                                        };
-                                        self.head_seq = seq;
-                                        let _ = self.broadcaster.send(record);
-                                        let _ = reply.send(Ok(seq));
+                                        self.finish_emitted(seq, event, at, reply);
                                     }
                                     Err(e) => {
                                         let _ = reply.send(Err(e));

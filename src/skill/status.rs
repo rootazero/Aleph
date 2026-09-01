@@ -8,6 +8,7 @@ use crate::skill::config::SkillEntryConfig;
 use crate::skill::eligibility::{EligibilityResult, IneligibilityReason};
 use crate::skill::installer::filter_install_specs_for_current_os;
 use crate::skill::usage::UsageStats;
+use crate::thinker::xml_util::escape_xml;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallOption {
@@ -132,8 +133,8 @@ impl SkillStatusEntry {
 
         Self {
             id: manifest.id().clone(),
-            name: manifest.name().to_string(),
-            description: manifest.description().to_string(),
+            name: escape_xml(manifest.name()),
+            description: escape_xml(manifest.description()),
             emoji: manifest.emoji().map(|s| s.to_string()),
             source: manifest.source().clone(),
             source_label,
