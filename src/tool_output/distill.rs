@@ -178,6 +178,12 @@ fn extract_path(line: &str) -> Option<String> {
             if path_part.is_empty() {
                 continue;
             }
+            // Reject URL-shaped candidates (e.g. `https://host:8080/path`) so
+            // `host:8080` is not surfaced as a `path:line` reference in the
+            // digest footer — the URL has no line number.
+            if path_part.contains("://") {
+                continue;
+            }
             // Accept paths that have an extension dot, a Unix slash, or a Windows backslash.
             if !path_part.contains('.') && !path_part.contains('/') && !path_part.contains('\\') {
                 continue;
@@ -291,8 +297,12 @@ pub fn distill_output(text: &str) -> Option<OutputDigest> {
         }
     }
 
-    // No signal → let the caller truncate instead.
-    if error_count == 0 && paths.is_empty() {
+    // No signal → let the caller truncate instead. Require either an
+    // error/context line (the digest is useful) or paired signal — at least
+    // one path AND at least one salient line — so a path-only artefact with
+    // zero errors does not produce a misleading `[Files: ...]` footer.
+    let has_pair = !paths.is_empty() && !salient.is_empty();
+    if error_count == 0 && !has_pair {
         return None;
     }
 
@@ -401,6 +411,17 @@ mod tests {
     fn extract_path_rejects_non_path() {
         assert_eq!(extract_path("time: 12:30"), None); // no dot in "time"
         assert_eq!(extract_path("just words here"), None);
+    }
+
+    #[test]
+    fn extract_path_rejects_url_with_port() {
+        // URLs with explicit ports must not be surfaced as `path:line`.
+        // `extract_path("curl http://localhost:8080/api")` would otherwise
+        // return `Some("http://localhost:8080")` because the algorithm
+        // accepts any colon-separated token whose left side has a `/` and
+        // whose right side starts with digits.
+        assert_eq!(extract_path("see https://example.com:8080/api for details"), None);
+        assert_eq!(extract_path("curl http://localhost:8080/api"), None);
     }
 
     #[test]

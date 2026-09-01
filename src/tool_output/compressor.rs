@@ -223,10 +223,21 @@ fn compress_screenshot(output: &str) -> String {
     let starts_with_data_image = output
         .get(..10)
         .is_some_and(|p| p.eq_ignore_ascii_case("data:image"));
+    // Tighten the base64 heuristic: a real base64 token has BOTH a `+`/`/`
+    // marker AND at least 2 such markers in the prefix, OR a trailing `=`
+    // padding. A 100+ char string with only one `+` (e.g. a CSV cell with a
+    // stray plus) is unlikely to be base64 — base64 is 6 bits per char and
+    // the alphabet is `A-Z a-z 0-9 + /`, so a real payload has many of each.
+    let base64_marker_count = || {
+        output
+            .bytes()
+            .take(128)
+            .filter(|b| *b == b'+' || *b == b'/')
+            .count()
+    };
+    let looks_like_base64 = base64_marker_count() >= 2 || has_base64_padding();
     if starts_with_data_image
-        || (output.len() > 100
-            && prefix_is_base64_chars()
-            && (prefix_has_base64_marker() || has_base64_padding()))
+        || (output.len() > 100 && prefix_is_base64_chars() && looks_like_base64)
     {
         return "[Screenshot captured successfully]".to_owned();
     }
@@ -525,6 +536,21 @@ mod tests {
         assert!(!result.contains("Screenshot captured successfully"));
         // Single-line input without newlines is preserved as-is (1 line <= 5)
         assert_eq!(result, output);
+    }
+
+    #[test]
+    fn test_compress_screenshot_alphanumeric_with_one_plus_not_base64() {
+        // A 100+ char string with only ONE `+` (e.g. a CSV cell with a stray
+        // plus) is NOT base64 — a real base64 payload has many `+`/`/` markers
+        // (6 bits per char from a 64-char alphabet; the markers are not rare).
+        let mut output = "A".repeat(120);
+        output.push('+');
+        output.push_str(&"A".repeat(50));
+        let result = compress_tool_output("take_screenshot", &output);
+        assert!(
+            !result.contains("Screenshot captured successfully"),
+            "single-`+` text must not be treated as base64; got: {result:?}"
+        );
     }
 
     #[test]
