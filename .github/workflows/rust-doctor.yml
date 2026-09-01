@@ -24,6 +24,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          # rust-doctor shells out to `cargo clippy`, and alephcore embeds the
+          # `skills/` and `plugins/` submodules with `include_dir!` — a
+          # compile-time macro, so an uninitialised submodule is a build error,
+          # not a missing feature.
+          submodules: recursive
 
       # rust-doctor shells out to `cargo clippy` inside the scanned workspace.
       - uses: dtolnay/rust-toolchain@stable
@@ -56,10 +61,16 @@ jobs:
           fi
 
           set +e
-          rust-doctor . --yes --verbose "${scope_arguments[@]}" > scan.txt 2>&1
-          scan_status=$?
+          rust-doctor . --yes --verbose "${scope_arguments[@]}" 2>&1 | tee scan.txt
+          scan_status=${PIPESTATUS[0]}
           set -e
 
+          # The scan output used to land ONLY in the step summary. A summary is
+          # not readable from `gh run view --log`, so this job's first failure
+          # (exit 2, 0.24s, never green since it landed on 2026-08-30) reported
+          # nothing at all to anyone reading the logs. `tee` puts the same bytes
+          # in both places; the summary keeps its rendering, the log keeps the
+          # diagnosis.
           {
             echo '## Rust Doctor'
             echo
