@@ -1,0 +1,265 @@
+#!/usr/bin/env bash
+# Real-machine QA for the crash boundary's TEXT — the sentence a dangling tool
+# call is answered with, and whether it actually reaches the model.
+#
+#   ./qa/resume_boundary/run.sh crash      # a dangling call gets OUTCOME UNKNOWN,
+#                                          # and the model's NEXT request carries it
+#   ./qa/resume_boundary/run.sh attribute  # a dangle left by an EARLIER run is not
+#                                          # blamed on this restart
+#   KEEP=1 ./qa/resume_boundary/run.sh crash
+#
+# Why a real machine. `resume_coordinator.rs`'s unit tests and
+# `tests/resume_coordinator_integration.rs` both assert on the bytes
+# `boundary_repair_text` returns and on the event the coordinator appends —
+# i.e. they test the PRODUCER. Neither shows those bytes ever entering a
+# prompt: throw away everything downstream of the event append and both
+# suites still pass. The oracle here is the mock provider's REQUEST LOG —
+# what was actually put in front of the model on the next turn — not the
+# server's event log.
+#
+# `attribute` is the falsifying arm for the defect this round's design spec
+# (§1.4) fixes: run it on the pre-round tree and it must FAIL, both dangles
+# misattributed to "the server restarted" instead of the older one reading
+# "an earlier run in this session".
+#
+# How the dangle is made to happen: the mock's first turn answers with a
+# `bash` tool_use of `sleep 120` — a call that will not get a result on any
+# timescale this fixture runs on — and the driver kills the server with
+# `kill -9` (not SIGTERM: a clean shutdown lets in-flight work settle and
+# there would be nothing left to repair) a few hundred ms after the durable
+# event log records the dispatch. `drive_dangle.py --mode send` does not
+# guess that timing with a sleep; it polls the event log itself for the new
+# `tool_call_requested` row before returning, so the kill lands exactly once
+# the call is durably dangling and no earlier.
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$HERE/../.." && pwd)"
+BUSY="$HERE/../busy_input"
+PLANH="$HERE/../plan_handoff"
+STAGE="${1:-crash}"
+QA_ROOT="${QA_ROOT:-$(mktemp -d "${TMPDIR:-/tmp}/aleph-qa-resume-XXXXXX")}"
+KEEP="${KEEP:-0}"
+
+GATEWAY_PORT="${GATEWAY_PORT:-18831}"
+MOCK_PORT="${MOCK_PORT:-18832}"
+
+case "$STAGE" in
+  crash|attribute) ;;
+  *) echo "unknown stage: $STAGE (crash|attribute)" >&2; exit 64 ;;
+esac
+
+# Build BEFORE HOME is redirected: cargo's registry/git-cache/toolchain all
+# live under the real HOME.
+. "$HERE/../lib/scratch_home.sh"
+. "$HERE/../lib/build.sh"
+qa_redirect_home "$QA_ROOT"
+mkdir -p "$ALEPH_HOME"
+CONFIG="$ALEPH_HOME/config.toml"
+# The durable event log: a single sqlite file, opened at
+# `SessionManagerConfig::default().db_path` (`src/gateway/session_manager/mod.rs`),
+# which resolves through `get_sessions_db_path()` (`src/utils/paths.rs`) to
+# `<ALEPH_HOME>/data/sessions.db`. `qa/busy_input/lib.py::SessionLog` already
+# reads this exact path in every other fixture here.
+EVENTS_DB="$ALEPH_HOME/data/sessions.db"
+REQUEST_LOG="$QA_ROOT/request_log.jsonl"
+SESSION_FILE="$QA_ROOT/session_key.txt"
+
+export RUST_MIN_STACK="${RUST_MIN_STACK:-268435456}"
+
+MOCK_PID=""
+SERVER_PID=""
+say() { printf '\n=== %s ===\n' "$*"; }
+
+# Poll a file for a substring rather than guessing a sleep. The repair text
+# is written to $REQUEST_LOG the instant the mock receives the resumed run's
+# request — well before the mock answers it — so this only has to wait for
+# boot + `wait_for_channel_config_snapshot` + one LLM round trip.
+wait_for_text() {
+  local file="$1" text="$2" budget="${3:-120}"
+  local end=$((SECONDS + budget))
+  while [ "$SECONDS" -lt "$end" ]; do
+    if [ -f "$file" ] && grep -qF "$text" "$file" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
+start_server() {
+  "$BIN" start >>"$QA_ROOT/server.log" 2>&1 &
+  SERVER_PID=$!
+  for _ in $(seq 1 90); do
+    curl -sf -o /dev/null "http://127.0.0.1:$GATEWAY_PORT/health" 2>/dev/null && return 0
+    kill -0 "$SERVER_PID" 2>/dev/null || { echo "server died on boot" >&2; tail -40 "$QA_ROOT/server.log" >&2; return 1; }
+    sleep 0.5
+  done
+  echo "server did not come up" >&2
+  return 1
+}
+
+# kill -9, not SIGTERM: a clean shutdown closes the dangling call and there
+# would be nothing left to repair — the fixture would be measuring nothing.
+hard_kill_server() {
+  [ -n "$SERVER_PID" ] && kill -9 "$SERVER_PID" 2>/dev/null
+  [ -n "$SERVER_PID" ] && wait "$SERVER_PID" 2>/dev/null
+  SERVER_PID=""
+}
+
+cleanup() {
+  [ -n "$SERVER_PID" ] && kill -9 "$SERVER_PID" 2>/dev/null
+  [ -n "$MOCK_PID" ] && kill -9 "$MOCK_PID" 2>/dev/null
+  if [ "$KEEP" = "1" ]; then echo "artifacts kept in $QA_ROOT"; else rm -rf "$QA_ROOT"; fi
+}
+trap cleanup EXIT
+
+say "build"
+if [ "${SKIP_BUILD:-0}" != "1" ]; then
+  qa_build -p alephcore --bin aleph-server || { echo "build failed" >&2; exit 1; }
+fi
+# `.cargo/config.toml` pins a shared absolute target dir, so `$REPO/target` is
+# wrong from any git worktree — ask cargo.
+TARGET_DIR="$(cd "$REPO" && HOME="$REAL_HOME" cargo metadata --format-version 1 --no-deps 2>/dev/null \
+  | python3 -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')"
+BIN="$TARGET_DIR/debug/aleph-server"
+[ -x "$BIN" ] || { echo "no binary at $BIN" >&2; exit 1; }
+
+say "generate a baseline config"
+timeout 25 "$BIN" start >"$QA_ROOT/gen.log" 2>&1 &
+GEN_PID=$!
+for _ in $(seq 1 50); do [ -f "$CONFIG" ] && break; sleep 0.5; done
+kill "$GEN_PID" 2>/dev/null; wait "$GEN_PID" 2>/dev/null
+[ -f "$CONFIG" ] || { echo "no config generated at $CONFIG" >&2; tail -20 "$QA_ROOT/gen.log" >&2; exit 1; }
+
+say "patch config"
+python3 "$BUSY/patch_config.py" "$CONFIG" --gateway-port "$GATEWAY_PORT" --mock-port "$MOCK_PORT" || exit 1
+# `bash` is not idempotent, so the default `auto` tier raises a confirmation
+# card and the resumed run would park on a human who is not there. An
+# explicit `allow` outranks the tier — the knob an operator would use.
+python3 "$PLANH/add_overrides.py" "$CONFIG" bash=allow || exit 1
+
+# The tool call every "tool" turn dispatches. `sleep 120` never returns on
+# any timescale this fixture runs on, so it is guaranteed to still be
+# in-flight (and therefore dangle) when the server is killed. The field name
+# is load-bearing: `BashExecArgs.cmd` (src/builtin_tools/bash_exec.rs), NOT
+# `command` — the wrong key deserializes to an EMPTY command under
+# `#[serde(default)]`, which returns instantly and never dangles at all.
+cat >"$QA_ROOT/tool_spec.json" <<'JSON'
+{"name": "bash", "input": {"cmd": "sleep 120"}}
+JSON
+
+say "start mock provider (plan channel-burst)"
+# `mock_anthropic.py` has no side-channel exemption (unlike `mock_halt.py`):
+# EVERY POST it receives advances the turn counter, including calls this
+# fixture never asked for — a token-count pre-check that carries the same
+# messages as the real call but never becomes a session event, observed to
+# precede the real dispatch by 1-3 turns and confirmed by the durable log
+# never growing a matching `assistant_message`/`tool_call_requested` for
+# them. A short plan ("quick": 2 tool turns then end) falls off its own end
+# before the real turn ever lands and the "dangle" is never created — this
+# was the fixture's first failure mode on a real machine. "channel-burst"'s
+# 16 tool-turn tail absorbs that noise; its own "think" pacing does not gate
+# when a request is WRITTEN to $REQUEST_LOG (that happens the instant the
+# request arrives, before the mock's simulated think time), which is the
+# only thing this fixture ever waits on.
+python3 "$BUSY/mock_anthropic.py" "$MOCK_PORT" /etc/hostname channel-burst \
+  "$QA_ROOT/tool_spec.json" "$REQUEST_LOG" >"$QA_ROOT/mock.log" 2>&1 &
+MOCK_PID=$!
+for _ in $(seq 1 20); do
+  # GET, not POST: `do_GET` never touches the turn counter, so the readiness
+  # probe itself cannot burn one of the plan's slots.
+  curl -sf -o /dev/null -m 1 "http://127.0.0.1:$MOCK_PORT/v1/messages" 2>/dev/null && break
+  kill -0 "$MOCK_PID" 2>/dev/null || break
+  sleep 0.5
+done
+kill -0 "$MOCK_PID" 2>/dev/null || { echo "mock provider died on startup — port $MOCK_PORT taken?" >&2; tail -5 "$QA_ROOT/mock.log" >&2; exit 70; }
+
+# Send one turn and PROVE the dangling call actually landed durably before
+# returning — see drive_dangle.py's `send` mode. A blind sleep here is
+# exactly the trap this fixture exists to avoid: guess too short and the
+# rest of the run measures nothing. The budget is generous (a real turn can
+# land on a 20s-think slot of the plan above, and more than one may precede
+# it).
+send_and_confirm_dangle() {
+  python3 "$HERE/drive_dangle.py" --mode send --port "$GATEWAY_PORT" \
+    --channel "gui:qa-resume-boundary" --session-file "$SESSION_FILE" \
+    --events-db "$EVENTS_DB" --budget 120
+}
+
+# The fixture's own instrument check: prove a dangling call exists in the
+# durable log before asserting anything about repair text. If this fails,
+# every later assertion in the stage would be passing over an empty set.
+assert_dangling() {
+  python3 "$HERE/drive_dangle.py" --mode assert-dangling \
+    --events-db "$EVENTS_DB" --min-count "$1"
+}
+
+set_resume() {
+  python3 "$HERE/drive_dangle.py" --mode config-resume --enabled "$1" --config "$CONFIG"
+}
+
+case "$STAGE" in
+  crash)
+    say "crash: dangle -> kill -9 -> restart with resume ON"
+    set_resume true
+    start_server || exit 1
+    send_and_confirm_dangle || { echo "instrument failure: the dangling call was never created" >&2; exit 1; }
+    hard_kill_server
+    say "assert-dangling (instrument self-check)"
+    assert_dangling 1 || exit 1
+
+    start_server || exit 1
+    say "waiting for the repaired request to reach the mock"
+    if ! wait_for_text "$REQUEST_LOG" "OUTCOME UNKNOWN" 120; then
+      echo "FAIL: no repair text ever reached the mock" >&2
+      tail -40 "$QA_ROOT/server.log" >&2
+      exit 1
+    fi
+    python3 "$HERE/assert_repairs.py" --request-log "$REQUEST_LOG" --stage crash
+    ;;
+
+  attribute)
+    say "attribute: dangle with resume OFF, then a second dangle, same session"
+    set_resume false
+    start_server || exit 1
+    send_and_confirm_dangle || { echo "instrument failure: dangle #1 was never created" >&2; exit 1; }
+    hard_kill_server
+    say "assert-dangling (instrument self-check, dangle #1)"
+    assert_dangling 1 || exit 1
+
+    # Restart with resume still OFF: nothing is repaired, dangle #1 survives.
+    start_server || exit 1
+    send_and_confirm_dangle || { echo "instrument failure: dangle #2 was never created" >&2; exit 1; }
+    hard_kill_server
+    say "assert-dangling (instrument self-check, dangles #1+#2)"
+    assert_dangling 2 || exit 1
+
+    # Now turn resume ON. The boot scan sees TWO dangling calls from TWO
+    # separate RunStarted markers in the SAME session.
+    set_resume true
+    start_server || exit 1
+    say "waiting for the repaired request to reach the mock"
+    if ! wait_for_text "$REQUEST_LOG" "OUTCOME UNKNOWN" 120; then
+      echo "FAIL: no repair text ever reached the mock" >&2
+      tail -40 "$QA_ROOT/server.log" >&2
+      exit 1
+    fi
+    python3 "$HERE/assert_repairs.py" --request-log "$REQUEST_LOG" --stage attribute
+    ;;
+esac
+RC=$?
+
+say "mock provider log"
+tail -30 "$QA_ROOT/mock.log"
+
+say "server log tail"
+LOGDIR="$ALEPH_HOME/logs"
+if [ -d "$LOGDIR" ]; then
+  tail -40 "$LOGDIR"/aleph-server.log* 2>/dev/null | tail -40
+else
+  tail -20 "$QA_ROOT/server.log"
+fi
+
+say "verdict: rc=$RC"
+exit "$RC"

@@ -183,7 +183,7 @@ pub enum SessionEvent {
     /// A turn opened. There is deliberately no closing `TurnEnded` marker: a
     /// turn ends when the next one opens or when the run does, and the crash
     /// boundary is read off the `RunStarted`/`RunFinished` pair instead
-    /// ([`crate::gateway::resume_coordinator::classify_markers`]). A
+    /// ([`crate::session::reduction::reduce_disposition`]). A
     /// `TurnEnded` variant existed here for a long time with no producer, so
     /// every turn matched "crashed mid-turn" and nothing could use it.
     TurnStarted {

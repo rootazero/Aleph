@@ -13,12 +13,16 @@
 //! Consistency model: `session_events` is the single source of truth and is
 //! unaffected — the agent replays the event log in full, so **recovery of the
 //! agent's context is complete**. The `messages` table is an *eventually
-//! consistent* read projection for the Panel: a turn written to the log just
-//! before a crash may be absent from the Panel display until re-materialised.
-//! P1 has no events→messages reconciliation pass; a boot-time reconciler
-//! (project any event whose seq exceeds the last-materialised row per session,
-//! keyed off a per-row source-seq watermark) is a P2 follow-up. Panel display
-//! is therefore best-effort; the SSOT is not.
+//! consistent* read projection for the Panel.
+//!
+//! A boot-time reconciler exists
+//! ([`crate::gateway::projection_reconciler`]) and back-fills the
+//! un-materialised tail of any session whose run markers read as interrupted.
+//! It does **not** catch a drop in a session whose run then finished cleanly:
+//! that session classifies as `Clean` and is skipped, so the row is lost from
+//! the display permanently. See
+//! `docs/superpowers/specs/2026-08-31-run-reduction-design.md` §8.1 — the fix
+//! is a durable projection watermark, not a wider marker scan.
 
 use std::sync::Arc;
 
@@ -135,8 +139,11 @@ fn peer_echo_frame(
 /// observed failure behind it. If one ever shows up, this is the place.
 ///
 /// Fails closed: an unreadable event log is reported as retired, so the failure
-/// mode is a missing projection row (best-effort display, back-filled by
-/// `ProjectionReconciler`) rather than resurrected content.
+/// mode is a missing projection row rather than resurrected content. That is
+/// not always a recoverable miss: `ProjectionReconciler` only back-fills a
+/// session whose run marker reads as interrupted, so if this session's run
+/// then finishes cleanly, the row is gone from the display for good — see the
+/// module doc.
 async fn event_retired(id: &SessionId, seq: u64) -> bool {
     match crate::session::store::is_event_retired(id, seq).await {
         Ok(retired) => retired,
@@ -350,8 +357,8 @@ impl SessionEventObserver for MessageProjector {
         match self.tx.try_send((id.clone(), record.clone())) {
             Ok(()) => {}
             // Expected back-pressure. The event stays in the SSOT log (agent
-            // recovery unaffected); the Panel projection is eventually
-            // consistent and may lag until a P2 reconciler catches it up.
+            // recovery unaffected). The Panel projection may lose this row for
+            // good if the run then finishes cleanly — see the module doc.
             Err(mpsc::error::TrySendError::Full(_)) => {
                 tracing::warn!(
                     session = ?id,

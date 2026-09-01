@@ -27,7 +27,8 @@
 //!   already reported an id it has never seen. A sensor must not create what it
 //!   measures, and a boot pass over every session's log would cost the whole
 //!   database to serve a case that mostly does not happen. One `get_events` per
-//!   tool call serves every unknown id in that call.
+//!   tool call classifies every unknown id in that call, plus one more per
+//!   interrupted id on the detail face (`resolve_forgotten`'s enrichment loop).
 //!
 //! What this module does **not** do: restart anything. Per R7 the decision to
 //! re-run an interrupted child is the model's — this reports what is known and
@@ -41,6 +42,7 @@ use serde_json::{json, Value};
 use crate::agents::subagent_spawner::{parent_session_id_of, SUBAGENT_BG_CHILD_PREFIX};
 use crate::routing::session_key::SessionKey;
 use crate::session::events::{SessionEvent, SessionEventRecord};
+use crate::session::reduction::RunProgress;
 use crate::tools::runtime::ToolResult;
 
 use super::types::LIST_RESULT_PREVIEW_CHARS;
@@ -56,9 +58,20 @@ pub(crate) enum Recovered {
         child_session: String,
         summary: String,
     },
-    /// The child was spawned and never returned — the process died while it was
-    /// running. Its partial transcript lives in `child_session`.
-    Interrupted { child_session: String, flow: String },
+    /// The child was spawned and never returned — the process died while it
+    /// was running. Its partial transcript lives in `child_session`.
+    Interrupted {
+        /// Kept as the key the emitter minted, not a string parsed back out of
+        /// one: `classify` and `enumerate` both hold it already, and a second
+        /// parse would be a second answer to "which session is this".
+        child_session: SessionKey,
+        flow: String,
+        /// What the child got done before it stopped, when this face paid to
+        /// find out. `None` means **this face did not ask** — never "no
+        /// progress". Only the detail face (`resolve_forgotten`) fills it in;
+        /// the directory (`list_from_log`) leaves it `None` on purpose.
+        progress: Option<RunProgress>,
+    },
     /// Known only to the cross-process sidecar
     /// ([`crate::agents::background_persistence`]).
     ///
@@ -109,8 +122,9 @@ pub(crate) fn classify(events: &[SessionEventRecord], request_id: &str) -> Optio
                 if addresses(child_id, request_id) =>
             {
                 interrupted = Some(Recovered::Interrupted {
-                    child_session: child_id.to_string(),
+                    child_session: child_id.clone(),
                     flow: flow.clone(),
+                    progress: None,
                 });
             }
             _ => {}
@@ -148,8 +162,9 @@ pub(crate) fn enumerate(
             SessionEvent::SubagentSpawned { child_id, flow, .. } => (
                 child_id,
                 Recovered::Interrupted {
-                    child_session: child_id.to_string(),
+                    child_session: child_id.clone(),
                     flow: flow.clone(),
+                    progress: None,
                 },
             ),
             SessionEvent::SubagentReturned {
@@ -224,17 +239,45 @@ pub(crate) fn to_json(request_id: &str, recovered: &Recovered) -> Value {
         Recovered::Interrupted {
             child_session,
             flow,
-        } => json!({
-            "status": "interrupted",
-            "request_id": request_id,
-            "agent": flow,
-            "child_session": child_session,
-            "note": "This sub-agent was still running when the server restarted, so it never \
-                     produced a result and is not running now. Whatever it had already done \
-                     — including any file writes or commands — has landed. Its partial \
-                     transcript is at child_session; read that before deciding whether to \
-                     spawn the task again.",
-        }),
+            progress,
+        } => {
+            let mut note = "This sub-agent was still running when the server restarted, so it \
+                            never produced a result and is not running now. Whatever it had \
+                            already done — including any file writes or commands — has landed. \
+                            Its partial transcript is at child_session; read that before \
+                            deciding whether to spawn the task again."
+                .to_string();
+            if let Some(p) = progress {
+                use std::fmt::Write as _;
+                let calls_word = if p.tool_calls_dispatched == 1 { "call" } else { "calls" };
+                let messages_word = if p.assistant_messages == 1 { "message" } else { "messages" };
+                let _ = write!(
+                    note,
+                    " Before it stopped it had dispatched {} tool {}, {} of which recorded a \
+                     result, and produced {} assistant {}. Read the child transcript to \
+                     judge what is done — this is a report of what happened, not a verdict on \
+                     what is left.",
+                    p.tool_calls_dispatched,
+                    calls_word,
+                    p.tool_calls_answered,
+                    p.assistant_messages,
+                    messages_word
+                );
+            }
+            json!({
+                "status": "interrupted",
+                "request_id": request_id,
+                "agent": flow,
+                "child_session": child_session.to_string(),
+                "progress": progress.as_ref().map(|p| json!({
+                    "tool_calls_dispatched": p.tool_calls_dispatched,
+                    "tool_calls_answered": p.tool_calls_answered,
+                    "assistant_messages": p.assistant_messages,
+                    "last_activity_ms": p.last_activity_at,
+                })),
+                "note": note,
+            })
+        }
         Recovered::Sidecar(run) => {
             use crate::agents::background_persistence::RunPhase;
             let settled = run.record.phase == RunPhase::Settled;
@@ -297,11 +340,12 @@ pub(crate) fn to_list_row(request_id: &str, recovered: &Recovered) -> Value {
         Recovered::Interrupted {
             child_session,
             flow,
+            ..
         } => json!({
             "status": "interrupted",
             "request_id": request_id,
             "agent": flow,
-            "child_session": child_session,
+            "child_session": child_session.to_string(),
         }),
         Recovered::Sidecar(run) => {
             let text = &run.partial_result;
@@ -395,6 +439,28 @@ impl super::SubagentTool {
                 out.insert(id.clone(), Recovered::Sidecar(Box::new(run)));
             }
         }
+        // The detail face pays for progress; the directory does not (see the
+        // `progress` field's doc). One extra read per interrupted child, and
+        // only for the ids the caller actually named.
+        for recovered in out.values_mut() {
+            if let Recovered::Interrupted {
+                child_session,
+                progress,
+                ..
+            } = recovered
+            {
+                match self.session.get_events(child_session, None, None).await {
+                    Ok(events) => {
+                        *progress = Some(crate::session::reduction::reduce_run(&events).progress);
+                    }
+                    Err(error) => {
+                        // Absent, not zero. A store that could not be read has
+                        // not told us the child did nothing.
+                        tracing::debug!(%error, "subagent recovery: child event log unreadable");
+                    }
+                }
+            }
+        }
         out
     }
 
@@ -444,7 +510,7 @@ impl super::SubagentTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::events::{now_ms, SessionEventRecord};
+    use crate::session::events::{now_ms, SessionEventRecord, TurnId};
 
     fn rec(event: SessionEvent) -> SessionEventRecord {
         SessionEventRecord {
@@ -495,9 +561,14 @@ mod tests {
             Some(Recovered::Interrupted {
                 flow,
                 child_session,
+                progress,
             }) => {
                 assert_eq!(flow, "researcher");
-                assert!(child_session.contains("sub-bg-r1"), "got {child_session}");
+                assert!(
+                    child_session.to_string().contains("sub-bg-r1"),
+                    "got {child_session}"
+                );
+                assert!(progress.is_none(), "classify never pays for progress");
             }
             other => panic!("expected Interrupted, got {other:?}"),
         }
@@ -639,5 +710,275 @@ mod tests {
         let minted = child("abc-123");
         assert!(addresses(&minted, "abc-123"));
         assert!(!addresses(&minted, "abc"));
+    }
+
+    // -------------------------------------------------------------------
+    // G5 — progress evidence fixtures
+    // -------------------------------------------------------------------
+
+    /// Like [`child`], but with a caller-chosen `agent_id` — G5's fixtures
+    /// need that to vary while `child`'s callers do not.
+    fn bg_child(agent: &str, request_id: &str) -> SessionKey {
+        SessionKey::Ephemeral {
+            agent_id: agent.to_string(),
+            ephemeral_id: format!("{SUBAGENT_BG_CHILD_PREFIX}{request_id}"),
+        }
+    }
+
+    /// Unlike [`rec`] (which always stamps `seq: 1`), takes an explicit
+    /// ascending `seq`. `reduce_run`'s anchor/in-scope split compares by
+    /// `seq`, not by vector position, so a child-log fixture with more than
+    /// one record after a `RunStarted` needs its `ToolCallRequested` to carry
+    /// a `seq` strictly greater than the anchor's — otherwise it reads as
+    /// belonging to an earlier run and `progress` undercounts it.
+    fn seqed(seq: crate::session::events::EventSeq, event: SessionEvent) -> SessionEventRecord {
+        SessionEventRecord {
+            seq,
+            event,
+            created_at_ms: now_ms(),
+        }
+    }
+
+    /// A `SessionService` test double that counts every `get_events` call and
+    /// answers from a fixed parent log plus an optional child log, dispatched
+    /// by session id. This is what proves G5: the directory face
+    /// (`list_from_log`) must read only the parent, the detail face
+    /// (`resolve_forgotten`) reads the parent AND the child it names.
+    struct CountingSessionService {
+        counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        parent_id: SessionKey,
+        parent_log: Vec<SessionEventRecord>,
+        child: Option<(SessionKey, Vec<SessionEventRecord>)>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::session::service::SessionService for CountingSessionService {
+        async fn attach(
+            &self,
+            id: crate::session::service::SessionId,
+        ) -> Result<crate::session::service::SessionHandle, crate::session::service::SessionError>
+        {
+            Ok(crate::session::service::SessionHandle { id, head_seq: 0 })
+        }
+
+        async fn get_events(
+            &self,
+            id: &crate::session::service::SessionId,
+            _from: Option<crate::session::events::EventSeq>,
+            _to: Option<crate::session::events::EventSeq>,
+        ) -> Result<Vec<SessionEventRecord>, crate::session::service::SessionError> {
+            self.counter
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if *id == self.parent_id {
+                return Ok(self.parent_log.clone());
+            }
+            if let Some((child_id, child_log)) = &self.child {
+                if id == child_id {
+                    return Ok(child_log.clone());
+                }
+            }
+            Ok(Vec::new())
+        }
+
+        async fn emit_event(
+            &self,
+            _id: &crate::session::service::SessionId,
+            _event: SessionEvent,
+        ) -> Result<crate::session::events::EventSeq, crate::session::service::SessionError>
+        {
+            unimplemented!("not exercised by recovery::tests")
+        }
+
+        async fn subscribe(
+            &self,
+            _id: &crate::session::service::SessionId,
+        ) -> Result<
+            tokio::sync::broadcast::Receiver<SessionEventRecord>,
+            crate::session::service::SessionError,
+        > {
+            unimplemented!("not exercised by recovery::tests")
+        }
+
+        async fn wake(
+            &self,
+            id: &crate::session::service::SessionId,
+        ) -> Result<crate::session::service::SessionHandle, crate::session::service::SessionError>
+        {
+            self.attach(id.clone()).await
+        }
+
+        async fn detach(
+            &self,
+            _id: &crate::session::service::SessionId,
+        ) -> Result<(), crate::session::service::SessionError> {
+            Ok(())
+        }
+    }
+
+    /// A minimal no-op `ToolService` — G5's tool never dispatches a tool call,
+    /// it only exercises the recovery read paths.
+    struct NoopToolService;
+
+    #[async_trait::async_trait]
+    impl crate::tools::service::ToolService for NoopToolService {
+        async fn execute(
+            &self,
+            _name: &str,
+            _input: serde_json::Value,
+        ) -> Result<crate::session::events::ToolOutput, crate::tools::service::ToolError> {
+            Err(crate::tools::service::ToolError::NotFound {
+                name: "test".into(),
+            })
+        }
+        async fn list(&self) -> Vec<crate::tools::service::ToolDefinition> {
+            vec![]
+        }
+        async fn describe(&self, _: &str) -> Option<crate::tools::service::ToolDefinition> {
+            None
+        }
+        fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+            std::sync::Arc::from([])
+        }
+    }
+
+    /// The parent session id every G5 fixture spawns under. Never a value
+    /// `bg_child(...)` could mint, so it can never collide with a child key.
+    fn g5_parent_id() -> SessionKey {
+        SessionKey::main("recovery-g5-parent")
+    }
+
+    fn g5_tool(
+        session: std::sync::Arc<dyn crate::session::service::SessionService>,
+    ) -> super::super::SubagentTool {
+        let provider: std::sync::Arc<dyn crate::providers::AiProvider> =
+            std::sync::Arc::new(crate::providers::mock::MockProvider::new("mock"));
+        let chain = crate::harness::chain_context::ChainContext::new();
+        super::super::SubagentTool::new(
+            provider,
+            chain,
+            std::sync::Arc::new(crate::agents::AgentRegistry::with_builtins()),
+            std::sync::Arc::new(crate::agents::background_tracker::BackgroundAgentTracker::new()),
+            session,
+            std::sync::Arc::new(NoopToolService),
+        )
+        .with_parent_session_id(g5_parent_id().to_key_string())
+    }
+
+    /// A `SubagentTool` whose durable parent log is `parent_events`, wired to a
+    /// `SessionService` that counts every `get_events` call.
+    fn counting_tool(
+        counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        parent_events: Vec<SessionEventRecord>,
+    ) -> super::super::SubagentTool {
+        let session: std::sync::Arc<dyn crate::session::service::SessionService> =
+            std::sync::Arc::new(CountingSessionService {
+                counter,
+                parent_id: g5_parent_id(),
+                parent_log: parent_events,
+                child: None,
+            });
+        g5_tool(session)
+    }
+
+    /// Like [`counting_tool`], plus a child log reachable at the `child_id` of
+    /// the `SubagentSpawned` event `parent_events` carries.
+    fn counting_tool_with_child(
+        counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        parent_events: Vec<SessionEventRecord>,
+        child_events: Vec<SessionEventRecord>,
+    ) -> super::super::SubagentTool {
+        let child_id = parent_events
+            .iter()
+            .find_map(|r| match &r.event {
+                SessionEvent::SubagentSpawned { child_id, .. } => Some(child_id.clone()),
+                _ => None,
+            })
+            .expect("counting_tool_with_child requires a SubagentSpawned event in parent_events");
+        let session: std::sync::Arc<dyn crate::session::service::SessionService> =
+            std::sync::Arc::new(CountingSessionService {
+                counter,
+                parent_id: g5_parent_id(),
+                parent_log: parent_events,
+                child: Some((child_id, child_events)),
+            });
+        g5_tool(session)
+    }
+
+    /// G5 — the directory face must not pay for progress. `list_from_log`
+    /// serves dozens of rows; one extra child-log read per interrupted child
+    /// turns a cheap directory into an N-read one.
+    ///
+    /// Asserted on the READ COUNT, not on the rows: "asked and got nothing"
+    /// and "did not ask" render identically in the output.
+    #[tokio::test]
+    async fn the_directory_face_reads_only_the_parent_log() {
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let tool = counting_tool(
+            counter.clone(),
+            vec![rec(SessionEvent::SubagentSpawned {
+                turn_id: TurnId::new_v4(),
+                child_id: bg_child("agent-a", "req-1"),
+                flow: "explore".into(),
+                at: 1,
+            })],
+        );
+        let rows = tool.list_from_log(&[], None).await;
+        assert_eq!(rows.len(), 1);
+        assert!(
+            matches!(&rows[0].1, Recovered::Interrupted { progress: None, .. }),
+            "the directory row carries no progress"
+        );
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "exactly one get_events: the parent log"
+        );
+    }
+
+    /// The detail face DOES pay, because it is the answer to "tell me about
+    /// this one" and already carries the child's whole text.
+    #[tokio::test]
+    async fn the_detail_face_loads_the_childs_progress() {
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let tool = counting_tool_with_child(
+            counter.clone(),
+            /* parent */
+            vec![rec(SessionEvent::SubagentSpawned {
+                turn_id: TurnId::new_v4(),
+                child_id: bg_child("agent-a", "req-1"),
+                flow: "explore".into(),
+                at: 1,
+            })],
+            /* child */
+            vec![
+                seqed(
+                    1,
+                    SessionEvent::RunStarted {
+                        run_id: "r1".into(),
+                        at: 1,
+                        project_root: None,
+                    },
+                ),
+                seqed(
+                    2,
+                    SessionEvent::ToolCallRequested {
+                        turn_id: TurnId::new_v4(),
+                        call_id: "c1".into(),
+                        name: "bash_exec".into(),
+                        input: serde_json::json!({}),
+                        at: 2,
+                    },
+                ),
+            ],
+        );
+        let out = tool.resolve_forgotten(&["req-1".to_string()], None).await;
+        let Some(Recovered::Interrupted {
+            progress: Some(p), ..
+        }) = out.get("req-1")
+        else {
+            panic!("the detail face must carry progress, got {:?}", out.get("req-1"));
+        };
+        assert_eq!(p.tool_calls_dispatched, 1);
+        assert_eq!(p.tool_calls_answered, 0);
     }
 }

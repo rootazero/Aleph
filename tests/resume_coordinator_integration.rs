@@ -379,9 +379,9 @@ async fn on_demand_resume_repairs_and_retriggers_the_named_session() {
 ///
 /// The assertion is the invariant, not the lock: **exactly one** repair event,
 /// whichever way the two futures interleave. If they serialize instead of
-/// racing, the second one's `compute_boundary_repairs` sees the first repair
-/// and produces nothing — so this holds either way, with no sleep and no
-/// ordering assumption.
+/// racing, the second one's `repairs_for(&reduce_run(..))` sees the first
+/// repair and produces nothing — so this holds either way, with no sleep and
+/// no ordering assumption.
 #[tokio::test]
 async fn concurrent_resumes_of_one_session_repair_the_boundary_once() {
     let store = store();

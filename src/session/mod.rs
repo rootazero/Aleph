@@ -13,6 +13,7 @@ pub mod events;
 pub mod in_process;
 pub mod observer;
 pub mod projection;
+pub mod reduction;
 pub mod service;
 pub mod steer_signal;
 pub mod store;
@@ -25,6 +26,10 @@ pub use events::{
 };
 pub use in_process::InProcessActorSessionService;
 pub use projection::project_row;
+pub use reduction::{
+    reduce_disposition, reduce_run, DanglingCall, DanglingProvenance, RunDisposition, RunProgress,
+    RunReduction,
+};
 pub use service::{SessionError, SessionHandle, SessionId, SessionService};
 pub use store::SessionEventStore;
 pub use tool_trace::with_session_scope;

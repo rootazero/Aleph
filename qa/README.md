@@ -64,6 +64,20 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                               # ⚠️ `crash` reports 4 failures today — a real defect it
                               # found (one terminal frame per retry attempt, last one
                               # zeroed). See the header of its run.sh.
+
+./qa/resume_boundary/run.sh crash      # a dangling tool call (`kill -9` mid-dispatch) gets
+                                       # an OUTCOME UNKNOWN repair, and the boot-scan resume's
+                                       # NEXT request to the model actually carries it — the
+                                       # oracle is the mock's request log, not the event log,
+                                       # because a repair synthesised but dropped by
+                                       # `build_prompt` would pass every unit test here.
+./qa/resume_boundary/run.sh attribute  # a dangle left by an EARLIER interrupted run is not
+                                       # blamed on THIS restart: two dangling calls from two
+                                       # separate crashes, repaired in the same boot scan, must
+                                       # read two different sentences. Run against the pre-round
+                                       # tree this must FAIL — both misattributed to "the server
+                                       # restarted" — which is the falsifying arm for the design
+                                       # spec's §1.4 claim.
 ./qa/session_order/run.sh        # the transcript's order and `session.truncate`, on BOTH
                                  # backends. Drives one conversation into a file-backed
                                  # server and a sqlite-backed one (separate scratch

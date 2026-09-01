@@ -109,7 +109,7 @@
 | `src/tool_output/` | FL §2.7 §3.14 | E.2 | — |
 | `src/tools/` `src/builtin_tools/` | [TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) · [SECURITY.md](docs/reference/SECURITY.md) · FL §3.2–§3.14 | E.3 | — |
 | `src/builtin_tools/file_search/` | FL §3.4 | E.0 E.3 | `qa/file_search/run.sh {floor,page,reach,steer}` · `cargo bench --bench file_search_scan` |
-| `src/gateway/` | [GATEWAY.md](docs/reference/GATEWAY.md) · [`src/gateway/CLAUDE.md`](src/gateway/CLAUDE.md) · FL §4.8 §5.6 §5.18 §5.26 §6.9 | E.4 | `qa/channels/run.sh {reach,errors,approval}` |
+| `src/gateway/` | [GATEWAY.md](docs/reference/GATEWAY.md) · [`src/gateway/CLAUDE.md`](src/gateway/CLAUDE.md) · FL §4.8 §5.6 §5.18 §5.26 §6.9 | E.4 | `qa/channels/run.sh {reach,errors,approval}` · `qa/resume_boundary/run.sh {crash,attribute}` |
 | `src/gateway/btw/` | FL §4.14 的机制图 · [SECURITY.md](docs/reference/SECURITY.md) 只读地板 | E.4 | `qa/btw_tui/run.sh {frames,promote}` |
 | `src/gateway/session_store/` `session_manager/` | FL §6.9 | E.0 | `qa/session_order/run.sh` |
 | `src/gateway/pty/` `interfaces/webchat/.../views/terminal/` | FL §6.11 · 判据清单 §0（分派表的静默 no-op · 有损可观测量） | E.0 | — |

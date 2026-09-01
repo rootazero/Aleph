@@ -1,25 +1,42 @@
-//! `ProjectionReconciler` — boot-time events→messages back-fill for the file
-//! backend's transcript projection.
+//! `ProjectionReconciler` — boot-time events→messages back-fill for the
+//! transcript projection.
 //!
 //! P1 made `session_events` the SSOT and materialised the `messages`
 //! projection asynchronously via `MessageProjector`. On a hard crash *during* a
-//! run, events durably in `session_events` may not have been drained to
-//! `transcript.jsonl` — the Panel display loses those rows. This reconciler
-//! runs at boot, finds interrupted sessions (via `ResumeCoordinator`'s run
-//! markers), and re-projects the un-materialised tail through the same
+//! run, events durably in `session_events` may not have been drained to the
+//! read projection — `transcript.jsonl` on the file backend, the `messages`
+//! table on SQLite — and the Panel display loses those rows. This reconciler
+//! runs at boot, asks [`crate::session::reduction::reduce_disposition`] about
+//! the run markers it loads from the event store to find interrupted
+//! sessions, and re-projects the un-materialised tail through the same
 //! `project_event` the live drain uses.
 //!
 //! Scope (see `docs/superpowers/specs/2026-07-04-projection-reconciler-p2-design.md`):
-//! file backend only, interrupted runs only, no schema change — the source seq
-//! is recovered from the `"{key}:{seq}"` id embedded in each projector-written
-//! transcript row.
+//! interrupted runs only, no schema change — the source seq is recovered from
+//! the `"{key}:{seq}"` id embedded in each projector-written transcript row.
+//!
+//! **Both backends.** This used to say "file backend only". The SQLite backend
+//! stores the projector's seq in its own `source_seq` column and rebuilds the
+//! same id through `projection::row_id` on read
+//! (`session_manager/ops/crud.rs`), so `parse_source_seq` succeeds there too
+//! and the back-fill covers it. A comment that names another module's
+//! behaviour freezes that module without telling it; this one had already
+//! drifted.
+//!
+//! **What it does NOT cover**: a row the live drain dropped under back-pressure
+//! in a run that later finished cleanly. `reduce_disposition` calls that
+//! session `Clean`, so this pass skips it and the row is gone from the display
+//! for good. The trigger condition here is "the run was interrupted"; the
+//! failure condition is "the projection has a gap", and the two are not the
+//! same set. Fixing it needs a durable projection watermark — see
+//! `docs/superpowers/specs/2026-08-31-run-reduction-design.md` §8.1.
 
 use std::collections::HashSet;
 
-use crate::gateway::resume_coordinator::{classify_markers, ScanVerdict};
 use crate::gateway::session_projector::project_event;
 use crate::gateway::session_store::SessionStore;
 use crate::session::projection::parse_source_seq;
+use crate::session::reduction::{reduce_disposition, RunDisposition};
 use crate::session::service::SessionId;
 use crate::session::store::SessionEventStore;
 use crate::sync_primitives::Arc;
@@ -74,9 +91,9 @@ impl ProjectionReconciler {
 
         for (session_id, markers) in groups {
             report.scanned += 1;
-            match classify_markers(&markers) {
-                ScanVerdict::Clean => report.skipped_clean += 1,
-                ScanVerdict::Interrupted { .. } => {
+            match reduce_disposition(&markers) {
+                RunDisposition::Clean => report.skipped_clean += 1,
+                RunDisposition::Interrupted { .. } => {
                     self.reconcile_session(&session_id, &mut report).await;
                 }
             }
