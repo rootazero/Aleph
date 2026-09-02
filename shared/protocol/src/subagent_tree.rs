@@ -172,6 +172,12 @@ pub fn apply_event(nodes: &mut Vec<SubagentNode>, ev: SubagentTreeEvent) {
             if let Some(n) = nodes.iter_mut().find(|n| n.node_id == node_id) {
                 n.lifecycle = lifecycle;
                 n.elapsed_ms = duration_ms;
+                // The activity word describes what a RUNNING node is doing
+                // right now; left in place it captions a finished node with
+                // its last progress tick — a ✓ row reading "thinking…" in
+                // the real Panel (2026-09-02). `last_tool` stays: "last tool:
+                // grep" is still true of a settled node, "thinking" is not.
+                n.last_activity = None;
                 let final_tools = u32::try_from(tool_calls_made).unwrap_or(u32::MAX);
                 n.tool_count = n.tool_count.max(final_tools);
                 // 0 means "unreported", not "zero tokens" (a real run always
@@ -468,6 +474,7 @@ mod tests {
         );
         assert_eq!(nodes[0].tool_count, 5);
         assert_eq!(nodes[0].last_tool.as_deref(), Some("grep"));
+        assert_eq!(nodes[0].last_activity.as_deref(), Some("tool_called"));
         apply_event(
             &mut nodes,
             SubagentTreeEvent::Settled {
@@ -484,6 +491,11 @@ mod tests {
         assert_eq!(nodes[0].elapsed_ms, 4200);
         assert_eq!(nodes[0].tool_count, 9);
         assert_eq!(nodes[0].total_tokens, Some(100));
+        // A settled node has no "current activity" — the last progress tick's
+        // word captioned a ✓ row with "thinking…" in the real Panel. The last
+        // tool is still a fact about the node and stays.
+        assert_eq!(nodes[0].last_activity, None);
+        assert_eq!(nodes[0].last_tool.as_deref(), Some("grep"));
     }
 
     #[test]
