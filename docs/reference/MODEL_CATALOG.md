@@ -444,6 +444,33 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 
 本轮新裁决（追加进 §9 的同款判据）：**hedging（并行对冲请求）不移植**——并行对冲是拿双倍请求钱买尾延迟，多租户网关的流量形态才值这个价；Aleph 的 failover walk 是顺序链，断路器 + 双层 cooldown + EWMA 已覆盖慢/死端点，个人 runtime 无此需求。**key 池维持 round-4 裁决**（多租户税）。**metrics 导出（Prometheus/OTel exporter）不移植**——可观测性的答案已经有 `route_status` 快照（含 `next_order` 与 `config_problems`）+ doctor，独立导出器是新依赖加新常驻面（R3），真出现外接监控需求时单独立项。**run 粒度 witness 键（E3①）不做**——`RequestPayload.metadata` 只有 `session_id` 没有 run_id，跨 harness↔gateway 穿一个 id 的代价对 best-effort 诊断不成比例；溢出全清抹在飞 run 的那一半已修（LRU 淘汰 + 写入刷新年龄，`route_witness::BoundedWitnesses`）。
 
+### 8.5 grok-bot-0.18-reconstructed（2026-09-02 round-6）
+
+一个 Cursor/Codex 后端的 TypeScript 助手，`README` 里把「Inference Router」列为一等子系统——但它的 router 是**一个 `settings.json` 枚举**（`shared/inference-router.ts`，默认 `cursor`，每会话在三处各读一遍磁盘），韧性全部住在 turn runner 里（`host/runner/*`）。它的重试边界**自述为 dormant**（`host-runner-composition.ts:1593-1605`：那条装配从未在生产里通电），所以下表把它的设计一律读作**意图**，不读作证据；能对标的只有「运行时路由与降级」这一族维度，目录层没有可比面。落地记录见 FEATURE_LOCATOR §3.6 round-6。
+
+| 维度 | grok-bot（参考） | Aleph | 裁决 |
+|------|-----------------|-------|------|
+| provider 选择 | 一个枚举，默认 `cursor`，每会话三处各读一遍磁盘 | `RouteHandle`（ArcSwap）+ `effective_fallback_names` 单一派生，热重载 | **Aleph 领先**——那个三处重读正是 round-1/2 拆掉的形状 |
+| 候选链 / failover | **无**（单后端，无链、无跨 provider 推进） | 有序游走 + 四道闸 + 每 provider 模型梯 + 嵌套 pinned 链 | **Aleph 领先**（参考项目无对应物） |
+| 断路器 | **无** | `FailoverHealth` 三振 / `Permanent` 即开 + HalfOpen 加倍 + `MAX_COOLDOWN` 600s | **Aleph 领先**；但**已吐字**的两条出口此前零记账 → round-6 T3 补上（共用 `decision::strike_for` 一处派生） |
+| 冷却 / 节流 | 只有 MCP 重连常量（与推理无关） | 双层 `ModelCooldown` + `ProviderCooldown`，只延长、成功即清 | **Aleph 领先**；`ProviderCooldown` 窗口（≤600s）与最后一根候选的等待上限（120s）分头派生，留档 round-7 |
+| 重试 / 退避 | equal jitter `[exp/2, exp]`，interactive 3 次 / automation 4 次（`transient-stream-error.ts:50-99`） | `backoff_delay` + `apply_jitter(0.25)`，`OVERLOAD_RETRY_BUDGET 1`，上限 30s / 120s | **已对齐**；抖动形状属化妆，interactive-vs-automation 分档**拒绝**（新旋钮，零需求） |
+| 服务端节流提示 | 只认秒数（Connect trailer），加 0–50% 抖动，硬上限 30s | `retry_after_header_secs` 认秒数**与** HTTP-date，honour 到 `MAX_COOLDOWN` | **Aleph 领先**（超集）；给等待加抖动**不移植**（单用户无羊群） |
+| 错误分类 | errno / 子串表 + 递归 `cause`/`AggregateError` 遍历 + `terminal` 否决 | `classify` / `classify_exhausted` / `is_permanent_failure` + `has_status_code` 邻位守卫 + `ACCOUNT_SCOPE_PATTERNS` 否决 | **Aleph 领先**（HTTP 栈上）；Node errno 词表**不移植**（死模式） |
+| token 上限分类 | ~18 条 `includesAll` + typed 标志优先；另有 `OutputTokensLimitExceededError` | `CONTEXT_OVERFLOW_PATTERNS` + 413 → `CompactAndRetry` | **已对齐**；剩余模式与输出上限判决**不做**（窄表闸着 `CompactAndRetry`；后者零消费者） |
+| HTTP 200 里的带内错误 | codex 路 `throw` 裸 JSON；proto 客户端把 `responseInfo.errorMessage` 当**值**返回、流照样 "ok" 结束（`chat-inference-proto/client.ts:257-271`） | 适配器映射成 `ProviderDelta::Error`；`HttpProvider` 只在**无内容**时升级为 `Err`，有半截内容时返回 `Ok` | **同款 bug，且 Aleph 这半更贵**（多一层健康表 / 冷却 / witness 被擦干净）→ **round-6 T3 修**（`provider_error` 字段 + walk 成功臂先读它） |
+| 吐字后掉线 | 同后端断点续传，generation 门控的持久化（`stream-attempt.ts:18-86`） | `EmissionGuard`：吐字之后即终局 | **Aleph 层次更对**；断点续传**不移植**（R10）；但终局 `Err` 不带「已吐字」事实、网关会重投，留档 round-7 |
+| 可安全重试的谓词 | `!outputProduced ‖ resumable` | `EmissionGuard::has_emitted` | **已对齐**（概念早已采纳） |
+| 时钟偏斜守卫 | 不可信的跨时钟时长打标丢弃、绝不夹取（`clock-skew-guard.ts`） | C 层只用单调 `Instant`（`load_stats.rs:31-45`） | **不移植**——没有跨时钟接缝可挂；原则本来就成立 |
+| 用量记账（含 cache） | 五个计数、bigint→safe、饱和合并 | `TokenUsage` + 不相交不变量 + `billed_tokens`（TPM 计 cache） | **Aleph 领先**（超集 + 不变量） |
+| per-provider 终身台账 | `recordInferenceUsage` 落盘（请求数 + 四个 token 计数 + `lastUsedAt`），失败静默不计、有重复计数风险 | 无（只有 60s 加权滑窗 + 每请求 trace 事件） | **不做**（零消费者；理由见 §9 round-6） |
+| 路由配置热重载 | **无**——每会话从磁盘重读（那正是三处重读的由来） | `RouteHandle` ArcSwap + `route_config.update` + `live_apply` | **Aleph 领先**；round-6 前只有专用 RPC 那一面重算 `config_problems` → T2 收敛到执行器一处 |
+| 降级对用户可见 | `"retrying"` UI 状态 + `sand.retry_count` trace 属性 | `RouteWitness` → 四个面的 `ModelResolved{is_fallback}` 横幅 | **Aleph 领先**；witness 锚在第一次**拨号**上，拨号前被跳过读起来像"什么都没偏离"，留档 round-7 |
+| 配置可达性 | env + `settings.json`，无 RPC | `route_config.get/update` + `update_config` 工具 + Panel 两张脸 | **Aleph 领先**；`health_probe_interval_secs` 曾是 server-only，Panel 每存一次就把它抹掉 → **round-6 T1 修**（整段替换语义 + 三条守卫） |
+| 韧性层的测试 | 分类器有单测，整条重试边界自述 dormant | 2429 行 walk / 排序测试（注入 mock）+ 快照 schema lock + wire 形状守卫 | **Aleph 决定性领先**——所以本轮把参考项目的设计一律当意图读 |
+
+本轮新裁决（同款判据追加进 §9）：**per-provider 终身用量台账不做**、**resume-from-checkpoint 不移植**、**首字停顿窗口指数加宽不采纳**（与 Aleph「60s TTFB + 换 provider」正相反）、**interactive/automation 重试分档不加**、**`Retry-After` 抖动不加**、**Node errno 词表不并入**、**输出 token 上限判决与 `StopReason::ProviderError` 变体不加**、**故障报文不喂给模型**（属 harness 的错误压缩侧，R10）、**clock-skew 守卫无接缝可挂**。
+
 ---
 
 ## 9. 刻意不做清单
@@ -521,6 +548,22 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 - **改 `qwen` 的默认模型** — `qwen3-max-2026-01-23` 不在上游 `alibaba` 的 roster 里（上游有 `qwen3-max` / `qwen3.7-max` / `qwen3.8-max`），即它可能是个**已经不存在**的日期快照 id 而不只是陈旧。仍不动：范围裁定同上，且「阿里保留历史快照 id」与「这个 id 已经 404」在没有第二个来源时分不开。记在这里是为了让下一轮不必重新发现它。**2026-08-15 复核**：`alibaba-cn`（与预设 `dashscope.aliyuncs.com` 同区）roster 现有 `qwen3.7-max` / `qwen3.8-max` / `qwen3.7-plus` / `qwen3.7-flash`，但仍无该日期快照 id——同一来源的再次缺席不构成第二来源，维持裁定；若下一来源（如 openclaw 或厂商控制台）确认该 id 404，直接跳到 `qwen3.8-max` 并同步 fallback 链。
 - ~~**给 `minimax-m3` / `grok-4.3` / `gpt-5.6` 系补长上下文档位行**~~ — **2026-08-15 数据刷新轮已采纳**：本条当初记下的确切数字（M3 >512K→$0.60/$2.40、grok-4.3 >200K→$2.50/$5.00、gpt-5.4/5.5/5.6 系 >272K 各档）经 models.dev 原始 `tiers` 复核后全部落进 `TIER_TABLE`（含 `gpt-5.4-mini`/`nano` 两条否定行——否则广义 `gpt-5.4` 档会按前缀误吞它们双倍计费；grok-4.5/4.6 同批补档）。⚠️ 原注「minimax-m3 修正后短提示准确、>512K 低估 2 倍」至此闭合。
 
+
+以下是 2026-09-02 **round-6**（对标 grok-bot-0.18-reconstructed 的 inference router，§8.5）评估后**明确不做**的：
+
+- **per-provider 终身用量台账**（参考 `recordInferenceUsage`：请求数 + 四个 token 计数 + `lastUsedAt` 持久化）— 它要答的两问 `route_status` 已经答了一半（`failure_count` / `last_error` / `breaker_cooldown_remaining_secs` / `rpm_used` / `tpm_used`，加每请求 trace 事件），另一半的唯一消费者是"人读 JSON"；代价是每 provider 六个原子 + 一个新快照对象 + 它自己的 schema lock。真出现「哪个端点在扛我的流量」这一问时，三个字段（`requests_total` / `failures_total` / `last_used_secs_ago`）够用，**不要 token 台账**（参考实现自己还带着失败静默不计与重复计数两个坑）。
+- **resume-from-checkpoint 重试**（`stream-attempt.ts`：同后端断点续传 + generation 门控持久化）— turn/transcript 层的事（R10）；Aleph 对同一个担忧的答案是 `EmissionGuard`「吐字之后就是终局」，更便宜且在对的层。何况参考项目自己把这条边界标注为 dormant。
+- **首字停顿窗口按重试次数指数加宽**（150s→300s→600s）— Aleph 的答案是 60s TTFB + 换 provider，对单用户严格更好；round-6 定位的缺口恰是**反方向**（别再为一个已经花光的 idle 窗口原地重试），两条一起采纳会自相矛盾。
+- **interactive / automation 两套重试参数** — 一根新的会话级旋钮加全套 R8 接线，零真实需求（P6）。记录为已评估。
+- **给 `Retry-After` 等待加 0–50% 抖动** — 抖动是给多会话惊群用的，单用户 runtime 没有羊群；照服务端说的等（上限 `MAX_COOLDOWN`）是更忠实的读法。
+- **照抄 Node errno / undici 瞬态词表**（`ECONNRESET` / `socket hang up` / `premature close` / `[unavailable]`）— hyper/reqwest 栈上是死模式（判据「列举法只覆盖立法当天的世界」）。
+- **把参考项目剩余的 token-limit 模式并进 `CONTEXT_OVERFLOW_PATTERNS`**（`payload too large` / `request size cannot exceed` / `maximum prompt length`）— 那张表闸的是 `CompactAndRetry`，一次误报废掉一整条 walk；没有观测到的漏判就不加。
+- **单独的 output-token-limit 判决**（`OutputTokensLimitExceededError` → "请求短一点的输出"）— 今天零消费者；真正的消费者在 harness 压缩那侧（R10 三问）。
+- **`StopReason::ProviderError` 新变体** — `StopReason` 在 15 个非测试文件里被 match，含 R10 锁住的 harness 侧；`Unknown` 已经就是"无法担保的收尾"。等到有消费者需要把"故障"与"不认识的厂商词"分开再立项。
+- **把 provider 的故障报文喂给模型** — 那是 turn 面/harness 的决定（12-factor A2 落在 harness 的错误压缩侧，R10 不许 failover 层写模型读的东西）；C 层这一侧的诚实信号是把默认 `EndTurn` 降级成 `Unknown`。
+- **中间件 / 装饰器链**（`PromptExecutor` + `BaseMiddleware`）— Aleph 已有同构的 `ThinkLevel→Metering→ModelOverride→Failover→Http`（R10/P6）；链里那个 continuation-injector 属 prompt 侧（R9）。
+- **clock-skew 守卫**（`sanitizeCrossClockDurationMs`）— C 层只用单调 `Instant`，没有跨时钟的接缝可挂；"绝不把不可信时长夹进 EWMA"这条原则已经成立。
+
 ---
 
 ## 10. 常见修改的落点
@@ -544,7 +587,7 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 | **某模型只在一家宿主上下线** | **同表，`provider: Some("<preset id>")`** —— 别写成全局行，那会拒掉别处能用的 id（§3.1） |
 | 某宿主用了别的 id 拼法 | `alias.rs::canonicalize_model_id`（host 路径折末段 / `p` 分隔符）；点号-短横见 §5.1 |
 | **默认模型过期了？** | **先跑 `cargo test -p alephcore --lib drift_tests`** |
-| **想一次看完所有 provider 通不通** | `aleph providers health`（`providers.healthcheck`）。`aleph doctor` 是更宽的那一问；两者共用 `probe::probe_provider_bounded` **与** `probe::probe_disposition` —— 后者是"要不要拨号"，此前只有 doctor 那一面认得 `supports_health_check` |
+| **想一次看完所有 provider 通不通** | `aleph providers health`（`providers.healthcheck`）。`aleph doctor` 是更宽的那一问。**「要不要拨这个 provider」只有 `probe::probe_disposition` 一处派生，「拨号」只有 `probe::probe_provider_bounded` 一个出口**（`probe_provider` 自 round-6 起私有，于是 `PROBE_TIMEOUT` 是结构属性不是约定）——别在这里数调用者，census 是 `grep -rn probe_provider_bounded src/`；后台健康探测（§8.5 / FL §3.6 round-6）就是它第三张脸，且只认 `Disabled` 一臂 |
 | **给 `QUOTA_BILLED_MODELS` 加一条** | 写 **canonical** 形式（表在 `canonicalize_model` 之后被读），线上拼法留注释；守卫 `quota_billed_ids_are_stated_in_lookup_form` |
 | **要一个表里没有的新模型** | **`list_models { refresh: true }` 或 `providers.modelsRefresh`** |
 | 子代理 / MoA 扇出跨厂商 | `provider/model` 限定名；消费点 `agents/runtime.rs::resolve_spawn_route`（见 §4.5 round-7）。守卫是"前缀须命中已配置 provider 才剥离"，**别改成无守卫剥离**。主循环侧同型解析是 `thinker/mod.rs::MultiProviderRegistry::get`（同一守卫；此前并排的 `resolve_model_to_provider_and_model` 只服务那条已 CUT 的预测式 `resolve_with_fallback`，见 §3.6 round-3） |
