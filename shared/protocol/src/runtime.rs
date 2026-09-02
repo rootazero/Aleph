@@ -1,0 +1,74 @@
+//! Wire types for the `runtime.*` surface (agent panel).
+//!
+//! These live here — not in the server — because both the gateway and the
+//! two clients depend on this crate, and the server MUST construct its
+//! responses from these types rather than hand-rolled `json!` (judgment §10).
+
+use serde::{Deserialize, Serialize};
+
+pub const RUNTIME_AGENTS_CHANGED_TOPIC: &str = "runtime.agents.changed";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RuntimeAgentState {
+    Idle,
+    Working,
+    Blocked,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeAgentEntry {
+    pub session_id: String,
+    pub label: String,
+    pub cwd: String,
+    /// `None` = the bundled manifest does not recognise this program.
+    /// Never a guess.
+    pub agent: Option<String>,
+    pub state: RuntimeAgentState,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeAgentsListResponse {
+    pub agents: Vec<RuntimeAgentEntry>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 用类型**构造**再解析。只解析一份自己刚写下的字面量，
+    /// 测的是 serde 而不是这段代码——那种测试永远绿（判据 §10）。
+    #[test]
+    fn the_response_round_trips_through_its_own_type() {
+        let resp = RuntimeAgentsListResponse {
+            agents: vec![RuntimeAgentEntry {
+                session_id: "s1".into(),
+                label: "claude".into(),
+                cwd: "/tmp".into(),
+                agent: Some("claude".into()),
+                state: RuntimeAgentState::Blocked,
+                updated_at: 42,
+            }],
+        };
+        let wire = serde_json::to_value(&resp).unwrap();
+        let back: RuntimeAgentsListResponse = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, resp);
+        assert_eq!(wire["agents"][0]["state"], "blocked");
+    }
+
+    /// manifest 不认识它 ⇒ agent 是 None，而不是一个猜出来的名字。
+    #[test]
+    fn an_unrecognised_agent_serialises_as_null_not_a_guess() {
+        let e = RuntimeAgentEntry {
+            session_id: "s2".into(),
+            label: "zsh".into(),
+            cwd: "/tmp".into(),
+            agent: None,
+            state: RuntimeAgentState::Unknown,
+            updated_at: 0,
+        };
+        assert!(serde_json::to_value(&e).unwrap()["agent"].is_null());
+    }
+}

@@ -38,6 +38,7 @@ pub mod providers;
 pub mod pty;
 pub mod queue;
 pub mod receipt;
+pub mod runtime;
 pub mod scope;
 pub mod search;
 pub mod session_thread;
