@@ -645,3 +645,22 @@ miss」和「一个更低的、本进程没记过的洞」——单看任一半�
 这一条补的正是续做 3 自己点名欠着的那次比对（它之后又落了三个 commit，其中两个改代码）。
 作用域仍**不含** clippy、`--features test-helpers --all-targets` 的**运行**、`--bins`、
 以及 panel/tui/cli/protocol 四个 crate。
+
+### T5 review 之后 — `up_to_date` 的证伪补上了（orchestrator）
+
+`66c3d72ff` 提交时诚实写着「证伪欠着」：跑变异那次 lib test target 编译不过，而错误
+（`Recovered::Sidecar`）来自 T6 在同一工作树里的在飞改动，不是这条改动。T6 落地后补跑：
+
+| 变异 | 观察到变红的测试 |
+|---|---|
+| `&& deferred == 0` → `&& (deferred == 0 \|\| true)` | `gateway::session_projector::tests::a_heal_that_deferred_a_row_is_not_up_to_date`（31 passed / 1 failed，只有这一条） |
+
+**「绿是真的、红还没观察到」和「两者都观察到了」是两种不同强度的证据**，所以这一行单独记，
+而不是回头把 `66c3d72ff` 的正文改成好看的样子（它也改不了）。
+
+### 0.1 续 — T5 review 转发给 T8 的两条
+
+| 给谁 | 约束 | 出处 |
+|---|---|---|
+| **T8** | `MessageProjector::deferred_count()` 在 `src/ interfaces/ shared/ qa/` **零读者**，且因为是 `pub` 所以 dead-code lint 看不见（判据 #7 + #11）。字段 doc 说它为 T8 的 burst 阶段而存在，而 T8 Step 2 现在写的是断言**日志行** `projector queue full; seq deferred`，不是这个计数器。**要么 T8 消费它，要么 CUT** —— 留着不消费就是一个「报成功的 no-op」。 | T5 review |
+| **T8 / 下一轮** | `run_start` 活在 drain 任务的局部作用域，`ensure_drain()` 重启后是空 map ⇒ stamp 区间退回「meta 之下最新的那条 assistant 行」。若本 run 自己那行随死掉的任务丢了，stamp 会落到**上一个 run** 的行上并计费；随后 heal 补回正确的行、meta 再处理一次（meta 不产生转录行，`present` 永远不抑制它）、区间找到新行、`already_stamped_by` 答 false ⇒ **第二次计费**。需要 drain panic 才触发，故 review 判非阻塞。修法：把 `run_start` 挪到 `MessageProjector` 上（与 `missed` 同一把 `StdMutex`），或让 `ensure_drain` 把每个有未闭合 run 的会话标脏。 | T5 review |
