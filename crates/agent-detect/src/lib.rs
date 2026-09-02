@@ -12,9 +12,9 @@
 //! | [`screen_rules`] | `src/pane/agent_detection.rs` |
 //!
 //! `src/detect/manifest_update.rs` is deliberately absent: every function in
-//! it was the remote-download path, which this phase does not ship. Its two
-//! items the engine actually needs — `ManifestVersion` and
-//! `MANIFEST_ENGINE_VERSION` — were salvaged into [`manifest`].
+//! it was the remote-download path, which this phase does not ship. The one
+//! item the engine actually needs — `ManifestVersion` — was salvaged into
+//! [`manifest`].
 
 pub mod engine;
 pub mod manifest;

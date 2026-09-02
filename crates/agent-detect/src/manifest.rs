@@ -10,11 +10,16 @@
 // because phase 2 restores the other two and this is what upstream reports in
 // `DetectionExplain::source`.
 //
-// `ManifestVersion` and `MANIFEST_ENGINE_VERSION` are salvaged verbatim from
-// upstream `src/detect/manifest_update.rs`, which is not ported (Task 2 ruling
-// R2-4: every other item in it was the remote download path). Only the impls
-// the surviving code needs came across --- `Serialize` and the `Ord` family
-// existed to compare a downloaded manifest against the bundled one.
+// `ManifestVersion` is salvaged verbatim from upstream
+// `src/detect/manifest_update.rs`, which is not ported (Task 2 ruling R2-4:
+// every other item in it was the remote download path). Only the impls the
+// surviving code needs came across --- `Serialize` and the `Ord` family
+// existed to compare a downloaded manifest against the bundled one. A second
+// item salvaged alongside it in the original port was cut in fix round 2
+// (F1): it had zero consumers, and its own doc comment named a validation
+// gate that never actually read it --- that gate compares `min_engine_version`
+// against a different, unrelated constant instead (判据 §1: a comment naming
+// a consumer that does not exist).
 
 use std::sync::{OnceLock, RwLock};
 
@@ -24,10 +29,6 @@ use serde::Deserialize;
 use crate::engine::{agent_label, parse_agent_label, Agent, AgentDetection, AgentState};
 
 // --- salvaged from upstream src/detect/manifest_update.rs ------------------
-
-/// Upstream `manifest_update::MANIFEST_ENGINE_VERSION`. A manifest declaring a
-/// `min_engine_version` above this is rejected by [`validate_manifest`].
-pub const MANIFEST_ENGINE_VERSION: u32 = 3;
 
 /// Upstream `manifest_update::ManifestVersion` (dotted-numeric, e.g.
 /// `2026.08.29.1`). `parse` is the validation gate; it is reached through
@@ -170,12 +171,20 @@ struct ManifestCache {
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentManifest {
+    #[allow(
+        dead_code,
+        reason = "part of the upstream TOML schema, deserialized from all 21 bundled manifests; read only by the cfg(test) guard `manifest_matches_agent` (manifest::tests::bundled_manifest_ids_match_their_table_entry) so a non-test build never reads it"
+    )]
     id: String,
     version: Option<ManifestVersion>,
     min_engine_version: Option<u32>,
     #[serde(rename = "updated_at")]
     _updated_at: Option<String>,
     #[serde(default)]
+    #[allow(
+        dead_code,
+        reason = "part of the upstream TOML schema, deserialized from all 21 bundled manifests; read only by the cfg(test) guard `manifest_matches_agent` (manifest::tests::bundled_manifest_ids_match_their_table_entry) so a non-test build never reads it"
+    )]
     aliases: Vec<String>,
     #[serde(default)]
     rules: Vec<ManifestRule>,
@@ -561,20 +570,8 @@ fn bundled_manifest(agent: Agent) -> Option<AgentManifest> {
         .iter()
         .find(|(manifest_id, _)| *manifest_id == id)
         .map(|(_, content)| {
-            let manifest = parse_manifest(content)
-                .unwrap_or_else(|err| panic!("bundled {id} manifest is invalid: {err}"));
-            // BUNDLED_MANIFESTS maps a label to a file; the file declares its
-            // own `id`. Without this, the two are the same fact stated twice
-            // with nothing comparing them, and a table entry pointing at the
-            // wrong .toml would load silently under the wrong agent (判据 §1).
-            // Upstream compares them on the override path, which phase 1 does
-            // not ship; the manifests are embedded at compile time, so a
-            // mismatch is a build defect and panics like an invalid one.
-            assert!(
-                manifest_matches_agent(&manifest, agent),
-                "the manifest bundled under {id} does not declare itself as that agent"
-            );
-            manifest
+            parse_manifest(content)
+                .unwrap_or_else(|err| panic!("bundled {id} manifest is invalid: {err}"))
         })
 }
 
@@ -823,7 +820,13 @@ fn validate_region_name(spec: &str) -> Result<(), String> {
 /// the only thing that reads `AgentManifest::id` and `::aliases`, and without a
 /// caller the `BUNDLED_MANIFESTS` table key and the `id` inside each `.toml`
 /// become two statements of one fact with nothing comparing them (判据 §1).
-/// [`bundled_manifest`] is now that caller.
+///
+/// The fact it checks is fixed at compile time --- the table and the 21
+/// `.toml`s ship in the same binary --- so the caller is a test, not a
+/// runtime path: `manifest::tests::bundled_manifest_ids_match_their_table_entry`
+/// (fix round 2, F2; a mismatch used to panic at `bundled_manifest`'s call
+/// site instead, which was a behavioural addition declared nowhere).
+#[cfg(test)]
 fn manifest_matches_agent(manifest: &AgentManifest, agent: Agent) -> bool {
     let id = agent_label(agent);
     manifest.id == id

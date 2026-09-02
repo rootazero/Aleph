@@ -12,9 +12,8 @@ Source: herdr 0.8.2
 The 21 .toml manifests are the detection rule data, embedded with include_str!
 by src/manifest.rs; they are part of the ported work, not configuration.
 
-Two items were lifted out of herdr src/detect/manifest_update.rs, which is
-otherwise not ported, into src/manifest.rs: `ManifestVersion` and
-`MANIFEST_ENGINE_VERSION`.
+One item was lifted out of herdr src/detect/manifest_update.rs, which is
+otherwise not ported, into src/manifest.rs: `ManifestVersion`.
 
 Modifications: crate-path rewrites; removal of the Remote manifest source, the
 remote-update module, and the platform-specific process-identification block.

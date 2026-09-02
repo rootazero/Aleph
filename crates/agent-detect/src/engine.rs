@@ -1,15 +1,24 @@
 // Ported from herdr 0.8.2 (https://github.com/herdrdev/herdr).
 // Copyright the herdr authors. Licensed under the Apache License, Version 2.0.
-// See ../NOTICE. Modifications: crate-path rewrites and removal of the
-// Remote manifest source (deferred to phase 2).
+// See ../NOTICE. This file never carried the Remote manifest source (that
+// lived only in `manifest.rs`); its own modifications are crate-path
+// rewrites (`manifest::X` -> `crate::manifest::X`) and the removal of
+// `pub mod manifest; pub mod manifest_update;` (those modules now live in
+// `lib.rs`).
 //
-// Additionally removed for this crate (Task 2 rulings R2-4 / R2-5):
-//   * the "Process identification (platform-specific)" block --- it needs
-//     `crate::platform::ForegroundJob` and PID probing, which this crate has
-//     no dependency budget for. `identify_agent` / `parse_agent_label` stay:
-//     they are pure string functions and Aleph supplies the process name.
-//   * `mod manifest_update` --- every one of its functions was the remote
-//     download path.
+// Additionally removed for this crate:
+//   * the "Process identification (platform-specific)" block (Task 2 rulings
+//     R2-4 / R2-5) --- it needs `crate::platform::ForegroundJob` and PID
+//     probing, which this crate has no dependency budget for.
+//     `identify_agent` / `parse_agent_label` stay: they are pure string
+//     functions and Aleph supplies the process name.
+//   * `mod manifest_update` (R2-4) --- every one of its functions was the
+//     remote download path.
+//   * `full_lifecycle_hook_authority` / `session_identity_only_integration`,
+//     with their two tests (fix round 2, F4) --- both matched
+//     `"herdr:<source>"`-style integration-source strings that nothing in
+//     Aleph produces, and neither had a non-test consumer (R10: a
+//     zero-consumer abstraction is CUT).
 
 //! Agent state detection via terminal tail pattern matching.
 //!
@@ -293,25 +302,6 @@ pub fn should_skip_state_update(agent: Option<Agent>, screen_content: &str) -> b
     agent.is_some_and(|agent| crate::manifest::should_skip_state_update(agent, screen_content))
 }
 
-pub fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> bool {
-    matches!(
-        (source, agent_label),
-        ("herdr:pi", "pi")
-            | ("herdr:omp", "omp")
-            | ("herdr:mastracode", "mastracode")
-            | ("herdr:opencode", "opencode")
-            | ("herdr:kilo", "kilo")
-            | ("herdr:kimi", "kimi")
-    )
-}
-
-pub fn session_identity_only_integration(source: &str, agent_label: &str) -> bool {
-    matches!(
-        (source, agent_label),
-        ("herdr:hermes", "hermes") | ("herdr:qwen", "qwen") | ("herdr:antigravity_cli", "agy")
-    )
-}
-
 // ---------------------------------------------------------------------------
 // Agent-label string helpers
 // ---------------------------------------------------------------------------
@@ -488,28 +478,6 @@ mod tests {
         assert_eq!(parse_canonical_agent_label("Pi"), None);
         assert_eq!(parse_canonical_agent_label(" pi "), None);
         assert_eq!(parse_canonical_agent_label("opencode.exe"), None);
-    }
-
-    #[test]
-    fn mastracode_is_hook_authority_without_screen_manifest() {
-        assert!(full_lifecycle_hook_authority(
-            "herdr:mastracode",
-            "mastracode"
-        ));
-        assert!(!Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Mastracode));
-    }
-
-    #[test]
-    fn session_identity_integrations_leave_state_to_screen_detection() {
-        for (source, label, agent) in [
-            ("herdr:hermes", "hermes", Agent::Hermes),
-            ("herdr:qwen", "qwen", Agent::Qwen),
-            ("herdr:antigravity_cli", "agy", Agent::Antigravity),
-        ] {
-            assert!(!full_lifecycle_hook_authority(source, label));
-            assert!(session_identity_only_integration(source, label));
-            assert!(Agent::SCREEN_MANIFEST_AGENTS.contains(&agent));
-        }
     }
 
     #[test]

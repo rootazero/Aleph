@@ -1,9 +1,11 @@
 // Ported from herdr 0.8.2 (https://github.com/herdrdev/herdr).
 // Copyright the herdr authors. Licensed under the Apache License, Version 2.0.
-// See ../NOTICE. Modifications: crate-path rewrites and removal of the
-// Remote manifest source (deferred to phase 2).
+// See ../NOTICE. This file never carried the Remote manifest source (that
+// lived only in `manifest.rs`).
 //
-// Upstream file: `src/pane/agent_detection.rs`. Two crate-boundary changes:
+// Upstream file: `src/pane/agent_detection.rs`. Modifications to THIS file:
+//   * `use crate::detect::{...}` -> `use crate::engine::{...}`, and
+//     `crate::detect::X` -> `crate::engine::X` throughout.
 //   * `pub(super)` -> `pub`: upstream this is a private child of `pane`; here
 //     the consumer (Aleph's pane layer) is outside the crate.
 //   * `crate::terminal::state::stabilize_agent_detection` is inlined below

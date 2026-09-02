@@ -1,7 +1,22 @@
 // Ported from herdr 0.8.2 (https://github.com/herdrdev/herdr).
 // Copyright the herdr authors. Licensed under the Apache License, Version 2.0.
-// See ../../NOTICE. Modifications: crate-path rewrites and removal of the
-// Remote manifest source (deferred to phase 2).
+// See ../../NOTICE. Modifications to THIS file:
+//   * Remote-only tests deleted (the manifest-download path is not ported).
+//     One property they proved survives the cut and is kept, on the bundled
+//     source: `fallback_explain_preserves_active_manifest_version`.
+//   * Fix round 1: the four Override-manipulation helpers (`versioned_manifest`,
+//     `override_env_lock`, `with_manifest_dirs`, `write_local_codex`) were
+//     deleted along with `ManifestSource::Override` --- three tests that used
+//     them were rewritten, not deleted, to reach the same code a different
+//     way: `rule_semantics_apply_gates_priority_and_line_regex` and
+//     `fallback_explain_preserves_active_manifest_version` now go through the
+//     new `explain_manifest()` helper or the real bundled cache;
+//     `manifest_version_follows_the_active_source_per_agent` was renamed
+//     `manifest_version_is_per_agent_and_matches_explain` and broadened from
+//     2 agents to all of `Agent::SCREEN_MANIFEST_AGENTS`.
+//   * Fix round 2 (F2): added `bundled_manifest_ids_match_their_table_entry`,
+//     declaring as a test the `BUNDLED_MANIFESTS`-key-vs-declared-`id` check
+//     that used to be a runtime `assert!` inside `bundled_manifest`.
 
 use super::*;
 
@@ -154,22 +169,48 @@ fn manifest_version_is_per_agent_and_matches_explain() {
         );
     }
 
-    // Mastracode has no screen manifest at all (pinned by engine.rs's
-    // `mastracode_is_hook_authority_without_screen_manifest`). `None` there
-    // means "no manifest", never "version unknown but present" (判据 §8).
+    // Mastracode has no screen manifest at all --- it is excluded from
+    // `Agent::SCREEN_MANIFEST_AGENTS`, the set `build_manifest_cache` loads
+    // from. `None` there means "no manifest", never "version unknown but
+    // present" (判据 §8).
     assert_eq!(manifest_version(Agent::Mastracode), None);
 }
 
 #[test]
 fn all_bundled_manifests_parse_and_validate() {
     for agent in Agent::SCREEN_MANIFEST_AGENTS {
-        // This call is also what drives `bundled_manifest`'s two panics for
-        // every bundled manifest: invalid TOML, and a manifest whose declared
-        // `id` disagrees with the BUNDLED_MANIFESTS table key it sits under.
+        // This call is also what drives `bundled_manifest`'s one remaining
+        // panic: invalid TOML. The other historical panic --- a manifest
+        // whose declared `id` disagrees with its BUNDLED_MANIFESTS table key
+        // --- is now `bundled_manifest_ids_match_their_table_entry` below,
+        // not a side effect of this loop (fix round 2, F2).
         assert!(
             bundled_manifest(agent).is_some(),
             "missing bundled manifest for {}",
             agent_label(agent)
+        );
+    }
+}
+
+/// Guards the fact [`manifest_matches_agent`] exists to check: the
+/// `BUNDLED_MANIFESTS` table maps a label to a `.toml` file, and that file
+/// separately declares its own `id` --- two statements of one fact with
+/// nothing comparing them unless something reads both (判据 §1). This used to
+/// be a runtime `assert!` inside `bundled_manifest`, on the `detect()` hot
+/// path, for a fact that is fixed at compile time (fix round 2, F2: a
+/// behavioural addition in a port, panicking somewhere no caller declared,
+/// for data that cannot change without a rebuild).
+#[test]
+fn bundled_manifest_ids_match_their_table_entry() {
+    for (label, content) in BUNDLED_MANIFESTS {
+        let manifest = parse_manifest(content)
+            .unwrap_or_else(|err| panic!("bundled {label} manifest is invalid: {err}"));
+        let agent = parse_agent_label(label).unwrap_or_else(|| {
+            panic!("BUNDLED_MANIFESTS table key {label:?} is not a known agent label")
+        });
+        assert!(
+            manifest_matches_agent(&manifest, agent),
+            "the manifest bundled under {label} does not declare itself as that agent"
         );
     }
 }
