@@ -28,7 +28,7 @@ use aleph_protocol::{AgentTraceEvent, StreamEvent};
 use tokio::sync::mpsc;
 
 use crate::output::{exec_echo, markdown, stream_md::MarkdownStream, Spinner};
-use aleph_client::CliResult;
+use aleph_client::{CliResult, ClientEvent};
 
 /// How long to wait for the `RunComplete` receipt after the final response
 /// chunk. The drain emits it immediately after the run settles, so this only
@@ -61,7 +61,7 @@ pub struct FollowOutcome {
 /// the run settles (`RunComplete` / `RunError`), the channel closes, or the
 /// post-final grace period elapses.
 pub async fn follow_run(
-    events: &mut mpsc::Receiver<StreamEvent>,
+    events: &mut mpsc::Receiver<ClientEvent>,
     opts: &FollowOptions,
 ) -> CliResult<FollowOutcome> {
     let mut streamed_raw = String::new();
@@ -82,18 +82,34 @@ pub async fn follow_run(
         Some(Spinner::start("thinking…"))
     };
 
-    loop {
-        let event = if saw_final_chunk {
-            // Body complete — wait briefly for the RunComplete receipt
-            // (single-source emission) without hanging on a dead server.
-            match tokio::time::timeout(FINAL_GRACE, events.recv()).await {
-                Ok(Some(ev)) => ev,
-                Ok(None) | Err(_) => break,
-            }
-        } else {
-            match events.recv().await {
-                Some(ev) => ev,
-                None => break,
+    'outer: loop {
+        // A `ClientEvent` off the wire is either this run's `stream.*` plane
+        // (what the rest of this loop renders) or a topic frame from
+        // `events.subscribe` — the Panel's/TUI's surface, not something
+        // `ask`/`chat --stream` consume. The inner loop keeps draining until
+        // it has a `StreamEvent` to hand the renderer, or the channel
+        // closes/times out, in which case it breaks the OUTER loop exactly
+        // like the un-split code below used to `break` directly.
+        let event = loop {
+            let ev = if saw_final_chunk {
+                // Body complete — wait briefly for the RunComplete receipt
+                // (single-source emission) without hanging on a dead server.
+                match tokio::time::timeout(FINAL_GRACE, events.recv()).await {
+                    Ok(Some(ev)) => ev,
+                    Ok(None) | Err(_) => break 'outer,
+                }
+            } else {
+                match events.recv().await {
+                    Some(ev) => ev,
+                    None => break 'outer,
+                }
+            };
+            match ev {
+                ClientEvent::Stream(se) => break *se,
+                // Explicit, not `_ =>`: the next `ClientEvent` variant added
+                // must make whoever extends this loop decide what it means
+                // here, not silently fall through with everything else.
+                ClientEvent::Topic { .. } => {}
             }
         };
 

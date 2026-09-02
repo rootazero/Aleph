@@ -1,4 +1,5 @@
 use super::*;
+use aleph_protocol::runtime::RUNTIME_AGENTS_CHANGED_TOPIC;
 use aleph_protocol::terminate::{self, UiLocale};
 use aleph_protocol::{
     AgentTraceEvent, AgentTraceReplay, AgentTraceSessionOutcome, AgentTraceTextKind,
@@ -2824,5 +2825,47 @@ fn beginning_a_reattach_keeps_the_side_question() {
         state.btw.active_run_id(),
         Some("run-side"),
         "the side question outlives a reconnect on the same conversation"
+    );
+}
+
+/// `handle_topic_event` is the sync half of Task 8a's wire: it recognises
+/// `runtime.agents.changed` and asks the main loop to re-fetch, but does not
+/// itself touch `runtime_agents` — a change notification carries no agent
+/// data, only word that a re-fetch is due, and clobbering still-valid data
+/// with `Loading` on every notification would flash the panel for no reason.
+#[test]
+fn a_runtime_agents_changed_topic_asks_for_a_refetch_without_touching_state() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.runtime_agents = AgentPanelData::Ready(vec![]);
+
+    let action = state.handle_topic_event(RUNTIME_AGENTS_CHANGED_TOPIC, serde_json::json!({}));
+
+    assert!(
+        matches!(action, Action::FetchRuntimeAgents),
+        "the one topic this phase understands must ask for a re-fetch: {action:?}"
+    );
+    assert!(
+        matches!(state.runtime_agents, AgentPanelData::Ready(ref v) if v.is_empty()),
+        "a change notification must not overwrite still-valid data before the \
+         re-fetch answers"
+    );
+}
+
+/// A topic this client did not subscribe to (or does not yet understand)
+/// must be a no-op, not a wildcard trigger — proves this is a recognised
+/// topic, not a catch-all that fires `FetchRuntimeAgents` for anything.
+#[test]
+fn an_unrelated_topic_is_a_no_op() {
+    let mut state = AppState::new("s".into(), "m".into());
+
+    let action = state.handle_topic_event("connection.warning", serde_json::json!({}));
+
+    assert!(
+        matches!(action, Action::None),
+        "an unrelated topic must not trigger the agent-panel re-fetch: {action:?}"
+    );
+    assert!(
+        matches!(state.runtime_agents, AgentPanelData::Loading),
+        "an unrelated topic must not touch runtime_agents at all"
     );
 }

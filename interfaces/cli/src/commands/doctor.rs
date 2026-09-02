@@ -42,7 +42,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliError, CliResult, ClientEvent};
 use aleph_protocol::jsonrpc::METHOD_NOT_FOUND;
 use aleph_protocol::{AgentTraceEvent, StreamEvent};
 
@@ -293,7 +293,16 @@ async fn launch_llm_repair(server_url: &str, brief: &str, config: &CliConfig) ->
     let mut run_error: Option<String> = None;
     let verbose = std::env::var("ALEPH_VERBOSE").is_ok();
 
-    while let Some(event) = events.recv().await {
+    while let Some(client_event) = events.recv().await {
+        let event = match client_event {
+            ClientEvent::Stream(event) => *event,
+            // This repair loop only understands its own run's `stream.*`
+            // plane; a topic frame (`events.subscribe`) is a different
+            // surface. Explicit, not `_ =>` — the next `ClientEvent` variant
+            // added must make whoever extends this loop decide what it
+            // means here, not silently pass through.
+            ClientEvent::Topic { .. } => continue,
+        };
         match event {
             // Rich path: hierarchical agent-loop trace (tool args + duration).
             StreamEvent::AgentTrace { event, .. } => {

@@ -14,6 +14,7 @@ mod tests;
 use std::time::{Duration, Instant};
 
 use aleph_protocol::providers::{rank_entries, CatalogEntry, RosterModel};
+use aleph_protocol::runtime::RuntimeAgentEntry;
 use aleph_protocol::{RunSummary, SessionSnapshot};
 use chrono::{DateTime, Utc};
 
@@ -112,6 +113,14 @@ pub enum Action {
     /// Ask the highlighted provider's vendor what it serves now, then re-read
     /// the catalogue so the discovered ids appear in its roster.
     ProviderPickerRefresh,
+
+    // -- Agent panel (Task 8a: the wire; Task 8b: the widget that reads it) --
+    /// A `runtime.agents.changed` topic event arrived — re-fetch
+    /// `runtime.agents.list` and replace [`AppState::runtime_agents`]. The
+    /// handler that returns this (`AppState::handle_topic_event`) is sync
+    /// and cannot itself await the RPC; the main loop performs the fetch
+    /// when it sees this action (same idiom as `ProviderPickerRefresh`).
+    FetchRuntimeAgents,
 }
 
 // ---------------------------------------------------------------------------
@@ -615,6 +624,49 @@ pub struct ActiveRunJoin {
     pub elapsed_ms: Option<u64>,
 }
 
+/// The agent panel's data, as [`AppState::runtime_agents`] holds it.
+///
+/// Deliberately not a bare `Vec<RuntimeAgentEntry>` and not a
+/// `Result<Vec<_>, String>` either: the latter conflates "no answer yet"
+/// with "an empty list", and a `runtime.agents.list` refusal is not an
+/// absence — [`AgentPanelData::Refused`] and [`AgentPanelData::Ready`]
+/// holding an empty `Vec` must render differently, or a non-operator's
+/// screen looks identical to an operator's install with nothing running
+/// (判据 §8: a refusal must not be read as "there is nothing").
+#[derive(Debug, Clone)]
+pub enum AgentPanelData {
+    /// Asked (or about to be asked), no answer yet. NOT "no agents" — the
+    /// initial state before the first `runtime.agents.list` reply, and
+    /// while a re-fetch triggered by [`Action::FetchRuntimeAgents`] is in
+    /// flight the field keeps its PREVIOUS value rather than reverting to
+    /// this, so a change notification does not flash the panel to "loading"
+    /// over data that is still valid.
+    Loading,
+    /// A `runtime.agents.list` reply. An empty `Vec` here really does mean
+    /// "no agents running" — nothing upstream needs to guess.
+    #[allow(
+        dead_code,
+        reason = "the entries are the whole point of this variant and are read by Task 8b's widget, not by anything in Task 8a's scope (mod.rs/app/mod.rs/app/events.rs) — see R8-3's scope fence"
+    )]
+    Ready(Vec<RuntimeAgentEntry>),
+    /// The operator gate said no (`runtime.agents.list` returned
+    /// [`aleph_protocol::jsonrpc::AUTH_REQUIRED`]) — distinguished from
+    /// [`Self::Unavailable`] by the JSON-RPC error CODE, never by matching
+    /// words in the message (P8).
+    #[allow(
+        dead_code,
+        reason = "the message is rendered by Task 8b's widget, not read anywhere in Task 8a's scope"
+    )]
+    Refused(String),
+    /// Every other failure: transport, timeout, decode. Not the operator
+    /// gate specifically — see [`Self::Refused`].
+    #[allow(
+        dead_code,
+        reason = "the message is rendered by Task 8b's widget, not read anywhere in Task 8a's scope"
+    )]
+    Unavailable(String),
+}
+
 /// Read a transcript row's RFC3339 stamp, falling back to now.
 ///
 /// One parser for both producers of that stamp, and they are the same value:
@@ -837,6 +889,11 @@ pub struct AppState {
     /// `widgets::chat_area::LineCache`. Not part of any serialized/exported
     /// state; purely a render-time optimization.
     pub chat_line_cache: crate::tui::widgets::chat_area::LineCache,
+
+    /// The agent panel's data (Task 8b renders it; Task 8a wires it).
+    /// Populated by a startup fetch and re-fetched on every
+    /// `runtime.agents.changed` topic event — see [`AgentPanelData`].
+    pub runtime_agents: AgentPanelData,
 }
 
 impl AppState {
@@ -901,6 +958,8 @@ impl AppState {
             should_quit: false,
 
             chat_line_cache: crate::tui::widgets::chat_area::LineCache::default(),
+
+            runtime_agents: AgentPanelData::Loading,
         }
     }
 

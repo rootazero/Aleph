@@ -738,4 +738,36 @@ impl AppState {
             }
         }
     }
+
+    // -- Topic event handling (Task 8a) -----------------------------------
+
+    /// Handle a `{"method":"event","params":{"topic":…,"data":…}}` topic
+    /// frame, surfaced by `aleph-client` as `ClientEvent::Topic` and routed
+    /// here from the main loop's `select!` arm.
+    ///
+    /// Sync, like [`Self::handle_gateway_event`] — it cannot itself await
+    /// the re-fetch RPC, so it only decides WHETHER one is due and leaves
+    /// performing it to the caller (`Action::FetchRuntimeAgents`, handled by
+    /// the main loop the same way it already handles
+    /// `Action::ProviderPickerRefresh`).
+    ///
+    /// Only one topic is understood this phase: `runtime.agents.changed`.
+    /// Every other topic is a no-op — this client subscribes to nothing
+    /// else (R8-5), so an unrecognised topic here means a future feature
+    /// has not wired its handler yet, not a defect, and must not be read as
+    /// license to trigger the one action that IS wired.
+    pub fn handle_topic_event(&mut self, topic: &str, _data: serde_json::Value) -> Action {
+        if topic == aleph_protocol::runtime::RUNTIME_AGENTS_CHANGED_TOPIC {
+            // Deliberately does NOT reset `self.runtime_agents` to `Loading`
+            // here: the notification carries no agent data, only word that
+            // the table changed, and clobbering still-valid data on every
+            // notification would flash the panel to "loading" over data
+            // that has not actually gone stale from the viewer's
+            // perspective. The re-fetch this triggers replaces it once the
+            // answer is in hand.
+            Action::FetchRuntimeAgents
+        } else {
+            Action::None
+        }
+    }
 }
