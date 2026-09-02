@@ -202,6 +202,9 @@ async fn h_t1_worktree_isolation_happy_path() {
         context_budget_refiner: None,
         primary_context_window: None,
         cheap_summary_provider: None,
+        // No watchdog in this fixture; the field is explicit so a no-verifier child
+        // is opted into rather than inherited from a default nobody read.
+        verifier_chain: None,
     };
 
     let agent_def =

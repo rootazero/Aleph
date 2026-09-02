@@ -163,6 +163,12 @@ async fn subagent_base_carries_4_p1_fields() {
         // chain-minimum budget, which is exactly what the test pins.
         context_budget_refiner: None,
         primary_context_window: None,
+        // Sentinel `None`: this fixture pins the context-management triple, not
+        // the watchdog, and the field is explicit precisely so a no-verifier
+        // child is opted into rather than inherited from a `..Default::default()`
+        // that nobody read. The inheritance itself is asserted in
+        // `subagent_spawner::tests`, on the parent's chain.
+        verifier_chain: None,
     };
 
     // Structural assertions — the 5 P1 fields are populated as expected.
