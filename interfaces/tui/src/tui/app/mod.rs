@@ -411,7 +411,11 @@ impl PaletteState {
 pub struct SessionEntry {
     /// The session key used by `chat.history` / to re-point the session.
     pub key: String,
-    /// Human-facing label (name + message count, or the key as fallback).
+    /// Human-facing label: the row's `topic` (or its `label`, or the key when
+    /// it has neither), its message count, and — when the server says this
+    /// conversation's newest run needs attention — a `[interrupted]` /
+    /// `[log inconsistent]` mark. Built in one place,
+    /// `commands::session_entry_from_json`, from the shared `SessionListRow`.
     pub label: String,
 }
 
