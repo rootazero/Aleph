@@ -70,6 +70,42 @@ pub use provider::{FailoverProvider, RouteStep};
 /// sidelining (the nested chain runs its own breaker per real provider).
 pub const NESTED_CHAIN_NODE: &str = "__global_chain__";
 
+/// Phrase planted in the *rendered message* of an error the walk raises after
+/// content already reached the user's sink.
+///
+/// "May this request be re-attempted?" has two faces: the walk answers it for
+/// the chain (it stops advancing — a second candidate would append its answer
+/// to a half-written one), and `orchestrator::harness_bridge::error` answers it
+/// for the gateway's outer dispatch loop. Before this marker the second face
+/// re-derived the answer from the provider's own wording, so a proxy that cut
+/// a long stream ("connection reset", "timed out") was read as
+/// `FlowError::Transient`, re-dispatched on the same `run_id` up to
+/// `MAX_FALLBACK_ATTEMPTS`, and the Panel appended a whole second answer under
+/// the half-written one. One fact, one derivation: the walk states it, the
+/// bridge reads it.
+///
+/// It must survive `Display`, because that is what the bridge classifies —
+/// `AlephError::ProviderError` renders `message` only and drops `suggestion`
+/// (the same asymmetry `decision::retry_after_from_suggestion` exists to work
+/// around), so a marker parked on `suggestion` would be two ends with no wire.
+/// Hence [`mark_partial_output_emitted`] puts it in the message text, and it is
+/// phrased as readable English because `AlephError::user_message` shows that
+/// text to the user.
+pub(crate) const PARTIAL_OUTPUT_EMITTED: &str = "partial output already delivered";
+
+/// Wrap a post-emission failure so every layer above the walk reads the same
+/// verdict from [`PARTIAL_OUTPUT_EMITTED`] instead of re-classifying the
+/// provider's wording. The original message is kept verbatim (it is the only
+/// diagnostic of *why* the stream died) and so is the original suggestion.
+pub(crate) fn mark_partial_output_emitted(
+    err: &crate::error::AlephError,
+) -> crate::error::AlephError {
+    crate::error::AlephError::ProviderError {
+        message: format!("{PARTIAL_OUTPUT_EMITTED}; the stream then failed: {err}"),
+        suggestion: err.suggestion().map(str::to_string),
+    }
+}
+
 /// Consecutive failures at which a provider's circuit breaker opens.
 const CIRCUIT_OPEN_THRESHOLD: u32 = 3;
 /// Hard ceiling on the circuit-breaker cooldown.

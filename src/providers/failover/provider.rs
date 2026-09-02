@@ -1252,12 +1252,8 @@ impl FailoverProvider {
                                     );
                                     // rust-doctor-disable-next-line excessive-clone
                                     let err = AlephError::provider(msg.clone());
-                                    self.record_emitted_failure(
-                                        &cand.name,
-                                        model.as_deref(),
-                                        &err,
-                                    )
-                                    .await;
+                                    self.record_emitted_failure(&cand.name, model.as_deref(), &err)
+                                        .await;
                                     return Ok(resp);
                                 }
                                 self.mark_healthy(&cand.name).await;
@@ -1336,7 +1332,17 @@ impl FailoverProvider {
                                 // derivation the in-stream-fault arm above uses.
                                 self.record_emitted_failure(&cand.name, model.as_deref(), &e)
                                     .await;
-                                return Err(e);
+                                // The gateway's outer dispatch loop asks the
+                                // same question this arm just answered, and
+                                // used to answer it from the provider's own
+                                // wording: a proxy that cuts a long stream says
+                                // "connection reset" / "timed out", which
+                                // `harness_bridge::error` read as
+                                // `FlowError::Transient` and re-dispatched on
+                                // the same run_id — appending a whole second
+                                // answer under the half-written one. State the
+                                // fact instead of leaving it to be re-derived.
+                                return Err(super::mark_partial_output_emitted(&e));
                             }
                             Err(e) => match decide(&e, attempt, self.config.max_retries) {
                                 Decision::RetrySame(delay) => {

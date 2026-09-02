@@ -1856,18 +1856,44 @@ async fn a_failure_after_partial_output_is_terminal_instead_of_restarting() {
         // rust-doctor-disable-next-line excessive-clone
         vec![node("fb", fb.clone() as Arc<dyn AiProvider>)],
     );
-    let sink = RecordingSink::default();
 
     let msgs = [UnifiedMessage::user("hi")];
-    let out = fp
-        .execute_streaming_dyn(RequestPayload::new(&msgs), &sink)
-        .await;
+    assert!(!fp.circuit_open("p").await);
+    for _ in 0..CIRCUIT_OPEN_THRESHOLD {
+        let sink = RecordingSink::default();
+        let out = fp
+            .execute_streaming_dyn(RequestPayload::new(&msgs), &sink)
+            .await;
+        // rust-doctor-disable-next-line unwrap-in-production
+        let err = out.expect_err("must not silently restart on another candidate");
+        assert_eq!(sink.text(), "partial ");
+        // The gateway's outer loop reads `Display`, so the fact that a half
+        // answer is already on screen has to be *in* the rendered message —
+        // the 429 wording alone would read as retryable up there.
+        assert!(
+            err.to_string().contains(PARTIAL_OUTPUT_EMITTED),
+            "the terminal verdict must survive Display: {err}"
+        );
+        assert_eq!(fb.call_count(), 0, "the fallback must not double-answer");
+    }
+
+    // A provider whose proxy cuts every long stream used to stay
+    // `circuit: closed, failure_count: 0` forever — it kept leading every walk
+    // and the prober, which only dials open circuits, never saw it. Assert the
+    // effect (the breaker), then that the walk acts on it: the next call is
+    // served by the fallback with `p` sidelined.
     assert!(
-        out.is_err(),
-        "must not silently restart on another candidate"
+        fp.circuit_open("p").await,
+        "a post-emission failure must count against the provider's circuit"
     );
-    assert_eq!(sink.text(), "partial ");
-    assert_eq!(fb.call_count(), 0, "the fallback must not double-answer");
+    let sink = RecordingSink::default();
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp
+        .execute_streaming_dyn(RequestPayload::new(&msgs), &sink)
+        .await
+        .expect("the sidelined provider must yield to the fallback");
+    assert_eq!(resp.text_content(), "fb");
+    assert_eq!(fb.call_count(), 1);
 }
 
 #[tokio::test]

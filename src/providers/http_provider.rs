@@ -552,8 +552,13 @@ impl HttpProvider {
         // executing it with empty `{}` args surfaces as a misleading
         // "missing field" validation error, and the model — unable to fix an
         // infrastructure truncation — loops on it. Surface a transient error
-        // (typed `Timeout` is classified retryable, so the failover/retry path
-        // can switch providers) with an honest diagnostic.
+        // (typed `Timeout`) with an honest diagnostic. Whether that buys
+        // another provider depends on how far the stream got: the walk only
+        // advances the chain while its `EmissionGuard` says nothing has
+        // reached the sink yet. Once text has been shown this error is
+        // terminal for routing, and leaves the walk marked
+        // `failover::PARTIAL_OUTPUT_EMITTED` so the gateway's outer dispatch
+        // loop does not re-run it either.
         if let Some(diag) = provider_response.truncated_tool_call {
             tracing::warn!(
                 provider = %self.name,

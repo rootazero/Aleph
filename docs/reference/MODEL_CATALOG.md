@@ -459,7 +459,7 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 | 错误分类 | errno / 子串表 + 递归 `cause`/`AggregateError` 遍历 + `terminal` 否决 | `classify` / `classify_exhausted` / `is_permanent_failure` + `has_status_code` 邻位守卫 + `ACCOUNT_SCOPE_PATTERNS` 否决 | **Aleph 领先**（HTTP 栈上）；Node errno 词表**不移植**（死模式） |
 | token 上限分类 | ~18 条 `includesAll` + typed 标志优先；另有 `OutputTokensLimitExceededError` | `CONTEXT_OVERFLOW_PATTERNS` + 413 → `CompactAndRetry` | **已对齐**；剩余模式与输出上限判决**不做**（窄表闸着 `CompactAndRetry`；后者零消费者） |
 | HTTP 200 里的带内错误 | codex 路 `throw` 裸 JSON；proto 客户端把 `responseInfo.errorMessage` 当**值**返回、流照样 "ok" 结束（`chat-inference-proto/client.ts:257-271`） | 适配器映射成 `ProviderDelta::Error`；`HttpProvider` 只在**无内容**时升级为 `Err`，有半截内容时返回 `Ok` | **同款 bug，且 Aleph 这半更贵**（多一层健康表 / 冷却 / witness 被擦干净）→ **round-6 T3 修**（`provider_error` 字段 + walk 成功臂先读它；三判决收在 `TerminalFrames::classify`——无内容 `Fatal` / 故障收尾 `Charged` / 故障后还来 `Done` 的 `Advisory` 不记账） |
-| 吐字后掉线 | 同后端断点续传，generation 门控的持久化（`stream-attempt.ts:18-86`） | `EmissionGuard`：吐字之后即终局 | **Aleph 层次更对**；断点续传**不移植**（R10）；但终局 `Err` 不带「已吐字」事实、网关会重投，留档 round-7 |
+| 吐字后掉线 | 同后端断点续传，generation 门控的持久化（`stream-attempt.ts:18-86`） | `EmissionGuard`：吐字之后即终局 | **Aleph 层次更对**；断点续传**不移植**（R10）；终局 `Err` 现在**带着**「已吐字」事实（`failover::PARTIAL_OUTPUT_EMITTED` 写进渲染出的 message，`classify_harness_error` 第一道就读它 → `FlowError::Internal`），网关不再重投 → **round-6 T4 修** |
 | 可安全重试的谓词 | `!outputProduced ‖ resumable` | `EmissionGuard::has_emitted` | **已对齐**（概念早已采纳） |
 | 时钟偏斜守卫 | 不可信的跨时钟时长打标丢弃、绝不夹取（`clock-skew-guard.ts`） | C 层只用单调 `Instant`（`load_stats.rs:31-45`） | **不移植**——没有跨时钟接缝可挂；原则本来就成立 |
 | 用量记账（含 cache） | 五个计数、bigint→safe、饱和合并 | `TokenUsage` + 不相交不变量 + `billed_tokens`（TPM 计 cache） | **Aleph 领先**（超集 + 不变量） |
