@@ -29,6 +29,11 @@ pub struct RuntimeAgentEntry {
     /// Never a guess.
     pub agent: Option<String>,
     pub state: RuntimeAgentState,
+    /// Unix epoch MILLISECONDS, from the sampler's flush-tick clock — not the
+    /// client's. Advances only when something observable changed (state,
+    /// agent, label or cwd), so an unchanged entry keeps its old value: read
+    /// it as "how long has it been like this", not as "when was this last
+    /// looked at".
     pub updated_at: i64,
 }
 

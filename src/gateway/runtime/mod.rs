@@ -166,6 +166,17 @@ impl RuntimeAgents {
                 // returns `visible_idle: true` for that case, which is why
                 // upstream's separate `!process_exited` term needs no
                 // restatement here.
+                //
+                // Upstream's other two terms are omitted because neither can
+                // vary here. `!next.visible_blocker` (herdr
+                // `agent_detection.rs:50`): `manifest.rs:470` computes
+                // `visible_blocker: rule.visible_blocker && state == Blocked`,
+                // so `state == Idle && visible_blocker` is unreachable.
+                // `!agent_changed` (`:51`): a session's `shell` is fixed at
+                // spawn, so the identified agent cannot change within one
+                // session — this term comes back the day a phase identifies
+                // the agent from something mutable (an OSC title, a PID
+                // probe).
                 if observed == RuntimeAgentState::Idle
                     && previous_state == RuntimeAgentState::Working
                     && !d.visible_idle
