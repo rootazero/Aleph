@@ -58,13 +58,20 @@ enum Inbound {
     ServerRequest { method: String, id: Value },
     /// A gateway stream event, ready for the caller's receiver.
     Event(Box<StreamEvent>),
-    /// The envelope parsed but the payload is not a [`StreamEvent`].
+    /// A `{"method":"event","params":{"topic":…,"data":…}}` topic-event frame
+    /// — the Panel's `events.subscribe` plane, and (since Task 8a) any other
+    /// client's. Its own variant rather than falling through to
+    /// [`Inbound::UnhandledNotification`]: that arm exists for frames this
+    /// client genuinely cannot make sense of, and a topic frame is not
+    /// one — it is fully understood, just not a [`StreamEvent`].
+    Topic { topic: String, data: Value },
+    /// The envelope parsed but the payload is neither a [`StreamEvent`] nor a
+    /// recognisable topic-event frame.
     ///
     /// `loud` separates a broken contract from a frame family this client
     /// simply does not consume: every `stream.*` method promises a
     /// `StreamEvent` (`gateway::events::frame_census` asserts that pairing on
-    /// the server side), while `{"method":"event",…}` topic frames are for the
-    /// Panel and are expected to land here.
+    /// the server side).
     UnhandledNotification {
         method: String,
         loud: bool,
@@ -134,6 +141,31 @@ fn classify_frame(text: &str) -> Inbound {
                 reason: "notification carried no params".to_string(),
             };
         };
+        // The Panel's (and now every client's) topic-event envelope:
+        // `{"method":"event","params":{"topic":…,"data":…}}` — see
+        // `gateway::server::handler::event_wire_form`'s doc for the two shapes
+        // that get wrapped into it. Checked before the `StreamEvent` decode
+        // attempt below so a topic frame is *recognised*, not merely a
+        // `StreamEvent` decode failure that happens to be non-loud — the two
+        // used to be indistinguishable here, which is exactly what made this
+        // whole family silently undeliverable to any caller (Task 8a).
+        if method == TOPIC_EVENT_METHOD {
+            return match params.get("topic").and_then(Value::as_str) {
+                Some(topic) => Inbound::Topic {
+                    topic: topic.to_string(),
+                    data: params.get("data").cloned().unwrap_or(Value::Null),
+                },
+                None => Inbound::UnhandledNotification {
+                    method: method.to_string(),
+                    // Never loud: `"event"` is not a `stream.*` method, and a
+                    // topic envelope missing its own `topic` field is a
+                    // producer bug on the SAME frame family this arm exists
+                    // to keep quiet, not a broken `stream.*` contract.
+                    loud: false,
+                    reason: "topic-event envelope missing 'topic' field".to_string(),
+                },
+            };
+        }
         return match serde_json::from_value::<StreamEvent>(params.clone()) {
             Ok(event) => Inbound::Event(Box::new(event)),
             Err(e) => Inbound::UnhandledNotification {
@@ -176,6 +208,39 @@ fn classify_frame(text: &str) -> Inbound {
 /// (`GatewayEventFrame::stream_method`).
 const STREAM_METHOD_PREFIX: &str = "stream.";
 
+/// The literal JSON-RPC method every topic-event envelope carries
+/// (`gateway::server::handler::event_wire_form`'s wrapped/rewrapped form).
+/// Not `stream.*`-prefixed and not a family of methods — one exact string,
+/// the same one the gateway hand-writes on its side (`aleph-protocol` has no
+/// shared constant for it; see that function's doc for why).
+const TOPIC_EVENT_METHOD: &str = "event";
+
+/// One item delivered on the receiver [`AlephClient::connect`]/[`AlephClient::open`]
+/// hands back to the caller.
+///
+/// A single channel carrying an enum, not two receivers: see
+/// [`classify_frame`]'s `TOPIC_EVENT_METHOD` arm for how a frame becomes one
+/// variant or the other. Two receivers would give every caller two answers to
+/// "what did the server send me, and in what order" — this crate's callers
+/// (the CLI's `aleph watch`/`aleph ask`, the TUI's main loop) already select
+/// on one receiver and would have to pick an arbitrary priority between two.
+#[derive(Debug, Clone)]
+pub enum ClientEvent {
+    /// A `stream.*` frame — the run/session event plane every existing
+    /// caller of this crate already consumes. Boxed: clippy's
+    /// `large_enum_variant` flags the unboxed form (`StreamEvent` is far
+    /// larger than `Topic`'s two fields), and `Inbound::Event` already hands
+    /// one in as a `Box`.
+    Stream(Box<StreamEvent>),
+    /// A `{"method":"event","params":{"topic":…,"data":…}}` topic frame —
+    /// the Panel's `events.subscribe` plane. Quiet on the wire (classifying
+    /// one never logs a `warn!`; see `classify_frame`), but no longer
+    /// dropped: a caller that has subscribed to a topic can now receive it
+    /// here instead of it being swallowed as an "unhandled notification"
+    /// indistinguishable from a genuinely undecodable frame.
+    Topic { topic: String, data: Value },
+}
+
 /// WebSocket client for Aleph Gateway
 pub struct AlephClient {
     /// WebSocket write half
@@ -193,7 +258,7 @@ pub struct AlephClient {
     /// the same receiver the caller has been selecting on since launch.
     /// Nothing downstream is re-plumbed, and no caller has to learn that the
     /// socket underneath changed.
-    event_tx: mpsc::Sender<StreamEvent>,
+    event_tx: mpsc::Sender<ClientEvent>,
     /// Whether this client is usable — the socket is up AND handshaken.
     ///
     /// Cleared by the read loop when the socket drops, and held low across the
@@ -237,7 +302,7 @@ impl AlephClient {
     pub async fn connect(
         url: &str,
         config: &CliConfig,
-    ) -> CliResult<(Self, mpsc::Receiver<StreamEvent>)> {
+    ) -> CliResult<(Self, mpsc::Receiver<ClientEvent>)> {
         let (client, events) = Self::open(url, config).await?;
         client.set_role(client.handshake(config).await?);
         Ok((client, events))
@@ -360,7 +425,7 @@ impl AlephClient {
     }
 
     /// Open the socket and spawn the read loop, without handshaking.
-    async fn open(url: &str, config: &CliConfig) -> CliResult<(Self, mpsc::Receiver<StreamEvent>)> {
+    async fn open(url: &str, config: &CliConfig) -> CliResult<(Self, mpsc::Receiver<ClientEvent>)> {
         info!("Connecting to {}", url);
 
         let connector = tls::connector_for(url, config.ca_cert.as_deref())?;
@@ -407,7 +472,7 @@ impl AlephClient {
     async fn read_loop(
         mut read: futures_util::stream::SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
         pending: Arc<RwLock<HashMap<String, PendingRequest>>>,
-        event_tx: mpsc::Sender<StreamEvent>,
+        event_tx: mpsc::Sender<ClientEvent>,
         connected: Arc<std::sync::atomic::AtomicBool>,
         write: WsWriter,
         generation: Arc<std::sync::atomic::AtomicU64>,
@@ -477,7 +542,7 @@ impl AlephClient {
     async fn handle_message(
         text: &str,
         pending: &Arc<RwLock<HashMap<String, PendingRequest>>>,
-        event_tx: &mpsc::Sender<StreamEvent>,
+        event_tx: &mpsc::Sender<ClientEvent>,
         write: &WsWriter,
     ) {
         // Log all incoming messages for debugging.
@@ -502,7 +567,16 @@ impl AlephClient {
             }
             Inbound::Event(event) => {
                 debug!("Parsed event: {:?}", event);
-                let _ = event_tx.send(*event).await;
+                let _ = event_tx.send(ClientEvent::Stream(event)).await;
+            }
+            Inbound::Topic { topic, data } => {
+                // Deliberately no log line here, loud or quiet: the frame is
+                // fully understood and forwarded, which is the "quiet" half
+                // of Task 8a's rewritten test — an unlogged frame that is
+                // silently DROPPED (the old behaviour) and one that is
+                // silently DELIVERED look identical in the log, so the
+                // channel send is what the test actually has to observe.
+                let _ = event_tx.send(ClientEvent::Topic { topic, data }).await;
             }
             Inbound::UnhandledNotification {
                 method,
@@ -922,7 +996,69 @@ mod tests {
             .await
             .expect("the receiver held since launch must still deliver")
             .expect("the event channel must not close across a reconnect");
-        assert_eq!(event.run_id(), "run-after-reconnect");
+        match event {
+            ClientEvent::Stream(event) => assert_eq!(event.run_id(), "run-after-reconnect"),
+            other => panic!("expected a stream event: {other:?}"),
+        }
+
+        server.abort();
+    }
+
+    /// The "surfaced" half of Task 8a: a topic-event frame sent over a real
+    /// socket reaches the caller's public receiver as `ClientEvent::Topic`,
+    /// not the CLI's terminal or a log line.
+    ///
+    /// `classify_frame`'s own tests (`wire_contract`) prove the frame is
+    /// *recognised*; they cannot prove it *arrives*, because `handle_message`
+    /// — the function that actually forwards it — takes a `write: &WsWriter`
+    /// that nothing can construct without a live socket (see this module's
+    /// `Inbound` doc). This is that proof: a real gateway-shaped frame, over a
+    /// real loopback socket, landing on the exact receiver
+    /// `AlephClient::connect` handed back.
+    #[tokio::test]
+    async fn a_topic_event_frame_reaches_the_public_receiver() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            serve_handshake(&mut ws, "operator").await;
+
+            // The exact wire form `gateway::server::handler::event_wire_form`
+            // emits for a topic event (R8-5's fixture).
+            let frame = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "event",
+                "params": {
+                    "topic": "runtime.agents.changed",
+                    "data": {"reason": "sampler_flush"},
+                },
+            });
+            ws.send(Message::Text(frame.to_string().into()))
+                .await
+                .unwrap();
+            // Hold the socket open past the client's read.
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        });
+
+        let config = CliConfig::default();
+        let (_client, mut events) = AlephClient::connect(&format!("ws://{addr}"), &config)
+            .await
+            .unwrap();
+
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("a topic frame on the wire must reach the receiver")
+            .expect("the event channel must not close");
+
+        match event {
+            ClientEvent::Topic { topic, data } => {
+                assert_eq!(topic, "runtime.agents.changed");
+                assert_eq!(data["reason"], "sampler_flush");
+            }
+            other => panic!("expected a topic event, got {other:?}"),
+        }
 
         server.abort();
     }
@@ -1059,7 +1195,10 @@ mod tests {
             .await
             .expect("the live socket must deliver")
             .expect("channel closed");
-        assert_eq!(event.run_id(), "run-on-the-live-socket");
+        match event {
+            ClientEvent::Stream(event) => assert_eq!(event.run_id(), "run-on-the-live-socket"),
+            other => panic!("expected a stream event: {other:?}"),
+        }
 
         // Give the superseded loop room to finish observing its dead socket.
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1232,11 +1371,25 @@ mod wire_contract {
         }
     }
 
-    /// …and the topic-event family is not. Those are the Panel's
-    /// (`{"method":"event","params":{"topic":…,"data":…}}`); warning on each
-    /// would bury the arm above in noise on every connection.
+    /// …and the topic-event family is not undecodable at all — it is a
+    /// recognised, understood frame shape.
+    ///
+    /// Before Task 8a this classified identically to a frame this client
+    /// genuinely could not make sense of: both fell into
+    /// `Inbound::UnhandledNotification { loud: false, .. }`, and
+    /// `handle_message` dropped both on the floor after one `debug!` line.
+    /// "Quiet" and "swallowed" were the same code path, so this test could
+    /// not have told them apart. Now a topic frame gets its own `Inbound`
+    /// variant carrying the topic/data it actually parsed — the "not a
+    /// broken contract" half of this test's original purpose is kept (it is
+    /// still never `loud`, because `Inbound::Topic` has no `loud` field to
+    /// set), and "…so drop it" is what changes: `handle_message` forwards it
+    /// instead (see `a_topic_event_frame_reaches_the_public_receiver` in
+    /// `mod tests` for the "reaches the caller" half — proving that needs a
+    /// live socket, the same reason `classify_frame` was split out of
+    /// `handle_message` in the first place; see this function's own doc).
     #[test]
-    fn a_topic_event_notification_is_quiet() {
+    fn a_topic_event_notification_is_recognised_and_quiet() {
         let text = json!({
             "method": "event",
             "params": {"topic": "connection.warning", "data": {"reason": "events_overflow"}},
@@ -1244,10 +1397,15 @@ mod wire_contract {
         .to_string();
 
         match classify_frame(&text) {
-            Inbound::UnhandledNotification { loud, .. } => {
-                assert!(!loud, "topic events are not this client's to decode")
+            Inbound::Topic { topic, data } => {
+                assert_eq!(topic, "connection.warning");
+                assert_eq!(data["reason"], "events_overflow");
             }
-            other => panic!("expected an unhandled notification: {other:?}"),
+            other => panic!(
+                "a topic event must be recognised as one, not folded into the \
+                 generic 'unhandled' bucket a truly undecodable frame falls \
+                 into: {other:?}"
+            ),
         }
     }
 
