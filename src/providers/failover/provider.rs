@@ -205,17 +205,31 @@ pub(crate) fn effective_fallback_names(
         .collect()
 }
 
-/// A [`DeltaSink`] pass-through that remembers whether any *content* reached
-/// the caller.
+/// A [`DeltaSink`] pass-through that remembers what reached the caller, on the
+/// two axes the layers above ask about *separately*.
 ///
-/// The failover walk needs one bit the sink itself does not expose: has the user
-/// already been shown part of an answer? Bookkeeping-only deltas
-/// ([`Usage`](ProviderDelta::Usage), [`Done`](ProviderDelta::Done),
-/// [`Error`](ProviderDelta::Error)) do not count — they carry nothing a second
-/// candidate's answer could contradict.
+/// * [`has_emitted`](Self::has_emitted) — did any **content** delta pass?
+///   Bookkeeping-only deltas ([`Usage`](ProviderDelta::Usage),
+///   [`Done`](ProviderDelta::Done), [`Error`](ProviderDelta::Error)) do not
+///   count. This is the **chain-terminal** predicate: once a candidate has
+///   produced structural output the walk stops advancing, because a second
+///   candidate would assemble a rival answer over a half-built one.
+/// * [`has_shown_user_output`](Self::has_shown_user_output) — did anything reach
+///   the user's **transcript** ([`ProviderDelta::is_user_visible`])? Strictly
+///   narrower: a stream that emitted only tool-call deltas latches the first
+///   bit and not this one.
+///
+/// Keeping them apart is what stops [`super::PARTIAL_OUTPUT_EMITTED`] from
+/// over-firing. That marker's whole job is to stop the gateway re-dispatching a
+/// run whose user already has half an answer on screen; asserting it off
+/// `has_emitted` would plant it on failures where nothing user-visible ever
+/// existed — a truncated tool call, say — and forfeit a re-dispatch that is
+/// safe there precisely because the screen is still blank. One guard, two
+/// facts, two questions.
 struct EmissionGuard<'a> {
     inner: &'a dyn DeltaSink,
     emitted: std::sync::atomic::AtomicBool,
+    user_visible: std::sync::atomic::AtomicBool,
 }
 
 impl<'a> EmissionGuard<'a> {
@@ -223,11 +237,16 @@ impl<'a> EmissionGuard<'a> {
         Self {
             inner,
             emitted: std::sync::atomic::AtomicBool::new(false),
+            user_visible: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
     fn has_emitted(&self) -> bool {
         self.emitted.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn has_shown_user_output(&self) -> bool {
+        self.user_visible.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -239,6 +258,10 @@ impl DeltaSink for EmissionGuard<'_> {
             ProviderDelta::Usage(_) | ProviderDelta::Done(_) | ProviderDelta::Error(_)
         ) {
             self.emitted
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        if delta.is_user_visible() {
+            self.user_visible
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
         self.inner.on_delta(delta).await;
@@ -1332,17 +1355,36 @@ impl FailoverProvider {
                                 // derivation the in-stream-fault arm above uses.
                                 self.record_emitted_failure(&cand.name, model.as_deref(), &e)
                                     .await;
-                                // The gateway's outer dispatch loop asks the
-                                // same question this arm just answered, and
-                                // used to answer it from the provider's own
-                                // wording: a proxy that cuts a long stream says
-                                // "connection reset" / "timed out", which
-                                // `harness_bridge::error` read as
+                                // The gateway's outer dispatch loop asks a
+                                // *narrower* question than the one this arm just
+                                // answered, and used to answer it from the
+                                // provider's own wording: a proxy that cuts a
+                                // long stream says "connection reset" / "timed
+                                // out", which `harness_bridge::error` read as
                                 // `FlowError::Transient` and re-dispatched on
                                 // the same run_id — appending a whole second
                                 // answer under the half-written one. State the
                                 // fact instead of leaving it to be re-derived.
-                                return Err(super::mark_partial_output_emitted(&e));
+                                //
+                                // Narrower, because the harm is "a second answer
+                                // lands under a visible first one" — which needs
+                                // a visible first one. `has_emitted` also latches
+                                // on tool-call deltas, and those never reach the
+                                // transcript (the sole production sink,
+                                // `harness::agent::think::CallbackSink`, drops
+                                // every variant but text and thinking). Marking
+                                // off `has_emitted` would forfeit the gateway's
+                                // re-dispatch for a truncated tool call, where a
+                                // fresh attempt is the correct and blameless
+                                // recovery. So the routing verdict comes from the
+                                // wide bit and the marker from the narrow one.
+                                if emission
+                                    .as_ref()
+                                    .is_some_and(EmissionGuard::has_shown_user_output)
+                                {
+                                    return Err(super::mark_partial_output_emitted(&e));
+                                }
+                                return Err(e);
                             }
                             Err(e) => match decide(&e, attempt, self.config.max_retries) {
                                 Decision::RetrySame(delay) => {

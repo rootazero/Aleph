@@ -173,6 +173,32 @@ mod tests {
         ));
     }
 
+    /// The gate's negative half: a chain-terminal failure that showed the user
+    /// nothing must still be re-dispatchable.
+    ///
+    /// `EmissionGuard::has_emitted` also latches on tool-call deltas, which the
+    /// production sink never renders. If the walk marked off *that* bit instead
+    /// of `has_shown_user_output`, a truncated tool call — the exact case its
+    /// own diagnostic calls "a large file write crossing a proxy timeout" —
+    /// would arrive here as `FlowError::Internal` and hard-fail the run on the
+    /// first truncation, silently deleting a safe recovery. Nothing else pins
+    /// that the marker does not over-fire.
+    #[test]
+    fn a_truncated_tool_call_that_showed_no_text_is_still_transient() {
+        let unmarked = crate::error::AlephError::Timeout { suggestion: None };
+        let rendered = unmarked.to_string();
+        assert!(
+            !rendered.contains(crate::providers::failover::PARTIAL_OUTPUT_EMITTED),
+            "the walk leaves a text-free cut unmarked: {rendered}"
+        );
+
+        let flow = classify_harness_error(HarnessError::Llm(unmarked), "p");
+        assert!(
+            matches!(flow, FlowError::Transient { .. }),
+            "a blank screen must keep its re-dispatch, got {flow:?}"
+        );
+    }
+
     #[test]
     fn rate_limit_429_is_transient() {
         // The exact production string that previously surfaced as a fatal

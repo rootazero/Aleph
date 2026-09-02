@@ -552,13 +552,19 @@ impl HttpProvider {
         // executing it with empty `{}` args surfaces as a misleading
         // "missing field" validation error, and the model — unable to fix an
         // infrastructure truncation — loops on it. Surface a transient error
-        // (typed `Timeout`) with an honest diagnostic. Whether that buys
-        // another provider depends on how far the stream got: the walk only
-        // advances the chain while its `EmissionGuard` says nothing has
-        // reached the sink yet. Once text has been shown this error is
-        // terminal for routing, and leaves the walk marked
-        // `failover::PARTIAL_OUTPUT_EMITTED` so the gateway's outer dispatch
-        // loop does not re-run it either.
+        // (typed `Timeout`) with an honest diagnostic.
+        //
+        // It does NOT buy another provider, and that is not a branch here: a
+        // truncated tool call implies its deltas were already forwarded to
+        // `sink` in the loop above, so the walk's `EmissionGuard` has latched
+        // and this error is always chain-terminal at this site. What it does
+        // buy is the gateway's re-dispatch — the walk marks a post-emission
+        // error `failover::PARTIAL_OUTPUT_EMITTED` only when *user-visible*
+        // output was shown, and tool-call deltas are not that. So a truncation
+        // with no text ahead of it gets a whole fresh attempt one layer up,
+        // which is exactly the recovery a proxy-cut file write wants; a
+        // truncation after the model had already written text does not, and
+        // surfaces to the user instead of double-answering.
         if let Some(diag) = provider_response.truncated_tool_call {
             tracing::warn!(
                 provider = %self.name,

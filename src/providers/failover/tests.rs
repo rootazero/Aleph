@@ -1664,6 +1664,11 @@ struct StreamingProvider {
     /// still returns `Ok` — exactly the shape `HttpProvider::execute_once`
     /// produces when a provider faults mid-stream with content already sent.
     report_error: Option<String>,
+    /// Streams `ToolCallStart` + `ToolCallArgDelta` INSTEAD of text, then
+    /// fails — the shape `HttpProvider` produces on a truncated tool call.
+    /// Content reached the sink (so the walk is terminal) but nothing reached
+    /// the user's transcript (so the marker must stay off).
+    tool_call_only: bool,
     calls: AtomicUsize,
 }
 
@@ -1674,6 +1679,7 @@ impl StreamingProvider {
             chunks,
             fail_after_stream: None,
             report_error: None,
+            tool_call_only: false,
             calls: AtomicUsize::new(0),
         })
     }
@@ -1684,6 +1690,7 @@ impl StreamingProvider {
             chunks,
             fail_after_stream: Some("HTTP 429 too many requests".to_string()),
             report_error: None,
+            tool_call_only: false,
             calls: AtomicUsize::new(0),
         })
     }
@@ -1696,6 +1703,19 @@ impl StreamingProvider {
             chunks,
             fail_after_stream: None,
             report_error: Some(msg.to_string()),
+            tool_call_only: false,
+            calls: AtomicUsize::new(0),
+        })
+    }
+
+    /// Streams only tool-call deltas, then fails — a truncated tool call.
+    fn fails_mid_tool_call(name: &str) -> Arc<Self> {
+        Arc::new(Self {
+            name: name.to_string(),
+            chunks: Vec::new(),
+            fail_after_stream: Some("Request timed out".to_string()),
+            report_error: None,
+            tool_call_only: true,
             calls: AtomicUsize::new(0),
         })
     }
@@ -1729,6 +1749,19 @@ impl AiProvider for StreamingProvider {
     ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.tool_call_only {
+                sink.on_delta(&crate::providers::ProviderDelta::ToolCallStart {
+                    id: "t1".to_string(),
+                    name: "file_write".to_string(),
+                    signature: None,
+                })
+                .await;
+                sink.on_delta(&crate::providers::ProviderDelta::ToolCallArgDelta {
+                    id: "t1".to_string(),
+                    delta: "{\"path\":\"big".to_string(),
+                })
+                .await;
+            }
             for c in &self.chunks {
                 sink.on_delta(&crate::providers::ProviderDelta::TextDelta(
                     (*c).to_string(),
@@ -1894,6 +1927,52 @@ async fn a_failure_after_partial_output_is_terminal_instead_of_restarting() {
         .expect("the sidelined provider must yield to the fallback");
     assert_eq!(resp.text_content(), "fb");
     assert_eq!(fb.call_count(), 1);
+}
+
+/// The negative half of the marker's gate — without it nothing pins that
+/// `PARTIAL_OUTPUT_EMITTED` does not over-fire.
+///
+/// A truncated tool call reaches the walk with `EmissionGuard::has_emitted`
+/// already latched (its deltas were forwarded), so it is chain-terminal exactly
+/// like a cut answer. But the user's screen is still blank — the only
+/// production sink drops every non-text/thinking delta — so the harm the marker
+/// exists to prevent (a second answer landing under a visible first one) cannot
+/// occur, and the gateway's fresh attempt is the correct recovery for precisely
+/// the case the site's own diagnostic names: a large file write crossing a
+/// proxy timeout.
+#[tokio::test]
+async fn a_tool_call_only_cut_stays_chain_terminal_without_claiming_the_user_saw_anything() {
+    let primary = StreamingProvider::fails_mid_tool_call("p");
+    let fb = ScriptProvider::ok("fb");
+    let fp = build(
+        primary as Arc<dyn AiProvider>,
+        vec![],
+        // rust-doctor-disable-next-line excessive-clone
+        vec![node("fb", fb.clone() as Arc<dyn AiProvider>)],
+    );
+    let sink = RecordingSink::default();
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let out = fp
+        .execute_streaming_dyn(RequestPayload::new(&msgs), &sink)
+        .await;
+    // rust-doctor-disable-next-line unwrap-in-production
+    let err = out.expect_err("content reached the sink, so the chain must not advance");
+
+    // Terminal for the chain — the wide bit is unchanged by the split.
+    assert_eq!(fb.call_count(), 0, "the walk must not advance the chain");
+    assert!(sink.text().is_empty(), "no text was ever streamed");
+
+    // ...but the narrow bit is false, so the marker must be absent and the
+    // provider's own retryable wording must survive intact for the gateway.
+    assert!(
+        !err.to_string().contains(PARTIAL_OUTPUT_EMITTED),
+        "nothing user-visible was shown; the marker must not over-fire: {err}"
+    );
+    assert!(
+        err.to_string().contains("timed out"),
+        "the original diagnostic must reach the gateway unwrapped: {err}"
+    );
 }
 
 #[tokio::test]
