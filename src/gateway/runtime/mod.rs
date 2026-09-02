@@ -946,6 +946,34 @@ mod tests {
     /// because every current call site points it at `src/`, never at the
     /// repo root, so this guard writes its own rather than pointing that
     /// one somewhere it was never meant to run.
+    ///
+    /// # Does not follow symlinks (Task 10 fix round 2, #9)
+    ///
+    /// Recursion is gated on `DirEntry::file_type()`, not `Path::is_dir()`
+    /// — the latter follows symlinks, so a directory symlink would be
+    /// descended into with no visited-set and no depth cap, and a symlink
+    /// CYCLE would not merely run slow, it would stack-overflow the whole
+    /// `cargo test -p alephcore --lib` binary (an infrastructure failure,
+    /// not a guard result). No directory symlink is reachable here today —
+    /// the only ones in the repo live under `node_modules/` and
+    /// `desktop/macos/bridge/.build/`, both already skipped by name — so
+    /// this was a latent hazard rather than a live bug, but `file_type()`
+    /// removes it for the cost of one method call.
+    ///
+    /// # False positives this walk can produce (判据 §3 — the expensive
+    /// direction; Task 10 fix round 2, #10)
+    ///
+    /// This walk is not scoped to `interfaces/`: `archive/` (72 `.rs` files
+    /// measured at review time), `examples/`, `benches/`, `tests/` and
+    /// `docs/` are walked too. A file legitimately named `agent_panel.rs`
+    /// living in any of those trees — an archived copy, a doc example —
+    /// would be picked up by this walk and scanned by the ordering guard
+    /// below as if it were a live frontend, reddening on its own valid
+    /// `.sort_by`. Exactly three `agent_panel.rs` files exist in the repo
+    /// today (the two live frontends and the shared owner excluded below),
+    /// so this is hypothetical, not live — but the false-positive
+    /// direction is the one that gets a guard weakened by the next person
+    /// it wrongly blocks, so it is worth knowing before someone trips it.
     fn agent_panel_frontend_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
         fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             let Ok(entries) = std::fs::read_dir(dir) else {
@@ -953,7 +981,12 @@ mod tests {
             };
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_dir() {
+                // `entry.file_type()` reports the entry itself and does NOT
+                // follow symlinks (unlike `path.is_dir()`), so a symlinked
+                // directory is neither recursed into nor treated as a
+                // directory at all — see the symlink note above.
+                let is_real_dir = entry.file_type().is_ok_and(|t| t.is_dir());
+                if is_real_dir {
                     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                     if name == "target" || name == "node_modules" || name == "graphify-out" || name.starts_with('.') {
                         continue;
@@ -986,8 +1019,10 @@ mod tests {
     /// to make the two frontends disagree without writing anything that
     /// reads like sorting.
     ///
-    /// # What this list still does NOT cover (判据 §5 — name the gap,
-    /// don't pretend it is closed)
+    /// # What this guard cannot see (判据 §5 — name the gaps, don't
+    /// pretend they are closed)
+    ///
+    /// Token-list gaps, specific to `BANNED_ORDERING_TOKENS`:
     ///
     /// - `.collect::<BTreeMap<_, _>>()` / `BTreeSet` — ordering with no
     ///   ordering CALL to grep for at all.
@@ -1005,6 +1040,19 @@ mod tests {
     ///   picker) starts sorting its own rows — 判据 §3: the false-positive
     ///   direction is the expensive one, because the next person weakens
     ///   the guard to get past it.
+    ///
+    /// A gap inherited from `production_prefix`, not introduced here (Task
+    /// 10 fix round 2, #11):
+    ///
+    /// - A line whose TEXT begins with `#[cfg(test)]` while actually being
+    ///   string- or comment-literal payload is read by `production_prefix`
+    ///   as a live attribute, which discards everything from there to the
+    ///   end of that (mis-detected) item — the silent-approval direction
+    ///   (`production_prefix`'s own doc comment, "Known gap (F2, review
+    ///   round 4, unfixed)", has the full account). Zero reachable
+    ///   instances in either frontend file as of this writing; noted here
+    ///   so a reader of THIS guard does not have to go find that fact in
+    ///   another module's doc comment to know it applies here too.
     const BANNED_ORDERING_TOKENS: [&str; 2] = [".sort", ".reverse()"];
 
     /// `code_text(production_prefix(src))`, extracted so the guard below
@@ -1021,6 +1069,27 @@ mod tests {
         crate::utils::source_scan::code_text(&crate::utils::source_scan::production_prefix(src))
     }
 
+    /// The two frontends this guard is known to protect today, asserted by
+    /// MEMBERSHIP in the derived walk's output rather than merely counted
+    /// (Task 10 fix round 2, #8 — REPLACES the earlier `files.len() >= 2`
+    /// floor rather than sitting beside it).
+    ///
+    /// A count floor passes as long as the walk finds ANY two files named
+    /// `agent_panel.rs`, including two WRONG ones — if a real frontend were
+    /// ever renamed out from under the walk on the same day an unrelated
+    /// stray `agent_panel.rs` appeared under `archive/` or `examples/`
+    /// (判据 §3's false positive, noted on the walk above), the count would
+    /// still read 2 and the floor would stay silently green. Asserting
+    /// these two specific paths are members of the walk's output does not
+    /// have that hole: it can only pass if the walk actually reached the
+    /// frontends it is supposed to guard, identity and all. The derived
+    /// walk still catches a third, unlisted frontend automatically — this
+    /// only pins that these two specific ones are never silently dropped.
+    const KNOWN_FRONTENDS: [&str; 2] = [
+        "interfaces/tui/src/tui/widgets/agent_panel.rs",
+        "interfaces/webchat/src/components/sidebar/agent_panel.rs",
+    ];
+
     /// R2: sorting lives ONLY in `shared_ui_logic::state::agent_panel::sort_entries`.
     /// Neither frontend's `agent_panel.rs` may perform its own ordering call.
     ///
@@ -1031,21 +1100,25 @@ mod tests {
     /// spelled inside a string literal is not a call either, any more than
     /// one spelled inside a doc comment is.
     ///
-    /// A missing file or an empty walk FAILS rather than vacuously passing
-    /// (判据 §2 / §8): "I found nothing to check" is not the same fact as
-    /// "I checked and it's clean".
+    /// A missing known frontend, or an ordering call in one that IS found,
+    /// FAILS rather than vacuously passing (判据 §2 / §8): "I found nothing
+    /// to check" is not the same fact as "I checked and it's clean".
     #[test]
     fn no_frontend_sorts_its_own_agent_panel_entries() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let files = agent_panel_frontend_files(root);
 
-        assert!(
-            files.len() >= 2,
-            "expected at least 2 frontend agent_panel.rs files (found {}); a \
-             lower count means this walk is not finding the frontends it is \
-             supposed to guard — a silent pass, not a clean one. Found: {files:?}",
-            files.len()
-        );
+        for known in KNOWN_FRONTENDS {
+            let expected = root.join(known);
+            assert!(
+                files.contains(&expected),
+                "expected {} among the derived agent_panel.rs frontend files, \
+                 but it was not found (found: {files:?}); a missing known \
+                 frontend means this walk is not finding what it is supposed \
+                 to guard — a silent pass, not a clean one.",
+                expected.display()
+            );
+        }
 
         for path in &files {
             let src = std::fs::read_to_string(path).unwrap_or_else(|e| {
