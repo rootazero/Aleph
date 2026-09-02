@@ -31,8 +31,8 @@
 //! its `in_flight` slot across the whole candidate, and the team path holds the
 //! dispatcher's task-row lock.
 
-use crate::session::events::{now_ms, SessionEvent};
-use crate::session::reduction::{DanglingProvenance, RunReduction};
+use crate::session::events::{now_ms, RunOutcome, SessionEvent};
+use crate::session::reduction::{reduce_run, DanglingProvenance, RunProgress, RunReduction};
 use crate::session::service::{SessionError, SessionId};
 use crate::session::store::SessionEventStore;
 
@@ -185,6 +185,93 @@ pub async fn repair_boundary(
         appended += 1;
     }
     Ok(RepairReport { appended })
+}
+
+/// How many characters of the crashed run's last assistant message
+/// [`repair_and_close_abandoned`] hands back. Long enough to be evidence, short
+/// enough that the caller's own budget still governs the final text.
+const LAST_ASSISTANT_CHARS: usize = 1000;
+
+/// What [`repair_and_close_abandoned`] wrote, plus what the crashed run had
+/// managed to produce.
+///
+/// `progress` and `last_assistant` are handed back rather than rendered here on
+/// purpose: the owner that called this is the one with a vocabulary for its own
+/// domain (a team task's "previous attempt", a cron tick's "missed run"), and a
+/// sentence written here would be that vocabulary in the wrong module.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AbandonReport {
+    /// Synthetic `ToolError`s appended for the dangling calls.
+    pub appended: usize,
+    /// `run_id` of the marker this call closed, or `None` when the log had no
+    /// open run left to close.
+    pub closed_run_id: Option<String>,
+    /// The crashed run's counters, from the same reduction the repair used.
+    pub progress: RunProgress,
+    /// Text of the last non-empty assistant message in the log, truncated to
+    /// [`LAST_ASSISTANT_CHARS`]. `None` when the run never said anything.
+    pub last_assistant: Option<String>,
+}
+
+/// Repair the crash boundary of a session whose **owner** is about to decide
+/// what happens to its work next, and close the run the crash left open.
+///
+/// The two writes are one act. A session handed back to its own scheduler (the
+/// team dispatcher's `reclaim_orphaned`, the resume scan's delegated arm) gets
+/// a *fresh* run from that scheduler, so the dangling calls of the dead one
+/// have to be answered before the replay reaches a model, and the marker has to
+/// be closed by whoever took the decision away from the generic scan —
+/// otherwise the log says a run is open forever and every later boot
+/// re-classifies the session `Interrupted`.
+///
+/// Repair first, closer second: the synthetic `ToolError`s belong *inside* the
+/// run they answer for.
+///
+/// Idempotent for the same reason [`repair_boundary`] is — it re-reads the log,
+/// and a session whose tail is already a `RunFinished` has no open run and no
+/// dangling call, so a second call appends nothing.
+///
+/// # Errors
+///
+/// Propagates the store's errors, and refuses a log the reducer refuses: a
+/// closer whose `run_id` came out of a slice nobody could read would name the
+/// wrong run, and inventing one is worse than leaving the marker open.
+pub async fn repair_and_close_abandoned(
+    store: &dyn SessionEventStore,
+    session: &SessionId,
+) -> Result<AbandonReport, SessionError> {
+    let events = store.load_all_events(session).await?;
+    let reduction = reduce_run(&events).map_err(|c| SessionError::Other(c.to_string()))?;
+    let repaired = repair_boundary(store, session, &reduction, None).await?;
+
+    let mut closed_run_id = None;
+    if let Some(open) = reduction.open_run.as_ref() {
+        let ev = SessionEvent::RunFinished {
+            run_id: open.run_id.clone(),
+            outcome: RunOutcome::Abandoned,
+            at: now_ms(),
+        };
+        let seq = store.load_head_seq(session).await? + 1;
+        store.append(session, seq, &ev, now_ms()).await?;
+        closed_run_id = Some(open.run_id.clone());
+    }
+
+    let last_assistant = events
+        .iter()
+        .rev()
+        .find_map(|record| match &record.event {
+            SessionEvent::AssistantMessage { content, .. } if !content.text.trim().is_empty() => {
+                Some(content.text.chars().take(LAST_ASSISTANT_CHARS).collect())
+            }
+            _ => None,
+        });
+
+    Ok(AbandonReport {
+        appended: repaired.appended,
+        closed_run_id,
+        progress: reduction.progress,
+        last_assistant,
+    })
 }
 
 #[cfg(test)]
@@ -406,6 +493,151 @@ mod tests {
         assert_eq!(
             second.appended, 0,
             "the re-read log has no dangling call left to answer"
+        );
+    }
+
+    fn assistant(text: &str) -> SessionEvent {
+        SessionEvent::AssistantMessage {
+            turn_id: TurnId::new_v4(),
+            content: crate::session::events::MessageContent {
+                text: text.to_string(),
+                blocks: vec![],
+                thinking: None,
+                thinking_signature: None,
+            },
+            usage: None,
+            at: 20,
+        }
+    }
+
+    fn abandon_store() -> (std::sync::Arc<dyn SessionEventStore>, SessionId) {
+        let store: std::sync::Arc<dyn SessionEventStore> = std::sync::Arc::new(
+            crate::session::store::SqliteEventStore::new({
+                let conn = rusqlite::Connection::open_in_memory().expect("sqlite");
+                crate::session::store::migrate_add_session_events(&conn).expect("migrate");
+                conn
+            }),
+        );
+        let sid: SessionId = crate::routing::session_key::SessionKey::ephemeral(format!(
+            "abandon-{}",
+            uuid::Uuid::new_v4()
+        ));
+        (store, sid)
+    }
+
+    async fn seed(store: &std::sync::Arc<dyn SessionEventStore>, sid: &SessionId, evs: &[SessionEvent]) {
+        for (i, ev) in evs.iter().enumerate() {
+            store
+                .append(sid, (i + 1) as EventSeq, ev, 10 * (i as i64 + 1))
+                .await
+                .expect("append");
+        }
+    }
+
+    /// The hand-back writes BOTH halves: the dangling call is answered and the
+    /// run marker is closed. RED with either half removed — an owner that
+    /// re-dispatches a step whose log still says a run is open re-classifies
+    /// `Interrupted` on every later boot, and one that replays an unanswered
+    /// `tool_use` shows the model a call that silently never happened.
+    #[tokio::test]
+    async fn handing_a_session_back_answers_the_call_and_closes_the_run() {
+        let (store, sid) = abandon_store();
+        seed(
+            &store,
+            &sid,
+            &[
+                run_started(10),
+                assistant("halfway through"),
+                tool_requested("c1"),
+            ],
+        )
+        .await;
+
+        let report = repair_and_close_abandoned(store.as_ref(), &sid)
+            .await
+            .expect("legal log");
+        assert_eq!(report.appended, 1, "the one dangling call is answered");
+        assert_eq!(
+            report.closed_run_id.as_deref(),
+            Some("run-10"),
+            "the closer names the run that was actually open, not a minted id"
+        );
+        assert_eq!(report.progress.tool_calls_dispatched, 1);
+        assert_eq!(report.progress.tool_calls_answered, 0);
+        assert_eq!(report.last_assistant.as_deref(), Some("halfway through"));
+
+        let events = store.load_all_events(&sid).await.expect("load");
+        assert!(
+            matches!(events[3].event, SessionEvent::ToolError { .. }),
+            "the repair lands INSIDE the run it answers for, before the closer"
+        );
+        assert!(
+            matches!(
+                &events[4].event,
+                SessionEvent::RunFinished { outcome, .. } if *outcome == RunOutcome::Abandoned
+            ),
+            "the marker is closed as Abandoned, not Cancelled — nobody cut this run"
+        );
+    }
+
+    /// Idempotent over a re-read log: the second hand-back has no dangling call
+    /// to answer and no open run to close. Without this the boot scan would
+    /// append one closer per boot forever.
+    #[tokio::test]
+    async fn a_second_hand_back_over_the_same_session_writes_nothing() {
+        let (store, sid) = abandon_store();
+        seed(&store, &sid, &[run_started(10), tool_requested("c1")]).await;
+
+        repair_and_close_abandoned(store.as_ref(), &sid)
+            .await
+            .expect("first");
+        let before = store.load_all_events(&sid).await.expect("load").len();
+
+        let second = repair_and_close_abandoned(store.as_ref(), &sid)
+            .await
+            .expect("second");
+        assert_eq!(second.appended, 0);
+        assert_eq!(second.closed_run_id, None);
+        assert_eq!(
+            store.load_all_events(&sid).await.expect("load").len(),
+            before,
+            "nothing at all was appended the second time"
+        );
+    }
+
+    /// A run that ran to a clean finish is not touched: no dangling call to
+    /// answer, no open marker to close. The hand-back arm reaches sessions the
+    /// scan already called `Interrupted`, but the on-demand face can reach any
+    /// session, and a closer appended to a finished run would be the
+    /// `FinishWithoutStart` this round exists to stop producing.
+    #[tokio::test]
+    async fn a_cleanly_finished_run_is_left_exactly_as_it_is() {
+        let (store, sid) = abandon_store();
+        seed(
+            &store,
+            &sid,
+            &[
+                run_started(10),
+                tool_requested("c1"),
+                tool_result("c1"),
+                SessionEvent::RunFinished {
+                    run_id: "run-10".to_string(),
+                    outcome: RunOutcome::Completed,
+                    at: 40,
+                },
+            ],
+        )
+        .await;
+
+        let report = repair_and_close_abandoned(store.as_ref(), &sid)
+            .await
+            .expect("legal log");
+        assert_eq!(report.appended, 0);
+        assert_eq!(report.closed_run_id, None);
+        assert_eq!(
+            store.load_all_events(&sid).await.expect("load").len(),
+            4,
+            "nothing was appended to a session that finished properly"
         );
     }
 }

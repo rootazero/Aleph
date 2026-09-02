@@ -7,7 +7,10 @@ use crate::agents::swarm::tasks::acceptance::{
     read_stale_review_warned_at, with_stale_review_warned_at,
 };
 use crate::agents::swarm::tasks::retry::{read_retry_budget_reset_at, recovery_abandons_since};
-use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate};
+use crate::agents::swarm::tasks::{CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate};
+use crate::session::boundary_repair::repair_and_close_abandoned;
+use crate::session::service::{SessionError, SessionId};
+use crate::session::store::SessionEventStore;
 use crate::sync_primitives::Arc;
 
 use super::select::{is_dispatcher_managed, is_stale_review, is_zombie, orphan_reset_status};
@@ -176,6 +179,20 @@ impl TeamDispatcher {
                     tracing::warn!(task_id = %task.id, error = %e, "dispatcher: release_lock failed during orphan reclaim");
                 }
             }
+            // The crash boundary of this step's own session is THIS pass's to
+            // repair, because this pass is what re-dispatches the step. The
+            // boot resume scan hands every team session back here
+            // (`resume_coordinator::has_own_scheduler`) precisely so the two
+            // never write into one log; if this pass skipped it nobody would,
+            // and the next attempt's replay would silently drop every tool call
+            // the crash caught in flight — while the recovery section told the
+            // member to "reuse work already done".
+            //
+            // Before the reset, not after: once the row is `Pending` the
+            // dispatcher may claim it on the same tick, and a repair racing a
+            // live run would append a `RunFinished` into the middle of it.
+            self.repair_and_stamp_orphan(&task).await;
+
             // A pause that landed while this step was in flight recorded its
             // intent and nothing else (the run could not be stopped). Honour
             // it now: park the step instead of re-dispatching it. The stamp
@@ -204,6 +221,45 @@ impl TeamDispatcher {
                 tracing::warn!(task_id = %task.id, error = %e, status = %restore,
                     "dispatcher: reclaim_orphaned status reset failed");
             }
+        }
+    }
+
+    /// Repair the crashed attempt's session log and stamp what it produced
+    /// onto its own run row.
+    ///
+    /// Best-effort in every direction (P7): a task with no owner (nothing was
+    /// ever dispatched, so there is no session), a process with no event store
+    /// wired, an unreadable log — each leaves the reclaim itself untouched,
+    /// because resetting the row to `Pending` is the part that must happen.
+    /// Every give-up is logged; none of them is silent.
+    async fn repair_and_stamp_orphan(self: &Arc<Self>, task: &CoordTask) {
+        let Some(owner) = task.owner.as_deref() else {
+            return; // no owner ⇒ no member session key ⇒ nothing was dispatched
+        };
+        let Some(store) = crate::session::store::global_session_event_store() else {
+            return; // persistence not wired (embeddings, most unit tests)
+        };
+        let session = crate::routing::session_key::SessionKey::task(
+            owner,
+            crate::teams::run_mode::TEAM_TASK_TASK_TYPE,
+            &task.id,
+        );
+        let summary = match repair_crashed_attempt(store.as_ref(), &session).await {
+            Ok(Some(summary)) => summary,
+            Ok(None) => return, // the attempt left nothing behind to report
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, error = %e,
+                    "dispatcher: crash-boundary repair of the member session failed");
+                return;
+            }
+        };
+        if let Err(e) = self
+            .coord_store
+            .stamp_abandoned_run_summary(&task.id, &summary)
+            .await
+        {
+            tracing::warn!(task_id = %task.id, error = %e,
+                "dispatcher: stamping the crashed attempt's partial output failed");
         }
     }
 
@@ -467,5 +523,190 @@ impl TeamDispatcher {
                 tracing::warn!(task_id = %task.id, error = %e, "dispatcher: clarify re-delivery reset failed");
             }
         }
+    }
+}
+
+/// Answer the dangling calls of a crash-interrupted member run, close the run
+/// marker it left open, and render what it managed to produce.
+///
+/// A free function over the store rather than a method so the rule is testable
+/// without a dispatcher, a registry and the process-wide event-store slot; the
+/// caller resolves both.
+///
+/// The sentence is the *dispatcher's* vocabulary on purpose — `session::
+/// boundary_repair` knows nothing about "attempts" or "steps", and
+/// `build_recovery_section` prints this text under "partial output
+/// (incomplete)" to the NEXT attempt of the same step.
+///
+/// # Errors
+///
+/// Propagates the store's errors and the reducer's refusal. `Ok(None)` means
+/// the attempt genuinely left nothing behind, which is a different answer from
+/// "its log could not be read" — collapsing the two would stamp an empty
+/// summary onto a row whose real state is unknown.
+pub(super) async fn repair_crashed_attempt(
+    store: &dyn SessionEventStore,
+    session: &SessionId,
+) -> Result<Option<String>, SessionError> {
+    let report = repair_and_close_abandoned(store, session).await?;
+    let progress = &report.progress;
+    if progress.tool_calls_dispatched == 0
+        && progress.assistant_messages == 0
+        && report.appended == 0
+    {
+        return Ok(None);
+    }
+
+    let mut out = format!(
+        "interrupted by a daemon restart after {} assistant message(s), \
+         {}/{} tool call(s) answered",
+        progress.assistant_messages, progress.tool_calls_answered, progress.tool_calls_dispatched
+    );
+    if report.appended > 0 {
+        out.push_str(&format!(
+            "; {} call(s) were still in flight when it died and their outcome is unknown",
+            report.appended
+        ));
+    }
+    if let Some(text) = report.last_assistant.as_deref() {
+        out.push_str("\nLast recorded output:\n");
+        out.push_str(text);
+    }
+    Ok(Some(out))
+}
+
+#[cfg(test)]
+mod crashed_attempt_tests {
+    use super::repair_crashed_attempt;
+    use crate::session::events::{MessageContent, SessionEvent, TurnId};
+    use crate::session::service::SessionId;
+    use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
+    use std::sync::Arc;
+
+    fn store_and_session() -> (Arc<dyn SessionEventStore>, SessionId) {
+        let conn = rusqlite::Connection::open_in_memory().expect("sqlite");
+        migrate_add_session_events(&conn).expect("migrate");
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        let sid = crate::routing::session_key::SessionKey::task(
+            "worker",
+            crate::teams::run_mode::TEAM_TASK_TASK_TYPE,
+            format!("task-{}", uuid::Uuid::new_v4()),
+        );
+        (store, sid)
+    }
+
+    async fn seed(store: &Arc<dyn SessionEventStore>, sid: &SessionId, evs: &[SessionEvent]) {
+        for (i, ev) in evs.iter().enumerate() {
+            store
+                .append(sid, (i + 1) as u64, ev, 10 * (i as i64 + 1))
+                .await
+                .expect("append");
+        }
+    }
+
+    fn assistant(text: &str) -> SessionEvent {
+        SessionEvent::AssistantMessage {
+            turn_id: TurnId::new_v4(),
+            content: MessageContent {
+                text: text.to_string(),
+                blocks: vec![],
+                thinking: None,
+                thinking_signature: None,
+            },
+            usage: None,
+            at: 20,
+        }
+    }
+
+    /// The re-dispatching scheduler repairs the crash boundary of the attempt
+    /// it is about to replace, and hands back a sentence with enough in it to
+    /// be worth printing under "partial output (incomplete)".
+    ///
+    /// RED without the `repair_and_close_abandoned` call: the log keeps a
+    /// `tool_use` with no `tool_result` (the next attempt's replay drops it
+    /// silently) and an open `RunStarted` (every later boot re-classifies the
+    /// session `Interrupted`).
+    #[tokio::test]
+    async fn a_crashed_member_run_is_repaired_closed_and_summarised() {
+        let (store, sid) = store_and_session();
+        seed(
+            &store,
+            &sid,
+            &[
+                SessionEvent::RunStarted {
+                    run_id: "member-run".into(),
+                    at: 10,
+                    project_root: None,
+                    envelope: None,
+                },
+                assistant("read the spec, starting the edit"),
+                SessionEvent::ToolCallRequested {
+                    turn_id: TurnId::new_v4(),
+                    call_id: "c1".into(),
+                    name: "file_write".into(),
+                    input: serde_json::json!({}),
+                    at: 30,
+                },
+            ],
+        )
+        .await;
+
+        let summary = repair_crashed_attempt(store.as_ref(), &sid)
+            .await
+            .expect("legal log")
+            .expect("the attempt left something behind");
+        assert!(
+            summary.contains("0/1 tool call(s) answered"),
+            "the counters name what actually landed: {summary}"
+        );
+        assert!(
+            summary.contains("outcome is unknown"),
+            "the in-flight call is named as unknown, not as landed: {summary}"
+        );
+        assert!(
+            summary.contains("read the spec, starting the edit"),
+            "the member's own last words are the partial output: {summary}"
+        );
+
+        let events = store.load_all_events(&sid).await.expect("load");
+        assert!(
+            events
+                .iter()
+                .any(|r| matches!(&r.event, SessionEvent::ToolError { call_id, .. } if call_id == "c1")),
+            "the dangling call was answered"
+        );
+        assert!(
+            events.iter().any(|r| matches!(
+                &r.event,
+                SessionEvent::RunFinished { run_id, .. } if run_id == "member-run"
+            )),
+            "the run marker the crash left open was closed"
+        );
+    }
+
+    /// A step whose worker died before it did anything has nothing to say, and
+    /// an empty summary must not be stamped onto its row: "this attempt left
+    /// nothing behind" and "I could not read its log" are different answers.
+    #[tokio::test]
+    async fn an_attempt_that_produced_nothing_reports_nothing() {
+        let (store, sid) = store_and_session();
+        seed(
+            &store,
+            &sid,
+            &[SessionEvent::RunStarted {
+                run_id: "member-run".into(),
+                at: 10,
+                project_root: None,
+                envelope: None,
+            }],
+        )
+        .await;
+
+        assert_eq!(
+            repair_crashed_attempt(store.as_ref(), &sid)
+                .await
+                .expect("legal log"),
+            None
+        );
     }
 }

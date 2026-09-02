@@ -96,21 +96,29 @@ pub struct ResumeReport {
     pub skipped: usize,
     /// Interrupted sessions handed back to the scheduler that owns them
     /// (team dispatcher / cron / heartbeat) instead of being resumed here.
-    /// Their dangling marker is closed on the way out — see
-    /// [`has_own_scheduler`].
+    /// Their crash boundary is repaired and their dangling marker closed on the
+    /// way out — see [`has_own_scheduler`].
     pub delegated: usize,
-    /// Sessions left alone because a resume for them was already in flight.
+    /// Sessions left alone because somebody else is writing them right now.
     ///
-    /// Always 0 for the boot scan, which walks sessions sequentially. It exists
-    /// for the on-demand face: two `agent.resume` calls for one session — or one
-    /// racing the boot scan, which is spawned while the gateway is already
-    /// serving — must not both run `repair_boundary`, because that is a
+    /// Two producers, one fact. **A resume already in flight**: two
+    /// `agent.resume` calls for one session — or one racing the boot scan,
+    /// which is spawned while the gateway is already serving — must not both
+    /// run `repair_boundary`, because that is a
     /// read-then-append and two winners append **two** synthetic `ToolError`s
     /// for the same `call_id`. Since `harness::agent::prompt` learned to
     /// downgrade an orphaned/duplicate `tool_result` to a plain user note
     /// (7929bbda6) that is no longer a provider rejection — it is text noise:
     /// the model reads the same "outcome unknown" sentence twice, the second
     /// time as prose that no longer references the call it answers.
+    ///
+    /// **The owning scheduler is running it**: a delegated session that the
+    /// engine has a live turn on gets neither the repair nor the marker close,
+    /// because both are appends and a `RunFinished` written into the middle of
+    /// a running turn makes the real finish land as a `FinishWithoutStart` on
+    /// a session that is then permanently mis-read. Unlike the first producer
+    /// this one is reachable from the boot scan: the dispatcher's own tick can
+    /// re-dispatch a task while the scan is still walking the list.
     pub busy: usize,
     /// Candidates this pass would not act on, and why. One entry per refusal,
     /// carrying the session so a multi-session boot report names which.
@@ -610,6 +618,25 @@ impl ResumeCoordinator {
 
     /// Take this session's resume slot, or `None` if a resume is already in
     /// flight for it.
+    /// Does the engine have a turn in flight on this session right now?
+    ///
+    /// The authoritative in-memory admission gate, asked of the adapter rather
+    /// than re-derived: [`ExecutionAdapter::running_sessions`] is the same set
+    /// `gateway.metrics.run_concurrency` publishes and the same one the queue
+    /// admits against. An adapter with no run registry answers with an empty
+    /// set, which is honest for it (a `SimpleExecutionEngine` runs nothing
+    /// concurrently) and is why this is not a fail-closed predicate the way
+    /// `marker_balance::close_open_run_after_retire`'s is: that one closes the
+    /// marker of a run the *user* just cut, this one only ever declines to
+    /// touch a log.
+    fn is_running(&self, session_id: &SessionId) -> bool {
+        let key = session_id.to_key_string();
+        self.execution_adapter
+            .running_sessions()
+            .iter()
+            .any(|k| *k == key)
+    }
+
     fn try_claim_resume(&self, session_id: &SessionId) -> Option<ResumeSlot<'_>> {
         let key = session_id.to_key_string();
         let inserted = self
@@ -666,38 +693,41 @@ impl ResumeCoordinator {
         report
     }
 
-    /// Close the dangling run marker of a session this coordinator declined,
-    /// so the scan does not re-classify it as interrupted on every later boot.
+    /// Hand a session back to the scheduler that owns it: answer the calls its
+    /// crash left dangling, then close the run marker so the scan does not
+    /// re-classify it as interrupted on every later boot.
     ///
-    /// Only the marker. Deliberately none of [`Self::abandon`]'s other three
-    /// steps: this is not an abandonment. The owning scheduler decides whether
-    /// the work is redone, so blocking the session's goal or telling the user
-    /// "could not be resumed" would both be false — and the goal block in
-    /// particular would be a wrong permanent verdict on a unit that is about
-    /// to recover normally.
-    async fn close_delegated_marker(&self, session_id: &SessionId) {
-        let ev = SessionEvent::RunFinished {
-            run_id: format!("delegated-{}", uuid::Uuid::new_v4()),
-            outcome: RunOutcome::Abandoned,
-            at: now_ms(),
-        };
-        match self.next_seq(session_id).await {
-            Ok(seq) => {
-                if let Err(e) = self
-                    .event_store
-                    .append(session_id, seq, &ev, now_ms())
-                    .await
-                {
-                    tracing::warn!(session = ?session_id, error = %e, "resume: delegated marker close failed");
-                }
-            }
-            // Same rule as `abandon`: never fabricate seq 1 on a read error —
-            // it would overwrite the session's genuine first event. Skipping
-            // costs one redundant re-classification on the next boot.
-            Err(e) => {
-                tracing::warn!(session = ?session_id, error = %e, "resume: delegated marker seq allocation failed; leaving it open");
-            }
-        }
+    /// Still none of [`Self::abandon`]'s other three steps: this is not an
+    /// abandonment. The owning scheduler decides whether the *work* is redone,
+    /// so blocking the session's goal or telling the user "could not be
+    /// resumed" would both be false — the goal block in particular would be a
+    /// wrong permanent verdict on a unit that is about to recover normally.
+    ///
+    /// But the crash boundary is not the scheduler's decision, it is a fact
+    /// about the log, and leaving it unrepaired meant this arm produced a
+    /// session whose next run replays a `tool_use` with no `tool_result` — the
+    /// exact silent drop [`crate::session::boundary_repair`] exists for. The
+    /// team dispatcher repairs its own member sessions in `reclaim_orphaned`;
+    /// cron and heartbeat have no such pass, so this arm is their only repair.
+    ///
+    /// Returns whether anything was written, so the caller can tell "handed
+    /// back" from "could not read its log".
+    async fn hand_back_to_scheduler(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<(), crate::session::SessionError> {
+        let report = crate::session::boundary_repair::repair_and_close_abandoned(
+            self.event_store.as_ref(),
+            session_id,
+        )
+        .await?;
+        tracing::info!(
+            session = ?session_id,
+            repaired = report.appended,
+            closed = ?report.closed_run_id,
+            "resume: crash boundary repaired and marker closed for the owning scheduler"
+        );
+        Ok(())
     }
 
     /// Classify one session's run markers and act on the verdict.
@@ -741,11 +771,42 @@ impl ResumeCoordinator {
             // on top of that is a duplicate run, not a safety net. Close
             // the dangling marker so the next boot does not re-decide this.
             Ok(RunDisposition::Interrupted { .. }) if has_own_scheduler(session_id) => {
+                // Handing recovery back does not mean handing the log back:
+                // the marker close and the boundary repair are facts about
+                // this session that only a reader of its log can write. But
+                // both are appends, so they may only happen while nobody else
+                // is writing — a session the engine is running RIGHT NOW is
+                // mid-turn, and a `RunFinished` appended into the middle of a
+                // live run is the `FinishWithoutStart` this round exists to
+                // stop producing.
+                if self.is_running(session_id) {
+                    tracing::info!(
+                        session = ?session_id,
+                        "resume: its own scheduler is running it right now; leaving the log alone"
+                    );
+                    report.busy += 1;
+                    return;
+                }
                 tracing::info!(
                     session = ?session_id,
                     "resume: session has its own scheduler; handing recovery back to it"
                 );
-                self.close_delegated_marker(session_id).await;
+                if let Err(e) = self.hand_back_to_scheduler(session_id).await {
+                    // Not `delegated`: nothing was handed back. A refusal here
+                    // reads as "I could not repair this log", which is exactly
+                    // what the `refused` bucket says and exactly what a
+                    // `delegated` counter would hide.
+                    tracing::warn!(
+                        session = ?session_id,
+                        error = %e,
+                        "resume: delegated hand-back failed; leaving the marker open"
+                    );
+                    report.refused.push((
+                        session_id.clone(),
+                        ResumeRefusal::BoundaryRepairFailed(e.to_string()),
+                    ));
+                    return;
+                }
                 report.delegated += 1;
             }
             Ok(RunDisposition::Interrupted { trailing_starts }) => {
