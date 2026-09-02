@@ -119,7 +119,12 @@ pub struct RepairReport {
     /// that found the row already carrying this run's id bills nothing —
     /// that is what makes a replay non-double-billing.
     pub usage_rebilled: usize,
-    /// Nothing was missing and nothing was re-stamped.
+    /// Nothing was missing, nothing was re-stamped, and nothing was deferred.
+    ///
+    /// The last clause is the one that is easy to drop: a seq the pass could
+    /// not resolve sets no counter at all, so a heal that wrote nothing
+    /// *because it could not* would otherwise be indistinguishable from a
+    /// session that needed nothing.
     pub up_to_date: bool,
     /// The transcript is non-empty and carries no projector seq ids (foreign
     /// or pre-SSOT content). Nothing was written: without seqs there is no way
@@ -557,9 +562,23 @@ async fn heal_session(
             }
         }
     }
+    let deferred = retry.len();
     lock_missed(missed).restore(id, retry);
-    report.up_to_date =
-        report.holes_filled == 0 && report.stamps_reapplied == 0 && !report.errored;
+    // `retry` is part of this answer. Every failure inside the loop — an append
+    // that would not write, a stamp that would not land, a retirement flag that
+    // would not read — comes back as `Projected::Retry` and sets none of the
+    // three counters, so without this clause a heal that wrote nothing BECAUSE
+    // it could not returns `up_to_date: true`, and the reconciler counts the
+    // session as whole in the boot line.
+    //
+    // Deliberately not folded into `errored`: a `NoRowInRange` deferral is
+    // benign (a run that produced no assistant row at all), and reporting it as
+    // a failure would mark such sessions permanently broken. "Not up to date"
+    // is the honest middle — the pass did not find out.
+    report.up_to_date = report.holes_filled == 0
+        && report.stamps_reapplied == 0
+        && !report.errored
+        && deferred == 0;
     report
 }
 
@@ -1232,16 +1251,20 @@ mod tests {
         ) -> Result<Vec<SessionEventRecord>, SessionError> {
             Ok(Vec::new())
         }
+        /// One projectable event, so a heal driven by this store has something
+        /// to try — and therefore something to DEFER when `is_retired` below
+        /// refuses to answer. The sibling test that calls `project_event`
+        /// directly never reaches this method.
         async fn load_events_range(
             &self,
             _id: &SessionId,
             _from: Option<EventSeq>,
             _to: Option<EventSeq>,
         ) -> Result<Vec<SessionEventRecord>, SessionError> {
-            Ok(Vec::new())
+            Ok(vec![rec(1, user_msg(uuid::Uuid::new_v4()))])
         }
         async fn load_head_seq(&self, _id: &SessionId) -> Result<EventSeq, SessionError> {
-            Ok(0)
+            Ok(1)
         }
         async fn retire_from(
             &self,
@@ -1292,6 +1315,48 @@ mod tests {
         assert!(
             store.get_history(&id, None).await.unwrap().is_empty(),
             "and it must not write the row on a guess either"
+        );
+    }
+
+    /// A heal that deferred a row did not find the session whole — it failed to
+    /// find out. `up_to_date` used to be computed from the three counters
+    /// alone, and every deferral sets none of them, so a pass that wrote
+    /// nothing BECAUSE it could not reported the same value as a pass that had
+    /// nothing to do. `ProjectionReconciler` then counts the session under
+    /// `skipped_up_to_date` and the boot line says it was whole.
+    ///
+    /// `errored` stays false on purpose: nothing was unreadable at the store
+    /// level, one row was deferred. Folding the two together would report a run
+    /// that produced no assistant row as a permanent failure.
+    #[tokio::test]
+    async fn a_heal_that_deferred_a_row_is_not_up_to_date() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "heal_deferred.db");
+        let id = SessionId::ephemeral("heal-deferred");
+        store.get_or_create(&id).await.unwrap();
+
+        let events: Option<Arc<dyn SessionEventStore>> = Some(Arc::new(UnreadableRetirement));
+        let missed = Arc::new(StdMutex::new(MissedSeqs::default()));
+        let mut run_start = HashMap::new();
+        let report = heal_session(
+            &store,
+            &id,
+            &missed,
+            &events,
+            &mut run_start,
+            HealScope::WholeSession,
+        )
+        .await;
+
+        assert_eq!(report.holes_filled, 0, "the row could not be written");
+        assert_eq!(report.stamps_reapplied, 0);
+        assert!(
+            !report.errored,
+            "a deferral is not a read failure; the store answered every call it could"
+        );
+        assert!(
+            !report.up_to_date,
+            "a pass that deferred a row must not report the session as whole"
         );
     }
 
