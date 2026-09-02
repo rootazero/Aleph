@@ -8,6 +8,21 @@ use serde::{Deserialize, Serialize};
 
 pub const RUNTIME_AGENTS_CHANGED_TOPIC: &str = "runtime.agents.changed";
 
+/// The RPC method name for the agent panel's snapshot fetch.
+///
+/// Used by every CLIENT that calls it (currently the TUI's
+/// `refresh_runtime_agents`). Deliberately NOT used at the server's own
+/// `registry.register(...)` site (`gateway::handlers::mod`): that scanner
+/// (`gateway::method_census::sweep_rpc_methods`) requires a STRING LITERAL
+/// as the first argument to add a method to its census — passing this
+/// constant there would make the registration invisible to the sweep
+/// (`literal_after_paren` returns `None` for an identifier) and redden
+/// `every_registered_rpc_method_has_a_recorded_ruling`'s staleness check.
+/// The server's literal and `RPC_METHOD_CENSUS`'s own entry stay as
+/// independently-written literals on purpose — the census's whole value is
+/// that it is not derived from what it is checking.
+pub const RUNTIME_AGENTS_LIST_METHOD: &str = "runtime.agents.list";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RuntimeAgentState {

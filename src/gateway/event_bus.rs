@@ -112,7 +112,7 @@ impl TopicEvent {
     pub fn to_notification(&self) -> Value {
         serde_json::json!({
             "jsonrpc": "2.0",
-            "method": "event",
+            "method": aleph_protocol::jsonrpc::TOPIC_EVENT_METHOD,
             "params": {
                 "topic": self.topic,
                 "data": self.data,

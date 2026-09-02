@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use aleph_protocol::jsonrpc::TOPIC_EVENT_METHOD;
 use aleph_protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, StreamEvent};
 use futures_util::{SinkExt, StreamExt};
 use serde::{de::DeserializeOwned, Serialize};
@@ -207,13 +208,6 @@ fn classify_frame(text: &str) -> Inbound {
 /// Method prefix every gateway stream frame carries
 /// (`GatewayEventFrame::stream_method`).
 const STREAM_METHOD_PREFIX: &str = "stream.";
-
-/// The literal JSON-RPC method every topic-event envelope carries
-/// (`gateway::server::handler::event_wire_form`'s wrapped/rewrapped form).
-/// Not `stream.*`-prefixed and not a family of methods — one exact string,
-/// the same one the gateway hand-writes on its side (`aleph-protocol` has no
-/// shared constant for it; see that function's doc for why).
-const TOPIC_EVENT_METHOD: &str = "event";
 
 /// One item delivered on the receiver [`AlephClient::connect`]/[`AlephClient::open`]
 /// hands back to the caller.
