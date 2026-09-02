@@ -21,6 +21,9 @@ pub enum RuntimeAgentState {
 pub struct RuntimeAgentEntry {
     pub session_id: String,
     pub label: String,
+    /// The directory the session was SPAWNED in; empty when the spawn
+    /// inherited the server's. NOT the live cwd — tracking a shell that has
+    /// since `cd`'d needs PID probing, which is a phase 0-A gap.
     pub cwd: String,
     /// `None` = the bundled manifest does not recognise this program.
     /// Never a guess.

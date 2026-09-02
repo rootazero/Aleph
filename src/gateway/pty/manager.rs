@@ -195,14 +195,24 @@ pub struct PtyManager {
 /// [`PtySession::with_screen`] takes it again for the length of one sample.
 /// The sample therefore sees a screen at least as new as the frame, never
 /// older, and the grid is never cloned.
-pub(crate) fn flush_session(session: &PtySession) -> Option<aleph_protocol::pty::PtyScreenFrame> {
+///
+/// `now` is unix millis, taken ONCE per tick by the caller and shared with
+/// [`crate::gateway::runtime::RuntimeAgents::release_expired`] — every entry
+/// touched in one pass carries the same instant, and the sampler never reads
+/// a clock of its own (判据 §12).
+pub(crate) fn flush_session(
+    session: &PtySession,
+    now: i64,
+) -> Option<aleph_protocol::pty::PtyScreenFrame> {
     let frame = session.feed_and_take_frame()?;
     session.with_screen(|screen| {
         crate::gateway::runtime::agents().sample(
             &session.id,
             &session.shell,
+            &session.cwd,
             screen,
             session.is_closed(),
+            now,
         );
     });
     Some(frame)
@@ -509,8 +519,9 @@ impl PtyManager {
                     let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
                     inner.sessions.values().cloned().collect()
                 };
+                let now = chrono::Utc::now().timestamp_millis();
                 for session in sessions {
-                    let Some(frame) = flush_session(&session) else {
+                    let Some(frame) = flush_session(&session, now) else {
                         continue;
                     };
                     let Ok(data) = serde_json::to_value(&frame) else {
@@ -519,6 +530,12 @@ impl PtyManager {
                     let ev = TopicEvent::new(aleph_protocol::pty::PTY_SCREEN_TOPIC, data);
                     let _ = bus.publish(serde_json::to_string(&ev).unwrap_or_default());
                 }
+                // Sessions that went quiet produce no frame, so the loop above
+                // cannot reach them — and a finished agent going quiet is
+                // exactly what the idle hold is waiting on. This runs on the
+                // tick, not on a frame, and it is the SAME tick: no second
+                // clock (判据 §12). Task 6 will emit the returned ids.
+                crate::gateway::runtime::agents().release_expired(now);
             }
         });
     }

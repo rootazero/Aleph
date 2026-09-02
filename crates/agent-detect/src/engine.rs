@@ -261,15 +261,28 @@ pub fn identify_agent(process_name: &str) -> Option<Agent> {
 
 /// Detect the state of an agent from the live terminal tail snapshot.
 /// If `agent` is `None`, returns `Unknown`.
+///
+/// Goes through [`crate::detect`], the crate's public entry, rather than a
+/// second no-OSC wrapper. Upstream's `detect_agent` was exactly that wrapper
+/// and carried `#[allow(dead_code)]`; its twin in `screen_rules` was cut for
+/// the same tell (判据 §2), and outside `cfg(test)` this one had no callers
+/// at all.
 #[cfg(test)]
 pub fn detect_state(agent: Option<Agent>, screen_content: &str) -> AgentState {
-    detect_agent(agent, screen_content).state
+    detect_no_osc(agent, screen_content).state
 }
 
-/// Detect state and whether a visible blocker is present on the current screen.
-#[allow(dead_code)] // shim for existing callers; detect_agent_with_osc is the real path
-pub fn detect_agent(agent: Option<Agent>, screen_content: &str) -> AgentDetection {
-    detect_agent_with_osc(agent, screen_content, "", "")
+/// Test-only spelling of "detect with no OSC data available".
+#[cfg(test)]
+fn detect_no_osc(agent: Option<Agent>, screen_content: &str) -> AgentDetection {
+    crate::detect(
+        agent,
+        crate::DetectionInput {
+            screen: screen_content,
+            osc_title: "",
+            osc_progress: "",
+        },
+    )
 }
 
 /// Detect state using screen content plus OSC title/progress strings.
@@ -337,7 +350,7 @@ mod tests {
 
     #[test]
     fn moved_agent_detection_routes_through_production_dispatch() {
-        let detection = detect_agent(Some(Agent::Pi), "Working...");
+        let detection = detect_no_osc(Some(Agent::Pi), "Working...");
 
         assert_eq!(detection.state, AgentState::Working);
         assert!(detection.visible_working);

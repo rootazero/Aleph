@@ -8,6 +8,10 @@
 //     `crate::detect::X` -> `crate::engine::X` throughout.
 //   * `pub(super)` -> `pub`: upstream this is a private child of `pane`; here
 //     the consumer (Aleph's `gateway::runtime` sampler) is outside the crate.
+//   * the detection call goes through `crate::detect`, this crate's documented
+//     public entry (spec §4.1), instead of reaching past it to
+//     `engine::detect_agent_with_osc`. Same engine, one door: an entry point
+//     whose only callers are tests is not an entry point.
 //   * Everything except `detection_update_for_publish_with_osc` was CUT --
 //     see below. Nothing was rewritten; each cut item is recoverable from
 //     upstream by name.
@@ -84,7 +88,14 @@ pub fn detection_update_for_publish_with_osc(
         });
     }
 
-    let detection = crate::engine::detect_agent_with_osc(agent, content, osc_title, osc_progress);
+    let detection = crate::detect(
+        agent,
+        crate::DetectionInput {
+            screen: content,
+            osc_title,
+            osc_progress,
+        },
+    );
     (!detection.skip_state_update).then_some(detection)
 }
 

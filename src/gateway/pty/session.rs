@@ -97,6 +97,15 @@ pub struct PtySession {
     pub created_at: i64,
     /// Who asked for this session — see [`SpawnOptions::created_by`].
     pub created_by: Option<String>,
+    /// The directory the child was SPAWNED in ([`SpawnOptions::cwd`]), or
+    /// empty when the spawn inherited the server's.
+    ///
+    /// NOT the live cwd: a shell that has since `cd`'d is not tracked,
+    /// because that needs PID probing (a phase 0-A gap). Retained rather than
+    /// dropped after `CommandBuilder` because `RuntimeAgentEntry.cwd` has no
+    /// other producer, and a field that is empty for every session is a
+    /// predicate that cannot vary (判据 §2).
+    pub cwd: String,
     /// Writer into the child's stdin (the PTY master write side).
     writer: crate::sync_primitives::Mutex<Box<dyn Write + Send>>,
     /// Master handle, retained for resize (`TIOCSWINSZ` equivalent).
@@ -181,6 +190,7 @@ impl PtySession {
         let session = Arc::new(Self {
             id: id.clone(),
             shell: label,
+            cwd: opts.cwd.clone().unwrap_or_default(),
             created_at: chrono::Utc::now().timestamp(),
             created_by: opts.created_by.clone(),
             writer: crate::sync_primitives::Mutex::new(writer),
