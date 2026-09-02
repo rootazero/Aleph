@@ -15,7 +15,8 @@ use crate::state::layout::WorkspaceState;
 use crate::state::sessions::SessionMap;
 use crate::views::chat::ChatState;
 
-/// One row of `sessions.list` — the same decoder the wide sidebar uses.
+/// One row of `sessions.list` — the same shared type the wide sidebar uses, and
+/// the one the server builds the row from.
 ///
 /// It used to be a second, narrower copy of that shape, and the narrowing was
 /// the bug: it modelled `project_root` and none of the dials, so `on_select`
@@ -23,15 +24,12 @@ use crate::views::chat::ChatState;
 /// global" for a session the server was governing with stored values. Team
 /// chats never appear here — the server filters out `task`/`ephemeral` session
 /// types.
-pub(crate) use crate::api::sessions::SessionRow;
+pub(crate) use crate::api::sessions::{SessionListRow, SessionRowKnobs};
 
-/// Sort newest-first by `updated_at`; rows with no timestamp sink to the bottom.
-pub(crate) fn sort_sessions_desc(mut rows: Vec<SessionRow>) -> Vec<SessionRow> {
-    rows.sort_by(|a, b| {
-        b.updated_at
-            .unwrap_or(i64::MIN)
-            .cmp(&a.updated_at.unwrap_or(i64::MIN))
-    });
+/// Sort newest-first by `updated_at`; rows the server never stamped (`0`, the
+/// field's `#[serde(default)]`) sink to the bottom.
+pub(crate) fn sort_sessions_desc(mut rows: Vec<SessionListRow>) -> Vec<SessionListRow> {
+    rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     rows
 }
 
@@ -51,7 +49,7 @@ pub fn PhoneChatHistory() -> impl IntoView {
     let navigate = use_navigate();
 
     // loading | loaded(rows) | error(msg)
-    let rows = RwSignal::new(Vec::<SessionRow>::new());
+    let rows = RwSignal::new(Vec::<SessionListRow>::new());
     let loading = RwSignal::new(true);
     let load_error = RwSignal::new(Option::<String>::None);
 
@@ -67,7 +65,7 @@ pub fn PhoneChatHistory() -> impl IntoView {
                     let parsed = result
                         .get("sessions")
                         .cloned()
-                        .and_then(|v| serde_json::from_value::<Vec<SessionRow>>(v).ok())
+                        .and_then(|v| serde_json::from_value::<Vec<SessionListRow>>(v).ok())
                         .unwrap_or_default();
                     rows.set(sort_sessions_desc(parsed));
                     loading.set(false);
@@ -96,7 +94,7 @@ pub fn PhoneChatHistory() -> impl IntoView {
 
     // Select a session: set ChatState, restore project root, load history, return
     // to the chat surface.
-    let on_select = move |row: SessionRow| {
+    let on_select = move |row: SessionListRow| {
         let navigate = navigate.clone();
         let dash = dashboard;
         if chat.session_key.get_untracked().as_deref() == Some(row.key.as_str()) {
@@ -180,8 +178,16 @@ pub fn PhoneChatHistory() -> impl IntoView {
                                 .unwrap_or_else(|| {
                                     t_string!(i18n, chat.untitled_conversation).to_string()
                                 });
-                            let sub = t_string!(i18n, chat.message_count, count = row.message_count as u64)
+                            // The count, plus the server's word about this
+                            // conversation's newest run when there is one to
+                            // report. Same derivation as the wide sidebar's
+                            // badge — one rule, two surfaces.
+                            let count_text = t_string!(i18n, chat.message_count, count = row.message_count as u64)
                                 .to_string();
+                            let sub = match crate::components::chat_sidebar::run_badge(&row) {
+                                Some(badge) => format!("{count_text} · {}", badge.label(i18n)),
+                                None => count_text,
+                            };
                             let row_for_click = row.clone();
                             view! {
                                 <div class="cell" on:click=move |_| on_select(row_for_click.clone())>
@@ -215,44 +221,44 @@ mod tests {
             "updated_at": 1_750_000_000_i64,
             "project_root": null
         });
-        let row: SessionRow = serde_json::from_value(json).unwrap();
+        let row: SessionListRow = serde_json::from_value(json).unwrap();
         assert_eq!(row.key, "agent-main:default");
         assert_eq!(row.agent_id, "agent-main");
         assert_eq!(row.topic.as_deref(), Some("Build the phone chat"));
         assert_eq!(row.message_count, 7);
-        assert_eq!(row.updated_at, Some(1_750_000_000));
+        assert_eq!(row.updated_at, 1_750_000_000);
     }
 
     #[test]
     fn deserializes_with_missing_optional_fields() {
         let json = serde_json::json!({ "key": "k" });
-        let row: SessionRow = serde_json::from_value(json).unwrap();
+        let row: SessionListRow = serde_json::from_value(json).unwrap();
         assert_eq!(row.key, "k");
         assert_eq!(row.agent_id, "");
         assert_eq!(row.topic, None);
         assert_eq!(row.message_count, 0);
-        assert_eq!(row.updated_at, None);
+        assert_eq!(row.updated_at, 0);
+        assert!(
+            row.last_run.is_none(),
+            "a core that never answered must not read as a clean run"
+        );
     }
 
     /// The sort is about `updated_at` only, so the rows are built from the
     /// default and given just that — a literal spelling out every dial would
     /// have to be edited whenever a dial is added, for a test that never reads
     /// one.
-    fn row_at(key: &str, updated_at: Option<i64>) -> SessionRow {
-        SessionRow {
+    fn row_at(key: &str, updated_at: i64) -> SessionListRow {
+        SessionListRow {
             key: key.into(),
             updated_at,
-            ..SessionRow::default()
+            ..SessionListRow::default()
         }
     }
 
     #[test]
-    fn sorts_newest_first_none_last() {
-        let rows = vec![
-            row_at("old", Some(100)),
-            row_at("none", None),
-            row_at("new", Some(200)),
-        ];
+    fn sorts_newest_first_unstamped_last() {
+        let rows = vec![row_at("old", 100), row_at("none", 0), row_at("new", 200)];
         let sorted = sort_sessions_desc(rows);
         let keys: Vec<&str> = sorted.iter().map(|r| r.key.as_str()).collect();
         assert_eq!(keys, vec!["new", "old", "none"]);

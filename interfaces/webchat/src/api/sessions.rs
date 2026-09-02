@@ -112,50 +112,36 @@ pub async fn set_memory_mode(
 /// the wide composer, the phone composer and three session pickers.
 pub use shared_ui_logic::state::SessionKnobs;
 
-/// One row of `sessions.list`, as every Panel surface reads it.
+/// One row of `sessions.list`, as every Panel surface reads it — the type the
+/// server constructs the row from, not a copy of its field names.
 ///
-/// Mirrors the server's `SessionInfo`. There were two hand-written copies of
-/// this shape — the wide sidebar's and the phone history's — and they had
-/// already diverged: the phone one carried no dials at all, so tapping a row
-/// there restored the folder and dropped every knob. One decoder, one place to
-/// add a field.
+/// This was a hand-written mirror of the server's row, and before that two
+/// mirrors: the wide sidebar's and the phone history's, already diverged (the
+/// phone one carried no dials at all, so tapping a row there restored the
+/// folder and dropped every knob). Collapsing them to one Panel-side decoder
+/// fixed that half and left the other: a subset reader can only ever prove it
+/// is a superset of whatever happens to arrive, so a field renamed on the
+/// server degrades here to a `#[serde(default)]` — a session with no override
+/// where there is one, or a run badge that never appears (criterion #10).
 ///
-/// Unknown fields are ignored (serde's default), which is what makes an older
-/// Panel survive a newer core; every field is `#[serde(default)]` so a newer
-/// Panel survives an older core.
-#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize)]
-pub struct SessionRow {
-    pub key: String,
-    #[serde(default)]
-    pub agent_id: String,
-    #[serde(default)]
-    pub topic: Option<String>,
-    #[serde(default)]
-    pub message_count: u32,
-    /// Unix epoch seconds; `None` sorts last.
-    #[serde(default)]
-    pub updated_at: Option<i64>,
-    /// The session's project working directory. `None` ⇒ the default
-    /// `~/.aleph/workspaces/{agent_id}` workspace.
-    #[serde(default)]
-    pub project_root: Option<String>,
-    #[serde(default)]
-    pub exec_tier: Option<String>,
-    #[serde(default)]
-    pub mode: Option<String>,
-    #[serde(default)]
-    pub think_level: Option<String>,
-    #[serde(default)]
-    pub memory_mode: Option<String>,
-    #[serde(default)]
-    pub model_pin: Option<String>,
+/// A field a client wants is now added to [`SessionListRow`] itself, in
+/// `shared/protocol`, which makes it a compile-time fact on the server too.
+pub use aleph_protocol::SessionListRow;
+
+/// The dials a `sessions.list` row carries, as one value to hand to
+/// [`crate::views::chat::state::ChatState::apply_session_knobs`].
+///
+/// An extension trait because [`SessionListRow`] is defined in
+/// `shared/protocol`, which has no business knowing about this crate's
+/// `SessionKnobs` — the wire shape belongs to the contract, the reduction to
+/// the surface that renders it.
+pub trait SessionRowKnobs {
+    /// The five per-session overrides this row reports.
+    fn knobs(&self) -> SessionKnobs;
 }
 
-impl SessionRow {
-    /// The dials this row carries, as one value to hand to
-    /// [`crate::views::chat::state::ChatState::apply_session_knobs`].
-    #[must_use]
-    pub fn knobs(&self) -> SessionKnobs {
+impl SessionRowKnobs for SessionListRow {
+    fn knobs(&self) -> SessionKnobs {
         SessionKnobs {
             exec_tier: self.exec_tier.clone(),
             mode: self.mode.clone(),
@@ -170,28 +156,29 @@ impl SessionRow {
 mod tests {
     use super::*;
 
-    /// The field names are the wire contract with `SessionInfo`, and a typo
-    /// here does not fail — it decodes to `None` and reads as "this session has
-    /// no override", which is indistinguishable from the truth.
+    /// The dials reach the surface, built from the shared row rather than from
+    /// a JSON literal written here — a literal would only prove serde
+    /// round-trips its own bytes, which stays true through a server-side
+    /// rename.
     #[test]
-    fn a_row_decodes_every_dial_the_server_sends() {
-        let row: SessionRow = serde_json::from_value(serde_json::json!({
-            "key": "agent:main:main:s1",
-            "agent_id": "main",
-            "exec_tier": "ask",
-            "mode": "code",
-            "think_level": "high",
-            "memory_mode": "off",
-            "model_pin": "claude-opus-5",
-            "project_root": "/tmp/p",
-            "updated_at": 1_700_000_000_i64,
-            // A field this Panel does not model must not fail the row.
-            "compaction_count": 3,
-        }))
-        .expect("a full server row must decode");
+    fn a_row_hands_over_every_dial_the_server_sent() {
+        let row = SessionListRow {
+            key: "agent:main:main:s1".into(),
+            agent_id: "main".into(),
+            exec_tier: Some("ask".into()),
+            mode: Some("code".into()),
+            think_level: Some("high".into()),
+            memory_mode: Some("off".into()),
+            model_pin: Some("claude-opus-5".into()),
+            project_root: Some("/tmp/p".into()),
+            updated_at: 1_700_000_000,
+            ..SessionListRow::default()
+        };
+        let wire = serde_json::to_value(&row).expect("the row serialises");
+        let parsed: SessionListRow = serde_json::from_value(wire).expect("and parses back");
 
         assert_eq!(
-            row.knobs(),
+            parsed.knobs(),
             SessionKnobs {
                 exec_tier: Some("ask".into()),
                 mode: Some("code".into()),
@@ -207,10 +194,22 @@ mod tests {
     /// not on a value this client invented.
     #[test]
     fn a_bare_row_follows_the_defaults() {
-        let row: SessionRow =
+        let row: SessionListRow =
             serde_json::from_value(serde_json::json!({ "key": "agent:main:main:s1" }))
                 .expect("a minimal row must decode");
         assert_eq!(row.knobs(), SessionKnobs::default());
         assert!(row.knobs().exec_tier.is_none());
+    }
+
+    /// A field this Panel does not model must not cost the whole row: a list
+    /// row that fails to parse renders as a session that does not exist.
+    #[test]
+    fn an_unmodelled_field_does_not_fail_the_row() {
+        let row: SessionListRow = serde_json::from_value(serde_json::json!({
+            "key": "agent:main:main:s1",
+            "a_field_from_a_newer_core": 3,
+        }))
+        .expect("unknown keys are ignored");
+        assert_eq!(row.key, "agent:main:main:s1");
     }
 }
