@@ -924,4 +924,114 @@ mod tests {
              Body was:\n{body}"
         );
     }
+
+    /// Every `agent_panel.rs` frontend file in the repo, EXCEPT the shared
+    /// owner that legitimately sorts (`shared/ui_logic/src/state/agent_panel.rs`
+    /// — the single source `sort_entries` lives in).
+    ///
+    /// Derived rather than hand-listed (Task 10, R10-5, 判据 §5): a fixed
+    /// two-path list only covers the frontends that exist on the day it is
+    /// written, so a THIRD frontend `agent_panel.rs` (a future mobile
+    /// client, a desktop-native surface) would sit silently outside a
+    /// hardcoded pair. Walking the tree instead means any file with that
+    /// exact name is picked up automatically, wherever it lands.
+    ///
+    /// `target/` and `interfaces/webchat/node_modules/` are skipped, not for
+    /// correctness (neither can contain a `.rs` file this guard cares
+    /// about) but because `target/` alone is >100GB of build output — this
+    /// repo's existing walker (`utils::source_scan::rust_sources_under`) has
+    /// no such skip because every current call site points it at `src/`,
+    /// never at the repo root, so this guard writes its own rather than
+    /// pointing that one somewhere it was never meant to run.
+    fn agent_panel_frontend_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if name == "target" || name == "node_modules" || name.starts_with('.') {
+                        continue;
+                    }
+                    walk(&path, out);
+                } else if path.file_name().and_then(|n| n.to_str()) == Some("agent_panel.rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(root, &mut files);
+        let owner = root.join("shared/ui_logic/src/state/agent_panel.rs");
+        files.retain(|p| p != &owner);
+        files
+    }
+
+    /// R2: sorting lives ONLY in `shared_ui_logic::state::agent_panel::sort_entries`.
+    /// Neither frontend's `agent_panel.rs` may perform its own ordering call.
+    ///
+    /// `code_text` (not the weaker `strip_comment_lines` the `live_apply.rs`
+    /// precedent uses) is deliberate here (R10-8): it strips comments AND
+    /// string-literal payloads over one lexer walk, and the property this
+    /// guard checks is "this file performs no ordering call" — a `.sort_by`
+    /// spelled inside a string literal is not a call either, any more than
+    /// one spelled inside a doc comment is.
+    ///
+    /// A missing file or an empty walk FAILS rather than vacuously passing
+    /// (判据 §2 / §8): "I found nothing to check" is not the same fact as
+    /// "I checked and it's clean".
+    #[test]
+    fn no_frontend_sorts_its_own_agent_panel_entries() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let files = agent_panel_frontend_files(root);
+
+        assert!(
+            files.len() >= 2,
+            "expected at least 2 frontend agent_panel.rs files (found {}); a \
+             lower count means this walk is not finding the frontends it is \
+             supposed to guard — a silent pass, not a clean one. Found: {files:?}",
+            files.len()
+        );
+
+        for path in &files {
+            let src = std::fs::read_to_string(path).unwrap_or_else(|e| {
+                panic!("{}: {e} — a missing frontend file is not a pass", path.display())
+            });
+            let code = crate::utils::source_scan::code_text(&crate::utils::source_scan::production_prefix(&src));
+            assert!(
+                !code.contains(".sort_by") && !code.contains(".sort()"),
+                "{} sorts its own agent-panel entries; sorting belongs to \
+                 shared_ui_logic::state::agent_panel::sort_entries (R2)",
+                path.display()
+            );
+        }
+    }
+
+    /// True-negative fixture for the guard above (R10-6, reversed by R10-8):
+    /// a comment or string literal that merely NAMES `.sort_by`/`.sort()` —
+    /// documenting the very rule this guard enforces — must not redden it.
+    /// Kept here, next to the assertion it proves, rather than as a
+    /// production doc comment in another crate that a future author with no
+    /// idea this guard exists could reword out from under it.
+    #[test]
+    fn the_stripper_survives_sort_by_named_only_in_prose() {
+        let synthetic = "\
+//! module doc naming `.sort_by` and `.sort()` so nobody re-adds them\n\
+/// doc comment: this widget must never call `.sort_by` or `.sort()`\n\
+// plain comment, also just prose: .sort_by(...) .sort()\n\
+pub fn render() {\n\
+    // still just a comment inside a function body: .sort_by\n\
+    let _ = \"a string literal mentioning .sort_by too\";\n\
+}\n";
+        let code = crate::utils::source_scan::code_text(&crate::utils::source_scan::production_prefix(synthetic));
+        assert!(
+            !code.contains(".sort_by") && !code.contains(".sort()"),
+            "code_text must strip `.sort_by`/`.sort()` when they appear only \
+             in `//`, `///` and `//!` comments or inside a string literal — \
+             otherwise the guard above would redden on prose, and a guard \
+             that fires on prose gets weakened by the next person who trips \
+             it (判据 §3). Code after stripping was:\n{code}"
+        );
+    }
 }
