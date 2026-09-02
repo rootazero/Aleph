@@ -63,17 +63,6 @@ fn state_chip_class(state: RuntimeAgentState) -> &'static str {
     }
 }
 
-/// The dim manifest-version suffix for one entry, or `None`.
-///
-/// Same derivation as the TUI's (`interfaces/tui/src/tui/widgets/agent_panel.rs:68-71`,
-/// 判据 §9/§12: one derivation, every face). `None` on either half — no
-/// recognised agent, or a recognised agent with no bundled manifest version —
-/// renders nothing, never a placeholder (判据 §17).
-fn manifest_suffix(entry: &RuntimeAgentEntry) -> Option<String> {
-    let agent = agent_detect::identify_agent(entry.agent.as_deref()?)?;
-    agent_detect::manifest_version(agent)
-}
-
 #[component]
 #[must_use]
 pub fn AgentPanel() -> impl IntoView {
@@ -276,7 +265,6 @@ fn AgentRow(entry: RuntimeAgentEntry) -> impl IntoView {
         RuntimeAgentState::Idle => t_string!(i18n, agent_panel.state_idle).to_string(),
         RuntimeAgentState::Unknown => t_string!(i18n, agent_panel.state_unknown).to_string(),
     };
-    let version_suffix = manifest_suffix(&entry);
 
     view! {
         <div class="flex items-center gap-1.5 text-xs" title=entry.cwd.clone()>
@@ -287,9 +275,6 @@ fn AgentRow(entry: RuntimeAgentEntry) -> impl IntoView {
                 {format!("{} {}", state_glyph(state), state_label)}
             </span>
             <span class="truncate text-text-primary">{entry.label.clone()}</span>
-            {version_suffix.map(|v| view! {
-                <span class="text-text-tertiary shrink-0">{v}</span>
-            })}
         </div>
     }
 }
@@ -328,12 +313,5 @@ mod tests {
     #[test]
     fn unknown_never_wears_idles_glyph() {
         assert_ne!(state_glyph(S::Unknown), state_glyph(S::Idle));
-    }
-
-    /// A recognised agent with no bundled manifest (`agent: None`) must
-    /// render no suffix at all — never a placeholder (判据 §17).
-    #[test]
-    fn no_agent_label_means_no_manifest_suffix() {
-        assert_eq!(manifest_suffix(&entry("s", S::Idle)), None);
     }
 }

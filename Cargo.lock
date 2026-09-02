@@ -323,7 +323,6 @@ dependencies = [
 name = "aleph-panel"
 version = "0.2.0"
 dependencies = [
- "agent-detect",
  "aleph-protocol",
  "chrono",
  "console_error_panic_hook",
@@ -363,7 +362,6 @@ dependencies = [
 name = "aleph-tui"
 version = "26.9.1"
 dependencies = [
- "agent-detect",
  "aleph-client",
  "aleph-logging",
  "aleph-protocol",

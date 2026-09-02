@@ -3,14 +3,23 @@
 // column (Task 8b).
 //
 // Row-drawing shape ported from herdr's `render_agent_detail`
-// (`herdr/src/ui/sidebar.rs`, ~L1432): a glyph, the label, and a dim
-// detail suffix. Data access is NOT ported — herdr reads its own
-// in-process `AppState`; this reads the slice Task 8a already fetched and
-// stored on `AppState::runtime_agents`. This module never fetches and
-// never sorts its own input: `sort_entries` (from `shared-ui-logic`,
-// Task 7) is the only ordering operation here, called on a clone. A
-// source-level guard (Task 10) fails the build if this file gains an
-// ordering call of its own.
+// (`herdr/src/ui/sidebar.rs`, ~L1432): a glyph and the label. Data access is
+// NOT ported — herdr reads its own in-process `AppState`; this reads the
+// slice Task 8a already fetched and stored on `AppState::runtime_agents`.
+// This module never fetches and never sorts its own input: `sort_entries`
+// (from `shared-ui-logic`, Task 7) is the only ordering operation here,
+// called on a clone. A source-level guard (Task 10) fails the build if this
+// file gains an ordering call of its own.
+//
+// A dim manifest-version suffix (R8-10) was here and was removed (Task 9
+// fix round 1, F4): `agent_detect::manifest_version` returns the CalVer
+// stamp of our own bundled detection-rules TOML
+// (`crates/agent-detect/src/manifests/*.toml`'s `version` key — see e.g.
+// `claude.toml:2`, next to its own `updated_at`), not the agent program's
+// version. Rendered next to the agent's name it reads as the latter to
+// every user who sees it — 判据 §17: a wrong label costs more than a
+// missing one. `agent_label` (the display name) is unaffected; it was
+// always the part that meant something.
 
 use ratatui::{
     layout::Rect,
@@ -58,37 +67,15 @@ fn state_color(state: RuntimeAgentState) -> Color {
     }
 }
 
-/// The dim manifest-version suffix for one entry, or `None`.
-///
-/// `None` whenever `entry.agent` is `None` OR the manifest lookup itself
-/// returns `None` (a recognised agent with no bundled screen manifest, or
-/// one whose manifest declares no version) — both render nothing, never a
-/// placeholder such as "unknown" or an empty `()` (R8-10, 判据 §17: a wrong
-/// label costs more than a missing one).
-fn manifest_suffix(entry: &RuntimeAgentEntry) -> Option<String> {
-    let agent = agent_detect::identify_agent(entry.agent.as_deref()?)?;
-    agent_detect::manifest_version(agent)
-}
-
-/// One row's spans: glyph (colored by state), the label, and the optional
-/// dim manifest-version suffix.
+/// One row's spans: glyph (colored by state) and the label.
 fn entry_line(entry: &RuntimeAgentEntry) -> Line<'static> {
-    let mut spans = vec![
+    Line::from(vec![
         Span::styled(
             format!("{} ", state_glyph(entry.state)),
             Style::default().fg(state_color(entry.state)),
         ),
         Span::raw(entry.label.clone()),
-    ];
-    if let Some(version) = manifest_suffix(entry) {
-        spans.push(Span::styled(
-            format!(" {version}"),
-            Style::default()
-                .fg(DEFAULT_THEME.muted)
-                .add_modifier(Modifier::DIM),
-        ));
-    }
-    Line::from(spans)
+    ])
 }
 
 /// Render the agent panel into `area`.
@@ -328,71 +315,4 @@ mod tests {
         }
     }
 
-    /// R8-10: a recognised agent with a bundled screen manifest gets a dim
-    /// version suffix. `claude` is in `agent_detect::Agent::SCREEN_MANIFEST_AGENTS`
-    /// (guarded by that crate's own `manifest_version_is_per_agent_and_matches_explain`
-    /// test), so this is deterministic with no fixture of our own.
-    ///
-    /// Reddens if `manifest_suffix` is never called, or is called with the
-    /// wrong field (e.g. `entry.label` instead of `entry.agent`).
-    #[test]
-    fn a_recognised_agent_with_a_manifest_gets_a_version_suffix() {
-        let entries = vec![entry("s1", "claude", Some("claude"), S::Idle, 1)];
-        let dump = render(&AgentPanelData::Ready(entries)).join("\n");
-
-        let expected = agent_detect::manifest_version(
-            agent_detect::identify_agent("claude").expect("claude is a recognised agent"),
-        )
-        .expect("claude has a bundled screen manifest");
-        assert!(
-            dump.contains(&expected),
-            "manifest version {expected:?} must appear as a suffix in {dump:?}"
-        );
-    }
-
-    /// R8-10's other half: a recognised agent with NO bundled manifest
-    /// (`mastracode` — confirmed absent from `SCREEN_MANIFEST_AGENTS` by
-    /// `agent-detect`'s own test) must render EXACTLY like no agent label
-    /// at all: nothing appended, never a placeholder.
-    ///
-    /// Reddens if a placeholder (e.g. "(unknown)") is appended for either
-    /// case, or if the two cases stop matching each other.
-    #[test]
-    fn an_agent_without_a_bundled_manifest_renders_identically_to_no_agent_label() {
-        let with_unmanifested_agent = render(&AgentPanelData::Ready(vec![entry(
-            "s1",
-            "some-shell",
-            Some("mastracode"),
-            S::Idle,
-            1,
-        )]));
-        let without_agent_label = render(&AgentPanelData::Ready(vec![entry(
-            "s1",
-            "some-shell",
-            None,
-            S::Idle,
-            1,
-        )]));
-        assert_eq!(
-            with_unmanifested_agent, without_agent_label,
-            "no manifest version must render exactly like no agent label at all"
-        );
-
-        // The equality check above reddens on an ASYMMETRIC placeholder (one
-        // appended only on one of the two paths) but would stay green on a
-        // SYMMETRIC one — e.g. `manifest_suffix(..).unwrap_or("unknown")` at
-        // the call site, which appends "unknown" on BOTH paths alike, so the
-        // two renders would still be equal to each other while both violate
-        // R8-10's "never a placeholder". Pin the absolute fact directly:
-        // nothing follows the label at all.
-        let row = without_agent_label
-            .iter()
-            .find(|r| r.contains("some-shell"))
-            .expect("the entry's row must render");
-        assert_eq!(
-            row.trim_end(),
-            "\u{25cb} some-shell",
-            "nothing must be appended after the label when there is no manifest version"
-        );
-    }
 }

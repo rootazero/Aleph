@@ -25,11 +25,6 @@ path = "src/main.rs"
 aleph-client = { path = "../../shared/client" }
 aleph-protocol = { path = "../../shared/protocol" }
 shared-ui-logic = { path = "../../shared/ui_logic", default-features = false }
-# Per-agent screen-manifest version lookup for the agent panel's dim suffix
-# (R8-10). Native target only — this crate is never built for wasm, so
-# agent-detect's regex + toml dependencies are unconditionally fine here.
-# This is the FIRST consumer of agent-detect outside its own crate.
-agent-detect = { path = "../../crates/agent-detect" }
 
 # Async runtime
 tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "io-util", "signal", "net"] }
