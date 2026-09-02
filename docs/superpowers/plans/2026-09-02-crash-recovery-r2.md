@@ -57,6 +57,19 @@ for i in $(seq 1 28); do [ -f "$S/<name>.txt.done" ] && break; sleep 20; done
 
 **基线失败名单**（改动前，18 条，全部环境/上游）在 `<scratchpad>/baseline_failures.txt`；全量 `--lib` 跑完后用 `comm -3` 按**名字**比对，多出来的才是你的。
 
+### 0.1 上游 review 转发给下游的约束（**你的任务在下表里的话，这是必读项**）
+
+> 每个任务的 review 只发给本任务的 fixer，够不到下一个任务的 agent。凡是「上游发现、下游才能修」的
+> 东西一律搬到这里——这本身就是判据 #7（两端完整而中间没线）在本流程上的形态。
+
+| 给谁 | 约束 | 出处 |
+|---|---|---|
+| **T4** | `ResumeReport.degraded` / `unsnapshotted` 现在**只有消费者没有生产者**（`receipt_from_report` 读它们，全程恒 0）。T3 是按计划「字段先到」，字段 doc 也照实说了自己还没被填。**T4 必须落地生产者**；T4 若滑掉，这两个字段就从「诚实的半条线」变成判据 #11 的「报成功的 no-op」——一个恒 0 的计数器在收据上读起来是事实。 | T3 review |
+| **T7** | `last_run_from_events` 可以返回 `never_ran` 而 `dangling` 非空、`inspected: true`：一份有工具派发但没有 run marker 的日志归约成 `Clean` + `run_anchor: None`（`UnmarkedActivity` 是 REPORT 级）。所以**渲染「上次崩在半路」的判据不能只看 `disposition == INTERRUPTED`**，要看 `dangling()` 非空——否则那些悬空调用服务端生产了、没人渲染（判据 #17）。 | T3 review |
+| **T7** | `interfaces/webchat/src/api/sessions.rs` 里那个手写 `SessionRow` 镜像（含两处点名已删除的 `SessionInfo` 的注释）由 T7 整体换成 `aleph_protocol::SessionListRow`；T3 刻意没去改它的注释，因为那是给一个即将删除的结构体写新文档。 | T3 续做 1/2 |
+| **T7** | `src/bin/aleph-server/commands/resume.rs` 的穷举 match 里有五个臂（`NotFound` / `InvalidSessionKey` / `AgentForbidden` / `Unavailable` / `Failed`）**经 CLI 唯一走的那条 HTTP 传输到不了**——`admin_api/resume.rs` 把这些 outcome 转成了 4xx/5xx，`forward_to_server` 直接 `Err`，收据根本不会被解析成这些状态。臂要留（穷举是本轮要的棘轮，JSON-RPC 面产得出来），但欠一句 doc 说明「这几句今天没有渲染者」。 | T3 review |
+| **T8** | 两处**无上限**的读要在真机阶段量出真实数字，再决定下一轮加不加 cap：`chat.history` 每次 attach/reconnect 都 `load_all_events`；`sessions.list` 每次都 `load_run_markers()` 全表（**不受列表自己的 filter/limit 收窄**，会取回随后被过滤掉的会话的 marker）。两者都是 spec §4.6 授权的、A10 明确推迟 cap，所以这是**记录在案的成本**不是缺陷——但「记录在案」的意思是必须有数字。 | T3 review |
+
 ---
 
 ## File Structure（本轮触碰面）
