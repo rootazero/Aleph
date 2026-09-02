@@ -1,0 +1,7 @@
+This crate contains code ported from herdr (https://github.com/herdrdev/herdr),
+Copyright the herdr authors, licensed under the Apache License, Version 2.0.
+
+Source: herdr 0.8.2 — src/detect/{mod,manifest,manifest_update}.rs,
+                      src/pane/agent_detection.rs
+
+The rest of the Aleph project is MIT-licensed. This crate is not.

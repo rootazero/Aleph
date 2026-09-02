@@ -18,6 +18,8 @@ members = [
     "interfaces/cli",
     "interfaces/tui",
     "interfaces/webchat",
+
+    "crates/agent-detect",
 ]
 
 [workspace.package]
