@@ -614,6 +614,18 @@ mod tests {
         }
     }
 
+    fn started_with_envelope(
+        run: &str,
+        envelope: Option<crate::session::events::RunEnvelopeSnapshot>,
+    ) -> SessionEvent {
+        SessionEvent::RunStarted {
+            run_id: run.to_string(),
+            at: 1,
+            project_root: None,
+            envelope,
+        }
+    }
+
     fn finished(run: &str) -> SessionEvent {
         finished_as(run, RunOutcome::Completed)
     }
@@ -1116,6 +1128,47 @@ mod tests {
             })
         );
         assert_eq!(r.run_anchor, Some(3));
+    }
+
+    /// ④ The envelope belongs to the run that is OPEN, not to whichever
+    /// `RunStarted` the log happens to hold first. A crash-loop leaves several
+    /// of them, each with its own knobs; replaying the earliest would resume
+    /// the crashed run under settings a later attempt had already changed.
+    #[test]
+    fn open_run_carries_the_envelope_of_the_run_that_is_actually_open() {
+        let stale = crate::session::events::RunEnvelopeSnapshot {
+            exec_tier: Some("full".into()),
+            ..Default::default()
+        };
+        let live = crate::session::events::RunEnvelopeSnapshot {
+            exec_tier: Some("ask".into()),
+            model: Some("m-live".into()),
+            ..Default::default()
+        };
+        let events = vec![
+            rec(1, started_with_envelope("a", Some(stale))),
+            rec(2, finished("a")),
+            rec(3, started_with_envelope("b", Some(live.clone()))),
+            rec(4, requested("c1")),
+        ];
+        let r = reduced(&events);
+        let facts = r.open_run.expect("the second run is still open");
+        assert_eq!(facts.run_id, "b");
+        assert_eq!(facts.envelope, Some(live));
+    }
+
+    /// A marker written before ④ existed reduces to `None`, which is what lets
+    /// the coordinator count it as `unsnapshotted` instead of reading an empty
+    /// envelope as "the gateway resolved nothing".
+    #[test]
+    fn a_pre_envelope_marker_reduces_to_no_envelope_at_all() {
+        let events = vec![rec(1, started("a"))];
+        let r = reduced(&events);
+        assert_eq!(
+            r.open_run.expect("open").envelope,
+            None,
+            "a legacy marker must not grow an envelope on the way through"
+        );
     }
 
     #[test]

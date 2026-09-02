@@ -25,10 +25,23 @@ use alephcore::session::store::{migrate_add_session_events, SessionEventStore, S
 use alephcore::ResumeConfig;
 
 /// Mock `ExecutionAdapter` that records every `execute` call's
-/// `(session_key, metadata)` so the test can assert resume signalling.
+/// `(session_key, metadata, model_override)` so the test can assert resume
+/// signalling.
+///
+/// The third element is ④'s carrier: the crashed run's model pin rides on
+/// `RunRequest.model_override` and NOT on metadata, precisely because the
+/// override governs this run only and never writes back to the session row.
+/// Asserting it from the metadata map would therefore pass on a resume that
+/// pinned nothing.
 struct RecordingAdapter {
-    calls: Arc<Mutex<Vec<(String, HashMap<String, String>)>>>,
+    calls: Arc<Mutex<Vec<Call>>>,
 }
+
+type Call = (
+    String,
+    HashMap<String, String>,
+    Option<alephcore::gateway::model_override::ModelOverride>,
+);
 
 impl RecordingAdapter {
     fn new() -> Self {
@@ -49,6 +62,7 @@ impl ExecutionAdapter for RecordingAdapter {
         self.calls.lock().await.push((
             request.session_key.to_key_string(),
             request.metadata.clone(),
+            request.model_override.clone(),
         ));
         Ok(())
     }
@@ -154,7 +168,20 @@ fn shared_goal_store() -> Arc<alephcore::goal::GoalStore> {
 
 /// Seed a complete interrupted run: user message, a turn, a dangling tool
 /// call, then a trailing `RunStarted` with no `RunFinished`.
+///
+/// The marker carries NO envelope, which is both the pre-④ shape every older
+/// log has and the shape the coordinator must keep resuming unchanged.
 async fn seed_interrupted_run(store: &Arc<dyn SessionEventStore>, sid: &SessionKey) {
+    seed_interrupted_run_with_envelope(store, sid, None).await;
+}
+
+/// The same crash, with ④'s knob envelope frozen onto the `RunStarted` marker
+/// the way `harness_bridge::runner_impl` writes it for every run since.
+async fn seed_interrupted_run_with_envelope(
+    store: &Arc<dyn SessionEventStore>,
+    sid: &SessionKey,
+    envelope: Option<alephcore::session::events::RunEnvelopeSnapshot>,
+) {
     let tid = TurnId::new_v4();
     let at = now_ms();
     let events: Vec<SessionEvent> = vec![
@@ -179,7 +206,7 @@ async fn seed_interrupted_run(store: &Arc<dyn SessionEventStore>, sid: &SessionK
             run_id: "run-1".into(),
             at: at + 2,
             project_root: None,
-            envelope: None,
+            envelope,
         },
         SessionEvent::ToolCallRequested {
             turn_id: tid,
@@ -243,7 +270,7 @@ async fn a_resumed_room_run_reaches_the_engine_with_the_rooms_scope() {
     assert_eq!(coordinator.resume_interrupted_runs().await.resumed, 1);
 
     let calls = calls.lock().await;
-    let (_key, metadata) = calls.first().expect("the resumed run reached the adapter");
+    let (_key, metadata, _model) = calls.first().expect("the resumed run reached the adapter");
     // Assert through the consumer, not the raw keys: this is the exact call
     // `with_request_scope` makes on the way into the run.
     let scope = alephcore::scope::scope_from_metadata(metadata)
@@ -313,6 +340,104 @@ async fn interrupted_run_is_repaired_and_retriggered() {
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].0, sid.to_key_string());
     assert_eq!(calls[0].1.get("resume").map(String::as_str), Some("true"));
+}
+
+/// ④ end to end: the knobs frozen on the crashed run's `RunStarted` reach the
+/// dispatched request, and each one reaches it on the carrier that cannot make
+/// the resume louder than the run it is replaying.
+///
+/// Every unit test underneath this builds `RunStartFacts` by hand, so all of
+/// them stay green if `retrigger` drops the plan on the floor. This asserts at
+/// the consumer end — the `RunRequest` an `ExecutionAdapter` actually receives.
+///
+/// Two carriers, deliberately different:
+/// * the model pin rides `RunRequest.model_override`, which governs this run
+///   only. On metadata it would be a session-level fact and the crashed run's
+///   model would outlive the resume.
+/// * the exec tier rides `RESUME_TIER_CEILING_KEY`, NOT the request-rung
+///   `exec_tier` key. The request rung outranks session and global, so a `full`
+///   snapshot arriving there would RAISE a conversation the operator had since
+///   tightened. The ceiling is composed through `most_restrictive` after all
+///   three rungs resolve, so it can only tighten — and this test pins the
+///   negative half by name.
+#[tokio::test]
+async fn a_resume_replays_the_crashed_runs_envelope_on_carriers_that_cannot_raise_it() {
+    use alephcore::agents::thinking::{ThinkLevel, THINK_LEVEL_SESSION_KEY};
+    use alephcore::gateway::execution_engine::RESUME_TIER_CEILING_KEY;
+    use alephcore::memory::session_memory_mode::{MemoryMode, MEMORY_MODE_SESSION_KEY};
+    use alephcore::orchestrator::{
+        ExecTier, SessionMode, EXEC_TIER_SESSION_KEY, MODE_SESSION_KEY,
+    };
+
+    let store = store();
+    let sid = SessionKey::main("envelope-replay");
+    seed_interrupted_run_with_envelope(
+        &store,
+        &sid,
+        Some(alephcore::session::events::RunEnvelopeSnapshot {
+            exec_tier: Some(ExecTier::Ask.id().to_string()),
+            session_mode: Some(SessionMode::Code.id().to_string()),
+            think_level: Some(ThinkLevel::High.id().to_string()),
+            memory_mode: Some(MemoryMode::Off.id().to_string()),
+            model: Some("aleph-test-model".to_string()),
+            model_provider: Some("openai".to_string()),
+        }),
+    )
+    .await;
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let registry = registry_with_agent(sid.agent_id()).await;
+
+    let coordinator = ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry,
+        sessions(),
+        test_bus(),
+    );
+    let report = coordinator.resume_interrupted_runs().await;
+    assert_eq!(report.resumed, 1);
+    assert_eq!(
+        report.unsnapshotted, 0,
+        "this marker carries an envelope; `unsnapshotted` counts the ones that do not"
+    );
+
+    let calls = calls.lock().await;
+    let (_key, metadata, model_override) =
+        calls.first().expect("the resumed run reached the adapter");
+
+    assert_eq!(
+        metadata.get(MODE_SESSION_KEY).map(String::as_str),
+        Some(SessionMode::Code.id())
+    );
+    assert_eq!(
+        metadata.get(THINK_LEVEL_SESSION_KEY).map(String::as_str),
+        Some(ThinkLevel::High.id())
+    );
+    assert_eq!(
+        metadata.get(MEMORY_MODE_SESSION_KEY).map(String::as_str),
+        Some(MemoryMode::Off.id())
+    );
+    assert_eq!(
+        metadata.get(RESUME_TIER_CEILING_KEY).map(String::as_str),
+        Some(ExecTier::Ask.id()),
+        "the snapshot tier must arrive as a ceiling"
+    );
+    assert_eq!(
+        metadata.get(EXEC_TIER_SESSION_KEY),
+        None,
+        "and never on the request rung, which outranks session and global"
+    );
+
+    match model_override {
+        Some(alephcore::gateway::model_override::ModelOverride::Qualified { provider, model }) => {
+            assert_eq!(provider, "openai");
+            assert_eq!(model, "aleph-test-model");
+        }
+        other => panic!("expected the snapshot's qualified pin, got {other:?}"),
+    }
 }
 
 /// The on-demand face does the same work as the boot scan, on one session.

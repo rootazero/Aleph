@@ -434,14 +434,8 @@ impl HarnessRunner for AgentHarnessRunner {
         // a re-derivation of it. Always `Some` from this writer: an empty
         // snapshot means "the gateway resolved nothing", which is a different
         // fact from the `None` a legacy marker carries.
-        let run_envelope_snapshot = crate::session::events::RunEnvelopeSnapshot {
-            exec_tier: envelope.exec_tier.map(|t| t.id().to_string()),
-            session_mode: envelope.session_mode.map(|m| m.id().to_string()),
-            think_level: think_level.map(|l| l.id().to_string()),
-            memory_mode: envelope.memory_mode.map(|m| m.id().to_string()),
-            model: snapshot_model.as_ref().map(|(_, m)| m.clone()),
-            model_provider: snapshot_model.and_then(|(p, _)| p),
-        };
+        let run_envelope_snapshot =
+            run_envelope_snapshot(&envelope, think_level, snapshot_model.as_ref());
 
         // Gauge denominator: authoritative per-model context window (R7 — the
         // lookup is core's, not the panel's), honoring the configured
@@ -1487,6 +1481,155 @@ fn acting_provider_id(
         .or(serving_hint)
         .unwrap_or(provider_name)
         .to_string()
+}
+
+/// ④ Freeze the knob envelope a run is executing under, for its `RunStarted`
+/// marker.
+///
+/// Every field is read from a value the turn is ALREADY using — `envelope` is
+/// what the prompt renders, `think_level` is what wraps the provider, and
+/// `model` is the `(provider, model)` directive the run is bound to, captured
+/// after the unconfigured-provider filter rather than the hint it was asked
+/// for. Nothing here re-derives: a resume must replay what happened, and a
+/// second derivation is exactly how it would come back on something else.
+///
+/// Extracted from the emit site so that agreement is testable. Inline, the
+/// only way to check that `think_level` (and not, say, `envelope`'s absent
+/// notion of it) reaches the marker was to read the call.
+fn run_envelope_snapshot(
+    envelope: &crate::thinker::TurnEnvelope,
+    think_level: Option<crate::agents::thinking::ThinkLevel>,
+    model: Option<&(Option<String>, String)>,
+) -> crate::session::events::RunEnvelopeSnapshot {
+    crate::session::events::RunEnvelopeSnapshot {
+        exec_tier: envelope.exec_tier.map(|t| t.id().to_string()),
+        session_mode: envelope.session_mode.map(|m| m.id().to_string()),
+        think_level: think_level.map(|l| l.id().to_string()),
+        memory_mode: envelope.memory_mode.map(|m| m.id().to_string()),
+        model: model.map(|(_, m)| m.clone()),
+        model_provider: model.and_then(|(p, _)| p.clone()),
+    }
+}
+
+#[cfg(test)]
+mod run_envelope_snapshot_tests {
+    use super::run_envelope_snapshot;
+    use crate::agents::thinking::ThinkLevel;
+    use crate::config::types::policies::{ExecTier, SessionMode};
+    use crate::memory::session_memory_mode::MemoryMode;
+    use crate::thinker::TurnEnvelope;
+
+    /// What the turn is running under is what the marker records — each of the
+    /// six read off the value the turn itself uses, spelled with the same
+    /// `id()` the resume parses back.
+    #[test]
+    fn the_marker_records_the_envelope_the_turn_is_running_under() {
+        let env = TurnEnvelope {
+            exec_tier: Some(ExecTier::Ask),
+            session_mode: Some(SessionMode::Code),
+            memory_mode: Some(MemoryMode::Off),
+            ..TurnEnvelope::default()
+        };
+        let snap = run_envelope_snapshot(
+            &env,
+            Some(ThinkLevel::High),
+            Some(&(Some("openai".to_string()), "gpt-5.6".to_string())),
+        );
+        assert_eq!(snap.exec_tier.as_deref(), Some(ExecTier::Ask.id()));
+        assert_eq!(snap.session_mode.as_deref(), Some(SessionMode::Code.id()));
+        assert_eq!(snap.think_level.as_deref(), Some(ThinkLevel::High.id()));
+        assert_eq!(snap.memory_mode.as_deref(), Some(MemoryMode::Off.id()));
+        assert_eq!(snap.model.as_deref(), Some("gpt-5.6"));
+        assert_eq!(snap.model_provider.as_deref(), Some("openai"));
+    }
+
+    /// A dispatch path that resolved nothing writes an EMPTY snapshot, not a
+    /// guessed one. The distinction the resume reads is `Some(empty)` — "the
+    /// gateway resolved nothing" — against the `None` a pre-envelope marker
+    /// carries, which is "no writer captured one at all".
+    #[test]
+    fn a_turn_that_resolved_nothing_snapshots_nothing_rather_than_a_default() {
+        let snap = run_envelope_snapshot(&TurnEnvelope::default(), None, None);
+        assert!(snap.is_empty());
+        assert_eq!(snap.exec_tier, None);
+        assert_eq!(snap.model, None);
+    }
+
+    /// An unqualified pin keeps its model half. Dropping the pair for want of
+    /// a provider would resume on the default chain while the log said the run
+    /// had a pin.
+    #[test]
+    fn a_model_with_no_provider_still_reaches_the_marker() {
+        let snap = run_envelope_snapshot(
+            &TurnEnvelope::default(),
+            None,
+            Some(&(None, "kimi-k2".to_string())),
+        );
+        assert_eq!(snap.model.as_deref(), Some("kimi-k2"));
+        assert_eq!(snap.model_provider, None);
+        assert!(!snap.is_empty());
+    }
+
+    /// The three tests above prove the snapshot BUILDER is right. They say
+    /// nothing about whether its result reaches the marker — and that gap is
+    /// measured, not assumed: replacing the emit with `envelope: None` and
+    /// running `orchestrator::harness_bridge session::reduction
+    /// gateway::resume_coordinator gateway::execution_engine` left
+    /// **456 passed; 0 failed**. Every resume would then read `unsnapshotted`,
+    /// which is the word for "an old log", so the failure would look like
+    /// history rather than a regression.
+    ///
+    /// A behavioural test would have to drive `AgentHarnessRunner::run`, which
+    /// needs a provider, a store, an emitter and a live harness. This is the
+    /// cheaper half of that: the one `RunStarted` this file constructs must
+    /// hand the marker the helper's result, not a literal. It fails on the
+    /// exact edit the mutation made.
+    #[test]
+    fn the_run_started_this_file_writes_carries_the_snapshot_it_built() {
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/orchestrator/harness_bridge/runner_impl.rs"
+        ))
+        .expect("runner_impl.rs is readable")
+        .replace('\r', "");
+        let production = crate::utils::source_scan::production_prefix(&src);
+        // `code_text`, not the raw prefix: the first draft of this guard split
+        // on the raw text, counted a comment and a `matches!` pattern as
+        // constructions, and reported three. A guard that miscounts in the
+        // direction of MORE is the lucky half — it went red and said so.
+        let code = crate::utils::source_scan::code_text(&production);
+
+        // A pattern (`RunStarted { run_id, .. }`) names no `envelope` field, so
+        // the emit is the site that does.
+        let sites: Vec<&str> = code.split("SessionEvent::RunStarted {").skip(1).collect();
+        assert!(
+            !sites.is_empty(),
+            "no `SessionEvent::RunStarted {{` in this file's production half — \
+             the emit moved, and with zero sites this guard cannot fail"
+        );
+        let emits: Vec<&str> = sites
+            .iter()
+            .filter_map(|body| {
+                let end = body.find('}')?;
+                let fields = &body[..end];
+                fields.contains("envelope:").then_some(fields)
+            })
+            .collect();
+        assert_eq!(
+            emits.len(),
+            1,
+            "expected exactly one RunStarted CONSTRUCTION (the one naming an \
+             `envelope` field) in this file; found {}. A second writer is a \
+             second answer to what a run started under.",
+            emits.len()
+        );
+        assert!(
+            emits[0].contains("envelope: Some(run_envelope_snapshot)"),
+            "the RunStarted this file writes must carry the snapshot built by \
+             `run_envelope_snapshot`; got fields:\n{}",
+            emits[0]
+        );
+    }
 }
 
 #[cfg(test)]
