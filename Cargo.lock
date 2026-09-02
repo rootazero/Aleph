@@ -323,6 +323,7 @@ dependencies = [
 name = "aleph-panel"
 version = "0.2.0"
 dependencies = [
+ "agent-detect",
  "aleph-protocol",
  "chrono",
  "console_error_panic_hook",

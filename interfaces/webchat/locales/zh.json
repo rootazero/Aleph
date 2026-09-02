@@ -2114,6 +2114,14 @@
       "members": "成员"
     }
   },
+  "agent_panel": {
+    "title": "运行中的智能体",
+    "state_blocked": "阻塞",
+    "state_working": "运行中",
+    "state_idle": "空闲",
+    "state_unknown": "未知",
+    "empty": "没有正在运行的智能体"
+  },
   "cron": {
     "title": "定时任务",
     "description": "管理定时任务和自动化调度",

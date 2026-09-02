@@ -2114,6 +2114,14 @@
       "members": "members"
     }
   },
+  "agent_panel": {
+    "title": "Running Agents",
+    "state_blocked": "Blocked",
+    "state_working": "Working",
+    "state_idle": "Idle",
+    "state_unknown": "Unknown",
+    "empty": "No agents running"
+  },
   "cron": {
     "title": "Scheduled Tasks",
     "description": "Manage cron jobs and scheduled automation tasks",
