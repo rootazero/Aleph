@@ -420,7 +420,7 @@ impl SessionStore for SessionManager {
     }
 
     /// See the trait doc. Written directly against `self.conn` — like
-    /// `stamp_last_assistant_metadata` above — rather than as an inherent
+    /// `stamp_assistant_metadata_in_range` above — rather than as an inherent
     /// `SessionManager` method plus `map_err`: `SessionManagerError` has no
     /// variant for "this key is not rescopable", because that is a
     /// store-level concept (`SessionStoreError::Unsupported`), not a

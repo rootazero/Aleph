@@ -122,7 +122,7 @@ See [FEATURE_LOCATOR §5.23](FEATURE_LOCATOR.md).
 |----------|--------|
 | `AgentHarness` | Reads and writes history exclusively through `SessionService` (Phase 6 completed). |
 | `agents::runtime` (SubagentTool) | Harness-based subagent spawning uses `SessionService` for ephemeral child sessions (Phase 7 completed). |
-| Gateway `session.*` RPC | On `SessionManager`; every append dual-writes into `SessionService` via `src/session/shim.rs`. Future phase will migrate Gateway RPC directly and remove the shim. |
+| Gateway `session.*` RPC | On `SessionManager`. **No dual write** — see the section above: `session_events` is the SSOT and `MessageProjector` is the only writer of the `messages` projection. The `src/session/shim.rs` this row used to name never survived that change. |
 | Memory / Dream / other | Read-only `SessionService::get_events` available; adoption on a case-by-case basis. |
 
 ## Non-goals

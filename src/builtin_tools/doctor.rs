@@ -193,7 +193,15 @@ mod tests {
     /// [`the_daemon_path_still_reports_the_two_log_backed_checks`]; this
     /// literal only holds the total, so that a check dropping out of
     /// `default_registry` is still a red.
-    const REGISTERED_CHECKS: usize = 16;
+    ///
+    /// 13 in `default_registry()` + those 4 = 17. Both halves of that sum moved
+    /// in this round and the literal was edited once per landing, not once at
+    /// the end: `core/projection-holes` and `core/session-log` arrived in
+    /// separate commits, and a module-filtered green (`--lib -- diagnostics`)
+    /// cannot see this test at all — it lives in `builtin_tools::doctor`. That
+    /// is why the count is asserted somewhere the check's own module filter
+    /// does not reach.
+    const REGISTERED_CHECKS: usize = 17;
 
     fn inspect_args() -> DoctorArgs {
         DoctorArgs::default()
