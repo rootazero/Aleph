@@ -83,7 +83,10 @@ pub async fn handle_run(
             // `default_registry()` — see that builder's doc.
             .with_capability_wiring_check()
             // Daemon-side: the projector and the event log are live here.
-            .with_projection_holes_check(),
+            .with_projection_holes_check()
+            // Same two handles, the other question: does the log contradict
+            // itself. `aleph resume` names this check to the operator by id.
+            .with_session_log_check(),
         Err(e) => {
             return JsonRpcResponse::error(
                 request.id,

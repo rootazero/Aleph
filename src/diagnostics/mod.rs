@@ -182,6 +182,28 @@ impl DiagnosticEngine {
         self
     }
 
+    /// Append `core/session-log`, which names the contradictions a session's
+    /// event log holds.
+    ///
+    /// Same handles, same cold-process story and same UNKNOWN-when-absent rule
+    /// as [`Self::with_projection_holes_check`] above. It is a separate builder
+    /// rather than a second check inside that one because the two answer
+    /// different questions about the same two handles: "is the projection
+    /// missing rows the log has" versus "does the log contradict itself", and
+    /// a caller that wants one may not want the other's unbounded read.
+    ///
+    /// Registering this is not optional in the daemon: `aleph resume`'s
+    /// `log_inconsistent` sentence and `ResumeReport::contradictions`' doc both
+    /// send the operator to this check by name.
+    #[must_use]
+    pub fn with_session_log_check(mut self) -> Self {
+        self.checks.push(Arc::new(checks::SessionLogCheck::new(
+            crate::gateway::session_projector::global_message_projector(),
+            crate::session::store::global_session_event_store(),
+        )));
+        self
+    }
+
     /// Append the `ext/idle-extensions` check.
     ///
     /// Separate from [`Self::with_runtime_checks`] because it needs a

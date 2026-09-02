@@ -130,7 +130,10 @@ impl AlephTool for DoctorTool {
             .with_capability_wiring_check()
             // Same reason: the projector and the event log only exist in the
             // booted daemon.
-            .with_projection_holes_check();
+            .with_projection_holes_check()
+            // Same two handles, the other question: does the log contradict
+            // itself. `aleph resume` names this check to the operator by id.
+            .with_session_log_check();
         let posture = if args.fix {
             Posture::Fix
         } else {
@@ -171,19 +174,26 @@ mod tests {
     /// Registered-check count. Asserted rather than derived so adding a check
     /// is a deliberate edit here too — the alternative (`>= 1`) would let a
     /// check silently drop out of `default_registry`.
-    /// Counts every check in `default_registry()` plus the two this tool
-    /// appends unconditionally: `ext/idle-extensions` (with `mcp: None` here,
-    /// so it reports the MCP category as unenumerable rather than being
-    /// absent) and `core/capability-wiring`.
+    /// Counts every check in `default_registry()` plus the four this tool
+    /// appends unconditionally, all of them daemon-only questions:
+    /// `ext/idle-extensions` (with `mcp: None` here, so it reports the MCP
+    /// category as unenumerable rather than being absent),
+    /// `core/capability-wiring`, `core/projection-holes` and
+    /// `core/session-log`. The last two answer UNKNOWN in this test — the
+    /// isolated home has no live projector and no open event log — which is
+    /// the point: they are registered, and an absent handle is a reported
+    /// "I could not look", never a silent absence.
     ///
-    /// The total is unchanged from the round in which `core/capability-wiring`
-    /// lived inside `default_registry()` — it moved from one side of the sum
-    /// to the other. That is the right outcome and not a coincidence to lean
-    /// on: this count alone can no longer tell "the daemon path still has it"
-    /// from "it vanished and something else appeared", so
-    /// [`the_daemon_path_still_reports_capability_wiring`] asserts the
-    /// identity directly.
-    const REGISTERED_CHECKS: usize = 15;
+    /// **A count cannot name what it counted.** It could not tell "the daemon
+    /// path still has `core/capability-wiring`" from "it vanished and
+    /// something else appeared" back when that check moved from one side of
+    /// the sum to the other, and it cannot do it for the two log-backed checks
+    /// now. Identity is asserted directly instead, by
+    /// [`the_daemon_path_still_reports_capability_wiring`] and
+    /// [`the_daemon_path_still_reports_the_two_log_backed_checks`]; this
+    /// literal only holds the total, so that a check dropping out of
+    /// `default_registry` is still a red.
+    const REGISTERED_CHECKS: usize = 16;
 
     fn inspect_args() -> DoctorArgs {
         DoctorArgs::default()
@@ -234,6 +244,35 @@ mod tests {
     fn alephcore_capability_wiring_id() -> &'static str {
         use crate::diagnostics::check::HealthCheck;
         crate::diagnostics::checks::CapabilityWiringCheck::new().id()
+    }
+
+    /// The same half for the two checks that read the session event log.
+    ///
+    /// They are registered by their own builders rather than by
+    /// `default_registry()`, for the same reason `core/capability-wiring` is:
+    /// the projector and the event log exist only in the booted daemon, and
+    /// this tool runs inside it. With both handles absent (which is this
+    /// test's situation) each reports UNKNOWN — so the finding is present and
+    /// says "I could not look". That is exactly the state a bare count cannot
+    /// distinguish from "the builder call was deleted", and the state the
+    /// operator must never be shown as a complete transcript.
+    #[tokio::test]
+    async fn the_daemon_path_still_reports_the_two_log_backed_checks() {
+        use crate::diagnostics::check::HealthCheck;
+        let _home = IsolatedAlephHome::new();
+        let holes = crate::diagnostics::checks::ProjectionHolesCheck::new(None, None).id();
+        let log = crate::diagnostics::checks::SessionLogCheck::new(None, None).id();
+
+        let out = DoctorTool::default().call(inspect_args()).await.unwrap();
+        let seen: Vec<&str> = out.report.findings.iter().map(|f| f.check_id).collect();
+        for id in [holes, log] {
+            assert!(
+                seen.contains(&id),
+                "`{id}` is appended by the doctor builtin's own engine build, \
+                 not by `default_registry()`; the daemon battery must still \
+                 ask it. Findings seen: {seen:?}"
+            );
+        }
     }
 
     #[tokio::test]
