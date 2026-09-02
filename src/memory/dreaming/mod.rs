@@ -1822,8 +1822,8 @@ const MATURE_SKILL_DAYS: i64 = 7;
 ///
 /// Pulls notes (count + 24h growth) from the in-memory note index and folds in
 /// per-note recall counts from `recall_signals` so the recall-derived signals
-/// (`note_hit_rate` / `never_recalled_ratio` / `skill_recall_rate`) carry real
-/// values rather than the historical zeros.
+/// (`note_hit_rate` / `skill_recall_rate`) carry real values rather than the
+/// historical zeros.
 ///
 /// The recall wiring is load-bearing: `skill_recall_rate` feeds the strategy
 /// selector's `growth_pressure` (a false 0 perpetually inflated the synthesize
@@ -1857,11 +1857,10 @@ async fn compute_raw_metrics(
     // is accumulated inside the Ok arm; the Err path leaves both at zero.
     let mut mature_skill_total = 0u32;
     let mut mature_skill_recalled = 0u32;
-    let (note_hit_rate, never_recalled_count, skill_notes_total, skill_notes_recalled) =
+    let (note_hit_rate, skill_notes_total, skill_notes_recalled) =
         match store.recall_hit_counts(agent_id, &all_paths).await {
             Ok(hits) => {
                 let recalled_total = hits.len() as u32;
-                let never = total_notes.saturating_sub(recalled_total);
                 let skill_total = notes.iter().filter(|n| n.category == "skill").count() as u32;
                 let skill_recalled = notes
                     .iter()
@@ -1884,7 +1883,7 @@ async fn compute_raw_metrics(
                 } else {
                     0.0
                 };
-                (hit_rate, never, skill_total, skill_recalled)
+                (hit_rate, skill_total, skill_recalled)
             }
             Err(e) => {
                 tracing::warn!(
@@ -1892,7 +1891,7 @@ async fn compute_raw_metrics(
                     agent = agent_id,
                     "recall-signal aggregation failed; recall signals will read zero",
                 );
-                (0.0, 0, 0, 0)
+                (0.0, 0, 0)
             }
         };
 
@@ -1922,7 +1921,6 @@ async fn compute_raw_metrics(
         total_notes,
         notes_added_24h,
         note_hit_rate,
-        never_recalled_count,
         skill_notes_total,
         skill_notes_recalled,
         mature_skill_total,
@@ -2392,8 +2390,6 @@ mod tests {
         // instead of the historical structural zero.
         assert_eq!(m.skill_notes_total, 2);
         assert_eq!(m.skill_notes_recalled, 1);
-        // 3 notes, 1 recalled → 2 never recalled.
-        assert_eq!(m.never_recalled_count, 2);
         assert!((m.note_hit_rate - 1.0 / 3.0).abs() < 1e-9);
 
         // The derived skill_recall_rate signal must now be non-zero.

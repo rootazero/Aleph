@@ -96,7 +96,8 @@ const DEFAULT_LOOKBACK_SECS: i64 = 7 * 24 * 60 * 60;
 /// [`crate::memory::insights::aggregate_tool_failures`] for which end truncates.
 const DEFAULT_FETCH_LIMIT: usize = 500;
 
-/// Tools carried into the prompt, most-used first.
+/// Failure-evidence entries carried into the prompt, most-failed first (the
+/// same bound caps the digest's usage breakdown, which stays most-used first).
 const TOP_N_TOOLS: usize = 5;
 
 /// Existing `lesson/` notes offered as strengthen/supersede candidates.

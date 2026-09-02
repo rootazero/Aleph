@@ -4,12 +4,16 @@
 //! adjudicated by the LLM (R7: the model makes the semantic verdict; this stage
 //! only routes it). The model returns a JSON verdict — `approve` (write the
 //! candidate to disk), `reject` (archive and discard), or `rewrite` (write with
-//! a corrected `facts` list). A provider error or an unparseable verdict leaves
-//! the row in the queue for a later cycle rather than rubber-stamping it, so the
-//! governance gate's Defer actually holds — but each such failure bumps
-//! `retry_count`, and once it reaches `max_retries` the row is evicted
-//! (`archive_review` with `max_retries_exceeded`) so a permanently
-//! un-adjudicable candidate cannot grow the queue without bound.
+//! a corrected `facts` list). A transient provider error or an unparseable
+//! verdict leaves the row in the queue for a later cycle rather than
+//! rubber-stamping it, so the governance gate's Defer actually holds — but each
+//! such failure bumps `retry_count`, and once it reaches `max_retries` the row
+//! is evicted (`archive_review` with `max_retries_exceeded`) so a permanently
+//! un-adjudicable candidate cannot grow the queue without bound. A
+//! provider-wide fault (rate limit / auth) instead aborts the whole stage
+//! without charging any row's retry counter — the fault is the provider's, not
+//! the row's, and eviction bookkeeping over it would erode the queue on every
+//! provider outage.
 
 use async_trait::async_trait;
 
@@ -68,7 +72,7 @@ impl DreamStage for NoteReviewStage {
                     // path increments `retry_count`, so a retry-gated archive
                     // would reprocess the row forever. Archive immediately.
                     tracing::warn!(error = %e, queue_id = %row.id, "candidate json parse failed; archiving unparseable row");
-                    let _ = store.archive_review(&row.id, "timeout").await;
+                    let _ = store.archive_review(&row.id, "unparseable_candidate").await;
                     continue;
                 }
             };
@@ -400,23 +404,12 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn unparseable_verdict_evicts_row_at_max_retries() {
-        use crate::memory::dreaming::{DreamReport, DreamStrategy};
+    /// A well-formed candidate the stage can parse, so tests reach the LLM
+    /// call rather than the json-parse immediate-archive path.
+    fn parseable_candidate_json() -> String {
         use crate::memory::notes::governance::gate::{CandidateNote, NoteWriteAction};
-        use crate::memory::notes::{KnowledgeNote, NoteIndexer};
-        use crate::memory::store::SqliteMemoryBackend;
-        use crate::providers::mock::MockProvider;
-        use crate::sync_primitives::Arc;
+        use crate::memory::notes::KnowledgeNote;
 
-        let (_temp_guard, temp) = crate::memory::dreaming::scratch_root();
-        tokio::fs::create_dir_all(&temp).await.unwrap();
-        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
-        let indexer = NoteIndexer::new(temp.clone(), store.clone());
-
-        // A parseable candidate so we reach the LLM call (not the json-parse
-        // immediate-archive path). The MockProvider returns non-JSON, so the
-        // verdict is unparseable → the retry/eviction branch runs.
         let candidate = CandidateNote {
             agent_id: "default".into(),
             category: "learning".into(),
@@ -430,14 +423,35 @@ mod tests {
             contradicts_existing: false,
             replay_op: None,
         };
-        let json = serde_json::to_string(&candidate).unwrap();
+        serde_json::to_string(&candidate).unwrap()
+    }
+
+    /// Backend + context wired to `provider`, with `candidate_json` already
+    /// queued for review. Returns the queue row id so tests can track it.
+    async fn queued_review_ctx(
+        provider: std::sync::Arc<dyn crate::providers::AiProvider>,
+        candidate_json: &str,
+    ) -> (
+        tempfile::TempDir,
+        crate::sync_primitives::Arc<crate::memory::store::SqliteMemoryBackend>,
+        String,
+        DreamContext,
+    ) {
+        use crate::memory::dreaming::{DreamReport, DreamStrategy};
+        use crate::memory::notes::NoteIndexer;
+        use crate::memory::store::SqliteMemoryBackend;
+        use crate::sync_primitives::Arc;
+
+        let (temp_guard, temp) = crate::memory::dreaming::scratch_root();
+        tokio::fs::create_dir_all(&temp).await.unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
+        let indexer = NoteIndexer::new(temp.clone(), store.clone());
+
         let id = store
-            .enqueue_review("default", &json, "med", 0.4, "low confidence")
+            .enqueue_review("default", candidate_json, "med", 0.4, "low confidence")
             .await
             .unwrap();
 
-        let provider: std::sync::Arc<dyn crate::providers::AiProvider> =
-            std::sync::Arc::new(MockProvider::new("not-a-json-verdict"));
         let ctx = DreamContext {
             notes: Vec::new(),
             note_contents: std::collections::HashMap::new(),
@@ -453,6 +467,19 @@ mod tests {
             orientation: None,
             evolution_budget: crate::memory::dreaming::EditBudget::default(),
         };
+        (temp_guard, store, id, ctx)
+    }
+
+    #[tokio::test]
+    async fn unparseable_verdict_evicts_row_at_max_retries() {
+        use crate::providers::mock::MockProvider;
+
+        // The MockProvider returns non-JSON, so the verdict is unparseable →
+        // the retry/eviction branch runs.
+        let provider: std::sync::Arc<dyn crate::providers::AiProvider> =
+            std::sync::Arc::new(MockProvider::new("not-a-json-verdict"));
+        let (_temp_guard, store, id, ctx) =
+            queued_review_ctx(provider, &parseable_candidate_json()).await;
 
         // dwell_seconds negative → the just-enqueued row is "old enough";
         // max_retries=1 → the first unparseable verdict hits the ceiling.
@@ -471,5 +498,74 @@ mod tests {
             !pending.iter().any(|r| r.id == id),
             "row must be evicted after max_retries unparseable verdicts"
         );
+    }
+
+    #[tokio::test]
+    async fn provider_rate_limit_aborts_stage_without_charging_retry_counts() {
+        use crate::providers::mock::{MockError, MockProvider};
+
+        let provider: std::sync::Arc<dyn crate::providers::AiProvider> = std::sync::Arc::new(
+            MockProvider::new("ignored").with_error(MockError::RateLimit("quota".into())),
+        );
+        let (_temp_guard, store, id, ctx) =
+            queued_review_ctx(provider, &parseable_candidate_json()).await;
+
+        let stage = NoteReviewStage {
+            dwell_seconds: -100,
+            max_retries: 3,
+        };
+        let result = stage.execute(ctx).await;
+        assert!(
+            result.is_err(),
+            "an exhausted provider must abort the stage instead of looping"
+        );
+
+        let pending = store
+            .list_pending_review("default", i64::MAX)
+            .await
+            .unwrap();
+        let row = pending
+            .iter()
+            .find(|r| r.id == id)
+            .expect("row must stay queued for a later cycle");
+        assert_eq!(
+            row.retry_count, 0,
+            "a provider-wide fault must not count against the row's eviction budget"
+        );
+    }
+
+    #[tokio::test]
+    async fn unparseable_candidate_is_archived_under_its_own_final_status() {
+        use crate::providers::mock::MockProvider;
+
+        let provider: std::sync::Arc<dyn crate::providers::AiProvider> =
+            std::sync::Arc::new(MockProvider::new(r#"{"verdict":"approve"}"#));
+        let (_temp_guard, store, id, ctx) =
+            queued_review_ctx(provider, "definitely-not-json").await;
+
+        let stage = NoteReviewStage {
+            dwell_seconds: -100,
+            max_retries: 3,
+        };
+        let _ = stage.execute(ctx).await.unwrap();
+
+        let pending = store
+            .list_pending_review("default", i64::MAX)
+            .await
+            .unwrap();
+        assert!(
+            !pending.iter().any(|r| r.id == id),
+            "an unparseable candidate must not stay queued (retries cannot fix it)"
+        );
+
+        // The archived verdict is rendered verbatim to the model by the
+        // `insights` action, so the status must name the actual defect —
+        // not masquerade as a timeout or any other adjudication outcome.
+        let archived = store.list_review_archive("default", 10).await.unwrap();
+        let row = archived
+            .iter()
+            .find(|r| r.id == id)
+            .expect("archived row must be reachable through the archive reader");
+        assert_eq!(row.final_status, "unparseable_candidate");
     }
 }
