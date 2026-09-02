@@ -1052,6 +1052,92 @@ mod reference_hook_tests {
         // No collision → no bump applied; confidence == as written.
         assert!((after - 0.7).abs() < 1e-5, "got {after}");
     }
+
+    #[tokio::test]
+    async fn supersede_archives_old_note_with_pointer_to_replacement() {
+        use crate::memory::dreaming::distill_action::DistillAction;
+
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let indexer = NoteIndexer::new(dir.path().join("note"), backend.clone());
+
+        seed_note(&indexer, "default", "skill", "old-way", 0.5, vec![]).await;
+
+        let action = DistillAction::Supersede {
+            old_note_path: "skill/old-way".into(),
+            title: "new-way".into(),
+            rule: "do it the new way".into(),
+            confidence: 0.8,
+            severity: Default::default(),
+            source_facts: vec!["F1".into()],
+        };
+        indexer
+            .apply_distill_action("default", "skill", &action)
+            .await
+            .unwrap();
+
+        let base = dir.path().join("note").join("default");
+        // The old note leaves the active category dir (and its index row)...
+        assert!(
+            !base.join("skill").join("old-way.md").exists(),
+            "superseded note must leave the active skill/ dir"
+        );
+        assert!(backend
+            .get_note_index("skill/old-way", "default")
+            .await
+            .unwrap()
+            .is_none());
+        // ...but survives under archive/ carrying a pointer to its replacement.
+        let archived = base.join("archive").join("skill").join("old-way.md");
+        let content = fs::read_to_string(&archived)
+            .await
+            .expect("superseded note must be archived, not deleted");
+        assert!(
+            content.contains("body fact"),
+            "archived note must keep its original content verbatim: {content}"
+        );
+        assert!(
+            content.contains("## Superseded by [[skill/new-way]]"),
+            "archived note must name its replacement: {content}"
+        );
+        // The replacement note is live and indexed.
+        assert!(base.join("skill").join("new-way.md").exists());
+        assert!(backend
+            .get_note_index("skill/new-way", "default")
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn supersede_with_missing_old_file_still_writes_replacement() {
+        use crate::memory::dreaming::distill_action::DistillAction;
+
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let indexer = NoteIndexer::new(dir.path().join("note"), backend.clone());
+
+        // No seed: the old path never existed on disk.
+        let action = DistillAction::Supersede {
+            old_note_path: "skill/ghost".into(),
+            title: "replacement".into(),
+            rule: "the rule".into(),
+            confidence: 0.6,
+            severity: Default::default(),
+            source_facts: vec![],
+        };
+        indexer
+            .apply_distill_action("default", "skill", &action)
+            .await
+            .unwrap();
+
+        let base = dir.path().join("note").join("default");
+        assert!(base.join("skill").join("replacement.md").exists());
+        assert!(
+            !base.join("archive").join("skill").join("ghost.md").exists(),
+            "nothing to archive when the old file never existed"
+        );
+    }
 }
 
 #[tokio::test]

@@ -148,6 +148,14 @@ mod tests {
                 prompt.contains("remedy, not the failure narrative"),
                 "anti-rot denylist must be present"
             );
+            assert!(
+                prompt.contains("never a dead end"),
+                "must forbid packaging unresolved failure sequences as workflows"
+            );
+            assert!(
+                prompt.contains("I cannot do X"),
+                "must redirect incapability claims into the troubleshooting remedy"
+            );
             // These blocks are appended AFTER the base plan prompt, so whatever
             // they say last is what the model reads last. They once ended with
             // a `{"updates": [...]}` block belonging to the retired

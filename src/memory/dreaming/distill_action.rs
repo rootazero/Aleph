@@ -49,8 +49,8 @@ pub enum DistillAction {
 ///
 /// `New` and `Skip` do not reference an existing note. `Strengthen` and
 /// `Supersede` both name an existing path that *must* come from the candidate
-/// list the LLM was shown — otherwise a hallucinated path could trigger
-/// cross-category file deletion (Supersede) or merge into the wrong note
+/// list the LLM was shown — otherwise a hallucinated path could archive an
+/// unrelated note out of the corpus (Supersede) or merge into the wrong note
 /// (Strengthen). Stages use this helper to drop actions whose target is not
 /// in the candidate set before invoking `apply_distill_action`.
 #[must_use]

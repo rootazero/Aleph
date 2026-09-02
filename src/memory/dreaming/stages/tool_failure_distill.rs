@@ -502,6 +502,10 @@ pub fn build_tool_failure_prompt(
          - Anti-rot denylist: never store an environment-dependent transient failure as a \
          permanent truth, and never store \"tool X is broken\" (it gets fixed) — store what to \
          do instead.\n\
+         - Never package an unresolved failure sequence as a recommended workflow: store \
+         nothing, or store only an independently verified alternative — never a dead end.\n\
+         - Redirect environment or configuration failures into the fix: store the \
+         troubleshooting remedy, never an incapability claim like \"I cannot do X\".\n\
          - A high failure count is NOT by itself a lesson. If you cannot name the different \
          action a future agent would take, SKIP it. Empty output beats noise.\n\n\
          Existing lesson candidates (you MUST reference these IDs verbatim if you choose \
@@ -640,6 +644,14 @@ mod tests {
         // The R7 boundary is stated to the model, not enforced in code.
         assert!(p.contains("A high failure count is NOT by itself a lesson"));
         assert!(p.contains("store what to do instead"));
+        assert!(
+            p.contains("never a dead end"),
+            "unresolved failure sequences must not become recommended workflows"
+        );
+        assert!(
+            p.contains("I cannot do X"),
+            "incapability claims must redirect to the troubleshooting remedy"
+        );
     }
 
     #[test]

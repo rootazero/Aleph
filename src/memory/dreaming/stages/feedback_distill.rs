@@ -537,7 +537,11 @@ pub fn build_feedback_distill_prompt(
          better for having this?\" — if not, SKIP it.\n\
          - Anti-rot denylist: never store environment-dependent transient failures as \
          permanent truths, and never store a negative assertion that a tool is broken (it \
-         gets fixed) — store the remedy, not the failure narrative.\n\n\
+         gets fixed) — store the remedy, not the failure narrative.\n\
+         - Never package an unresolved failure sequence as a recommended workflow: store \
+         nothing, or store only an independently verified alternative — never a dead end.\n\
+         - Redirect environment or configuration failures into the fix: store the \
+         troubleshooting remedy, never an incapability claim like \"I cannot do X\".\n\n\
          Existing feedback-note candidates (you MUST reference these IDs verbatim if you \
          choose strengthen or supersede):\n\
          existing_candidates: {candidates_block}\n\n\
@@ -817,6 +821,14 @@ mod tests {
         assert!(prompt.contains("absolute dates"));
         assert!(prompt.contains("Will a future agent plausibly act better"));
         assert!(prompt.contains("remedy, not the failure narrative"));
+        assert!(
+            prompt.contains("never a dead end"),
+            "unresolved failure sequences must not become recommended workflows"
+        );
+        assert!(
+            prompt.contains("I cannot do X"),
+            "incapability claims must redirect to the troubleshooting remedy"
+        );
         // The empty sentinel must stay intact for the tolerant parser.
         assert!(prompt.contains("Return `{\"actions\": []}` if nothing actionable."));
     }
