@@ -16,9 +16,9 @@ use crate::event::{AlephEvent, EventFilter, EventType, GlobalBus, GlobalEvent};
 use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
 use crate::sync_primitives::Arc;
 
-/// Panel-facing topic. The frontend dispatches `run.*` topics to subscribers;
-/// the background sub-agent tree view filters for exactly this one.
-const TREE_TOPIC: &str = "run.subagent_tree";
+/// Panel/TUI-facing topic — the shared protocol constant, not a local literal,
+/// so the producer and every client filter name one string.
+const TREE_TOPIC: &str = aleph_protocol::subagent_tree::TOPIC;
 
 /// Subscribe to `SubAgentTreeUpdate` global events and republish each onto the
 /// gateway event bus for the panel's background sub-agent tree view.

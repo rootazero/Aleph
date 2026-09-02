@@ -181,6 +181,7 @@ mod tests {
                 depth: 1,
                 root_session: root_session.to_string(),
                 model: None,
+                child_session: None,
             },
         );
         RegisteredAgent {
