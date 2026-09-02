@@ -722,3 +722,16 @@ builtin_tools::bash_exec` = `649 passed; 0 failed; 0 ignored; 17230 filtered out
 与 [[alephcore-integration-tests-need-j1]] 记的 `--test '*'` 那条 E0463 不冲突——
 那条是"一次展开全部集成 target"时的资源上限，点名单个 target 不触发。
 T8 若要跑集成面，优先按 target 点名，而不是先试 `--test '*'` 再退化到 `-j 1`。
+
+### T6 之后的尖端全量（orchestrator 测于 `bebb8f661`）
+
+`cargo test -p alephcore --lib` = `17845 passed; **17** failed; 17 ignored`。按名字比对：
+**零新增**；而基线 18 条里少了一条——
+`agents::subagent_tool::recovery::tests::the_directory_face_reads_only_the_parent_log`
+**在完整并行二进制里通过了**。
+
+⚠️ **这一条不许写成「修好了」。** 它本来就是个 flake（单独跑一直绿，只在整个并行 binary 里红过），
+所以**一次并行绿是证据不是证明**——把 18 减成 17 当作新基线，等于用一次抽样重写那张名单。
+T6 的两次续做在过滤跑里各看到它绿一次，并且明确说了「找不到可疑机制、不为一个定位不到的机制
+发明修法」；现在多了一次**并行**绿，方向一致但强度不够。**T8 的全量跑要连着看它几次**，
+只有稳定复现绿才配改基线；在那之前 `baseline_failures.txt` 保持 18 条不动。
