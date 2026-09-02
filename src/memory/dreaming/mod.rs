@@ -2949,21 +2949,10 @@ mod tests {
         );
     }
 
-    /// A namespace's gate is folded from the namespace's own log — not the base
-    /// agent's, and not a process-local accumulator.
-    ///
-    /// Seeded with one degrading cycle, the next sub-cycle must open in
-    /// Conserve. This is the whole reason the namespaces get their own logs
-    /// rather than staying ungoverned: the cooldown has to survive the restart
-    /// that a once-a-day cycle almost always straddles.
-    #[tokio::test]
-    async fn project_namespace_gate_folds_its_own_history() {
-        let fx = ProjectFixture::new("dream_proj_gate", false);
-        let ns = format!("{DEFAULT_AGENT_ID}__proj-degraded");
-        fx.seed_note(&ns).await;
-        let log = EventLog::new(fx.dir.join(&ns));
-
-        // A prior cycle that degraded this namespace's memory health.
+    /// Append one prior cycle whose evolution gate rejected a health-lowering
+    /// candidate — the footprint that arms the namespace's Conserve cooldown on
+    /// its next cycle.
+    async fn seed_degraded_cycle(log: &EventLog) {
         let report = DreamReport {
             evolution: Some(EvolutionOutcome {
                 baseline: 0.8,
@@ -3013,6 +3002,22 @@ mod tests {
         })
         .await
         .expect("seed append succeeds");
+    }
+
+    /// A namespace's gate is folded from the namespace's own log — not the base
+    /// agent's, and not a process-local accumulator.
+    ///
+    /// Seeded with one degrading cycle, the next sub-cycle must open in
+    /// Conserve. This is the whole reason the namespaces get their own logs
+    /// rather than staying ungoverned: the cooldown has to survive the restart
+    /// that a once-a-day cycle almost always straddles.
+    #[tokio::test]
+    async fn project_namespace_gate_folds_its_own_history() {
+        let fx = ProjectFixture::new("dream_proj_gate", false);
+        let ns = format!("{DEFAULT_AGENT_ID}__proj-degraded");
+        fx.seed_note(&ns).await;
+        let log = EventLog::new(fx.dir.join(&ns));
+        seed_degraded_cycle(&log).await;
 
         project_cycle::run_namespace_cycle(&fx.deps(), &ns)
             .await
@@ -3055,6 +3060,79 @@ mod tests {
         assert!(
             outcome.report.is_vacuous_interruption(),
             "the caller decides whether to persist by reading this"
+        );
+    }
+
+    /// File one correction row against `agent_id` — the shape
+    /// `flag_user_correction` writes and `feedback_distill` reads. `critical`
+    /// so a single row passes the gate's urgency bypass.
+    async fn file_critical_correction(fx: &ProjectFixture, agent_id: &str, id: &str) {
+        use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+        let mut raw = RawMemory::new(
+            "never commit without asking me first".into(),
+            RawMemorySource::Correction {
+                severity: "critical".into(),
+                suggested_rule: None,
+            },
+        )
+        .with_agent(agent_id);
+        raw.path = Some(format!(
+            "{}{id}",
+            stages::feedback_distill::CORRECTION_PATH_PREFIX
+        ));
+        fx.store.insert_raw_memory(&raw).await.unwrap();
+    }
+
+    /// A Conserve night must not spend a fan-out slot on a corpus whose ONLY
+    /// admission reason is distill signals.
+    ///
+    /// The Conserve pipeline carries no `feedback_distill` /
+    /// `tool_failure_distill` arm. Before the cut, this combination returned
+    /// `Ran`: the caller's nightly budget did `spent += 1` and the full
+    /// maintenance subset executed — while the corrections that admitted the
+    /// corpus were exactly as undistilled afterwards as before, so the same
+    /// rows re-admitted the corpus the next Conserve night too.
+    #[tokio::test]
+    async fn conserve_with_only_distill_work_is_idle_and_spends_no_fan_out_slot() {
+        let fx = ProjectFixture::new("dream_proj_conserve_distill", false);
+        let ns = format!("{DEFAULT_AGENT_ID}__proj-conserved");
+        let log = EventLog::new(fx.dir.join(&ns));
+        // Degraded prior cycle => tonight's strategy is Conserve.
+        seed_degraded_cycle(&log).await;
+        // The corpus's only work: an undistilled correction. No note moved
+        // (there are none), no review is pending.
+        file_critical_correction(&fx, &ns, "c1").await;
+
+        let outcome = project_cycle::run_namespace_cycle(&fx.deps(), &ns)
+            .await
+            .expect("sub-cycle succeeds");
+
+        assert!(
+            matches!(outcome, project_cycle::NamespaceCycle::Idle),
+            "Conserve has no distill stage that could consume the admitting \
+             corrections — running would burn one of the night's corpus slots \
+             for a guaranteed no-op"
+        );
+        let events = log.read_last(10).await.expect("log is readable");
+        assert_eq!(
+            events.len(),
+            1,
+            "an idle night must not append to the event log either"
+        );
+
+        // Positive control: the identical correction-only admission RUNS when
+        // the strategy is not Conserve (empty history => Allow => Consolidate,
+        // which carries the feedback_distill arm) — the cut is specific to a
+        // pipeline with no distill stage, not a new way to strand corrections.
+        let ns_allow = format!("{DEFAULT_AGENT_ID}__proj-allowed");
+        file_critical_correction(&fx, &ns_allow, "c1").await;
+        let outcome = project_cycle::run_namespace_cycle(&fx.deps(), &ns_allow)
+            .await
+            .expect("sub-cycle succeeds");
+        assert!(
+            matches!(outcome, project_cycle::NamespaceCycle::Ran(_)),
+            "a correction-only corpus must still dream on nights whose pipeline \
+             can actually distill it"
         );
     }
 
