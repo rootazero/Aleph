@@ -460,3 +460,56 @@ T4 把「Step 5 的 prefix-cache 守卫没跑」诚实地留在了 `not_done` �
 `--lib -- orchestrator::harness_bridge session::reduction gateway::resume_coordinator
 gateway::execution_engine` = 457 passed / 0 failed。**未做**：全量 `--lib` 按名字比对、
 `--bins`、clippy —— 留给 T5 或 T8。
+
+### T5 — `33cf88be3`（实现）+ `23d855f`（续做：模块过滤看不见的那两条红）
+
+T5 的实现记录在 `33cf88be3` 的正文里。**它自己的三条变异（Step 5 ①②③）的红名单只存在于
+实现 agent 的结构化报告里，没有进仓库**，本续做 agent 结构上观察不到它们，因此**不复述**——
+这正是 T3 续续那一节的规矩：「记录里没有」和「没发生」需要的证据不是同一份，而这里连
+「记录里有」都只是在 orchestrator 手上，不在仓库里。下面每一行都是本次跑出来的。
+
+| 命令（测于） | 观察到的结果 |
+|---|---|
+| `cargo test -p alephcore --lib` 全量（测于 `33cf88be3`，树干净） | `17811 passed; 19 failed; 17 ignored`，`finished in 154.31s` |
+| 同上（测于 `33cf88be3` + 本次三处改动 + 邻座 agent 当时未提交的 `core/session-log`） | `17813 passed; 20 failed; 17 ignored` |
+| `cargo test -p alephcore --lib -- builtin_tools::doctor diagnostics:: gateway::session_projector gateway::projection_reconciler capability::census`（测于 `23d855f`） | `EXIT=0`，`188 passed; 0 failed`，四条 doctor 测试逐条 `ok` |
+
+**`comm -3` 按名字比对（第一次全量 vs `baseline_failures.txt`）——多出来两条，都是 T5 的：**
+
+```
+builtin_tools::doctor::tests::inspect_run_returns_structured_output      (left 16, right 15)
+builtin_tools::doctor::tests::only_and_skip_narrow_the_battery           (left 15, right 14)
+```
+
+`REGISTERED_CHECKS` 是 `builtin_tools/doctor.rs` 测试模块里的一个字面量总数，而 T5 往 doctor
+的电池上挂了 `core/projection-holes`。**T5 的 Step 6 六条命令一条都没能看见它**：`--lib
+gateway::session_projector gateway::projection_reconciler gateway::session_store
+gateway::session_manager diagnostics::checks capability::census` 里没有 `builtin_tools::doctor`，
+`--bins` 看的是 `src/bin/`，`check --all-targets` 编译得到但不运行。**过滤器收窄的是「跑了什么」，
+不是「改动够得着什么」**——判据 #18 在本轮的形态：一次模块过滤的绿只为它枚举过的模块背书。
+随后邻座 commit `9e6c83002` 又挂上 `core/session-log`，第二次全量因此读到 `left 17`。
+13（`default_registry()`）+ 4（本 tool 自己挂的四条）= 17，`23d855f` 把字面量对齐到 17。
+
+**加了一条身份断言并证伪过它**（判据 #3：没被证伪过的守卫不算守卫）。总数说不出它数了谁——
+文件里早就为 `core/capability-wiring` 写过这半边，本轮的两条同样需要：
+`the_daemon_path_still_reports_the_two_log_backed_checks` 从 check 类型上读 id，断言两条都出现在
+findings 里（句柄缺席时它们报 UNKNOWN——「在场且说我没看」，正是裸计数分不出「builder 调用被
+删了」的那个状态）。
+
+| 变异（测于 `23d855f` 的树） | 观察到变红的测试 |
+|---|---|
+| 从 doctor 的 engine 构建里删掉 `.with_projection_holes_check()` | `builtin_tools::doctor::tests::the_daemon_path_still_reports_the_two_log_backed_checks` · `::inspect_run_returns_structured_output` · `::only_and_skip_narrow_the_battery`（`4 passed; 3 failed`） |
+
+还原用 sed 反向替换，并与变异前的副本 `diff` 到**零差异**（§0.2 第 3 条：先 `cp` 再动）。
+
+> ⚠️ **本轮第一次出现「两个 agent 同时在同一个 worktree 里写」**：`9e6c83002` 在本 agent
+> 编辑 `src/builtin_tools/doctor.rs` 的**同时**把这个文件 `git add` 了，于是本 agent 写的
+> doc 与那条身份测试**落进了别人的提交**。`git status` 随后是干净的、`git diff` 是空的，而磁盘
+> 上的内容确实变了——分辨方法是 `git hash-object <file>` 与 `git rev-parse HEAD:<file>` 相等。
+> 后果不严重（内容对、作者字段本来就一样），但**提交正文与它的 diff 不再对应**，所以
+> `23d855f` 的正文末尾写了一段出处说明。教训：并发时 `git add <具体文件>` 也不安全，
+> 只有「这个文件此刻没有别人在写」才安全。
+
+> ⚠️ 另一条顺带的观察，给 T6：`agents::subagent_tool::recovery::tests::the_directory_face_reads_only_the_parent_log`
+> （计划 T6 段点名的那条已知 flake）在第一次全量里**绿**、第二次全量里**红**，两次都是全量并行、
+> 同一台机器。**它确实是 flake 而不是恒红**，这是两次观测，不是推断。
