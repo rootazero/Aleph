@@ -387,3 +387,23 @@ main 上同样红。
 构造点）——**一共三个文件四个构造点**，第三次才 `EXIT=0`。那个 0 也是「没有第四个」的**唯一**
 证据。判据 #6「先数一遍，数错的方向永远是少一个」在这里的形态是：一次红只报得出**一个**名字，
 所以「有几个」这个问题在它变绿之前没有答案。
+
+### T4 — 前缀缓存那一问，答案是「结构上到不了」（orchestrator 实测，`b144bfec2`）
+
+T4 把「Step 5 的 prefix-cache 守卫没跑」诚实地留在了 `not_done` 里。补上，答案是**否定的**——
+`RunEnvelopeSnapshot` 的字节**结构上进不了 system prompt**，理由是两条 grep 而不是推理：
+
+1. `grep -rn "\.envelope" src/` 在 `session/{events,reduction}.rs` · `gateway/resume_coordinator.rs` ·
+   `orchestrator/harness_bridge/runner_impl.rs` 之外**没有一个读者**。其余命中是**另一个**叫
+   envelope 的东西（`envelope_parent`、`dispatch.rs` 的 `TurnEnvelope`、`thinker/layers/
+   operating_envelope.rs`），同名不同物。
+2. `grep -rn "load_run_markers\|RunStarted" src/thinker/` = **零命中**。提示层根本不读 run marker，
+   所以快照没有一条路径能到达任何 stable layer。
+
+⚠️ **这不是「测过了」，是「没有那条路」**——两者的证据强度不同，别把它当成一次绿。它会在有人给
+提示层加一个读 run marker 的层的那天失效，而那天没有任何测试会红。真正管住它的是判据本身
+（[[prompt-layer-cache-discipline]]：逐 run 变化的字节不得进 system prompt），不是这两条 grep。
+
+⚠️ 另记一个命名危险：本轮引入的 `RunEnvelopeSnapshot` 与既有的 `TurnEnvelope` / `operating_envelope`
+层同用「envelope」一词，而前者正是**从后者构建**的。两者是真关系不是撞名，但 `grep envelope`
+从此会同时回答两个子系统——写文档与判据时要指名类型，不要只写「envelope」。
