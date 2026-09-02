@@ -279,19 +279,33 @@ Step 3 说「`grep -rn SessionInfo src` **全部**改引用」。`fcf6aad4e` 改
 > 「Mirrors the server's `SessionInfo`」——那个手写镜像整体由 T7 换成 `SessionListRow`，
 > 在这里改注释等于给一个即将被删的结构体写新文档。
 
-### T3 续续 — `2aa2a569e`（Step 4 的四条命令里，三条从没被跑过）
+### T3 续续 — `2aa2a569e`（Step 4 的四条命令，在新 HEAD 上重测了一遍）
 
-前两个 agent 把 T3 的代码做完了，**Step 4 的验证矩阵只跑了一半**。补齐的三条与结果：
+> ⚠️ **本节标题与下表的「之前」列原本写的是「三条从没被跑过」，那是错的**（`d447bd93f` 的
+> commit message 也这么写，无法改，以此条为准）。逐条查过第一个 T3 agent 的 transcript：
+> `cargo test -p aleph-protocol`、`cargo check -p aleph-cli -p aleph-tui`、
+> `cargo test -p alephcore --bins` **三条都真跑过**，且都有真实输出（最后一条正是
+> `test result: ok. 87 passed`）。**真实的事实是：提交进 plan 的那份记录（`7272b68cd`）
+> 只带了其中一条的证据。**
+>
+> 这个错误本身是本轮判据的一个新实例，值得记下来：**一个续做 agent 读得到的是提交进仓库的
+> 记录，读不到前任的 transcript** ——所以「没人跑过」是它**结构上观察不到**的一句话，它能诚实
+> 说出口的只有「记录里没有」。EVIDENCE RULE 挡住了「编造红名单」，挡不住「把记录的缺席
+> 说成事实的缺席」：**一句关于「某件事没发生」的断言，和一句关于「我没看到它发生」的断言，
+> 需要的证据不是同一份。**
+>
+> 下表因此仍然有价值——它是在**新 HEAD**（续做 1 删掉 `agent_instance::SessionInfo` 之后）上的
+> 第二次观测，而先前那次跑在旧 HEAD 上；只是它不是**第一次**。
 
-| Step 4 的命令 | 之前 | 本次观察到 |
+| Step 4 的命令 | 记录里之前有没有证据 | 本次（新 HEAD）观察到 |
 |---|---|---|
-| `cargo test -p aleph-protocol` | 未跑 | `318 passed; 0 failed`（+ 2 doctest ignored） |
-| `cargo check -p aleph-cli -p aleph-tui` | 未跑 | `Finished in 5.34s`，零错误 |
-| `cargo test -p alephcore --bins` | 只跑过 `check --bins` | `EXIT=0`，`87 passed; 0 failed` |
-| `cargo check -p aleph-panel --target wasm32-unknown-unknown` | 未见记录 | `EXIT=0`，`Finished in 2.16s` |
+| `cargo test -p aleph-protocol` | 无（但实际跑过） | `318 passed; 0 failed`（+ 2 doctest ignored） |
+| `cargo check -p aleph-cli -p aleph-tui` | 无（但实际跑过） | `Finished in 5.34s`，零错误 |
+| `cargo test -p alephcore --bins` | 无（但实际跑过，`87 passed`） | `EXIT=0`，`87 passed; 0 failed` |
+| `cargo check -p aleph-panel --target wasm32-unknown-unknown` | 无（但实际跑过） | `EXIT=0`，`Finished in 2.16s` |
 
 `check` 不是 `test`：`cargo check -p alephcore --bins` 看不见 `src/bin/` 下的 `#[cfg(test)]`，
-所以「`--bins` 绿」在此之前是**没有观察过**的一句话。`aleph-cli` / `aleph-tui` / `aleph-client`
+这一条本身是对的（只是这一轮里两条命令都真被跑过）。`aleph-cli` / `aleph-tui` / `aleph-client`
 不依赖 alephcore，可以前台跑，于是**没有**停在 `check`——三个 crate 的 `cargo test` 是
 `230 + 25 + 300 + 1 passed; 0 failed`（`session_resolve.rs` 换了行类型，而 `check` 同样
 看不见它的测试）。
