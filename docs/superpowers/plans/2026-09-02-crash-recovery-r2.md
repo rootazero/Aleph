@@ -279,6 +279,50 @@ Step 3 说「`grep -rn SessionInfo src` **全部**改引用」。`fcf6aad4e` 改
 > 「Mirrors the server's `SessionInfo`」——那个手写镜像整体由 T7 换成 `SessionListRow`，
 > 在这里改注释等于给一个即将被删的结构体写新文档。
 
+### T3 续续 — `2aa2a569e`（Step 4 的四条命令里，三条从没被跑过）
+
+前两个 agent 把 T3 的代码做完了，**Step 4 的验证矩阵只跑了一半**。补齐的三条与结果：
+
+| Step 4 的命令 | 之前 | 本次观察到 |
+|---|---|---|
+| `cargo test -p aleph-protocol` | 未跑 | `318 passed; 0 failed`（+ 2 doctest ignored） |
+| `cargo check -p aleph-cli -p aleph-tui` | 未跑 | `Finished in 5.34s`，零错误 |
+| `cargo test -p alephcore --bins` | 只跑过 `check --bins` | `EXIT=0`，`87 passed; 0 failed` |
+| `cargo check -p aleph-panel --target wasm32-unknown-unknown` | 未见记录 | `EXIT=0`，`Finished in 2.16s` |
+
+`check` 不是 `test`：`cargo check -p alephcore --bins` 看不见 `src/bin/` 下的 `#[cfg(test)]`，
+所以「`--bins` 绿」在此之前是**没有观察过**的一句话。`aleph-cli` / `aleph-tui` / `aleph-client`
+不依赖 alephcore，可以前台跑，于是**没有**停在 `check`——三个 crate 的 `cargo test` 是
+`230 + 25 + 300 + 1 passed; 0 failed`（`session_resolve.rs` 换了行类型，而 `check` 同样
+看不见它的测试）。
+
+> ⚠️ Panel 那条的 `Finished in 2.16s` **什么都没重编**，一个缓存的绿有可能比被验证的东西还老
+> （判据 #18「量具会骗人」）。分辨方法不是再跑一次，是去看**产物比源码新不新**：
+> `target/wasm32-unknown-unknown/debug/deps/libaleph_protocol-*.rmeta` 与 `libaleph_panel-*.rmeta`
+> 的时间戳是 `20:30`，而 protocol 五个源文件最晚的一个是 `metrics.rs 20:13` ⇒ 那次 wasm 编译
+> 发生在改动**之后**，这个绿覆盖的是当下的类型。（没有用 `touch` 去强制重编：touch protocol
+> 会连带作废 alephcore 的增量产物，下一个任务要多付 16 分钟。）
+
+**顺带修掉 T3 自己造出来的一个判据 #1：`SessionListRow` 有两个。** T3 把 wire 行搬进
+`aleph_protocol::SessionListRow`，而 `src/builtin_tools/sessions/list_tool.rs` 里**早就有**一个
+同名结构体——`sessions_list` **工具**的输出行，没有 `last_run` / `project_root` / 任何 knob，
+`updated_at` 是 epoch 秒而不是 RFC3339。于是 Step 3 点名的那次 `grep -rn SessionListRow src`
+会回答**两个都活着的**结构体，而错的那个能编译：问「列表面是不是丢了 `project_root`」的人
+得到一个说得通的「是」。
+
+这与 `5bc0ceebd` 删掉第二个 `SessionInfo` 是同一个形状，但**处置不同**：那次两个里有一个是死的，
+这次**两张脸都是真的**（判据 #9：一个动词的工具面与 RPC 面，形状本就该不同），所以是**改名**
+不是删除。工具行 → `SessionsListToolRow`，doc 里写明自己是哪张脸、另一张是哪个类型。
+名字不参与序列化、也没有 `builtin_tools::sessions` 以外的引用 ⇒ 零行为变化，6 行 2 文件。
+
+证据：`cargo check -p alephcore` = `Finished in 2m 23s`，零错误零警告；
+`cargo test -p alephcore --lib builtin_tools::sessions` = `EXIT=0`，`79 passed; 0 failed;
+17731 filtered out`。**79 + 17731 = 17810 = 本轮基线总数**（17775 + 18 + 17）⇒ 改名没吃掉测试。
+
+**仍然欠着**：本次没跑 `cargo clippy --workspace --all-targets`（要先
+`just _stage-shell-placeholders`，~6 min+）。本次改动是一次纯改名加一段 doc，`check` 与
+`--lib` 都绿——但这句话是「没测」，不是「测过了」。
+
 ### 继承自 main 的破损（不是本轮引入，挡住最小验证集的一条）
 
 `cargo check -p alephcore --features test-helpers --all-targets` 在
