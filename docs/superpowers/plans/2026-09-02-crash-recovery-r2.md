@@ -427,3 +427,36 @@ T4 把「Step 5 的 prefix-cache 守卫没跑」诚实地留在了 `not_done` �
 ⚠️ 另记一个命名危险：本轮引入的 `RunEnvelopeSnapshot` 与既有的 `TurnEnvelope` / `operating_envelope`
 层同用「envelope」一词，而前者正是**从后者构建**的。两者是真关系不是撞名，但 `grep envelope`
 从此会同时回答两个子系统——写文档与判据时要指名类型，不要只写「envelope」。
+
+### T4 收尾 — `8e4eab2d5`（orchestrator 接手，因为三个 agent 连续死于网络）
+
+`b144bfec2` 之后的续做 agent 死于 `API Error: UNKNOWN_CERTIFICATE_VERIFICATION_ERROR`，fixer 与 T5
+接着死于 `SSL certificate hostname mismatch`。§0.2 说的那个形状第三次发生，这次由 orchestrator
+按 §0.2 的规矩接手：先 `git status --porcelain`，读完 diff，验证，提交。
+
+| 变异 | 观察到变红的测试 |
+|---|---|
+| `resolve_exec_tier_with_ceiling` 直接返回 ceiling（快照赢，而不是只收紧） | `gateway::execution_engine::turn_permissions::tests::a_resume_ceiling_never_raises_the_resolved_tier` |
+| `knob_to_stamp` 忽略 `is_resume`（四张脸的 stamp-skip 一起去掉） | `gateway::execution_engine::knob_stamp_tests::a_resume_stamps_nothing_however_far_the_snapshot_differs` |
+| `validate_snapshot_model` 恒返回 `Keep` | `gateway::resume_coordinator::tests::a_retired_snapshot_model_resumes_on_its_successor_and_says_so` |
+| **emit 点** `envelope: Some(..)` → `None` | **零条**（456 passed / 0 failed）→ 见下 |
+
+**第四行才是这一段存在的理由。** 三条 builder 测试就位之后，把 emit 换成 `None` 依然**零红**——
+而那之后每一次 resume 都会答 `unsnapshotted`，那是「这是条老日志」的词，所以故障读起来像**历史**
+而不像回归。行为测试要驱动 `AgentHarnessRunner::run`（provider + store + emitter + 活 harness），
+所以补的是源码级 pin `the_run_started_this_file_writes_carries_the_snapshot_it_built`，**并且证伪过**：
+同一个变异现在让它红。
+
+⚠️ **那个 pin 的第一版自己就是判据 #3 的实例**：它 split 原始源码，把一条注释和一个 `matches!`
+模式当成构造，报「找到三个」。**它是红着说这句话的**——数错方向里运气好的那半边（少数了才是静默）。
+现在读 `source_scan::code_text` 并只留声明了 `envelope` 字段的站点，同时断言**有且只有一个**：
+第二个写者就是「这个 run 在什么设定下开始」的第二个答案。
+
+⚠️ **orchestrator 自己犯了一次 §0.2**：回滚变异时用了 `git checkout -- <file>`，把同一文件里
+那批孤儿改动一起冲掉了。`<scratchpad>/t4_orphan/` 的存档救回来了，之后改用 sed 反向替换。
+**§0.2 第 3 条「要丢也先 cp」不是给别人写的。**
+
+绿：`--features test-helpers --test resume_coordinator_integration` = 14 passed；
+`--lib -- orchestrator::harness_bridge session::reduction gateway::resume_coordinator
+gateway::execution_engine` = 457 passed / 0 failed。**未做**：全量 `--lib` 按名字比对、
+`--bins`、clippy —— 留给 T5 或 T8。
