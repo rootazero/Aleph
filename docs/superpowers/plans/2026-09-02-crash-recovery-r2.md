@@ -233,5 +233,10 @@ session::reduction gateway::resume_coordinator gateway::handlers::resume` = 70 p
 `tests/subagent_deps_inherit.rs` 上红：`error[E0063]: missing field verifier_chain in
 initializer of SpawnerBase`。该测试最后改动于 `c9b54e2b4`，`SpawnerBase.verifier_chain`
 由 `dd4a24d41` 引入，两者都在 main 上，本分支一个 commit 都没碰过这两个文件 ⇒ 按构造在
-main 上同样红。cargo 遇到第一个失败 target 就停，**后面可能还有更多陈旧集成测试**，修完要
-重跑一次才知道。T8 之前单独一个 commit 修（补显式 `verifier_chain: None`）。
+main 上同样红。
+
+**已修，`8ab5d2007`。** 而「cargo 遇到第一个失败 target 就停，后面可能还有更多」这句当时只是
+猜测，实测是真的：修完第一个露出 `worktree_isolation`，再修露出 `cancellation_chain`（两个
+构造点）——**一共三个文件四个构造点**，第三次才 `EXIT=0`。那个 0 也是「没有第四个」的**唯一**
+证据。判据 #6「先数一遍，数错的方向永远是少一个」在这里的形态是：一次红只报得出**一个**名字，
+所以「有几个」这个问题在它变绿之前没有答案。
