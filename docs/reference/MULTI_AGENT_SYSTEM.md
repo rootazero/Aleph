@@ -206,13 +206,26 @@ nonce, `sub-<uuid>`.
 
 **The reader** (`src/agents/subagent_tool/recovery.rs`) is lazy: it runs only
 when the tracker reports an id it has never seen, and one `get_events` serves
-every unknown id in that call. Three verdicts — `SubagentReturned` present →
-`completed_recovered` carrying the real summary; only `SubagentSpawned` →
-`interrupted` plus a `child_session` pointer to the partial transcript;
-neither → the pre-existing `unknown`. Wired into `check_status`, `wait`
-(single and `wait_any`), `cancel`, `wait_cancelled` and `list`.
+every unknown id in that call. **Four** verdicts, not three — the sidecar
+(`background_persistence`) is a second durable source covering a set the event
+log cannot see, and it earns its own arm:
 
-Both verdicts are `ToolResult::Success`, including `interrupted`: a restart is
+1. `SubagentReturned` present → `completed_recovered` carrying the real summary;
+2. only `SubagentSpawned` → `interrupted`, plus a `child_session` pointer, the
+   progress counters, the named in-flight calls and the transcript tail;
+3. a sidecar record → its **outcome's** word (`completed` / `failed` /
+   `timed_out` / `cancelled` / `interrupted_by_restart` / `settled_unknown`,
+   from `background_persistence::settled_label`), merged with whatever the child
+   log adds rather than replacing it — only `completed` carries the "do NOT
+   re-run it" seal;
+4. neither source → the pre-existing `unknown`.
+
+Wired into `check_status`, `wait` (single and `wait_any`), `cancel`,
+`wait_cancelled` and `list`. The detail faces pay one child-log read per
+unfinished row; the directory face (`list`) does not, and renders
+`progress: null` — "did not ask", never "no progress".
+
+Every verdict is `ToolResult::Success`, including `interrupted`: a restart is
 not a verdict on the call the model is making now.
 
 `list` gained a `from_durable_log` array. It documents itself as the way to
