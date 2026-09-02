@@ -4,8 +4,11 @@
 //! `route_config.get` returns the live mode plus a tier-classified view of the
 //! configured providers (so the UI can show *which* providers each mode will
 //! target without re-deriving locality in WASM); `route_config.update` writes
-//! the new mode, persists it, and **hot-applies it to the running failover
-//! chain** via the process-global [`RouteHandle`] — the next prompt routes the
+//! the new mode, persists it, and **hot-applies it through
+//! [`live_apply::apply_live_sections`](crate::config::live_apply::apply_live_sections)**
+//! — the same executor `config.patch`, `ConfigPatcher::rollback` and
+//! `config.reload` run, so the running failover chain *and* `route_status`'s
+//! `config_problems` both see the new config, and the next prompt routes the
 //! new way with no daemon restart.
 //!
 //! R7/R10 unchanged: this moves two HARD operator signals (mode + escalation),
@@ -19,7 +22,6 @@ use crate::config::Config;
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::orchestrator::deps_builder::provider_tier;
-use crate::providers::route_handle::try_global_route_handle;
 use crate::providers::route_policy::EndpointTier;
 use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
@@ -241,21 +243,20 @@ pub async fn handle_update(
                 format!("Failed to save config: {e}"),
             );
         }
-    }
-
-    // Hot-apply: the live failover chain reads this on the next request, so the
-    // switch takes effect without a restart. `None` only before boot wiring —
-    // then the on-disk write above still lands at the next start.
-    if let Some(handle) = try_global_route_handle() {
-        handle.store(&new_route);
-    }
-    // The `config_problems` half of the same hot-apply: the observability
-    // bundle's boot-time list says nothing about a config written at runtime
-    // (e.g. a typo'd pin), so recompute it against the bundle's provider/tier
-    // picture and republish — `route_status` then diagnoses the config that is
-    // actually live. `None` only before boot wiring, same contract as above.
-    if let Some(obs) = crate::providers::route_observe::global_route_observability() {
-        obs.hot_apply_problems(&new_route);
+        // Hot-apply through the shared executor, NOT by hand: `[route]` has
+        // two live faces (the chain's `RouteHandle` and `route_status`'s
+        // `config_problems`), and this handler used to poke both itself while
+        // the generic path (`config.patch` / `ConfigPatcher::rollback` /
+        // `config.reload`) poked only the first — so a route write through the
+        // very RPC `route_status`'s own tool text recommends left
+        // `config_problems` describing the previous generation. One arm, one
+        // derivation, every write face.
+        //
+        // Called while the write guard is still held: `apply_live_sections` is
+        // synchronous and only pokes process-global handles, so it never
+        // re-enters this lock, and holding it means the poke sees exactly the
+        // config that was persisted.
+        let _ = crate::config::live_apply::apply_live_sections(&cfg, &["route"]);
     }
 
     let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
@@ -279,6 +280,7 @@ pub async fn handle_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::paths::AlephHomeEnvGuard;
 
     /// The Panel's route DTOs, read at compile time. Comparing against the
     /// *source* is deliberate: `alephcore` does not depend on `aleph-panel`, so
@@ -595,6 +597,80 @@ mod tests {
         };
         let resp = handle_update(req, config, bus).await;
         assert!(resp.error.is_some());
+    }
+
+    /// A successful update must reach BOTH live faces of `[route]`, through
+    /// the shared executor.
+    ///
+    /// This handler used to poke the route handle and `config_problems` by
+    /// hand; the generic path (`config.patch` / rollback / `config.reload`)
+    /// poked only the first, so `config_problems` went stale on every write
+    /// that did not come through here. Both now run `apply_live_sections`.
+    ///
+    /// `apply_live_sections` returns which targets landed, but this handler
+    /// does not surface that vec (the RPC answers `{"success": true}` either
+    /// way), so what is asserted is what `applied == ["route"]` *means*: the
+    /// process-global `RouteHandle` carries the new mode, and the
+    /// observability bundle carries the new config's problems. Asserting the
+    /// call happened would pass just as well against a poke that stored
+    /// nothing.
+    ///
+    /// ⚠️ Both handles are install-once process globals shared by the whole
+    /// `--lib` binary; the serial key is the same one
+    /// `config::live_apply::tests::a_route_patch_through_the_executor_republishes_config_problems`
+    /// takes, because that test asserts on the very bundle this one writes.
+    #[tokio::test]
+    #[serial_test::serial(route_observability_global)]
+    async fn update_hot_applies_both_route_faces_through_the_executor() {
+        use crate::providers::default_handle::StaticDefault;
+        use crate::providers::mock::MockProvider;
+        use crate::providers::route_observe::{
+            global_route_observability, set_global_route_observability, test_observability,
+        };
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+
+        // Both process-global handles the `route` arm pokes. `global_route_handle`
+        // is get-or-init and the bundle slot is install-once, so an earlier
+        // installer in this binary wins — hence the assertions below read the
+        // handles back rather than assuming these instances.
+        let handle =
+            crate::providers::route_handle::global_route_handle(&ModelRouteConfig::default());
+        set_global_route_observability(test_observability(
+            Arc::new(StaticDefault::new(Arc::new(MockProvider::new("ok")))),
+            std::collections::HashMap::from([("ollama".to_string(), EndpointTier::Local)]),
+        ));
+        let obs = global_route_observability().expect("bundle installed");
+
+        let config = Arc::new(RwLock::new(Config::default()));
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(Value::from(1)),
+            method: "route_config.update".to_string(),
+            params: Some(serde_json::json!({
+                "mode": "always_local",
+                // A pin naming a provider that is not configured: the runtime
+                // diagnosis this write must republish.
+                "local_provider": "olama",
+            })),
+        };
+        let resp = handle_update(req, Arc::clone(&config), Arc::new(GatewayEventBus::new())).await;
+        assert!(resp.error.is_none(), "update failed: {resp:?}");
+
+        assert_eq!(
+            handle.snapshot().mode,
+            RouteMode::AlwaysLocal,
+            "the live failover chain must see the new mode without a restart"
+        );
+        let problems = obs.snapshot().await["config_problems"].clone();
+        let problems = problems.as_array().expect("array").clone();
+        assert_eq!(
+            problems.len(),
+            1,
+            "route_status must diagnose the config that was just written; got: {problems:?}"
+        );
+        assert_eq!(problems[0]["field"], "local_provider");
     }
 
     #[tokio::test]

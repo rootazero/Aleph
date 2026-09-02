@@ -203,7 +203,8 @@ pub fn build_failover_chain(
     // and the engine can never describe different provider sets. Logged loudly
     // here (a silent no-op knob is the failure mode) and carried into
     // `route_status` for the model. This is only the BOOT generation: the
-    // `route_config.update` write path re-computes the list on every hot apply
+    // `route` arm of `config::live_apply::apply_live_sections` re-computes the
+    // list on every hot `[route]` write, whichever face it came through
     // (`RouteObservability::hot_apply_problems`), against the same tier catalog.
     let problems = crate::providers::route_policy::route_problems(&config.route, &tier_catalog);
     for problem in &problems {

@@ -144,10 +144,15 @@ fn price_milli_per_mtok(provider: &str, model: &str) -> Option<u64> {
 impl RouteObservability {
     /// Recompute `config_problems` for a hot-applied `[route]` config and
     /// publish them as one atomic swap (the same RCU idiom the route handle
-    /// uses for the config itself). Called by the `route_config.update` write
-    /// path right after it stores the new route, so the very next `snapshot`
-    /// reports the problems of the config that is actually live — not the ones
-    /// the boot config had. The provider/tier picture is the boot catalog
+    /// uses for the config itself). Called from the `route` arm of
+    /// [`config::live_apply::apply_live_sections`](crate::config::live_apply::apply_live_sections),
+    /// alongside the route handle's store — so EVERY hot `[route]` write
+    /// republishes it (`route_config.update`, the `update_config` tool /
+    /// `config.patch` RPC, `ConfigPatcher::rollback`, `config.reload`) and the
+    /// very next `snapshot` reports the problems of the config that is
+    /// actually live, not the ones the boot config had. Naming one write face
+    /// here is what let the other three go stale; do not re-inline this call
+    /// into a handler. The provider/tier picture is the boot catalog
     /// ([`tiers`](Self::tiers)): a route write cannot change which providers
     /// exist or where they point.
     pub fn hot_apply_problems(&self, cfg: &ModelRouteConfig) {
@@ -380,8 +385,9 @@ impl RouteObservability {
 /// about live health, so the model does exactly what that sentence warns
 /// against and guesses why a provider was chosen. `health_prober` `continue`s
 /// every tick forever, a prober that never probes and never says so.
-/// `route_config`'s hot-apply of `config_problems` is skipped silently, and
-/// three more readers each pick their own answer.
+/// `live_apply`'s `route` arm skips the `config_problems` republish silently
+/// (the route handle still stores, because a missing bundle is not a failed
+/// route apply), and three more readers each pick their own answer.
 ///
 /// ⚠️ The paragraph above this one points at
 /// [`route_handle`](crate::providers::route_handle)'s global for "the same
@@ -423,6 +429,35 @@ pub fn global_route_observability() -> Option<&'static RouteObservability> {
     GLOBAL.get()
 }
 
+/// A bundle with no chain behind it, for tests in this crate.
+///
+/// Lives here, next to the struct, because three test modules need one
+/// (`route_observe`'s own, `config::live_apply`'s executor arm, and
+/// `gateway::handlers::route_config`'s handler face) and a twelve-field
+/// literal copied into each is twelve chances for the copies to disagree
+/// about what "no chain behind it" means. `primary` and `tiers` are the only
+/// parts a caller cares about; everything else is the empty/default state a
+/// pre-boot process has.
+#[cfg(test)]
+pub(crate) fn test_observability(
+    primary: Arc<dyn DefaultProviderHandle>,
+    tiers: std::collections::HashMap<String, EndpointTier>,
+) -> RouteObservability {
+    RouteObservability {
+        primary,
+        fallbacks: Vec::new(),
+        auto_derived: false,
+        health: FailoverHealth::default(),
+        model_cooldown: ModelCooldown::default(),
+        provider_cooldown: ProviderCooldown::default(),
+        load: Arc::new(LoadStats::new()),
+        route: None,
+        chain: None,
+        problems: Arc::new(ArcSwap::from_pointee(Vec::new())),
+        tiers: Arc::new(tiers),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,19 +486,12 @@ mod tests {
     }
 
     fn observability(fallbacks: Vec<ChainCandidate>) -> RouteObservability {
-        RouteObservability {
-            primary: Arc::new(StaticDefault::new(Arc::new(NamedProvider("kimi")))),
-            fallbacks,
-            auto_derived: false,
-            health: FailoverHealth::default(),
-            model_cooldown: ModelCooldown::default(),
-            provider_cooldown: ProviderCooldown::default(),
-            load: Arc::new(LoadStats::new()),
-            route: None,
-            chain: None,
-            problems: Arc::new(ArcSwap::from_pointee(Vec::new())),
-            tiers: Arc::new(std::collections::HashMap::new()),
-        }
+        let mut obs = test_observability(
+            Arc::new(StaticDefault::new(Arc::new(NamedProvider("kimi")))),
+            std::collections::HashMap::new(),
+        );
+        obs.fallbacks = fallbacks;
+        obs
     }
 
     #[tokio::test]
