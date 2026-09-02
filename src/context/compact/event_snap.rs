@@ -134,6 +134,7 @@ mod tests {
                     run_id: id.into(),
                     at: now_ms(),
                     project_root: None,
+                    envelope: None,
                 },
             )
         }

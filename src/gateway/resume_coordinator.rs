@@ -476,14 +476,14 @@ impl ResumeCoordinator {
         };
         report.scanned += 1;
         match reduce_disposition(markers) {
-            RunDisposition::Clean => {
+            Ok(RunDisposition::Clean) => {
                 report.skipped += 1;
             }
             // Not ours to resume: the team dispatcher / cron / heartbeat
             // each recover their own interrupted work, and a second driver
             // on top of that is a duplicate run, not a safety net. Close
             // the dangling marker so the next boot does not re-decide this.
-            RunDisposition::Interrupted { .. } if has_own_scheduler(session_id) => {
+            Ok(RunDisposition::Interrupted { .. }) if has_own_scheduler(session_id) => {
                 tracing::info!(
                     session = ?session_id,
                     "resume: session has its own scheduler; handing recovery back to it"
@@ -491,10 +491,22 @@ impl ResumeCoordinator {
                 self.close_delegated_marker(session_id).await;
                 report.delegated += 1;
             }
-            RunDisposition::Interrupted { trailing_starts } => {
+            Ok(RunDisposition::Interrupted { trailing_starts }) => {
                 let project_root = latest_project_root(markers);
                 self.handle_interrupted(session_id, markers, trailing_starts, project_root, report)
                     .await;
+            }
+            // A refused slice is "I do not know", not "clean": it is
+            // deliberately NOT counted as `skipped` (documented as clean, and
+            // rendered `already_finished` by `status_of`). Left uncounted it
+            // lands on the `scanned > 0` → `not_resumed` arm, the honest
+            // interim word until the `refused` bucket exists.
+            Err(c) => {
+                tracing::warn!(
+                    session = ?session_id,
+                    contradiction = %c,
+                    "resume: session log refused by the reducer; not resuming"
+                );
             }
         }
     }
@@ -715,7 +727,11 @@ impl ResumeCoordinator {
         session_id: &SessionId,
     ) -> Result<(), crate::session::service::SessionError> {
         let events = self.event_store.load_all_events(session_id).await?;
-        let repairs = repairs_for(&reduce_run(&events));
+        // A refused log propagates as an error: repairing on top of a slice
+        // the reducer could not read would append receipts to the wrong calls.
+        let reduction = reduce_run(&events)
+            .map_err(|c| crate::session::service::SessionError::Other(c.to_string()))?;
+        let repairs = repairs_for(&reduction);
         if repairs.is_empty() {
             return Ok(());
         }
@@ -946,6 +962,7 @@ mod tests {
             run_id: format!("r-{at}"),
             at,
             project_root: None,
+            envelope: None,
         }
     }
 
@@ -954,6 +971,7 @@ mod tests {
             run_id: format!("r-{at}"),
             at,
             project_root: Some(project.to_string()),
+            envelope: None,
         }
     }
 
@@ -990,7 +1008,7 @@ mod tests {
     #[test]
     fn classify_clean_when_last_marker_is_finished() {
         let markers = vec![rec(1, run_started(10), 10), rec(2, run_finished(20), 20)];
-        assert_eq!(reduce_disposition(&markers), RunDisposition::Clean);
+        assert_eq!(reduce_disposition(&markers), Ok(RunDisposition::Clean));
     }
 
     #[test]
@@ -1002,7 +1020,7 @@ mod tests {
         ];
         assert_eq!(
             reduce_disposition(&markers),
-            RunDisposition::Interrupted { trailing_starts: 1 }
+            Ok(RunDisposition::Interrupted { trailing_starts: 1 })
         );
     }
 
@@ -1017,7 +1035,7 @@ mod tests {
         ];
         assert_eq!(
             reduce_disposition(&markers),
-            RunDisposition::Interrupted { trailing_starts: 3 }
+            Ok(RunDisposition::Interrupted { trailing_starts: 3 })
         );
     }
 
@@ -1026,7 +1044,7 @@ mod tests {
         let markers = vec![rec(1, run_started(10), 10)];
         assert_eq!(
             reduce_disposition(&markers),
-            RunDisposition::Interrupted { trailing_starts: 1 }
+            Ok(RunDisposition::Interrupted { trailing_starts: 1 })
         );
     }
 
@@ -1065,7 +1083,7 @@ mod tests {
             rec(3, run_started(30), 30),
             rec(4, tool_requested("c2"), 40),
         ];
-        let repairs = repairs_for(&reduce_run(&events));
+        let repairs = repairs_for(&reduce_run(&events).expect("legal log"));
         assert_eq!(repairs.len(), 2, "BOTH provenances get a repair event");
 
         let mut texts = Vec::new();
@@ -1098,7 +1116,7 @@ mod tests {
             rec(2, tool_requested("c1"), 20),
             rec(3, tool_result("c1"), 30),
         ];
-        assert!(repairs_for(&reduce_run(&events)).is_empty());
+        assert!(repairs_for(&reduce_run(&events).expect("legal log")).is_empty());
     }
 
     /// `latest_project_root` walks the marker list from newest to oldest
@@ -1253,6 +1271,6 @@ mod tests {
                 30,
             ),
         ];
-        assert!(repairs_for(&reduce_run(&events)).is_empty());
+        assert!(repairs_for(&reduce_run(&events).expect("legal log")).is_empty());
     }
 }

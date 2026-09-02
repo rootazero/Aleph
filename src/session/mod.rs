@@ -27,8 +27,8 @@ pub use events::{
 pub use in_process::InProcessActorSessionService;
 pub use projection::project_row;
 pub use reduction::{
-    reduce_disposition, reduce_run, DanglingCall, DanglingProvenance, RunDisposition, RunProgress,
-    RunReduction,
+    reduce_disposition, reduce_run, validate_slice, DanglingCall, DanglingProvenance,
+    LogContradiction, RunDisposition, RunProgress, RunReduction, RunStartFacts,
 };
 pub use service::{SessionError, SessionHandle, SessionId, SessionService};
 pub use store::SessionEventStore;

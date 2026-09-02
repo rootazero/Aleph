@@ -181,6 +181,7 @@ fn sample_of_every_kind() -> Vec<(&'static str, SessionEvent)> {
                 run_id: "r".into(),
                 at: 0,
                 project_root: None,
+                envelope: None,
             },
         ),
         (

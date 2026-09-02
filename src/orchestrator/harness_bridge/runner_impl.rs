@@ -873,6 +873,7 @@ impl HarnessRunner for AgentHarnessRunner {
                     run_id: run_marker_id.clone(),
                     at: crate::session::events::now_ms(),
                     project_root: project_root_str,
+                    envelope: None,
                 },
             )
             .await

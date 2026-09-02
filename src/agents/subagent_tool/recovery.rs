@@ -42,7 +42,7 @@ use serde_json::{json, Value};
 use crate::agents::subagent_spawner::{parent_session_id_of, SUBAGENT_BG_CHILD_PREFIX};
 use crate::routing::session_key::SessionKey;
 use crate::session::events::{SessionEvent, SessionEventRecord};
-use crate::session::reduction::RunProgress;
+use crate::session::reduction::{LogContradiction, RunProgress};
 use crate::tools::runtime::ToolResult;
 
 use super::types::LIST_RESULT_PREVIEW_CHARS;
@@ -71,6 +71,11 @@ pub(crate) enum Recovered {
         /// progress". Only the detail face (`resolve_forgotten`) fills it in;
         /// the directory (`list_from_log`) leaves it `None` on purpose.
         progress: Option<RunProgress>,
+        /// What the child's log says that it must not say, read in the same
+        /// pass as `progress`. Empty when the log is consistent or when this
+        /// face did not ask; holds the REJECT kind alone when the reducer
+        /// refused the log (then `progress` is `None` — unknown, not zero).
+        contradictions: Vec<LogContradiction>,
     },
     /// Known only to the cross-process sidecar
     /// ([`crate::agents::background_persistence`]).
@@ -125,6 +130,7 @@ pub(crate) fn classify(events: &[SessionEventRecord], request_id: &str) -> Optio
                     child_session: child_id.clone(),
                     flow: flow.clone(),
                     progress: None,
+                    contradictions: Vec::new(),
                 });
             }
             _ => {}
@@ -165,6 +171,7 @@ pub(crate) fn enumerate(
                     child_session: child_id.clone(),
                     flow: flow.clone(),
                     progress: None,
+                    contradictions: Vec::new(),
                 },
             ),
             SessionEvent::SubagentReturned {
@@ -240,6 +247,7 @@ pub(crate) fn to_json(request_id: &str, recovered: &Recovered) -> Value {
             child_session,
             flow,
             progress,
+            contradictions,
         } => {
             let mut note = "This sub-agent was still running when the server restarted, so it \
                             never produced a result and is not running now. Whatever it had \
@@ -249,8 +257,16 @@ pub(crate) fn to_json(request_id: &str, recovered: &Recovered) -> Value {
                 .to_string();
             if let Some(p) = progress {
                 use std::fmt::Write as _;
-                let calls_word = if p.tool_calls_dispatched == 1 { "call" } else { "calls" };
-                let messages_word = if p.assistant_messages == 1 { "message" } else { "messages" };
+                let calls_word = if p.tool_calls_dispatched == 1 {
+                    "call"
+                } else {
+                    "calls"
+                };
+                let messages_word = if p.assistant_messages == 1 {
+                    "message"
+                } else {
+                    "messages"
+                };
                 let _ = write!(
                     note,
                     " Before it stopped it had dispatched {} tool {}, {} of which recorded a \
@@ -275,6 +291,13 @@ pub(crate) fn to_json(request_id: &str, recovered: &Recovered) -> Value {
                     "assistant_messages": p.assistant_messages,
                     "last_activity_ms": p.last_activity_at,
                 })),
+                // The child log's contradictions, by finding tag, so the model
+                // reads a refused or inconsistent log as "unknown" rather than
+                // as a clean run with zero progress.
+                "log_contradictions": contradictions
+                    .iter()
+                    .map(LogContradiction::tag)
+                    .collect::<Vec<_>>(),
                 "note": note,
             })
         }
@@ -446,13 +469,27 @@ impl super::SubagentTool {
             if let Recovered::Interrupted {
                 child_session,
                 progress,
+                contradictions,
                 ..
             } = recovered
             {
                 match self.session.get_events(child_session, None, None).await {
-                    Ok(events) => {
-                        *progress = Some(crate::session::reduction::reduce_run(&events).progress);
-                    }
+                    Ok(events) => match crate::session::reduction::reduce_run(&events) {
+                        Ok(reduction) => {
+                            *progress = Some(reduction.progress);
+                            *contradictions = reduction.contradictions;
+                        }
+                        // Refused: progress stays absent (unknown, not zero)
+                        // and the refusal itself is what the model sees.
+                        Err(contradiction) => {
+                            *progress = None;
+                            tracing::warn!(
+                                contradiction = %contradiction,
+                                "subagent recovery: child log refused by the reducer"
+                            );
+                            *contradictions = vec![contradiction];
+                        }
+                    },
                     Err(error) => {
                         // Absent, not zero. A store that could not be read has
                         // not told us the child did nothing.
@@ -562,6 +599,7 @@ mod tests {
                 flow,
                 child_session,
                 progress,
+                ..
             }) => {
                 assert_eq!(flow, "researcher");
                 assert!(
@@ -957,6 +995,7 @@ mod tests {
                         run_id: "r1".into(),
                         at: 1,
                         project_root: None,
+                        envelope: None,
                     },
                 ),
                 seqed(
@@ -976,7 +1015,10 @@ mod tests {
             progress: Some(p), ..
         }) = out.get("req-1")
         else {
-            panic!("the detail face must carry progress, got {:?}", out.get("req-1"));
+            panic!(
+                "the detail face must carry progress, got {:?}",
+                out.get("req-1")
+            );
         };
         assert_eq!(p.tool_calls_dispatched, 1);
         assert_eq!(p.tool_calls_answered, 0);

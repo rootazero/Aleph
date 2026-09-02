@@ -179,6 +179,7 @@ async fn seed_interrupted_run(store: &Arc<dyn SessionEventStore>, sid: &SessionK
             run_id: "run-1".into(),
             at: at + 2,
             project_root: None,
+            envelope: None,
         },
         SessionEvent::ToolCallRequested {
             turn_id: tid,
@@ -438,6 +439,7 @@ async fn on_demand_resume_of_a_finished_session_is_a_no_op() {
             run_id: "run-1".into(),
             at,
             project_root: None,
+            envelope: None,
         },
         SessionEvent::RunFinished {
             run_id: "run-1".into(),
@@ -582,16 +584,19 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
             run_id: "r1".into(),
             at,
             project_root: None,
+            envelope: None,
         },
         SessionEvent::RunStarted {
             run_id: "r2".into(),
             at: at + 1,
             project_root: None,
+            envelope: None,
         },
         SessionEvent::RunStarted {
             run_id: "r3".into(),
             at: at + 2,
             project_root: None,
+            envelope: None,
         },
     ]
     .into_iter()
@@ -688,6 +693,7 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
                 run_id: "r-p1".into(),
                 at,
                 project_root: None,
+                envelope: None,
             },
             at,
         )
@@ -702,6 +708,7 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
                     run_id: (*run).into(),
                     at: at + 1 + i as i64,
                     project_root: None,
+                    envelope: None,
                 },
                 at,
             )
@@ -743,6 +750,7 @@ async fn too_old_candidate_abandons_and_blocks_the_goal() {
                 run_id: "r-old".into(),
                 at: old_at,
                 project_root: None,
+                envelope: None,
             },
             old_at,
         )

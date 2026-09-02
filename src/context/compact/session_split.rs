@@ -187,6 +187,7 @@ pub async fn perform_session_split(
                 // resume path does not need a duplicate persisted value
                 // here.
                 project_root: None,
+                envelope: None,
             },
         )
         .await

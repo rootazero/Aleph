@@ -55,6 +55,11 @@ pub struct ReconcileReport {
     /// Sessions skipped because the transcript is non-empty but carries no
     /// parseable source seq (foreign / pre-P1 rows — never touched).
     pub skipped_legacy: usize,
+    /// Sessions whose marker slice the reducer refused; nothing was written.
+    /// Counted apart from `skipped_clean` on purpose: a refusal means "I do
+    /// not know", and folding it into the clean bucket would read it as
+    /// "finished".
+    pub errored: usize,
 }
 
 /// Boot-time reconciler. Constructed with the durable event store and the
@@ -92,9 +97,17 @@ impl ProjectionReconciler {
         for (session_id, markers) in groups {
             report.scanned += 1;
             match reduce_disposition(&markers) {
-                RunDisposition::Clean => report.skipped_clean += 1,
-                RunDisposition::Interrupted { .. } => {
+                Ok(RunDisposition::Clean) => report.skipped_clean += 1,
+                Ok(RunDisposition::Interrupted { .. }) => {
                     self.reconcile_session(&session_id, &mut report).await;
+                }
+                Err(c) => {
+                    tracing::warn!(
+                        session = ?session_id,
+                        contradiction = %c,
+                        "projection reconcile: reducer refused the marker slice"
+                    );
+                    report.errored += 1;
                 }
             }
         }
@@ -105,6 +118,7 @@ impl ProjectionReconciler {
             rows_filled = report.rows_filled,
             skipped_clean = report.skipped_clean,
             skipped_legacy = report.skipped_legacy,
+            errored = report.errored,
             "projection reconcile scan complete"
         );
         report
@@ -261,6 +275,7 @@ mod tests {
                     run_id: "r1".into(),
                     at: 3,
                     project_root: None,
+                    envelope: None,
                 },
             ),
             (6, assistant(tid, tin, tout, 6)),
@@ -441,6 +456,7 @@ mod tests {
                     run_id: "r1".into(),
                     at: 3,
                     project_root: None,
+                    envelope: None,
                 },
             ),
             (4, assistant(tid, 10, 20, 4)),

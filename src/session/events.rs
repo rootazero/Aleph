@@ -147,6 +147,18 @@ pub enum RunOutcome {
     Abandoned,
 }
 
+/// The session-knob envelope a run started under, frozen onto its
+/// `RunStarted` marker so a resume replays the crashed run's configuration
+/// instead of re-deriving it from whatever the knobs say now.
+///
+/// Empty for the moment: the reducer ([`crate::session::reduction`]) already
+/// reads it off the marker (`RunStartFacts::envelope`), and the fields plus
+/// the harness-bridge emit land together in the crash-recovery ④ task so no
+/// half-populated snapshot ever reaches a log. Absent from the wire when
+/// `None` — a legacy log deserialises to `None`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct RunEnvelopeSnapshot {}
+
 // NOTE: `PartialEq` is intentionally omitted from `SessionEvent` because
 // some variants carry types that do not implement it.
 // Tests that need comparison should compare on the serialized JSON form.
@@ -172,6 +184,13 @@ pub enum SessionEvent {
         /// stays platform-portable.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         project_root: Option<String>,
+        /// The knob envelope this run started under (see
+        /// [`RunEnvelopeSnapshot`]). `None` on every marker written before
+        /// the snapshot existed and on markers whose writer did not capture
+        /// one; omitted from the wire when `None` so the legacy forms stay
+        /// byte-identical.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        envelope: Option<RunEnvelopeSnapshot>,
     },
     /// A harness run reached a terminal state on this session.
     RunFinished {
@@ -415,14 +434,16 @@ mod tests {
             run_id: "run-abc".into(),
             at: 1_700_000_000_000,
             project_root: None,
+            envelope: None,
         };
         let json = serde_json::to_string(&ev).unwrap();
         let back: SessionEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(serde_json::to_string(&back).unwrap(), json);
         assert!(json.contains("\"type\":\"run_started\""));
-        // Optional field is omitted on the wire when None so the legacy
+        // Optional fields are omitted on the wire when None so the legacy
         // 2-field form stays byte-identical for old event-log readers.
         assert!(!json.contains("project_root"));
+        assert!(!json.contains("envelope"));
     }
 
     /// New optional `project_root` field round-trips and survives the
@@ -434,6 +455,7 @@ mod tests {
             run_id: "run-pr".into(),
             at: 1_700_000_000_000,
             project_root: Some("/Users/alice/proj".into()),
+            envelope: None,
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert!(json.contains("\"project_root\":\"/Users/alice/proj\""));
@@ -447,16 +469,30 @@ mod tests {
     }
 
     /// Backward compatibility: deserialising a legacy 2-field RunStarted
-    /// (no `project_root` key) yields `None` thanks to `#[serde(default)]`.
+    /// (no `project_root` key, no `envelope` key) and the 3-field form that
+    /// predates `envelope` both yield `None` for every absent optional field
+    /// thanks to `#[serde(default)]`.
     #[test]
     fn run_started_legacy_log_deserialises_with_none() {
-        let legacy = r#"{"type":"run_started","run_id":"old","at":1700000000000}"#;
-        let back: SessionEvent = serde_json::from_str(legacy).unwrap();
-        match back {
-            SessionEvent::RunStarted { project_root, .. } => {
-                assert!(project_root.is_none());
+        let two_field = r#"{"type":"run_started","run_id":"old","at":1700000000000}"#;
+        let three_field =
+            r#"{"type":"run_started","run_id":"old","at":1700000000000,"project_root":"/p"}"#;
+        for (legacy, expected_root) in [(two_field, None), (three_field, Some("/p"))] {
+            let back: SessionEvent = serde_json::from_str(legacy).unwrap();
+            match back {
+                SessionEvent::RunStarted {
+                    project_root,
+                    envelope,
+                    ..
+                } => {
+                    assert_eq!(project_root.as_deref(), expected_root);
+                    assert!(
+                        envelope.is_none(),
+                        "legacy log {legacy} must carry no envelope"
+                    );
+                }
+                other => panic!("expected RunStarted, got {other:?}"),
             }
-            other => panic!("expected RunStarted, got {other:?}"),
         }
     }
 
