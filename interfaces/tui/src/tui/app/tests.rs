@@ -2826,3 +2826,37 @@ fn beginning_a_reattach_keeps_the_side_question() {
         "the side question outlives a reconnect on the same conversation"
     );
 }
+
+/// The live plan projection against the PRODUCTION shape of a tool result:
+/// the scratchpad's JSON re-encoded as a `Value::String`, which is what both
+/// `agent_trace.tool_call_completed` and `tool_end` carry. A reader keyed on
+/// `output.get("snapshot")` is `None` on that shape — this projection never
+/// moved on a live frame until qa/agents_viz measured it (2026-09-02).
+#[test]
+fn a_live_scratchpad_result_in_the_wire_string_shape_updates_the_plan() {
+    let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
+    let output = serde_json::json!({
+        "success": true,
+        "message": "Plan set with 2 item(s)",
+        "snapshot": {
+            "objective": "Ship",
+            "complete": false,
+            "items": [
+                {"text": "Design", "status": "completed"},
+                {"text": "Build", "status": "in_progress"},
+            ]
+        }
+    });
+    let wire = serde_json::Value::String(output.to_string());
+
+    state.maybe_apply_plan_from_tool("scratchpad", &wire);
+
+    let plan = state.plan.as_ref().expect("the live frame updates the plan");
+    assert_eq!(plan.total(), 2);
+    assert_eq!(plan.current_step(), Some("Build"));
+
+    // A later call with no snapshot (a `read`, or prose) leaves it alone:
+    // absence is "this call carried none", never "clear".
+    state.maybe_apply_plan_from_tool("scratchpad", &serde_json::json!("ok"));
+    assert_eq!(state.plan.as_ref().map(PlanSnapshot::total), Some(2));
+}

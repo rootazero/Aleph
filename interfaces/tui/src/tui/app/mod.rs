@@ -1294,10 +1294,13 @@ impl AppState {
         if tool_name != "scratchpad" || self.replaying_trace {
             return;
         }
-        if let Some(snapshot) = output.get("snapshot") {
-            if let Ok(plan) = serde_json::from_value::<PlanSnapshot>(snapshot.clone()) {
-                self.plan = Some(plan);
-            }
+        // The shared reader: on the real wire `output` is the tool's JSON as
+        // a `Value::String`, so an `output.get("snapshot")` here was `None`
+        // on every live frame and this projection only ever moved on a cold
+        // `chat.history` attach (qa/agents_viz, 2026-09-02). Same reader as
+        // the gateway's run-end latch and the Panel's Todo strip.
+        if let Ok(Some(plan)) = aleph_protocol::plan::snapshot_from_tool_output(output) {
+            self.plan = Some(plan);
         }
     }
 
