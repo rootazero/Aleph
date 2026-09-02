@@ -524,3 +524,38 @@ findings 里（句柄缺席时它们报 UNKNOWN——「在场且说我没看」
 
 这条比对的作用域是 `--lib` ＋ `--bins`，**不含** clippy、`--features test-helpers --all-targets`
 的**运行**（只 check 过）、以及 panel / tui / cli / protocol 四个 crate。T8 Step 4 仍要跑它们。
+
+### 0.3 orchestrator 与 agent 同时改一个文件时，`git add <path>` 会把对方的在飞改动一起提交
+
+2026-09-03 实测，**是 orchestrator 干的**：我在补 `core/session-log` 时 `git add
+src/builtin_tools/doctor.rs`，而 T5 的续做 agent 正在同一个文件里改 doc 和加测试。它的改动被
+`9e6c83002` 一并提交，而那条 commit message 一个字都没提到它们。
+
+它诊断得比症状准，值得抄下来：**`git status` 干净、`git diff` 为空，而磁盘上的文件明显和你刚写的
+不一样**——因为别人已经把你的改动提交了。分辨方法是
+`git hash-object <path>` 与 `git rev-parse HEAD:<path>` 比对，相等就说明「你的改动还在，只是
+已经在 HEAD 里了」，不是「你的改动没了」。
+
+规矩（对 orchestrator）：
+
+1. **`git add` 只列自己创建的新文件，或先确认那个路径的 diff 只有自己那几行**（`git diff --stat
+   <path>` 对一遍行数）。`git add -A` 在这个工作树里等于替所有在跑的 agent 做决定。
+2. 要改的文件如果在**当前任务的 Files 列表**里，就别在任务跑着的时候改——等任务间隙。
+3. 真的扫进去了：**别 revert**（对方的工作在你的 commit 里是安全的），在下一条 commit 的正文里
+   写清楚哪些行不是这条 commit 的。`23d855f53` 就是这么做的。
+
+### T5 补记 — 一个模块过滤的绿看不见的两条红（`23d855f53` / `24f9e3f0b` / `f4a93bbf1`）
+
+T5 的 Step 6 给的是六条命令，全绿；而分支尖端的**全量** `--lib` 是 **19 failed**（基线 18）。
+多出来的两条是 `builtin_tools::doctor::tests::inspect_run_returns_structured_output` 与
+`::only_and_skip_narrow_the_battery`——T5 把 `core/projection-holes` 注册进了 doctor 内置工具的
+engine，却没动那个工具**自己测试模块里的** `REGISTERED_CHECKS` 字面量。
+
+**T5 那六条命令没有一条够得到它**：`--lib` 的过滤列表点的是 `diagnostics::checks` 而不是
+`builtin_tools::doctor`；`--bins` 读的是 `src/bin/`；`check --all-targets` 只编译不运行。
+一句话：**过滤器收窄的是「跑了什么」，不是「改动够到了什么」。**（我随后加的
+`core/session-log` 让真实总数从 16 变 17，所以这个数在两次全量之间又动过一次。）
+
+尖端全量（测于 `24f9e3f0b`）：`17815 passed; 18 failed; 17 ignored`，`comm -3` 与基线**双向为空**
+⇒ 零新增；`--bins` = `87 passed`。作用域**不含** clippy、`--features test-helpers --all-targets`
+的**运行**、以及 panel/tui/cli/protocol 四个 crate——T8 Step 4 仍欠。
