@@ -852,3 +852,40 @@ Panel 的任务都让它更旧一点），要看新 Panel 的界面必须先 `ju
 棘轮、以及「不许自己手搓 `#[cfg(test)]` 切割、必须调 `production_lines`」。第一版 4 条红全在
 这三道闸上。文案因此进了 `locales/{en,zh}.json`，`run_badge` 也从返回字面量改成返回
 `RunBadge` 枚举（判据一次，措辞按面）。**计划里的一句「中文」不等于这个 crate 允许写中文。**
+
+**T7 续做 2/2 — 在 `eb3fcbffc` 复测，并回答「计划点名却没被改的三个文件呢」**
+
+复测（本会话观察到的输出，测于 `eb3fcbffc`，即 T7 三个提交全部落地之后的树）：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo test -p aleph-tui -p aleph-cli` | `230 passed`（cli）+ `310 passed`（tui lib）+ `1 passed`（tui bin）+ `0 passed`；**0 failed** |
+| `cargo test -p aleph-panel --lib`（分离式） | `1225 passed; 0 failed; 0 ignored`，`EXIT=0` |
+| `cargo check -p alephcore --bins`（分离式） | `EXIT=0`，`Finished in 1m 17s`，**零 warning** |
+
+前两条与 `92353f2a1` / `0bb51e613` 记的数字**逐个相同**——不是"再绿一次"的形式，而是因为
+`492ac719d` 往 `src/bin/aleph-server/commands/resume.rs` 里加了十行注释而**没有人重编过那个
+crate**。第三条就是为它跑的：那十行是函数体内的 `//`（不是 `///`，`///` 落在 match 臂上会撞
+`unused_doc_comments`），所以它不可能红——但"不可能红"是推理，`EXIT=0` 才是观察。
+
+**计划的 T7 文件表里有三个文件从头到尾没被改，这不是漏做，是它们本来就不该改**——判据 #17
+问的是「指出渲染它的那一行」，三个都指得出来，所以记在这里，免得下一个人把它们当成欠账：
+
+- `interfaces/tui/src/tui/widgets/session_picker.rs`：第 79 行 `format!("{}{}", indicator, entry.label)`。
+  标记是 `session_entry_from_json` 拼进 `label` 的，picker 逐字画 `label`，**多一个改动点就是多一份
+  推导**。
+- `interfaces/webchat/src/platform/wide/views/chat/messages.rs`：第 442 行 `else if role == "system"`
+  已经把 `role: "system"` 的行派给 `SystemNoticeRow`（第 456 行），通知推的正是这种行，
+  **不需要新 kind**（计划自己写的就是「若需要」）。手机侧同样到达：`platform/phone/chat/mod.rs`
+  的模块头写明「Reuses ChatState / ChatApi / MessageList」，转录面是同一个组件，不是第二份。
+- `shared/client/src/session_resolve.rs`：T3 已经把它换成 `SessionListRow` 了（第 11/33/50 行），
+  T7 再动就是改一遍已经对的东西。
+
+**顺带核了 §0.1 给 T7 的三条转发，三条都已落地**：dangling 判据两面都不只看
+`disposition == INTERRUPTED`（`last_run_mark` / `run_badge` 各有一条 `Clean | NeverRan if dangling`
+臂）；Panel 的手写 `SessionRow` 镜像连同两处点名 `SessionInfo` 的注释一起没了（全树只剩
+`shared/protocol/src/sessions.rs:3` 一条，那是"这个类型是从哪儿搬来的"的出处说明，是事实）；
+五个无渲染者的 CLI 臂拿到了注释。
+
+**没做**：`just wasm` 没有在本会话重跑——T7 续做 1 在 `492ac719d` 的树 + 三个提交上跑通了整条
+recipe，之后到 `eb3fcbffc` 只多了注释与本段文档，Panel 源码一个字节没动。
