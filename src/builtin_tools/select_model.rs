@@ -179,6 +179,13 @@ impl AlephTool for SelectModelTool {
         crate::providers::moa::activation::disarm(&key);
         session_model_handle::set_session_model(&key, args.provider.clone(), args.model.clone());
 
+        // "takes effect from your next message — this run finishes on the
+        // current model" is a promise, and crash recovery is the one path that
+        // could have broken it: a resume replays the (provider, model) frozen
+        // on the interrupted run's `RunStarted` marker, so a `select_model`
+        // call made *after* the crash does NOT retroactively re-serve the
+        // recovered run. It governs the next message, as promised. Guarded by
+        // `resume_coordinator::tests::a_live_snapshot_model_is_replayed_as_a_qualified_override`.
         let mut message = match &args.provider {
             Some(p) => format!(
                 "Model switched to '{}' (provider '{}'); takes effect from your next message \

@@ -245,18 +245,213 @@ pub fn has_own_scheduler(key: &SessionId) -> bool {
     )
 }
 
-/// Extract `project_root` from the most recent `RunStarted` marker.
-/// Returns `None` for legacy logs or when the original run was not
-/// project-scoped, so the caller falls back to the agent's default
-/// workspace — same shape as the in-memory `RunRequest.workspace_override`
-/// field flows through the engine.
-pub(crate) fn latest_project_root(markers: &[SessionEventRecord]) -> Option<std::path::PathBuf> {
-    markers.iter().rev().find_map(|record| match &record.event {
-        SessionEvent::RunStarted { project_root, .. } => {
-            project_root.as_deref().map(std::path::PathBuf::from)
+/// What a resume can still do with the model the crashed run was bound to.
+///
+/// The pin is read off a `RunStarted` envelope that may be days old, so it is
+/// **validated before it is replayed**, never after: an id the vendor retired
+/// while the daemon was down would otherwise come back as an opaque provider
+/// 400 on the first Think step of every recovered run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SnapshotModel {
+    /// Replay the pair as recorded.
+    Keep {
+        provider: Option<String>,
+        model: String,
+    },
+    /// The vendor retired it and named what to use instead.
+    Successor { from: String, to: String, why: String },
+    /// Nothing to replay: resume on the agent's own default chain — which is
+    /// exactly what this session did before the envelope existed.
+    Drop { from: String, why: String },
+}
+
+/// Decide the above.
+///
+/// `pinnable` is the published set of provider keys a pin can name
+/// ([`crate::providers::session_model_handle::pinnable_providers`]), passed in
+/// rather than read here so this stays a pure function with no global to
+/// install in a test. `None` means **no set was published**, which is
+/// "unvalidated", never "nothing is pinnable" — the same reading
+/// `select_model::refuse_unpinnable_provider` takes of the same handle, because
+/// one verb with two faces has to share its derivation (判据 #9).
+///
+/// Lifecycle comes from [`crate::providers::model_catalog::lifecycle_for`] —
+/// the table `select_model`, the picker and the drift guard already read. A
+/// second retirement list here is the shape this round exists to delete.
+pub(crate) fn validate_snapshot_model(
+    pinnable: Option<&std::collections::BTreeSet<String>>,
+    provider: Option<&str>,
+    model: &str,
+) -> SnapshotModel {
+    use crate::providers::model_catalog::lifecycle::{lifecycle_for, ModelStatus};
+
+    let model = model.trim();
+    let provider = provider.map(str::trim).filter(|p| !p.is_empty());
+
+    // A pin naming a provider this server does not have cannot be honoured:
+    // the run would fall through to the default chain anyway, and the
+    // mis-attributed pair would be recorded as if it had served the run.
+    if let (Some(p), Some(known)) = (provider, pinnable) {
+        if !known.contains(p) {
+            return SnapshotModel::Drop {
+                from: model.to_string(),
+                why: format!("provider `{p}` is no longer configured on this server"),
+            };
         }
-        _ => None,
-    })
+    }
+
+    let life = lifecycle_for(provider, model);
+    if life.status != ModelStatus::Deprecated {
+        return SnapshotModel::Keep {
+            provider: provider.map(str::to_string),
+            model: model.to_string(),
+        };
+    }
+    let why = life.note.map_or_else(
+        || "it has been retired since this run started".to_string(),
+        |n| n.into_owned(),
+    );
+    match life.successor {
+        Some(to) => SnapshotModel::Successor {
+            from: model.to_string(),
+            to: to.into_owned(),
+            why,
+        },
+        None => SnapshotModel::Drop {
+            from: model.to_string(),
+            why,
+        },
+    }
+}
+
+/// Everything a resume replays, derived once from the crashed run's
+/// `RunStarted` marker.
+///
+/// Built by [`plan_resume`] from the reduction's `open_run` — the single
+/// anchor, so the workspace, the knobs and the model cannot come from three
+/// different markers.
+#[derive(Debug, Default)]
+pub(crate) struct ResumePlan {
+    /// The project folder to resume in, `None` for the agent's own workspace.
+    pub(crate) workspace: Option<std::path::PathBuf>,
+    /// The model pin to replay, after validation.
+    pub(crate) model_override: Option<crate::gateway::model_override::ModelOverride>,
+    /// Request metadata the resumed run carries: the three replayable knobs
+    /// plus the tier CEILING (never the tier request rung — see
+    /// [`crate::gateway::execution_engine::RESUME_TIER_CEILING_KEY`]).
+    pub(crate) knobs: HashMap<String, String>,
+    /// What the model is told it lost, if anything.
+    pub(crate) degrade: Option<crate::session::boundary_repair::DegradeNote>,
+    /// Whether this resume gave something up (one or more sentences above).
+    pub(crate) degraded: bool,
+    /// Whether the crashed run's marker carried no envelope at all, so the
+    /// resume follows today's session and global values.
+    pub(crate) unsnapshotted: bool,
+}
+
+/// Derive the plan above.
+///
+/// `dir_exists` is injected so the project-root arm is testable without
+/// touching a filesystem; production passes `|p| p.is_dir()`.
+///
+/// A missing `open_run` is the ③-D2 writer-side shape: the `RunStarted` append
+/// failed and the run executed anyway. There is nothing to replay, and saying
+/// so (`unsnapshotted`) is the honest answer — the resume still happens, on
+/// today's values, exactly as it did before this field existed.
+pub(crate) fn plan_resume(
+    open_run: Option<&crate::session::reduction::RunStartFacts>,
+    pinnable: Option<&std::collections::BTreeSet<String>>,
+    dir_exists: &dyn Fn(&std::path::Path) -> bool,
+) -> ResumePlan {
+    use crate::gateway::execution_engine::RESUME_TIER_CEILING_KEY;
+    use crate::gateway::model_override::ModelOverride;
+
+    let mut plan = ResumePlan::default();
+    let Some(facts) = open_run else {
+        plan.unsnapshotted = true;
+        return plan;
+    };
+    let mut sentences: Vec<String> = Vec::new();
+
+    // Workspace. A folder that has since been deleted or moved falls back to
+    // the agent's workspace rather than failing the run mid-tool-call — and
+    // says so, because a silent fallback means the recovered run writes its
+    // files somewhere the user is not looking (ruling A9).
+    if let Some(root) = facts.project_root.as_deref() {
+        let path = std::path::PathBuf::from(root);
+        if dir_exists(&path) {
+            plan.workspace = Some(path);
+        } else {
+            sentences.push(format!(
+                "This run was working in `{root}`; it resumes in this agent's default \
+                 workspace because that folder no longer exists."
+            ));
+            plan.degraded = true;
+        }
+    }
+
+    let Some(env) = facts.envelope.as_ref() else {
+        plan.unsnapshotted = true;
+        plan.degrade = degrade_note(sentences);
+        return plan;
+    };
+
+    for (key, value) in [
+        (
+            crate::config::types::policies::MODE_SESSION_KEY,
+            env.session_mode.as_deref(),
+        ),
+        (
+            crate::agents::thinking::THINK_LEVEL_SESSION_KEY,
+            env.think_level.as_deref(),
+        ),
+        (
+            crate::memory::session_memory_mode::MEMORY_MODE_SESSION_KEY,
+            env.memory_mode.as_deref(),
+        ),
+        (RESUME_TIER_CEILING_KEY, env.exec_tier.as_deref()),
+    ] {
+        if let Some(v) = value.map(str::trim).filter(|v| !v.is_empty()) {
+            plan.knobs.insert(key.to_string(), v.to_string());
+        }
+    }
+
+    if let Some(model) = env.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+        match validate_snapshot_model(pinnable, env.model_provider.as_deref(), model) {
+            SnapshotModel::Keep { provider, model } => {
+                plan.model_override =
+                    ModelOverride::from_voice(provider.as_deref().unwrap_or(""), &model);
+            }
+            SnapshotModel::Successor { from, to, why } => {
+                plan.model_override = ModelOverride::from_voice(
+                    env.model_provider.as_deref().unwrap_or(""),
+                    &to,
+                );
+                sentences.push(format!(
+                    "This run was served by `{from}`; it resumes on `{to}` because {why}."
+                ));
+                plan.degraded = true;
+            }
+            SnapshotModel::Drop { from, why } => {
+                sentences.push(format!(
+                    "This run was served by `{from}`; it resumes on this agent's default \
+                     model because {why}."
+                ));
+                plan.degraded = true;
+            }
+        }
+    }
+
+    plan.degrade = degrade_note(sentences);
+    plan
+}
+
+/// One note out of however many sentences the plan collected.
+fn degrade_note(
+    sentences: Vec<String>,
+) -> Option<crate::session::boundary_repair::DegradeNote> {
+    (!sentences.is_empty())
+        .then(|| crate::session::boundary_repair::DegradeNote::new(sentences.join(" ")))
 }
 
 /// Build a resumed run's metadata: the resume marker, the original working
@@ -554,8 +749,7 @@ impl ResumeCoordinator {
                 report.delegated += 1;
             }
             Ok(RunDisposition::Interrupted { trailing_starts }) => {
-                let project_root = latest_project_root(markers);
-                self.handle_interrupted(session_id, markers, trailing_starts, project_root, report)
+                self.handle_interrupted(session_id, markers, trailing_starts, report)
                     .await;
             }
             // A refused slice is "I do not know", not "clean": it is
@@ -638,7 +832,6 @@ impl ResumeCoordinator {
         session_id: &SessionId,
         markers: &[SessionEventRecord],
         trailing_starts: usize,
-        project_root: Option<std::path::PathBuf>,
         report: &mut ResumeReport,
     ) {
         // The dangling RunStarted is the last marker (reduce_disposition
@@ -726,47 +919,64 @@ impl ResumeCoordinator {
             return;
         }
 
+        // ④ Everything the resume replays, derived from the SAME `open_run`
+        // the repair is about to answer against: the project folder, the three
+        // replayable knobs, the tier ceiling and the validated model pin.
+        let plan = plan_resume(
+            reduction.open_run.as_ref(),
+            crate::providers::session_model_handle::pinnable_providers(),
+            &|p| p.is_dir(),
+        );
+        if plan.degraded {
+            report.degraded += 1;
+        }
+        if plan.unsnapshotted {
+            report.unsnapshotted += 1;
+        }
+
         // Crash-boundary repair — append a synthetic ToolError for every
         // dangling call THIS reduction names, so the model sees each one
-        // answered instead of silently dropped from the replay.
-        if let Err(e) = crate::session::boundary_repair::repair_boundary(
+        // answered instead of silently dropped from the replay. The degrade
+        // note rides on the first of them.
+        match crate::session::boundary_repair::repair_boundary(
             self.event_store.as_ref(),
             session_id,
             &reduction,
-            None,
+            plan.degrade.as_ref(),
         )
         .await
         {
-            tracing::warn!(
-                session = ?session_id,
-                error = %e,
-                "resume: boundary repair failed; skipping candidate"
-            );
-            report.refused.push((
-                session_id.clone(),
-                ResumeRefusal::BoundaryRepairFailed(e.to_string()),
-            ));
-            return;
-        }
-
-        // Re-trigger. Task 6 implements `retrigger`. When the original
-        // run carried a `project_root`, pre-validate it still exists so a
-        // moved/deleted folder degrades to a default-workspace resume
-        // (with a warn) instead of failing the run mid-tool-call.
-        let resume_project_root = match project_root {
-            Some(p) if p.is_dir() => Some(p),
-            Some(p) => {
+            // A degrade with no dangling call has no repair to ride on. It is
+            // still a fact the model needs — the alternative is a run that
+            // silently comes back on a different model — so it gets its own
+            // carrier rather than being dropped for want of one.
+            Ok(repair) => {
+                if repair.appended == 0 {
+                    if let Some(note) = plan.degrade.as_ref() {
+                        self.announce_degrade(session_id, note).await;
+                    }
+                }
+            }
+            Err(e) => {
                 tracing::warn!(
                     session = ?session_id,
-                    project_root = %p.display(),
-                    "resume: original project folder no longer exists; \
-                     falling back to agent workspace"
+                    error = %e,
+                    "resume: boundary repair failed; skipping candidate"
                 );
-                None
+                report.refused.push((
+                    session_id.clone(),
+                    ResumeRefusal::BoundaryRepairFailed(e.to_string()),
+                ));
+                return;
             }
-            None => None,
-        };
-        match self.retrigger(session_id, resume_project_root).await {
+        }
+
+        // Re-trigger, carrying the plan. `RunRequest.model_override` is the
+        // carrier for the model because it never writes back to the session
+        // row — the crash-time pin governs THIS run and the `select_model`
+        // pick the user made after the crash still governs the next one,
+        // which is exactly the promise `select_model` prints to the model.
+        match self.retrigger(session_id, &plan).await {
             Ok(()) => report.resumed += 1,
             Err(refusal) => {
                 tracing::warn!(
@@ -866,6 +1076,40 @@ impl ResumeCoordinator {
         Ok(self.event_store.load_head_seq(session_id).await? + 1)
     }
 
+    /// Tell the model what this resume gave up, when there was no dangling
+    /// call for the note to ride on.
+    ///
+    /// Best-effort: a failed append leaves the run resumable, and refusing to
+    /// resume because a *notice* could not be written would trade a whole
+    /// recovered conversation for a sentence.
+    async fn announce_degrade(
+        &self,
+        session_id: &SessionId,
+        note: &crate::session::boundary_repair::DegradeNote,
+    ) {
+        let ev = SessionEvent::SystemMessage {
+            // A fresh turn id: the crashed turn is over, and this sentence is
+            // about the run that is starting, not about that one.
+            turn_id: crate::session::events::TurnId::new_v4(),
+            content: note.sentence.clone(),
+            at: now_ms(),
+        };
+        match self.next_seq(session_id).await {
+            Ok(seq) => {
+                if let Err(e) = self
+                    .event_store
+                    .append(session_id, seq, &ev, now_ms())
+                    .await
+                {
+                    tracing::warn!(session = ?session_id, error = %e, "resume: degrade notice append failed");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(session = ?session_id, error = %e, "resume: degrade notice seq allocation failed");
+            }
+        }
+    }
+
     /// Re-trigger an interrupted run. Resolves the agent from the session
     /// key, builds a `RunRequest` with `metadata["resume"] = "true"` (the
     /// engine→orchestrator boundary converts that into `FlowInput::Resume`,
@@ -875,8 +1119,9 @@ impl ResumeCoordinator {
     async fn retrigger(
         &self,
         session_id: &SessionId,
-        workspace_override: Option<std::path::PathBuf>,
+        plan: &ResumePlan,
     ) -> Result<(), ResumeRefusal> {
+        let workspace_override = plan.workspace.clone();
         let permit = self
             .semaphore
             .clone()
@@ -901,6 +1146,12 @@ impl ResumeCoordinator {
         );
         self.stamp_origin_identity(&agent, session_id, &mut metadata)
             .await;
+        // ④ The crashed run's knobs. `extend` after the identity stamp so a
+        // replayed knob can never overwrite the caller-role / scope keys the
+        // stamp exists to restore — the knob keys are disjoint from those, and
+        // this ordering keeps that true by construction rather than by
+        // inspection.
+        metadata.extend(plan.knobs.iter().map(|(k, v)| (k.clone(), v.clone())));
 
         let request = RunRequest {
             run_id: uuid::Uuid::new_v4().to_string(),
@@ -915,7 +1166,7 @@ impl ResumeCoordinator {
             sandbox_override: None,
             workspace_override,
             max_iterations_override: None,
-            model_override: None,
+            model_override: plan.model_override.clone(),
         };
 
         // Broadcast the recovered run live (Panel / CLI / `aleph watch`) on
@@ -1078,15 +1329,6 @@ mod tests {
         }
     }
 
-    fn run_started_with_project(at: i64, project: &str) -> SessionEvent {
-        SessionEvent::RunStarted {
-            run_id: format!("r-{at}"),
-            at,
-            project_root: Some(project.to_string()),
-            envelope: None,
-        }
-    }
-
     fn run_finished(at: i64) -> SessionEvent {
         SessionEvent::RunFinished {
             run_id: format!("r-{at}"),
@@ -1232,26 +1474,218 @@ mod tests {
         );
     }
 
-    /// `latest_project_root` walks the marker list from newest to oldest
-    /// and returns the most recent persisted `project_root`, falling back
-    /// to `None` (legacy log, or non-project run) for the resume default.
-    #[test]
-    fn latest_project_root_picks_newest_marker() {
-        let markers = vec![
-            rec(1, run_started_with_project(10, "/a"), 10),
-            rec(2, run_finished(20), 20),
-            rec(3, run_started_with_project(30, "/b"), 30),
-        ];
-        assert_eq!(
-            latest_project_root(&markers),
-            Some(std::path::PathBuf::from("/b"))
-        );
+    // ---- ④ the crash-time envelope --------------------------------------
+
+    fn facts(
+        project_root: Option<&str>,
+        envelope: Option<crate::session::events::RunEnvelopeSnapshot>,
+    ) -> crate::session::reduction::RunStartFacts {
+        crate::session::reduction::RunStartFacts {
+            seq: 1,
+            run_id: "r".to_string(),
+            project_root: project_root.map(str::to_string),
+            envelope,
+        }
     }
 
+    fn envelope_with(
+        model: Option<&str>,
+        provider: Option<&str>,
+        exec_tier: Option<&str>,
+    ) -> crate::session::events::RunEnvelopeSnapshot {
+        crate::session::events::RunEnvelopeSnapshot {
+            exec_tier: exec_tier.map(str::to_string),
+            session_mode: Some("code".to_string()),
+            think_level: Some("high".to_string()),
+            memory_mode: Some("off".to_string()),
+            model: model.map(str::to_string),
+            model_provider: provider.map(str::to_string),
+        }
+    }
+
+    fn pinnable(names: &[&str]) -> std::collections::BTreeSet<String> {
+        names.iter().map(|n| (*n).to_string()).collect()
+    }
+
+    /// The three replayable knobs ride on their own metadata keys, and the
+    /// tier rides on the CEILING key — never on `exec_tier`, which is the
+    /// request rung and would let a resume raise a tightened conversation.
     #[test]
-    fn latest_project_root_returns_none_for_legacy_runs() {
-        let markers = vec![rec(1, run_started(10), 10)];
-        assert_eq!(latest_project_root(&markers), None);
+    fn the_snapshot_knobs_reach_the_request_and_the_tier_rides_the_ceiling_key() {
+        let plan = plan_resume(
+            Some(&facts(None, Some(envelope_with(None, None, Some("full"))))),
+            None,
+            &|_| true,
+        );
+        assert_eq!(
+            plan.knobs
+                .get(crate::gateway::execution_engine::RESUME_TIER_CEILING_KEY)
+                .map(String::as_str),
+            Some("full")
+        );
+        assert_eq!(
+            plan.knobs
+                .get(crate::config::types::policies::EXEC_TIER_SESSION_KEY),
+            None,
+            "the tier must never arrive as the request rung"
+        );
+        assert_eq!(
+            plan.knobs
+                .get(crate::config::types::policies::MODE_SESSION_KEY)
+                .map(String::as_str),
+            Some("code")
+        );
+        assert_eq!(
+            plan.knobs
+                .get(crate::agents::thinking::THINK_LEVEL_SESSION_KEY)
+                .map(String::as_str),
+            Some("high")
+        );
+        assert_eq!(
+            plan.knobs
+                .get(crate::memory::session_memory_mode::MEMORY_MODE_SESSION_KEY)
+                .map(String::as_str),
+            Some("off")
+        );
+        assert!(!plan.degraded);
+        assert!(!plan.unsnapshotted);
+        assert!(plan.degrade.is_none());
+    }
+
+    /// A live pin is replayed verbatim, as a qualified override.
+    #[test]
+    fn a_live_snapshot_model_is_replayed_as_a_qualified_override() {
+        let plan = plan_resume(
+            Some(&facts(
+                None,
+                Some(envelope_with(Some("gpt-5.6"), Some("openai"), None)),
+            )),
+            Some(&pinnable(&["openai"])),
+            &|_| true,
+        );
+        assert_eq!(
+            plan.model_override,
+            Some(crate::gateway::model_override::ModelOverride::Qualified {
+                provider: "openai".to_string(),
+                model: "gpt-5.6".to_string(),
+            })
+        );
+        assert!(!plan.degraded);
+    }
+
+    /// A model the catalog retired since the crash comes back on its
+    /// successor, and the model is told which and why.
+    #[test]
+    fn a_retired_snapshot_model_resumes_on_its_successor_and_says_so() {
+        let plan = plan_resume(
+            Some(&facts(
+                None,
+                Some(envelope_with(Some("deepseek-chat"), Some("deepseek"), None)),
+            )),
+            Some(&pinnable(&["deepseek"])),
+            &|_| true,
+        );
+        let note = plan.degrade.expect("a degraded resume carries a sentence");
+        assert!(
+            note.sentence.contains("deepseek-chat") && note.sentence.contains("resumes on"),
+            "{}",
+            note.sentence
+        );
+        assert!(plan.degraded);
+        let over = plan.model_override.expect("a successor is still a pin");
+        assert_ne!(over.model(), "deepseek-chat");
+    }
+
+    /// A pin naming a provider this server no longer has cannot be honoured:
+    /// the run falls back to the default chain, degraded and stated.
+    #[test]
+    fn a_pin_on_an_unconfigured_provider_is_dropped_not_replayed() {
+        let plan = plan_resume(
+            Some(&facts(
+                None,
+                Some(envelope_with(Some("m-x"), Some("gone-inc"), None)),
+            )),
+            Some(&pinnable(&["openai"])),
+            &|_| true,
+        );
+        assert_eq!(plan.model_override, None);
+        assert!(plan.degraded);
+        assert!(plan
+            .degrade
+            .expect("stated")
+            .sentence
+            .contains("gone-inc"));
+    }
+
+    /// "No published pinnable set" is *unvalidated*, never "nothing is
+    /// pinnable" — the same reading `select_model` takes of the same handle.
+    #[test]
+    fn an_unpublished_pinnable_set_does_not_drop_the_pin() {
+        let plan = plan_resume(
+            Some(&facts(
+                None,
+                Some(envelope_with(Some("m-x"), Some("whatever"), None)),
+            )),
+            None,
+            &|_| true,
+        );
+        assert!(plan.model_override.is_some());
+        assert!(!plan.degraded);
+    }
+
+    /// A project folder that has since gone away degrades to the agent
+    /// workspace *and* says so (ruling A9) — a silent fallback would write
+    /// the recovered run's files where nobody is looking.
+    #[test]
+    fn a_vanished_project_root_degrades_and_is_stated() {
+        let plan = plan_resume(
+            Some(&facts(Some("/gone"), Some(envelope_with(None, None, None)))),
+            None,
+            &|_| false,
+        );
+        assert_eq!(plan.workspace, None);
+        assert!(plan.degraded);
+        assert!(plan.degrade.expect("stated").sentence.contains("/gone"));
+    }
+
+    /// A marker written before the envelope existed is counted, not assumed
+    /// away: the first boot after this ships is what reports the real size of
+    /// the pre-envelope backlog.
+    #[test]
+    fn a_legacy_marker_is_unsnapshotted_and_replays_nothing() {
+        let plan = plan_resume(Some(&facts(Some("/p"), None)), None, &|_| true);
+        assert!(plan.unsnapshotted);
+        assert!(plan.knobs.is_empty());
+        assert_eq!(plan.model_override, None);
+        assert_eq!(plan.workspace, Some(std::path::PathBuf::from("/p")));
+    }
+
+    /// No `open_run` at all — the ③-D2 shape where the `RunStarted` append
+    /// failed and the run executed anyway. Nothing to replay; today's values
+    /// apply, and the count says so.
+    #[test]
+    fn a_missing_open_run_is_unsnapshotted_rather_than_invented() {
+        let plan = plan_resume(None, None, &|_| true);
+        assert!(plan.unsnapshotted);
+        assert!(plan.knobs.is_empty());
+        assert_eq!(plan.workspace, None);
+        assert!(plan.degrade.is_none());
+    }
+
+    /// Two degradations in one resume are one note, not one that wins.
+    #[test]
+    fn a_resume_that_loses_two_things_says_both() {
+        let plan = plan_resume(
+            Some(&facts(
+                Some("/gone"),
+                Some(envelope_with(Some("m-x"), Some("gone-inc"), None)),
+            )),
+            Some(&pinnable(&["openai"])),
+            &|_| false,
+        );
+        let s = plan.degrade.expect("stated").sentence;
+        assert!(s.contains("/gone"), "{s}");
+        assert!(s.contains("m-x"), "{s}");
     }
 
     /// I2: a resumed run must carry the session's SCOPE, not just its folder.

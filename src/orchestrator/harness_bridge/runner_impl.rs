@@ -354,6 +354,14 @@ impl HarnessRunner for AgentHarnessRunner {
         // model_hint (with its provider_hint); the dynamic pick_llm(brain) path uses
         // BrainRef::Strict's pinned model when present, else "(dynamic)" (genuinely
         // unresolved at run-start — never the meaningless wrapper name "failover").
+        // ④ crash-recovery snapshot of the model half, taken here because the
+        // directive is consumed by the match below. Post-validation: the
+        // unconfigured-provider filter above has already run, so this is the
+        // pair the run is actually bound to. `None` when the run carried no
+        // directive at all — a resume then walks the default chain, which is
+        // what this run did.
+        // rust-doctor-disable-next-line excessive-clone
+        let snapshot_model: Option<(Option<String>, String)> = routing_directive.clone();
         let (routing_model_id, routing_provider_id): (String, Option<String>) =
             match routing_directive {
                 Some((provider_opt, model)) => (model, provider_opt),
@@ -418,6 +426,22 @@ impl HarnessRunner for AgentHarnessRunner {
         // `provider.name()` and told every turn it was running on `failover`.
         // rust-doctor-disable-next-line excessive-clone
         envelope.serving_model = Some(gauge_model.clone());
+
+        // ④ The knob envelope this run is executing under, frozen for the
+        // `RunStarted` marker below. Built from the SAME values the turn is
+        // about to use — `envelope` is what the prompt renders, `think_level`
+        // is what wraps the provider — so a resume replays what happened, not
+        // a re-derivation of it. Always `Some` from this writer: an empty
+        // snapshot means "the gateway resolved nothing", which is a different
+        // fact from the `None` a legacy marker carries.
+        let run_envelope_snapshot = crate::session::events::RunEnvelopeSnapshot {
+            exec_tier: envelope.exec_tier.map(|t| t.id().to_string()),
+            session_mode: envelope.session_mode.map(|m| m.id().to_string()),
+            think_level: think_level.map(|l| l.id().to_string()),
+            memory_mode: envelope.memory_mode.map(|m| m.id().to_string()),
+            model: snapshot_model.as_ref().map(|(_, m)| m.clone()),
+            model_provider: snapshot_model.and_then(|(p, _)| p),
+        };
 
         // Gauge denominator: authoritative per-model context window (R7 — the
         // lookup is core's, not the panel's), honoring the configured
@@ -853,11 +877,14 @@ impl HarnessRunner for AgentHarnessRunner {
         // equivalent to the retiring AgentLoop StreamingSink.
         // rust-doctor-disable-next-line excessive-clone
         let mut cb = callback::BroadcastCallback::new(events.clone(), context_window);
-        // Resume run markers. `run_id` is a locally-minted UUID — the marker
-        // pair only needs to correlate within one session log, so the
-        // gateway scheduler's run id is not required here. A crash between
-        // these two emits leaves a trailing `RunStarted` with no
-        // `RunFinished`, which is exactly what `ResumeCoordinator` detects.
+        // Resume run markers. `run_id` is a locally-minted UUID, and it is a
+        // DIFFERENT id from the gateway scheduler's `RunRequest.run_id` for
+        // the same run: the two are never joined, in either direction. The
+        // marker pair only has to correlate within one session log, which it
+        // does; what nothing can currently answer is "which scheduler run
+        // wrote this marker" — reading a marker id as a scheduler run id (or
+        // the reverse) finds nothing. Recorded rather than fixed (ruling A5):
+        // joining them is its own contract, with its own writers.
         let run_marker_id = uuid::Uuid::new_v4().to_string();
         // `project_root` rides on RunStarted so `ResumeCoordinator` can
         // re-trigger a crashed run in the same user-picked folder. The
@@ -873,7 +900,7 @@ impl HarnessRunner for AgentHarnessRunner {
                     run_id: run_marker_id.clone(),
                     at: crate::session::events::now_ms(),
                     project_root: project_root_str,
-                    envelope: None,
+                    envelope: Some(run_envelope_snapshot),
                 },
             )
             .await

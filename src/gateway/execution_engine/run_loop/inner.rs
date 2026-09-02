@@ -1276,7 +1276,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // session event log already holds the full trajectory. The
             // `ResumeCoordinator` sets `metadata["resume"] = "true"`; the
             // harness bridge then skips seeding and replays the log.
-            let flow_input = if request.metadata.get("resume").map(String::as_str) == Some("true") {
+            let flow_input = if request.is_resume() {
                 crate::orchestrator::FlowInput::Resume
             } else if media_blocks.is_empty() {
                 super::super::helpers::history_to_flow_input(

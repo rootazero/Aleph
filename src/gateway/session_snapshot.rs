@@ -37,6 +37,34 @@ use crate::session::reduction::{
 /// name the *readers* agree on.
 pub const PROJECT_ROOT_SESSION_KEY: &str = "project_root";
 
+/// The knob vocabulary a `RunStarted` envelope freezes, in the envelope's own
+/// declaration order.
+///
+/// Four of these are `identity_meta.custom` keys — spelled here by their
+/// constants, so a renamed key moves both readers at once. The last two are
+/// the session row's own columns and are spelled literally because there is no
+/// constant to borrow: nothing else keys a bag by them.
+///
+/// It exists so the two shapes cannot drift: a census test in
+/// [`crate::session::events`] asserts this array equals
+/// [`crate::session::events::RunEnvelopeSnapshot`]'s serialised key set. A
+/// seventh knob therefore has to be added in both places before the build is
+/// green.
+///
+/// What it does **not** catch, said out loud: a knob added to
+/// [`SessionSnapshot`] and to neither of those two. `SessionSnapshot` carries
+/// identity, usage counters and a label alongside its knobs, and nothing in
+/// its shape says which fields are knobs — so there is no set to derive that
+/// question from, only a list to keep.
+pub const RUN_ENVELOPE_KNOB_KEYS: [&str; 6] = [
+    crate::config::types::policies::EXEC_TIER_SESSION_KEY,
+    crate::config::types::policies::MODE_SESSION_KEY,
+    crate::agents::thinking::THINK_LEVEL_SESSION_KEY,
+    crate::memory::session_memory_mode::MEMORY_MODE_SESSION_KEY,
+    "model",
+    "model_provider",
+];
+
 /// Read one `identity_meta.custom` string, treating JSON `null` as absent.
 ///
 /// The single decoder for every knob. Inlining `im.custom.get(k)?.as_str()` at

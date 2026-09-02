@@ -27,19 +27,30 @@
 //! `providers::session_model_handle` (a **process-global `OnceLock<RwLock<
 //! HashMap>>`**, written only by the `select_model` tool) → the agent default.
 //!
-//! So the model is the one session dial that does **not** survive a restart.
-//! `exec_tier` and `session_mode` both persist in
-//! `SessionMetadata.identity_meta.custom` and are restored through `SessionListRow`
-//! into the Panel pills; the model picker is a Leptos signal that resets on
-//! reload (`chat/state.rs` says so itself), and the server-side sticky map dies
-//! with the process. Picking `openai/gpt-5.6`, sending three messages and
-//! reloading silently reverts to the agent default.
+//! So the model is still the one session dial that does not survive a restart
+//! **as a preference**. `exec_tier` and `session_mode` persist in
+//! `SessionMetadata.identity_meta.custom` and are restored through
+//! `SessionListRow` into the Panel pills; the model picker is a Leptos signal
+//! that resets on reload (`chat/state.rs` says so itself), and the server-side
+//! sticky map dies with the process. Picking `openai/gpt-5.6`, sending three
+//! messages and reloading still reverts to the agent default.
 //!
-//! Making it persist means giving it the same carrier the other two dials use —
-//! a `turn_model.rs` twin of `turn_mode.rs` resolving request > session > global
-//! with stamp-on-carry, which would also retire that process-global map (P6).
-//! Not done here; this note exists so the next reader is not misled by a
-//! documented chain that was never built.
+//! ⚠️ One narrow exception now exists, and it is not persistence: a run that
+//! was **interrupted** by a crash records the (provider, model) it was bound to
+//! on its `RunStarted` marker (`session::events::RunEnvelopeSnapshot`), and
+//! `resume_coordinator` replays that pair through this type's
+//! `model_override` slot when it re-triggers the run. That restores the
+//! *crashed run*, not the user's preference: it is per-run by construction (it
+//! never writes back to the session row, which is exactly why this carrier was
+//! chosen), it is validated against the catalog first — a retired id resumes on
+//! its successor with the model told why — and the next message after the
+//! recovered run resolves through the ordinary chain again.
+//!
+//! Making the *preference* persist still means giving it the same carrier the
+//! other two dials use — a `turn_model.rs` twin of `turn_mode.rs` resolving
+//! request > session > global with stamp-on-carry, which would also retire that
+//! process-global map (P6). Not done here; this note exists so the next reader
+//! is not misled by a documented chain that was never built.
 
 use serde::{Deserialize, Serialize};
 
