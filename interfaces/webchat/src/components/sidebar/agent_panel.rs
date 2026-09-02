@@ -281,9 +281,10 @@ mod tests {
 
     /// Brief's Step-1 test. Weak on its own — proves `ui_logic` sorts, not
     /// that the Panel called it (R9-7) — the real R2 property is enforced by
-    /// Task 10's source-scan guard on THIS file (no `.sort_by` / `.sort()`
-    /// allowed here; the panel's render closure only ever calls
-    /// `sort_entries` on a local clone).
+    /// Task 10's source-scan guard on THIS file: no ordering call of its own
+    /// is allowed here, only calling `sort_entries` on a local clone (see the
+    /// module doc above — that guard is a raw text scan, so the forbidden
+    /// tokens are deliberately not spelled out here).
     #[test]
     fn the_panel_renders_the_order_ui_logic_produced() {
         let mut entries = vec![entry("i", S::Idle), entry("b", S::Blocked)];
