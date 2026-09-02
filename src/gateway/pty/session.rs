@@ -379,9 +379,10 @@ fn spawn_reader(
             crate::gateway::runtime::agents().remove(&session.id);
             // Task 6: the edge above IS the change — a removed row is
             // exactly what `runtime.agents.list`'s next fetch will no longer
-            // show. Same emit `start_flush_loop` uses.
+            // show. Same helper `start_flush_loop` uses, called with `true`
+            // unconditionally: a removed row is always a change.
             if let Some(bus) = &bus {
-                super::manager::publish_agents_changed(bus);
+                super::manager::publish_agents_changed_if(true, bus);
             }
         })
         .ok();

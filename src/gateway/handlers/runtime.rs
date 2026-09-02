@@ -25,9 +25,8 @@
 //! disagree about who sees which row (判据 §9).
 
 use aleph_protocol::runtime::RuntimeAgentsListResponse;
-use serde_json::json;
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use crate::gateway::pty;
 
 /// `runtime.agents.list` — the caller's own agent-panel rows, in the order
@@ -49,12 +48,18 @@ pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
     let body = RuntimeAgentsListResponse { agents };
     match serde_json::to_value(&body) {
         Ok(v) => JsonRpcResponse::success(id, v),
-        Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, format!("encode failed: {e}")),
+        // A failure to encode the server's OWN response type is never the
+        // caller's fault — `INVALID_PARAMS` would tell them their request
+        // was wrong when it was this handler's encode step that failed.
+        // Same shape as `handlers/users.rs`'s `encoded` helper.
+        Err(e) => JsonRpcResponse::error(id, INTERNAL_ERROR, format!("encode failed: {e}")),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     fn req(method: &str, params: serde_json::Value) -> JsonRpcRequest {

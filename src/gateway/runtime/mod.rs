@@ -530,37 +530,65 @@ mod tests {
         );
     }
 
-    /// THE EVENT WIRE (task 6). `sample()` reporting a change must reach a
-    /// real bus subscriber as `runtime.agents.changed`; a frame whose
-    /// detected state/agent/label/cwd are unchanged must publish NOTHING —
-    /// the "not on every frame" rule from R6-4 — and the exit path must
-    /// publish once more.
+    /// Whether a raw bus frame is a `runtime.agents.changed` topic event —
+    /// via the protocol constant, not a re-typed literal (fix round 1,
+    /// review Minor 6's reasoning applied here too: a rename of the
+    /// constant must redden every reader, not just the ones that remembered
+    /// to update their copy of the string).
+    fn is_agents_changed(raw: &str) -> bool {
+        serde_json::from_str::<serde_json::Value>(raw)
+            .ok()
+            .and_then(|v| v.get("topic").and_then(|t| t.as_str().map(str::to_owned)))
+            .as_deref()
+            == Some(aleph_protocol::runtime::RUNTIME_AGENTS_CHANGED_TOPIC)
+    }
+
+    /// THE EVENT WIRE (task 6, fix round 1). `sample()` reporting a change
+    /// must reach a real bus subscriber as `runtime.agents.changed`; a frame
+    /// whose detected state/agent/label/cwd are unchanged must publish
+    /// NOTHING — the "not on every frame" rule from R6-4 — and the exit path
+    /// must publish once more.
     ///
     /// `start_flush_loop` cannot be driven from a test (see
     /// `the_flush_loop_body_calls_the_sampler_and_the_release`'s doc), so
-    /// this drives the exact call it makes instead:
-    /// `crate::gateway::pty::manager::flush_session` for the two frames, and
-    /// `crate::gateway::pty::manager::publish_agents_changed` — the same
-    /// function `start_flush_loop`'s body is pinned to call — for the emit.
-    /// That pin is what ties this behavioural proof back to production code:
-    /// deleting either `publish_agents_changed(&bus)` call inside
-    /// `start_flush_loop`, or deleting the `bus.publish(...)` line inside
-    /// `publish_agents_changed` itself, reddens something — the first
-    /// reddens the source pin, the second reddens THIS test (its subscriber
-    /// would receive nothing to count). Deleting only the `if changed`
-    /// guard around the sample-triggered call in `start_flush_loop` is a
-    /// gap neither test catches — see the task report.
+    /// this drives the exact per-tick decision it makes instead: ONE call to
+    /// `crate::gateway::pty::manager::publish_agents_changed_if(changed, &bus)`
+    /// per frame — the `if` now lives INSIDE that function (fix round 1,
+    /// review F4/Minor 8), not re-implemented here, so this test asserts
+    /// what the helper actually does rather than a copy of its logic.
     ///
-    /// The command below writes two DIFFERENT visible strings ("first" then
-    /// "second") rather than repeating one, so each write produces its own
-    /// screen diff and its own frame (`feed_and_take_frame` returns `None`
-    /// when nothing changed — a second identical write might not even
-    /// re-arm it). What must NOT change between the two frames is the
-    /// *detected* state: `shell` here is `"sh"`/`"cmd.exe"`, which
-    /// `agent_detect::identify_agent` does not recognise, and an
-    /// unrecognised agent is `Unknown` "regardless of screen content"
-    /// (`agent_detect`'s own doc, judgment §8) — so differing visible text
-    /// is exactly the case that must NOT count as a change here.
+    /// Assertions are by ORDER, not by a final count: `bus.publish` is
+    /// synchronous, so `try_recv` immediately after each call is
+    /// deterministic (no wait needed for the first two steps) — this closes
+    /// review Minor 4 (the old "seen >= 2" could not tell {frame1, frame2}
+    /// from {frame1, exit}; this can, because each step drains and asserts
+    /// before the next one runs).
+    ///
+    /// Three specific deletions redden three specific steps:
+    /// - deleting the `if !changed { return; }` guard inside
+    ///   `publish_agents_changed_if` reddens the FRAME 2 step (it would then
+    ///   see an event instead of empty);
+    /// - deleting the `bus.publish(...)` line inside that same function
+    ///   reddens the FRAME 1 step (it would see empty instead of an event);
+    /// - deleting the exit-site call in `session.rs` reddens the EXIT step.
+    ///
+    /// The source pin (`the_flush_loop_body_calls_the_sampler_and_the_release`)
+    /// still covers the one thing this test cannot: that `start_flush_loop`'s
+    /// own body still calls `publish_agents_changed_if` at all, rather than
+    /// this test's own direct calls being the only production-shaped caller
+    /// left standing.
+    ///
+    /// The command below writes "first", waits for the caller to unblock a
+    /// `read`/`pause`, then writes "second" — demand-driven rather than a
+    /// fixed sleep window (fix round 1, review Minor 5: a fixed-delay second
+    /// write can land before the FIRST `flush_session` poll on a loaded
+    /// runner, leaving no second frame to observe at all). What must NOT
+    /// change between the two frames is the *detected* state: `shell` here
+    /// is `"sh"`/`"cmd.exe"`, which `agent_detect::identify_agent` does not
+    /// recognise, and an unrecognised agent is `Unknown` "regardless of
+    /// screen content" (`agent_detect`'s own doc, judgment §8) — so
+    /// differing visible text is exactly the case that must NOT count as a
+    /// change here.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_changed_sample_reaches_the_bus_an_unchanged_one_does_not_and_exit_publishes_once() {
         let id = "t-runtime-event-wire";
@@ -573,16 +601,16 @@ mod tests {
         let opts = SpawnOptions {
             command: Some(if cfg!(windows) { "cmd.exe" } else { "sh" }.to_string()),
             args: if cfg!(windows) {
+                // `pause` waits for exactly one keystroke on stdin — the
+                // Windows analogue of `read x` below.
                 vec![
                     "/C".into(),
-                    "echo first & ping -n 2 127.0.0.1 >nul & echo second & \
-                     ping -n 30 127.0.0.1 >nul"
-                        .into(),
+                    "echo first & pause & echo second & ping -n 30 127.0.0.1 >nul".into(),
                 ]
             } else {
                 vec![
                     "-c".into(),
-                    "printf 'first'; sleep 0.3; printf 'second'; sleep 30".into(),
+                    "printf 'first'; read x; printf 'second'; sleep 30".into(),
                 ]
             },
             rows: 6,
@@ -611,7 +639,21 @@ mod tests {
             "a brand-new session's first frame must be reported as a change, \
              or this test proves nothing"
         );
-        crate::gateway::pty::manager::publish_agents_changed(&bus);
+
+        crate::gateway::pty::manager::publish_agents_changed_if(changed1, &bus);
+        assert!(
+            matches!(rx.try_recv(), Ok(raw) if is_agents_changed(&raw)),
+            "publish_agents_changed_if(true, ..) must deliver runtime.agents.changed \
+             to a real subscriber"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "exactly one event for frame 1 — no more"
+        );
+
+        // Unblock the child's `read`/`pause` so it writes its second,
+        // DIFFERENT visible text on demand rather than racing a fixed sleep.
+        session.write_input(b"\r\n").expect("write to unblock read");
 
         // Frame 2: different visible text, same detected (Unknown) state —
         // must NOT be reported as a change.
@@ -632,35 +674,108 @@ mod tests {
             "a second frame with an unchanged detected state must not be \
              reported as a change"
         );
-        // Deliberately no publish here — start_flush_loop would not either.
 
-        // Exit path: kill the child; the reader thread's EOF handling must
-        // publish once more (`session.rs`, beside `agents().remove`).
+        crate::gateway::pty::manager::publish_agents_changed_if(changed2, &bus);
+        assert!(
+            rx.try_recv().is_err(),
+            "publish_agents_changed_if(false, ..) must publish nothing"
+        );
+
+        // Exit path: kill the child; the reader thread's real EOF handling
+        // must publish once more (`session.rs`, beside `agents().remove`) —
+        // bounded poll, since this crosses a real thread boundary.
         session.kill();
 
-        let mut seen = 0usize;
+        let mut seen_exit = false;
         for _ in 0..200 {
-            while let Ok(raw) = rx.try_recv() {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
-                    if v.get("topic").and_then(|t| t.as_str())
-                        == Some(aleph_protocol::runtime::RUNTIME_AGENTS_CHANGED_TOPIC)
-                    {
-                        seen += 1;
-                    }
+            if let Ok(raw) = rx.try_recv() {
+                if is_agents_changed(&raw) {
+                    seen_exit = true;
+                    break;
                 }
-            }
-            if seen >= 2 {
-                break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-
         agents().remove(id);
-        assert_eq!(
-            seen, 2,
-            "expected exactly one runtime.agents.changed for the first \
-             (changed) frame and one for the exit path — no more, no fewer"
+        assert!(
+            seen_exit,
+            "the exit path must publish one more runtime.agents.changed"
         );
+        assert!(
+            rx.try_recv().is_err(),
+            "exactly one event from the exit path — no more"
+        );
+    }
+
+    /// F2 (fix round 1, review Important 2): a row landing in the process
+    /// table must actually reach the caller through `runtime.agents.list` —
+    /// a handler that always returned `agents: vec![]`, or whose filter
+    /// dropped every row, would pass every other test in this module.
+    ///
+    /// Ownership is REAL here, not the `Unknown`-admits-unscoped-caller
+    /// fallback the other tests in this file lean on: the session is
+    /// spawned through `pty::manager().spawn()` (not the bare
+    /// `PtySession::spawn()` the flush-wire tests use), so
+    /// `PtyManager::owner_of` has an actual `Known(Some("u-owner"))` record
+    /// — the same mechanism `handlers::pty::require_owned` filters on. The
+    /// table row itself is seeded directly via `sample()` on a synthetic
+    /// screen (the `screen()` helper above): this test's subject is the RPC
+    /// face's ownership filter, not the flush wire, which
+    /// `a_published_frame_lands_the_session_in_the_table` above already
+    /// proves.
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::parallel(pty_global_manager)]
+    async fn a_row_reaches_the_caller_through_the_list_rpc_filtered_by_owner() {
+        let opts = SpawnOptions {
+            created_by: Some("u-owner".to_string()),
+            ..Default::default()
+        };
+        let spawn = crate::gateway::pty::manager().spawn(&opts).expect("spawn");
+        let id = spawn.session_id.clone();
+        agents().remove(&id);
+
+        let s = screen(b"$ ");
+        agents().sample(&id, &spawn.shell, "", &s, false, 0);
+
+        let list_req = || crate::gateway::protocol::JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "runtime.agents.list".to_string(),
+            params: Some(serde_json::json!({})),
+            id: Some(serde_json::json!(1)),
+        };
+        let agent_ids = |resp: &crate::gateway::protocol::JsonRpcResponse| -> Vec<String> {
+            let parsed: aleph_protocol::runtime::RuntimeAgentsListResponse =
+                serde_json::from_value(resp.result.clone().expect("list always succeeds"))
+                    .expect("must be the protocol shape");
+            parsed.agents.into_iter().map(|e| e.session_id).collect()
+        };
+
+        let owner_resp = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-owner".to_string()),
+                crate::gateway::handlers::runtime::handle_list(list_req()),
+            )
+            .await;
+        let owner_ids = agent_ids(&owner_resp);
+        assert!(
+            owner_ids.contains(&id),
+            "the owner must see their own row through runtime.agents.list: {owner_ids:?}"
+        );
+
+        let other_resp = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-other".to_string()),
+                crate::gateway::handlers::runtime::handle_list(list_req()),
+            )
+            .await;
+        let other_ids = agent_ids(&other_resp);
+        assert!(
+            !other_ids.contains(&id),
+            "a different actor must not see another owner's row: {other_ids:?}"
+        );
+
+        crate::gateway::pty::manager().close(&id).ok();
+        agents().remove(&id);
     }
 
     /// Spec §5: PTY 会话消失 ⇒ 条目消失. Asserts presence FIRST — otherwise a
@@ -732,17 +847,18 @@ mod tests {
     /// it is the only thing that ever releases a held idle, and it too has a
     /// single unwitnessed call site.
     ///
-    /// Task 6 adds a third and fourth thing this same unwitnessed body must
-    /// do: call `publish_agents_changed` once per trigger (`flush_session`
-    /// reporting `changed`, and `release_expired` returning a non-empty
-    /// `Vec`) — two call sites, so the count below is `>= 2`, not merely
-    /// `contains`. The behavioural half of this proof
+    /// Task 6 adds a third thing this same unwitnessed body must do: fold
+    /// both triggers (`flush_session` reporting `changed` for any session
+    /// touched this tick, and `release_expired` returning a non-empty `Vec`)
+    /// into one bool and call `publish_agents_changed_if` with it — ONE call
+    /// site (fix round 1, review F4/Minor 8 — coalesced per tick, so the
+    /// two triggers share the one call rather than each getting their own).
+    /// The behavioural half of this proof
     /// (`a_changed_sample_reaches_the_bus_an_unchanged_one_does_not_and_exit_publishes_once`)
-    /// drives `publish_agents_changed` directly against a real bus and
-    /// cannot see whether `start_flush_loop` itself still calls it, or still
-    /// gates that call on `changed` rather than firing every tick — this pin
-    /// covers the call sites' existence, not the `if changed` guard around
-    /// the first one.
+    /// drives `publish_agents_changed_if` directly against a real bus and
+    /// cannot see whether `start_flush_loop` itself still calls it — this
+    /// pin covers the call site's existence, not whether the bool handed to
+    /// it is folded correctly from both triggers.
     ///
     /// A missing file or a missing/renamed function FAILS — it does not skip.
     /// A guard that goes quiet when it cannot find its subject is not a guard
@@ -799,14 +915,13 @@ mod tests {
              working->idle observation is never believed and a finished agent \
              reads Working forever. Body was:\n{body}"
         );
-        let emit_sites = body.matches("publish_agents_changed(").count();
         assert!(
-            emit_sites >= 2,
-            "start_flush_loop must call publish_agents_changed at BOTH trigger \
-             sites — once for flush_session's `changed`, once for a non-empty \
-             release_expired() — found {emit_sites}. Without both, the RPC \
-             list and the change event can disagree forever with every test \
-             green. Body was:\n{body}"
+            body.contains("publish_agents_changed_if("),
+            "start_flush_loop must call publish_agents_changed_if — without it \
+             neither trigger (flush_session's `changed`, or a non-empty \
+             release_expired()) can ever reach a subscriber, and the RPC list \
+             and the change event can disagree forever with every test green. \
+             Body was:\n{body}"
         );
     }
 }

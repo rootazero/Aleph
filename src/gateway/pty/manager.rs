@@ -224,22 +224,33 @@ pub(crate) fn flush_session(
     Some((frame, changed))
 }
 
-/// Publish `runtime.agents.changed` on `bus`. Payload is deliberately empty
-/// (`json!({})`) — the event means "the table changed, re-fetch via
-/// `runtime.agents.list`", which is already filtered per caller (R6-3), so
-/// the event itself carries no session id or other content to leak (see
-/// `event_scope.rs`'s `runtime.` rule doc for why that needs no
-/// `session_identity_of` arm).
+/// Publish `runtime.agents.changed` on `bus` iff `changed`. Payload is
+/// deliberately empty (`json!({})`) — the event means "the table changed,
+/// re-fetch via `runtime.agents.list`", which is already filtered per
+/// caller (R6-3), so the event itself carries no session id or other
+/// content to leak (see `event_scope.rs`'s `runtime.` rule doc for why that
+/// needs no `session_identity_of` arm).
 ///
-/// Extracted to one call so [`PtyManager::start_flush_loop`]'s two triggers
-/// — [`flush_session`] reporting `changed`, and
-/// [`crate::gateway::runtime::RuntimeAgents::release_expired`] returning a
-/// non-empty `Vec` — share one emit site, and so a test can drive the exact
-/// call `start_flush_loop` makes without needing the process-global loop
-/// itself (that loop cannot be driven from a test — see
-/// `the_flush_loop_body_calls_the_sampler_and_the_release`'s doc in
-/// `gateway::runtime`).
-pub(crate) fn publish_agents_changed(bus: &GatewayEventBus) {
+/// The `if` lives HERE, not at each call site: [`PtyManager::start_flush_loop`]
+/// folds every session's [`flush_session`] outcome plus
+/// [`crate::gateway::runtime::RuntimeAgents::release_expired`]'s non-empty
+/// check into ONE `bool` per tick before calling this — N sessions changing
+/// in one 16 ms tick still produce at most one event, the same reasoning
+/// `release_expired`'s own single-event-per-batch already used, extended
+/// across sessions (fix round 1, review Minor 8): a second event tells a
+/// subscriber nothing a first one didn't already say. The exit-path call in
+/// `session.rs` passes `true` unconditionally — a removed row is always a
+/// change.
+///
+/// One function, one decision, so a test can drive the EXACT decision
+/// `start_flush_loop` makes (not just the publish beneath it) without
+/// needing the process-global loop itself (that loop cannot be driven from
+/// a test — see `the_flush_loop_body_calls_the_sampler_and_the_release`'s
+/// doc in `gateway::runtime`).
+pub(crate) fn publish_agents_changed_if(changed: bool, bus: &GatewayEventBus) {
+    if !changed {
+        return;
+    }
     let ev = TopicEvent::new(
         aleph_protocol::runtime::RUNTIME_AGENTS_CHANGED_TOPIC,
         serde_json::json!({}),
@@ -549,40 +560,35 @@ impl PtyManager {
                     inner.sessions.values().cloned().collect()
                 };
                 let now = chrono::Utc::now().timestamp_millis();
+                // Folded across BOTH triggers and every session touched this
+                // tick, then handed to `publish_agents_changed_if` ONCE below
+                // — not sent on every frame, and not one event per session
+                // either (fix round 1, review Minor 8): an event per
+                // unchanged frame, or a duplicate for a second session
+                // changing in the same tick, is noise clients learn to
+                // ignore, and then they ignore the real ones too (R6-4).
+                let mut any_agent_changed = false;
                 for session in sessions {
                     let Some((frame, changed)) = flush_session(&session, now) else {
                         continue;
                     };
+                    any_agent_changed |= changed;
                     let Ok(data) = serde_json::to_value(&frame) else {
                         continue;
                     };
                     let ev = TopicEvent::new(aleph_protocol::pty::PTY_SCREEN_TOPIC, data);
                     let _ = bus.publish(serde_json::to_string(&ev).unwrap_or_default());
-                    // Trigger one of two: sample() saw an observable change.
-                    // Gated on `changed`, not sent on every frame — an event
-                    // per unchanged frame is noise clients learn to ignore,
-                    // and then they ignore the real ones too (R6-4).
-                    if changed {
-                        publish_agents_changed(&bus);
-                    }
                 }
                 // Sessions that went quiet produce no frame, so the loop above
                 // cannot reach them — and a finished agent going quiet is
                 // exactly what the idle hold is waiting on. This runs on the
                 // tick, not on a frame, and it is the SAME tick: no second
-                // clock (判据 §12).
-                //
-                // Trigger two of two: a held working->idle observation
-                // released. One event covers the whole batch (R6-4b) rather
-                // than one per flipped id — the payload is empty either way,
-                // so a second event would tell a subscriber nothing a first
-                // one didn't already say.
-                if !crate::gateway::runtime::agents()
+                // clock (判据 §12). A held working->idle observation released
+                // is folded into the same one-event-per-tick decision (R6-4b).
+                any_agent_changed |= !crate::gateway::runtime::agents()
                     .release_expired(now)
-                    .is_empty()
-                {
-                    publish_agents_changed(&bus);
-                }
+                    .is_empty();
+                publish_agents_changed_if(any_agent_changed, &bus);
             }
         });
     }

@@ -626,13 +626,17 @@ mod tests {
             "the agent panel's RPC face must be admin-gated"
         );
         let g = EventScopeGuard::default_rules();
+        // Via the protocol constant, not a re-typed literal (fix round 1,
+        // review Minor 6) — a rename in the protocol crate must redden this
+        // gate test, not silently keep testing a string nothing publishes.
+        let topic = aleph_protocol::runtime::RUNTIME_AGENTS_CHANGED_TOPIC;
         assert!(
-            !g.can_receive("runtime.agents.changed", &scope_for_role("member")),
-            "runtime.agents.changed must be admin-gated on the event face too — \
+            !g.can_receive(topic, &scope_for_role("member")),
+            "{topic} must be admin-gated on the event face too — \
              gating only the RPC just relocates the disclosure onto the event bus"
         );
         // The operator still receives — the half that fails silently.
-        assert!(g.can_receive("runtime.agents.changed", &scope_for_role("operator")));
+        assert!(g.can_receive(topic, &scope_for_role("operator")));
     }
 
     /// Prefix hygiene, mirroring `method_admin`'s
