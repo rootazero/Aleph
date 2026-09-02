@@ -69,6 +69,7 @@ for i in $(seq 1 28); do [ -f "$S/<name>.txt.done" ] && break; sleep 20; done
 | **T7** | `interfaces/webchat/src/api/sessions.rs` 里那个手写 `SessionRow` 镜像（含两处点名已删除的 `SessionInfo` 的注释）由 T7 整体换成 `aleph_protocol::SessionListRow`；T3 刻意没去改它的注释，因为那是给一个即将删除的结构体写新文档。 | T3 续做 1/2 |
 | **T7** | `src/bin/aleph-server/commands/resume.rs` 的穷举 match 里有五个臂（`NotFound` / `InvalidSessionKey` / `AgentForbidden` / `Unavailable` / `Failed`）**经 CLI 唯一走的那条 HTTP 传输到不了**——`admin_api/resume.rs` 把这些 outcome 转成了 4xx/5xx，`forward_to_server` 直接 `Err`，收据根本不会被解析成这些状态。臂要留（穷举是本轮要的棘轮，JSON-RPC 面产得出来），但欠一句 doc 说明「这几句今天没有渲染者」。 | T3 review |
 | **T8** | 两处**无上限**的读要在真机阶段量出真实数字，再决定下一轮加不加 cap：`chat.history` 每次 attach/reconnect 都 `load_all_events`；`sessions.list` 每次都 `load_run_markers()` 全表（**不受列表自己的 filter/limit 收窄**，会取回随后被过滤掉的会话的 marker）。两者都是 spec §4.6 授权的、A10 明确推迟 cap，所以这是**记录在案的成本**不是缺陷——但「记录在案」的意思是必须有数字。 | T3 review |
+| **T9** | T7 的渲染点是**四个函数**，写「哪张脸说了什么」时直接指它们，别从 spec §4.6 重新推一遍：Panel `chat_sidebar.rs::last_run_notice`（`hydrate_session_history` 把它推成 `role: "system"` 行、固定 id `last-run-notice`、在 `settle_plan` 之后所以坐在转录尾）与 `::run_badge` → `RunBadge::label`（宽侧栏与 phone `chat/history.rs` 两个调用点共用**同一个**判据函数，不是两份 match）；TUI `commands.rs::last_run_notice`（L976，`apply_history` 在 `adopt_active_run` 之后读 `state.session_snapshot`）与 `::last_run_mark`（L482，拼进 `SessionEntry.label`，picker 逐字画）。**文案不在代码里**：Panel 的八条在 `locales/{en,zh}.json`（`narration.last_run_*` 五条 + `chat.run_badge_*` 三条——`aleph-panel` 的 i18n 闸不许手写中文），TUI 的在函数里（那个 crate 没有 locale 表）。**并且**：计划 T7 文件表点名的 `widgets/session_picker.rs` / `wide/views/chat/messages.rs` / `shared/client/src/session_resolve.rs` 三个文件本轮**没改也不该改**（理由见「T7 续做 2/2」），别把它们写成本轮改过的文件。 | T7 续做 3/3 |
 | **T8** | Step 4 的 `just wasm` 在 worktree 里**要先补一个 `node_modules` junction**（命令与实测输出见下面「T7 续做」段）：recipe 借主检出 `.bin` 只覆盖 CLI，覆盖不了样式表自己的 `@import`。跑完 `dist/` 七个产物会脏树——它们是产物，`git checkout -- interfaces/webchat/dist` 还原，别提交进功能提交里（会顺带把 `dist/tailwind.css` 从 tailwind `4.2.2` 换成 `4.3.1` 的全文件产物）。 | T7 续做 |
 
 ### 0.2 你的第一条命令是 `git status --porcelain`（**每个 agent，无例外**）
@@ -889,3 +890,25 @@ crate**。第三条就是为它跑的：那十行是函数体内的 `//`（不�
 
 **没做**：`just wasm` 没有在本会话重跑——T7 续做 1 在 `492ac719d` 的树 + 三个提交上跑通了整条
 recipe，之后到 `eb3fcbffc` 只多了注释与本段文档，Panel 源码一个字节没动。
+
+**T7 续做 3/3 — 在 `4c4d0fd7a` 复测 + 一次「这条通知会不会说错会话」的审计**
+
+树到达时是干净的（`git status --porcelain` 空），T7 五个 Step 全部落地，所以本会话只做两件事：
+在**当前 HEAD** 上重新取一次绿（判据 #18：数字只对它测于的那个 commit 有效），以及把渲染路径
+按判据 #17 自己走一遍——不是重读上一位的记录，是打开每个调用点看那一行。
+
+| 命令（本会话实测于 `4c4d0fd7a`） | 结果 |
+|---|---|
+| `cargo test -p aleph-panel --lib`（分离式） | `1225 passed; 0 failed; 0 ignored`，`EXIT=0`。日志里两条 `panic_overlay.rs:356` / `canvas/ops.rs:340` 的 `panicked at` 是那两条守卫**自己要的** panic，不是失败 |
+| `cargo test -p aleph-tui -p aleph-cli`（前台） | `230 passed`（cli）+ `310 passed`（tui lib）+ `1 passed`（tui bin）+ `0 passed`；**0 failed** |
+| `cargo check -p alephcore --bins` | **本会话没跑**——`eb3fcbffc` 到 `4c4d0fd7a` 只多了这个 plan 文件，没有任何 crate 的源码变化，那一条的绿留在续做 2/2 的记录里，不在这里冒充新观察 |
+
+**审计里唯一有可能说谎的那条路，答案是「说不了」**：TUI 的通知不是从 `result` 第二次解析出来的，
+而是读 `state.session_snapshot`（`commands.rs` L953-959，刻意与状态栏同源），于是「快照是上一个会话的
+残留」就成了这条线唯一的失效形状——`session` 解析失败那一臂不写快照，屏幕上却仍有一份旧的。
+查下来它够不到：`switch_session`（`app/mod.rs` L1731）与 `adopt_canonical_session_key`（同文件 L1617）
+**都**把 `session_snapshot` 置回 `None`，两处都带着「keeping them would make it confidently describe
+someone else's conversation」这一句写明的理由。换会话之后没有旧快照可读，通知因此只可能描述当前这场。
+
+**另一条顺手核实的**：phone 的 `cell-sub` 是 `format!("{count_text} · {badge}")`（`chat/history.rs` L187-190），
+**追加**在消息条数后面而不是替换它——徽标没有吃掉那一行原本承载的事实。
