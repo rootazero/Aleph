@@ -192,3 +192,46 @@ for i in $(seq 1 28); do [ -f "$S/<name>.txt.done" ] && break; sleep 20; done
 **Files:** `docs/reference/FEATURE_LOCATOR.md`（§4.13a 增 ⑩–⑯：闭集 / 搬家 / refused / 快照回放 / 委托修复 / 三张脸；§6.9 投影段改写；§4.11 子 agent 恢复段；附录 D 叙事 + 附录 E.0/E.4/E.7 触发器：「sidecar 盖过日志」「按位置 stamp」「先盖 announced 后投递」「会拒掉自家 closer 的闭集」「恢复只能收紧」；L345 与代码一致；L2309/L2310/L2315/L3811/L4043 逐条改），`SESSION_KNOBS.md`（T4 已加段；复核），`SESSION_SERVICE.md`（L38 PK 说法、L77 路径），`GATEWAY.md`（投影段），`MULTI_AGENT_SYSTEM.md`（四种裁决），`qa/README.md`，`CLAUDE.md` 路由表 `src/gateway/` 行加 `qa/resume_boundary/run.sh {claims,denied,rewind,knobs,holes}`，spec `2026-08-31` §8 每项加「→ 2026-09-02 已做」指针。**只在出现新形状时**给 CLAUDE.md 判据索引加行（本轮候选：无——五个形状都落在既有 #3/#5/#8/#9/#14/#16/#17 下，触发器进附录 E）。
 
 - [ ] 逐文件改写；每一处「说谎的文档」都对应 spec §6 的清单；提交 `docs: FEATURE_LOCATOR crash-recovery r2 (projection heal, log contradictions, envelope replay, subagent facts, faces)`。
+
+---
+
+## 验证记录（实测，逐条注明测于哪个 commit）
+
+> 判据 #18：数字要带着它测的**谓词**和它测于哪个 **commit**。变异证伪只为「这一条断言**能**变红」背书，
+> 不为「实现是对的」背书。下表每一行的红名单都是**跑出来的**，不是推出来的。
+
+### T1 — `f9b30242d`
+
+| 变异 | 观察到变红的测试 |
+|---|---|
+| 每一次 dispatch 都与回执配对（撤销「最近前驱」） | `session::reduction::tests::duplicate_dispatch_pairs_each_dispatch_with_its_nearest_receipt` |
+| `RunFinished` 不再清 `open_run` | `open_run_is_none_once_a_run_finished_follows_it` · `unmarked_activity_reads_as_earlier_run_with_no_open_run` · `a_full_normal_run_reduces_to_nothing_to_recover` · `finish_without_start_is_reported_and_changes_no_reading` |
+| 删掉 `reduce_disposition` 的非 marker 检查 | `a_non_marker_in_the_marker_slice_is_refused` |
+
+绿基线：`cargo test -p alephcore --lib session::reduction` = 29 passed。
+全量 `cargo test -p alephcore --lib` = 17750 passed / 18 failed，失败**按名字**与
+`scratchpad/baseline_failures.txt` 的 18 条**完全相同**（双向差集为空）⇒ 零新增。
+
+### T2 — `8f243f3a0`
+
+| 变异 | 观察到变红的测试 |
+|---|---|
+| `last_alive_at` 退回只读 marker | `gateway::resume_coordinator::tests::recency_is_measured_from_the_last_activity_not_the_marker` · `::an_answered_call_is_still_activity` |
+| `status_of` 的 `log_inconsistent` 臂降到 `scanned > 0` 之下 | `gateway::handlers::resume::tests::a_refused_log_is_log_inconsistent_not_not_resumed` |
+| `close_open_run_after_retire` 去掉 `is_running` 闸 | `session::marker_balance::tests::an_open_run_on_a_running_session_is_left_alone` |
+
+绿基线：`cargo test -p alephcore --lib -- session::boundary_repair session::marker_balance
+session::reduction gateway::resume_coordinator gateway::handlers::resume` = 70 passed；
+`cargo check -p alephcore --bins` = 0。
+
+> ⚠️ 第一条变异的红名单是**两条**，计划里预测的是一条——`an_answered_call_is_still_activity`
+> 守的是同一条规则的另一半。**预测的红名单不是观察到的红名单**，这一行是后者。
+
+### 继承自 main 的破损（不是本轮引入，挡住最小验证集的一条）
+
+`cargo check -p alephcore --features test-helpers --all-targets` 在
+`tests/subagent_deps_inherit.rs` 上红：`error[E0063]: missing field verifier_chain in
+initializer of SpawnerBase`。该测试最后改动于 `c9b54e2b4`，`SpawnerBase.verifier_chain`
+由 `dd4a24d41` 引入，两者都在 main 上，本分支一个 commit 都没碰过这两个文件 ⇒ 按构造在
+main 上同样红。cargo 遇到第一个失败 target 就停，**后面可能还有更多陈旧集成测试**，修完要
+重跑一次才知道。T8 之前单独一个 commit 修（补显式 `verifier_chain: None`）。
