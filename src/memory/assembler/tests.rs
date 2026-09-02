@@ -363,6 +363,19 @@ async fn skeleton_fallback_respects_the_runtime_token_budget() {
         total <= 300,
         "skeleton fallback emitted {total} tokens against a 300-token budget"
     );
+    // `tokens_used` is a report; the content is what reaches the prompt.
+    // Hydration once broke out of its loop leaving the tail of each slot
+    // untruncated, so `tokens_used` stayed low while full text leaked.
+    let content_chars: usize = env
+        .slots
+        .iter()
+        .flat_map(|s| &s.items)
+        .map(|i| i.content.chars().count())
+        .sum();
+    assert!(
+        content_chars <= 300 * 4,
+        "slot content ({content_chars} chars) exceeds the 300-token budget"
+    );
 }
 
 /// A zero budget means "inject nothing this turn". The skeleton path used to
@@ -396,6 +409,20 @@ async fn zero_budget_yields_a_near_empty_skeleton_envelope() {
     assert!(
         total <= env.slots.len() as u32 * 2,
         "zero budget produced {total} tokens across {} slots",
+        env.slots.len()
+    );
+    // Same effect-level check as the 300-token test above: with each live
+    // slot floored at 1 token (4 chars), the surviving content must be a few
+    // characters per slot, never the untruncated tail of the candidate pool.
+    let content_chars: usize = env
+        .slots
+        .iter()
+        .flat_map(|s| &s.items)
+        .map(|i| i.content.chars().count())
+        .sum();
+    assert!(
+        content_chars <= env.slots.len() * 8,
+        "zero budget leaked {content_chars} chars of content across {} slots",
         env.slots.len()
     );
 }

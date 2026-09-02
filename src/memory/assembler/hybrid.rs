@@ -196,7 +196,7 @@ impl HybridAssembler {
         // Feedback (user-taught rules) is pre-populated first — exempt from the
         // LLM re-rank's discretion. Ordering matters as much as inclusion:
         // `hydrate` charges the slot budget strictly in item order and drops
-        // whatever truncates to empty, and `gather` pushes retrieval matches
+        // everything past its exhaustion point, and `gather` pushes retrieval matches
         // into the pool BEFORE the always-on High/Critical floor. Collecting in
         // pool order therefore put the floor entry last in line for the budget,
         // so query-matched feedback notes could evict the standing rule the
@@ -448,6 +448,7 @@ fn hydrate(slots: &mut [EnvelopeSlot]) {
     for slot in slots.iter_mut() {
         let mut used = 0u32;
         let budget_chars = slot.tokens_budget.saturating_mul(4) as usize;
+        let mut processed = 0usize;
         for item in slot.items.iter_mut() {
             let remaining_chars = budget_chars.saturating_sub((used as usize).saturating_mul(4));
             // Cap by CHARACTERS, matching how `budget_chars` and
@@ -459,18 +460,24 @@ fn hydrate(slots: &mut [EnvelopeSlot]) {
             item.tokens = estimate_tokens(&truncated);
             item.content = truncated;
             used = used.saturating_add(item.tokens);
-            // Once the budget is exhausted, drop the rest of the slot's items
-            // in-place. The previous shape relied on the post-loop `retain`
-            // dropping zero-tokens empties, which is fragile: any future
-            // change to `truncate_chars` that returned non-empty for length-0
-            // input would silently blow the budget. Break here so the budget
-            // invariant is enforced at the loop, not at the post-loop filter.
+            processed += 1;
             if used >= slot.tokens_budget {
                 break;
             }
         }
+        // Items past the break were never truncated: they still carry their
+        // full gathered content with `tokens: 0`, so a retain keyed on
+        // "non-empty content" would keep them and leak them verbatim into the
+        // rendered prompt. Cut the unprocessed tail before filtering. This is
+        // also what empties a zero-budget slot: its first item truncates to
+        // empty, `used >= 0` breaks immediately, and everything behind it is
+        // dropped here instead of surviving untruncated.
+        slot.items.truncate(processed);
         slot.tokens_used = used;
-        slot.items.retain(|i| i.tokens > 0 || !i.content.is_empty());
+        // Every surviving item was truncated above, and `estimate_tokens`
+        // never returns 0 for non-empty text — so empty content is exactly
+        // "truncated to nothing" and is dropped.
+        slot.items.retain(|i| !i.content.is_empty());
     }
 }
 
@@ -635,5 +642,106 @@ mod tests {
         // yielded ~133 chars (400 bytes backed off to a boundary) and 33 tokens.
         assert_eq!(slots[0].items[0].content.chars().count(), 400);
         assert_eq!(slots[0].tokens_used, 100);
+    }
+
+    fn over_budget_item(id: &str) -> EnvelopeItem {
+        EnvelopeItem {
+            id: id.into(),
+            title: id.into(),
+            // Marker prefix + bulk: each item alone overflows the 100-token
+            // (400-char) budgets used below, so any surviving untruncated item
+            // is visible in the rendered output by its marker.
+            content: format!("MARKER-{id} {}", "x".repeat(2000)),
+            source: ItemSource::Note {
+                path: id.into(),
+                category: "reference".into(),
+            },
+            relevance: 1.0,
+            tokens: 0,
+            updated_at: 0,
+            extra: Default::default(),
+        }
+    }
+
+    fn envelope_with(slots: Vec<EnvelopeSlot>) -> MemoryEnvelope {
+        MemoryEnvelope {
+            schema_version: SCHEMA_VERSION.to_string(),
+            generated_at: 0,
+            query: "q".into(),
+            agent_id: "default".into(),
+            session_id: None,
+            slots,
+            meta: EnvelopeMeta {
+                strategy: "hybrid_v1".into(),
+                candidates_considered: 3,
+                used_fallback: false,
+                fallback_reason: None,
+                llm_rerank_latency_ms: None,
+                total_latency_ms: 0,
+            },
+        }
+    }
+
+    #[test]
+    fn hydrate_drops_items_left_unprocessed_when_budget_exhausts_mid_slot() {
+        let mut slots = vec![EnvelopeSlot {
+            kind: SlotKind::RelevantNotes,
+            items: vec![
+                over_budget_item("note://a"),
+                over_budget_item("note://b"),
+                over_budget_item("note://c"),
+            ],
+            tokens_used: 0,
+            tokens_budget: 100,
+        }];
+        hydrate(&mut slots);
+
+        // The first item alone exhausts the budget; the tail must be gone,
+        // not sitting there untruncated with `tokens: 0`.
+        assert_eq!(slots[0].items.len(), 1);
+        assert_eq!(slots[0].items[0].id, "note://a");
+        let total_chars: usize = slots[0]
+            .items
+            .iter()
+            .map(|i| i.content.chars().count())
+            .sum();
+        assert!(
+            total_chars <= 400,
+            "slot content ({total_chars} chars) exceeds the 100-token budget"
+        );
+
+        // Effect check: what actually reaches the prompt is bounded too.
+        let rendered = super::super::render::render_envelope(&envelope_with(slots));
+        assert!(rendered.contains("MARKER-note://a"));
+        assert!(
+            !rendered.contains("MARKER-note://b") && !rendered.contains("MARKER-note://c"),
+            "items past the budget must not reach the rendered prompt:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn hydrate_renders_a_zero_budget_slot_as_empty() {
+        // A disabled slot (budget 0) must inject nothing: before the
+        // unprocessed-tail cut, the first item truncated to empty and broke
+        // the loop, and every item behind it leaked into the prompt verbatim.
+        let mut slots = vec![EnvelopeSlot {
+            kind: SlotKind::RelevantNotes,
+            items: vec![
+                over_budget_item("note://a"),
+                over_budget_item("note://b"),
+                over_budget_item("note://c"),
+            ],
+            tokens_used: 0,
+            tokens_budget: 0,
+        }];
+        hydrate(&mut slots);
+
+        assert!(slots[0].items.is_empty());
+        assert_eq!(slots[0].tokens_used, 0);
+        let rendered = super::super::render::render_envelope(&envelope_with(slots));
+        assert_eq!(
+            rendered, "",
+            "a zero-budget slot must render nothing at all"
+        );
     }
 }
