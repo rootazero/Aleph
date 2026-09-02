@@ -513,3 +513,14 @@ findings 里（句柄缺席时它们报 UNKNOWN——「在场且说我没看」
 > ⚠️ 另一条顺带的观察，给 T6：`agents::subagent_tool::recovery::tests::the_directory_face_reads_only_the_parent_log`
 > （计划 T6 段点名的那条已知 flake）在第一次全量里**绿**、第二次全量里**红**，两次都是全量并行、
 > 同一台机器。**它确实是 flake 而不是恒红**，这是两次观测，不是推断。
+
+**分支尖端的全量比对（测于 `24f9e3f0b`，即 T1–T5 ＋ `core/session-log` 全部落地之后）：**
+
+| 命令 | 观察到的结果 |
+|---|---|
+| `cargo test -p alephcore --bins` | `EXIT` 段见下，`87 passed; 0 failed; 0 ignored`（boot census 绿；注意仓库记忆里那句「94 条」与本机这三次跑出来的 87 不符，**以跑出来的为准**） |
+| `cargo test -p alephcore --lib` 全量 | `17815 passed; 18 failed; 17 ignored`，`finished in 183.29s` |
+| `comm -3 baseline_sorted.txt <尖端失败名单>` | **输出为空**（两侧各 18 行）⇒ **零新增**；`23d855f` 之前多出来的那两条 doctor 红已消失 |
+
+这条比对的作用域是 `--lib` ＋ `--bins`，**不含** clippy、`--features test-helpers --all-targets`
+的**运行**（只 check 过）、以及 panel / tui / cli / protocol 四个 crate。T8 Step 4 仍要跑它们。
