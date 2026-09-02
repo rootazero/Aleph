@@ -265,6 +265,24 @@
       "usage": "Usage"
     }
   },
+  "subagent_tree": {
+    "title": "Background Sub-agents",
+    "empty": "No background sub-agents yet. They appear here the moment one is spawned.",
+    "no_match": "No sub-agents match this filter.",
+    "sort": "sort:",
+    "filter": "filter:",
+    "tools_suffix": "tools",
+    "tokens_suffix": "tok",
+    "subtree_agents": "agents in subtree",
+    "heat_title": "activity heat (tools/sec)",
+    "preview_title": "result preview",
+    "thinking": "thinking…",
+    "last_tool": "last tool:",
+    "transcript_empty": "(child transcript is empty)",
+    "transcript_loading": "Loading transcript…",
+    "transcript_unavailable": "Transcript unavailable:",
+    "no_child_session": "No child transcript address (spawned before this build, or a sync child whose result was returned inline)."
+  },
   "chat": {
     "new": "+ New",
     "team_chat": "Team Chat",

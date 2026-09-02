@@ -453,12 +453,21 @@ impl AppState {
                 // arrival would un-complete a finished tool — and the trace
                 // mirror's `summarize_tool_input` params render better than the
                 // raw ones here.
+                // Live plan projection BEFORE the display-mode gate: `/tools
+                // off` hides tool rows, not the todo panel. The frame carries
+                // no tool name; the row learned it at ToolStart.
+                let output_value = serde_json::json!(result.output);
+                if result.success {
+                    if let Some(name) = self.tool_name_of(&tool_id) {
+                        self.maybe_apply_plan_from_tool(&name, &output_value);
+                    }
+                }
                 if matches!(self.tool_progress_mode, ToolProgressMode::Off) {
                     return Action::None;
                 }
                 let result = if result.success {
                     AgentTraceToolResult::Success {
-                        output: serde_json::json!(result.output),
+                        output: output_value,
                     }
                 } else {
                     AgentTraceToolResult::Error {
@@ -501,6 +510,13 @@ impl AppState {
                 // first, then settle whatever it did not mention.
                 self.reconcile_tools_from_summary(&summary.tool_summaries, &summary.errors);
                 self.settle_orphan_tools();
+                // Same invariant, second object: the todo panel's live frames
+                // ride the same lossy mirror. `RunSummary.plan` is present iff
+                // scratchpad ran this run — a `clear` arrives as an EMPTY
+                // snapshot, never as absence, so absence means "leave it".
+                if let Some(plan) = &summary.plan {
+                    self.plan = Some(plan.clone());
+                }
                 // The terminal answer, when this run produced no other copy of
                 // it. On an ordinary streamed turn the text is already on
                 // screen (twice on the wire, de-duped by `turn_streamed_len`)

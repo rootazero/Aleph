@@ -1301,6 +1301,7 @@ mod chat_cancel_gate_tests {
                 depth: 0,
                 root_session: run_id.clone(),
                 model: None,
+                child_session: None,
             },
         );
         let member = RunningRegistration::register(
@@ -1313,6 +1314,7 @@ mod chat_cancel_gate_tests {
                 depth: 1,
                 root_session: run_id.clone(),
                 model: None,
+                child_session: None,
             },
         );
         (

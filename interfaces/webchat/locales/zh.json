@@ -265,6 +265,24 @@
       "usage": "用量"
     }
   },
+  "subagent_tree": {
+    "title": "后台子代理",
+    "empty": "还没有后台子代理。子代理一被派生就会出现在这里。",
+    "no_match": "没有符合此过滤条件的子代理。",
+    "sort": "排序：",
+    "filter": "过滤：",
+    "tools_suffix": "工具",
+    "tokens_suffix": "tok",
+    "subtree_agents": "子树代理数",
+    "heat_title": "活跃度（工具/秒）",
+    "preview_title": "结果预览",
+    "thinking": "思考中……",
+    "last_tool": "最近工具：",
+    "transcript_empty": "（子代理对话为空）",
+    "transcript_loading": "正在加载对话……",
+    "transcript_unavailable": "对话不可用：",
+    "no_child_session": "此子代理没有可寻址的对话（在此版本之前派生，或结果内联返回的同步子代理）。"
+  },
   "chat": {
     "new": "+ 新建",
     "team_chat": "团队群聊",

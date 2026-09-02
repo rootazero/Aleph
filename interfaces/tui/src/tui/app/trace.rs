@@ -290,6 +290,13 @@ impl AppState {
                 Action::ScrollToBottomIfAutoScroll
             }
             AgentTraceEvent::ToolCallCompleted { call, result, .. } => {
+                // Live plan projection (`ScratchpadOutput.snapshot` rides the
+                // tool result). `maybe_apply_plan_from_tool` no-ops during a
+                // trace REPLAY — a historical run's checklist must not
+                // overwrite the live conversation's.
+                if let AgentTraceToolResult::Success { output } = result {
+                    self.maybe_apply_plan_from_tool(&call.tool_name, output);
+                }
                 self.finish_tool_execution(&call.tool_id, result, call.duration_ms);
                 Action::ScrollToBottomIfAutoScroll
             }

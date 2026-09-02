@@ -411,6 +411,7 @@ impl AlephTool for TeamDelegateTool {
                     depth: 1,
                     root_session: caller.to_string(),
                     model: None,
+                    child_session: None,
                 },
             )
         });
@@ -558,6 +559,7 @@ mod tests {
                 depth: 1,
                 root_session: leader.to_string(),
                 model: None,
+                child_session: None,
             },
         );
         assert!(tracker

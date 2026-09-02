@@ -1,52 +1,13 @@
-//! Pure state logic for the sub-agent tree view: merging live events into the
-//! flat node list, summarizing, and sort/filter over the rebuilt forest. No
-//! Leptos; host-testable. The forest itself is rebuilt via the shared
-//! `aleph_protocol::subagent_tree::build_tree` (single source, native + WASM).
+//! View-side state logic for the sub-agent tree: sort/filter over the rebuilt
+//! forest. No Leptos; host-testable. The merge (`apply_event`), the summary
+//! arithmetic (`summarize`), and the forest rebuild (`build_tree`) all live in
+//! `aleph_protocol::subagent_tree` — ONE implementation shared by the native
+//! server, this WASM panel, and the TUI. Only the sort/filter presentation
+//! choices below are panel-specific.
 
-use aleph_protocol::subagent_tree::{NodeLifecycle, SubagentNode, SubagentTreeEvent, TreeNode};
+use aleph_protocol::subagent_tree::{NodeLifecycle, TreeNode};
 
-/// Merge one live event into the flat node list (keyed by `node_id`). Spawned
-/// upserts; Progress / Settled patch an existing node (ignored if unknown — the
-/// cold-start snapshot or an earlier Spawned will have created it).
-pub fn apply_event(nodes: &mut Vec<SubagentNode>, ev: SubagentTreeEvent) {
-    match ev {
-        SubagentTreeEvent::Spawned { node } => {
-            match nodes.iter_mut().find(|n| n.node_id == node.node_id) {
-                Some(existing) => *existing = node,
-                None => nodes.push(node),
-            }
-        }
-        SubagentTreeEvent::Progress {
-            node_id,
-            activity,
-            tool_name,
-            tool_count,
-            ..
-        } => {
-            if let Some(n) = nodes.iter_mut().find(|n| n.node_id == node_id) {
-                n.tool_count = tool_count;
-                n.last_activity = Some(activity);
-                if tool_name.is_some() {
-                    n.last_tool = tool_name;
-                }
-            }
-        }
-        SubagentTreeEvent::Settled {
-            node_id,
-            lifecycle,
-            duration_ms,
-            tool_calls_made,
-            ..
-        } => {
-            if let Some(n) = nodes.iter_mut().find(|n| n.node_id == node_id) {
-                n.lifecycle = lifecycle;
-                n.elapsed_ms = duration_ms;
-                let final_tools = u32::try_from(tool_calls_made).unwrap_or(u32::MAX);
-                n.tool_count = n.tool_count.max(final_tools);
-            }
-        }
-    }
-}
+pub use aleph_protocol::subagent_tree::{apply_event, summarize};
 
 /// How to order the top-level roots.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -98,43 +59,6 @@ impl FilterMode {
             Self::Failed => node.node.lifecycle.is_failure(),
         }
     }
-}
-
-/// Header summary stats.
-pub struct Summary {
-    pub agents: usize,
-    pub tools: u32,
-    pub active: u32,
-    pub max_depth: u32,
-    pub total_duration_ms: u64,
-    /// `depth_counts[i]` = nodes at depth `i` (drives the sparkline).
-    pub depth_counts: Vec<u32>,
-}
-
-#[must_use]
-pub fn summarize(nodes: &[SubagentNode]) -> Summary {
-    let mut s = Summary {
-        agents: nodes.len(),
-        tools: 0,
-        active: 0,
-        max_depth: 0,
-        total_duration_ms: 0,
-        depth_counts: Vec::new(),
-    };
-    for n in nodes {
-        s.tools += n.tool_count;
-        if n.lifecycle == NodeLifecycle::Running {
-            s.active += 1;
-        }
-        s.max_depth = s.max_depth.max(n.depth);
-        s.total_duration_ms += n.elapsed_ms;
-        let d = n.depth as usize;
-        if s.depth_counts.len() <= d {
-            s.depth_counts.resize(d + 1, 0);
-        }
-        s.depth_counts[d] += 1;
-    }
-    s
 }
 
 /// Sort + filter the forest. `Leaves` flattens to leaf nodes (drops hierarchy);
@@ -189,7 +113,7 @@ const fn status_rank(n: &TreeNode) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aleph_protocol::subagent_tree::build_tree;
+    use aleph_protocol::subagent_tree::{build_tree, SubagentNode};
 
     fn node(id: &str, lc: NodeLifecycle) -> SubagentNode {
         SubagentNode {
@@ -206,47 +130,9 @@ mod tests {
             last_tool: None,
             last_activity: None,
             result_preview: None,
+            child_session: None,
+            total_tokens: None,
         }
-    }
-
-    #[test]
-    fn apply_spawned_then_progress_then_settled() {
-        let mut nodes = Vec::new();
-        apply_event(
-            &mut nodes,
-            SubagentTreeEvent::Spawned {
-                node: node("a", NodeLifecycle::Running),
-            },
-        );
-        assert_eq!(nodes.len(), 1);
-        apply_event(
-            &mut nodes,
-            SubagentTreeEvent::Progress {
-                node_id: "a".into(),
-                root_session: "agent:s".into(),
-                step: 2,
-                activity: "tool_called".into(),
-                tool_name: Some("grep".into()),
-                tool_count: 5,
-            },
-        );
-        assert_eq!(nodes[0].tool_count, 5);
-        assert_eq!(nodes[0].last_tool.as_deref(), Some("grep"));
-        apply_event(
-            &mut nodes,
-            SubagentTreeEvent::Settled {
-                node_id: "a".into(),
-                root_session: "agent:s".into(),
-                lifecycle: NodeLifecycle::Completed,
-                duration_ms: 4200,
-                iterations: 3,
-                tool_calls_made: 9,
-                total_tokens: 100,
-            },
-        );
-        assert_eq!(nodes[0].lifecycle, NodeLifecycle::Completed);
-        assert_eq!(nodes[0].elapsed_ms, 4200);
-        assert_eq!(nodes[0].tool_count, 9);
     }
 
     #[test]

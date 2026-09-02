@@ -1301,6 +1301,16 @@ fn ephemeral_for(agent_id: &str, request_id: Option<&str>) -> SessionKey {
     }
 }
 
+/// Public face of the background half of [`ephemeral_for`]: the session key a
+/// background child's transcript persists under. The tracker stamps this into
+/// `SubagentNode.child_session` so clients receive the address instead of
+/// re-deriving its shape — a client-side derivation would be a second source
+/// of truth that rots the day this format moves.
+#[must_use]
+pub fn background_child_session_key(agent_id: &str, request_id: &str) -> SessionKey {
+    ephemeral_for(agent_id, Some(request_id))
+}
+
 /// Prefix for a **background** child's session key, whose suffix is the
 /// caller's `request_id`. Single source shared by the minting side
 /// ([`ephemeral_for`]) and the recovery side
