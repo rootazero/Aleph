@@ -43,9 +43,14 @@ const fn default_limit() -> Option<u32> {
     Some(50)
 }
 
-/// A row in the session list output
+/// A row in the `sessions_list` **tool** output — the model-facing face of
+/// listing sessions, not the wire row. The RPC face is
+/// [`aleph_protocol::SessionListRow`], which carries the knob snapshot and
+/// `last_run`; this one carries what a model reads (`messages`,
+/// `derived_title`, `estimated_cost_usd`, `checkpoints`). Two faces of one
+/// verb, deliberately different shapes — so they must not share a name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionListRow {
+pub struct SessionsListToolRow {
     /// Session key string
     pub key: String,
     /// Session kind (main, dm, group, task, subagent, ephemeral)
@@ -87,7 +92,7 @@ pub struct SessionsListOutput {
     /// Total count of sessions returned
     pub count: usize,
     /// List of session rows
-    pub sessions: Vec<SessionListRow>,
+    pub sessions: Vec<SessionsListToolRow>,
 }
 
 /// Tool for listing sessions accessible to the current agent.
@@ -137,7 +142,7 @@ impl SessionsListTool {
     }
 
     /// Convert session metadata to list row
-    fn metadata_to_row(&self, meta: &SessionMetadata) -> SessionListRow {
+    fn metadata_to_row(&self, meta: &SessionMetadata) -> SessionsListToolRow {
         // Parse the session key to get kind and channel info
         let (kind, channel) = if let Some(parsed) = SessionKey::parse(&meta.key) {
             let kind = classify_session_kind(&parsed);
@@ -159,7 +164,7 @@ impl SessionsListTool {
             })
         });
 
-        SessionListRow {
+        SessionsListToolRow {
             key: meta.key.clone(),
             kind,
             channel,
@@ -262,7 +267,7 @@ impl AlephTool for SessionsListTool {
         );
 
         // 3. Convert to rows and parse session keys
-        let mut rows: Vec<SessionListRow> = accessible_sessions
+        let mut rows: Vec<SessionsListToolRow> = accessible_sessions
             .iter()
             .map(|meta| self.metadata_to_row(meta))
             .collect();
