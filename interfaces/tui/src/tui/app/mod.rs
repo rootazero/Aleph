@@ -886,6 +886,23 @@ pub struct AppState {
     /// Populated by a startup fetch and re-fetched on every
     /// `runtime.agents.changed` topic event — see [`AgentPanelData`].
     pub runtime_agents: AgentPanelData,
+    /// Whether the agent-panel column is shown in the sidebar.
+    ///
+    /// Starts `false`: this is a new, opt-in surface, not a replacement for
+    /// any existing screen real estate — `/agents` (`LocalCommand::Agents`)
+    /// flips it. The SOLE visibility gate `render.rs`'s layout reads; when
+    /// `false` the layout takes the exact path it took before this column
+    /// existed (R8-9 — no horizontal split, not even one with a nominally
+    /// zero-width chunk).
+    ///
+    /// Deliberately NOT `shared_ui_logic::state::agent_panel::AgentPanelState`
+    /// (or its `collapsed` field): that struct's `split_ratio` is the
+    /// Panel's draggable-divider ratio (R7-2 names Task 9's drag handle as
+    /// its driver), and R8-0 scopes drag-to-resize to the Panel only this
+    /// phase — the TUI has no divider to drive it, so holding that struct
+    /// here would be a field with no writer. A plain `bool` is the whole of
+    /// what this screen's toggle needs.
+    pub agent_panel_visible: bool,
     /// Set by [`AppState::handle_topic_event`], cleared by the main loop once
     /// it has performed the re-fetch.
     ///
@@ -966,6 +983,7 @@ impl AppState {
             chat_line_cache: crate::tui::widgets::chat_area::LineCache::default(),
 
             runtime_agents: AgentPanelData::Loading,
+            agent_panel_visible: false,
             runtime_agents_refetch_due: false,
         }
     }
@@ -1669,6 +1687,11 @@ impl AppState {
     /// Toggle verbose/debug output mode.
     pub const fn toggle_verbose(&mut self) {
         self.verbose = !self.verbose;
+    }
+
+    /// Toggle the agent-panel column's visibility (`/agents`).
+    pub const fn toggle_agent_panel(&mut self) {
+        self.agent_panel_visible = !self.agent_panel_visible;
     }
 
     /// Clear the chat screen (keep session state).

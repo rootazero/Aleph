@@ -149,6 +149,21 @@ fn toggle_verbose() {
     assert!(!state.verbose);
 }
 
+/// R8-9: the agent panel starts hidden — it is a new, opt-in surface, not
+/// on screen until `/agents` asks for it — and `toggle_agent_panel` flips
+/// exactly that one flag.
+#[test]
+fn agent_panel_starts_hidden_and_toggles() {
+    let mut state = AppState::new("s".into(), "m".into());
+    assert!(!state.agent_panel_visible);
+
+    state.toggle_agent_panel();
+    assert!(state.agent_panel_visible);
+
+    state.toggle_agent_panel();
+    assert!(!state.agent_panel_visible);
+}
+
 #[test]
 fn ensure_assistant_message_creates_one() {
     let mut state = AppState::new("s".into(), "m".into());

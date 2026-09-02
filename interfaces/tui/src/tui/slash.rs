@@ -91,6 +91,8 @@ pub enum LocalCommand {
     /// Browse providers and their models (opens the provider picker).
     /// `query` pre-filters both levels through the shared ranker.
     Providers { query: String },
+    /// Toggle the agent-panel column (live `runtime.agents.list` sidebar).
+    Agents,
 }
 
 /// A per-conversation knob reachable from a slash command.
@@ -206,6 +208,10 @@ const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
         "/providers",
         "Browse providers & models and pick one (/providers [query])",
     ),
+    (
+        "/agents",
+        "Toggle the agent panel (live runtime agents sidebar)",
+    ),
     ("/replays", "List recent persisted trace replays"),
     ("/replay", "Load a persisted trace replay by task ID"),
     ("/help", "Show available commands"),
@@ -292,6 +298,7 @@ pub fn parse_input(input: &str) -> ParsedInput {
             // even though matching is not.
             query: args.to_string(),
         }),
+        "/agents" => ParsedInput::Local(LocalCommand::Agents),
         "/replays" => ParsedInput::Local(LocalCommand::ReplayList),
         "/replay" => {
             if args.is_empty() {
@@ -450,9 +457,13 @@ mod tests {
         // knob was added but no client could set or see. The fall-through case
         // it used to illustrate is covered by the other lines here; a command
         // the gateway genuinely owns is a better example anyway.
+        //
+        // `/agents` USED to be that example — it moved to the local
+        // `LocalCommand::Agents` toggle (Task 8b); `/skills` takes its place
+        // as a command this crate does not claim.
         assert_eq!(
-            parse_input("/agents"),
-            ParsedInput::Gateway("/agents".to_string())
+            parse_input("/skills"),
+            ParsedInput::Gateway("/skills".to_string())
         );
         assert_eq!(
             parse_input("/status"),
@@ -598,7 +609,7 @@ mod tests {
     #[test]
     fn local_commands_returns_catalog() {
         let cmds = local_commands();
-        assert_eq!(cmds.len(), 18);
+        assert_eq!(cmds.len(), 19);
         assert!(cmds.iter().any(|(name, _)| *name == "/providers"));
         assert!(cmds.iter().any(|(name, _)| *name == "/clear"));
         assert!(cmds.iter().any(|(name, _)| *name == "/tier"));
@@ -612,6 +623,25 @@ mod tests {
         assert!(cmds.iter().any(|(name, _)| *name == "/tools"));
         assert!(cmds.iter().any(|(name, _)| *name == "/replays"));
         assert!(cmds.iter().any(|(name, _)| *name == "/replay"));
+        assert!(cmds.iter().any(|(name, _)| *name == "/agents"));
+    }
+
+    /// `/agents` must both parse to the toggle AND appear in the palette
+    /// catalog — R8-8: "a command that parses but is absent from the
+    /// palette is invisible". No crate-wide test ties `LOCAL_COMMAND_CATALOG`
+    /// to `parse_input` generically (checked before adding this), so this
+    /// pins the pair for the one command this task adds.
+    #[test]
+    fn parse_agents_toggle_and_its_catalog_row_agree() {
+        assert_eq!(
+            parse_input("/agents"),
+            ParsedInput::Local(LocalCommand::Agents)
+        );
+        assert_eq!(
+            parse_input("/AGENTS"),
+            ParsedInput::Local(LocalCommand::Agents)
+        );
+        assert!(local_commands().iter().any(|(name, _)| *name == "/agents"));
     }
 
     #[test]
