@@ -227,6 +227,33 @@ session::reduction gateway::resume_coordinator gateway::handlers::resume` = 70 p
 > ⚠️ 第一条变异的红名单是**两条**，计划里预测的是一条——`an_answered_call_is_still_activity`
 > 守的是同一条规则的另一半。**预测的红名单不是观察到的红名单**，这一行是后者。
 
+### T3 — `fcf6aad4e`
+
+三条变异**同批注入**（三个守卫互不相交，红名单按名字可归属），一次构建跑
+`cargo test -p alephcore --lib gateway::`：
+
+| 变异 | 观察到变红的测试 |
+|---|---|
+| `receipt_from_report` 的 `delegated` 恒 0 | `gateway::handlers::resume::tests::every_counter_the_report_carries_reaches_the_wire_with_its_value` · `::the_body_parses_back_as_the_receipt_the_cli_reads` |
+| `last_run_from_events` 的 `Err` 臂答 `CLEAN`（判据 #8 的反面） | `gateway::session_snapshot::last_run_tests::a_log_the_reducer_refuses_is_log_inconsistent_never_clean` |
+| `last_run_from_markers` 盖 `inspected = true` | `gateway::session_snapshot::last_run_tests::the_list_face_agrees_on_the_word_without_claiming_to_have_looked` |
+
+变异构建：`3905 passed; 5 failed`（上表四条 + 基线的
+`gateway::handlers::providers::tests::catalog_unknown_view_treats_as_all`）。还原后同一条命令
+所在的全量 `cargo test -p alephcore --lib` = `17775 passed / 18 failed / 17 ignored`，18 条
+**按名字**与 `scratchpad/baseline_failures.txt` 完全相同 ⇒ 零新增。
+
+> ⚠️ 两条**没有**变红的，同样是观察：`the_wire_keys_are_the_receipts_declared_fields` 对第一条
+> 变异是绿的（它守的是**键集**，不是值），`the_two_faces_never_disagree_about_the_word` 对第二条
+> 是绿的（它喂的是合法日志，走不到 `Err` 臂）。两条各自守着自己的那一问，不是冗余。
+
+> ⚠️ 本轮还有一条**不是变异、是真跑出来的回归**：`per_agent` 上写
+> `skip_serializing_if = "Vec::is_empty"` 之后第一次全量 `--lib` 是 `20 failed`，多出来的两条是
+> `gateway::handlers::gateway_metrics::tests::run_concurrency_reports_default_global_total` 与
+> `::the_per_agent_breakdown_is_withheld_from_a_member_and_only_a_member`——仓里既有的测试早就
+> 把「这个键在不在」钉成了权限信号，而空数组把「被扣下」和「没人在跑」压成同一串字节（判据 #17）。
+> 改成 `Option<Vec<_>>` 后两条转绿。**基线名单比对是这么发现的，不是读代码读出来的。**
+
 ### 继承自 main 的破损（不是本轮引入，挡住最小验证集的一条）
 
 `cargo check -p alephcore --features test-helpers --all-targets` 在
