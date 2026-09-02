@@ -735,3 +735,52 @@ T8 若要跑集成面，优先按 target 点名，而不是先试 `--test '*'` �
 T6 的两次续做在过滤跑里各看到它绿一次，并且明确说了「找不到可疑机制、不为一个定位不到的机制
 发明修法」；现在多了一次**并行**绿，方向一致但强度不够。**T8 的全量跑要连着看它几次**，
 只有稳定复现绿才配改基线；在那之前 `baseline_failures.txt` 保持 18 条不动。
+
+### T6 review 修复 — `018efb4e6`（两条阻塞项 + 三条计划项，四条变异四条红）
+
+**阻塞 1（判据 #1「同一事实的两份表述」，最贵的那份在发给模型的第一行）**：只替**一个**孩子说话的
+开机通知，头上写着 `succeeded`，正下方的正文写着 "1 background sub-agent(s) ended without
+success"。原因是 T6 给 `summarize_orphans` 加了第三个人群（`Settled` 但 outcome 非 completed），
+却没动事件的 `success: interrupted == 0`——那个谓词只问"还有没有人是 `Running`"，对一条
+`phase == Settled, outcome == Some("failed")` 的记录答 `true`；而 `announce_one` 只在
+`batch.len() > 1` 时才不下判决。T6 新加的守卫 `a_grouped_notice_counts_its_children_instead_of_judging_one`
+只走 N=2 那条路，所以 N=1 这半边一条都不红。修法是把事件构造收进
+`background_persistence::orphan_notice`（批次判决的唯一产地），`success` 改成读 **outcome**：
+每个 run 都必须 `phase == Settled && outcome == Some("completed")`——与 `settled_label`
+拒绝把未知 outcome 叫作 completed 是同一个立场。`error` / `interrupted` 不动，它们描述的是中断。
+
+**阻塞 2（判据 #8 在一个新键上）**：`in_flight_calls` 在**三条**"我不知道"的路径上渲染成 `[]`——
+目录面从不问、`get_events` 读不到、reducer **拒绝**了子日志。同一个对象上的 `progress` 对这三条
+都诚实地答 `null`，于是相邻两个键给出互相矛盾的答案，而 `[]` 读起来是"没有调用悬在半空"。
+`in_flight_json` 现在收同一个 `progress`：那次读没发生（或被拒）就答 `null`；读发生了而没有悬空
+调用仍答 `[]`，那是事实。
+
+**顺带关掉的三条计划项**：`list` 面显式渲染 `progress: null`（缺键读起来像"这个子 agent 没有
+进度"）；fork 子的 own-scope 切片第一次有了测试（marker 经 `fork::mark_forked` 真实构造，因此
+这一条测试付得起一个真事件库，计数 double 无法被 emit）；reclaim 那条测试现在断言修复后的 run
+以 `Abandoned` 关闭、且孤儿 `ToolError` 追加在 `RunFinished` **之前**（原来只 match `{ run_id, .. }`，
+两者都没查）。
+
+**四条变异，一次跑完，红名单逐条对得上**（`cargo test -p alephcore --lib -- agents::
+teams::dispatcher gateway::subagent_announce`，`527 passed; 4 failed`，EXIT=101）：
+
+| 变异 | 观察到变红的测试 |
+|---|---|
+| ① `orphan_notice` 的 `success` 改回 `interrupted == 0` | `gateway::subagent_announce::tests::a_lone_child_that_settled_unsuccessfully_is_not_called_succeeded` |
+| ② `in_flight_json` 去掉 `progress.is_none() -> Null` | `agents::subagent_tool::recovery::tests::a_row_nobody_read_says_it_does_not_know_about_in_flight_calls_either` |
+| ③ `to_list_row` 两臂去掉 `"progress": progress_json(None)` | `agents::subagent_tool::recovery::tests::list_rows_say_they_did_not_ask_for_progress` |
+| ④ `recover_from_log` 的 `own_work_start` 切片改成 `&events[..]` | `agents::subagent_tool::recovery::tests::a_forked_childs_progress_excludes_the_parents_copied_calls` |
+
+**绿基线（同一 commit，变异还原前）**：同一条命令 `531 passed; 0 failed; 0 ignored;
+17352 filtered out`，EXIT=0；`cargo check -p alephcore` EXIT=0。还原后
+`git status --porcelain` 为空。
+
+**reclaim 那两条新断言没有变异证据**：让它们变红要改的是 `session::boundary_repair`
+（不属本次改动面），故只记为"断言加强"，不记为已验证的闸。
+
+**没做（留给后续）**：spec §143 的分组头 "K finished, M ended without success, J interrupted"
+仍是纯计数。要落地它得给 `SubAgentCompletionEvent` 加一个新字段，而那个结构体在树里有
+**9 个字面量构造点**（`src/agents/background_persistence.rs` · `subagent_tool/spawn.rs` ·
+`event/{filter,global_bus,types}.rs` · `event/tests/integration.rs` · `gateway/subagent_announce.rs`），
+不属于 review 允许的"trivial"。阻塞项 1 修好之后头文本已不再说谎（N>1 只计数，N=1 的判决
+来自 outcome），所以这是**缺信息**不是**错信息**。
