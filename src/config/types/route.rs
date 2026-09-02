@@ -152,10 +152,13 @@ pub struct ModelRouteConfig {
     /// Background health-probe interval for circuit-open providers, in
     /// seconds. `None`/`0` (default) disables the prober: probing spends real
     /// requests (and money) against the endpoint, so it is strictly opt-in.
-    /// When set, a background task pings each provider whose circuit breaker
-    /// is open and resets the breaker on a successful ping, so a low-traffic
-    /// provider does not stay sidelined for the full breaker cooldown waiting
-    /// for a real request to probe it. Hot-tunable via `route_config.update`.
+    /// When set, a background task pings each **enabled** provider whose
+    /// circuit breaker is open and resets the breaker on a successful ping, so
+    /// a low-traffic provider does not stay sidelined for the full breaker
+    /// cooldown waiting for a real request to probe it. A provider the operator
+    /// disabled is never dialled. Hot-tunable via `route_config.update` (and
+    /// from the Panel's route page): the loop re-reads this at most 30s after
+    /// the change, so switching it off does not buy one more probe pass.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health_probe_interval_secs: Option<u64>,
 }

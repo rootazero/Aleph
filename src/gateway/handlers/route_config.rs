@@ -280,6 +280,80 @@ pub async fn handle_update(
 mod tests {
     use super::*;
 
+    /// The Panel's route DTOs, read at compile time. Comparing against the
+    /// *source* is deliberate: `alephcore` does not depend on `aleph-panel`, so
+    /// `RouteConfigUpdate` cannot be constructed here, and a test that
+    /// round-tripped this crate's own payload would only be testing serde.
+    /// Precedent: `handlers/cron/real.rs`'s Panel-DTO scan.
+    const PANEL_SETTINGS_API: &str =
+        include_str!("../../../interfaces/webchat/src/api/settings.rs");
+    const THIS_HANDLER: &str = include_str!("route_config.rs");
+
+    /// Collect the field names of a struct from Rust source (`pub` optional).
+    fn struct_fields(source: &str, struct_name: &str) -> Vec<String> {
+        let start = source
+            .find(&format!("struct {struct_name} {{"))
+            .unwrap_or_else(|| panic!("struct {struct_name} not found"));
+        let body = &source[start..];
+        let end = body.find("\n}").expect("unterminated struct");
+        body[..end]
+            .lines()
+            .skip(1)
+            .filter_map(|line| {
+                let rest = line.trim();
+                let rest = rest.strip_prefix("pub ").unwrap_or(rest);
+                let name = rest.split(':').next()?.trim();
+                (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+                    .then(|| name.to_string())
+            })
+            .collect()
+    }
+
+    /// `handle_update` replaces the whole `[route]` section: whatever the Panel
+    /// leaves out of its payload is *erased*, not preserved. So every field
+    /// this handler parses must exist on the Panel's update DTO — and on its
+    /// view DTO, or the Panel could never have loaded the value it sends back.
+    ///
+    /// `health_probe_interval_secs` shipped on the server and on the tool face
+    /// while both Panel structs stayed silent about it, so any route save from
+    /// the Panel switched a running health prober off — no log, nothing on
+    /// screen, and no way to tell it had happened.
+    #[test]
+    fn panel_update_payload_carries_every_field_handle_update_replaces() {
+        let payload = RouteModePayload {
+            mode: "auto".to_string(),
+            allow_cloud_escalation: false,
+            local_provider: None,
+            cloud_provider: None,
+            load_balance: None,
+            rate_limits: BTreeMap::new(),
+            health_probe_interval_secs: None,
+        };
+        let Value::Object(wire) = serde_json::to_value(&payload).expect("serialize") else {
+            panic!("payload must serialize to an object");
+        };
+        // `serde_json::Map` orders its keys, so compare against a sorted list.
+        let wire_keys: Vec<String> = wire.keys().cloned().collect();
+        // The wire key set must still be the whole struct: a `skip_serializing_if`
+        // added here would otherwise quietly shrink what this guard checks.
+        let mut declared = struct_fields(THIS_HANDLER, "RouteModePayload");
+        declared.sort();
+        assert_eq!(
+            wire_keys, declared,
+            "RouteModePayload's wire keys no longer match its fields"
+        );
+
+        for dto in ["RouteConfigUpdate", "RouteConfigView"] {
+            let panel = struct_fields(PANEL_SETTINGS_API, dto);
+            let missing: Vec<&String> = wire_keys.iter().filter(|k| !panel.contains(k)).collect();
+            assert!(
+                missing.is_empty(),
+                "Panel {dto} never names {missing:?}; handle_update full-replaces \
+                 [route], so a save from the Panel wipes those settings"
+            );
+        }
+    }
+
     /// The rejection message must list exactly what the parser takes. These two
     /// drifted once — `cost_aware` was accepted but advertised as invalid — and
     /// the only symptom was users (and option-list-building clients) believing a

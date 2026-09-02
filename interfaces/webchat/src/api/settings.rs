@@ -137,6 +137,11 @@ pub struct RouteConfigView {
     /// Per-provider rpm/tpm ceilings keyed by provider name. Empty when unset.
     #[serde(default)]
     pub rate_limits: BTreeMap<String, RateLimit>,
+    /// Background health-probe interval for circuit-open providers, in seconds.
+    /// `None`/`0` = the prober idles. Loaded so the save closure can send it
+    /// back — see [`RouteConfigUpdate::health_probe_interval_secs`].
+    #[serde(default)]
+    pub health_probe_interval_secs: Option<u64>,
 }
 
 /// `route_config.update` payload.
@@ -157,6 +162,22 @@ pub struct RouteConfigUpdate {
     /// full-replace does not wipe configured limits.
     #[serde(default)]
     pub rate_limits: BTreeMap<String, RateLimit>,
+    /// Background health-probe interval in seconds (`None`/`0` = off). Sent on
+    /// every save so the backend full-replace does not switch a running prober
+    /// off. Both faces edit it directly (a number field on the wide route page,
+    /// an inline cell on the phone one), so the value the user sees is the
+    /// value that goes back.
+    #[serde(default)]
+    pub health_probe_interval_secs: Option<u64>,
+}
+
+/// Parse the health-probe interval field both route screens render. Blank,
+/// non-numeric and `0` all mean "the prober idles" — the same normalisation
+/// `route_config.update` applies server-side (it is the authority; this only
+/// keeps the field's own value stable across a save).
+#[must_use]
+pub fn parse_probe_interval(raw: &str) -> Option<u64> {
+    raw.trim().parse::<u64>().ok().filter(|&s| s > 0)
 }
 
 pub struct RouteConfigApi;
@@ -207,11 +228,44 @@ mod route_serde_tests {
             cloud_provider: None,
             load_balance: Some("usage_based".into()),
             rate_limits,
+            health_probe_interval_secs: None,
         };
         let j = serde_json::to_value(&u).unwrap();
         assert_eq!(j["load_balance"], "usage_based");
         assert_eq!(j["rate_limits"]["anthropic"]["rpm"], 60);
         assert_eq!(j["rate_limits"]["anthropic"]["tpm"], 90_000);
+    }
+
+    /// A value the operator set from a TOML edit or the `route_config` tool has
+    /// to come back out of the Panel unchanged: `route_config.update` replaces
+    /// the whole `[route]` section, so a key the Panel never sends is a key the
+    /// backend erases. This mirrors what both save closures do with the loaded
+    /// view (`platform/wide/views/settings/route.rs`,
+    /// `platform/phone/settings/model_route.rs`) — they seed a signal from the
+    /// view and hand it straight back.
+    #[test]
+    fn probe_interval_survives_the_load_save_round_trip() {
+        let view: RouteConfigView = serde_json::from_value(serde_json::json!({
+            "mode": "auto",
+            "health_probe_interval_secs": 300,
+        }))
+        .unwrap();
+        assert_eq!(view.health_probe_interval_secs, Some(300));
+
+        let u = RouteConfigUpdate {
+            mode: view.mode,
+            allow_cloud_escalation: view.allow_cloud_escalation,
+            local_provider: None,
+            cloud_provider: None,
+            load_balance: view.load_balance,
+            rate_limits: view.rate_limits,
+            health_probe_interval_secs: view.health_probe_interval_secs,
+        };
+        assert_eq!(
+            serde_json::to_value(&u).unwrap()["health_probe_interval_secs"],
+            300,
+            "a Panel save must not switch a running health prober off"
+        );
     }
 
     #[test]
