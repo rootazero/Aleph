@@ -87,6 +87,7 @@ pub fn AgentPanel() -> impl IntoView {
 
     let refresh = move || {
         spawn_local(async move {
+            loading.set(true);
             match RuntimeAgentsApi::list(&dash).await {
                 Ok(resp) => {
                     entries.set(resp.agents);
@@ -108,7 +109,13 @@ pub fn AgentPanel() -> impl IntoView {
         if dash.is_connected.get() {
             refresh();
         } else {
+            // Disconnect must fall through to the loading branch below, not
+            // the empty-list one — "not connected" and "confirmed zero
+            // agents" are different facts (判据 §8/§9; the exact collapse
+            // R8-11 forbids on the TUI face). `error` is intentionally left
+            // as-is: a disconnect is not what produced it.
             entries.set(Vec::new());
+            loading.set(true);
         }
     });
 
