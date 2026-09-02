@@ -200,12 +200,18 @@ pub struct PtyManager {
 /// [`crate::gateway::runtime::RuntimeAgents::release_expired`] — every entry
 /// touched in one pass carries the same instant, and the sampler never reads
 /// a clock of its own (判据 §12).
+///
+/// The second element of the return is [`RuntimeAgents::sample`]'s own
+/// `changed` bool (task 6): whether anything OBSERVABLE — state, agent,
+/// label, or cwd — differs from the entry's last sample. `start_flush_loop`
+/// keys `runtime.agents.changed` on it, so it is surfaced here rather than
+/// discarded, exactly like the frame it travels with.
 pub(crate) fn flush_session(
     session: &PtySession,
     now: i64,
-) -> Option<aleph_protocol::pty::PtyScreenFrame> {
+) -> Option<(aleph_protocol::pty::PtyScreenFrame, bool)> {
     let frame = session.feed_and_take_frame()?;
-    session.with_screen(|screen| {
+    let changed = session.with_screen(|screen| {
         crate::gateway::runtime::agents().sample(
             &session.id,
             &session.shell,
@@ -213,9 +219,32 @@ pub(crate) fn flush_session(
             screen,
             session.is_closed(),
             now,
-        );
+        )
     });
-    Some(frame)
+    Some((frame, changed))
+}
+
+/// Publish `runtime.agents.changed` on `bus`. Payload is deliberately empty
+/// (`json!({})`) — the event means "the table changed, re-fetch via
+/// `runtime.agents.list`", which is already filtered per caller (R6-3), so
+/// the event itself carries no session id or other content to leak (see
+/// `event_scope.rs`'s `runtime.` rule doc for why that needs no
+/// `session_identity_of` arm).
+///
+/// Extracted to one call so [`PtyManager::start_flush_loop`]'s two triggers
+/// — [`flush_session`] reporting `changed`, and
+/// [`crate::gateway::runtime::RuntimeAgents::release_expired`] returning a
+/// non-empty `Vec` — share one emit site, and so a test can drive the exact
+/// call `start_flush_loop` makes without needing the process-global loop
+/// itself (that loop cannot be driven from a test — see
+/// `the_flush_loop_body_calls_the_sampler_and_the_release`'s doc in
+/// `gateway::runtime`).
+pub(crate) fn publish_agents_changed(bus: &GatewayEventBus) {
+    let ev = TopicEvent::new(
+        aleph_protocol::runtime::RUNTIME_AGENTS_CHANGED_TOPIC,
+        serde_json::json!({}),
+    );
+    let _ = bus.publish(serde_json::to_string(&ev).unwrap_or_default());
 }
 
 static GLOBAL: LazyLock<PtyManager> = LazyLock::new(PtyManager::new);
@@ -521,7 +550,7 @@ impl PtyManager {
                 };
                 let now = chrono::Utc::now().timestamp_millis();
                 for session in sessions {
-                    let Some(frame) = flush_session(&session, now) else {
+                    let Some((frame, changed)) = flush_session(&session, now) else {
                         continue;
                     };
                     let Ok(data) = serde_json::to_value(&frame) else {
@@ -529,13 +558,31 @@ impl PtyManager {
                     };
                     let ev = TopicEvent::new(aleph_protocol::pty::PTY_SCREEN_TOPIC, data);
                     let _ = bus.publish(serde_json::to_string(&ev).unwrap_or_default());
+                    // Trigger one of two: sample() saw an observable change.
+                    // Gated on `changed`, not sent on every frame — an event
+                    // per unchanged frame is noise clients learn to ignore,
+                    // and then they ignore the real ones too (R6-4).
+                    if changed {
+                        publish_agents_changed(&bus);
+                    }
                 }
                 // Sessions that went quiet produce no frame, so the loop above
                 // cannot reach them — and a finished agent going quiet is
                 // exactly what the idle hold is waiting on. This runs on the
                 // tick, not on a frame, and it is the SAME tick: no second
-                // clock (判据 §12). Task 6 will emit the returned ids.
-                crate::gateway::runtime::agents().release_expired(now);
+                // clock (判据 §12).
+                //
+                // Trigger two of two: a held working->idle observation
+                // released. One event covers the whole batch (R6-4b) rather
+                // than one per flipped id — the payload is empty either way,
+                // so a second event would tell a subscriber nothing a first
+                // one didn't already say.
+                if !crate::gateway::runtime::agents()
+                    .release_expired(now)
+                    .is_empty()
+                {
+                    publish_agents_changed(&bus);
+                }
             }
         });
     }

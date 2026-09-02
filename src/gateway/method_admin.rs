@@ -262,6 +262,10 @@ const ADMIN_PREFIXES: &[&str] = &[
     // `[sandbox.command_policy]` pattern matching or exec-tier approval —
     // it is a raw shell, so the two are not comparable; this is strictly
     // more dangerous, not equally protected by a different layer.
+    "runtime.", // read-only agent panel over the same PTY sessions `pty.`
+    // gates — a session id, its cwd, and what is running in it, seen
+    // through a different lens. Same disclosure, same gate; see
+    // `gateway::handlers::runtime`'s module doc.
     // --- Direct tool-execution RPC: same cross-check as `cron.`/`heartbeat.`
     // above, and the sharpest case of it. `tools.invoke` dispatches straight
     // off the raw `ToolRegistry` — its own module doc says so, and its own
@@ -714,6 +718,7 @@ mod tests {
             "wizard.start",
             "diagnostics.run",
             "pty.spawn",
+            "runtime.agents.list",
             // exec approval — BOTH registered methods are carved open (a
             // member resolving their own parked call; see MEMBER_CARVE_OUTS),
             // so what is pinned here is the PREFIX, through a name that is

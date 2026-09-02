@@ -370,6 +370,7 @@ mod tests {
         ("routing_rules.list", Class::Admin),
         ("routing_rules.move", Class::Admin),
         ("routing_rules.update", Class::Admin),
+        ("runtime.agents.list", Class::Admin),
         ("runtimes.install", Class::Admin),
         ("runtimes.list", Class::Admin),
         ("runtimes.refresh", Class::Admin),

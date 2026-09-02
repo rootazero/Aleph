@@ -32,6 +32,7 @@
 //! | exec_grants | Standing approval grants (list / revoke) |
 //! | clarification | `ask_user` clarification pending/resolve (HITL P4) |
 //! | pty | Embedded interactive terminal sessions (spawn/input/resize/close/list) |
+//! | runtime | Read-only agent panel (which agent is running in which PTY session) |
 //! | identity | Identity/soul management |
 //! | workspace | Workspace isolation management |
 //! | daemon | Daemon status, shutdown, logs |
@@ -109,6 +110,7 @@ pub mod rerank_config;
 pub mod resume;
 pub mod route_config;
 pub mod routing_rules;
+pub mod runtime;
 pub mod runtimes;
 pub mod search_config;
 pub mod secret_migration;
@@ -374,6 +376,11 @@ impl HandlerRegistry {
         registry.register("pty.close", pty::handle_close);
         registry.register("pty.list", pty::handle_list);
         registry.register("pty.attach", pty::handle_attach);
+
+        // Read-only agent panel — same "pty." operator gate (see
+        // `handlers::runtime`'s module doc), reads the sampler table only
+        // (no live Config needed), so it takes this stateless site.
+        registry.register("runtime.agents.list", runtime::handle_list);
 
         // Heartbeat handlers — real handlers wired with HeartbeatService in Gateway startup.
 

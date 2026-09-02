@@ -377,6 +377,12 @@ fn spawn_reader(
             // alive" (判据 §6), and only an explicit removal gives task 6 an
             // edge to emit `runtime.agents.changed` on.
             crate::gateway::runtime::agents().remove(&session.id);
+            // Task 6: the edge above IS the change — a removed row is
+            // exactly what `runtime.agents.list`'s next fetch will no longer
+            // show. Same emit `start_flush_loop` uses.
+            if let Some(bus) = &bus {
+                super::manager::publish_agents_changed(bus);
+            }
         })
         .ok();
 }

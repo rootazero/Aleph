@@ -530,6 +530,139 @@ mod tests {
         );
     }
 
+    /// THE EVENT WIRE (task 6). `sample()` reporting a change must reach a
+    /// real bus subscriber as `runtime.agents.changed`; a frame whose
+    /// detected state/agent/label/cwd are unchanged must publish NOTHING —
+    /// the "not on every frame" rule from R6-4 — and the exit path must
+    /// publish once more.
+    ///
+    /// `start_flush_loop` cannot be driven from a test (see
+    /// `the_flush_loop_body_calls_the_sampler_and_the_release`'s doc), so
+    /// this drives the exact call it makes instead:
+    /// `crate::gateway::pty::manager::flush_session` for the two frames, and
+    /// `crate::gateway::pty::manager::publish_agents_changed` — the same
+    /// function `start_flush_loop`'s body is pinned to call — for the emit.
+    /// That pin is what ties this behavioural proof back to production code:
+    /// deleting either `publish_agents_changed(&bus)` call inside
+    /// `start_flush_loop`, or deleting the `bus.publish(...)` line inside
+    /// `publish_agents_changed` itself, reddens something — the first
+    /// reddens the source pin, the second reddens THIS test (its subscriber
+    /// would receive nothing to count). Deleting only the `if changed`
+    /// guard around the sample-triggered call in `start_flush_loop` is a
+    /// gap neither test catches — see the task report.
+    ///
+    /// The command below writes two DIFFERENT visible strings ("first" then
+    /// "second") rather than repeating one, so each write produces its own
+    /// screen diff and its own frame (`feed_and_take_frame` returns `None`
+    /// when nothing changed — a second identical write might not even
+    /// re-arm it). What must NOT change between the two frames is the
+    /// *detected* state: `shell` here is `"sh"`/`"cmd.exe"`, which
+    /// `agent_detect::identify_agent` does not recognise, and an
+    /// unrecognised agent is `Unknown` "regardless of screen content"
+    /// (`agent_detect`'s own doc, judgment §8) — so differing visible text
+    /// is exactly the case that must NOT count as a change here.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_changed_sample_reaches_the_bus_an_unchanged_one_does_not_and_exit_publishes_once() {
+        let id = "t-runtime-event-wire";
+        agents().remove(id);
+
+        let bus =
+            crate::sync_primitives::Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+        let mut rx = bus.subscribe();
+
+        let opts = SpawnOptions {
+            command: Some(if cfg!(windows) { "cmd.exe" } else { "sh" }.to_string()),
+            args: if cfg!(windows) {
+                vec![
+                    "/C".into(),
+                    "echo first & ping -n 2 127.0.0.1 >nul & echo second & \
+                     ping -n 30 127.0.0.1 >nul"
+                        .into(),
+                ]
+            } else {
+                vec![
+                    "-c".into(),
+                    "printf 'first'; sleep 0.3; printf 'second'; sleep 30".into(),
+                ]
+            },
+            rows: 6,
+            cols: 40,
+            ..Default::default()
+        };
+        let session = PtySession::spawn(id.into(), &opts, Some(bus.clone())).expect("spawn");
+
+        // Frame 1: a brand-new session's first observation is unconditionally
+        // a change (`sample`'s `previous.is_none_or(...)` — nothing to
+        // compare against yet).
+        let mut changed1 = None;
+        for _ in 0..100 {
+            let now = chrono::Utc::now().timestamp_millis();
+            if let Some((_frame, changed)) =
+                crate::gateway::pty::manager::flush_session(&session, now)
+            {
+                changed1 = Some(changed);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let changed1 = changed1.expect("the child produced no first frame in 2s");
+        assert!(
+            changed1,
+            "a brand-new session's first frame must be reported as a change, \
+             or this test proves nothing"
+        );
+        crate::gateway::pty::manager::publish_agents_changed(&bus);
+
+        // Frame 2: different visible text, same detected (Unknown) state —
+        // must NOT be reported as a change.
+        let mut changed2 = None;
+        for _ in 0..100 {
+            let now = chrono::Utc::now().timestamp_millis();
+            if let Some((_frame, changed)) =
+                crate::gateway::pty::manager::flush_session(&session, now)
+            {
+                changed2 = Some(changed);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let changed2 = changed2.expect("the child produced no second frame in 2s");
+        assert!(
+            !changed2,
+            "a second frame with an unchanged detected state must not be \
+             reported as a change"
+        );
+        // Deliberately no publish here — start_flush_loop would not either.
+
+        // Exit path: kill the child; the reader thread's EOF handling must
+        // publish once more (`session.rs`, beside `agents().remove`).
+        session.kill();
+
+        let mut seen = 0usize;
+        for _ in 0..200 {
+            while let Ok(raw) = rx.try_recv() {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                    if v.get("topic").and_then(|t| t.as_str())
+                        == Some(aleph_protocol::runtime::RUNTIME_AGENTS_CHANGED_TOPIC)
+                    {
+                        seen += 1;
+                    }
+                }
+            }
+            if seen >= 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        agents().remove(id);
+        assert_eq!(
+            seen, 2,
+            "expected exactly one runtime.agents.changed for the first \
+             (changed) frame and one for the exit path — no more, no fewer"
+        );
+    }
+
     /// Spec §5: PTY 会话消失 ⇒ 条目消失. Asserts presence FIRST — otherwise a
     /// child that exits before the first flush would let this test pass by
     /// observing an absence that was never a presence (判据 §2).
@@ -599,6 +732,18 @@ mod tests {
     /// it is the only thing that ever releases a held idle, and it too has a
     /// single unwitnessed call site.
     ///
+    /// Task 6 adds a third and fourth thing this same unwitnessed body must
+    /// do: call `publish_agents_changed` once per trigger (`flush_session`
+    /// reporting `changed`, and `release_expired` returning a non-empty
+    /// `Vec`) — two call sites, so the count below is `>= 2`, not merely
+    /// `contains`. The behavioural half of this proof
+    /// (`a_changed_sample_reaches_the_bus_an_unchanged_one_does_not_and_exit_publishes_once`)
+    /// drives `publish_agents_changed` directly against a real bus and
+    /// cannot see whether `start_flush_loop` itself still calls it, or still
+    /// gates that call on `changed` rather than firing every tick — this pin
+    /// covers the call sites' existence, not the `if changed` guard around
+    /// the first one.
+    ///
     /// A missing file or a missing/renamed function FAILS — it does not skip.
     /// A guard that goes quiet when it cannot find its subject is not a guard
     /// (判据 §2).
@@ -653,6 +798,15 @@ mod tests {
             "start_flush_loop must call release_expired — without it a held \
              working->idle observation is never believed and a finished agent \
              reads Working forever. Body was:\n{body}"
+        );
+        let emit_sites = body.matches("publish_agents_changed(").count();
+        assert!(
+            emit_sites >= 2,
+            "start_flush_loop must call publish_agents_changed at BOTH trigger \
+             sites — once for flush_session's `changed`, once for a non-empty \
+             release_expired() — found {emit_sites}. Without both, the RPC \
+             list and the change event can disagree forever with every test \
+             green. Body was:\n{body}"
         );
     }
 }
