@@ -156,12 +156,14 @@ pub(crate) fn apply_trace_event(
                 // JSON-encoded STRING inside `Success.output` (the same text the
                 // model is shown), so `output` is a `Value::String`, not an
                 // object — `o.get("snapshot")` on a string is always `None`.
-                // Decode the string first; tolerate the already-object form too.
-                let output = result.get("Success").and_then(|s| s.get("output"));
-                let decoded = output
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
-                let snapshot = decoded.as_ref().or(output).and_then(|o| o.get("snapshot"));
+                // The decode lives in `aleph_protocol::plan` now, shared with
+                // the gateway's run-end latch and the TUI's live projection:
+                // this view had the decode and its two twins did not (§16).
+                let snapshot_value = result
+                    .get("Success")
+                    .and_then(|s| s.get("output"))
+                    .and_then(aleph_protocol::plan::snapshot_value_from_tool_output);
+                let snapshot = snapshot_value.as_ref();
                 // Sink the prior plan before the new snapshot overwrites it.
                 // Only a fresh decomposition (`set_plan`) or explicit teardown
                 // (`clear`) supersedes — `start_item`/`complete_item`/
