@@ -335,7 +335,31 @@ Step 3 说「`grep -rn SessionInfo src` **全部**改引用」。`fcf6aad4e` 改
 
 **仍然欠着**：本次没跑 `cargo clippy --workspace --all-targets`（要先
 `just _stage-shell-placeholders`，~6 min+）。本次改动是一次纯改名加一段 doc，`check` 与
-`--lib` 都绿——但这句话是「没测」，不是「测过了」。
+`--lib` 都绿——但这句话是「没测」，不是「测过了」。**已在下一节补上。**
+
+### T3 收尾 — `d447bd93f`（clippy 与「最终 commit 上的全量红名单」）
+
+T3 的代码在 `2aa2a569e` 就已经完整（Step 1–3、Step 5 全部落地，Step 4 六条命令全部有观测）。
+这一轮只补两件**只有跑一次才能知道答案**的事，一个字节的代码都没改。
+
+| 命令 | 观察到的结果 |
+|---|---|
+| `just _stage-shell-placeholders` → `cargo clippy --workspace --all-targets --exclude aleph-desktop-macos --exclude aleph-desktop-linux` | `EXIT=0`，`Finished in 10m 40s`，**两条 warning** |
+| `cargo test -p alephcore --lib`（全量，分离式；测试二进制已热，`Finished in 9.70s` + 跑 `247.61s`） | `17775 passed; 18 failed; 17 ignored; 0 filtered out` |
+
+**两条 clippy warning 都不是本分支的**：`interfaces/cli/src/commands/daemon.rs:351`
+（`needless_return`）与 `src/builtin_tools/skill_install.rs:75`（`single_match`）。分辨方法不是
+读代码判断「像不像我写的」，而是 `git diff --name-only d0fc03750..HEAD` ——本分支改过的 54 个
+文件里没有这两个，所以它们在 main 上同样会报。（`--exclude aleph-desktop-{macos,linux}` 是
+Windows 上的既定作用域，不是为了让它变绿。）
+
+**18 条红是**按名字**与基线完全相同的那 18 条**：把 `--lib` 输出的 `failures:` 段落抽成名单，
+`comm -3 baseline_failures.txt head_failures.txt` **输出为空**（两侧各 18 行）。
+这一条之所以值得再跑：上一次全量 `--lib` 测于 `fcf6aad4e`，其后还有两笔**动了代码**的提交
+（`5bc0ceebd` 删 `agent_instance` 的死 `SessionInfo`、`2aa2a569e` 改名 `SessionsListToolRow`），
+而它们各自的证据是 `--lib <module>` 的**模块过滤**跑——`79 passed; 17731 filtered out` 只证明
+那 79 条绿，被过滤掉的 17731 条**一条都没执行**。总数守恒（79 + 17731 = 17810）能证明
+「没删掉测试」，不能证明「没有别的东西变红」。判据 #18：数字要带着它测的谓词。
 
 ### 继承自 main 的破损（不是本轮引入，挡住最小验证集的一条）
 
