@@ -17,5 +17,9 @@ otherwise not ported, into src/manifest.rs: `ManifestVersion`.
 
 Modifications: crate-path rewrites; removal of the Remote manifest source, the
 remote-update module, and the platform-specific process-identification block.
+src/screen_rules.rs keeps only `detection_update_for_publish_with_osc` of the
+ten public items in herdr src/pane/agent_detection.rs; the rest were cut
+because they are driven by upstream's poll interval and content-sequence
+counter, which Aleph does not have. That file's header lists them by name.
 
 The rest of the Aleph project is MIT-licensed. This crate is not.

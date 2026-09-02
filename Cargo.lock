@@ -387,6 +387,7 @@ dependencies = [
  "aes 0.8.4",
  "aes 0.9.1",
  "aes-gcm",
+ "agent-detect",
  "aho-corasick",
  "aleph-client",
  "aleph-desktop",

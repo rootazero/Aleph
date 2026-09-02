@@ -181,6 +181,33 @@ pub struct PtyManager {
     max_sessions: AtomicUsize,
 }
 
+/// One flush iteration for one session: take the diff frame, then sample the
+/// agent state off the same screen.
+///
+/// Extracted from [`PtyManager::start_flush_loop`]'s loop body rather than
+/// written inline so the wire between the PTY and `gateway::runtime` has a
+/// caller a test can drive. Sampling sits inside the `Some(frame)` arm on
+/// purpose: a frame exists exactly when the screen changed, which is the
+/// sampling cadence the spec asked for — the sampler starts no clock of its
+/// own (判据 §12).
+///
+/// The frame is taken first (one screen lock, released), then
+/// [`PtySession::with_screen`] takes it again for the length of one sample.
+/// The sample therefore sees a screen at least as new as the frame, never
+/// older, and the grid is never cloned.
+pub(crate) fn flush_session(session: &PtySession) -> Option<aleph_protocol::pty::PtyScreenFrame> {
+    let frame = session.feed_and_take_frame()?;
+    session.with_screen(|screen| {
+        crate::gateway::runtime::agents().sample(
+            &session.id,
+            &session.shell,
+            screen,
+            session.is_closed(),
+        );
+    });
+    Some(frame)
+}
+
 static GLOBAL: LazyLock<PtyManager> = LazyLock::new(PtyManager::new);
 
 /// Access the process-global PTY manager.
@@ -483,7 +510,7 @@ impl PtyManager {
                     inner.sessions.values().cloned().collect()
                 };
                 for session in sessions {
-                    let Some(frame) = session.feed_and_take_frame() else {
+                    let Some(frame) = flush_session(&session) else {
                         continue;
                     };
                     let Ok(data) = serde_json::to_value(&frame) else {

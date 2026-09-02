@@ -262,6 +262,18 @@ impl PtySession {
         })
     }
 
+    /// Run `f` against the server-held screen under ONE lock acquisition.
+    ///
+    /// The agent sampler needs the visible text *and* the OSC title from the
+    /// same screen; two accessors would be two acquisitions and two
+    /// observations of a screen the reader thread mutates in between. Handing
+    /// the borrow out instead of returning `(String, Option<String>)` also
+    /// keeps the title read inside `RuntimeAgents::sample`, which is the line
+    /// the falsification guard has to be able to cut.
+    pub(crate) fn with_screen<R>(&self, f: impl FnOnce(&super::screen::Screen) -> R) -> R {
+        f(&self.screen.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
     /// Override the scrollback ceiling for this session. Called at spawn
     /// from `[policies.terminal] scrollback_lines`; without this the field
     /// would be settable and inert (`Grid::set_scrollback_limit`'s doc).
@@ -349,6 +361,12 @@ fn spawn_reader(
                 let _ = bus.publish(serde_json::to_string(&ev).unwrap_or_default());
             }
             super::manager().remove(&session.id);
+            // Spec §5: the PTY session is gone, so its agent entry is gone.
+            // Here and not as a prune inside `RuntimeAgents::snapshot` —
+            // two mechanisms would be two answers to "is this session
+            // alive" (判据 §6), and only an explicit removal gives task 6 an
+            // edge to emit `runtime.agents.changed` on.
+            crate::gateway::runtime::agents().remove(&session.id);
         })
         .ok();
 }

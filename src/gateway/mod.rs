@@ -44,6 +44,7 @@ pub mod process_announce;
 pub mod protocol;
 pub mod pty;
 pub mod router;
+pub mod runtime;
 pub mod runtime_footer;
 pub mod security;
 pub mod server;

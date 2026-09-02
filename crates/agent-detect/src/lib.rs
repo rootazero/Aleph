@@ -9,7 +9,7 @@
 //! |---|---|
 //! | [`engine`] | `src/detect/mod.rs` |
 //! | [`manifest`] | `src/detect/manifest.rs` + `src/detect/manifests/*.toml` |
-//! | [`screen_rules`] | `src/pane/agent_detection.rs` |
+//! | [`screen_rules`] | `src/pane/agent_detection.rs` (one fn of ten; see its header) |
 //!
 //! `src/detect/manifest_update.rs` is deliberately absent: every function in
 //! it was the remote-download path, which this phase does not ship. The one
@@ -20,7 +20,7 @@ pub mod engine;
 pub mod manifest;
 pub mod screen_rules;
 
-pub use engine::{Agent, AgentDetection, AgentState};
+pub use engine::{agent_label, Agent, AgentDetection, AgentState};
 pub use manifest::{manifest_version, DetectionInput, ManifestSource};
 
 /// Identify which agent is running from the process name.
