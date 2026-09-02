@@ -93,6 +93,7 @@ mod tests {
                     thinking_signature: None,
                     stop_reason: StopReason::ToolUse,
                     truncated_tool_call: None,
+                    provider_error: None,
                     usage: None,
                 })
             })
@@ -162,6 +163,7 @@ mod tests {
                     thinking_signature: None,
                     stop_reason: StopReason::ToolUse,
                     truncated_tool_call: None,
+                    provider_error: None,
                     usage: None,
                 })
             })
@@ -477,6 +479,7 @@ mod tests {
             thinking_signature: None,
             stop_reason: StopReason::EndTurn,
             truncated_tool_call: None,
+            provider_error: None,
             usage: Some(TokenUsage {
                 input_tokens: 12,
                 output_tokens: 30,
@@ -698,6 +701,7 @@ mod tests {
                 thinking_signature: None,
                 stop_reason: StopReason::ToolUse,
                 truncated_tool_call: None,
+                provider_error: None,
                 usage: None,
             },
             // Turn 2: terminal text.
@@ -1309,6 +1313,7 @@ mod tests {
                     thinking_signature: None,
                     stop_reason: StopReason::EndTurn,
                     truncated_tool_call: None,
+                    provider_error: None,
                     usage: Some(crate::providers::adapter::TokenUsage {
                         input_tokens: 10,
                         output_tokens: 5,
@@ -1831,6 +1836,7 @@ mod tests {
                 thinking_signature: None,
                 stop_reason: StopReason::ToolUse,
                 truncated_tool_call: None,
+                provider_error: None,
                 usage: None,
             },
             ProviderResponse::text_only("finished anyway".to_string()),

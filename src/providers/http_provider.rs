@@ -402,15 +402,32 @@ impl HttpProvider {
             }
             collector.push(delta);
         }
-        let provider_response = collector.finish();
+        let mut provider_response = collector.finish();
 
         // Promote a reported error to a hard failure only when nothing usable
-        // came through; a partial response (text/tool calls + a late error) is
-        // still returned so the model can react on the next turn.
+        // came through. With partial content the answer is still returned — the
+        // user has already seen it and no later candidate can un-show it — but
+        // the fault rides along on `provider_error` so the failover walk records
+        // the attempt as failed instead of as a healthy round-trip.
         if let Some(msg) = provider_error {
             if provider_response.text.is_none() && provider_response.tool_calls.is_empty() {
                 return Err(crate::error::AlephError::provider(msg));
             }
+            tracing::warn!(
+                provider = %self.name,
+                error = %msg,
+                "Provider reported a fault after emitting content — returning the \
+                 partial answer and recording the attempt as a failure"
+            );
+            // The stream ended on the fault, so no `Done` frame ever arrived and
+            // `stop_reason` is sitting on its `EndTurn` default — indistinguishable
+            // from a natural completion. Downgrade *that default* to `Unknown`
+            // ("we cannot vouch for this turn"), which `validate()` already logs.
+            // A stop reason the provider actually stated is a fact and is kept.
+            if provider_response.stop_reason == StopReason::EndTurn {
+                provider_response.stop_reason = StopReason::Unknown;
+            }
+            provider_response.provider_error = Some(msg);
         }
 
         // A tool call whose streamed arguments were truncated mid-stream (the

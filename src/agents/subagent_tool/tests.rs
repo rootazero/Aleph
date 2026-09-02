@@ -1451,6 +1451,7 @@ impl AiProvider for UsageMockProvider {
                 thinking_signature: None,
                 stop_reason: crate::providers::adapter::StopReason::EndTurn,
                 truncated_tool_call: None,
+                provider_error: None,
                 usage: Some(crate::providers::adapter::TokenUsage {
                     input_tokens: 10,
                     output_tokens: 5,

@@ -1660,6 +1660,11 @@ struct StreamingProvider {
     name: String,
     chunks: Vec<&'static str>,
     fail_after_stream: Option<String>,
+    /// Reports an in-band fault (`ProviderDelta::Error`) after the chunks and
+    /// still returns `Ok` — exactly the shape `HttpProvider::execute_once`
+    /// produces when a provider faults mid-stream with content already sent.
+    report_error: Option<String>,
+    calls: AtomicUsize,
 }
 
 impl StreamingProvider {
@@ -1668,6 +1673,8 @@ impl StreamingProvider {
             name: name.to_string(),
             chunks,
             fail_after_stream: None,
+            report_error: None,
+            calls: AtomicUsize::new(0),
         })
     }
 
@@ -1676,7 +1683,25 @@ impl StreamingProvider {
             name: name.to_string(),
             chunks,
             fail_after_stream: Some("HTTP 429 too many requests".to_string()),
+            report_error: None,
+            calls: AtomicUsize::new(0),
         })
+    }
+
+    /// Emits `chunks`, then an in-band `ProviderDelta::Error`, then returns
+    /// `Ok(partial)` carrying the fault on `provider_error`.
+    fn emits_then_reports_error(name: &str, chunks: Vec<&'static str>, msg: &str) -> Arc<Self> {
+        Arc::new(Self {
+            name: name.to_string(),
+            chunks,
+            fail_after_stream: None,
+            report_error: Some(msg.to_string()),
+            calls: AtomicUsize::new(0),
+        })
+    }
+
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
     }
 }
 
@@ -1703,11 +1728,23 @@ impl AiProvider for StreamingProvider {
         sink: &'a dyn crate::providers::DeltaSink,
     ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
         Box::pin(async move {
+            self.calls.fetch_add(1, Ordering::SeqCst);
             for c in &self.chunks {
                 sink.on_delta(&crate::providers::ProviderDelta::TextDelta(
                     (*c).to_string(),
                 ))
                 .await;
+            }
+            if let Some(msg) = &self.report_error {
+                // rust-doctor-disable-next-line excessive-clone
+                sink.on_delta(&crate::providers::ProviderDelta::Error(msg.clone()))
+                    .await;
+                return Ok(ProviderResponse {
+                    text: Some(self.chunks.concat()),
+                    // rust-doctor-disable-next-line excessive-clone
+                    provider_error: Some(msg.clone()),
+                    ..Default::default()
+                });
             }
             match &self.fail_after_stream {
                 Some(msg) => Err(AlephError::provider(msg.clone())),
@@ -1858,6 +1895,77 @@ async fn a_failure_before_any_output_still_fails_over_while_streaming() {
         sink.text(),
         "fb",
         "the replayed answer still reaches the sink"
+    );
+}
+
+#[tokio::test]
+async fn an_in_stream_provider_error_after_content_is_not_a_healthy_success() {
+    // A provider that emits a little text and then reports a fault in-band used
+    // to be indistinguishable from a clean answer: the collector drops the
+    // `Error` delta, `execute_once` only promotes it to `Err` when *nothing*
+    // came through, and the walk's `Ok` arm then marked the provider healthy.
+    // A provider failing this way on every request stayed `circuit: closed,
+    // failure_count: 0` forever. The fault now rides on `provider_error` and
+    // earns the same strike a pre-emission failure would have.
+    let primary = StreamingProvider::emits_then_reports_error(
+        "p",
+        vec!["par", "tial"],
+        "upstream connection error",
+    );
+    // rust-doctor-disable-next-line excessive-clone
+    let fp = build(primary.clone() as Arc<dyn AiProvider>, vec![], vec![]);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    assert!(!fp.circuit_open("p").await);
+    for _ in 0..CIRCUIT_OPEN_THRESHOLD {
+        let sink = RecordingSink::default();
+        // rust-doctor-disable-next-line unwrap-in-production
+        let resp = fp
+            .execute_streaming_dyn(RequestPayload::new(&msgs), &sink)
+            .await
+            .unwrap();
+        // The user still gets what was already streamed — the strike is
+        // bookkeeping, not a change of the request outcome.
+        assert_eq!(resp.text_content(), "partial");
+        assert_eq!(sink.text(), "partial");
+    }
+    assert_eq!(primary.call_count(), CIRCUIT_OPEN_THRESHOLD as usize);
+    assert!(
+        fp.circuit_open("p").await,
+        "an in-stream fault must count against the provider's circuit"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_in_stream_provider_error_leaves_the_pacing_window_parked() {
+    // `pc.clear` retires the 429 pacing window because "we just went through
+    // it and succeeded". A faulted turn is not that evidence, so the window
+    // must survive — otherwise a provider that 429s and then faults mid-stream
+    // is un-paced by its own failure and re-dialed at full rate next turn.
+    // Asserting the *effect* (`remaining` still `Some`), not the call.
+    let primary = StreamingProvider::emits_then_reports_error("p", vec!["hi"], "overloaded");
+    let cooldown = ProviderCooldown::default();
+    cooldown
+        .cool("p", std::time::Duration::from_secs(600))
+        .await;
+
+    let fp = build(primary as Arc<dyn AiProvider>, vec![], vec![])
+        // rust-doctor-disable-next-line excessive-clone
+        .with_provider_cooldown(cooldown.clone());
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let sink = RecordingSink::default();
+    // The lone candidate is paced (a virtual sleep under `start_paused`) and
+    // then dialed.
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp
+        .execute_streaming_dyn(RequestPayload::new(&msgs), &sink)
+        .await
+        .unwrap();
+    assert_eq!(resp.text_content(), "hi");
+    assert!(
+        cooldown.remaining("p").await.is_some(),
+        "a faulted turn must not retire the provider's rate-pacing window"
     );
 }
 

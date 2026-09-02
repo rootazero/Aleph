@@ -21,11 +21,11 @@ use crate::providers::{AiProvider, DefaultProviderHandle, DeltaSink, ProviderDel
 use crate::sandbox::exec_approval::gate::ApprovalRequester;
 use crate::sync_primitives::Arc;
 
-use super::decision::{decide, Decision, FailureKind};
+use super::decision::{cooldown_window, decide, strike_for, Decision, FailureKind};
 use super::health::{CircuitState, FailoverHealth, ModelCooldown, ProviderCooldown};
 use super::{
-    FailoverConfig, FailoverNode, CIRCUIT_OPEN_THRESHOLD, DEFAULT_MODEL_COOLDOWN, MAX_COOLDOWN,
-    MAX_OVERLOAD_RETRY_DELAY, MAX_RETRY_DELAY,
+    FailoverConfig, FailoverNode, CIRCUIT_OPEN_THRESHOLD, MAX_COOLDOWN, MAX_OVERLOAD_RETRY_DELAY,
+    MAX_RETRY_DELAY,
 };
 
 /// Cost-routing sort key for a model with no static rate card.
@@ -911,6 +911,32 @@ impl FailoverProvider {
         }
     }
 
+    /// Bookkeeping for an attempt that failed *after* content already reached
+    /// the user — the walk's two already-emitted exits:
+    /// * an `Err` raised once [`EmissionGuard::has_emitted`] is true, and
+    /// * an `Ok` carrying
+    ///   [`ProviderResponse::provider_error`](crate::providers::adapter::ProviderResponse::provider_error)
+    ///   (the provider reported an in-band fault mid-stream).
+    ///
+    /// Both are terminal for *routing* — a second candidate would append its
+    /// answer to a half-written one — but neither is a success, so both spend
+    /// the same [`strike_for`] verdict here rather than each inventing one.
+    /// The strike is deliberately the *whole* effect: the request outcome
+    /// (partial `Ok`, or the error) is unchanged.
+    async fn record_emitted_failure(&self, provider: &str, model: Option<&str>, err: &AlephError) {
+        let strike = strike_for(err);
+        if let Some(dur) = strike.cooldown {
+            if let (Some(cd), Some(m)) = (&self.model_cooldown, model) {
+                cd.cool(provider, m, dur).await;
+            }
+            if let Some(pc) = &self.provider_cooldown {
+                pc.cool(provider, dur).await;
+            }
+        }
+        self.mark_unhealthy(provider, err.to_string(), strike.kind)
+            .await;
+    }
+
     /// Whether `name`'s circuit is currently open.
     ///
     /// Test-only: the operator/model-facing status surface is
@@ -1205,6 +1231,35 @@ impl FailoverProvider {
                                         g.record_tokens(billed_tokens(u));
                                     }
                                 }
+                                // A provider that reported a fault mid-stream
+                                // is not healthy, even though the partial answer
+                                // it already streamed is returned unchanged. The
+                                // collector drops the `Error` delta and
+                                // `HttpProvider` only promotes it to `Err` when
+                                // *nothing* came through, so without this arm a
+                                // provider failing this way on every request
+                                // stayed `circuit: closed, failure_count: 0`
+                                // forever — and each fault also *cleared* its
+                                // 429 pacing window below. Fail-closed: the
+                                // fault is an answer only about the provider's
+                                // health, never a success value.
+                                if let Some(msg) = &resp.provider_error {
+                                    tracing::warn!(
+                                        provider = %cand.name, model = ?model, error = %msg,
+                                        "failover: provider reported a fault after emitting \
+                                         content; recording the strike and returning the \
+                                         partial answer",
+                                    );
+                                    // rust-doctor-disable-next-line excessive-clone
+                                    let err = AlephError::provider(msg.clone());
+                                    self.record_emitted_failure(
+                                        &cand.name,
+                                        model.as_deref(),
+                                        &err,
+                                    )
+                                    .await;
+                                    return Ok(resp);
+                                }
                                 self.mark_healthy(&cand.name).await;
                                 // Tell the gateway which endpoint actually
                                 // answered. The `ModelResolved` banner — the
@@ -1275,6 +1330,12 @@ impl FailoverProvider {
                                     "failover: stream failed after partial output; \
                                      surfacing instead of restarting on another candidate",
                                 );
+                                // Terminal for *routing* only. The attempt still
+                                // failed, so it earns the same strike a
+                                // pre-emission failure would have — the identical
+                                // derivation the in-stream-fault arm above uses.
+                                self.record_emitted_failure(&cand.name, model.as_deref(), &e)
+                                    .await;
                                 return Err(e);
                             }
                             Err(e) => match decide(&e, attempt, self.config.max_retries) {
@@ -1336,8 +1397,7 @@ impl FailoverProvider {
                                     // ends up exhausted (single-model providers
                                     // behave exactly as before); it is discarded the
                                     // moment a sibling model succeeds.
-                                    let dur =
-                                        hint.unwrap_or(DEFAULT_MODEL_COOLDOWN).min(MAX_COOLDOWN);
+                                    let dur = cooldown_window(hint);
                                     if let (Some(cd), Some(m)) = (&self.model_cooldown, &model) {
                                         cd.cool(&cand.name, m, dur).await;
                                     }

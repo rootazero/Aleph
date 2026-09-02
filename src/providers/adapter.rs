@@ -262,6 +262,20 @@ pub struct ProviderResponse {
     /// executing the tool with empty `{}` args, which would surface as a
     /// misleading "missing field" validation error the model cannot fix.
     pub truncated_tool_call: Option<String>,
+    /// The provider reported a fault mid-stream *after* content had already
+    /// been emitted (an Anthropic `error` SSE, an OpenAI-compatible in-band
+    /// `{"error": ...}` chunk, a Responses `response.failed`). The partial
+    /// content is still returned — the user has already seen it and no
+    /// candidate can un-show it — but the fault is **not** a success.
+    ///
+    /// Producer: [`HttpProvider::execute_once`], which returns a hard `Err`
+    /// instead whenever nothing usable came through.
+    /// Reader: the failover walk's `Ok(resp)` arm
+    /// (`failover::provider::FailoverProvider::walk`), which records the
+    /// attempt as a failed one — circuit strike, no `mark_healthy`, no route
+    /// witness, and the provider's rate-pacing window left parked — rather
+    /// than counting a faulted turn as a healthy round-trip.
+    pub provider_error: Option<String>,
 }
 
 impl ProviderResponse {

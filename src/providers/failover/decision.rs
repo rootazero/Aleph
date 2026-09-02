@@ -8,7 +8,9 @@ use crate::providers::llm_retry::{
     RetryVerdict,
 };
 
-use super::{DEFAULT_TRANSIENT_DELAY, OVERLOAD_RETRY_BUDGET};
+use super::{
+    DEFAULT_MODEL_COOLDOWN, DEFAULT_TRANSIENT_DELAY, MAX_COOLDOWN, OVERLOAD_RETRY_BUDGET,
+};
 
 /// How a provider-level failure should shape the circuit breaker.
 ///
@@ -58,6 +60,68 @@ fn retry_after_from_suggestion(err: &AlephError) -> Option<Duration> {
         _ => None,
     }?;
     extract_retry_after_str(suggestion)
+}
+
+/// The pacing window a rate-limited attempt earns: the server hint when it gave
+/// one, else the default, always capped.
+///
+/// Single derivation of that default-and-cap so the two writers of the window —
+/// [`decide`]'s `RateLimited` verdict and [`strike_for`] — cannot disagree about
+/// how long a 429 parks a provider (criterion: order/unit/boundary derived in
+/// one place).
+pub(crate) fn cooldown_window(hint: Option<Duration>) -> Duration {
+    hint.unwrap_or(DEFAULT_MODEL_COOLDOWN).min(MAX_COOLDOWN)
+}
+
+/// The bookkeeping an attempt earns when it failed *after* the user has already
+/// been shown part of an answer.
+///
+/// Two arms of the walk end that way and must not drift apart:
+/// * the streaming `Err` arm guarded by `EmissionGuard::has_emitted`, and
+/// * the `Ok(resp)` arm where the provider reported an in-band fault mid-stream
+///   ([`ProviderResponse::provider_error`](crate::providers::adapter::ProviderResponse::provider_error)).
+///
+/// Neither may retry or advance — appending a second answer to a half-written
+/// one is worse than the fault — so the *routing* half of a verdict is already
+/// settled and only the bookkeeping half is open. [`Decision`] cannot answer it:
+/// its variants encode **where to go next**, so consuming one here would have to
+/// invent bookkeeping for `NextModel` / `Stop` / `RetrySame`, which name no
+/// strike at all. This derives the two facts that are actually needed —
+/// how the breaker should count it, and whether anything told us to wait —
+/// directly from the error, in one place.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Strike {
+    /// How the circuit breaker counts this failure.
+    pub(crate) kind: FailureKind,
+    /// Pacing window to park on the model *and* its provider, set only when the
+    /// fault was a rate limit. `None` for every other fault: nothing told us to
+    /// wait, and inventing a window would sideline a provider on a blip.
+    pub(crate) cooldown: Option<Duration>,
+}
+
+/// Derive the [`Strike`] one already-emitted failed attempt deserves.
+pub(crate) fn strike_for(err: &AlephError) -> Strike {
+    let msg = err.to_string();
+    // Same permanent/transient split `decide` tags its `NextProvider` with, read
+    // from the same predicate — a dead credential is shed at once, everything
+    // else needs `CIRCUIT_OPEN_THRESHOLD` strikes.
+    let kind = if crate::providers::llm_retry::is_permanent_failure(&msg) {
+        FailureKind::Permanent
+    } else {
+        FailureKind::Transient
+    };
+    // Same classifier and same hint precedence `decide` uses for
+    // `Decision::RateLimited`: typed `suggestion` first, then the `Retry-After`
+    // the message body itself states.
+    let cooldown = match classify_exhausted(&msg) {
+        RetryVerdict::Fallback { reason } if reason.starts_with("rate limited") => {
+            Some(cooldown_window(
+                retry_after_from_suggestion(err).or_else(|| extract_retry_after_str(&msg)),
+            ))
+        }
+        _ => None,
+    };
+    Strike { kind, cooldown }
 }
 
 /// Classify one failed attempt into a [`Decision`].

@@ -40,8 +40,11 @@ pub(crate) fn parse_chat_sse_event(
     // `usage` nor `choices` and would be dropped silently — the stream
     // would end as if the provider had simply stopped talking, and the
     // failover machinery would never see the failure. Mapping it to
-    // `ProviderDelta::Error` reuses the same "promote to retryable
-    // transient error" path the Anthropic/Responses protocols already take.
+    // `ProviderDelta::Error` reaches the same consumer the Anthropic/Responses
+    // protocols do, which reads it two ways: with no content yet it is promoted
+    // to a retryable transient error; once content has been streamed the partial
+    // answer is kept and the fault rides out on `ProviderResponse::provider_error`
+    // for the failover walk to strike the provider with.
     if let Some(error) = v.get("error") {
         let message = match error {
             serde_json::Value::String(s) => s.clone(),

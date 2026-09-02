@@ -218,7 +218,12 @@ impl DeltaCollector {
             }
             ProviderDelta::Done(reason) => self.stop_reason = reason,
             ProviderDelta::Error(_) => {
-                // Error deltas are observed by DeltaSink consumers; collector ignores them
+                // Error deltas are observed by DeltaSink consumers; the collector
+                // ignores them because a fault is not content. The owner of the
+                // stream (`HttpProvider::execute_once`) captures the first one and
+                // either promotes it to a hard `Err` (nothing usable arrived) or
+                // parks it on `ProviderResponse::provider_error` (partial answer),
+                // so it is never simply dropped.
             }
         }
     }
@@ -319,6 +324,9 @@ impl DeltaCollector {
             usage: self.usage,
             stop_reason: self.stop_reason,
             truncated_tool_call,
+            // The collector drops `ProviderDelta::Error` (see `push`); the
+            // caller that owns the stream captures it and sets this field.
+            provider_error: None,
         }
     }
 
@@ -1201,6 +1209,7 @@ mod tests {
             }),
             thinking: None,
             truncated_tool_call: None,
+            provider_error: None,
         };
 
         let deltas: Vec<_> = response_to_delta_stream(resp).collect::<Vec<_>>().await;
