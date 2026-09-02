@@ -1,7 +1,22 @@
 This crate contains code ported from herdr (https://github.com/herdrdev/herdr),
 Copyright the herdr authors, licensed under the Apache License, Version 2.0.
 
-Source: herdr 0.8.2 — src/detect/{mod,manifest,manifest_update}.rs,
-                      src/pane/agent_detection.rs
+Source: herdr 0.8.2
+
+  herdr src/detect/mod.rs             -> src/engine.rs
+  herdr src/detect/manifest.rs        -> src/manifest.rs
+  herdr src/detect/manifest/tests.rs  -> src/manifest/tests.rs
+  herdr src/detect/manifests/*.toml   -> src/manifests/*.toml  (21 files)
+  herdr src/pane/agent_detection.rs   -> src/screen_rules.rs
+
+The 21 .toml manifests are the detection rule data, embedded with include_str!
+by src/manifest.rs; they are part of the ported work, not configuration.
+
+Two items were lifted out of herdr src/detect/manifest_update.rs, which is
+otherwise not ported, into src/manifest.rs: `ManifestVersion` and
+`MANIFEST_ENGINE_VERSION`.
+
+Modifications: crate-path rewrites; removal of the Remote manifest source, the
+remote-update module, and the platform-specific process-identification block.
 
 The rest of the Aleph project is MIT-licensed. This crate is not.

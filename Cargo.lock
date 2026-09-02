@@ -96,6 +96,7 @@ version = "26.9.1"
 dependencies = [
  "regex",
  "serde",
+ "toml 0.8.23",
 ]
 
 [[package]]
