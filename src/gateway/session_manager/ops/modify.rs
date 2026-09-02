@@ -258,7 +258,7 @@ impl SessionManager {
     ///
     /// `Some(path)` stores the absolute project folder; `None` removes the key
     /// (revert to the default `~/.aleph/workspaces/{agent_id}` workspace). The
-    /// value is surfaced through `sessions.list` (`SessionInfo.project_root`) so
+    /// value is surfaced through `sessions.list` (`SessionListRow.project_root`) so
     /// the Panel can restore the active project after a reload.
     pub async fn set_project_root(
         &self,
@@ -312,7 +312,7 @@ impl SessionManager {
     /// or the `"unknown"` sentinel), so a session's real origin is never clobbered
     /// by a later continuation from a different surface. Called once on the first
     /// message of a session (see `execution_engine::execute`). Surfaced through
-    /// `sessions.list` (`SessionInfo.channel`) and `SessionChangedEvent.channel`
+    /// `sessions.list` (`SessionListRow.channel`) and `SessionChangedEvent.channel`
     /// via `SessionMetadata::origin_channel`.
     pub async fn set_source_channel(
         &self,

@@ -37,7 +37,7 @@ struct SessionListReply {
 ///
 /// RFC 3339 timestamps sort lexicographically, so a string comparison is the
 /// chronological one as long as every row uses the same offset — which
-/// `SessionInfo` guarantees by rendering them all through `to_rfc3339`.
+/// `SessionListRow` guarantees by rendering them all through `to_rfc3339`.
 ///
 /// # Errors
 ///

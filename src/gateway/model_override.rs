@@ -29,7 +29,7 @@
 //!
 //! So the model is the one session dial that does **not** survive a restart.
 //! `exec_tier` and `session_mode` both persist in
-//! `SessionMetadata.identity_meta.custom` and are restored through `SessionInfo`
+//! `SessionMetadata.identity_meta.custom` and are restored through `SessionListRow`
 //! into the Panel pills; the model picker is a Leptos signal that resets on
 //! reload (`chat/state.rs` says so itself), and the server-side sticky map dies
 //! with the process. Picking `openai/gpt-5.6`, sending three messages and

@@ -348,7 +348,7 @@ pub trait SessionStore: Send + Sync {
     /// Persist (or clear) the user-chosen project working directory for a
     /// session onto its identity metadata (`custom["project_root"]`).
     /// `Some(path)` stores it; `None` reverts to the default agent workspace.
-    /// Surfaced through `sessions.list` (`SessionInfo.project_root`). Default is
+    /// Surfaced through `sessions.list` (`SessionListRow.project_root`). Default is
     /// a no-op so backends that do not persist identity metadata (file backend,
     /// test stubs) compile unchanged.
     async fn set_project_root(
