@@ -127,7 +127,10 @@ impl AlephTool for DoctorTool {
             // Daemon-side: this process booted, so `core/capability-wiring` can
             // actually answer here. It is deliberately absent from
             // `default_registry()` — see that builder's doc.
-            .with_capability_wiring_check();
+            .with_capability_wiring_check()
+            // Same reason: the projector and the event log only exist in the
+            // booted daemon.
+            .with_projection_holes_check();
         let posture = if args.fix {
             Posture::Fix
         } else {

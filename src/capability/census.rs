@@ -775,7 +775,7 @@ mod tests {
     /// the SUM, never a bare count of either side, because that is the form
     /// that survives further migration: `raw` and `slots` move against each
     /// other as handles migrate (today: 1 raw, all of it
-    /// `route_handle::GLOBAL`, + 45 slots), and only the sum is invariant.
+    /// `route_handle::GLOBAL`, + 46 slots), and only the sum is invariant.
     ///
     /// Neither of those two assertions can see the exemption ITSELF growing:
     /// widen the filter below to also swallow a second raw handle and
@@ -808,9 +808,9 @@ mod tests {
         );
         assert_eq!(
             raw + slots,
-            46,
+            47,
             "capability handle total drifted: {raw} raw + {slots} slots = {}, not \
-             46. Never assert either side alone: raw shrinks and slots grows as \
+             47. Never assert either side alone: raw shrinks and slots grows as \
              migration proceeds, so only the SUM is stable. A drift here means \
              either a census recogniser regressed (see the module doc's \
              recogniser blind spots) or a handle genuinely left the corpus — \

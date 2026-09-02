@@ -74,7 +74,9 @@ There is deliberately no `TurnEnded` marker to pair with `TurnStarted`; a turn e
 
 ## Gateway RPC relationship
 
-Gateway `session.*` RPC methods remain on `SessionManager` (`src/gateway/session_manager/`). A dual-write shim (`src/session/shim.rs`) mirrors each `SessionManager` append into `SessionService` so `session_events` stays populated in parallel with the legacy `messages` table. A future phase will migrate Gateway RPC directly and remove the shim.
+Gateway `session.*` RPC methods remain on `SessionManager` (`src/gateway/session_manager/`). **There is no dual-write shim.** This section described `src/session/shim.rs` — a file that does not exist and whose mirroring was removed when `session_events` became the SSOT — so anyone reading it went looking for a second writer of the `messages` table. There is exactly one: `MessageProjector` (`src/gateway/session_projector.rs`), which materialises `messages` from `session_events` asynchronously.
+
+The projection is **self-healing rather than lossy**. Back-pressure or a stopped drain records the event's `seq` (payload stays in the SSOT) and the next heal pass re-reads it from the log; a heal is a seq-set difference against the transcript's own row ids, so a hole below the newest row is filled, not only a missing tail. `missed` is process memory, so a crash between an append and its drain is repaired at the NEXT boot: `ProjectionReconciler` asks the projector to repair every session in the activity window (`[resume] max_age_secs`) plus every session whose markers read as interrupted, and the `core/projection-holes` doctor check does the unbounded sweep for anything older.
 
 ## Re-attaching a client (`chat.history`'s `session` snapshot)
 

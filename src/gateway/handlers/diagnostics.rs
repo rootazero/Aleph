@@ -81,7 +81,9 @@ pub async fn handle_run(
             // In-daemon: this process ran `aleph-server start`, so the
             // capability roster is a real fact here. Deliberately absent from
             // `default_registry()` — see that builder's doc.
-            .with_capability_wiring_check(),
+            .with_capability_wiring_check()
+            // Daemon-side: the projector and the event log are live here.
+            .with_projection_holes_check(),
         Err(e) => {
             return JsonRpcResponse::error(
                 request.id,

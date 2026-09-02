@@ -160,6 +160,28 @@ impl DiagnosticEngine {
         self
     }
 
+    /// Append `core/projection-holes`, the unbounded transcript-vs-event-log
+    /// sweep.
+    ///
+    /// Out of `default_registry()` for the same reason as its two neighbours:
+    /// it needs the live `MessageProjector` and the open `session_events` log,
+    /// and `aleph-server doctor` is by definition a cold process. Both handles
+    /// are read from their capability slots HERE rather than threaded through
+    /// the two call sites (the `doctor` builtin tool and the `diagnostics.run`
+    /// RPC), neither of which has ever held a session store.
+    ///
+    /// Registering with the handles absent is deliberate and is not a no-op
+    /// check: it then reports UNKNOWN, which is the honest answer and the one
+    /// thing that must never render as "the transcript is complete".
+    #[must_use]
+    pub fn with_projection_holes_check(mut self) -> Self {
+        self.checks.push(Arc::new(checks::ProjectionHolesCheck::new(
+            crate::gateway::session_projector::global_message_projector(),
+            crate::session::store::global_session_event_store(),
+        )));
+        self
+    }
+
     /// Append the `ext/idle-extensions` check.
     ///
     /// Separate from [`Self::with_runtime_checks`] because it needs a

@@ -17,6 +17,25 @@ use crate::gateway::session_store::types::{
 };
 use async_trait::async_trait;
 
+/// What [`SessionStore::stamp_assistant_metadata_in_range`] did.
+///
+/// Three answers, not two, because the caller bills on exactly one of them.
+/// Folding `NoRowInRange` into `Stamped` bills a run whose row is not in the
+/// projection yet; folding it into `AlreadyStamped` retires a stamp that was
+/// never applied. Both were reachable while this verb returned `()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StampOutcome {
+    /// A row in range had no stamp for this run and now carries one.
+    Stamped,
+    /// The row in range already carries THIS run's `run_id` — a replay. The
+    /// row is untouched and the caller must not bill again.
+    AlreadyStamped,
+    /// No assistant row with a source seq in `(after_seq, before_seq]` exists.
+    /// Its row was never materialised (or has not been healed yet), so there is
+    /// nothing to stamp and nothing to bill.
+    NoRowInRange,
+}
+
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     async fn get_or_create(&self, key: &SessionKey) -> Result<SessionMetadata, SessionStoreError>;
@@ -89,8 +108,13 @@ pub trait SessionStore: Send + Sync {
     ///     above its question is wrong in a way no reader can repair.
     ///   * Adopting it costs nothing. `session_projector` — the single append
     ///     throat — stamps `SessionEventRecord::created_at_ms`, monotonic in
-    ///     `seq`, and `ProjectionReconciler` only fills the tail above
-    ///     `max(seq)`; the other two producers stamp `Utc::now()`. So on real
+    ///     `seq`, and the projector's heal re-projects only the seqs the
+    ///     transcript is MISSING (it was "only the tail above `max(seq)`" until
+    ///     the heal became a seq-set difference — the sentence survived the
+    ///     mechanism it described); the other two producers stamp
+    ///     `Utc::now()`. A back-filled row therefore lands at the END of the
+    ///     transcript in recording order even though its seq is older, which is
+    ///     the one place the two orders visibly part company. So on real
     ///     data the two orders already coincide: this settles a rule, it does
     ///     not repair a live symptom. `messages.source_seq` agrees with `id`
     ///     wherever it is non-NULL, a third witness to the same order.
@@ -430,33 +454,46 @@ pub trait SessionStore: Send + Sync {
         Ok(0)
     }
 
-    /// Stamp `run_id` + context-window occupancy onto the most recent
-    /// assistant message row for this session. Called by the projector when it
-    /// processes a [`crate::session::events::SessionEvent::AssistantRunMeta`]
-    /// event, so the Panel can restore the occupancy gauge on session reload
-    /// without a live `run_complete` event.
+    /// Stamp `run_id` + context-window occupancy onto the assistant row this
+    /// run produced — the LAST assistant row whose source seq is in
+    /// `(after_seq, before_seq]`. Called by the projector when it processes a
+    /// [`crate::session::events::SessionEvent::AssistantRunMeta`] event, so the
+    /// Panel can restore the occupancy gauge on session reload without a live
+    /// `run_complete` event.
     ///
-    /// Default: no-op (`Ok(())`) — for TEST STUBS only. **Both production
-    /// backends override it**: SQLite with an `UPDATE ... WHERE id = (SELECT
-    /// MAX(id) ... role='assistant')`, the file backend with a locked rewrite
-    /// of `transcript.jsonl`.
+    /// ⚠️ The range is the whole point, and it replaced "the most recent
+    /// assistant row in the table". Position is not identity: the projector now
+    /// re-reads a session's whole event range on every heal, so a replayed
+    /// `AssistantRunMeta` used to walk its numbers onto whatever row happened
+    /// to be newest — a LATER run's row — and the session was billed twice for
+    /// the first run while the second one's gauge read the first one's tokens.
+    /// `after_seq` is the run's own `RunStarted` seq (0 when the replay window
+    /// opened after it), `before_seq` is the meta's own seq.
     ///
-    /// ⚠️ This sentence read "Only the SQLite-backed store overrides this;
-    /// file-backend and test stubs compile unchanged" until 2026-08-29, and it
-    /// was not describing a design — it was describing a gap, in the voice of a
-    /// decision. The file backend is the DEFAULT (`default_session_store_backend()`
-    /// returns `"file"`), so what the sentence actually meant was that every
-    /// assistant row in `chat.history` carried a null `run_id` and null
-    /// occupancy on a stock install, and the one thing that would have made a
-    /// reader look — the trait's own doc — told them it was on purpose. A
-    /// default arm that some implementors legitimately keep must say WHICH ones
-    /// and why, or it hands the next reader a ruling that was never made.
-    async fn stamp_last_assistant_metadata(
+    /// Rows with no source seq (legacy transcripts, boot-time orphan notices)
+    /// are never in any range and are therefore never stamped.
+    ///
+    /// [`StampOutcome::AlreadyStamped`] is what makes billing idempotent: the
+    /// caller accumulates the run's spend ONLY on [`StampOutcome::Stamped`], so
+    /// a replay of the same meta cannot bill twice. Implementors must return
+    /// `AlreadyStamped` when the row in range already carries this metadata's
+    /// `run_id`, and must not overwrite it.
+    ///
+    /// Default: [`StampOutcome::NoRowInRange`] — for TEST STUBS only, and true
+    /// of them by construction (a stub with no transcript has no row in any
+    /// range). **Both production backends override it**: SQLite with a
+    /// `source_seq`-ranged `ORDER BY source_seq DESC LIMIT 1`, the file backend
+    /// with a locked `rfind` over the same range. It is deliberately NOT
+    /// `Stamped`: a default that claims the write happened would let the caller
+    /// bill a session against a store that wrote nothing.
+    async fn stamp_assistant_metadata_in_range(
         &self,
         _key: &SessionKey,
+        _after_seq: u64,
+        _before_seq: u64,
         _metadata: &serde_json::Value,
-    ) -> Result<(), SessionStoreError> {
-        Ok(())
+    ) -> Result<StampOutcome, SessionStoreError> {
+        Ok(StampOutcome::NoRowInRange)
     }
 
     async fn patch_session(

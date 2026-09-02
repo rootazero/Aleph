@@ -9,7 +9,7 @@ use crate::gateway::session_store::types::{
     CheckpointSummary, DeleteResult, HistoryPage, MessageRecord, SearchHit, SessionFilter,
     SessionMetadata, SessionPatch, SessionPreview, TruncateResult,
 };
-use crate::gateway::session_store::SessionStore;
+use crate::gateway::session_store::{SessionStore, StampOutcome};
 
 pub type SqliteSessionStore = SessionManager;
 pub type SqliteSessionStoreConfig = SessionManagerConfig;
@@ -571,25 +571,84 @@ impl SessionStore for SessionManager {
         self.set_idle(key).await.map_err(map_err)
     }
 
-    async fn stamp_last_assistant_metadata(
+    /// See the trait doc. `source_seq` is the only column that answers "which
+    /// run did this row belong to"; `MAX(id)` — what this used to select —
+    /// answers "which row is newest", and the two stop agreeing the moment a
+    /// heal back-fills an older row or a second run appends a newer one.
+    ///
+    /// Ordering by `source_seq DESC` rather than `id DESC` for the same reason:
+    /// a back-filled row has a larger `id` than rows recorded before it, so
+    /// `id` order inside a range is not seq order after a repair.
+    async fn stamp_assistant_metadata_in_range(
         &self,
         key: &SessionKey,
+        after_seq: u64,
+        before_seq: u64,
         metadata: &serde_json::Value,
-    ) -> Result<(), SessionStoreError> {
+    ) -> Result<StampOutcome, SessionStoreError> {
         let key_str = key.to_key_string();
+        let run_id = metadata.get("run_id").and_then(|v| v.as_str());
         let metadata_json = serde_json::to_string(metadata)
             .map_err(|e| SessionStoreError::DatabaseError(format!("serialize metadata: {e}")))?;
         let conn = self
             .conn
             .lock()
             .map_err(|e| SessionStoreError::DatabaseError(format!("Lock error: {e}")))?;
+        let target: Option<(i64, Option<String>)> = conn
+            .query_row(
+                "SELECT id, metadata FROM messages
+                  WHERE session_key = ?1 AND role = 'assistant'
+                    AND source_seq IS NOT NULL AND source_seq > ?2 AND source_seq <= ?3
+                  ORDER BY source_seq DESC LIMIT 1",
+                params![key_str, after_seq as i64, before_seq as i64],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
+        let Some((row_id, existing)) = target else {
+            return Ok(StampOutcome::NoRowInRange);
+        };
+        if already_stamped_by(existing.as_deref(), run_id) {
+            return Ok(StampOutcome::AlreadyStamped);
+        }
         conn.execute(
-            "UPDATE messages SET metadata = ?1
-             WHERE id = (SELECT MAX(id) FROM messages WHERE session_key = ?2 AND role = 'assistant')",
-            params![metadata_json, key_str],
+            "UPDATE messages SET metadata = ?1 WHERE id = ?2",
+            params![metadata_json, row_id],
         )
         .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
-        Ok(())
+        Ok(StampOutcome::Stamped)
+    }
+}
+
+/// "This row must not be stamped (and billed) again by this run."
+///
+/// Shared by both backends so the two cannot drift on what "already stamped"
+/// means — the answer decides whether a session is billed, and two spellings of
+/// it would be two billing policies.
+///
+/// The ambiguous cases answer `true`, i.e. LEAVE IT ALONE:
+///
+/// * metadata that is present but not JSON, or JSON without a `run_id` — this
+///   row was not written by the projector's stamp, so overwriting it would
+///   destroy somebody else's data and bill for a row we do not own;
+/// * a metadata bag with no `run_id` of its own — there is nothing to compare,
+///   so a replay could not be told from a first pass, and "bill again" is the
+///   answer that cannot be undone.
+///
+/// Only an empty row, or a row carrying a DIFFERENT run's id, answers `false`.
+pub(crate) fn already_stamped_by(existing: Option<&str>, run_id: Option<&str>) -> bool {
+    let Some(existing) = existing.filter(|e| !e.trim().is_empty()) else {
+        return false;
+    };
+    let Some(run_id) = run_id else {
+        return true;
+    };
+    match serde_json::from_str::<serde_json::Value>(existing) {
+        Ok(v) => match v.get("run_id").and_then(serde_json::Value::as_str) {
+            Some(existing_run) => existing_run == run_id,
+            None => true,
+        },
+        Err(_) => true,
     }
 }
 

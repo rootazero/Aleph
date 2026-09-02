@@ -10,7 +10,7 @@ use crate::gateway::session_store::types::{
     CheckpointSummary, DeleteResult, MessageRecord, SearchHit, SessionChangedEvent, SessionFilter,
     SessionMetadata, SessionPatch, SessionPreview, TruncateResult,
 };
-use crate::gateway::session_store::SessionStore;
+use crate::gateway::session_store::{SessionStore, StampOutcome};
 use crate::sync_primitives::Arc;
 
 pub(crate) mod meta;
@@ -307,7 +307,7 @@ impl FileSessionStore {
     /// update is lost. Losing an update needs a lock held across the read AND
     /// the write, and the scope of that here is deliberately partial:
     ///
-    /// - `append_message` and `stamp_last_assistant_metadata` DO hold the
+    /// - `append_message` and `stamp_assistant_metadata_in_range` DO hold the
     ///   session's [`Self::lock_metadata`] guard across their whole operation.
     ///   Those two are the pair that runs on every turn of every run on the
     ///   default backend, so their race is a routine event rather than a rare
@@ -683,7 +683,7 @@ impl SessionStore for FileSessionStore {
         let key_str = key.to_key_string();
         // Lock FIRST, then append. The append used to sit outside the critical
         // section, which was harmless while nothing else rewrote the transcript
-        // — it is not harmless now that `stamp_last_assistant_metadata` does a
+        // — it is not harmless now that `stamp_assistant_metadata_in_range` does a
         // read-modify-write of the same file at the end of every run. Taking
         // the same lock is what makes the two mutually exclusive; the append
         // itself is still O(one line) so the section stays short.
@@ -1450,27 +1450,28 @@ impl SessionStore for FileSessionStore {
         self.set_state(key, SessionState::Idle).await
     }
 
-    /// Stamp the run's `run_id` + context-window occupancy onto the newest
-    /// assistant line of `transcript.jsonl`.
+    /// Stamp the run's `run_id` + context-window occupancy onto the assistant
+    /// line of `transcript.jsonl` that this run produced — see the trait doc
+    /// for why the range, and not "the newest line", is the identity.
     ///
-    /// The trait's `Ok(())` default reads as a deliberate opt-out ("only the
-    /// SQLite store overrides this"), but the projector is the ONE producer of
-    /// per-message run metadata and this is the DEFAULT backend — so on a stock
-    /// install every assistant row came back with a null `run_id` and null
-    /// occupancy, and the Panel's context gauge (`occupancy_from_history`)
-    /// stayed hidden after every reload. The same install under
-    /// `session_store_backend = "sqlite"` showed it. That is not an opt-out,
-    /// it is the feature being off for most users.
+    /// This is the DEFAULT backend (`default_session_store_backend()` returns
+    /// `"file"`), so the trait's default arm being wrong here means the feature
+    /// is off for most users: before this backend implemented the stamp at all,
+    /// every assistant row came back with a null `run_id` and null occupancy on
+    /// a stock install and the Panel's context gauge (`occupancy_from_history`)
+    /// stayed hidden after every reload.
     ///
     /// Written through `atomic_write_file` rather than `fs::write`: a rewrite
     /// of the whole transcript is a truncate-then-write, and the projector can
     /// append between the two halves — the same tear that cost this store its
     /// `metadata.json` (see `utils::atomic_write`).
-    async fn stamp_last_assistant_metadata(
+    async fn stamp_assistant_metadata_in_range(
         &self,
         key: &SessionKey,
+        after_seq: u64,
+        before_seq: u64,
         metadata: &serde_json::Value,
-    ) -> Result<(), SessionStoreError> {
+    ) -> Result<StampOutcome, SessionStoreError> {
         let key_str = key.to_key_string();
         // The session's write lock, held across the whole read-modify-write.
         //
@@ -1488,11 +1489,33 @@ impl SessionStore for FileSessionStore {
         // discipline is a module boundary, not a convention to remember).
         let _write_lock = self.lock_metadata(&key_str).await?;
         let mut messages = self.read_transcript(&key_str, None).await?;
-        let Some(last) = messages.iter_mut().rfind(|m| m.role == "assistant") else {
-            // No assistant row yet (the run failed before it produced one).
-            // Not an error: the SQLite twin's UPDATE matches zero rows here.
-            return Ok(());
+        let run_id = metadata.get("run_id").and_then(|v| v.as_str());
+        // The same range predicate as the SQLite twin, spelled over the row ids
+        // this backend writes. `rfind` walks recording order, which for rows
+        // this projector wrote is seq order; the explicit seq test is what makes
+        // that true rather than assumed, and it is what excludes rows with no
+        // parseable seq (legacy transcripts, boot-time orphan notices).
+        let Some(last) = messages.iter_mut().rfind(|m| {
+            m.role == "assistant"
+                && crate::session::projection::parse_source_seq(&m.id, &key_str)
+                    .is_some_and(|s| s > after_seq && s <= before_seq)
+        }) else {
+            // The row this run produced is not in the transcript — never
+            // materialised, or not healed yet. Not an error, and NOT a stamp:
+            // the caller must not bill for it.
+            return Ok(StampOutcome::NoRowInRange);
         };
+        let existing = last
+            .metadata
+            .as_ref()
+            .map(serde_json::Value::to_string)
+            .filter(|s| s != "null");
+        if crate::gateway::session_store::sqlite_backend::already_stamped_by(
+            existing.as_deref(),
+            run_id,
+        ) {
+            return Ok(StampOutcome::AlreadyStamped);
+        }
         last.metadata = Some(metadata.clone());
 
         let mut contents = String::new();
@@ -1504,7 +1527,10 @@ impl SessionStore for FileSessionStore {
         }
         crate::utils::atomic_write::atomic_write_file(&self.transcript_path(&key_str), &contents)
             .await
-            .map_err(|e| SessionStoreError::DatabaseError(format!("Write transcript failed: {e}")))
+            .map_err(|e| {
+                SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
+            })?;
+        Ok(StampOutcome::Stamped)
     }
 }
 
@@ -1727,12 +1753,12 @@ mod default_backend_parity_guards {
 
         let stamp = tokio::time::timeout(
             Duration::from_millis(150),
-            store.stamp_last_assistant_metadata(&key, &serde_json::json!({"run_id": "r1"})),
+            store.stamp_assistant_metadata_in_range(&key, 0, 99, &serde_json::json!({"run_id": "r1"})),
         )
         .await;
         assert!(
             stamp.is_err(),
-            "stamp_last_assistant_metadata completed while the session write \
+            "stamp_assistant_metadata_in_range completed while the session write \
              lock was held — it is doing an UNLOCKED read-modify-write of \
              transcript.jsonl at the end of every run on the default backend, \
              and the update it loses is the user's newest message"
@@ -1773,7 +1799,7 @@ mod default_backend_parity_guards {
         drop(held);
         tokio::time::timeout(
             Duration::from_secs(5),
-            store.stamp_last_assistant_metadata(&key, &serde_json::json!({"run_id": "r1"})),
+            store.stamp_assistant_metadata_in_range(&key, 0, 99, &serde_json::json!({"run_id": "r1"})),
         )
         .await
         .expect("stamp must proceed once the lock is free")
@@ -1836,39 +1862,96 @@ mod default_backend_parity_guards {
         );
     }
 
-    /// `stamp_last_assistant_metadata`'s trait default is `Ok(())`, documented
-    /// as "only the SQLite store overrides this". On the DEFAULT backend that
+    /// The stamp's trait default writes nothing. On the DEFAULT backend that
     /// silently dropped the projector's only per-message run metadata, so
     /// `chat.history` returned null `run_id`/occupancy for every assistant row
     /// and the Panel's context gauge stayed hidden after every reload.
+    ///
+    /// Also pins the RANGE: a second run's row sits above the first run's meta
+    /// seq, and must not be the one stamped. "The newest assistant row" — what
+    /// this used to select — gets that wrong on every session with two runs.
     #[tokio::test]
-    async fn the_default_backend_stamps_run_metadata_onto_the_last_assistant_row() {
+    async fn the_default_backend_stamps_the_row_inside_the_runs_own_range() {
         let (store, _dir) = temp_store();
         let key = SessionKey::from_key_string("agent:stampcheck:main").unwrap();
+        let key_str = key.to_key_string();
         store.get_or_create(&key).await.unwrap();
-        store.append_message(&key, msg("user", "hi")).await.unwrap();
-        store
-            .append_message(&key, msg("assistant", "hello"))
-            .await
-            .unwrap();
+        for (seq, role, content) in [
+            (1u64, "user", "hi"),
+            (2, "assistant", "hello"),
+            (5, "assistant", "later run"),
+        ] {
+            let mut record = msg(role, content);
+            record.id = crate::session::projection::row_id(&key_str, seq);
+            store.append_message(&key, record).await.unwrap();
+        }
 
         let meta = serde_json::json!({ "run_id": "run-7", "context_tokens": 1234 });
-        store
-            .stamp_last_assistant_metadata(&key, &meta)
-            .await
-            .unwrap();
+        assert_eq!(
+            store
+                .stamp_assistant_metadata_in_range(&key, 0, 3, &meta)
+                .await
+                .unwrap(),
+            StampOutcome::Stamped
+        );
+        // Replay: the same meta must recognise its own stamp and refuse to
+        // re-apply it, which is what keeps the caller from billing twice.
+        assert_eq!(
+            store
+                .stamp_assistant_metadata_in_range(&key, 0, 3, &meta)
+                .await
+                .unwrap(),
+            StampOutcome::AlreadyStamped
+        );
 
         let history = store.get_history(&key, None).await.unwrap();
-        let last = history.last().expect("assistant row");
-        assert_eq!(last.role, "assistant");
+        let stamped = history
+            .iter()
+            .find(|m| m.content == "hello")
+            .expect("assistant row");
         assert_eq!(
-            last.metadata.as_ref().and_then(|m| m.get("run_id")),
+            stamped.metadata.as_ref().and_then(|m| m.get("run_id")),
             Some(&serde_json::json!("run-7")),
             "the run metadata the projector produced never reached the transcript"
         );
+        assert!(
+            history
+                .iter()
+                .find(|m| m.content == "later run")
+                .expect("second run's row")
+                .metadata
+                .is_none(),
+            "a row above the meta's seq belongs to a later run"
+        );
         // The rest of the transcript must survive the rewrite.
-        assert_eq!(history.len(), 2);
+        assert_eq!(history.len(), 3);
         assert_eq!(history[0].content, "hi");
+    }
+
+    /// A run whose assistant row never reached the transcript has nothing to
+    /// stamp — and the caller must be able to tell that from a successful
+    /// write, because it bills on one and not the other.
+    #[tokio::test]
+    async fn a_range_with_no_assistant_row_is_named_not_silently_ok() {
+        let (store, _dir) = temp_store();
+        let key = SessionKey::from_key_string("agent:norange:main").unwrap();
+        store.get_or_create(&key).await.unwrap();
+        let mut record = msg("assistant", "hello");
+        record.id = crate::session::projection::row_id(&key.to_key_string(), 9);
+        store.append_message(&key, record).await.unwrap();
+
+        assert_eq!(
+            store
+                .stamp_assistant_metadata_in_range(
+                    &key,
+                    0,
+                    3,
+                    &serde_json::json!({ "run_id": "run-7" })
+                )
+                .await
+                .unwrap(),
+            StampOutcome::NoRowInRange
+        );
     }
 }
 
