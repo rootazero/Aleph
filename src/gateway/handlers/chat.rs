@@ -749,6 +749,7 @@ pub async fn handle_clear(
 pub async fn handle_rewind(
     request: JsonRpcRequest,
     session_manager: Arc<dyn SessionStore>,
+    run_manager: Option<Arc<crate::gateway::handlers::agent::AgentRunManager>>,
 ) -> JsonRpcResponse {
     let params: RewindParams = match parse_params(&request) {
         Ok(p) => p,
@@ -793,6 +794,13 @@ pub async fn handle_rewind(
             );
         }
     };
+
+    // A rewind that cut away a `RunFinished` and left its `RunStarted` behind
+    // does not corrupt anything — it makes the log SAY a run is still open, and
+    // the boot scan believes it: every later boot re-classifies this session
+    // `Interrupted`, appends a crash-boundary repair and re-triggers a run the
+    // user deleted, forever, because nothing else ever closes that marker.
+    super::balance_run_markers_after_retire(&session_key, run_manager.as_ref()).await;
 
     // Realign the Panel's projection with the shortened log by deleting the
     // rows the retired events produced — matched by their source seq, never by
@@ -1913,6 +1921,7 @@ mod tests {
                             json!({ "session_key": alice_key_str, "seq": 1 }),
                         ),
                         store.clone(),
+                        None,
                     ),
                 )
                 .await;

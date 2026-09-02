@@ -1898,7 +1898,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.generation_registry.clone(),
     );
 
-    register_session_handlers(&mut server, &session_store, &memory_db, args.daemon);
+    register_session_handlers(
+        &mut server,
+        &session_store,
+        &memory_db,
+        Some(agent_result.run_manager.clone()),
+        args.daemon,
+    );
     // Artifact metadata (`artifacts.list`, `session.export_html`). The byte
     // route itself is plain HTTP on the axum router; these RPCs are what mint
     // the capability that authorises it.

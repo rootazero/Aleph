@@ -45,7 +45,7 @@ use crate::server_init::{handle_chat_send_with_engine, handle_run_with_engine};
 /// Result from registering agent handlers — includes optional execution support
 /// for use by `InboundMessageRouter`.
 pub(in crate::commands::start) struct AgentHandlersResult {
-    pub _run_manager: Arc<AgentRunManager>,
+    pub run_manager: Arc<AgentRunManager>,
     pub execution_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>>,
     pub agent_registry: Option<Arc<AgentRegistry>>,
     pub default_provider: Option<Arc<dyn alephcore::providers::AiProvider>>,
@@ -1889,7 +1889,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
         // Publish the fallback run manager through the outer `run_manager`
         // Option. The `agent.status`/`agent.cancel`/`chat.abort` registrations
-        // below and the `_run_manager` field at the end of this fn are both
+        // below and the `run_manager` field at the end of this fn are both
         // gated on `Some(run_manager)`; without this assignment simulated mode
         // skips those handlers and panics on the terminal `.expect(...)`.
         run_manager = Some(fallback_run_manager);
@@ -1965,7 +1965,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // (not `panic!`) so the diagnostic reads as "this invariant was
         // violated" rather than "something exploded", and so the line is
         // greppable by anyone scanning for production panics.
-        _run_manager: run_manager.expect(
+        run_manager: run_manager.expect(
             "run_manager must be set by either the real-execution branch or the \
              simulated-fallback branch before reaching this point",
         ),

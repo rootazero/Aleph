@@ -34,7 +34,16 @@ use super::super::visibility;
 use super::agent::BuildRunError;
 use super::parse_params;
 use crate::gateway::agent_instance::AgentRegistry;
-use crate::gateway::ResumeReport;
+use crate::gateway::{ResumeRefusal, ResumeReport};
+
+/// The status word for "the reducer refused this session's log".
+///
+/// A string constant, not an inline literal, because three faces spell it
+/// (this handler, the admin route, the CLI's match) and a fourth reads it back
+/// (`aleph doctor`'s finding ids share the vocabulary). T3 moves it to
+/// `shared/protocol` with the rest of the closed set; it lives here for exactly
+/// as long as this handler is its only writer.
+pub const LOG_INCONSISTENT: &str = "log_inconsistent";
 
 /// Parameters for `agent.resume`.
 #[derive(Debug, Clone, Deserialize)]
@@ -95,6 +104,17 @@ impl ResumeOutcome {
                 // even a `--json` caller could not tell "handed back to its own
                 // scheduler" from "the re-trigger errored".
                 "delegated": report.delegated,
+                "skipped_unknown_age": report.skipped_unknown_age,
+                "contradictions": report.contradictions,
+                "refused": report
+                    .refused
+                    .iter()
+                    .map(|(session, refusal)| json!({
+                        "session_key": session.to_key_string(),
+                        "reason": refusal.reason(),
+                        "detail": refusal.detail(),
+                    }))
+                    .collect::<Vec<_>>(),
             }),
             Self::InvalidKey => json!({ "status": "invalid_session_key" }),
             Self::NotFound => json!({ "status": "not_found" }),
@@ -120,6 +140,21 @@ fn status_of(report: &ResumeReport) -> &'static str {
     // resumed.
     if report.busy > 0 {
         "already_resuming"
+    } else if matches!(
+        report.refused.first(),
+        Some((_, ResumeRefusal::LogInconsistent(_)))
+    ) {
+        // Checked before every verdict-shaped counter. A log the reducer
+        // refused produces no `resumed`, no `abandoned` and no `skipped`, so
+        // this used to fall through to `not_resumed` — "we tried and nothing
+        // happened" — when the truth is "this log contradicts itself and
+        // nothing was tried". The operator's next move differs: `not_resumed`
+        // says retry, `log_inconsistent` says run `aleph doctor`.
+        //
+        // `first()`, not "any": this face resumes exactly ONE session, so it
+        // has at most one refusal; the boot scan's multi-session report names
+        // its refusals per session rather than through this word.
+        LOG_INCONSISTENT
     } else if report.delegated > 0 {
         // A cron / heartbeat / team session: `resume_from_markers` deliberately
         // hands recovery back to the scheduler that owns it and closes the
@@ -334,7 +369,65 @@ mod tests {
             skipped,
             busy: 0,
             delegated: 0,
+            refused: Vec::new(),
+            skipped_unknown_age: 0,
+            contradictions: 0,
         }
+    }
+
+    fn refused_report(refusal: ResumeRefusal) -> ResumeReport {
+        ResumeReport {
+            scanned: 1,
+            refused: vec![(
+                crate::routing::session_key::SessionKey::ephemeral("status-of"),
+                refusal,
+            )],
+            ..report(0, 0, 0, 0)
+        }
+    }
+
+    /// The refusal must be readable as itself, not as "we tried and nothing
+    /// happened". Goes red if the `log_inconsistent` arm is moved below
+    /// `scanned > 0` (it would then read `not_resumed`) or below `skipped`.
+    #[test]
+    fn a_refused_log_is_log_inconsistent_not_not_resumed() {
+        let refused = refused_report(ResumeRefusal::LogInconsistent(
+            crate::session::reduction::LogContradiction::OutOfOrderSlice { at_seq: 41 },
+        ));
+        assert_eq!(status_of(&refused), LOG_INCONSISTENT);
+
+        // The arm it used to fall into still means what it says.
+        assert_eq!(status_of(&report(1, 0, 0, 0)), "not_resumed");
+    }
+
+    /// Only the log-contradiction refusal gets the word. A missing agent or a
+    /// failed re-trigger IS "we tried and nothing happened", and telling the
+    /// operator to run `doctor` for it would send them to the wrong place.
+    #[test]
+    fn the_other_refusals_do_not_claim_an_inconsistent_log() {
+        for refusal in [
+            ResumeRefusal::AgentMissing,
+            ResumeRefusal::BoundaryRepairFailed("append failed".into()),
+            ResumeRefusal::RetriggerFailed("adapter said no".into()),
+        ] {
+            assert_eq!(
+                status_of(&refused_report(refusal.clone())),
+                "not_resumed",
+                "{refusal:?} must not read as an inconsistent log"
+            );
+        }
+    }
+
+    /// A refusal outranks `busy`? No — `busy` still wins, because a busy pass
+    /// looked at nothing at all and therefore cannot have refused anything.
+    /// Pinned so the two never swap.
+    #[test]
+    fn a_busy_session_outranks_every_refusal() {
+        let mut busy = refused_report(ResumeRefusal::LogInconsistent(
+            crate::session::reduction::LogContradiction::NonMarkerInMarkerSlice { seq: 3 },
+        ));
+        busy.busy = 1;
+        assert_eq!(status_of(&busy), "already_resuming");
     }
 
     /// A cron / heartbeat / team session is handed back to the scheduler that
@@ -369,6 +462,12 @@ mod tests {
             skipped: 4,
             busy: 5,
             delegated: 6,
+            skipped_unknown_age: 7,
+            contradictions: 8,
+            refused: vec![(
+                crate::routing::session_key::SessionKey::ephemeral("wire"),
+                ResumeRefusal::AgentMissing,
+            )],
         };
         let body = ResumeOutcome::Done {
             status: "delegated",
@@ -385,14 +484,38 @@ mod tests {
             skipped,
             busy,
             delegated,
+            skipped_unknown_age,
+            contradictions,
+            refused,
         } = ResumeReport::default();
-        let counters = [scanned, resumed, abandoned, skipped, busy, delegated].len();
+        let fields = [
+            scanned,
+            resumed,
+            abandoned,
+            skipped,
+            busy,
+            delegated,
+            skipped_unknown_age,
+            contradictions,
+        ]
+        .len()
+            // `refused` is a list, not a counter, so it cannot join the array
+            // above — but the destructure is exhaustive (no `..`), so a new
+            // field still fails to compile here rather than going unrendered.
+            + [refused.len()].len();
         assert_eq!(
             obj.len(),
-            counters + 2,
-            "a counter on `ResumeReport` is not reaching the wire: {obj:?}"
+            fields + 2,
+            "a field on `ResumeReport` is not reaching the wire: {obj:?}"
         );
         assert_eq!(obj["delegated"], serde_json::json!(6));
+        assert_eq!(obj["skipped_unknown_age"], serde_json::json!(7));
+        assert_eq!(obj["contradictions"], serde_json::json!(8));
+        assert_eq!(
+            obj["refused"][0]["reason"],
+            serde_json::json!("agent_missing"),
+            "a refusal must reach the wire as its own word: {obj:?}"
+        );
     }
 
     #[test]

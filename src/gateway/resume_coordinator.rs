@@ -26,7 +26,7 @@ use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::execution_engine::{RunRequest, UNATTENDED_KEY};
 use crate::session::events::{now_ms, RunOutcome, SessionEvent, SessionEventRecord};
 use crate::session::reduction::{
-    reduce_disposition, reduce_run, DanglingProvenance, RunDisposition, RunReduction,
+    reduce_disposition, reduce_run, LogContradiction, RunDisposition,
 };
 use crate::session::service::SessionId;
 use crate::session::store::SessionEventStore;
@@ -106,9 +106,79 @@ pub struct ResumeReport {
     /// racing the boot scan, which is spawned while the gateway is already
     /// serving — must not both run `repair_boundary`, because that is a
     /// read-then-append and two winners append **two** synthetic `ToolError`s
-    /// for the same `call_id`. A tool_use with two tool_results is a provider
-    /// API error on every later turn of that session.
+    /// for the same `call_id`. Since `harness::agent::prompt` learned to
+    /// downgrade an orphaned/duplicate `tool_result` to a plain user note
+    /// (7929bbda6) that is no longer a provider rejection — it is text noise:
+    /// the model reads the same "outcome unknown" sentence twice, the second
+    /// time as prose that no longer references the call it answers.
     pub busy: usize,
+    /// Candidates this pass would not act on, and why. One entry per refusal,
+    /// carrying the session so a multi-session boot report names which.
+    ///
+    /// Not a counter: "something was refused" and "this session's log
+    /// contradicts itself at seq 41" are different answers, and the caller
+    /// (`status_of`, the CLI receipt, the doctor) needs the second.
+    pub refused: Vec<(SessionId, ResumeRefusal)>,
+    /// Interrupted candidates left alone because their log's recency is
+    /// unknown ([`LogContradiction::ClockAnomaly`]).
+    ///
+    /// Deliberately neither `resumed` nor `abandoned`: both are decisions
+    /// taken on an age, and the age is exactly what this log does not support.
+    pub skipped_unknown_age: usize,
+    /// REPORT-kind contradictions seen across every candidate this pass
+    /// reduced. A magnitude for the boot line — the kinds themselves are named
+    /// per session by the `core/session-log` doctor check.
+    pub contradictions: usize,
+}
+
+/// Why one candidate was not resumed.
+///
+/// Every arm is a refusal the coordinator *made*, not a state it found: a
+/// clean session is `skipped`, a delegated one is `delegated`. This carries
+/// only the cases where something was wrong enough to stop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResumeRefusal {
+    /// The reducer refused the log ([`LogContradiction::rejects`]). "I do not
+    /// know what state this run is in" — never read as clean.
+    LogInconsistent(LogContradiction),
+    /// The session's agent is not in the registry, so there is nothing to
+    /// re-trigger the run on.
+    AgentMissing,
+    /// The log could not be read, or the repair events could not be appended.
+    /// Resuming anyway would hand the model a `tool_use` with no result.
+    BoundaryRepairFailed(String),
+    /// The repair landed but the run could not be dispatched.
+    RetriggerFailed(String),
+}
+
+impl ResumeRefusal {
+    /// The stable word this refusal is reported under. Pinned by test to the
+    /// variant list so a new arm cannot ship without a word of its own.
+    #[must_use]
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Self::LogInconsistent(_) => "log_inconsistent",
+            Self::AgentMissing => "agent_missing",
+            Self::BoundaryRepairFailed(_) => "boundary_repair_failed",
+            Self::RetriggerFailed(_) => "retrigger_failed",
+        }
+    }
+
+    /// The specifics behind [`Self::reason`], for an operator to act on.
+    #[must_use]
+    pub fn detail(&self) -> String {
+        match self {
+            Self::LogInconsistent(c) => c.to_string(),
+            Self::AgentMissing => "the session's agent is not registered".to_string(),
+            Self::BoundaryRepairFailed(e) | Self::RetriggerFailed(e) => e.clone(),
+        }
+    }
+}
+
+impl std::fmt::Display for ResumeRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.reason(), self.detail())
+    }
 }
 
 /// `task_type` of a cron-triggered run's session key.
@@ -223,57 +293,29 @@ pub(crate) fn resume_metadata(
     metadata
 }
 
-/// The sentence a dangling call is answered with.
+/// When this candidate was last *alive*, in recording time.
 ///
-/// Deliberately **not** a safety-level classifier. `ToolSafetyLevel` exists and
-/// could sort read-only calls from destructive ones, but deciding "is this safe
-/// to redo?" from a tool name and its arguments is exactly the reasoning R7
-/// reserves for the model. State the fact; let it judge.
+/// Measured from the last thing that happened inside the run, not from the
+/// marker that opened it. A long-running agent whose `RunStarted` is three days
+/// old and whose last tool call landed a minute before the crash is the exact
+/// candidate resume exists for; on the marker alone it was abandoned as "too
+/// old", while a run that opened seconds before a crash and did nothing was
+/// resumed. Whole classes of long agent runs were unresumable and the counter
+/// said `abandoned`, which reads like a decision rather than a mismeasurement.
 ///
-/// Two arms because there are two true sentences. Everything after the lead-in
-/// is shared, so the five semantic points cannot drift apart between them.
-fn boundary_repair_text(tool: &str, provenance: DanglingProvenance) -> String {
-    let lead = match provenance {
-        DanglingProvenance::ThisRestart => format!(
-            "the server restarted after this `{tool}` call was dispatched but before its \
-             result was recorded"
-        ),
-        DanglingProvenance::EarlierRun => format!(
-            "an earlier run in this session ended without recording the result of this \
-             `{tool}` call"
-        ),
-    };
-    format!(
-        "OUTCOME UNKNOWN — {lead}. This is NOT a report that the call failed: it may have \
-         completed, and any side effects it has (file writes, commands, network calls, \
-         external state) have already landed. Verify the current state before deciding \
-         whether to repeat it."
-    )
-}
-
-/// Turn a reduction's dangling set into appendable answer events.
-///
-/// **Both provenances get an event.** Leaving the older ones unanswered is not
-/// the cheaper option: `build_prompt` drops an orphan `tool_use` whose result
-/// never arrives, so the model stops seeing that the call ever happened — while
-/// its side effects may still be on disk. A missing row reads as "there was no
-/// value"; that is the reading this whole repair exists to prevent.
-///
-/// The answer is shaped as `ToolError` because there is no result to hand back:
-/// a synthetic `ToolResult` would make an invented payload indistinguishable
-/// from the tool's real output.
-pub(crate) fn repairs_for(reduction: &RunReduction) -> Vec<SessionEvent> {
-    let at = now_ms();
-    reduction
-        .dangling
-        .iter()
-        .map(|call| SessionEvent::ToolError {
-            turn_id: call.turn_id,
-            call_id: call.call_id.clone(),
-            error: boundary_repair_text(&call.tool_name, call.provenance),
-            at,
-        })
-        .collect()
+/// The marker still participates (`max`): a run that opened and recorded
+/// nothing has no in-scope activity at all, and the marker's own recording time
+/// is then the newest fact the log has about it. Pure, and separate from
+/// [`ResumeCoordinator::handle_interrupted`], so the rule is falsifiable
+/// without a coordinator, a store and an execution adapter.
+fn last_alive_at(
+    reduction: &crate::session::reduction::RunReduction,
+    last_marker: &SessionEventRecord,
+) -> crate::session::events::Timestamp {
+    match reduction.progress.last_activity_at {
+        Some(activity) => activity.max(last_marker.created_at_ms),
+        None => last_marker.created_at_ms,
+    }
 }
 
 /// Boot-scan coordinator. Constructed at boot with the durable event store,
@@ -461,11 +503,13 @@ impl ResumeCoordinator {
         // Claimed before anything reads the log. `repair_boundary` is a
         // read-then-append: two concurrent resumes of one session both compute
         // the same repair set and both append it, leaving one `call_id` with
-        // two `ToolError`s — a tool_use with two tool_results, which the
-        // provider rejects on every later turn. The boot scan never exposed
-        // this (it walks sessions in a sequential loop); the on-demand face
-        // does, including against the boot scan itself, which is spawned while
-        // the gateway is already accepting requests.
+        // two `ToolError`s. `harness::agent::prompt` downgrades the second one
+        // to a plain user note rather than sending an invalid pair, so the cost
+        // is duplicated prose the model must reconcile, not an API rejection.
+        // The boot scan never exposed this (it walks sessions in a sequential
+        // loop); the on-demand face does, including against the boot scan
+        // itself, which is spawned while the gateway is already accepting
+        // requests.
         let Some(_slot) = self.try_claim_resume(session_id) else {
             tracing::info!(
                 session = ?session_id,
@@ -497,16 +541,19 @@ impl ResumeCoordinator {
                     .await;
             }
             // A refused slice is "I do not know", not "clean": it is
-            // deliberately NOT counted as `skipped` (documented as clean, and
-            // rendered `already_finished` by `status_of`). Left uncounted it
-            // lands on the `scanned > 0` → `not_resumed` arm, the honest
-            // interim word until the `refused` bucket exists.
+            // deliberately NOT counted as `skipped` (which `status_of` renders
+            // `already_finished`). It goes in the `refused` bucket, which
+            // `status_of` reads BEFORE every counter that could be mistaken
+            // for a verdict.
             Err(c) => {
                 tracing::warn!(
                     session = ?session_id,
                     contradiction = %c,
                     "resume: session log refused by the reducer; not resuming"
                 );
+                report
+                    .refused
+                    .push((session_id.clone(), ResumeRefusal::LogInconsistent(c)));
             }
         }
     }
@@ -560,8 +607,14 @@ impl ResumeCoordinator {
         Ok(report)
     }
 
-    /// Handle one interrupted candidate: recency filter, cap check,
-    /// crash-boundary repair, then re-trigger.
+    /// Handle one interrupted candidate: **one** reduction over the log, then
+    /// the recency filter, the cap check, the crash-boundary repair and the
+    /// re-trigger — every one of them reading that same reduction.
+    ///
+    /// The repair used to re-read and re-reduce the log itself, so "what state
+    /// is this candidate in" was answered twice per candidate, at two moments,
+    /// with an append in between. Two derivations of one fact is the shape
+    /// this round exists to remove.
     async fn handle_interrupted(
         &self,
         session_id: &SessionId,
@@ -576,8 +629,56 @@ impl ResumeCoordinator {
             return;
         };
 
+        let events = match self.event_store.load_all_events(session_id).await {
+            Ok(events) => events,
+            Err(e) => {
+                tracing::warn!(
+                    session = ?session_id,
+                    error = %e,
+                    "resume: candidate log unreadable; skipping candidate"
+                );
+                report.refused.push((
+                    session_id.clone(),
+                    ResumeRefusal::BoundaryRepairFailed(e.to_string()),
+                ));
+                return;
+            }
+        };
+        let reduction = match reduce_run(&events) {
+            Ok(reduction) => reduction,
+            Err(c) => {
+                tracing::warn!(
+                    session = ?session_id,
+                    contradiction = %c,
+                    "resume: candidate log refused by the reducer; not resuming"
+                );
+                report
+                    .refused
+                    .push((session_id.clone(), ResumeRefusal::LogInconsistent(c)));
+                return;
+            }
+        };
+        report.contradictions += reduction.contradictions.len();
+
+        // A clock anomaly makes the age unknown, and BOTH remaining verdicts
+        // are decisions taken on an age: resuming says "recent enough",
+        // abandoning says "too old". Neither is derivable, so this candidate
+        // is left exactly as it is and counted under its own name.
+        if reduction
+            .contradictions
+            .iter()
+            .any(|c| matches!(c, LogContradiction::ClockAnomaly { .. }))
+        {
+            tracing::warn!(
+                session = ?session_id,
+                "resume: candidate log has a clock anomaly; its age is unknown, leaving it alone"
+            );
+            report.skipped_unknown_age += 1;
+            return;
+        }
+
         // Recency filter — abandon runs interrupted too long ago.
-        let age_ms = now_ms().saturating_sub(last.created_at_ms);
+        let age_ms = now_ms().saturating_sub(last_alive_at(&reduction, last));
         if age_ms > (self.config.max_age_secs as i64).saturating_mul(1000) {
             tracing::info!(
                 session = ?session_id,
@@ -607,14 +708,26 @@ impl ResumeCoordinator {
             return;
         }
 
-        // Crash-boundary repair — append a synthetic ToolError for each
-        // dangling tool call so the provider API sees a balanced log.
-        if let Err(e) = self.repair_boundary(session_id).await {
+        // Crash-boundary repair — append a synthetic ToolError for every
+        // dangling call THIS reduction names, so the model sees each one
+        // answered instead of silently dropped from the replay.
+        if let Err(e) = crate::session::boundary_repair::repair_boundary(
+            self.event_store.as_ref(),
+            session_id,
+            &reduction,
+            None,
+        )
+        .await
+        {
             tracing::warn!(
                 session = ?session_id,
                 error = %e,
                 "resume: boundary repair failed; skipping candidate"
             );
+            report.refused.push((
+                session_id.clone(),
+                ResumeRefusal::BoundaryRepairFailed(e.to_string()),
+            ));
             return;
         }
 
@@ -637,12 +750,13 @@ impl ResumeCoordinator {
         };
         match self.retrigger(session_id, resume_project_root).await {
             Ok(()) => report.resumed += 1,
-            Err(e) => {
+            Err(refusal) => {
                 tracing::warn!(
                     session = ?session_id,
-                    error = %e,
+                    error = %refusal,
                     "resume: re-trigger failed; skipping candidate"
                 );
+                report.refused.push((session_id.clone(), refusal));
             }
         }
     }
@@ -721,30 +835,6 @@ impl ResumeCoordinator {
         }
     }
 
-    /// Append synthetic `ToolError`s for any dangling tool calls.
-    async fn repair_boundary(
-        &self,
-        session_id: &SessionId,
-    ) -> Result<(), crate::session::service::SessionError> {
-        let events = self.event_store.load_all_events(session_id).await?;
-        // A refused log propagates as an error: repairing on top of a slice
-        // the reducer could not read would append receipts to the wrong calls.
-        let reduction = reduce_run(&events)
-            .map_err(|c| crate::session::service::SessionError::Other(c.to_string()))?;
-        let repairs = repairs_for(&reduction);
-        if repairs.is_empty() {
-            return Ok(());
-        }
-        let mut next = self.event_store.load_head_seq(session_id).await? + 1;
-        for ev in repairs {
-            self.event_store
-                .append(session_id, next, &ev, now_ms())
-                .await?;
-            next += 1;
-        }
-        Ok(())
-    }
-
     /// Allocate the next append seq for a session.
     ///
     /// Propagates read errors rather than defaulting to `1`: a transient
@@ -768,20 +858,24 @@ impl ResumeCoordinator {
         &self,
         session_id: &SessionId,
         workspace_override: Option<std::path::PathBuf>,
-    ) -> Result<(), crate::session::service::SessionError> {
-        use crate::session::service::SessionError;
-
+    ) -> Result<(), ResumeRefusal> {
         let permit = self
             .semaphore
             .clone()
             .acquire_owned()
             .await
-            .map_err(|e| SessionError::Other(format!("resume semaphore closed: {e}")))?;
+            .map_err(|e| ResumeRefusal::RetriggerFailed(format!("resume semaphore closed: {e}")))?;
 
         let agent_id = session_id.agent_id().to_string();
-        let agent = self.agent_registry.get(&agent_id).await.ok_or_else(|| {
-            SessionError::Other(format!("resume: agent '{agent_id}' not registered"))
-        })?;
+        // A missing agent is its own refusal, not a generic failure: the run
+        // is intact and re-triggerable the moment that agent exists again,
+        // which is a different thing for an operator to read than "dispatch
+        // errored".
+        let agent = self
+            .agent_registry
+            .get(&agent_id)
+            .await
+            .ok_or(ResumeRefusal::AgentMissing)?;
 
         let mut metadata = resume_metadata(
             workspace_override.as_deref(),
@@ -855,7 +949,7 @@ impl ResumeCoordinator {
             .execution_adapter
             .execute(request, agent, emitter)
             .await
-            .map_err(|e| SessionError::Other(format!("resume execute failed: {e}")));
+            .map_err(|e| ResumeRefusal::RetriggerFailed(format!("resume execute failed: {e}")));
 
         drop(permit);
         result
@@ -1048,75 +1142,76 @@ mod tests {
         );
     }
 
-    /// G3 — both arms must carry all five semantic points. Asserting on
-    /// MEANING, not bytes: `!contains("failed")` gets hit by the text's own
-    /// negation sentence, which is how the first version of this guard went
-    /// red for the wrong reason (§4.13a).
-    fn assert_five_points(error: &str, tool: &str) {
-        assert!(
-            error.contains("OUTCOME UNKNOWN"),
-            "must state the outcome is unknown, got: {error}"
-        );
-        assert!(
-            error.contains("NOT a report that the call failed"),
-            "must explicitly deny that the call failed, got: {error}"
-        );
-        assert!(
-            error.contains(tool),
-            "must name the tool so the model knows what to verify, got: {error}"
-        );
-        assert!(
-            error.contains("side effects"),
-            "must warn that side effects may have landed, got: {error}"
-        );
-        assert!(
-            error.contains("Verify the current state before deciding"),
-            "must tell the model to verify current state before redoing, got: {error}"
+
+    /// ③-D8's falsification arm. A run whose `RunStarted` is ancient but whose
+    /// last tool call landed a moment ago is alive, and measuring its age from
+    /// the marker abandons exactly the long runs resume exists for.
+    ///
+    /// Goes red if `last_alive_at` is reverted to reading the marker alone.
+    #[test]
+    fn recency_is_measured_from_the_last_activity_not_the_marker() {
+        let events = vec![
+            rec(1, run_started(10), 1_000),
+            rec(2, tool_requested("c1"), 900_000),
+        ];
+        let reduction = reduce_run(&events).expect("legal log");
+        assert_eq!(
+            last_alive_at(&reduction, &events[0]),
+            900_000,
+            "the dispatch is newer than the marker that opened the run"
         );
     }
 
+    /// The other direction: a run that opened and recorded nothing has no
+    /// in-scope activity, so the marker's own recording time is the newest
+    /// fact there is. `None` here may not read as "epoch" — that would abandon
+    /// every freshly-opened run.
     #[test]
-    fn repairs_speak_a_different_sentence_per_provenance() {
-        let events = vec![
-            rec(1, run_started(10), 10),
-            rec(2, tool_requested("c1"), 20),
-            rec(3, run_started(30), 30),
-            rec(4, tool_requested("c2"), 40),
-        ];
-        let repairs = repairs_for(&reduce_run(&events).expect("legal log"));
-        assert_eq!(repairs.len(), 2, "BOTH provenances get a repair event");
+    fn a_run_that_recorded_nothing_is_dated_by_its_marker() {
+        let events = vec![rec(1, run_started(10), 5_000)];
+        let reduction = reduce_run(&events).expect("legal log");
+        assert_eq!(reduction.progress.last_activity_at, None);
+        assert_eq!(last_alive_at(&reduction, &events[0]), 5_000);
+    }
 
-        let mut texts = Vec::new();
-        for ev in &repairs {
-            let SessionEvent::ToolError { call_id, error, .. } = ev else {
-                panic!("expected ToolError, got {ev:?}");
-            };
-            assert_five_points(error, "bash_exec");
-            texts.push((call_id.clone(), error.clone()));
+    /// An answered call is still activity — the run was alive when its result
+    /// landed, whether or not anything is left dangling.
+    #[test]
+    fn an_answered_call_is_still_activity() {
+        let events = vec![
+            rec(1, run_started(10), 1_000),
+            rec(2, tool_requested("c1"), 2_000),
+            rec(3, tool_result("c1"), 3_000),
+        ];
+        let reduction = reduce_run(&events).expect("legal log");
+        assert!(reduction.dangling.is_empty());
+        assert_eq!(last_alive_at(&reduction, &events[0]), 3_000);
+    }
+
+    /// Every refusal carries a word of its own. A new variant that fans into
+    /// an existing word would make two different answers read alike in the
+    /// receipt, the CLI and the doctor at once.
+    #[test]
+    fn every_refusal_has_its_own_reason_word() {
+        let all = [
+            ResumeRefusal::LogInconsistent(LogContradiction::OutOfOrderSlice { at_seq: 7 }),
+            ResumeRefusal::AgentMissing,
+            ResumeRefusal::BoundaryRepairFailed("append failed".into()),
+            ResumeRefusal::RetriggerFailed("adapter said no".into()),
+        ];
+        let words: std::collections::HashSet<&str> = all.iter().map(|r| r.reason()).collect();
+        assert_eq!(words.len(), all.len(), "two refusals share one word");
+        for refusal in &all {
+            assert!(
+                !refusal.detail().is_empty(),
+                "{refusal:?} reports no detail an operator could act on"
+            );
         }
-        assert_eq!(texts[0].0, "c1");
         assert!(
-            texts[0].1.contains("an earlier run in this session"),
-            "the older dangle must not be blamed on this restart, got: {}",
-            texts[0].1
+            all[0].detail().contains("seq 7"),
+            "a log contradiction must name where: {}",
+            all[0].detail()
         );
-        assert_eq!(texts[1].0, "c2");
-        assert!(
-            texts[1].1.contains("the server restarted"),
-            "this run's dangle must say so, got: {}",
-            texts[1].1
-        );
-        assert_ne!(texts[0].1, texts[1].1, "two provenances, two sentences");
-    }
-
-    #[test]
-    fn repairs_are_empty_when_every_call_is_answered() {
-        let events = vec![
-            rec(1, run_started(10), 10),
-            rec(2, tool_requested("c1"), 20),
-            rec(3, tool_result("c1"), 30),
-        ];
-        assert!(repairs_for(&reduce_run(&events).expect("legal log")).is_empty());
     }
 
     /// `latest_project_root` walks the marker list from newest to oldest
@@ -1255,22 +1350,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_tool_error_counts_as_an_answer() {
-        let events = vec![
-            rec(1, run_started(10), 10),
-            rec(2, tool_requested("c1"), 20),
-            rec(
-                3,
-                SessionEvent::ToolError {
-                    turn_id: TurnId::new_v4(),
-                    call_id: "c1".into(),
-                    error: "prior failure".into(),
-                    at: 30,
-                },
-                30,
-            ),
-        ];
-        assert!(repairs_for(&reduce_run(&events).expect("legal log")).is_empty());
-    }
 }
