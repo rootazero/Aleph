@@ -119,6 +119,22 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # reason as `multiuser_audit`. Node, not Python — see its run.sh
                                  # header.
 
+./qa/agents_viz/run.sh claims    # §4.11 / §5.13 / §3.13 tasks+agents visualization: the two
+                                 # severed wires the round fixed, each asserted by effect on a
+                                 # real socket. `run.subagent_tree` reaches an UNFILTERED (TUI-
+                                 # shaped) connection in its double-nested envelope; a filtered
+                                 # connection gets it only after subscribing (a filtered-but-not-
+                                 # subscribed socket gets NOTHING — the negative arm); the node
+                                 # carries child_session and chat.history opens it. Plus the plan's
+                                 # three carriers (live frames / RunSummary.plan / chat.history).
+                                 # First run found RunSummary.plan had never left the server —
+                                 # FEATURE_LOCATOR 附录 D.4.35. Reuses teamchat_rooms' mock
+                                 # (QA-DELEGATE-BG / QA-PLAN arms) and config patcher. No pty:
+                                 # aleph-tui is never launched (same call as btw_tui).
+./qa/agents_viz/run.sh panel     # boot + hold with a minted session, prints the browser URL and
+                                 # the one-line `delegate` / `plan` commands — the tree is a LIVE
+                                 # projection, attach the browser BEFORE triggering.
+
 ./qa/channels/run.sh             # both phases below
 ./qa/channels/run.sh reach       # feishu / line / qq really come up; msteams is the control.
 ./qa/channels/run.sh errors      # Lark throttle / refusal, via mock_lark.py's /__inject queue
@@ -720,6 +736,10 @@ refuses to boot with `invalid type: sequence, expected a map`.
 - **`browser_managed`** — 改 `src/browser/` 或 `src/builtin_tools/browser_tools/` 前跑。
   `{open,ambient,headed,tools,frames,reap,pdf,existing,exec-offload}`——**两个 driver 的每个动词都有效果断言**。
 - **`btw_tui`** — 改 `/btw` 的到达顺序或退休面前先读 FEATURE_LOCATOR §4.14 的机制图，再跑 `{frames,promote}`。
+- **`agents_viz`** — 改 `run.subagent_tree` 的产地 / relay / 可见性分类、`events.subscribe` 的过滤语义、
+  执行清单三载体（`tool_call_completed` snapshot · `RunSummary.plan` · `chat.history.plan`）或 TUI/Panel
+  的 tasks/agents 面板前跑 `claims`；改 Panel `/dashboard/subagents` 的渲染再跑 `panel` 并挂上浏览器。
+  三个 socket 三种订阅形状，D5 是负向臂——少了它 D4 对「订阅才是载体」什么也证明不了。
 - **`picker_nav`** — 改 `interfaces/webchat/` 的键盘导航/渐隐前跑：键盘 walk · 条件渐隐 · 手机端加 provider，
   三档宽度各带效果断言。
 - **`canvas`** — 改 `src/canvas/` 或 Panel canvas 视图前跑：九项清单每条带效果断言。
