@@ -55,6 +55,12 @@ pub fn sort_entries(entries: &mut [RuntimeAgentEntry]) {
 /// surface renders the split.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AgentPanelState {
+    /// The clamp-and-NaN-fallback invariant lives in `with_split_ratio`,
+    /// not here — this field is `pub` so the read side can use it directly,
+    /// but a direct struct literal (or `..` update syntax) bypasses that
+    /// guard entirely. Any caller computing a ratio from input (a drag
+    /// delta, a stored preference) must construct through
+    /// `with_split_ratio`, not by writing this field.
     pub split_ratio: f32,
     pub collapsed: bool,
 }
@@ -119,9 +125,10 @@ mod tests {
         assert!(attention_rank(S::Idle) < attention_rank(S::Unknown));
     }
 
-    /// 同状态内按 updated_at 降序，且稳定。
+    /// 同状态内按 updated_at 降序排列（无相同 updated_at，未测 tie-break——
+    /// tie-break 见 `ties_on_state_and_updated_at_resolve_by_session_id`）。
     #[test]
-    fn same_state_orders_by_recency_and_is_stable() {
+    fn same_state_orders_by_recency_descending() {
         let mut v = vec![
             e("a", S::Working, 1),
             e("b", S::Blocked, 5),
