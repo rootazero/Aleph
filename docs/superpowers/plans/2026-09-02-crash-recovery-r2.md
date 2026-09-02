@@ -69,6 +69,7 @@ for i in $(seq 1 28); do [ -f "$S/<name>.txt.done" ] && break; sleep 20; done
 | **T7** | `interfaces/webchat/src/api/sessions.rs` 里那个手写 `SessionRow` 镜像（含两处点名已删除的 `SessionInfo` 的注释）由 T7 整体换成 `aleph_protocol::SessionListRow`；T3 刻意没去改它的注释，因为那是给一个即将删除的结构体写新文档。 | T3 续做 1/2 |
 | **T7** | `src/bin/aleph-server/commands/resume.rs` 的穷举 match 里有五个臂（`NotFound` / `InvalidSessionKey` / `AgentForbidden` / `Unavailable` / `Failed`）**经 CLI 唯一走的那条 HTTP 传输到不了**——`admin_api/resume.rs` 把这些 outcome 转成了 4xx/5xx，`forward_to_server` 直接 `Err`，收据根本不会被解析成这些状态。臂要留（穷举是本轮要的棘轮，JSON-RPC 面产得出来），但欠一句 doc 说明「这几句今天没有渲染者」。 | T3 review |
 | **T8** | 两处**无上限**的读要在真机阶段量出真实数字，再决定下一轮加不加 cap：`chat.history` 每次 attach/reconnect 都 `load_all_events`；`sessions.list` 每次都 `load_run_markers()` 全表（**不受列表自己的 filter/limit 收窄**，会取回随后被过滤掉的会话的 marker）。两者都是 spec §4.6 授权的、A10 明确推迟 cap，所以这是**记录在案的成本**不是缺陷——但「记录在案」的意思是必须有数字。 | T3 review |
+| **T8** | Step 4 的 `just wasm` 在 worktree 里**要先补一个 `node_modules` junction**（命令与实测输出见下面「T7 续做」段）：recipe 借主检出 `.bin` 只覆盖 CLI，覆盖不了样式表自己的 `@import`。跑完 `dist/` 七个产物会脏树——它们是产物，`git checkout -- interfaces/webchat/dist` 还原，别提交进功能提交里（会顺带把 `dist/tailwind.css` 从 tailwind `4.2.2` 换成 `4.3.1` 的全文件产物）。 | T7 续做 |
 
 ### 0.2 你的第一条命令是 `git status --porcelain`（**每个 agent，无例外**）
 
@@ -817,10 +818,34 @@ teams::dispatcher gateway::subagent_announce`，`527 passed; 4 failed`，EXIT=10
 变异还原后 `git diff --stat` 对 `chat_sidebar.rs` / `commands.rs` 为空——**还原的证据是差集为空，
 不是再跑一遍绿**。
 
-**`just wasm` 在本 worktree 跑不起来，且与本改动无关**：`tailwindcss v4` 解析不到
-`interfaces/webchat/styles` 下的 `tailwindcss` 包（worktree 没有自己的 `node_modules`；
-`justfile` 的 recipe 借的是主检出的 `.bin`，那只解决 CLI，解决不了样式表自己的 `@import`）。
-出厂形态的 Rust 那一半由上面的 wasm-target check 覆盖，CSS 那一半**没验证过**。
+**`just wasm` 出厂形态：跑通了**（T7 续做 1/1 实测，`492ac719d` 的树 + 上面三个提交）。
+上一版这里写的是「在本 worktree 跑不起来」——那句话现在**作废**，留在这里只为说清它错在哪：
+挡路的不是 recipe 而是环境。`justfile` 借主检出 `.bin` 只把 **CLI** 放上 PATH，样式表自己的
+`@import "tailwindcss"` 由 tailwind v4 从**CSS 文件所在目录**向上做 node 解析，那条路上没有
+`node_modules` 就找不到包。补一个目录 junction（`node_modules/` 在 `.gitignore` 里，不脏树）即可：
+
+```powershell
+New-Item -ItemType Junction -Path 'D:\Workspace\Aleph\.claude\worktrees\crash-recovery-r2\interfaces\webchat\node_modules' -Target 'D:\Workspace\Aleph\interfaces\webchat\node_modules'
+```
+
+之后实测（本会话观察到的输出）：
+
+- CSS 半边：`npm run build:css` = `tailwindcss v4.3.1 · Done in 239ms`；本轮新加的徽标类
+  **确实被生成了**——`dist/tailwind.css` 里 `grep -F 'border-warning\/50'` 与 `'text-\[9px\]'`
+  各命中。这一条不是形式主义：tailwind v4 按源码扫描生成工具类，一个没被生成的类名在页面上
+  就是「徽标在 DOM 里而没有样式」，服务端产出、渲染者半在（判据 #17）。
+- 出厂 Rust 半边：`cargo build -p aleph-panel --lib --target wasm32-unknown-unknown
+  --profile wasm-release`（分离式）= `Finished in 7m 18s`，`EXIT=0`，零 warning 零 error。
+- 整条 recipe：Bash 前台 `just wasm` = `Finished 'wasm-release' in 8m 27s` → `✓ wasm-opt applied
+  (feature set fenced)` → `✓ webview baseline consistent` → `✓ panel dist OK: all 42 wasm
+  references in aleph_panel.js resolve against 43 exports in aleph_panel_bg.wasm`。
+
+**`dist/` 的七个产物没有提交，是 `git checkout -- interfaces/webchat/dist` 还原的**：本任务只要
+「能不能造出来」这个答案，而这次重造会把已提交的 `dist/tailwind.css` 从 `tailwindcss v4.2.2`
+的产物换成 `v4.3.1` 的（主检出的 `node_modules` 已经往前走了），那是一次**全文件替换**，
+跟 last_run 的渲染无关——混进 T7 的提交里就是把一次工具链升级藏在功能提交下面。
+连带的事实一并记下：**仓库里已提交的 `dist/` 相对本分支的 Panel 源码是旧的**（本轮每个动过
+Panel 的任务都让它更旧一点），要看新 Panel 的界面必须先 `just wasm`。
 
 **Panel 的 i18n 闸是本任务的意外一课**：计划写的是「通知文案（中文）一处一份」，而
 `aleph-panel` 有 `i18n_census` 三道闸——手写中文（phone 可达路径**零容忍**）、全 crate 中文行数
