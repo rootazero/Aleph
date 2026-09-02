@@ -143,12 +143,12 @@ pub fn render_agent_panel(f: &mut Frame, area: Rect, data: &AgentPanelData) {
     };
 
     // Wrapped: at AGENT_PANEL_WIDTH (28), the real operator-gate refusal
-    // (`aleph_protocol::jsonrpc::ADMIN_REQUIRED_MESSAGE`, 59 chars) cannot
-    // fit on one row no matter how short a prefix gets — R8-6 carried that
-    // message through four variants specifically so a human could read WHY
-    // the panel is empty, and an unwrapped single line would truncate it
-    // to a handful of characters past the prefix, silently deleting that
-    // work at the last inch.
+    // (`aleph_protocol::jsonrpc::ADMIN_REQUIRED_MESSAGE`) is longer than the
+    // panel is wide and cannot fit on one row no matter how short a prefix
+    // gets — R8-6 carried that message through four variants specifically
+    // so a human could read WHY the panel is empty, and an unwrapped single
+    // line would truncate it to a handful of characters past the prefix,
+    // silently deleting that work at the last inch.
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), body);
 }
 
@@ -302,8 +302,8 @@ mod tests {
     /// non-operator), not a short test fixture, rendered at the SHIPPED
     /// width (`AGENT_PANEL_WIDTH`, not a wider instrument — 判据 §18).
     ///
-    /// The message is 59 characters, so it wraps across several rows at 28
-    /// cells wide; checks distinguishing WORDS survive rather than one
+    /// The message is longer than the panel is wide, so it wraps across
+    /// several rows; checks distinguishing WORDS survive rather than one
     /// contiguous phrase, since a word can land on either side of a row
     /// boundary once wrapped.
     ///
