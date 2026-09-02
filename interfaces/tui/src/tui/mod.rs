@@ -44,8 +44,8 @@ use app::{Action, AppState, Focus};
 use commands::{
     attach_session, btw_abort_or_close, confirm_provider_pick, confirm_session_switch,
     dispatch_gateway_text, execute_local_command, fetch_gateway_commands, fetch_my_user_id,
-    reconcile_side_question, refresh_picker_provider, send_to_agent, shadowed_gateway_commands,
-    AttachMode,
+    open_agent_detail, reconcile_side_question, refresh_picker_provider, send_to_agent,
+    shadowed_gateway_commands, AttachMode,
 };
 use slash::ParsedInput;
 
@@ -278,6 +278,18 @@ fn next_backoff(current: Duration) -> Duration {
     }
 }
 
+/// Await the next topic notification, or never when the plane was already
+/// claimed elsewhere (`take_topic_events` is one-shot per client). The `None`
+/// branch must never resolve — same rule as [`awaiting_reconnect`].
+async fn next_topic_event(
+    rx: &mut Option<mpsc::Receiver<aleph_client::TopicEvent>>,
+) -> Option<aleph_client::TopicEvent> {
+    match rx {
+        Some(rx) => rx.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
 /// Whether a pure `Action::Tick` (no gateway/terminal event) needs a redraw.
 ///
 /// A tick that only bumped the spinner counter with nothing on screen
@@ -308,6 +320,10 @@ async fn main_loop<'c>(
     // a parameter that only one caller can supply is a parameter that only
     // spends the argument budget.
     let mut tick_interval = tokio::time::interval(Duration::from_millis(50));
+    // The topic plane (`{"method":"event"}` frames — `run.subagent_tree` and
+    // friends), claimed once. `shared/client` used to drop these frames with a
+    // `debug!` line; now they drive the agents panel/overlay live.
+    let mut topic_events = client.take_topic_events();
     // At most one reconnect attempt is ever outstanding, and the loop owns the
     // policy: `shared/client` supplies only the mechanism, deliberately, so
     // that a socket cannot come back without this screen learning of it and
@@ -365,6 +381,18 @@ async fn main_loop<'c>(
                     }
                 }
                 action
+            }
+            Some(topic) = next_topic_event(&mut topic_events) => {
+                needs_redraw = true;
+                state.handle_topic_event(&topic.topic, topic.data);
+                // Coalesce a burst the same way the gateway-event arm does.
+                while let Some(rx) = topic_events.as_mut() {
+                    match rx.try_recv() {
+                        Ok(queued) => state.handle_topic_event(&queued.topic, queued.data),
+                        Err(_) => break,
+                    }
+                }
+                Action::None
             }
             _ = tick_interval.tick() => {
                 Action::Tick
@@ -687,6 +715,29 @@ async fn main_loop<'c>(
             }
             Action::SessionPickerConfirm => {
                 confirm_session_switch(state, client).await;
+            }
+
+            // -- Agents overlay --
+            Action::AgentsUp => {
+                if let Some(overlay) = &mut state.agents_overlay {
+                    if overlay.selected > 0 {
+                        overlay.selected -= 1;
+                    }
+                }
+            }
+            Action::AgentsDown => {
+                let count = state.agents.len();
+                if let Some(overlay) = &mut state.agents_overlay {
+                    if overlay.selected + 1 < count {
+                        overlay.selected += 1;
+                    }
+                }
+            }
+            Action::AgentsConfirm => {
+                open_agent_detail(state, client).await;
+            }
+            Action::AgentsBack => {
+                state.agents_overlay_back();
             }
 
             // -- Provider picker --

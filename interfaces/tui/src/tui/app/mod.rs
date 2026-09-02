@@ -13,7 +13,9 @@ mod tests;
 
 use std::time::{Duration, Instant};
 
+use aleph_protocol::plan::PlanSnapshot;
 use aleph_protocol::providers::{rank_entries, CatalogEntry, RosterModel};
+use aleph_protocol::subagent_tree::{self, NodeLifecycle, SubagentNode};
 use aleph_protocol::{RunSummary, SessionSnapshot};
 use chrono::{DateTime, Utc};
 
@@ -102,6 +104,16 @@ pub enum Action {
     /// Confirm the selected session and switch to it
     SessionPickerConfirm,
 
+    // -- Agents overlay (`/agents`) --
+    /// Move the agents-overlay selection up
+    AgentsUp,
+    /// Move the agents-overlay selection down
+    AgentsDown,
+    /// Open the highlighted agent's run view (fetches its child transcript)
+    AgentsConfirm,
+    /// Back out one level: detail → list, list → closed
+    AgentsBack,
+
     // -- Provider / model picker --
     /// Move provider-picker selection up
     ProviderPickerUp,
@@ -130,6 +142,8 @@ pub enum Focus {
     Approval,
     /// The `/btw` side-question overlay.
     Btw,
+    /// The `/agents` overlay (sub-agent list + per-agent run view).
+    Agents,
 }
 
 // ---------------------------------------------------------------------------
@@ -410,6 +424,47 @@ pub struct SessionPickerState {
     /// Indices into `entries` surviving the current input filter.
     pub filtered: Vec<usize>,
     pub selected: usize,
+}
+
+/// State for the `/agents` overlay: a selectable list of this session's
+/// sub-agents (pi-style "↑↓ select · enter view · esc back"), with an optional
+/// drill-in detail showing one agent's own transcript.
+#[derive(Debug, Clone)]
+pub struct AgentsOverlayState {
+    /// Index into [`agent_display_order`]'s row order.
+    pub selected: usize,
+    /// `Some` while showing one agent's run view; Esc drops back to the list.
+    pub detail: Option<AgentDetailState>,
+}
+
+/// One agent's run view, loaded on Enter. (The child session key it was
+/// fetched from is deliberately not retained — nothing re-reads it, and a
+/// stored copy would be a zero-consumer field.)
+#[derive(Debug, Clone)]
+pub struct AgentDetailState {
+    /// Header: the task the agent was spawned with.
+    pub title: String,
+    /// Pre-formatted transcript/metadata lines (the widget wraps them).
+    pub lines: Vec<String>,
+    /// Scroll offset in lines from the top.
+    pub scroll: usize,
+}
+
+/// Display order for agent rows — running first (spawn order within each
+/// group, id tiebreak). ONE derivation shared by the pinned panel, the overlay
+/// list, and Enter's index resolution: selecting in one order and applying the
+/// index in another names a different agent.
+#[must_use]
+pub fn agent_display_order(agents: &[SubagentNode]) -> Vec<&SubagentNode> {
+    let mut rows: Vec<&SubagentNode> = agents.iter().collect();
+    rows.sort_by(|a, b| {
+        let rank = |n: &SubagentNode| u8::from(n.lifecycle != NodeLifecycle::Running);
+        rank(a)
+            .cmp(&rank(b))
+            .then_with(|| a.started_at_ms.cmp(&b.started_at_ms))
+            .then_with(|| a.node_id.cmp(&b.node_id))
+    });
+    rows
 }
 
 /// One row on screen in the provider picker.
@@ -807,6 +862,22 @@ pub struct AppState {
     // -- Gateway commands (fetched at startup, tree-structured) --
     pub gateway_commands: Vec<CommandEntry>,
 
+    // -- Tasks + agents visualization --
+    /// The conversation's live execution list (pi-style tasks block). Fed by
+    /// three carriers, all pre-existing: cold `chat.history.plan`, live
+    /// `scratchpad` tool results (`ScratchpadOutput.snapshot`), and the
+    /// authoritative `RunSummary.plan` at run end.
+    pub plan: Option<PlanSnapshot>,
+    /// `/todo` toggle for the pinned tasks panel. Defaults on; the panel only
+    /// occupies rows while a plan with content exists.
+    pub tasks_panel_visible: bool,
+    /// Flat sub-agent nodes for THIS session — cold `subagent.tree` snapshot
+    /// merged with live `run.subagent_tree` deltas via the shared protocol
+    /// `apply_event` (the same algorithm the Panel runs).
+    pub agents: Vec<SubagentNode>,
+    /// The `/agents` overlay, when open.
+    pub agents_overlay: Option<AgentsOverlayState>,
+
     // -- UI state --
     pub focus: Focus,
     pub dialog: Option<DialogState>,
@@ -888,6 +959,11 @@ impl AppState {
             tool_progress_mode: ToolProgressMode::default(),
             gateway_commands: Vec::new(),
 
+            plan: None,
+            tasks_panel_visible: true,
+            agents: Vec::new(),
+            agents_overlay: None,
+
             focus: Focus::Input,
             dialog: None,
             palette: None,
@@ -953,6 +1029,21 @@ impl AppState {
             .rposition(|m| matches!(m, ChatMessage::Assistant { .. }))
             .unwrap_or_else(|| self.messages.len().saturating_sub(1));
         &mut self.messages[idx]
+    }
+
+    /// The name a tool row learned at its start frame, when the row exists.
+    /// Read-only sibling of [`Self::find_tool_mut`], for consumers that need
+    /// to identify a tool from a frame that carries only its id (`ToolEnd`).
+    pub(super) fn tool_name_of(&self, tool_id: &str) -> Option<String> {
+        for msg in self.messages.iter().rev() {
+            if let ChatMessage::Assistant { tools, .. } = msg {
+                return tools
+                    .iter()
+                    .find(|t| t.id == tool_id)
+                    .map(|t| t.name.clone());
+            }
+        }
+        None
     }
 
     /// Find a tool execution by `tool_id` in the last assistant message.
@@ -1137,14 +1228,120 @@ impl AppState {
     }
 
     /// Close any open overlay (palette, dialog, session picker, provider
-    /// picker) and return focus to whatever is still on screen.
+    /// picker, agents overlay) and return focus to whatever is still on screen.
     pub fn close_overlay(&mut self) {
         self.palette = None;
         self.dialog = None;
         self.session_picker = None;
         self.provider_picker = None;
         self.approval = None;
+        self.agents_overlay = None;
         self.focus = self.focus_after_modal();
+    }
+
+    // -- Tasks + agents -------------------------------------------------
+
+    /// Apply one gateway topic notification. Unknown topics are ignored —
+    /// this client consumes exactly the planes it renders.
+    pub fn handle_topic_event(&mut self, topic: &str, data: serde_json::Value) {
+        if topic == subagent_tree::TOPIC {
+            if let Ok(ev) = serde_json::from_value::<subagent_tree::SubagentTreeEvent>(data) {
+                self.apply_subagent_tree_event(ev);
+            }
+        }
+    }
+
+    /// Merge one `run.subagent_tree` event into this screen's flat node list.
+    ///
+    /// Events for OTHER sessions' trees are dropped here: the gateway scopes
+    /// delivery by what this caller may see, not by which conversation this
+    /// screen currently shows, so an operator with two busy sessions receives
+    /// both trees on one socket.
+    pub fn apply_subagent_tree_event(&mut self, ev: subagent_tree::SubagentTreeEvent) {
+        let root = match &ev {
+            subagent_tree::SubagentTreeEvent::Spawned { node } => node.root_session.as_str(),
+            subagent_tree::SubagentTreeEvent::Progress { root_session, .. }
+            | subagent_tree::SubagentTreeEvent::Settled { root_session, .. } => {
+                root_session.as_str()
+            }
+        };
+        if root != self.session_key {
+            return;
+        }
+        subagent_tree::apply_event(&mut self.agents, ev);
+    }
+
+    /// How many of this session's sub-agents are still running (status bar).
+    #[must_use]
+    pub fn running_agent_count(&self) -> usize {
+        self.agents
+            .iter()
+            .filter(|n| n.lifecycle == NodeLifecycle::Running)
+            .count()
+    }
+
+    /// Live plan projection — a mutating `scratchpad` call attaches the full
+    /// snapshot to its result (`ScratchpadOutput.snapshot`); mirror it the way
+    /// the Panel's TodoPanel does. Only a parseable snapshot object updates
+    /// state: absence means "this call carried none", never "clear" — the
+    /// authoritative clear arrives as an EMPTY snapshot in `RunSummary.plan`
+    /// at run end.
+    pub(super) fn maybe_apply_plan_from_tool(
+        &mut self,
+        tool_name: &str,
+        output: &serde_json::Value,
+    ) {
+        if tool_name != "scratchpad" || self.replaying_trace {
+            return;
+        }
+        if let Some(snapshot) = output.get("snapshot") {
+            if let Ok(plan) = serde_json::from_value::<PlanSnapshot>(snapshot.clone()) {
+                self.plan = Some(plan);
+            }
+        }
+    }
+
+    /// Open the `/agents` overlay in list mode.
+    pub fn open_agents_overlay(&mut self) {
+        self.agents_overlay = Some(AgentsOverlayState {
+            selected: 0,
+            detail: None,
+        });
+        self.focus = Focus::Agents;
+    }
+
+    /// The node currently highlighted in the agents overlay, resolved through
+    /// the same [`agent_display_order`] the widget renders with.
+    #[must_use]
+    pub fn selected_agent(&self) -> Option<&SubagentNode> {
+        let overlay = self.agents_overlay.as_ref()?;
+        agent_display_order(&self.agents)
+            .get(overlay.selected)
+            .copied()
+    }
+
+    /// Esc in the agents overlay: detail → list, list → closed.
+    pub fn agents_overlay_back(&mut self) {
+        match self.agents_overlay.as_mut() {
+            Some(overlay) if overlay.detail.is_some() => overlay.detail = None,
+            _ => {
+                self.agents_overlay = None;
+                self.focus = self.focus_after_modal();
+            }
+        }
+    }
+
+    /// Scroll the agent detail view. Positive = down.
+    pub fn agents_detail_scroll(&mut self, delta: isize) {
+        if let Some(detail) = self.agents_overlay.as_mut().and_then(|o| o.detail.as_mut()) {
+            let max = detail.lines.len().saturating_sub(1);
+            let next = if delta.is_negative() {
+                detail.scroll.saturating_sub(delta.unsigned_abs())
+            } else {
+                detail.scroll.saturating_add(delta.unsigned_abs())
+            };
+            detail.scroll = next.min(max);
+        }
     }
 
     // -- Session picker -------------------------------------------------
@@ -1547,6 +1744,14 @@ impl AppState {
         // `frame_belongs_here` falls back to keeping unknown run ids, which is
         // the safe direction while this screen genuinely cannot tell.
         self.session_reconciled = false;
+
+        // Per-conversation surfaces: the outgoing conversation's execution
+        // list and sub-agent tree must not caption the incoming one. The
+        // attach that follows restores both (`chat.history.plan` +
+        // `subagent.tree`).
+        self.plan = None;
+        self.agents.clear();
+        self.agents_overlay = None;
 
         // The side thread belongs to the conversation we just left, and it is
         // cleared rather than kept per-conversation. Two reasons, and the

@@ -1,3 +1,5 @@
+pub mod agents_overlay;
+pub mod agents_panel;
 pub mod btw_panel;
 pub mod chat_area;
 pub mod command_palette;
@@ -6,4 +8,5 @@ pub mod input_area;
 pub mod provider_picker;
 pub mod session_picker;
 pub mod status_bar;
+pub mod tasks_panel;
 pub mod tool_block;
