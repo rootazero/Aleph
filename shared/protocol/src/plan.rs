@@ -125,6 +125,99 @@ impl PlanSnapshot {
     }
 }
 
+/// The `snapshot` a mutating `scratchpad` call attaches to its output, as a
+/// raw value, read off the tool result in whichever shape the wire carries it.
+///
+/// The harness serializes a tool's structured output as a JSON-encoded
+/// **string** (`Value::String`, the same text the model is shown) — so on the
+/// real wire `output.get("snapshot")` is always `None`, and a reader tested
+/// only against an object passes for a shape production never produces. The
+/// Panel learned this first; the gateway's run-end latch and the TUI's live
+/// projection did not, and `RunSummary.plan` never left the server (measured
+/// 2026-09-02, qa/agents_viz P2). One reader for the three faces, so they
+/// cannot disagree again about where the snapshot lives. The already-decoded
+/// object form is accepted too.
+#[must_use]
+pub fn snapshot_value_from_tool_output(output: &serde_json::Value) -> Option<serde_json::Value> {
+    let decoded;
+    let object = match output {
+        serde_json::Value::String(text) => {
+            decoded = serde_json::from_str::<serde_json::Value>(text).ok()?;
+            &decoded
+        }
+        other => other,
+    };
+    object.get("snapshot").cloned()
+}
+
+/// [`snapshot_value_from_tool_output`], deserialized. `Ok(None)` when the
+/// output carries no snapshot; `Err` when it carries one that is not a
+/// [`PlanSnapshot`] — the caller decides whether that is worth a log line.
+pub fn snapshot_from_tool_output(
+    output: &serde_json::Value,
+) -> Result<Option<PlanSnapshot>, serde_json::Error> {
+    snapshot_value_from_tool_output(output)
+        .map(serde_json::from_value)
+        .transpose()
+}
+
+#[cfg(test)]
+mod tool_output_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn output() -> serde_json::Value {
+        json!({
+            "success": true,
+            "message": "Plan set with 2 item(s)",
+            "snapshot": {
+                "objective": "Ship auth",
+                "complete": false,
+                "items": [
+                    {"text": "Design", "status": "completed"},
+                    {"text": "Build", "status": "in_progress"},
+                ]
+            }
+        })
+    }
+
+    /// The production shape: the object above re-encoded as a string. This
+    /// is the arm that was red for every reader keyed on `.get("snapshot")`.
+    #[test]
+    fn reads_the_snapshot_out_of_the_json_encoded_string_the_harness_emits() {
+        let wire = serde_json::Value::String(output().to_string());
+        let plan = snapshot_from_tool_output(&wire)
+            .expect("well-formed")
+            .expect("carries a snapshot");
+        assert_eq!(plan.total(), 2);
+        assert_eq!(plan.current_step(), Some("Build"));
+    }
+
+    #[test]
+    fn accepts_the_already_decoded_object_form_too() {
+        let plan = snapshot_from_tool_output(&output())
+            .expect("well-formed")
+            .expect("carries a snapshot");
+        assert_eq!(plan.done_count(), 1);
+    }
+
+    #[test]
+    fn an_output_without_a_snapshot_is_none_not_an_error() {
+        let wire = serde_json::Value::String(json!({"success": true}).to_string());
+        assert!(snapshot_from_tool_output(&wire)
+            .expect("well-formed")
+            .is_none());
+        // Plain prose (a non-JSON tool text) is likewise "no snapshot".
+        assert!(snapshot_value_from_tool_output(&json!("done.")).is_none());
+    }
+
+    #[test]
+    fn a_snapshot_that_is_not_a_plan_is_an_error_the_caller_can_log() {
+        let wire = serde_json::Value::String(json!({"snapshot": {"items": "nope"}}).to_string());
+        assert!(snapshot_from_tool_output(&wire).is_err());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
