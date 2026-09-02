@@ -9,14 +9,14 @@
 // stored on `AppState::runtime_agents`. This module never fetches and
 // never sorts its own input: `sort_entries` (from `shared-ui-logic`,
 // Task 7) is the only ordering operation here, called on a clone. A
-// source-level guard (Task 10) fails the build if this file gains a
-// `.sort_by`/`.sort()` of its own.
+// source-level guard (Task 10) fails the build if this file gains an
+// ordering call of its own.
 
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Wrap},
     Frame,
 };
 
@@ -142,7 +142,14 @@ pub fn render_agent_panel(f: &mut Frame, area: Rect, data: &AgentPanelData) {
         ))],
     };
 
-    f.render_widget(Paragraph::new(lines), body);
+    // Wrapped: at AGENT_PANEL_WIDTH (28), the real operator-gate refusal
+    // (`aleph_protocol::jsonrpc::ADMIN_REQUIRED_MESSAGE`, 59 chars) cannot
+    // fit on one row no matter how short a prefix gets — R8-6 carried that
+    // message through four variants specifically so a human could read WHY
+    // the panel is empty, and an unwrapped single line would truncate it
+    // to a handful of characters past the prefix, silently deleting that
+    // work at the last inch.
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), body);
 }
 
 #[cfg(test)]
@@ -186,9 +193,18 @@ mod tests {
         (0..buf.area.height).map(|y| row_text(buf, y)).collect()
     }
 
-    /// Renders `data` into a fixed 30x6 backend and returns its rows.
+    /// Renders `data` into a backend at the SHIPPED width (`AGENT_PANEL_WIDTH`)
+    /// and returns its rows. Any other width is an instrument that
+    /// disagrees with the artefact (判据 §18) — a wider backend can make an
+    /// assertion true that would be false in the product.
     fn render(data: &AgentPanelData) -> Vec<String> {
-        let backend = TestBackend::new(30, 6);
+        render_at(AGENT_PANEL_WIDTH, 6, data)
+    }
+
+    /// As [`render`], but with an explicit height — for messages long
+    /// enough that they need more than 5 body rows once wrapped.
+    fn render_at(width: u16, height: u16, data: &AgentPanelData) -> Vec<String> {
+        let backend = TestBackend::new(width, height);
         let mut term = Terminal::new(backend).unwrap();
         term.draw(|f| render_agent_panel(f, f.area(), data))
             .unwrap();
@@ -255,7 +271,13 @@ mod tests {
             "an empty Ready and a Refused must not render identically"
         );
         assert!(ready.to_lowercase().contains("no agents"));
-        assert!(refused.contains("operators only"));
+        // "access denied: operators only" is 30 chars, wider than
+        // AGENT_PANEL_WIDTH (28) — it wraps, so "operators only" does not
+        // survive as one contiguous substring of `refused` (word-wrapping
+        // inserts a row boundary, not a space). Check the two words
+        // separately instead of assuming they land on the same line.
+        assert!(refused.contains("operators"));
+        assert!(refused.contains("only"));
     }
 
     /// The fourth state: `Unavailable` must also be distinguishable from
@@ -269,6 +291,41 @@ mod tests {
 
         assert_ne!(refused, unavailable);
         assert!(unavailable.contains("timed out"));
+    }
+
+    /// R8-6 carried a refusal message through four variants specifically so
+    /// a human could read WHY the panel is empty — a message truncated to a
+    /// handful of characters past its prefix deletes that work at the last
+    /// inch. Uses the REAL production text
+    /// (`aleph_protocol::jsonrpc::ADMIN_REQUIRED_MESSAGE` — what
+    /// `agent_panel_data` in `mod.rs` actually wraps into `Refused` for a
+    /// non-operator), not a short test fixture, rendered at the SHIPPED
+    /// width (`AGENT_PANEL_WIDTH`, not a wider instrument — 判据 §18).
+    ///
+    /// The message is 59 characters, so it wraps across several rows at 28
+    /// cells wide; checks distinguishing WORDS survive rather than one
+    /// contiguous phrase, since a word can land on either side of a row
+    /// boundary once wrapped.
+    ///
+    /// Reddens if `Wrap` is removed from the body `Paragraph` — the message
+    /// then truncates to roughly 13 characters past the "access denied: "
+    /// prefix and none of these words reach the buffer at all.
+    #[test]
+    fn a_realistic_refusal_message_survives_wrapped_at_the_shipped_width() {
+        let dump = render_at(
+            AGENT_PANEL_WIDTH,
+            10,
+            &AgentPanelData::Refused(aleph_protocol::jsonrpc::ADMIN_REQUIRED_MESSAGE.to_string()),
+        )
+        .join("\n");
+
+        for word in ["operator", "privileges", "authorized"] {
+            assert!(
+                dump.contains(word),
+                "distinguishing word {word:?} must survive to the buffer \
+                 at AGENT_PANEL_WIDTH; got {dump:?}"
+            );
+        }
     }
 
     /// R8-10: a recognised agent with a bundled screen manifest gets a dim
@@ -319,6 +376,23 @@ mod tests {
         assert_eq!(
             with_unmanifested_agent, without_agent_label,
             "no manifest version must render exactly like no agent label at all"
+        );
+
+        // The equality check above reddens on an ASYMMETRIC placeholder (one
+        // appended only on one of the two paths) but would stay green on a
+        // SYMMETRIC one — e.g. `manifest_suffix(..).unwrap_or("unknown")` at
+        // the call site, which appends "unknown" on BOTH paths alike, so the
+        // two renders would still be equal to each other while both violate
+        // R8-10's "never a placeholder". Pin the absolute fact directly:
+        // nothing follows the label at all.
+        let row = without_agent_label
+            .iter()
+            .find(|r| r.contains("some-shell"))
+            .expect("the entry's row must render");
+        assert_eq!(
+            row.trim_end(),
+            "\u{25cb} some-shell",
+            "nothing must be appended after the label when there is no manifest version"
         );
     }
 }

@@ -168,7 +168,11 @@ mod tests {
     ///
     /// Reddens if `agent_panel_visible` stops reserving space (the layout
     /// silently ignores the flag), or if the reserved width drifts from
-    /// `AGENT_PANEL_WIDTH`.
+    /// `AGENT_PANEL_WIDTH`. Verified by mutation: swapping `cols.first()`/
+    /// `cols.get(1)` (an inverted index — the panel and the main chunk
+    /// trade places) reddens this test's `assert_ne!` at column 0 with
+    /// `left: Some("┌") right: Some("┌")`, since the input box's border then
+    /// lands back at column 0 instead of `AGENT_PANEL_WIDTH`.
     #[test]
     fn visible_agent_panel_reserves_a_left_column() {
         let backend = TestBackend::new(40, 10);
