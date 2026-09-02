@@ -5,6 +5,8 @@
 //! individual surfaces; only the *decisions* live here so they stay testable.
 
 pub mod agent_panel;
+#[cfg(test)]
+mod agent_panel_parity;
 pub mod chat_scroll;
 pub mod composer_dials;
 pub mod composer_queue;
