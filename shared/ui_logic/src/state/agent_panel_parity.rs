@@ -29,15 +29,19 @@ use aleph_protocol::runtime::{RuntimeAgentEntry, RuntimeAgentState};
 
 use super::agent_panel::{attention_rank, sort_entries};
 
-/// One [`RuntimeAgentEntry`] per [`RuntimeAgentState`], in every possible
-/// input order (4! = 24 permutations).
+/// Four [`RuntimeAgentEntry`]s, in every possible input order (4! = 24
+/// permutations) — carrying ONE deliberate tie (Task 10 fix round 1, F3):
+/// two entries share both `state` (`Idle`) and `updated_at` (0, same as
+/// the other two), so `attention_rank` alone cannot decide their relative
+/// order and the `session_id` tie-break key must fire for the result to be
+/// a total order at all.
 ///
 /// Written with a tiny recursive helper (Heap's algorithm) rather than by
 /// hand or by pulling in `permutohedron`/`itertools` for 24 cases (R10-3).
 /// Each permutation carries a FRESH clone of the four entries — they are not
 /// `Copy` (they own `String` fields) — so mutating one permutation's vector
 /// in the test below can never alias another's.
-fn all_permutations_of_four_states() -> Vec<Vec<RuntimeAgentEntry>> {
+fn all_permutations_of_four_entries() -> Vec<Vec<RuntimeAgentEntry>> {
     fn entry(session_id: &str, state: RuntimeAgentState) -> RuntimeAgentEntry {
         RuntimeAgentEntry {
             session_id: session_id.to_string(),
@@ -49,16 +53,19 @@ fn all_permutations_of_four_states() -> Vec<Vec<RuntimeAgentEntry>> {
         }
     }
 
-    // Four distinct states -> no two entries can ever tie on `state`, so
-    // `attention_rank` alone decides the order; `updated_at`/`session_id`
-    // tie-breaking is exercised separately by `agent_panel`'s own unit
-    // tests (`ties_on_state_and_updated_at_resolve_by_session_id`), not
-    // here.
+    // "second" and "first" tie on state AND updated_at, and are listed here
+    // in the OPPOSITE of `session_id` order — so if the `session_id`
+    // tie-break key is ever dropped, reordered ahead of `state`, or
+    // reversed, at least one of the 24 permutations below sorts them the
+    // wrong way relative to the others and `sorting_is_deterministic_and_total`
+    // reddens. Single-key coverage (`Blocked` outranks `Working`) is
+    // exercised separately by `agent_panel`'s own unit tests
+    // (`blocked_always_outranks_working`), not here.
     let base = [
         entry("blocked", RuntimeAgentState::Blocked),
         entry("working", RuntimeAgentState::Working),
-        entry("idle", RuntimeAgentState::Idle),
-        entry("unknown", RuntimeAgentState::Unknown),
+        entry("second", RuntimeAgentState::Idle),
+        entry("first", RuntimeAgentState::Idle),
     ];
 
     // Heap's algorithm over indices 0..4, generating all 24 permutations by
@@ -92,34 +99,60 @@ fn all_permutations_of_four_states() -> Vec<Vec<RuntimeAgentEntry>> {
 /// R2 的自动化表达：两端都只能通过 sort_entries 得到顺序，
 /// 所以「TUI 与 Panel 显示同一个顺序」等价于「两边都调了它」。
 /// 这条守卫钉住的是后者——任何一端自己排序，property 就会漂。
+///
+/// Task 10 fix round 1, F3: the previous version cloned ONE permutation
+/// into `a` and `b` and sorted both — two runs of a pure function on
+/// identical input are equal for any implementation, so that compared
+/// nothing (判据 §2, unfalsifiable by construction) and totality went
+/// untested (dropping the `session_id` tie-break key still left it green).
+/// This version instead sorts every one of the 24 permutations and compares
+/// each result against the FIRST permutation's sorted result: a real
+/// parity property — "every input order of the same set sorts to the same
+/// output" — that reddens on a dropped, reordered, or reversed
+/// `session_id` key thanks to the tie built into the fixture above.
 #[test]
 fn sorting_is_deterministic_and_total() {
-    for perm in all_permutations_of_four_states() {
-        let mut a = perm.clone();
-        let mut b = perm;
-        sort_entries(&mut a);
-        sort_entries(&mut b);
-        assert_eq!(a, b, "sort must be deterministic");
-        assert!(a
-            .windows(2)
-            .all(|w| attention_rank(w[0].state) <= attention_rank(w[1].state)));
+    let mut permutations = all_permutations_of_four_entries().into_iter();
+    let mut canonical = permutations.next().expect("generator always yields 24 permutations");
+    sort_entries(&mut canonical);
+    assert!(canonical
+        .windows(2)
+        .all(|w| attention_rank(w[0].state) <= attention_rank(w[1].state)));
+
+    for perm in permutations {
+        let mut sorted = perm;
+        sort_entries(&mut sorted);
+        assert_eq!(
+            sorted, canonical,
+            "sort must not depend on input order — every permutation of the \
+             same entries must sort to the same output"
+        );
     }
 }
 
-/// `all_permutations_of_four_states` claims 24 permutations of 4 distinct
-/// states; a bug in `heap` (e.g. an off-by-one that produces duplicates or
+/// `all_permutations_of_four_entries` claims 24 permutations of four
+/// entries; a bug in `heap` (e.g. an off-by-one that produces duplicates or
 /// drops a permutation) would silently shrink the coverage of the test
 /// above without it ever going red — this pins the generator's own claim.
+///
+/// Task 10 fix round 1, F4: dedups on `session_id`, not `state`. The
+/// fixture now carries two entries that share a `state` (the tie F3
+/// needs), so projecting onto `state` collapses every permutation that
+/// only swaps those two `Idle` entries with each other — undercounting to
+/// 12 distinct orderings instead of 24, which would have silently
+/// re-broken F3's fix (it needs all 24 genuinely distinct orderings on
+/// hand). `session_id` is unique per entry by construction here, so this
+/// projection is injective without depending on the fixture's state shape.
 #[test]
 fn the_generator_produces_all_twenty_four_permutations_with_no_duplicates() {
-    let perms = all_permutations_of_four_states();
+    let perms = all_permutations_of_four_entries();
     assert_eq!(perms.len(), 24);
 
-    let mut orderings: Vec<Vec<RuntimeAgentState>> = perms
+    let mut orderings: Vec<Vec<&str>> = perms
         .iter()
-        .map(|perm| perm.iter().map(|e| e.state).collect())
+        .map(|perm| perm.iter().map(|e| e.session_id.as_str()).collect())
         .collect();
-    orderings.sort_by_key(|o| format!("{o:?}"));
+    orderings.sort();
     orderings.dedup();
     assert_eq!(orderings.len(), 24, "generator produced a duplicate ordering");
 }

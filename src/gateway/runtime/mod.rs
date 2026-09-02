@@ -936,13 +936,16 @@ mod tests {
     /// hardcoded pair. Walking the tree instead means any file with that
     /// exact name is picked up automatically, wherever it lands.
     ///
-    /// `target/` and `interfaces/webchat/node_modules/` are skipped, not for
-    /// correctness (neither can contain a `.rs` file this guard cares
-    /// about) but because `target/` alone is >100GB of build output — this
-    /// repo's existing walker (`utils::source_scan::rust_sources_under`) has
-    /// no such skip because every current call site points it at `src/`,
-    /// never at the repo root, so this guard writes its own rather than
-    /// pointing that one somewhere it was never meant to run.
+    /// `target/`, `interfaces/webchat/node_modules/` and `graphify-out/` are
+    /// skipped, not for correctness (none can contain a `.rs` file this
+    /// guard cares about) but because `target/` alone is >100GB of build
+    /// output and `graphify-out/` (Task 10 fix round 1, F6) is a 1.3 GB,
+    /// `.gitignore`d, machine-generated tree that the reviewer measured at
+    /// 59% of this walk's 15,689 visited entries — this repo's existing
+    /// walker (`utils::source_scan::rust_sources_under`) has no such skip
+    /// because every current call site points it at `src/`, never at the
+    /// repo root, so this guard writes its own rather than pointing that
+    /// one somewhere it was never meant to run.
     fn agent_panel_frontend_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
         fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             let Ok(entries) = std::fs::read_dir(dir) else {
@@ -952,7 +955,7 @@ mod tests {
                 let path = entry.path();
                 if path.is_dir() {
                     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                    if name == "target" || name == "node_modules" || name.starts_with('.') {
+                    if name == "target" || name == "node_modules" || name == "graphify-out" || name.starts_with('.') {
                         continue;
                     }
                     walk(&path, out);
@@ -966,6 +969,56 @@ mod tests {
         let owner = root.join("shared/ui_logic/src/state/agent_panel.rs");
         files.retain(|p| p != &owner);
         files
+    }
+
+    /// Substrings this guard treats as "this file performs its own
+    /// ordering" (Task 10 fix round 1, F1+F2, reviewer-verified).
+    ///
+    /// `.sort` — not `.sort_by` — is the token, because `.sort_by` alone
+    /// left `.sort_unstable_by` / `.sort_unstable_by_key` / `.sort_unstable()`
+    /// GREEN: a real `.sort_unstable_by` inserted into the TUI panel's
+    /// production code passed the old check, and `sort_unstable*` appears
+    /// 74× in this repo's own first-party code — an established idiom
+    /// here, not a theoretical dodge. `.sort` as a substring still catches
+    /// `.sort_by`, `.sort_by_key`, `.sort()` and every `.sort_unstable*`
+    /// spelling in one token. `.reverse()` is separate because it shares no
+    /// substring with `.sort` at all, and it is the cheapest possible way
+    /// to make the two frontends disagree without writing anything that
+    /// reads like sorting.
+    ///
+    /// # What this list still does NOT cover (判据 §5 — name the gap,
+    /// don't pretend it is closed)
+    ///
+    /// - `.collect::<BTreeMap<_, _>>()` / `BTreeSet` — ordering with no
+    ///   ordering CALL to grep for at all.
+    /// - `.min_by` / `.max_by` / `.min_by_key` — picks one row rather than
+    ///   reordering the rest, so it is a parity risk only for a "top
+    ///   agent" affordance, not full-list ordering.
+    /// - A `binary_search`-and-insert that maintains order incrementally.
+    /// - An ordering call moved into a sibling file next to
+    ///   `agent_panel.rs` (`agent_panel_rows.rs`, a `render_rows` in
+    ///   `widgets/mod.rs`) — this guard is keyed on the file NAME, not the
+    ///   widget. Left uncovered deliberately: no neighbour of either panel
+    ///   (`btw_panel.rs`, `session_picker.rs`, `provider_picker.rs`, …)
+    ///   currently sorts, and a directory-scoped scan trades this gap for
+    ///   a false-positive one the day a legitimate sibling widget (a
+    ///   picker) starts sorting its own rows — 判据 §3: the false-positive
+    ///   direction is the expensive one, because the next person weakens
+    ///   the guard to get past it.
+    const BANNED_ORDERING_TOKENS: [&str; 2] = [".sort", ".reverse()"];
+
+    /// `code_text(production_prefix(src))`, extracted so the guard below
+    /// and its true-negative fixture
+    /// (`the_stripper_survives_sort_by_named_only_in_prose`) call the exact
+    /// same stripping instead of each re-spelling it (Task 10 fix round 1,
+    /// F5). Before this extraction the fixture wrote its own composition
+    /// of the two calls, so weakening the guard to the weaker
+    /// `strip_comment_lines` (the `live_apply.rs:477` precedent) would have
+    /// left the fixture green while the guard started firing on string
+    /// literals and doc comments — 判据 §1: two representations of one
+    /// fact, and the weaker one is the one that ships.
+    fn scrub(src: &str) -> String {
+        crate::utils::source_scan::code_text(&crate::utils::source_scan::production_prefix(src))
     }
 
     /// R2: sorting lives ONLY in `shared_ui_logic::state::agent_panel::sort_entries`.
@@ -998,40 +1051,46 @@ mod tests {
             let src = std::fs::read_to_string(path).unwrap_or_else(|e| {
                 panic!("{}: {e} — a missing frontend file is not a pass", path.display())
             });
-            let code = crate::utils::source_scan::code_text(&crate::utils::source_scan::production_prefix(&src));
+            let code = scrub(&src);
+            let hit = BANNED_ORDERING_TOKENS.iter().find(|token| code.contains(**token));
             assert!(
-                !code.contains(".sort_by") && !code.contains(".sort()"),
-                "{} sorts its own agent-panel entries; sorting belongs to \
-                 shared_ui_logic::state::agent_panel::sort_entries (R2)",
-                path.display()
+                hit.is_none(),
+                "{} sorts its own agent-panel entries (found `{}`); sorting \
+                 belongs to shared_ui_logic::state::agent_panel::sort_entries (R2)",
+                path.display(),
+                hit.unwrap_or(&"")
             );
         }
     }
 
     /// True-negative fixture for the guard above (R10-6, reversed by R10-8):
-    /// a comment or string literal that merely NAMES `.sort_by`/`.sort()` —
-    /// documenting the very rule this guard enforces — must not redden it.
-    /// Kept here, next to the assertion it proves, rather than as a
-    /// production doc comment in another crate that a future author with no
-    /// idea this guard exists could reword out from under it.
+    /// a comment or string literal that merely NAMES `.sort_by`/`.sort()`/
+    /// `.reverse()` — documenting the very rule this guard enforces — must
+    /// not redden it. Kept here, next to the assertion it proves, rather
+    /// than as a production doc comment in another crate that a future
+    /// author with no idea this guard exists could reword out from under
+    /// it. Calls the same `scrub` the guard above calls (F5) so weakening
+    /// one cannot silently stop tracking the other.
     #[test]
     fn the_stripper_survives_sort_by_named_only_in_prose() {
         let synthetic = "\
-//! module doc naming `.sort_by` and `.sort()` so nobody re-adds them\n\
-/// doc comment: this widget must never call `.sort_by` or `.sort()`\n\
-// plain comment, also just prose: .sort_by(...) .sort()\n\
+//! module doc naming `.sort_by`, `.sort()` and `.reverse()` so nobody re-adds them\n\
+/// doc comment: this widget must never call `.sort_by`, `.sort()` or `.reverse()`\n\
+// plain comment, also just prose: .sort_by(...) .sort() .reverse()\n\
 pub fn render() {\n\
-    // still just a comment inside a function body: .sort_by\n\
-    let _ = \"a string literal mentioning .sort_by too\";\n\
+    // still just a comment inside a function body: .sort_by .reverse()\n\
+    let _ = \"a string literal mentioning .sort_by and .reverse() too\";\n\
 }\n";
-        let code = crate::utils::source_scan::code_text(&crate::utils::source_scan::production_prefix(synthetic));
+        let code = scrub(synthetic);
+        let hit = BANNED_ORDERING_TOKENS.iter().find(|token| code.contains(**token));
         assert!(
-            !code.contains(".sort_by") && !code.contains(".sort()"),
-            "code_text must strip `.sort_by`/`.sort()` when they appear only \
+            hit.is_none(),
+            "code_text must strip `.sort`/`.reverse()` when they appear only \
              in `//`, `///` and `//!` comments or inside a string literal — \
              otherwise the guard above would redden on prose, and a guard \
              that fires on prose gets weakened by the next person who trips \
-             it (判据 §3). Code after stripping was:\n{code}"
+             it (判据 §3). Found `{}` in code after stripping:\n{code}",
+            hit.unwrap_or(&"")
         );
     }
 }
