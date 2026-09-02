@@ -62,6 +62,19 @@ pub fn sparkline(counts: &[u32]) -> String {
         .collect()
 }
 
+/// Token-count ladder: `950` / `2.3k` / `232k` / `1.2M`.
+#[must_use]
+pub fn fmt_tokens(n: u64) -> String {
+    #[allow(clippy::cast_precision_loss)]
+    match n {
+        0..=999 => n.to_string(),
+        1_000..=9_999 => format!("{:.1}k", n as f64 / 1000.0),
+        10_000..=999_999 => format!("{}k", n / 1000),
+        1_000_000..=9_999_999 => format!("{:.1}M", n as f64 / 1_000_000.0),
+        _ => format!("{}M", n / 1_000_000),
+    }
+}
+
 /// Human duration from milliseconds: `820ms` / `12s` / `1m 14s`.
 #[must_use]
 pub fn fmt_duration(ms: u64) -> String {
@@ -98,6 +111,14 @@ mod tests {
         // taller bar for the larger count
         let chars: Vec<char> = s.chars().collect();
         assert_eq!(chars[1], '█');
+    }
+
+    #[test]
+    fn fmt_tokens_ladder() {
+        assert_eq!(fmt_tokens(950), "950");
+        assert_eq!(fmt_tokens(2_340), "2.3k");
+        assert_eq!(fmt_tokens(232_500), "232k");
+        assert_eq!(fmt_tokens(1_200_000), "1.2M");
     }
 
     #[test]
