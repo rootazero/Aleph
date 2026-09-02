@@ -129,6 +129,24 @@ pub struct ResumeReport {
     /// reduced. A magnitude for the boot line — the kinds themselves are named
     /// per session by the `core/session-log` doctor check.
     pub contradictions: usize,
+    /// Resumed runs that had to give something up on the way back: a model the
+    /// catalog has retired since the crash, a `project_root` that no longer
+    /// exists. The model is told in-band by the boundary repair; this is the
+    /// operator's count of the same fact.
+    ///
+    /// The producer arrives with the ④ settings envelope; until a `RunStarted`
+    /// carries one there is nothing that can degrade, and this reads 0 for the
+    /// honest reason rather than because nobody looks.
+    pub degraded: usize,
+    /// Resumed runs whose `RunStarted` carried no settings envelope, so the
+    /// re-triggered run follows today's session and global values instead of
+    /// the ones the crashed run was executing under.
+    ///
+    /// Counted rather than assumed away: the first real boot after the
+    /// envelope ships is what reports the true size of the pre-envelope
+    /// backlog, and a "no-op that reports success" is exactly what a silent 0
+    /// here would be.
+    pub unsnapshotted: usize,
 }
 
 /// Why one candidate was not resumed.

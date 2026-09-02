@@ -144,17 +144,35 @@ pub async fn handle_gateway_metrics_run_concurrency(
     run_manager: Arc<AgentRunManager>,
     sessions: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
-    let mut run_concurrency =
-        serde_json::to_value(run_manager.concurrency_snapshot()).unwrap_or_else(|_| json!({}));
+    let snapshot = run_manager.concurrency_snapshot();
+    let mut run_concurrency = aleph_protocol::RunConcurrency {
+        global_in_use: snapshot.global_in_use,
+        global_total: snapshot.global_total,
+        per_agent_cap: snapshot.per_agent_cap,
+        waiting: snapshot.waiting,
+        per_agent: Some(
+            snapshot
+                .per_agent
+                .iter()
+                .map(|slot| aleph_protocol::AgentSlotUsage {
+                    agent_id: slot.agent_id.clone(),
+                    in_use: slot.in_use,
+                })
+                .collect(),
+        ),
+    };
     // `per_agent` is the third identity array in this response, but it names
     // agent personas rather than sessions — server-global config, so the
     // question is PRIVILEGE and the predicate is the privilege one. See this
     // function's doc for why the ownership filter was the wrong question here
     // and how it made the field unreadable on every deployment.
+    //
+    // `None` drops the key. Deliberately not an emptied vector: the shared
+    // type keeps "withheld" and "no agent is busy" apart, and collapsing them
+    // would tell a member the server is idle on the strength of a fact that
+    // was withheld from them.
     if crate::gateway::caller_identity::caller_is_member() {
-        if let Some(obj) = run_concurrency.as_object_mut() {
-            obj.remove("per_agent");
-        }
+        run_concurrency.per_agent = None;
     }
     let running_sessions =
         visible_running_keys(sessions.as_ref(), run_manager.running_sessions()).await;
@@ -177,19 +195,32 @@ pub async fn handle_gateway_metrics_run_concurrency(
         .per_session
         .iter()
         .filter(|(session_key, _)| visible_lanes.contains(session_key))
-        .map(|(session_key, depth)| json!({ "session_key": session_key, "depth": depth }))
+        .map(|(session_key, depth)| aleph_protocol::SessionQueueDepth {
+            session_key: session_key.clone(),
+            depth: *depth,
+        })
         .collect();
-    JsonRpcResponse::success(
-        request.id,
-        json!({
-            "run_concurrency": run_concurrency,
-            "running_sessions": running_sessions,
-            "busy_queue": {
-                "total_waiting": busy.total_waiting,
-                "per_session": per_session,
-            },
-        }),
-    )
+    // Constructed from the shared type rather than a `json!` envelope: the
+    // Panel's own mirror of these key names could only ever prove it was a
+    // superset reader of whatever the literal happened to emit, so a rename
+    // here degraded to a `#[serde(default)]` zero there — a saturated engine
+    // rendering as an idle one (criterion #10).
+    let metrics = aleph_protocol::RunConcurrencyMetrics {
+        run_concurrency,
+        running_sessions,
+        busy_queue: aleph_protocol::BusyQueueMetrics {
+            total_waiting: busy.total_waiting,
+            per_session,
+        },
+    };
+    match serde_json::to_value(&metrics) {
+        Ok(body) => JsonRpcResponse::success(request.id, body),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            crate::gateway::protocol::INTERNAL_ERROR,
+            format!("could not render run-concurrency metrics: {e}"),
+        ),
+    }
 }
 
 /// Round-8 (§4.11) — Handle `gateway.metrics.subagent_concurrency`. Returns
@@ -232,6 +263,48 @@ mod tests {
         })
         .unwrap();
         (Arc::new(store), temp)
+    }
+
+    /// The engine's snapshot and the shared wire type must serialise to the
+    /// same key set, or the conversion in the handler is quietly renaming a
+    /// field for every client.
+    ///
+    /// This is the assertion neither side could make before: `alephcore` is the
+    /// crate that depends on both, so it is the only place the two shapes can
+    /// be compared to each other rather than each to a literal of its own
+    /// (criterion #10). `per_agent` is non-empty on both sides on purpose — the
+    /// wire type skips it when empty, so an empty fixture would compare two
+    /// key sets that both happen to be missing it.
+    #[test]
+    fn the_wire_type_and_the_engine_snapshot_name_the_same_fields() {
+        use crate::gateway::execution_engine::{AgentSlotUsage, ConcurrencySnapshot};
+
+        let engine = serde_json::to_value(ConcurrencySnapshot {
+            global_in_use: 1,
+            global_total: 8,
+            per_agent_cap: 3,
+            waiting: 0,
+            per_agent: vec![AgentSlotUsage {
+                agent_id: "main".to_string(),
+                in_use: 1,
+            }],
+        })
+        .expect("serialize");
+        let wire = serde_json::to_value(aleph_protocol::RunConcurrency {
+            global_in_use: 1,
+            global_total: 8,
+            per_agent_cap: 3,
+            waiting: 0,
+            per_agent: Some(vec![aleph_protocol::AgentSlotUsage {
+                agent_id: "main".to_string(),
+                in_use: 1,
+            }]),
+        })
+        .expect("serialize");
+        assert_eq!(
+            engine, wire,
+            "the engine snapshot and the shared wire type disagree"
+        );
     }
 
     async fn owned_session(store: &Arc<dyn SessionStore>, conv: &str, owner: &str) -> String {

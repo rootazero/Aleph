@@ -613,7 +613,35 @@ pub async fn handle_history(
             // values — the tier pill under-reporting the gate that was live,
             // the token counter restarting at zero, the model caption naming
             // the default the session had overridden.
-            let session_snapshot = crate::gateway::session_snapshot::snapshot_from_metadata(&meta);
+            let mut session_snapshot =
+                crate::gateway::session_snapshot::snapshot_from_metadata(&meta);
+            // What the newest run did, from the event log this session already
+            // keeps — the fact a re-attaching client had no way to learn. A
+            // Panel reopened after a crash painted the transcript and said
+            // nothing at all about the run that had been cut off mid-tool-call,
+            // so the only sign was output that never arrived.
+            //
+            // `None` on **either** absence — no event store published, or the
+            // read failed — because both mean "we did not find out". Neither
+            // may decay to a clean answer: a list that renders absence as
+            // "fine" hides exactly the sessions this field exists to surface
+            // (criterion #8).
+            session_snapshot.last_run = match crate::session::store::global_session_event_store() {
+                Some(events_store) => match events_store.load_all_events(&session_key).await {
+                    Ok(events) => Some(
+                        crate::gateway::session_snapshot::last_run_from_events(&events),
+                    ),
+                    Err(e) => {
+                        tracing::warn!(
+                            session = %canonical,
+                            error = %e,
+                            "could not read the event log for this session's run state"
+                        );
+                        None
+                    }
+                },
+                None => None,
+            };
             // The lane's waiting messages, by the SAME canonical key and at
             // the same post-gate position as `active_run` and `plan` above,
             // and for the same reason: they are one snapshot with the

@@ -1,8 +1,17 @@
 //! On-demand resume of an interrupted run.
 //!
 //! Surfaces:
-//! - `agent.resume` (JSON-RPC, Panel / WS clients) — [`handle_resume`]
-//! - `POST /v1/admin/resume` (CLI over IPC) — `admin_api::resume`
+//! - `agent.resume` (JSON-RPC) — [`handle_resume`]. **No client calls it yet**:
+//!   it is registered and member-carved so a WS client *can*, and the doc line
+//!   here used to say "Panel / WS clients" as though one did. Nothing in
+//!   `interfaces/` sends the method; the sentence described a plan, and a
+//!   reader auditing the surface would have gone looking for a caller that
+//!   does not exist (criterion #1 — the cheapest lie is the one in a comment).
+//! - `POST /v1/admin/resume` — the surface with a real caller today:
+//!   `aleph-server resume` over admin HTTP.
+//!
+//! Both render [`aleph_protocol::ResumeReceipt`], so the counters, the status
+//! vocabulary and the key names are one shape rather than three.
 //!
 //! [`crate::gateway::ResumeCoordinator`] scans for interrupted runs exactly
 //! once, at boot. That covers the case it was built for (the daemon died and
@@ -22,8 +31,8 @@
 //! every request; one with no caller costs them for nothing.
 
 use crate::sync_primitives::Arc;
+use aleph_protocol::resume::{RefusedEntry, ResumeReceipt};
 use serde::Deserialize;
-use serde_json::json;
 
 use super::super::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, PERMISSION_DENIED,
@@ -35,15 +44,6 @@ use super::agent::BuildRunError;
 use super::parse_params;
 use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::{ResumeRefusal, ResumeReport};
-
-/// The status word for "the reducer refused this session's log".
-///
-/// A string constant, not an inline literal, because three faces spell it
-/// (this handler, the admin route, the CLI's match) and a fourth reads it back
-/// (`aleph doctor`'s finding ids share the vocabulary). T3 moves it to
-/// `shared/protocol` with the rest of the closed set; it lives here for exactly
-/// as long as this handler is its only writer.
-pub const LOG_INCONSISTENT: &str = "log_inconsistent";
 
 /// Parameters for `agent.resume`.
 #[derive(Debug, Clone, Deserialize)]
@@ -86,44 +86,96 @@ pub enum ResumeOutcome {
     Failed(String),
 }
 
+/// Render a finished pass as the shared receipt.
+///
+/// The **one** constructor. Both transports call it, so a counter that reaches
+/// one face reaches the other by construction — the defect the two hand-written
+/// bodies had was not a typo, it was that `delegated`, `busy`, `refused`,
+/// `skipped_unknown_age` and `contradictions` simply had no slot on the route
+/// the CLI actually calls.
+#[must_use]
+pub fn receipt_from_report(
+    status: &str,
+    session_key: Option<String>,
+    report: &ResumeReport,
+) -> ResumeReceipt {
+    ResumeReceipt {
+        status: status.to_string(),
+        session_key,
+        scanned: report.scanned as u32,
+        resumed: report.resumed as u32,
+        abandoned: report.abandoned as u32,
+        skipped: report.skipped as u32,
+        busy: report.busy as u32,
+        delegated: report.delegated as u32,
+        refused: report
+            .refused
+            .iter()
+            .map(|(session, refusal)| RefusedEntry {
+                session_key: session.to_key_string(),
+                reason: refusal.reason().to_string(),
+                detail: refusal.detail(),
+            })
+            .collect(),
+        contradictions: report.contradictions as u32,
+        degraded: report.degraded as u32,
+        unsnapshotted: report.unsnapshotted as u32,
+        skipped_unknown_age: report.skipped_unknown_age as u32,
+        error: None,
+        agent_id: None,
+    }
+}
+
 impl ResumeOutcome {
-    /// The wire body for the `Done` / `Failed` cases, plus the session key the
-    /// caller named so a batched caller can correlate.
+    /// The receipt for this outcome, whatever it was.
+    ///
+    /// Every arm renders through [`ResumeReceipt`] rather than through a
+    /// per-arm `json!` literal, so a caller sees one object shape and can read
+    /// the status word out of the same field in every case.
+    #[must_use]
+    pub fn receipt(&self, session_key: &str) -> ResumeReceipt {
+        let named = || Some(session_key.to_string());
+        match self {
+            Self::Done { status, report } => receipt_from_report(status, named(), report),
+            Self::InvalidKey => ResumeReceipt {
+                status: ResumeReceipt::INVALID_SESSION_KEY.to_string(),
+                ..ResumeReceipt::default()
+            },
+            Self::NotFound => ResumeReceipt {
+                status: ResumeReceipt::NOT_FOUND.to_string(),
+                session_key: named(),
+                ..ResumeReceipt::default()
+            },
+            Self::AgentForbidden(agent_id) => ResumeReceipt {
+                status: ResumeReceipt::AGENT_FORBIDDEN.to_string(),
+                session_key: named(),
+                agent_id: Some(agent_id.clone()),
+                ..ResumeReceipt::default()
+            },
+            Self::Unavailable => ResumeReceipt {
+                status: ResumeReceipt::UNAVAILABLE.to_string(),
+                session_key: named(),
+                ..ResumeReceipt::default()
+            },
+            Self::Failed(e) => ResumeReceipt {
+                status: ResumeReceipt::FAILED.to_string(),
+                session_key: named(),
+                error: Some(e.clone()),
+                ..ResumeReceipt::default()
+            },
+        }
+    }
+
+    /// The wire body: [`Self::receipt`], serialised.
+    ///
+    /// `expect` rather than a fallback: `ResumeReceipt` is a plain struct of
+    /// owned scalars, so the only way this fails is a `serde` bug, and an
+    /// `unwrap_or_else(|_| json!({}))` here would answer an empty object — a
+    /// body whose `status` is absent, which every reader has to render as
+    /// "unrecognised outcome" (criterion #8).
     #[must_use]
     pub fn to_json(&self, session_key: &str) -> serde_json::Value {
-        match self {
-            Self::Done { status, report } => json!({
-                "status": status,
-                "session_key": session_key,
-                "scanned": report.scanned,
-                "resumed": report.resumed,
-                "abandoned": report.abandoned,
-                "skipped": report.skipped,
-                "busy": report.busy,
-                // Omitting this was half of the same defect as `status_of`'s:
-                // even a `--json` caller could not tell "handed back to its own
-                // scheduler" from "the re-trigger errored".
-                "delegated": report.delegated,
-                "skipped_unknown_age": report.skipped_unknown_age,
-                "contradictions": report.contradictions,
-                "refused": report
-                    .refused
-                    .iter()
-                    .map(|(session, refusal)| json!({
-                        "session_key": session.to_key_string(),
-                        "reason": refusal.reason(),
-                        "detail": refusal.detail(),
-                    }))
-                    .collect::<Vec<_>>(),
-            }),
-            Self::InvalidKey => json!({ "status": "invalid_session_key" }),
-            Self::NotFound => json!({ "status": "not_found" }),
-            Self::AgentForbidden(agent_id) => {
-                json!({ "status": "agent_forbidden", "agent_id": agent_id })
-            }
-            Self::Unavailable => json!({ "status": "unavailable" }),
-            Self::Failed(e) => json!({ "status": "failed", "error": e }),
-        }
+        serde_json::to_value(self.receipt(session_key)).expect("ResumeReceipt is serialisable")
     }
 }
 
@@ -133,13 +185,17 @@ impl ResumeOutcome {
 /// anything. That is an answer, not a failure, and `no_runs` is what
 /// distinguishes it from `already_finished` (scanned, and its newest marker was
 /// a `RunFinished`).
+///
+/// Every word comes from [`ResumeReceipt`]'s constants — the same set
+/// [`aleph_protocol::ResumeStatus`] reads back. A literal here would be the
+/// half of the contract that can drift without anything going red.
 fn status_of(report: &ResumeReport) -> &'static str {
     // Checked first: `busy` means nothing was even looked at, so every other
     // counter is 0 and would otherwise render as `no_runs` — telling the
     // operator the session has no history at the exact moment it is being
     // resumed.
     if report.busy > 0 {
-        "already_resuming"
+        ResumeReceipt::ALREADY_RESUMING
     } else if matches!(
         report.refused.first(),
         Some((_, ResumeRefusal::LogInconsistent(_)))
@@ -154,7 +210,7 @@ fn status_of(report: &ResumeReport) -> &'static str {
         // `first()`, not "any": this face resumes exactly ONE session, so it
         // has at most one refusal; the boot scan's multi-session report names
         // its refusals per session rather than through this word.
-        LOG_INCONSISTENT
+        ResumeReceipt::LOG_INCONSISTENT
     } else if report.delegated > 0 {
         // A cron / heartbeat / team session: `resume_from_markers` deliberately
         // hands recovery back to the scheduler that owns it and closes the
@@ -169,21 +225,21 @@ fn status_of(report: &ResumeReport) -> &'static str {
         // Position among the counters is not load-bearing (this face resumes
         // exactly one session, so exactly one of them can be non-zero); it sits
         // here to read in the same order as `resume_from_markers` classifies.
-        "delegated"
+        ResumeReceipt::DELEGATED
     } else if report.resumed > 0 {
-        "resumed"
+        ResumeReceipt::RESUMED
     } else if report.abandoned > 0 {
-        "abandoned"
+        ResumeReceipt::ABANDONED
     } else if report.skipped > 0 {
-        "already_finished"
+        ResumeReceipt::ALREADY_FINISHED
     } else if report.scanned > 0 {
         // Scanned and interrupted, but neither resumed nor abandoned:
         // `handle_interrupted` bailed out (boundary repair failed, or the
         // re-trigger errored). Both log a warning; the caller gets an honest
         // "nothing happened" rather than a fabricated success.
-        "not_resumed"
+        ResumeReceipt::NOT_RESUMED
     } else {
-        "no_runs"
+        ResumeReceipt::NO_RUNS
     }
 }
 
@@ -372,6 +428,8 @@ mod tests {
             refused: Vec::new(),
             skipped_unknown_age: 0,
             contradictions: 0,
+            degraded: 0,
+            unsnapshotted: 0,
         }
     }
 
@@ -394,7 +452,7 @@ mod tests {
         let refused = refused_report(ResumeRefusal::LogInconsistent(
             crate::session::reduction::LogContradiction::OutOfOrderSlice { at_seq: 41 },
         ));
-        assert_eq!(status_of(&refused), LOG_INCONSISTENT);
+        assert_eq!(status_of(&refused), ResumeReceipt::LOG_INCONSISTENT);
 
         // The arm it used to fall into still means what it says.
         assert_eq!(status_of(&report(1, 0, 0, 0)), "not_resumed");
@@ -450,12 +508,11 @@ mod tests {
         assert_eq!(status_of(&report(1, 0, 0, 0)), "not_resumed");
     }
 
-    /// Every counter the report carries must reach the wire, or a `--json`
-    /// caller cannot re-derive the status word. Derived from the struct: adding
-    /// a counter without rendering it reddens here.
-    #[test]
-    fn to_json_renders_every_counter_the_report_carries() {
-        let r = ResumeReport {
+    /// A report with **every** counter non-zero, so a field that silently
+    /// stopped being copied shows up as a zero rather than hiding behind a
+    /// default that happens to match.
+    fn every_counter_report() -> ResumeReport {
+        ResumeReport {
             scanned: 1,
             resumed: 2,
             abandoned: 3,
@@ -464,19 +521,50 @@ mod tests {
             delegated: 6,
             skipped_unknown_age: 7,
             contradictions: 8,
+            degraded: 9,
+            unsnapshotted: 10,
             refused: vec![(
                 crate::routing::session_key::SessionKey::ephemeral("wire"),
                 ResumeRefusal::AgentMissing,
             )],
-        };
+        }
+    }
+
+    /// The wire key set is the receipt's declared field list — **not** a
+    /// literal written beside the code that produces it.
+    ///
+    /// The old version of this test counted keys against a destructure of
+    /// `ResumeReport`, which proved that the handler's `json!` agreed with
+    /// itself and nothing about whether the CLI's struct could read it. The
+    /// route the CLI actually calls carried four of the nine counters and no
+    /// test could see that, because neither side compared against the other
+    /// (criterion #10: parsing only ever proves a superset).
+    #[test]
+    fn the_wire_keys_are_the_receipts_declared_fields() {
         let body = ResumeOutcome::Done {
-            status: "delegated",
-            report: r,
+            status: ResumeReceipt::DELEGATED,
+            report: every_counter_report(),
         }
         .to_json("agent:main:cron:daily");
         let obj = body.as_object().expect("object");
-        // `status` + `session_key` + one key per counter. The count is derived
-        // from a destructure so a new field cannot be forgotten silently.
+
+        let mut on_wire: Vec<&str> = obj.keys().map(String::as_str).collect();
+        on_wire.sort_unstable();
+        let mut declared: Vec<&str> = ResumeReceipt::WIRE_FIELDS.to_vec();
+        declared.sort_unstable();
+        assert_eq!(
+            on_wire, declared,
+            "the resume body and `ResumeReceipt` disagree about the field set"
+        );
+    }
+
+    /// …and each counter carries the report's value, not a default that
+    /// happens to look plausible.
+    #[test]
+    fn every_counter_the_report_carries_reaches_the_wire_with_its_value() {
+        let report = every_counter_report();
+        // Exhaustive destructure (no `..`): a new counter on the report is a
+        // compile error here rather than a field that quietly never ships.
         let ResumeReport {
             scanned,
             resumed,
@@ -486,36 +574,48 @@ mod tests {
             delegated,
             skipped_unknown_age,
             contradictions,
+            degraded,
+            unsnapshotted,
             refused,
-        } = ResumeReport::default();
-        let fields = [
-            scanned,
-            resumed,
-            abandoned,
-            skipped,
-            busy,
-            delegated,
-            skipped_unknown_age,
-            contradictions,
-        ]
-        .len()
-            // `refused` is a list, not a counter, so it cannot join the array
-            // above — but the destructure is exhaustive (no `..`), so a new
-            // field still fails to compile here rather than going unrendered.
-            + [refused.len()].len();
-        assert_eq!(
-            obj.len(),
-            fields + 2,
-            "a field on `ResumeReport` is not reaching the wire: {obj:?}"
+        } = &report;
+
+        let receipt = receipt_from_report(
+            ResumeReceipt::DELEGATED,
+            Some("agent:main:cron:daily".to_string()),
+            &report,
         );
-        assert_eq!(obj["delegated"], serde_json::json!(6));
-        assert_eq!(obj["skipped_unknown_age"], serde_json::json!(7));
-        assert_eq!(obj["contradictions"], serde_json::json!(8));
+        assert_eq!(receipt.scanned as usize, *scanned);
+        assert_eq!(receipt.resumed as usize, *resumed);
+        assert_eq!(receipt.abandoned as usize, *abandoned);
+        assert_eq!(receipt.skipped as usize, *skipped);
+        assert_eq!(receipt.busy as usize, *busy);
+        assert_eq!(receipt.delegated as usize, *delegated);
+        assert_eq!(receipt.skipped_unknown_age as usize, *skipped_unknown_age);
+        assert_eq!(receipt.contradictions as usize, *contradictions);
+        assert_eq!(receipt.degraded as usize, *degraded);
+        assert_eq!(receipt.unsnapshotted as usize, *unsnapshotted);
+        assert_eq!(receipt.refused.len(), refused.len());
         assert_eq!(
-            obj["refused"][0]["reason"],
-            serde_json::json!("agent_missing"),
-            "a refusal must reach the wire as its own word: {obj:?}"
+            receipt.refused[0].reason, "agent_missing",
+            "a refusal must reach the wire as its own word"
         );
+        assert_eq!(receipt.refused[0].session_key, refused[0].0.to_key_string());
+    }
+
+    /// The CLI reads the body back through the same type, so this is the round
+    /// trip the two hand-written shapes could never make: server-side
+    /// construction → JSON → client-side parse → the closed status set.
+    #[test]
+    fn the_body_parses_back_as_the_receipt_the_cli_reads() {
+        let body = ResumeOutcome::Done {
+            status: ResumeReceipt::DELEGATED,
+            report: every_counter_report(),
+        }
+        .to_json("agent:main:cron:daily");
+        let parsed: ResumeReceipt = serde_json::from_value(body).expect("parse");
+        assert_eq!(parsed.outcome(), aleph_protocol::ResumeStatus::Delegated);
+        assert_eq!(parsed.delegated, 6);
+        assert_eq!(parsed.session_key.as_deref(), Some("agent:main:cron:daily"));
     }
 
     #[test]

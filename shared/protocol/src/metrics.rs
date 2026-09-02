@@ -48,14 +48,14 @@ pub struct RunConcurrency {
     pub waiting: usize,
     /// Per-agent in-use counts, for agents holding at least one run.
     ///
-    /// **Withheld from a member** — it names agent personas, which are
-    /// server-global configuration, so the question is privilege rather than
-    /// ownership. Absent means "not yours to see", never "no agent is busy":
-    /// the empty list and the withheld field are the same bytes, which is why
-    /// the numbers a member DOES get (`global_in_use` / `global_total`) are
-    /// the ones that answer "how busy is the server".
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub per_agent: Vec<AgentSlotUsage>,
+    /// **`None` is withheld, `Some([])` is "no agent is busy".** They are
+    /// different answers and the wire keeps them apart: the field names agent
+    /// personas, which are server-global configuration, so dropping it is a
+    /// privilege decision — and a member who saw an empty array would read
+    /// "the server is idle" off a fact that was simply not shown to them
+    /// (criterion #17: a wrong label costs more than a missing one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_agent: Option<Vec<AgentSlotUsage>>,
 }
 
 /// One agent's live run-slot usage.
@@ -113,23 +113,40 @@ mod tests {
         assert!(m.busy_queue.per_session.is_empty());
     }
 
-    /// The privilege drop is an absent key, and a client must read it as
-    /// "withheld", which is what an empty list already means here.
+    /// The privilege drop is an absent key; "no agent is busy" is an empty
+    /// array. A reader must be able to tell them apart, which is the whole
+    /// reason this field is an `Option` rather than a `Vec` that goes empty.
     #[test]
-    fn a_withheld_per_agent_is_an_absent_key() {
-        let v = serde_json::to_value(RunConcurrencyMetrics::default()).expect("serialize");
-        assert!(v["run_concurrency"].get("per_agent").is_none());
-        let with = RunConcurrencyMetrics {
+    fn a_withheld_per_agent_is_absent_and_an_idle_one_is_empty() {
+        let withheld = serde_json::to_value(RunConcurrencyMetrics::default()).expect("serialize");
+        assert!(withheld["run_concurrency"].get("per_agent").is_none());
+
+        let idle = RunConcurrencyMetrics {
             run_concurrency: RunConcurrency {
-                per_agent: vec![AgentSlotUsage {
-                    agent_id: "main".into(),
-                    in_use: 1,
-                }],
+                per_agent: Some(Vec::new()),
                 ..RunConcurrency::default()
             },
             ..RunConcurrencyMetrics::default()
         };
-        let v = serde_json::to_value(&with).expect("serialize");
+        let v = serde_json::to_value(&idle).expect("serialize");
+        assert!(
+            v["run_concurrency"]["per_agent"]
+                .as_array()
+                .is_some_and(Vec::is_empty),
+            "an idle server must still show the field: {v:?}"
+        );
+
+        let busy = RunConcurrencyMetrics {
+            run_concurrency: RunConcurrency {
+                per_agent: Some(vec![AgentSlotUsage {
+                    agent_id: "main".into(),
+                    in_use: 1,
+                }]),
+                ..RunConcurrency::default()
+            },
+            ..RunConcurrencyMetrics::default()
+        };
+        let v = serde_json::to_value(&busy).expect("serialize");
         assert_eq!(v["run_concurrency"]["per_agent"][0]["agent_id"], "main");
     }
 
@@ -141,10 +158,10 @@ mod tests {
                 global_total: 8,
                 per_agent_cap: 2,
                 waiting: 1,
-                per_agent: vec![AgentSlotUsage {
+                per_agent: Some(vec![AgentSlotUsage {
                     agent_id: "ops".into(),
                     in_use: 2,
-                }],
+                }]),
             },
             running_sessions: vec!["agent:ops:main".into()],
             busy_queue: BusyQueueMetrics {

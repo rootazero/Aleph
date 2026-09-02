@@ -51,7 +51,7 @@ mod tests;
 
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use agent_trace_emit_sink::AgentTraceEmitSink;
-pub use concurrency::ConcurrencySnapshot;
+pub use concurrency::{AgentSlotUsage, ConcurrencySnapshot};
 pub use engine::{ContinuationDeps, ExecutionEngine};
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use scratchpad_progress_sink::ScratchpadProgressSink;

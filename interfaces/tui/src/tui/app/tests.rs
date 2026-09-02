@@ -1363,6 +1363,10 @@ fn snapshot(key: &str) -> SessionSnapshot {
         compaction_count: 1,
         project_root: Some("/tmp/proj".into()),
         label: None,
+        // The run-state view rides on the same snapshot; this fixture is about
+        // the knobs, so it says nothing about the last run rather than
+        // inventing a clean one.
+        last_run: None,
     }
 }
 
