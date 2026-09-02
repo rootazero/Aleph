@@ -31,7 +31,7 @@ CARGO_PROFILE_TEST_DEBUG=line-tables-only
 | 目的 | 命令 | 怎么跑 |
 |---|---|---|
 | 快速类型检查（不含 tests） | `cargo check -p alephcore` / `cargo check -p aleph-protocol` | Bash 前台，timeout 600000（1–4 min） |
-| 运行某模块单测 | `cargo test -p alephcore --lib <module::path>` | **分离式**（见下），Monitor 等待 |
+| 运行某模块单测 | `cargo test -p alephcore --lib <module::path>` ；**多个**过滤器必须写在 `--` 之后（`--lib -- a b`），并排写会以 `error: unexpected argument` 空跑退出 | **分离式**（见下）＋**前台轮询**等待（Monitor 会截断本回合，见下段） |
 | 集成面类型检查（替代 `--test '*' --no-run`） | `cargo check -p alephcore --features test-helpers --all-targets` | 分离式（约 8 min） |
 | protocol / tui / cli / bins | `cargo test -p aleph-protocol`；`cargo test -p aleph-tui`；`cargo test -p aleph-cli`；`cargo test -p alephcore --bins` | Bash 前台 timeout 600000 通常够；超时就改分离式 |
 | Panel（宿主测试） | `cargo test -p aleph-panel --lib`（harness 在**第一个**失败处中止——用 `-- --skip <name>` 看其余） | 分离式 |
@@ -559,3 +559,37 @@ engine，却没动那个工具**自己测试模块里的** `REGISTERED_CHECKS` �
 尖端全量（测于 `24f9e3f0b`）：`17815 passed; 18 failed; 17 ignored`，`comm -3` 与基线**双向为空**
 ⇒ 零新增；`--bins` = `87 passed`。作用域**不含** clippy、`--features test-helpers --all-targets`
 的**运行**、以及 panel/tui/cli/protocol 四个 crate——T8 Step 4 仍欠。
+
+### T5 收尾 — Step 5 的三条变异第一次在仓库里留下红名单（续做 2/3）
+
+前一位续做 agent 写下的规矩是「记录里没有」和「没发生」需要的证据不是同一份。于是这一次把
+**Step 5 的三条变异真跑了一遍**，下面每一行都是本次 `cargo test` 输出里的字，过滤器统一是
+`--lib -- gateway::session_projector gateway::projection_reconciler`（30 条）。
+
+| 变异（施于 `f4a93bbf1` + 本次 CUT 的树） | 观察到变红的测试 |
+|---|---|
+| ① `heal_session` 的 `present` 谓词恒假（`\|s\| seqs.contains(&s)` → `\|_\| false`） | `26 passed; 4 failed` — `projection_reconciler::…::a_partially_flushed_turn_is_completed_without_duplicates` · `::reconcile_is_idempotent` · `session_projector::…::a_dead_drain_is_restarted_and_the_seqs_it_missed_are_healed` · `::repairing_a_whole_session_writes_nothing_and_says_up_to_date` |
+| ② `NoRowInRange` 仍走计费臂（原臂加 `if false` 守卫，`NoRowInRange` 并进 `Stamped` 臂） | `29 passed; 1 failed` — `session_projector::…::a_run_meta_with_no_row_in_range_defers_and_does_not_bill`（`left: Stamped { billed: true }` / `right: Retry`） |
+| ③ boot 候选去掉活动窗口（`for meta in sessions` → `sessions.into_iter().take(0)`） | `28 passed; 2 failed` — `projection_reconciler::…::a_markerless_background_child_in_the_window_is_repaired` · `::clean_session_with_hole_is_repaired` |
+
+**②的红名单和计划里写的不是同一条。** 计划预测「幂等测试红」，而 `replaying_one_run_meta_bills_once`
+**是绿的**：重放走的是 `AlreadyStamped` 臂，根本到不了计费那一句——幂等性由 stamp 自己担保，删掉
+`NoRowInRange` 的延迟碰不到它。真正守住这条线的是那条 defer 测试。**预测的红不是观察到的红**；
+变异的作用是**指认那条守卫是谁**，不是确认我们本来以为的那条。
+
+还原：两个文件都先 `cp` 到 scratchpad，改完用 `cp` 回来，`diff` 到**零差异**（两条都打印了
+identical），随后 `git diff --stat` 只剩本次 CUT 的 17 行删除。
+
+**T5 Step 6 最后一条命令（此前从未跑过）**：`cargo check -p alephcore --features test-helpers
+--all-targets` = `EXIT=0`，`Finished dev profile in 1m 33s`。它是唯一能编到集成 target 的一条，
+因此也是唯一能看见 `stamp_last_assistant_metadata` 从 trait 上消失后 test-helpers 侧还编不编得过
+的一条——编得过。
+
+它同时报了整个 lib test target 里**唯一**一条警告：`function poll_history is never used`。
+`git log -S poll_history` 说它进来于 `27b7406c0`，最后一个调用者消失于 `33cf88be3`——T5 用
+`flush(timeout)` 这个确定性屏障换掉了轮询等行落库的写法，helper 就此没有调用者。按熵减纪律
+CUT（本条记录同一轮提交）。删掉后同一过滤器的绿是 `256 passed; 0 failed`，**零警告**。
+
+**一个命令陷阱，值得写进 §0**：`cargo test -p alephcore --lib a b`（两个过滤器直接跟在 `--lib`
+后面）会立刻以 `error: unexpected argument 'b' found` 退出，`EXIT=1`，**一条测试都没跑**，而日志
+里那行 `^error` 长得和编译失败一模一样。多个过滤器必须写在 `--` 之后：`--lib -- a b`。
