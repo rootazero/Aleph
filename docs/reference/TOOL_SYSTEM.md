@@ -587,9 +587,12 @@ pub struct TranscriptIndexerConfig {
 
 **Usage**:
 ```rust
-let indexer = TranscriptIndexer::new(database, embedder);
+let indexer = TranscriptIndexer::new(database);
 let chunks = indexer.chunk_text(&long_conversation);
 ```
+
+No embedder: the indexer writes plain `raw_memories` rows; recall over them
+is the substring transcripts leg of `memory_search`.
 
 ### ValueEstimator
 

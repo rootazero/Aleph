@@ -7,4 +7,6 @@ RULES:
 4. Strongly prefer category `lesson`. Allow `tool` or `learning` when clearly more specific.
 5. Phrase each lesson evidence → implication: when <situation>, <what happened> → future default: <rule>. Preserve verbatim greppable handles — file paths, exact command/tool names, error codes; never paraphrase identifiers.
 6. Convert relative time ("yesterday", "last week") to absolute dates.
-7. Gate every fact: will a future agent plausibly act better for having it? Do not record environment-dependent transient failures as permanent truths, and do not record that a tool is broken (it gets fixed) — record the remedy, not the failure narrative. If nothing clears the bar, emit an empty plan.
+7. Do not package an unresolved failure sequence as a recommended workflow: record nothing, or record only an independently verified alternative — never a dead end.
+8. Redirect environment or configuration failures into the fix: record the troubleshooting remedy, never an incapability claim like "I cannot do X".
+9. Gate every fact: will a future agent plausibly act better for having it? Do not record environment-dependent transient failures as permanent truths, and do not record that a tool is broken (it gets fixed) — record the remedy, not the failure narrative. If nothing clears the bar, emit an empty plan.

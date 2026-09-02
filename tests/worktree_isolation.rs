@@ -191,6 +191,7 @@ async fn h_t1_worktree_isolation_happy_path() {
         stall_config: None,
         consecutive_failure_cap: None,
         turn_timeout: None,
+        verifier_chain: None,
         trace_sink: Some(sink_for_base),
         // P3 Stage I:
         plugin_registry: None,

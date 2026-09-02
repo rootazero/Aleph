@@ -108,8 +108,9 @@ pub(crate) fn skeleton_pack(
 /// Order candidates within one slot by recency-weighted relevance, descending.
 ///
 /// Both assembly paths depend on this: `hydrate` charges each slot's token
-/// budget strictly in item order and drops whatever truncates to empty, so
-/// position *is* priority. Pinned entries (the always-on High/Critical feedback
+/// budget strictly in item order, dropping whatever truncates to empty and
+/// every item behind the point where the budget exhausts, so position *is*
+/// priority. Pinned entries (the always-on High/Critical feedback
 /// floor, the user profile) carry `relevance: 1.0` while RRF retrieval scores
 /// are far below 1.0, which is what keeps a query match from evicting a
 /// standing rule.

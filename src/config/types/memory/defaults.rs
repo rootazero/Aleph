@@ -6,12 +6,6 @@ pub fn default_vector_db() -> String {
     "sqlite-vec".to_string()
 }
 
-pub fn default_similarity_threshold() -> f32 {
-    crate::config::defaults_override::get_defaults_override()
-        .memory_similarity_threshold()
-        .unwrap_or(0.3)
-}
-
 pub const fn default_embedding_timeout_ms() -> u64 {
     10000
 }

@@ -61,8 +61,8 @@ use super::evolution::{
 use super::validation::{self, DreamValidationReport};
 use super::{
     compute_raw_metrics, l1_over_corpus, now_timestamp, CycleDecision, DreamContext,
-    DreamCycleOutcome, DreamEvent, DreamPipeline, DreamReport, DreamRunStatus, EventLog,
-    MutationGate, NoteEntry, SignalSnapshot, StrategySelector, DREAM_HISTORY_WINDOW,
+    DreamCycleOutcome, DreamEvent, DreamPipeline, DreamReport, DreamRunStatus, DreamStrategy,
+    EventLog, MutationGate, NoteEntry, SignalSnapshot, StrategySelector, DREAM_HISTORY_WINDOW,
 };
 
 /// Everything a project sub-cycle borrows from the daemon.
@@ -88,9 +88,11 @@ pub(super) struct ProjectCycleDeps<'a> {
 /// "never started, spent no tokens" is what lets the caller's nightly budget
 /// count only the cycles that actually cost something.
 pub(super) enum NamespaceCycle {
-    /// No note in this corpus has changed since its last cycle (or it holds no
-    /// notes at all). Not one stage started, so not one LLM call was made — the
-    /// night's per-corpus budget is untouched.
+    /// Nothing tonight's pipeline could act on: either the corpus is unchanged
+    /// since its last cycle (no note moved, no review pending, no undistilled
+    /// signals), or its only work is distill signals on a Conserve night whose
+    /// pipeline has no distill stages. Not one stage started, so not one LLM
+    /// call was made — the night's per-corpus budget is untouched.
     Idle,
     /// The corpus ran the maintenance subset. Carries the same
     /// [`DreamCycleOutcome`] the base cycle produces, decision included.
@@ -123,8 +125,10 @@ pub(super) enum NamespaceCycle {
 ///   both blind to them — a corpus whose only new work is a batch of
 ///   corrections would sit at `Idle` forever while the tool told the user the
 ///   nightly cycle would distill them. The answer comes from
-///   [`has_undistilled_corrections`], i.e. the stage's own watermark read, so
-///   the gate cannot disagree with the stage it is gating.
+///   [`has_undistilled_corrections`] — same watermark, same window, same
+///   admission quorum as the stage — so the gate cannot disagree with the
+///   stage it is gating: it may only ever save a cycle, never pay for one the
+///   stage then skips.
 ///
 /// * **undistilled tool failures.** `RawMemoryToolSink` writes one row per tool
 ///   call keyed on the *turn's* agent, and `tool_failure_distill` is their only
@@ -211,12 +215,15 @@ pub(super) async fn run_namespace_cycle(
         .map_or(usize::MAX, |rows| rows.len());
     // Third leg: corrections filed against THIS agent that `feedback_distill`
     // has not consumed. Read through the stage's own predicate so gate and
-    // stage share one watermark.
+    // stage share one watermark and one admission quorum — both knobs come
+    // from the same `DreamingConfig` fields `DreamPipeline::from_strategy`
+    // builds the stage with.
     let has_corrections =
         crate::memory::dreaming::stages::feedback_distill::has_undistilled_corrections(
             deps.database,
             agent_id,
             deps.config.feedback_lookback,
+            deps.config.feedback_distill_min_candidates,
         )
         .await;
     // Fourth leg: tool failures recorded against THIS agent that
@@ -263,6 +270,25 @@ pub(super) async fn run_namespace_cycle(
         StrategySelector::from_outcomes(history.iter().map(|ev| ev.validation.overall_ok()))
             .select(&signal_snapshot, &gate_decision);
     let strategy = selection.strategy;
+
+    // The Conserve pipeline carries no `feedback_distill` / `tool_failure_distill`
+    // arm, so a corpus admitted ONLY for undistilled corrections or tool
+    // failures would run a full sub-cycle — and spend one slot of the nightly
+    // `max_corpus_cycles_per_night` budget — without any stage able to consume
+    // the work that admitted it. Conserve exists to touch less, not to pay for
+    // motion with no effect: treat the night as Idle instead. The signals lose
+    // nothing — they move no watermark by sitting, and the first non-Conserve
+    // night picks them up.
+    if strategy == DreamStrategy::Conserve
+        && !corpus_needs_maintenance(&index, last_cycle_started_at, pending_reviews, false, false)
+    {
+        tracing::debug!(
+            agent = %agent_id,
+            "corpus admitted only for distill signals but tonight's strategy is \
+             Conserve, whose pipeline has no distill stages; skipping"
+        );
+        return Ok(NamespaceCycle::Idle);
+    }
 
     // --- Run the note-maintenance subset ---
     let notes: Vec<NoteEntry> = index.iter().map(NoteEntry::from_index_entry).collect();

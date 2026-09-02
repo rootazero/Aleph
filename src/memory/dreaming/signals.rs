@@ -48,7 +48,6 @@ pub struct RawMetrics {
     pub notes_added_24h: u32,
     pub total_notes: u32,
     pub note_hit_rate: f64,
-    pub never_recalled_count: u32,
     pub skill_notes_total: u32,
     pub skill_notes_recalled: u32,
     /// Mature skill-note cohort (created more than `MATURE_SKILL_DAYS` ago) —
@@ -101,21 +100,15 @@ impl SignalSnapshot {
         });
 
         // Recall signals
+        // A `never_recalled_ratio` signal used to be pushed alongside this
+        // one. No consumer ever addressed it by name (`memory_health_score`
+        // and `StrategySelector::select` both read through
+        // `SignalSnapshot::score`, and neither key existed), so it met the
+        // same dead-island bar as the `Quality` variant above and was cut.
         signals.push(DreamSignal {
             signal_type: SignalType::Recall,
             name: "note_hit_rate".into(),
             score: m.note_hit_rate.clamp(0.0, 1.0),
-            source: "recall_signals".into(),
-        });
-        let never_recalled_ratio = if m.total_notes > 0 {
-            (f64::from(m.never_recalled_count) / f64::from(m.total_notes)).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        signals.push(DreamSignal {
-            signal_type: SignalType::Recall,
-            name: "never_recalled_ratio".into(),
-            score: never_recalled_ratio,
             source: "recall_signals".into(),
         });
 

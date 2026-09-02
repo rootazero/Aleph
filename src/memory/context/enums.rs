@@ -125,7 +125,7 @@ impl NoteType {
             Self::Skill => "aleph://skills/",
             Self::Reference => "aleph://reference/",
             Self::Feedback => "aleph://feedback/",
-            Self::Transcript => "aleph://transcript/",
+            Self::Transcript => crate::memory::transcript_indexer::TRANSCRIPT_PATH_PREFIX,
             Self::Other => "aleph://knowledge/",
             Self::SubagentRun
             | Self::SubagentSession

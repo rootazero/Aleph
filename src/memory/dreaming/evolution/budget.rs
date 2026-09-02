@@ -50,15 +50,18 @@ impl EditBudget {
     /// the budget covers it; returns `false` (and leaves the budget untouched)
     /// when exhausted, signalling the caller to stop editing this cycle.
     ///
-    /// The byte spend is clamped to at least [`Self::MIN_EDIT_BYTES`] so a
-    /// near-exhausted budget cannot fund a degenerate 1-byte edit.
+    /// The byte spend is clamped to at least [`Self::MIN_EDIT_BYTES`], and the
+    /// clamped amount is also what gets debited: charging the raw `bytes` would
+    /// let a stream of sub-floor edits pass the affordability check while
+    /// draining almost nothing — exactly the degenerate churn the floor exists
+    /// to stop.
     pub fn try_spend(&mut self, bytes: u64) -> bool {
         let spend = bytes.max(Self::MIN_EDIT_BYTES);
         if self.edits_remaining == 0 || self.bytes_remaining < spend {
             return false;
         }
         self.edits_remaining -= 1;
-        self.bytes_remaining -= bytes;
+        self.bytes_remaining -= spend;
         true
     }
 
@@ -94,6 +97,21 @@ mod tests {
         assert!(!b.try_spend(1000), "edit larger than byte budget refused");
         assert_eq!(b.edits_remaining, 5, "refused edit must not consume budget");
         assert_eq!(b.bytes_remaining, 500);
+    }
+
+    #[test]
+    fn tiny_edits_are_debited_at_the_clamped_floor() {
+        // 32 one-byte edits must drain 32 * MIN_EDIT_BYTES, not 32 bytes.
+        let mut b = EditBudget::new(64, 32 * EditBudget::MIN_EDIT_BYTES);
+        for _ in 0..32 {
+            assert!(b.try_spend(1));
+        }
+        assert_eq!(
+            b.bytes_remaining, 0,
+            "each sub-floor edit must cost the clamped floor"
+        );
+        assert!(b.is_exhausted());
+        assert!(!b.try_spend(1));
     }
 
     #[test]

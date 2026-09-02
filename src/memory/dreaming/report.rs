@@ -127,8 +127,10 @@ pub struct DreamReport {
     /// knowledge). Surfaced via the `note_manage(action="evolution")` tool.
     #[serde(default)]
     pub merges_rejected: u32,
-    /// Cycle-level evolution-gate outcome (memory-health before/after). `None`
-    /// when the gate did not run (e.g. conserve cycles, missing provider).
+    /// Cycle-level evolution-gate outcome (memory-health before/after). Both
+    /// the base cycle (Phase 5.5) and the project sub-cycle write `Some`
+    /// unconditionally — conserve nights and the provider-less boot path
+    /// included — so `None` only for rows persisted before this field existed.
     #[serde(default)]
     pub evolution: Option<EvolutionOutcome>,
     /// Stages that were executed during this run.

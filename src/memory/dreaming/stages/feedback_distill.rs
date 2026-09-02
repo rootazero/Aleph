@@ -79,14 +79,35 @@ fn batch_end_on_timestamp_boundary(corrections: &[RawMemory], max_per_cycle: usi
         .unwrap_or(corrections.len())
 }
 
-/// Does `agent_id` hold correction rows this stage has not consumed yet?
+/// The stage's admission quorum: enough corrections to be worth an LLM call,
+/// or at least one urgent (High/Critical) standing directive that must not
+/// wait for company.
+///
+/// One function on purpose — [`has_undistilled_corrections`] (the per-corpus
+/// activity gate's read) and [`FeedbackDistillStage::execute`] both consume it,
+/// so the gate can only ever *save* a cycle, never admit a corpus the stage
+/// then no-ops on. Two hand-written copies of this predicate would drift, and
+/// the drift is silent: 1-2 low-severity corrections below `min_candidates`
+/// admitted the corpus every night, the stage skipped without advancing its
+/// watermark, and the same rows burned a fan-out slot again the next night.
+fn meets_distill_quorum(corrections: &[RawMemory], min_candidates: usize) -> bool {
+    corrections.len() >= min_candidates || corrections.iter().any(is_urgent_correction)
+}
+
+/// Does `agent_id` hold correction rows this stage would actually consume?
 ///
 /// Exists so the per-corpus activity gate
 /// (`project_cycle::corpus_needs_maintenance`) and the stage itself answer
 /// "is there feedback work here" with the SAME read — same watermark key, same
-/// path prefix, same lookback. A gate that guessed differently from the stage
+/// path prefix, same lookback, and the same admission quorum
+/// ([`meets_distill_quorum`]). A gate that guessed differently from the stage
 /// would either strand corrections (gate says no, stage would have said yes) or
 /// pay for a cycle that does nothing.
+///
+/// `min_candidates` must be the value the stage itself is constructed with
+/// (`DreamPipeline::from_strategy` reads it from the same `DreamingConfig`
+/// field the caller passes here) — a gate quorum that drifts from the stage's
+/// re-creates the burned-slot failure this predicate exists to prevent.
 ///
 /// Errors read as `true`: this predicate may only ever *save* a cycle, never
 /// withhold one on a failed read.
@@ -94,6 +115,7 @@ pub(crate) async fn has_undistilled_corrections(
     store: &crate::memory::store::MemoryBackend,
     agent_id: &str,
     lookback: usize,
+    min_candidates: usize,
 ) -> bool {
     let watermark = store
         .get_dream_watermark(WATERMARK_CONSUMER, agent_id)
@@ -102,7 +124,9 @@ pub(crate) async fn has_undistilled_corrections(
     store
         .get_raw_by_path_prefix_since(CORRECTION_PATH_PREFIX, agent_id, watermark, lookback)
         .await
-        .map_or(true, |rows| !rows.is_empty())
+        .map_or(true, |rows| {
+            !rows.is_empty() && meets_distill_quorum(&rows, min_candidates)
+        })
 }
 
 impl Default for FeedbackDistillStage {
@@ -168,7 +192,7 @@ impl DreamStage for FeedbackDistillStage {
             return Ok(ctx);
         }
 
-        // The count gate is severity-blind on its own, which lets it withhold the
+        // A pure count quorum would be severity-blind, which lets it withhold the
         // one class of correction that most needs to land. "Never commit without
         // asking me first" is a standing directive the model flags as
         // `severity=critical` (verbatim the tool's own documented example) — but a
@@ -176,9 +200,10 @@ impl DreamStage for FeedbackDistillStage {
         // never distilled until two unrelated corrections happened to accumulate.
         // Meanwhile the always-on FeedbackFloor only surfaces High/Critical
         // *feedback notes*, so the exact class of rule the floor exists to carry
-        // was the class the gate could defer indefinitely. High/Critical bypass it.
-        let has_urgent = corrections.iter().any(is_urgent_correction);
-        if corrections.len() < self.min_candidates && !has_urgent {
+        // was the class the gate could defer indefinitely. High/Critical bypass
+        // the count inside `meets_distill_quorum` — shared with the activity gate
+        // so a batch too small to distill never admits a corpus either.
+        if !meets_distill_quorum(&corrections, self.min_candidates) {
             tracing::debug!(
                 count = corrections.len(),
                 min = self.min_candidates,
@@ -512,7 +537,11 @@ pub fn build_feedback_distill_prompt(
          better for having this?\" — if not, SKIP it.\n\
          - Anti-rot denylist: never store environment-dependent transient failures as \
          permanent truths, and never store a negative assertion that a tool is broken (it \
-         gets fixed) — store the remedy, not the failure narrative.\n\n\
+         gets fixed) — store the remedy, not the failure narrative.\n\
+         - Never package an unresolved failure sequence as a recommended workflow: store \
+         nothing, or store only an independently verified alternative — never a dead end.\n\
+         - Redirect environment or configuration failures into the fix: store the \
+         troubleshooting remedy, never an incapability claim like \"I cannot do X\".\n\n\
          Existing feedback-note candidates (you MUST reference these IDs verbatim if you \
          choose strengthen or supersede):\n\
          existing_candidates: {candidates_block}\n\n\
@@ -792,6 +821,14 @@ mod tests {
         assert!(prompt.contains("absolute dates"));
         assert!(prompt.contains("Will a future agent plausibly act better"));
         assert!(prompt.contains("remedy, not the failure narrative"));
+        assert!(
+            prompt.contains("never a dead end"),
+            "unresolved failure sequences must not become recommended workflows"
+        );
+        assert!(
+            prompt.contains("I cannot do X"),
+            "incapability claims must redirect to the troubleshooting remedy"
+        );
         // The empty sentinel must stay intact for the tolerant parser.
         assert!(prompt.contains("Return `{\"actions\": []}` if nothing actionable."));
     }
@@ -1099,11 +1136,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
         let lookback = crate::config::types::memory::default_feedback_lookback();
+        let min = crate::config::types::memory::default_feedback_distill_min_candidates();
         let backend: crate::memory::store::MemoryBackend = store.clone();
 
         // Quiet to start, for both agents.
         assert!(
-            !has_undistilled_corrections(&backend, "researcher", lookback).await,
+            !has_undistilled_corrections(&backend, "researcher", lookback, min).await,
             "an agent with no corrections must not wake its corpus"
         );
 
@@ -1112,13 +1150,13 @@ mod tests {
         store.insert_raw_memory(&raw).await.unwrap();
 
         assert!(
-            has_undistilled_corrections(&backend, "researcher", lookback).await,
+            has_undistilled_corrections(&backend, "researcher", lookback, min).await,
             "a fresh correction must make its own corpus eligible"
         );
         // Partitioning is the whole point: another agent's corpus must not be
         // woken by it, or the fan-out budget drains on empty cycles.
         assert!(
-            !has_undistilled_corrections(&backend, "main", lookback).await,
+            !has_undistilled_corrections(&backend, "main", lookback, min).await,
             "a correction must only wake the agent it was filed against"
         );
 
@@ -1128,8 +1166,72 @@ mod tests {
             .set_dream_watermark(WATERMARK_CONSUMER, "researcher", raw.created_at)
             .unwrap();
         assert!(
-            !has_undistilled_corrections(&backend, "researcher", lookback).await,
+            !has_undistilled_corrections(&backend, "researcher", lookback, min).await,
             "a distilled correction must not re-wake the corpus every night"
+        );
+    }
+
+    /// The gate applies the SAME admission quorum as the stage.
+    ///
+    /// Without it, 1-2 low-severity corrections below `min_candidates` admitted
+    /// the corpus every night: the stage skipped without advancing its
+    /// watermark, so the same sub-quorum rows re-admitted the corpus the next
+    /// night too — a full maintenance sub-cycle (LLM stages included) and one
+    /// slot of `max_corpus_cycles_per_night` burned nightly on work the gated
+    /// stage was never going to touch.
+    #[tokio::test]
+    async fn a_sub_quorum_batch_of_low_corrections_does_not_wake_the_corpus() {
+        use crate::memory::store::SqliteMemoryBackend;
+        use crate::sync_primitives::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let lookback = 50;
+        let min_candidates = 3;
+        let backend: crate::memory::store::MemoryBackend = store.clone();
+
+        // One low-severity correction: the stage would skip it, so the gate
+        // must not admit for it.
+        let raw = fake_correction("q1", "prefer tabs here", "low").with_agent("default");
+        store.insert_raw_memory(&raw).await.unwrap();
+        assert!(
+            !has_undistilled_corrections(&backend, "default", lookback, min_candidates).await,
+            "a single low correction is below the stage's quorum — admitting the \
+             corpus for it burns a fan-out slot on a cycle the stage skips"
+        );
+
+        // Two more rows reach the count quorum; now the stage would run.
+        for id in ["q2", "q3"] {
+            let raw = fake_correction(id, "another nit", "low").with_agent("default");
+            store.insert_raw_memory(&raw).await.unwrap();
+        }
+        assert!(
+            has_undistilled_corrections(&backend, "default", lookback, min_candidates).await,
+            "min_candidates rows meet the same quorum the stage applies"
+        );
+    }
+
+    /// A lone urgent correction passes the gate exactly as it bypasses the
+    /// stage's count quorum — the two must flip together or the standing
+    /// directive waits for unrelated company (stage side) or never gets a
+    /// cycle at all (gate side).
+    #[tokio::test]
+    async fn a_lone_critical_correction_wakes_the_corpus_through_the_gate() {
+        use crate::memory::store::SqliteMemoryBackend;
+        use crate::sync_primitives::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let backend: crate::memory::store::MemoryBackend = store.clone();
+
+        let raw = fake_correction("u1", "never commit without asking me first", "critical")
+            .with_agent("default");
+        store.insert_raw_memory(&raw).await.unwrap();
+
+        assert!(
+            has_undistilled_corrections(&backend, "default", 50, 3).await,
+            "one critical correction is a standing directive: it bypasses the \
+             count quorum in the stage, so it must bypass it in the gate too"
         );
     }
 }

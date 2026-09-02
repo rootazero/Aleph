@@ -27,9 +27,9 @@ fn test_new_config_matches_default() {
 
 #[test]
 fn test_shipped_defaults_pass_validation() {
-    // The strongest characterization available, and the only one immune to the
-    // `defaults_override` hook sitting behind `default_similarity_threshold`:
-    // whatever the shipped defaults are, they must satisfy every rule
+    // The strongest characterization available, and the only one immune to
+    // the `~/.aleph/defaults.toml` override hooks behind some `default_*()`
+    // fns: whatever the shipped defaults are, they must satisfy every rule
     // `validate` enforces. A default that fails its own validator would brick
     // first launch.
     assert!(Config::default().validate().is_ok());

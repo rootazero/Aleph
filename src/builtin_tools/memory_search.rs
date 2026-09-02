@@ -109,6 +109,48 @@ pub struct TranscriptResult {
     pub similarity_score: f32,
 }
 
+/// Hard cap on transcript results per search. Transcript chunks run long
+/// (up to the indexer's `max_tokens_per_chunk` each), so this is deliberately
+/// tighter than the fact-result ceiling.
+const MAX_TRANSCRIPT_RESULTS: usize = 5;
+
+/// Per-field char cap for a returned transcript excerpt.
+const MAX_TRANSCRIPT_FIELD_CHARS: usize = 1000;
+
+/// Cap `text` at `max_chars` chars, announcing the cut in-band so the model
+/// reads a marked excerpt instead of mistaking the cut for the full text.
+fn truncate_announced(text: &str, max_chars: usize) -> String {
+    let total = text.chars().count();
+    if total <= max_chars {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(max_chars).collect();
+    format!("{kept} … [truncated: {total} chars total]")
+}
+
+/// Map a stored transcript row back into the tool's result shape.
+///
+/// The indexer writes `[user]: {u}\n\n[assistant]: {a}` for two-sided turns
+/// and bare user text otherwise; a chunked row can cut mid-format, in which
+/// case the whole chunk lands in `user_input` unsplit rather than guessed at.
+fn raw_transcript_to_result(raw: crate::memory::store::raw_memory::RawMemory) -> TranscriptResult {
+    let parsed = raw
+        .content
+        .strip_prefix("[user]: ")
+        .and_then(|rest| rest.split_once("\n\n[assistant]: "))
+        .map(|(u, a)| (u.to_string(), a.to_string()));
+    let (user_input, ai_output) = parsed.unwrap_or_else(|| (raw.content, String::new()));
+    TranscriptResult {
+        user_input: truncate_announced(&user_input, MAX_TRANSCRIPT_FIELD_CHARS),
+        ai_output: truncate_announced(&ai_output, MAX_TRANSCRIPT_FIELD_CHARS),
+        // The row's storage path — carries session + seq provenance.
+        context: raw.path.unwrap_or_default(),
+        // A substring match carries no graded score; same convention as the
+        // session-facts leg's exact-match results.
+        similarity_score: 1.0,
+    }
+}
+
 /// Output from `memory_search` tool
 #[derive(Debug, Clone, Serialize)]
 pub struct MemorySearchOutput {
@@ -237,29 +279,13 @@ impl MemorySearchTool {
         'current_session' (only this session's compressed summaries), \
         or 'both' (long-term memory plus current session summaries).";
 
-    /// Default similarity threshold when not specified by config.
-    ///
-    /// L2 distance in high-dimensional space (1536-dim) produces lower similarity
-    /// scores than one might expect. 0.3 is a pragmatic floor that balances
-    /// recall (not missing relevant memories) with precision (not returning noise).
-    // `DEFAULT_SIMILARITY_THRESHOLD` was removed: the value used to feed a
-    // `let _threshold = ...` binding that never reached `NoteFactRetrieval`.
-    // When the threshold gate lands upstream, re-introduce the constant
-    // alongside the `with_similarity_threshold` setter.
+    // A `similarity_threshold` parameter (and the `[memory]` config key that
+    // fed it) used to arrive here as a documented no-op. It was cut, not
+    // wired: `NoteFactRetrieval` ranks on RRF-fused rank scores (or
+    // rank-derived FTS scores), which carry no honest "similarity in [0,1]"
+    // dimension for such a gate to act on.
 
-    /// Create a new `MemorySearchTool` instance.
-    ///
-    /// `similarity_threshold`: currently a no-op (see `new_with_config`).
-    /// Preserved in the constructor signature for API stability with the
-    /// `[[memory]]` config block.
-    pub fn new_with_embedder(
-        database: MemoryBackend,
-        embedder: Arc<dyn EmbeddingProvider>,
-    ) -> Self {
-        Self::new_with_config(database, embedder, None, None, None, None)
-    }
-
-    /// Create a new `MemorySearchTool` with explicit similarity threshold from config.
+    /// Create a new `MemorySearchTool` from config.
     ///
     /// `rerank_config`: when `Some` and enabled, attaches a cross-encoder
     /// reranker to the long-term recall path. `None` / disabled leaves recall
@@ -270,15 +296,6 @@ impl MemorySearchTool {
     pub fn new_with_config(
         database: MemoryBackend,
         embedder: Arc<dyn EmbeddingProvider>,
-        // `similarity_threshold` is accepted for API stability with the
-        // `[[memory]]` config block but is currently a no-op: `NoteFactRetrieval`
-        // does not yet accept a per-tool threshold, so the operator's config
-        // value would be silently ignored here. The parameter is preserved
-        // so the config side can wire it up without a signature break when
-        // the threshold gate lands upstream. Until then, it is documented as
-        // a no-op rather than `#[deprecated]`, since callers reading the
-        // current shape expect to set it.
-        _similarity_threshold: Option<f32>,
         rerank_config: Option<&crate::memory::rerank::RerankConfig>,
         scoring_config: Option<&crate::config::types::memory::RetrievalScoringConfig>,
         expansion_config: Option<&crate::config::types::memory::ExpansionConfig>,
@@ -802,7 +819,38 @@ impl MemorySearchTool {
                 })
                 .collect();
 
-            let transcripts: Vec<TranscriptResult> = Vec::new();
+            // Transcripts leg — substring recall over the rows
+            // `TranscriptIndexer` writes under `TRANSCRIPT_PATH_PREFIX`.
+            // Reads the same admits-narrowed partitions as the facts leg so
+            // there is no second visibility decision point, and the store
+            // query is agent-scoped SQL-side — one caller's search cannot
+            // return another agent's conversation rows.
+            let transcript_agents: Vec<String> = match &workspace_filter {
+                AgentEnvFilter::Single(ws) => vec![ws.clone()],
+                AgentEnvFilter::Multiple(wss) => wss.clone(),
+                // Not constructed above (see the facts-leg `All` arm); kept
+                // total over the shared enum. Falls back to the caller's own
+                // read partitions rather than enumerating the disk.
+                AgentEnvFilter::All => default_read_ids(),
+            };
+            let transcript_cap = args.max_results.min(MAX_TRANSCRIPT_RESULTS);
+            let mut transcripts: Vec<TranscriptResult> = Vec::new();
+            for agent in &transcript_agents {
+                if transcripts.len() >= transcript_cap {
+                    break;
+                }
+                let raws = self
+                    .database
+                    .search_raw_by_path_prefix(
+                        crate::memory::transcript_indexer::TRANSCRIPT_PATH_PREFIX,
+                        agent,
+                        &args.query,
+                        transcript_cap - transcripts.len(),
+                    )
+                    .await
+                    .map_err(|e| ToolError::Execution(format!("Transcript recall failed: {e}")))?;
+                transcripts.extend(raws.into_iter().map(raw_transcript_to_result));
+            }
 
             (
                 facts,
@@ -932,6 +980,172 @@ mod tests {
              to every other principal's notes and returned their content to the \
              model as `CrossWorkspaceFact`."
         );
+    }
+
+    /// Build the tool against a temp `ALEPH_HOME` + temp sqlite backend.
+    /// Caller must hold `ALEPH_HOME_TEST_GUARD` for the env override.
+    fn build_tool_on(db: &MemoryBackend) -> MemorySearchTool {
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
+            crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(
+                1024,
+                "mock-model",
+            ),
+        );
+        MemorySearchTool::new_with_config(db.clone(), embedder, None, None, None)
+    }
+
+    fn default_args(query: &str) -> MemorySearchArgs {
+        MemorySearchArgs {
+            query: query.to_string(),
+            max_results: 10,
+            workspace: None,
+            workspaces: None,
+            cross_workspace: None,
+            scope: None,
+        }
+    }
+
+    /// End-to-end over the real seam: rows written by `TranscriptIndexer`
+    /// must come back out of `memory_search`'s transcripts leg, split back
+    /// into user/assistant halves, and rows owned by another agent must not.
+    #[tokio::test]
+    async fn transcripts_leg_recalls_indexed_rows_and_stays_within_the_agent() {
+        let _home_guard = crate::utils::paths::ALEPH_HOME_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let home = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ALEPH_HOME").ok();
+        // SAFETY: test holds the ALEPH_HOME guard; scoped env override, restored below.
+        unsafe {
+            std::env::set_var("ALEPH_HOME", home.path());
+        }
+
+        let db: MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&home.path().join("mem.db")).unwrap());
+
+        let indexer = crate::memory::transcript_indexer::TranscriptIndexer::new(db.clone());
+        indexer
+            .index_turn_text(
+                "sess-t",
+                0,
+                "Tell me about the quantum sprocket",
+                "It spins clockwise.",
+                "owner",
+                "main",
+            )
+            .await;
+        // Another agent's transcript with the same marker must not leak in.
+        {
+            use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
+            let foreign = RawMemory::new(
+                "[user]: quantum sprocket secrets".to_string(),
+                RawMemorySource::Transcript,
+            )
+            .with_agent("someone_else")
+            .with_session("sess-x")
+            .with_path("aleph://transcript/sess-x/0");
+            db.insert_raw_memory(&foreign).await.unwrap();
+        }
+
+        let tool = build_tool_on(&db);
+        let out = tool
+            .call_impl(default_args("quantum sprocket"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            out.transcripts.len(),
+            1,
+            "expected exactly the caller's own transcript row, got {:?}",
+            out.transcripts
+        );
+        let t = &out.transcripts[0];
+        assert_eq!(t.user_input, "Tell me about the quantum sprocket");
+        assert_eq!(t.ai_output, "It spins clockwise.");
+        assert!(
+            t.context.starts_with("aleph://transcript/sess-t/"),
+            "context should carry the row's storage path, got {}",
+            t.context
+        );
+
+        match prev {
+            // SAFETY: restoring previously-read env var while the ALEPH_HOME guard is held.
+            Some(v) => unsafe { std::env::set_var("ALEPH_HOME", v) },
+            // SAFETY: removing the env var we set above while the ALEPH_HOME guard is held.
+            None => unsafe { std::env::remove_var("ALEPH_HOME") },
+        }
+    }
+
+    /// Transcript rows can be long and plentiful; the leg must cap the count
+    /// and truncate audibly rather than dumping whole conversations.
+    #[tokio::test]
+    async fn transcripts_leg_caps_count_and_announces_truncation() {
+        let _home_guard = crate::utils::paths::ALEPH_HOME_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let home = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ALEPH_HOME").ok();
+        // SAFETY: test holds the ALEPH_HOME guard; scoped env override, restored below.
+        unsafe {
+            std::env::set_var("ALEPH_HOME", home.path());
+        }
+
+        let db: MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&home.path().join("mem.db")).unwrap());
+
+        let indexer = crate::memory::transcript_indexer::TranscriptIndexer::new(db.clone());
+        let long_tail = "x".repeat(1200);
+        for seq in 0..(MAX_TRANSCRIPT_RESULTS as u32 + 3) {
+            indexer
+                .index_turn_text(
+                    "sess-cap",
+                    seq,
+                    &format!("quantum sprocket {long_tail}"),
+                    "",
+                    "owner",
+                    "main",
+                )
+                .await;
+        }
+
+        let tool = build_tool_on(&db);
+        let out = tool
+            .call_impl(default_args("quantum sprocket"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            out.transcripts.len(),
+            MAX_TRANSCRIPT_RESULTS,
+            "count must be capped"
+        );
+        for t in &out.transcripts {
+            assert!(
+                t.user_input.contains("[truncated:"),
+                "an over-long excerpt must announce its cut ({} chars returned)",
+                t.user_input.chars().count()
+            );
+            assert!(
+                t.user_input.chars().count() <= MAX_TRANSCRIPT_FIELD_CHARS + 60,
+                "excerpt must actually be capped"
+            );
+        }
+
+        match prev {
+            // SAFETY: restoring previously-read env var while the ALEPH_HOME guard is held.
+            Some(v) => unsafe { std::env::set_var("ALEPH_HOME", v) },
+            // SAFETY: removing the env var we set above while the ALEPH_HOME guard is held.
+            None => unsafe { std::env::remove_var("ALEPH_HOME") },
+        }
+    }
+
+    #[test]
+    fn truncate_announced_keeps_short_text_verbatim_and_marks_long_text() {
+        assert_eq!(truncate_announced("short", 10), "short");
+        let long = "汉".repeat(20);
+        let cut = truncate_announced(&long, 10);
+        assert!(cut.starts_with(&"汉".repeat(10)));
+        assert!(cut.contains("[truncated: 20 chars total]"));
     }
 
     #[tokio::test]

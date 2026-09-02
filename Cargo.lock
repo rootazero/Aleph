@@ -208,7 +208,6 @@ dependencies = [
  "chrono",
  "futures",
  "image",
- "serde_json",
  "tokio",
  "tracing",
  "zbus",

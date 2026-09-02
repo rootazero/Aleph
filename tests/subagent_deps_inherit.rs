@@ -129,6 +129,7 @@ async fn subagent_base_carries_4_p1_fields() {
         stall_config: Some(stall.clone()),
         consecutive_failure_cap: Some(cap),
         turn_timeout: Some(turn),
+        verifier_chain: None,
         trace_sink: Some(trace_sink.clone()),
         // P3 Stage I:
         plugin_registry: None,
