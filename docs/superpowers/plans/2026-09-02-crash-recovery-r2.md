@@ -254,6 +254,31 @@ session::reduction gateway::resume_coordinator gateway::handlers::resume` = 70 p
 > 把「这个键在不在」钉成了权限信号，而空数组把「被扣下」和「没人在跑」压成同一串字节（判据 #17）。
 > 改成 `Option<Vec<_>>` 后两条转绿。**基线名单比对是这么发现的，不是读代码读出来的。**
 
+### T3 续 — `d141245b1` / `5bc0ceebd`（Step 3 的「全部改引用」还欠一半）
+
+Step 3 说「`grep -rn SessionInfo src` **全部**改引用」。`fcf6aad4e` 改完了**代码**引用，
+留下的是**注释**引用——判据 #1 里最贵的那一份。两笔收尾：
+
+| commit | 做了什么 | 证据 |
+|---|---|---|
+| `d141245b1` | 七处 doc 注释里的 `SessionInfo.project_root` / `.channel` / 「restored through `SessionInfo`」 / 「`SessionInfo` builder」 / 「`SessionInfo` guarantees」改成 `SessionListRow`（`handlers/agent.rs`、`model_override.rs`、`session_manager/ops/modify.rs` ×2、`session_store/mod.rs`、`session_store/types.rs`、`shared/client/session_resolve.rs`） | `cargo check -p alephcore` = `Finished in 3m 07s`，零错误零警告 |
+| `5bc0ceebd` | 删 `agent_instance.rs` 的**第二个** `SessionInfo`（5 字段）+ `from_metadata` + `get_or_create_session` + `list_sessions` | `cargo test -p alephcore --lib gateway::agent_instance` = `EXIT=0`，`11 passed; 0 failed; 0 ignored; 17799 filtered out`（11 + 17799 = 17810 = 基线的 17775 + 18 + 17，**总数未变** ⇒ 没删掉测试，只换了断言的读法）；`cargo check -p alephcore --bins` = `Finished`，零错误 |
+
+**为什么第二个 `SessionInfo` 值得删（判据 #6「先数一遍」）**：`AgentInstance::list_sessions`
+的调用者是 **0**（另外三处 `list_sessions` grep 命中分别属于 `acp::manager`、
+`content_index`、`SessionManager`，是别的类型）；`get_or_create_session` 的调用者是 **1**，
+`agent_instance.rs` 自己的 `test_session_management`，断言 `message_count == 0`。两者都没
+被 `gateway/mod.rs` re-export（那里只出 `AgentInstance` / `AgentInstanceConfig` /
+`AgentRegistry` / `AgentState`）。**代价不在字节数**：Step 3 点名要跑的那次
+`grep -rn SessionInfo src`，会回答出一个**看起来还活着**、却没有 `project_root` 字段的结构体
+——于是「会话行是不是丢了 `project_root`」有两个说得通的答案，而错的那个能编译。
+测试改成经**还存在**的 API 断同一件事：`ensure_session` 之后 `get_history` 为空。
+`pty::SessionInfo` 是另一个子系统的另一个类型，未动。
+
+> **仍然欠着（T7 的文件）**：`interfaces/webchat/src/api/sessions.rs` 里还有两处
+> 「Mirrors the server's `SessionInfo`」——那个手写镜像整体由 T7 换成 `SessionListRow`，
+> 在这里改注释等于给一个即将被删的结构体写新文档。
+
 ### 继承自 main 的破损（不是本轮引入，挡住最小验证集的一条）
 
 `cargo check -p alephcore --features test-helpers --all-targets` 在
