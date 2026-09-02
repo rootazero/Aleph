@@ -1165,23 +1165,6 @@ mod tests {
         }
     }
 
-    async fn poll_history(
-        store: &Arc<dyn SessionStore>,
-        id: &SessionId,
-        want: usize,
-        timeout: Duration,
-    ) -> Vec<MessageRecord> {
-        let iters = (timeout.as_millis() / 20).max(1) as usize;
-        for _ in 0..iters {
-            let rows = store.get_history(id, None).await.unwrap_or_default();
-            if rows.len() >= want {
-                return rows;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        store.get_history(id, None).await.unwrap_or_default()
-    }
-
     fn sqlite_store(dir: &std::path::Path, name: &str) -> Arc<dyn SessionStore> {
         let config = SessionManagerConfig {
             db_path: dir.join(name),
