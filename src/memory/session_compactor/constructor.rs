@@ -35,11 +35,14 @@ impl SessionCompactor {
         self
     }
 
-    /// Attach an embedding provider for transcript indexing.
-    pub fn with_embedder(mut self, embedder: Arc<dyn crate::memory::EmbeddingProvider>) -> Self {
+    /// Enable transcript indexing: post-turn raw text is chunked and stored
+    /// as `RawMemorySource::Transcript` rows for substring recall and later
+    /// compression. Needs no embedding provider — the indexer produces no
+    /// vectors.
+    #[must_use]
+    pub fn with_transcript_indexing(mut self) -> Self {
         self.indexer = Some(crate::memory::transcript_indexer::TranscriptIndexer::new(
             self.database.clone(),
-            embedder,
         ));
         self
     }

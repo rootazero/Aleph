@@ -3,16 +3,19 @@ use crate::memory::extensions::{insert_with_capture_filter, MemoryExtensionRegis
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::memory::store::MemoryBackend;
-use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
 
 use super::config::TranscriptIndexerConfig;
 
-/// Near-realtime transcript indexer
+/// Path prefix of every row this indexer writes. Readers (the
+/// `memory_search` transcripts leg) must query by this same constant.
+pub const TRANSCRIPT_PATH_PREFIX: &str = "aleph://transcript/";
+
+/// Stores per-turn transcript chunks as plain `raw_memories` rows — no
+/// vectors are produced here; recall over these rows is substring-based
+/// (`memory_search` transcripts leg) and later compression consumes them.
 pub struct TranscriptIndexer {
     database: MemoryBackend,
-    #[allow(dead_code)] // retained: ctor param part of public API, consumed cross-file
-    embedder: Arc<dyn EmbeddingProvider>,
     config: TranscriptIndexerConfig,
     /// Optional capture-filter registry (Spec 4 Task 6).
     /// When set, transcript raw-memory rows go through `insert_with_capture_filter`.
@@ -22,24 +25,18 @@ pub struct TranscriptIndexer {
 
 impl TranscriptIndexer {
     /// Create new indexer with default config
-    pub fn new(database: MemoryBackend, embedder: Arc<dyn EmbeddingProvider>) -> Self {
+    pub fn new(database: MemoryBackend) -> Self {
         Self {
             database,
-            embedder,
             config: TranscriptIndexerConfig::default(),
             capture_registry: None,
         }
     }
 
     /// Create with custom config
-    pub fn with_config(
-        database: MemoryBackend,
-        embedder: Arc<dyn EmbeddingProvider>,
-        config: TranscriptIndexerConfig,
-    ) -> Self {
+    pub fn with_config(database: MemoryBackend, config: TranscriptIndexerConfig) -> Self {
         Self {
             database,
-            embedder,
             config,
             capture_registry: None,
         }
@@ -55,11 +52,12 @@ impl TranscriptIndexer {
         self
     }
 
-    /// Index a single conversation turn's text into memory facts
+    /// Index a single conversation turn's text into raw memory rows
     ///
-    /// Combines user input and AI output, chunks if necessary, embeds each
-    /// chunk, and stores as `NoteType::Transcript` facts. Returns the IDs of
-    /// all successfully created facts. Never fails — partial failures are
+    /// Combines user input and AI output, chunks if necessary, and stores
+    /// each chunk as a `RawMemorySource::Transcript` row under
+    /// `aleph://transcript/{session}/{seq}`. Returns the IDs of all
+    /// successfully created rows. Never fails — partial failures are
     /// logged and skipped.
     pub async fn index_turn_text(
         &self,
@@ -81,12 +79,10 @@ impl TranscriptIndexer {
             return Vec::new();
         }
 
-        // Chunk if exceeding ~800 estimated tokens
-        let chunks = if self.estimate_tokens(&combined) > 800 {
-            self.chunk_text(&combined)
-        } else {
-            vec![combined]
-        };
+        // `chunk_text` already short-circuits below `config.max_tokens_per_chunk`
+        // (and when chunking is disabled) — no second threshold here, or the
+        // two numbers drift and the gap between them bypasses chunking.
+        let chunks = self.chunk_text(&combined);
 
         let multi_chunk = chunks.len() > 1;
         let mut created_ids = Vec::with_capacity(chunks.len());
@@ -94,9 +90,9 @@ impl TranscriptIndexer {
         for (i, chunk) in chunks.iter().enumerate() {
             // Build path
             let path = if multi_chunk {
-                format!("aleph://transcript/{session_key}/{seq}_chunk{i}")
+                format!("{TRANSCRIPT_PATH_PREFIX}{session_key}/{seq}_chunk{i}")
             } else {
-                format!("aleph://transcript/{session_key}/{seq}")
+                format!("{TRANSCRIPT_PATH_PREFIX}{session_key}/{seq}")
             };
 
             // Insert to raw_memories
@@ -194,10 +190,14 @@ impl TranscriptIndexer {
         chunks
     }
 
-    /// Estimate token count for text
+    /// Estimate token count for text.
+    ///
+    /// Counts chars, not bytes — the same unit as
+    /// `assembler::hydration::estimate_tokens`. A byte count triples the
+    /// estimate for CJK text and over-chunks it.
     #[must_use]
-    pub const fn estimate_tokens(&self, text: &str) -> usize {
-        text.len().div_ceil(4) // 4 chars per token, round up
+    pub fn estimate_tokens(&self, text: &str) -> usize {
+        text.chars().count().div_ceil(4) // ~4 chars per token, round up
     }
 
     /// Get overlap text from end of chunk (UTF-8 safe)
