@@ -136,6 +136,14 @@ impl Grid {
         (self.rows, self.cols)
     }
 
+    /// Current visible row count. Tracks `resize` — never a cached magic
+    /// number — so callers that iterate `0..rows()` stay in bounds across a
+    /// live terminal resize.
+    #[must_use]
+    pub const fn rows(&self) -> u16 {
+        self.rows
+    }
+
     #[must_use]
     pub const fn cursor(&self) -> (u16, u16) {
         (self.cursor_row, self.cursor_col)
