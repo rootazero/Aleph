@@ -70,6 +70,26 @@ for i in $(seq 1 28); do [ -f "$S/<name>.txt.done" ] && break; sleep 20; done
 | **T7** | `src/bin/aleph-server/commands/resume.rs` 的穷举 match 里有五个臂（`NotFound` / `InvalidSessionKey` / `AgentForbidden` / `Unavailable` / `Failed`）**经 CLI 唯一走的那条 HTTP 传输到不了**——`admin_api/resume.rs` 把这些 outcome 转成了 4xx/5xx，`forward_to_server` 直接 `Err`，收据根本不会被解析成这些状态。臂要留（穷举是本轮要的棘轮，JSON-RPC 面产得出来），但欠一句 doc 说明「这几句今天没有渲染者」。 | T3 review |
 | **T8** | 两处**无上限**的读要在真机阶段量出真实数字，再决定下一轮加不加 cap：`chat.history` 每次 attach/reconnect 都 `load_all_events`；`sessions.list` 每次都 `load_run_markers()` 全表（**不受列表自己的 filter/limit 收窄**，会取回随后被过滤掉的会话的 marker）。两者都是 spec §4.6 授权的、A10 明确推迟 cap，所以这是**记录在案的成本**不是缺陷——但「记录在案」的意思是必须有数字。 | T3 review |
 
+### 0.2 你的第一条命令是 `git status --porcelain`（**每个 agent，无例外**）
+
+本轮已经发生**三次**：一个 agent 死在半路，留下未提交的改动，而**接手的那个 agent 拿到的是全新
+prompt，不知道那些改动存在**。三次的死因各不相同，形状完全一样：
+
+| 何时 | 死因 | 留下了什么 |
+|---|---|---|
+| T2 第一次 | harness 判为 `[Request interrupted by user]` | `boundary_repair.rs` + `marker_balance.rs` 共 605 行 |
+| T2 第二次 | 账号 session 上限（`resets 7pm`） | 11 个文件 508 行，含已写好的 commit message |
+| T4 续做 1 | `API Error: UNKNOWN_CERTIFICATE_VERIFICATION_ERROR`（本机 schannel TLS 抖动，见 [[windows-git-schannel-tls-flake]]） | `runner_impl.rs` + `reduction.rs` + `tests/resume_coordinator_integration.rs`，+160/−11，**恰好是计划要的那批测试** |
+
+所以：
+
+1. **第一条命令是 `git status --porcelain`**，不是读计划。脏 ⇒ **有人死在这里**。
+2. 接着 `git diff --stat` 与 `git diff`，**读完再判断**。这批改动往往正是计划要而提交里没有的部分。
+3. **不许 `git checkout --` 掉它**，除非你已经证明它编译不过且修不动；要丢也先 `cp` 到
+   `<scratchpad>/` 再丢。默认动作是**验证后提交**（`<scope>: <task> part N — <what>`）。
+4. 报告里 `tree_clean` 只有在你自己跑过 `git status --porcelain` 且为空时才填 `true`。
+   **上一个 agent 说过 clean 不算**——T4 的 impl 报的就是 `tree_clean: true`，而 review 到达时树是脏的。
+
 ---
 
 ## File Structure（本轮触碰面）
