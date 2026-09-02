@@ -639,3 +639,9 @@ miss」和「一个更低的、本进程没记过的洞」——单看任一半�
 `--lib -- gateway::session_projector gateway::projection_reconciler` 与
 `cargo check -p alephcore`（`Finished dev profile in 3m 15s`）——全量 `--lib`、`--bins`、
 `--features test-helpers --all-targets` 仍是 T8 Step 4 的活，本条不为它们背书。
+
+**T5 全部落地后的尖端全量（orchestrator 测于 `ce68cbf38`）**：`cargo test -p alephcore --lib` =
+`17816 passed; 18 failed; 17 ignored`，`comm -3` 与基线**双向为空**（各 18 行）⇒ 零新增。
+这一条补的正是续做 3 自己点名欠着的那次比对（它之后又落了三个 commit，其中两个改代码）。
+作用域仍**不含** clippy、`--features test-helpers --all-targets` 的**运行**、`--bins`、
+以及 panel/tui/cli/protocol 四个 crate。
