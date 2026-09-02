@@ -185,24 +185,49 @@ pub struct PersistedRun {
     /// moves; resolve it with [`Self::partial_result_path`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partial_result_file: Option<String>,
-    /// Whether the parent was ever told this run finished.
+    /// How many times a boot has *tried* to hand this completion to the parent.
     ///
-    /// `phase` answers "did it finish"; this answers "does anyone know". They
-    /// are different questions and the gap between them is a real window:
+    /// `phase` answers "did it finish"; [`Self::announced_boot`] answers "does
+    /// anyone know"; this answers "how often have we asked". They are three
+    /// different questions and the gap between the first two is a real window:
     /// `spawn` writes the tombstone, *then* announces, and `announce_one`
     /// retries at 0/30/120s when the parent session is busy. A daemon that dies
-    /// inside those two and a half minutes leaves a `Settled` record that the
-    /// boot reconcile skips (it only looks at `Running`), so the completion
-    /// promised to the model at spawn time — "its completion will be announced
-    /// to you" — is silently withdrawn while the result sits on disk.
+    /// inside those two and a half minutes leaves a `Settled` record whose
+    /// completion notice died with it.
     ///
-    /// `#[serde(default)]` makes every pre-existing record read as *not*
-    /// announced, which is the fail-safe direction: at worst the parent is told
-    /// once more about something it already saw, and the announce path is
-    /// already deduplicated by `is_consumed`.
+    /// It is a **count of attempts, not a receipt**, because the boot reconcile
+    /// used to stamp `announced = true` before the broadcast it was about to
+    /// make — so a notice that never landed was recorded as delivered, and the
+    /// promise made at spawn time was withdrawn in silence. Counting instead
+    /// lets the next boot try again while still bounding the retry: a record
+    /// whose parent session no longer exists would otherwise be re-announced at
+    /// every boot forever.
+    ///
+    /// `#[serde(default)]` reads every pre-existing record as zero attempts,
+    /// which is the fail-safe direction — at worst the parent hears once more
+    /// about something it already saw, and the announce path is deduplicated by
+    /// `is_consumed`.
     #[serde(default)]
-    pub announced: bool,
+    pub announce_attempts: u8,
+    /// The boot that actually delivered this completion, as that boot's
+    /// wall-clock ms. `None` means nobody has been told yet.
+    ///
+    /// Written only by [`record_announced`], and only from the three
+    /// chokepoints that *own* the fact — never in advance of the delivery it
+    /// describes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub announced_boot: Option<u64>,
 }
+
+/// How many boots may try to hand one completion to its parent before the
+/// record stops asking.
+///
+/// The bound exists because the attempt counter replaced a receipt: without it,
+/// a `Settled` record whose parent session is gone (deleted, renamed, an agent
+/// that no longer exists) would drive a fresh proactive turn at every boot for
+/// the whole retention window. Three is the same shape as `announce_one`'s
+/// 0/30/120s ladder — try, try again, then stop claiming.
+pub const MAX_ANNOUNCE_ATTEMPTS: u8 = 3;
 
 impl PersistedRun {
     /// Absolute path of this run's activity trail, given the sidecar root.
@@ -240,7 +265,7 @@ pub struct RecoveredRun {
 /// ran" from "ran and the write was lost".
 ///
 /// **Two kinds of run are recovered, not one.** `Running` is the orphan case
-/// above. `Settled && !announced` is the run that *finished* and whose
+/// above. `Settled` with no `announced_boot` is the run that *finished* and whose
 /// completion notice died with the process somewhere in `announce_one`'s
 /// 0/30/120s retry ladder: nothing is wrong with its result, but the parent was
 /// promised an announcement at spawn time and never got one. Reconciling only
@@ -288,22 +313,35 @@ pub fn init_and_reconcile(dir: PathBuf) -> Vec<RecoveredRun> {
             index.insert(tombstone.request_id.clone(), tombstone);
         } else {
             // Finished, but the parent was never told: hand the result over now
-            // rather than leaving it addressable-only-if-asked. Mark it
-            // announced as part of the same pass so a second restart before the
-            // parent turn lands does not repeat it forever.
-            if record.phase == RunPhase::Settled && !record.announced {
+            // rather than leaving it addressable-only-if-asked.
+            //
+            // This pass records an ATTEMPT, not a delivery. Stamping "announced"
+            // here — which is what it used to do — described a broadcast that
+            // had not happened yet, so a daemon that died between this write and
+            // the parent turn withdrew the promise in silence with the answer on
+            // disk. The stamp now belongs to `record_announced`, called from the
+            // delivery itself; this counter is what stops the retry from being
+            // unbounded.
+            if record.phase == RunPhase::Settled && record.announced_boot.is_none() {
+                if record.announce_attempts >= MAX_ANNOUNCE_ATTEMPTS {
+                    // Out of attempts. The record stays on disk and stays
+                    // addressable by `check_status` — giving up on the proactive
+                    // turn is not giving up on the answer.
+                    index.insert(record.request_id.clone(), record);
+                    continue;
+                }
                 let trail = read_trail(&dir, &record);
-                let delivered = PersistedRun {
-                    announced: true,
+                let attempted = PersistedRun {
+                    announce_attempts: record.announce_attempts.saturating_add(1),
                     ..record.clone()
                 };
-                write_state(&dir, &delivered);
+                write_state(&dir, &attempted);
                 recovered.push(RecoveredRun {
-                    last_activity_ms: trail.last_ms.unwrap_or(delivered.started_ms),
+                    last_activity_ms: trail.last_ms.unwrap_or(attempted.started_ms),
                     partial_result: trail.text,
-                    record: delivered.clone(),
+                    record: attempted.clone(),
                 });
-                index.insert(delivered.request_id.clone(), delivered);
+                index.insert(attempted.request_id.clone(), attempted);
                 continue;
             }
             index.insert(record.request_id.clone(), record);
@@ -381,6 +419,10 @@ pub async fn init_and_announce_orphans(dir: PathBuf) -> usize {
             // tracker has never heard of a pre-restart id. Supplying one would
             // pin the whole grouped notice to a single arbitrary child.
             request_id: None,
+            // …and this is what it is instead. Every child in the batch, so the
+            // delivery callback can stamp all of them and the reader can render
+            // per-child pointers rather than one arbitrary id's verdict.
+            request_ids: runs.iter().map(|r| r.record.request_id.clone()).collect(),
         };
         crate::event::GlobalBus::global()
             .broadcast(
@@ -495,7 +537,8 @@ pub fn record_start(request_id: &str, root_session: &str, task: &str, agent: &st
         ended_ms: None,
         outcome: None,
         partial_result_file: Some(RESULT_FILE.to_string()),
-        announced: false,
+        announce_attempts: 0,
+        announced_boot: None,
     };
     write_state(&dir, &record);
     index_lock().insert(record.request_id.clone(), record);
@@ -545,7 +588,11 @@ pub fn record_settled(request_id: &str, outcome: &str, final_text: &str) {
 /// cancelled child — a completion nobody will ever be told about is
 /// indistinguishable on disk from one whose notice died in flight, and the boot
 /// reconcile would deliver it. Without this stamp, `phase == Settled` cannot
-/// tell those apart — see [`PersistedRun::announced`].
+/// tell those apart — see [`PersistedRun::announced_boot`].
+///
+/// Called **after** the delivery it records, never before. The boot reconcile
+/// used to stamp the flag in advance of the broadcast it was about to make,
+/// which is how a notice that never landed came to read as delivered.
 pub fn record_announced(request_id: &str) {
     let Some(dir) = store_dir() else { return };
     let record = {
@@ -553,13 +600,26 @@ pub fn record_announced(request_id: &str) {
         let Some(record) = index.get_mut(request_id) else {
             return;
         };
-        if record.announced {
+        if record.announced_boot.is_some() {
             return; // already durable; do not pay a write per poll
         }
-        record.announced = true;
+        record.announced_boot = Some(now_ms());
         record.clone()
     };
     write_state(&dir, &record);
+}
+
+/// Stamp every id a grouped announcement actually delivered.
+///
+/// The boot notice is one event per parent session carrying N children, so the
+/// delivery callback has N facts to record and the single `request_id` the
+/// event used to carry could only record one of them — leaving the other N-1
+/// to be re-announced at the next boot. `SubAgentCompletionEvent::request_ids`
+/// is the carrier; this is the writer.
+pub fn on_delivered(request_ids: &[String]) {
+    for id in request_ids {
+        record_announced(id);
+    }
 }
 
 // ============================================================================
@@ -987,8 +1047,13 @@ mod tests {
     /// parent is busy. A daemon that dies in between leaves a finished run
     /// nobody will ever mention again. Reconciling only `Running` (the shape
     /// before this) makes the first assertion fail.
+    ///
+    /// A boot records an ATTEMPT, not a delivery: the reconcile used to stamp
+    /// "announced" before the broadcast it was about to make, so a daemon that
+    /// died between the two withdrew the promise in silence with the answer
+    /// sitting on disk. Three boots may try; the fourth stops asking.
     #[test]
-    fn a_finished_run_whose_announce_never_landed_is_recovered_once_and_only_once() {
+    fn a_finished_run_whose_announce_never_landed_is_retried_then_bounded() {
         let _g = gate();
         let tmp = tempfile::tempdir().unwrap();
         enable_for_test(tmp.path().to_path_buf());
@@ -996,18 +1061,61 @@ mod tests {
         record_settled("req-silent", "completed", "done, nobody heard");
         disable_for_test();
 
-        let first = init_and_reconcile(tmp.path().to_path_buf());
+        for attempt in 1..=usize::from(MAX_ANNOUNCE_ATTEMPTS) {
+            let boot = init_and_reconcile(tmp.path().to_path_buf());
+            let row = boot
+                .iter()
+                .find(|r| r.record.request_id == "req-silent")
+                .unwrap_or_else(|| {
+                    panic!("attempt {attempt}: an undelivered completion must be handed back")
+                });
+            assert_eq!(
+                row.record.announce_attempts,
+                attempt as u8,
+                "the boot counts the attempt it is about to make"
+            );
+            assert_eq!(
+                row.record.announced_boot, None,
+                "nothing has been delivered yet — that stamp belongs to the delivery"
+            );
+            disable_for_test();
+        }
+
+        let exhausted = init_and_reconcile(tmp.path().to_path_buf());
         assert!(
-            first.iter().any(|r| r.record.request_id == "req-silent"),
-            "a finished run whose completion notice died must be handed back"
+            !exhausted
+                .iter()
+                .any(|r| r.record.request_id == "req-silent"),
+            "past the attempt bound the record stops asking for a proactive turn"
+        );
+        assert!(
+            lookup("req-silent", None).is_some(),
+            "…but it stays on disk and stays addressable: giving up on the turn \
+             is not giving up on the answer"
         );
         disable_for_test();
+    }
 
-        // Second boot: it is now stamped announced, so it must stay quiet.
-        let second = init_and_reconcile(tmp.path().to_path_buf());
+    /// A completion the announce path actually delivered is stamped by the
+    /// delivery, and every id in a grouped batch is stamped — not just the
+    /// first. Stamping one of N left the other N-1 to come back at every later
+    /// boot.
+    #[test]
+    fn on_delivered_stamps_every_id_the_notice_spoke_for() {
+        let _g = gate();
+        let tmp = tempfile::tempdir().unwrap();
+        enable_for_test(tmp.path().to_path_buf());
+        for id in ["req-a", "req-b"] {
+            record_start(id, "agent:a:peer:user", "t", "default");
+            record_settled(id, "completed", "done");
+        }
+        on_delivered(&["req-a".to_string(), "req-b".to_string()]);
+        disable_for_test();
+
+        let recovered = init_and_reconcile(tmp.path().to_path_buf());
         assert!(
-            !second.iter().any(|r| r.record.request_id == "req-silent"),
-            "recovering it stamps `announced`; a later boot must not repeat it"
+            recovered.is_empty(),
+            "both ids were stamped by the delivery: {recovered:?}"
         );
         disable_for_test();
     }

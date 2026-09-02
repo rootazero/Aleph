@@ -170,6 +170,20 @@ pub struct SubAgentCompletionEvent {
     /// Request ID for result correlation (optional for backwards compatibility)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    /// Every child this event speaks for.
+    ///
+    /// One-element for the ordinary per-child completion; N-element for the
+    /// grouped boot notice `background_persistence::init_and_announce_orphans`
+    /// sends (one event per parent session, N children). `request_id` cannot
+    /// carry that: it is a single value, so the delivery callback could stamp
+    /// only one of the N as delivered and the other N-1 came back at the next
+    /// boot, while the header passed one child's verdict off as the batch's.
+    ///
+    /// `#[serde(default)]` so an event written before this field existed
+    /// decodes as "no per-child list", which readers fall back from to
+    /// `request_id`.
+    #[serde(default)]
+    pub request_ids: Vec<String>,
 }
 
 // ============================================================================
@@ -223,6 +237,7 @@ mod tests {
             success: true,
             error: None,
             request_id: None,
+            request_ids: Vec::new(),
         });
 
         assert_eq!(event.event_type(), EventType::SubAgentCompleted);

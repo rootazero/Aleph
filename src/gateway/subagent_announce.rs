@@ -80,6 +80,15 @@ async fn announce_one(
         .clone()
         .unwrap_or_else(|| result.child_session_id.clone());
 
+    // Every child this notice speaks for. The grouped boot notice carries N;
+    // the ordinary per-child completion carries none and falls back to the one
+    // id above.
+    let batch: Vec<String> = if result.request_ids.is_empty() {
+        vec![request_id.clone()]
+    } else {
+        result.request_ids.clone()
+    };
+
     let status = if result.success {
         "succeeded"
     } else {
@@ -102,14 +111,41 @@ async fn announce_one(
         (_, Some(err)) => err,
         _ => "(no detail)".to_string(),
     };
+    // A batch of N children has N outcomes, and `success` is a single bool
+    // computed by the producer over the whole batch. Rendering it as one
+    // verdict ("run <one id> succeeded") told the model that every child in the
+    // batch had that outcome, and named one arbitrary child as the one to ask
+    // about — while the detail underneath said something different per child.
+    // The grouped header counts instead of judging; the per-child verdicts stay
+    // where the producer wrote them, in `detail`.
+    let head = if batch.len() > 1 {
+        format!(
+            "[system] {} background subagent runs settled while the daemon was down. \
+             Each one's own outcome is listed below — they are not all the same.",
+            batch.len()
+        )
+    } else {
+        format!("[system] Background subagent run {request_id} {status}.")
+    };
+    let pointer = if batch.len() > 1 {
+        format!(
+            "Use the subagent tool's 'check_status' action with any of these \
+             request_ids if you need the full output: {}.",
+            batch.join(", ")
+        )
+    } else {
+        format!(
+            "Use the subagent tool's 'check_status' action with \
+             request_id='{request_id}' if you need the full output."
+        )
+    };
     let input = format!(
-        "[system] Background subagent run {request_id} {status}.\n\
+        "{head}\n\
          Result summary:\n{detail}\n\n\
          Process this result now: report the outcome to the user in your \
          reply (or to your team leader via team messaging when you work as a \
          team member), and take any follow-up actions the original task \
-         implies. Use the subagent tool's 'check_status' action with \
-         request_id='{request_id}' if you need the full output.",
+         implies. {pointer}",
     );
 
     // Dedup with the on-demand paths: a result the parent already saw via a
@@ -119,7 +155,7 @@ async fn announce_one(
     // busy is very often that it is parked in the `wait` that consumes this
     // exact result.
     let dedup_id = request_id.clone();
-    let stamp_id = request_id.clone();
+    let stamp_ids = batch;
 
     announce_delivery::deliver(
         adapter,
@@ -137,11 +173,12 @@ async fn announce_one(
                     .is_consumed(&dedup_id)
             }),
             on_delivered: Box::new(move || {
-                // Durable "the parent knows". Without this stamp, a restart
-                // inside the retry ladder leaves a `Settled` sidecar record
-                // that the boot reconcile skips, and the announcement promised
-                // at spawn time is withdrawn in silence.
-                crate::agents::background_persistence::record_announced(&stamp_id);
+                // Durable "the parent knows", for EVERY child this notice spoke
+                // for. Without the stamp, a restart inside the retry ladder
+                // leaves a `Settled` sidecar record whose promised announcement
+                // is withdrawn in silence; with only the first id stamped, the
+                // other N-1 of a grouped notice come back at the next boot.
+                crate::agents::background_persistence::on_delivered(&stamp_ids);
             }),
         },
     )
@@ -261,6 +298,7 @@ mod tests {
                 success: true,
                 error: None,
                 request_id: Some(request_id.into()),
+                request_ids: vec![request_id.into()],
             }),
         )
     }

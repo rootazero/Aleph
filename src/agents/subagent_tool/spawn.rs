@@ -344,6 +344,10 @@ impl SubagentTool {
                     success,
                     error,
                     request_id: Some(rid.clone()),
+                    // One child, named explicitly rather than left to the
+                    // reader's fallback: the field means "everyone this notice
+                    // speaks for", and this notice speaks for exactly one.
+                    request_ids: vec![rid.clone()],
                 };
                 (sid, result)
             });
