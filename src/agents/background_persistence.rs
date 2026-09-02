@@ -392,38 +392,7 @@ pub async fn init_and_announce_orphans(dir: PathBuf) -> usize {
     for (session, runs) in by_session {
         let agent_id = crate::routing::session_key::SessionKey::from_key_string(&session)
             .map_or_else(|| "primary".to_string(), |k| k.agent_id().to_string());
-        let summary = summarize_orphans(&runs);
-        // `error` describes the *interruption*, so it must count only the runs
-        // that were actually interrupted. A batch where every child finished
-        // and merely went unannounced is not a failure, and saying it is would
-        // push the model to redo completed work.
-        let interrupted = runs
-            .iter()
-            .filter(|r| r.record.phase != RunPhase::Settled)
-            .count();
-        let event = crate::event::SubAgentCompletionEvent {
-            agent_id: agent_id.clone(),
-            child_session_id: runs
-                .first()
-                .map(|r| r.record.request_id.clone())
-                .unwrap_or_default(),
-            summary,
-            success: interrupted == 0,
-            error: (interrupted > 0).then(|| {
-                format!(
-                    "{interrupted} background sub-agent(s) were interrupted by a daemon restart"
-                )
-            }),
-            // Deliberately `None`: the announce path's dedup asks the live
-            // tracker whether this request_id was already consumed, and the
-            // tracker has never heard of a pre-restart id. Supplying one would
-            // pin the whole grouped notice to a single arbitrary child.
-            request_id: None,
-            // …and this is what it is instead. Every child in the batch, so the
-            // delivery callback can stamp all of them and the reader can render
-            // per-child pointers rather than one arbitrary id's verdict.
-            request_ids: runs.iter().map(|r| r.record.request_id.clone()).collect(),
-        };
+        let event = orphan_notice(&agent_id, &runs);
         crate::event::GlobalBus::global()
             .broadcast(
                 &agent_id,
@@ -433,6 +402,58 @@ pub async fn init_and_announce_orphans(dir: PathBuf) -> usize {
             .await;
     }
     total
+}
+
+/// The one boot notice a session's orphans earn, built in one place so the
+/// batch-wide verdict and the per-child paragraphs are derived from the same
+/// records.
+///
+/// `success` reads the **outcome**, not the phase count. The phase-count
+/// version (`interrupted == 0`) answered `true` for a batch whose every child
+/// had settled — including one that settled `failed`, `timed_out` or
+/// `cancelled` — and the announce head renders that bool as a word for a batch
+/// of one: `"Background subagent run <id> succeeded."` above a body that said
+/// "1 background sub-agent(s) ended without success". Two answers to one
+/// question, and the expensive one was on top.
+///
+/// `error` still counts the *interruption* only: a batch where every child
+/// finished and merely went unannounced is not an interruption, and saying it
+/// was would push the model to redo completed work.
+pub(crate) fn orphan_notice(
+    agent_id: &str,
+    runs: &[RecoveredRun],
+) -> crate::event::SubAgentCompletionEvent {
+    let interrupted = runs
+        .iter()
+        .filter(|r| r.record.phase != RunPhase::Settled)
+        .count();
+    crate::event::SubAgentCompletionEvent {
+        agent_id: agent_id.to_string(),
+        child_session_id: runs
+            .first()
+            .map(|r| r.record.request_id.clone())
+            .unwrap_or_default(),
+        summary: summarize_orphans(runs),
+        // Success is a claim about the WORK, so only a run that both reached a
+        // terminal state and recorded `completed` may make it. An absent or
+        // unrecognised outcome is not success (same stance as
+        // [`settled_label`]'s `settled_unknown`).
+        success: runs.iter().all(|r| {
+            r.record.phase == RunPhase::Settled && r.record.outcome.as_deref() == Some("completed")
+        }),
+        error: (interrupted > 0).then(|| {
+            format!("{interrupted} background sub-agent(s) were interrupted by a daemon restart")
+        }),
+        // Deliberately `None`: the announce path's dedup asks the live
+        // tracker whether this request_id was already consumed, and the
+        // tracker has never heard of a pre-restart id. Supplying one would
+        // pin the whole grouped notice to a single arbitrary child.
+        request_id: None,
+        // …and this is what it is instead. Every child in the batch, so the
+        // delivery callback can stamp all of them and the reader can render
+        // per-child pointers rather than one arbitrary id's verdict.
+        request_ids: runs.iter().map(|r| r.record.request_id.clone()).collect(),
+    }
 }
 
 /// One human/model-readable block describing every orphan of one session.
@@ -1070,8 +1091,7 @@ mod tests {
                     panic!("attempt {attempt}: an undelivered completion must be handed back")
                 });
             assert_eq!(
-                row.record.announce_attempts,
-                attempt as u8,
+                row.record.announce_attempts, attempt as u8,
                 "the boot counts the attempt it is about to make"
             );
             assert_eq!(

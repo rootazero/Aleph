@@ -462,6 +462,87 @@ mod tests {
         );
     }
 
+    /// The other half of the same defect: a boot notice that speaks for exactly
+    /// ONE child keeps the single-run head, so the head's verdict word must be
+    /// true of that child.
+    ///
+    /// The batch bool used to be `interrupted == 0`, i.e. "no run is still
+    /// `Running`" — which is `true` for a lone record that settled `failed`.
+    /// The head then read "Background subagent run <id> succeeded." directly
+    /// above a body reading "1 background sub-agent(s) ended without success
+    /// before the daemon stopped". The `batch.len() > 1` guard above never
+    /// covered this: at N == 1 there is no count to fall back on.
+    ///
+    /// Built through `orphan_notice`, the producer that owns the verdict, so a
+    /// regression there is what goes red — a hand-written `success: false`
+    /// event would only test this file's `if`.
+    #[tokio::test]
+    async fn a_lone_child_that_settled_unsuccessfully_is_not_called_succeeded() {
+        use crate::agents::background_persistence::{
+            orphan_notice, PersistedRun, RecoveredRun, RunPhase,
+        };
+
+        let request_id = format!("lone-failed-{}", uuid::Uuid::new_v4());
+        seed_completed(&request_id);
+
+        let run = RecoveredRun {
+            record: PersistedRun {
+                request_id: request_id.clone(),
+                root_session: "agent:main:peer:user".into(),
+                task: "check the migration".into(),
+                agent: "researcher".into(),
+                started_ms: 1,
+                phase: RunPhase::Settled,
+                ended_ms: Some(2),
+                outcome: Some("failed".into()),
+                partial_result_file: None,
+                announce_attempts: 1,
+                announced_boot: None,
+            },
+            partial_result: String::new(),
+            last_activity_ms: 2,
+        };
+        let event = orphan_notice("main", std::slice::from_ref(&run));
+        assert!(
+            !event.success,
+            "a record that settled `failed` is not a success"
+        );
+
+        let (registry, _tmp) = registry_with_main_agent().await;
+        let adapter = RecordingAdapter::new(0);
+        let event_bus = Arc::new(GatewayEventBus::new());
+
+        announce_one(
+            adapter.clone(),
+            registry,
+            event_bus,
+            GlobalEvent::for_test(
+                "agent:main:peer:user",
+                Some("main".into()),
+                AlephEvent::SubAgentCompleted(event),
+            ),
+        )
+        .await;
+
+        assert_eq!(adapter.call_count(), 1);
+        let input = adapter
+            .calls
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pop()
+            .expect("one call recorded")
+            .input;
+
+        assert!(
+            !input.contains("succeeded"),
+            "the head must not call an unsuccessful child a success: {input}"
+        );
+        assert!(
+            input.contains(&format!("Background subagent run {request_id} failed")),
+            "the lone-child head still names the child and its real verdict: {input}"
+        );
+    }
+
     /// The retry path, all three rungs of it: the parent is busy for the first
     /// two attempts, so the ladder must sleep 30s, retry, sleep 120s and retry
     /// again before the third attempt succeeds.

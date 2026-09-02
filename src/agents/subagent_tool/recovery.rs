@@ -125,9 +125,13 @@ pub(crate) enum Recovered {
         /// the directory (`list_from_log`) leaves it `None` on purpose.
         progress: Option<RunProgress>,
         /// Calls the child dispatched with no recorded result, filled in the
-        /// same pass as `progress` and empty for the same two reasons (the log
-        /// was clean, or this face did not ask). These are the calls whose
-        /// outcome is *unknown* — the model must not read them as landed.
+        /// same pass as `progress`. These are the calls whose outcome is
+        /// *unknown* — the model must not read them as landed.
+        ///
+        /// Empty here means either "the log was clean" or "this face did not
+        /// ask", which the field cannot tell apart — so the renderer does not
+        /// ask it to: `in_flight_json` keys the rendered value on `progress`,
+        /// and every row that did not pay for the read says `null`.
         in_flight: Vec<DanglingCall>,
         /// The last few lines of the child's own transcript, so the pointer at
         /// `child_session` carries evidence instead of only an address.
@@ -411,7 +415,7 @@ pub(crate) fn to_json(request_id: &str, recovered: &Recovered) -> Value {
             "agent": flow,
             "child_session": child_session.to_string(),
             "progress": progress_json(progress.as_ref()),
-            "in_flight_calls": in_flight_json(in_flight),
+            "in_flight_calls": in_flight_json(progress.as_ref(), in_flight),
             "child_tail": tail_json(tail),
             // The child log's contradictions, by finding tag, so the model
             // reads a refused or inconsistent log as "unknown" rather than
@@ -458,7 +462,7 @@ pub(crate) fn to_json(request_id: &str, recovered: &Recovered) -> Value {
                 "outcome": run.record.outcome,
                 "child_session": child_session.as_ref().map(SessionKey::to_string),
                 "progress": progress_json(progress.as_ref()),
-                "in_flight_calls": in_flight_json(in_flight),
+                "in_flight_calls": in_flight_json(progress.as_ref(), in_flight),
                 "child_tail": tail_json(tail),
                 "log_contradictions": contradictions
                     .iter()
@@ -484,12 +488,27 @@ fn progress_json(progress: Option<&RunProgress>) -> Value {
     })
 }
 
-/// The calls that crossed the dispatch line with no recorded result.
+/// The calls that crossed the dispatch line with no recorded result, or `null`
+/// for **"this face did not ask"** — keyed on the same fact `progress_json` is
+/// keyed on, because it is the same read that fills both.
+///
+/// An empty array used to be rendered on the three paths where the honest
+/// answer is "I do not know": the directory face never asks, `get_events` can
+/// fail, and the reducer can REFUSE the child's log. On each of those the
+/// sibling `progress` key correctly said `null` while this one said `[]`, and
+/// `[]` reads as "nothing was left in flight" — a permissive value derived
+/// from an absence (criterion #8). `progress.is_none()` is exactly "the read
+/// that would have filled this did not happen or was refused", so the two keys
+/// now give one answer. A read that DID happen and found no dangling call
+/// still renders `[]`, which is a fact.
 ///
 /// `provenance` is deliberately not rendered: every dangling call in a *child*
 /// log is `EarlierRun` (the child has no open run of its own once its process
 /// is gone), so the field would be a constant dressed as a finding.
-fn in_flight_json(calls: &[DanglingCall]) -> Value {
+fn in_flight_json(progress: Option<&RunProgress>, calls: &[DanglingCall]) -> Value {
+    if progress.is_none() {
+        return Value::Null;
+    }
     Value::Array(
         calls
             .iter()
@@ -564,7 +583,10 @@ fn interrupted_note(
             note,
             " Before it stopped it had dispatched {} tool {}, {} of which recorded a result, \
              and produced {} assistant {}. Calls that recorded a result have landed.",
-            p.tool_calls_dispatched, calls_word, p.tool_calls_answered, p.assistant_messages,
+            p.tool_calls_dispatched,
+            calls_word,
+            p.tool_calls_answered,
+            p.assistant_messages,
             messages_word
         );
     }
@@ -636,6 +658,12 @@ pub(crate) fn to_list_row(request_id: &str, recovered: &Recovered) -> Value {
             "request_id": request_id,
             "agent": flow,
             "child_session": child_session.to_string(),
+            // Stated, not omitted. The directory face deliberately does not
+            // read the child log (see `list_from_log`), so every row here is
+            // "I did not ask" — and a row that simply lacks the key reads as
+            // a child that had no progress to report. Same renderer as the
+            // detail face, so the two faces cannot drift on what `null` means.
+            "progress": progress_json(None),
         }),
         Recovered::Sidecar { record: run, .. } => {
             let text = &run.partial_result;
@@ -653,6 +681,8 @@ pub(crate) fn to_list_row(request_id: &str, recovered: &Recovered) -> Value {
                 "result_preview": preview,
                 "result_chars": text.chars().count(),
                 "last_activity_ms": run.last_activity_ms,
+                // Same reason as the interrupted arm above.
+                "progress": progress_json(None),
             })
         }
     }
@@ -1324,6 +1354,133 @@ mod tests {
         assert!(!in_flight[0].denied);
     }
 
+    /// C4 — a `context=fork` child's log opens with a verbatim copy of the
+    /// parent's transcript, so reading it from index 0 charges the parent's
+    /// dispatches to the child. The recovery face slices at
+    /// [`crate::session::reduction::own_work_start`]; this is the test that
+    /// goes red when that slice is dropped.
+    ///
+    /// The fork marker is written by `fork::mark_forked`, the single producer
+    /// `own_work_start` reads — a hand-written `SessionForked` here would be a
+    /// second answer to "what does a fork look like", and it would keep passing
+    /// if the real seed ever changed shape. That is also why this one test
+    /// pays for a real event store instead of the counting double: the double
+    /// answers from fixed vectors and cannot be emitted into.
+    #[tokio::test]
+    async fn a_forked_childs_progress_excludes_the_parents_copied_calls() {
+        let conn = rusqlite::Connection::open_in_memory().expect("sqlite");
+        crate::session::store::migrate_add_session_events(&conn).expect("migrate");
+        let store: std::sync::Arc<dyn crate::session::store::SessionEventStore> =
+            std::sync::Arc::new(crate::session::store::SqliteEventStore::new(conn));
+        let session: std::sync::Arc<dyn crate::session::service::SessionService> =
+            std::sync::Arc::new(
+                crate::session::in_process::InProcessActorSessionService::new(store),
+            );
+
+        let parent = g5_parent_id();
+        let child_id = bg_child("agent-a", "req-fork");
+        session.attach(parent.clone()).await.expect("attach parent");
+        session
+            .attach(child_id.clone())
+            .await
+            .expect("attach child");
+        session
+            .emit_event(
+                &parent,
+                SessionEvent::SubagentSpawned {
+                    turn_id: TurnId::new_v4(),
+                    child_id: child_id.clone(),
+                    flow: "explore".into(),
+                    at: 1,
+                },
+            )
+            .await
+            .expect("spawn event");
+
+        // The seeded prefix: the parent's own turn, copied in verbatim behind
+        // the real marker.
+        crate::agents::subagent_spawner::fork::mark_forked(session.as_ref(), &parent, &child_id)
+            .await
+            .expect("mark_forked");
+        let parent_turn = TurnId::new_v4();
+        for call in ["p1", "p2"] {
+            session
+                .emit_event(
+                    &child_id,
+                    SessionEvent::ToolCallRequested {
+                        turn_id: parent_turn,
+                        call_id: call.into(),
+                        name: "file_read".into(),
+                        input: serde_json::json!({}),
+                        at: 2,
+                    },
+                )
+                .await
+                .expect("copied call");
+        }
+
+        // The child's own scope opens here.
+        let own_turn = TurnId::new_v4();
+        session
+            .emit_event(
+                &child_id,
+                SessionEvent::TurnStarted {
+                    turn_id: own_turn,
+                    trigger: crate::session::events::TurnTrigger::SubagentRequest,
+                    at: 3,
+                },
+            )
+            .await
+            .expect("own turn");
+        session
+            .emit_event(
+                &child_id,
+                SessionEvent::RunStarted {
+                    run_id: "child-run".into(),
+                    at: 3,
+                    project_root: None,
+                    envelope: None,
+                },
+            )
+            .await
+            .expect("own run");
+        session
+            .emit_event(
+                &child_id,
+                SessionEvent::ToolCallRequested {
+                    turn_id: own_turn,
+                    call_id: "c1".into(),
+                    name: "bash_exec".into(),
+                    input: serde_json::json!({}),
+                    at: 4,
+                },
+            )
+            .await
+            .expect("own call");
+
+        let tool = g5_tool(session);
+        let out = tool
+            .resolve_forgotten(&["req-fork".to_string()], Some(G5_SCOPE))
+            .await;
+        let Some(Recovered::Interrupted {
+            progress: Some(p),
+            in_flight,
+            ..
+        }) = out.get("req-fork")
+        else {
+            panic!(
+                "expected an interrupted fork child, got {:?}",
+                out.get("req-fork")
+            );
+        };
+        assert_eq!(
+            p.tool_calls_dispatched, 1,
+            "only the child's own dispatch counts, not the two copied in"
+        );
+        assert_eq!(in_flight.len(), 1, "and only its own call is in flight");
+        assert_eq!(in_flight[0].call_id, "c1");
+    }
+
     // -- C: the sub-agent faces state facts -----------------------------
 
     fn persisted(request_id: &str, phase: RunPhase, outcome: Option<&str>) -> RecoveredRun {
@@ -1376,7 +1533,8 @@ mod tests {
     /// detail face does not pay a read to second-guess it.
     #[test]
     fn a_settled_sidecar_row_is_not_asked_about() {
-        let mut row = Recovered::sidecar(persisted("req-done", RunPhase::Settled, Some("completed")));
+        let mut row =
+            Recovered::sidecar(persisted("req-done", RunPhase::Settled, Some("completed")));
         assert!(row.enrichment_slots().is_none());
     }
 
@@ -1465,6 +1623,84 @@ mod tests {
         assert!(
             !note.contains("their outcome is unknown"),
             "a denied call has a known outcome: {note}"
+        );
+    }
+
+    /// The two adjacent keys must give ONE answer. A row whose `progress` is
+    /// absent is a row nobody read — the directory face never asks, and both
+    /// unreadable and reducer-REFUSED child logs land here too — so an empty
+    /// `in_flight_calls` array would read as "the child left nothing in
+    /// flight", which is a permissive value invented from an absence.
+    ///
+    /// RED before `in_flight_json` took `progress`: `[]` on every one of those
+    /// rows, right beside a `null` progress.
+    #[test]
+    fn a_row_nobody_read_says_it_does_not_know_about_in_flight_calls_either() {
+        let unread = Recovered::Interrupted {
+            child_session: bg_child("agent-a", "req-1"),
+            flow: "explore".into(),
+            progress: None,
+            in_flight: Vec::new(),
+            tail: Vec::new(),
+            contradictions: Vec::new(),
+        };
+        let json = to_json("req-1", &unread);
+        assert!(json["progress"].is_null());
+        assert!(
+            json["in_flight_calls"].is_null(),
+            "an unasked/refused log has not said the child had nothing in \
+             flight: {}",
+            json["in_flight_calls"]
+        );
+        // The sidecar face answers the same way — one renderer, both arms.
+        let settled = Recovered::sidecar(persisted("req-2", RunPhase::Settled, Some("completed")));
+        assert!(to_json("req-2", &settled)["in_flight_calls"].is_null());
+
+        // And a read that DID happen and found nothing still says so.
+        let read_clean = Recovered::Interrupted {
+            child_session: bg_child("agent-a", "req-3"),
+            flow: "explore".into(),
+            progress: Some(RunProgress {
+                tool_calls_dispatched: 1,
+                tool_calls_answered: 1,
+                assistant_messages: 1,
+                last_activity_at: Some(9),
+            }),
+            in_flight: Vec::new(),
+            tail: Vec::new(),
+            contradictions: Vec::new(),
+        };
+        assert_eq!(
+            to_json("req-3", &read_clean)["in_flight_calls"],
+            serde_json::json!([]),
+            "an empty list is a fact once the read happened"
+        );
+    }
+
+    /// The directory face states that it did not ask, rather than omitting the
+    /// key: a row with no `progress` key at all reads as a child that reported
+    /// no progress, which is the same lie in a quieter font.
+    #[test]
+    fn list_rows_say_they_did_not_ask_for_progress() {
+        let interrupted = Recovered::Interrupted {
+            child_session: bg_child("agent-a", "req-1"),
+            flow: "explore".into(),
+            progress: None,
+            in_flight: Vec::new(),
+            tail: Vec::new(),
+            contradictions: Vec::new(),
+        };
+        let row = to_list_row("req-1", &interrupted);
+        assert!(
+            row.get("progress").is_some() && row["progress"].is_null(),
+            "the interrupted directory row must say null, not nothing: {row}"
+        );
+
+        let sidecar = Recovered::sidecar(persisted("req-2", RunPhase::Running, None));
+        let row = to_list_row("req-2", &sidecar);
+        assert!(
+            row.get("progress").is_some() && row["progress"].is_null(),
+            "the sidecar directory row must say null, not nothing: {row}"
         );
     }
 

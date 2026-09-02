@@ -669,18 +669,33 @@ mod crashed_attempt_tests {
         );
 
         let events = store.load_all_events(&sid).await.expect("load");
+        let repair_at = events
+            .iter()
+            .position(
+                |r| matches!(&r.event, SessionEvent::ToolError { call_id, .. } if call_id == "c1"),
+            )
+            .expect("the dangling call was answered");
+        // The verdict, not merely the marker: a `RunFinished` carrying any
+        // other outcome would tell the next reader this attempt reached a
+        // terminal state of its own, when in fact its process disappeared.
+        let closed_at = events
+            .iter()
+            .position(|r| {
+                matches!(
+                    &r.event,
+                    SessionEvent::RunFinished { run_id, outcome, .. }
+                        if run_id == "member-run"
+                            && *outcome == crate::session::events::RunOutcome::Abandoned
+                )
+            })
+            .expect("the run marker the crash left open was closed as Abandoned");
+        // Order matters as much as presence: closing the run first would put
+        // the repair for a call the run dispatched *after* its own end marker,
+        // and the next reduction would charge it to whatever run comes next.
         assert!(
-            events
-                .iter()
-                .any(|r| matches!(&r.event, SessionEvent::ToolError { call_id, .. } if call_id == "c1")),
-            "the dangling call was answered"
-        );
-        assert!(
-            events.iter().any(|r| matches!(
-                &r.event,
-                SessionEvent::RunFinished { run_id, .. } if run_id == "member-run"
-            )),
-            "the run marker the crash left open was closed"
+            repair_at < closed_at,
+            "the orphan tool call is answered before the run marker closes \
+             (repair at {repair_at}, close at {closed_at})"
         );
     }
 
