@@ -393,6 +393,16 @@ pub(super) async fn execute_local_command(
         LocalCommand::Knob { knob, value } => execute_knob(state, client, knob, value).await,
         LocalCommand::Sessions => execute_sessions(state, client).await,
         LocalCommand::Providers { query } => execute_providers(state, client, query).await,
+        LocalCommand::Agents => execute_agents(state, client).await,
+        LocalCommand::Todo => {
+            state.tasks_panel_visible = !state.tasks_panel_visible;
+            let notice = match (state.tasks_panel_visible, &state.plan) {
+                (true, Some(plan)) if plan.has_content() => "Tasks panel shown.",
+                (true, _) => "Tasks panel shown (it appears once this conversation has a plan).",
+                (false, _) => "Tasks panel hidden. /todo to bring it back.",
+            };
+            state.add_system_message(notice.to_string());
+        }
     }
 }
 
@@ -451,6 +461,131 @@ pub(super) async fn confirm_session_switch(state: &mut AppState, client: &AlephC
     // banner; `attach_session` then restores the incoming conversation's own.
     state.switch_session(&key);
     attach_session(state, client, &key, AttachMode::Append).await;
+}
+
+// ---------------------------------------------------------------------------
+// Agents overlay (`/agents`).
+// ---------------------------------------------------------------------------
+
+/// Refresh this session's sub-agent snapshot from `subagent.tree`, then open
+/// the overlay. The snapshot is merged through the shared protocol
+/// `apply_event` (a `Spawned` upsert per node — the Panel's cold-start rule),
+/// so a spawn that raced ahead on the live topic survives.
+async fn execute_agents(state: &mut AppState, client: &AlephClient) {
+    refresh_agents(state, client).await;
+    if state.agents.is_empty() {
+        state.add_system_message(
+            "No background sub-agents in this session yet. They appear here (and in the \
+             docked panel) when the agent delegates work with the `subagent` tool."
+                .to_string(),
+        );
+        return;
+    }
+    state.open_agents_overlay();
+}
+
+/// One `subagent.tree` fetch, merged into `AppState.agents`.
+pub(super) async fn refresh_agents(state: &mut AppState, client: &AlephClient) {
+    if state.session_key.is_empty() {
+        return;
+    }
+    let params = json!({ "root_session": state.session_key });
+    match client.call::<_, Value>("subagent.tree", Some(params)).await {
+        Ok(result) => {
+            let nodes: Vec<aleph_protocol::subagent_tree::SubagentNode> = result
+                .get("nodes")
+                .cloned()
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_default();
+            for node in nodes {
+                aleph_protocol::subagent_tree::apply_event(
+                    &mut state.agents,
+                    aleph_protocol::subagent_tree::SubagentTreeEvent::Spawned { node },
+                );
+            }
+        }
+        Err(e) => state.add_system_message(format!("Sub-agent tree error: {e}")),
+    }
+}
+
+/// Enter on an overlay row: open that agent's run view. The transcript is the
+/// child's own persisted session (`SubagentNode.child_session`), served by the
+/// same `chat.history` RPC as any conversation — no dedicated endpoint.
+pub(super) async fn open_agent_detail(state: &mut AppState, client: &AlephClient) {
+    let Some(node) = state.selected_agent().cloned() else {
+        return;
+    };
+    let mut lines = agent_meta_lines(&node);
+    match node.child_session.as_deref() {
+        Some(child_key) => {
+            let params = json!({ "session_key": child_key });
+            match client.call::<_, Value>("chat.history", Some(params)).await {
+                Ok(result) => {
+                    lines.push(String::new());
+                    lines.extend(transcript_lines(&result));
+                }
+                Err(e) => {
+                    lines.push(String::new());
+                    lines.push(format!("Transcript unavailable: {e}"));
+                }
+            }
+        }
+        None => {
+            lines.push(String::new());
+            lines.push(
+                "No child transcript address for this agent (spawned before this build, \
+                 or a sync fan-out child whose result was returned inline)."
+                    .to_string(),
+            );
+        }
+    }
+    if let Some(overlay) = &mut state.agents_overlay {
+        overlay.detail = Some(app::AgentDetailState {
+            title: node.task.clone(),
+            lines,
+            scroll: 0,
+        });
+    }
+}
+
+/// Metadata header for the agent run view — everything the node itself knows.
+fn agent_meta_lines(node: &aleph_protocol::subagent_tree::SubagentNode) -> Vec<String> {
+    let mut lines = vec![format!("\u{2500}\u{2500} {}", node.task)];
+    let mut meta = format!("  \u{00b7} {:?}", node.lifecycle).to_lowercase();
+    if let Some(model) = node.model.as_deref() {
+        meta.push_str(&format!(" \u{00b7} {model}"));
+    }
+    meta.push_str(&format!(" \u{00b7} {} tools", node.tool_count));
+    if let Some(tokens) = node.total_tokens {
+        meta.push_str(&format!(" \u{00b7} {tokens} tokens"));
+    }
+    lines.push(meta);
+    if let Some(preview) = node.result_preview.as_deref() {
+        lines.push(format!("  \u{00b7} result: {preview}"));
+    }
+    lines
+}
+
+/// Flatten a `chat.history` response into displayable lines: a `── role ──`
+/// separator per row, then the content verbatim (the widget wraps).
+fn transcript_lines(result: &Value) -> Vec<String> {
+    let rows = result
+        .get("messages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if rows.is_empty() {
+        return vec!["(the child transcript is empty)".to_string()];
+    }
+    let mut lines = Vec::new();
+    for row in &rows {
+        let role = row.get("role").and_then(Value::as_str).unwrap_or("?");
+        let content = row.get("content").and_then(Value::as_str).unwrap_or("");
+        lines.push(format!("\u{2500}\u{2500} {role}"));
+        lines.extend(content.lines().map(str::to_string));
+        lines.push(String::new());
+    }
+    lines
 }
 
 // ---------------------------------------------------------------------------
@@ -668,7 +803,13 @@ pub(super) async fn attach_session(
 ) {
     let params = json!({ "session_key": key });
     match client.call::<_, Value>("chat.history", Some(params)).await {
-        Ok(result) => apply_history(state, &result, mode),
+        Ok(result) => {
+            apply_history(state, &result, mode);
+            // The sub-agent tree is per-session state the transcript does not
+            // carry; seed it from the tracker snapshot the same way the plan
+            // was seeded from the history response above.
+            refresh_agents(state, client).await;
+        }
         Err(e) => state.add_system_message(format!("History error: {e}")),
     }
 }
@@ -721,6 +862,26 @@ fn apply_history(state: &mut AppState, result: &Value, mode: AttachMode) {
              showing install defaults."
                 .to_string(),
         ),
+    }
+
+    // The conversation's execution list — the disk markdown is the truth the
+    // model, the prompt layer and the stop guard all read, and this field is
+    // its only cold-load carrier. A THREE-state read (the same one the Panel
+    // does): absent = older gateway, learn nothing; `null` = asked and
+    // answered, no plan; object = the plan. Collapsing absent into "no plan"
+    // would clear a checklist on the say-so of a server that never spoke.
+    match result.get("plan") {
+        None => {}
+        Some(Value::Null) => state.plan = None,
+        Some(v) => {
+            // Unreadable is "I have no answer", not "there is none" — the
+            // failed parse keeps whatever this screen already knew.
+            if let Ok(plan) =
+                serde_json::from_value::<aleph_protocol::plan::PlanSnapshot>(v.clone())
+            {
+                state.plan = Some(plan);
+            }
+        }
     }
 
     // Which run — if any — is in flight on this session right now.
@@ -1776,8 +1937,13 @@ mod attach_mode_tests {
             "attach_session must not touch the transcript itself — the clear \
              belongs in `apply_history`, which only runs on a successful fetch"
         );
+        // Normalize line endings first: `include_str!` preserves the checkout's
+        // bytes, and a CRLF checkout would turn a `\n`-carrying needle into a
+        // guard that can never match (the "guard only recognizes the shape it
+        // was written on" defect, CRLF edition).
+        let body = body.replace("\r\n", "\n");
         assert!(
-            body.contains("Ok(result) => apply_history(state, &result, mode)"),
+            body.contains("Ok(result) => {\n            apply_history(state, &result, mode);"),
             "the applier must be reached only from the success arm"
         );
     }

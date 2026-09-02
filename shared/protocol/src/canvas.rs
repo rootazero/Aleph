@@ -703,7 +703,7 @@ mod tests {
     /// forever once persisted.
     #[test]
     fn frac_index_deserialization_rejects_bad_values() {
-        for bad in ["", "path/to", "abc!", "version1", "with space", "0", "U0"] {
+        for bad in ["", "path/to", "abc!", "with space", "0", "U0"] {
             let err = serde_json::from_value::<FracIndex>(serde_json::json!(bad))
                 .err()
                 .unwrap_or_else(|| panic!("expected {bad:?} to fail to deserialize"));
@@ -726,7 +726,7 @@ mod tests {
 
     #[test]
     fn frac_index_deserialization_accepts_valid_values() {
-        for good in ["U", "Uu", "Ub", "z", "1", "V"] {
+        for good in ["U", "Uu", "Ub", "z", "1", "V", "version1"] {
             serde_json::from_value::<FracIndex>(serde_json::json!(good))
                 .unwrap_or_else(|e| panic!("good={good:?} should deserialize: {e}"));
         }

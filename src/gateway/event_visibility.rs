@@ -455,7 +455,7 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         // envelope this producer uses read as topic `"event"` before the
         // `extract_topic_and_data` fix (fix round 1) — see that function's
         // doc in `server::handler`.
-        "run.subagent_tree" => match subagent_tree_root_session(data) {
+        aleph_protocol::subagent_tree::TOPIC => match subagent_tree_root_session(data) {
             Some(k) => SessionIdentity::BySessionKey(k),
             None => SessionIdentity::Global,
         },

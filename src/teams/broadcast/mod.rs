@@ -455,6 +455,7 @@ impl GroupChatBroadcaster {
                 depth: 0,
                 root_session: tree.run_id.as_ref().clone(),
                 model: None,
+                child_session: None,
             },
         );
         RegisteredFanout { tree, _tree_reg }
@@ -804,6 +805,7 @@ impl GroupChatBroadcaster {
                 depth: chain_depth.saturating_add(1),
                 root_session: tree.run_id.as_ref().clone(),
                 model: None,
+                child_session: None,
             },
         );
         // Member is live NOW. `TeamFanoutEmitter` only reports "working" on the

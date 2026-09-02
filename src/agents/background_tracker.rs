@@ -66,6 +66,12 @@ pub struct SpawnMeta {
     pub root_session: String,
     /// Resolved model id, when known.
     pub model: Option<String>,
+    /// The child's own persisted session key
+    /// (`agent:{agent}:ephemeral:sub-bg-{request_id}`), when the spawn minted
+    /// one. Captured here — the one place that owns the spawn — so clients
+    /// open the child transcript via `chat.history` without re-deriving the
+    /// key format (a second derivation site is a second source of truth).
+    pub child_session: Option<String>,
 }
 
 /// Snake_case activity label for a progress kind — fed to `SubagentNode.last_activity`
@@ -129,6 +135,20 @@ pub(crate) fn preview_from_outcome(outcome: &CompletedOutcome) -> Option<String>
         Some(format!("{head}\u{2026}"))
     } else {
         Some(head)
+    }
+}
+
+/// Token total for `SubagentNode.total_tokens`. `Ok { total_tokens: 0 }` maps
+/// to `None`, not `Some(0)`: the `ok_text` convenience constructor stamps 0
+/// for "no metrics reported", and a real run always consumes tokens — so 0
+/// here means "unknown", and displaying a fabricated 0 would be the more
+/// expensive lie (a wrong label costs more than a missing one).
+fn tokens_from_outcome(outcome: &CompletedOutcome) -> Option<u64> {
+    match outcome {
+        CompletedOutcome::Ok { total_tokens, .. } if *total_tokens > 0 => {
+            Some(u64::try_from(*total_tokens).unwrap_or(u64::MAX))
+        }
+        _ => None,
     }
 }
 
@@ -1247,6 +1267,8 @@ impl BackgroundAgentTracker {
                     // verbatim, which the user actually wants to read in the
                     // tree (the full text is one `check_status` away).
                     result_preview: preview_from_outcome(&agent.outcome),
+                    child_session: agent.meta.child_session.clone(),
+                    total_tokens: tokens_from_outcome(&agent.outcome),
                 });
             }
             completed.keys().cloned().collect()
@@ -1282,6 +1304,9 @@ impl BackgroundAgentTracker {
                     last_activity: agent.last_activity.clone(),
                     // Running nodes have no terminal result yet.
                     result_preview: None,
+                    child_session: agent.meta.child_session.clone(),
+                    // Token totals are only known at settlement.
+                    total_tokens: None,
                 });
             }
         }
@@ -1681,6 +1706,7 @@ mod tests {
                 depth: 1,
                 root_session: leader.to_string(),
                 model: None,
+                child_session: None,
             },
         );
         let _r2 = RunningRegistration::register(
@@ -1693,6 +1719,7 @@ mod tests {
                 depth: 1,
                 root_session: "agent:other:main".to_string(),
                 model: None,
+                child_session: None,
             },
         );
         let mut ids = tracker.running_runs_of_session(leader);
@@ -1947,6 +1974,7 @@ mod tests {
                 depth: 1,
                 root_session: "agent:s1".into(),
                 model: Some("opus".into()),
+                child_session: None,
             },
         );
         tracker.register_with_meta(
@@ -1958,6 +1986,7 @@ mod tests {
                 depth: 1,
                 root_session: "agent:s2".into(),
                 model: None,
+                child_session: None,
             },
         );
         assert_eq!(tracker.flat_nodes(None).len(), 2);
@@ -1982,6 +2011,7 @@ mod tests {
                 depth: 1,
                 root_session: "agent:s".into(),
                 model: None,
+                child_session: None,
             },
         );
         tracker.push_progress("n1", fake_progress(0)); // ToolCalled
@@ -2533,6 +2563,7 @@ mod tests {
                 depth: 1,
                 root_session: root.into(),
                 model: None,
+                child_session: None,
             },
         );
         assert!(tracker.session_has_running(root), "busy guard must see it");

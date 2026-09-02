@@ -20,10 +20,13 @@
 use std::panic::PanicHookInfo;
 use std::sync::Once;
 
+#[cfg(target_arch = "wasm32")]
 const OVERLAY_ID: &str = "aleph-panic-overlay";
 /// localStorage key holding the crash-history ring buffer (JSON array).
+#[cfg(target_arch = "wasm32")]
 const CRASH_LOG_KEY: &str = "aleph.panel.crashes";
 /// Maximum number of crash records retained across reloads.
+#[cfg(target_arch = "wasm32")]
 const CRASH_LOG_CAP: usize = 10;
 
 /// Install the recovery panic hook. Idempotent — repeat calls are no-ops.
@@ -41,19 +44,36 @@ fn hook(info: &PanicHookInfo<'_>) {
     console_error_panic_hook::hook(info);
 
     // 2. Capture a symbolicated JS backtrace, persist a crash record, and
-    //    mount a one-shot recovery overlay. If anything here panics (it
-    //    shouldn't — DOM + localStorage only) swallow it so we don't recurse.
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    //    mount a one-shot recovery overlay.
+    //
+    //    Every step degrades to a default instead of panicking, and that is
+    //    the only protection there is: a panic raised INSIDE a panic hook
+    //    aborts the process before any unwinding starts ("thread panicked
+    //    while processing panic"), so the `catch_unwind` an earlier version
+    //    wrapped this in — with a comment promising it would swallow
+    //    recursion — could never catch anything. Measured on the native test
+    //    harness: one failing assertion after `install()` had run took the
+    //    whole test binary down, and every test sorted after this module
+    //    with it.
+    //
+    //    That harness is the only place this hook runs off-wasm, and there
+    //    the `js_sys`/`web_sys` calls below ARE the nested panic (every
+    //    wasm-bindgen import panics on a non-wasm target). So the DOM half is
+    //    wasm-only; on native the hook is exactly `console_error_panic_hook`,
+    //    which writes to stderr and lets the panic unwind like any other.
+    #[cfg(target_arch = "wasm32")]
+    {
         let message = info.to_string();
         let stack = capture_js_stack();
         let crash_count = persist_crash(&message, &stack);
         mount_overlay(&message, &stack, crash_count);
-    }));
+    }
 }
 
 /// Best-effort capture of the JS call stack from within the panic hook. With
 /// section preserved (the `wasm-release` profile), these frames carry Rust
 /// symbol names. Returns an empty string if unavailable.
+#[cfg(target_arch = "wasm32")]
 fn capture_js_stack() -> String {
     use wasm_bindgen::JsValue;
     let err = js_sys::Error::new("");
@@ -66,6 +86,7 @@ fn capture_js_stack() -> String {
 /// Append a crash record to the localStorage ring buffer and return the new
 /// record count. No-op (returns 0) if localStorage is unavailable. Never
 /// panics — every fallible step degrades to a default.
+#[cfg(target_arch = "wasm32")]
 fn persist_crash(message: &str, stack: &str) -> usize {
     let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) else {
         return 0;
@@ -98,6 +119,7 @@ fn persist_crash(message: &str, stack: &str) -> usize {
 /// sessionStorage, not localStorage). Strip the credential-bearing params
 /// here so a panic during cold-start cannot leak the gateway token into a
 /// key the XSS blast radius already covers.
+#[cfg(target_arch = "wasm32")]
 fn current_url() -> String {
     let raw = web_sys::window()
         .and_then(|w| w.location().href().ok())
@@ -108,6 +130,7 @@ fn current_url() -> String {
 /// Drop `?token=…` and `?bt=…` (and their `&` siblings) from a URL, mirroring
 /// `context::strip_params` so the format the crash ring stores cannot be
 /// distinguished from a post-handshake URL.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn strip_credentials(url: &str) -> String {
     let Some(q_start) = url.find('?') else {
         return url.to_string();
@@ -144,6 +167,7 @@ fn strip_credentials(url: &str) -> String {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 fn mount_overlay(message: &str, stack: &str, crash_count: usize) {
     let Some(window) = web_sys::window() else {
         return;
@@ -222,6 +246,7 @@ fn mount_overlay(message: &str, stack: &str, crash_count: usize) {
 }
 
 /// Attach click handlers to the Reload / Dismiss buttons.
+#[cfg(target_arch = "wasm32")]
 fn wire_buttons(document: &web_sys::Document) {
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
@@ -258,6 +283,7 @@ fn wire_buttons(document: &web_sys::Document) {
 /// Escape a string for embedding inside an HTML text node / `<pre>`. We
 /// only need `<`, `>`, `&` here; quotes go inside attributes via
 /// `set_attribute` which already escapes.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn escape_html(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -277,6 +303,7 @@ fn escape_html(s: &str) -> String {
 /// unparseable new record (skipped). Returns the serialized JSON array.
 ///
 /// Pure — no DOM/JS dependency — so it is unit-testable on the host.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn append_capped(existing_json: &str, new_record_json: &str, cap: usize) -> String {
     let mut arr: Vec<serde_json::Value> = serde_json::from_str(existing_json).unwrap_or_default();
     if let Ok(record) = serde_json::from_str::<serde_json::Value>(new_record_json) {
@@ -314,6 +341,20 @@ mod tests {
         // set_hook so the second call is a cheap no-op.
         install();
         install();
+    }
+
+    /// `install()` is process-global, so once the test above has run every
+    /// later panic in this binary goes through `hook`. A failing assertion
+    /// must then unwind like any other panic. Before the DOM half was fenced
+    /// to wasm this did not fail — it ABORTED the whole test binary ("thread
+    /// panicked while processing panic"), and with it every test sorted
+    /// after `panic_overlay`, which is how a red canvas test read as "the
+    /// harness crashed" for a round.
+    #[test]
+    fn a_panic_after_install_unwinds_instead_of_aborting_the_process() {
+        install();
+        let outcome = std::panic::catch_unwind(|| panic!("deliberate"));
+        assert!(outcome.is_err());
     }
 
     #[test]
