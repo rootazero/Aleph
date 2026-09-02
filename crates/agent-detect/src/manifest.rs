@@ -3,16 +3,20 @@
 // See ../NOTICE. Modifications: crate-path rewrites and removal of the
 // Remote manifest source (deferred to phase 2).
 //
+// The local Override source went with it: spec §4.1 scopes phase 1 to
+// `Bundled` (compile-time embedded) only, so nothing in this phase supplies an
+// override directory and the branch would have had zero producers. That leaves
+// `ManifestSource` with a single variant --- kept, rather than folded away,
+// because phase 2 restores the other two and this is what upstream reports in
+// `DetectionExplain::source`.
+//
 // `ManifestVersion` and `MANIFEST_ENGINE_VERSION` are salvaged verbatim from
 // upstream `src/detect/manifest_update.rs`, which is not ported (Task 2 ruling
 // R2-4: every other item in it was the remote download path). Only the impls
 // the surviving code needs came across --- `Serialize` and the `Ord` family
 // existed to compare a downloaded manifest against the bundled one.
 
-use std::{
-    path::{Path, PathBuf},
-    sync::{Mutex, OnceLock, RwLock},
-};
+use std::sync::{OnceLock, RwLock};
 
 use regex::Regex;
 use serde::Deserialize;
@@ -104,43 +108,20 @@ pub struct DetectionExplain {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManifestSource {
     Bundled,
-    Override(PathBuf),
 }
 
 impl ManifestSource {
     pub fn label(&self) -> String {
         match self {
             Self::Bundled => "bundled".to_string(),
-            Self::Override(path) => path.display().to_string(),
         }
     }
 
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Bundled => "bundled",
-            Self::Override(_) => "local override",
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentManifestSummary {
-    pub agent: Agent,
-    pub active_source: ManifestSource,
-    pub active_version: Option<String>,
-    pub(crate) warning: Option<String>,
-}
-
-/// Per-agent view of which manifest is active and at what version --- the
-/// data Task 8/9's panel header renders. `pub` here, `pub(crate)` upstream,
-/// because upstream's consumer (`app/mod.rs`) lives in the same crate.
-pub fn manifest_summaries() -> Vec<AgentManifestSummary> {
-    let lock = manifest_cache();
-    let guard = match lock.read() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    manifest_summaries_from_cache(&guard)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -312,7 +293,6 @@ const BUNDLED_MANIFESTS: &[(&str, &str)] = &[
 ];
 
 static MANIFEST_CACHE: OnceLock<RwLock<ManifestCache>> = OnceLock::new();
-static MANIFEST_RELOAD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 const MAX_RULES_PER_MANIFEST: usize = 128;
 const MAX_GATE_DEPTH: usize = 8;
@@ -320,24 +300,6 @@ const MAX_TOTAL_GATES: usize = 512;
 const MAX_MATCHERS_PER_GATE: usize = 32;
 const MAX_TOTAL_MATCHERS: usize = 1024;
 const MAX_MATCHER_CHARS: usize = 512;
-
-/// Rebuild the manifest cache from disk. The host calls this after an
-/// override `.toml` under [`OVERRIDE_DIR_ENV`] is added or edited; nothing
-/// re-reads the directory on its own.
-pub fn reload_manifests() -> Vec<AgentManifestSummary> {
-    let _reload_guard = MANIFEST_RELOAD_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let cache = build_manifest_cache();
-    let summaries = manifest_summaries_from_cache(&cache);
-    let lock = MANIFEST_CACHE.get_or_init(|| RwLock::new(cache.clone()));
-    match lock.write() {
-        Ok(mut guard) => *guard = cache,
-        Err(poisoned) => *poisoned.into_inner() = cache,
-    }
-    summaries
-}
 
 fn manifest_cache() -> &'static RwLock<ManifestCache> {
     MANIFEST_CACHE.get_or_init(|| RwLock::new(build_manifest_cache()))
@@ -349,27 +311,6 @@ fn build_manifest_cache() -> ManifestCache {
             .into_iter()
             .map(|agent| (agent, load_manifest_uncached(agent)))
             .collect(),
-    }
-}
-
-fn manifest_summaries_from_cache(cache: &ManifestCache) -> Vec<AgentManifestSummary> {
-    cache
-        .manifests
-        .iter()
-        .filter_map(|(agent, loaded)| {
-            loaded
-                .clone()
-                .map(|loaded| manifest_summary_from_loaded(*agent, loaded))
-        })
-        .collect()
-}
-
-fn manifest_summary_from_loaded(agent: Agent, loaded: LoadedManifest) -> AgentManifestSummary {
-    AgentManifestSummary {
-        agent,
-        active_version: loaded.manifest.version.as_ref().map(ToString::to_string),
-        active_source: loaded.source,
-        warning: loaded.warning,
     }
 }
 
@@ -580,48 +521,11 @@ fn load_manifest(agent: Agent) -> Option<LoadedManifest> {
 }
 
 fn load_manifest_uncached(agent: Agent) -> Option<LoadedManifest> {
-    let bundled = bundled_manifest(agent)?;
-    let Some(path) = override_path(agent) else {
-        return Some(bundled_loaded_manifest(agent, bundled, None));
-    };
-
-    if !path.exists() {
-        return Some(bundled_loaded_manifest(agent, bundled, None));
-    }
-
-    match read_override_manifest(&path) {
-        Ok(manifest) if manifest_matches_agent(&manifest, agent) => {
-            match loaded_manifest(manifest, ManifestSource::Override(path.clone()), None) {
-                Ok(loaded) => Some(loaded),
-                Err(err) => Some(bundled_loaded_manifest(
-                    agent,
-                    bundled,
-                    Some(format!(
-                        "ignored override {} because it could not be compiled: {err}",
-                        path.display()
-                    )),
-                )),
-            }
-        }
-        Ok(manifest) => Some(bundled_loaded_manifest(
-            agent,
-            bundled,
-            Some(format!(
-                "ignored override {} because manifest id {} does not match {}",
-                path.display(),
-                manifest.id,
-                agent_label(agent)
-            )),
-        )),
-        Err(err) => Some(bundled_loaded_manifest(
-            agent,
-            bundled,
-            Some(format!(
-                "ignored override {} because it could not be loaded: {err}",
-                path.display()
-            )),
-        )),
-    }
+    Some(bundled_loaded_manifest(
+        agent,
+        bundled_manifest(agent)?,
+        None,
+    ))
 }
 
 fn loaded_manifest(
@@ -657,14 +561,21 @@ fn bundled_manifest(agent: Agent) -> Option<AgentManifest> {
         .iter()
         .find(|(manifest_id, _)| *manifest_id == id)
         .map(|(_, content)| {
-            parse_manifest(content)
-                .unwrap_or_else(|err| panic!("bundled {id} manifest is invalid: {err}"))
+            let manifest = parse_manifest(content)
+                .unwrap_or_else(|err| panic!("bundled {id} manifest is invalid: {err}"));
+            // BUNDLED_MANIFESTS maps a label to a file; the file declares its
+            // own `id`. Without this, the two are the same fact stated twice
+            // with nothing comparing them, and a table entry pointing at the
+            // wrong .toml would load silently under the wrong agent (判据 §1).
+            // Upstream compares them on the override path, which phase 1 does
+            // not ship; the manifests are embedded at compile time, so a
+            // mismatch is a build defect and panics like an invalid one.
+            assert!(
+                manifest_matches_agent(&manifest, agent),
+                "the manifest bundled under {id} does not declare itself as that agent"
+            );
+            manifest
         })
-}
-
-fn read_override_manifest(path: &Path) -> Result<AgentManifest, String> {
-    let content = std::fs::read_to_string(path).map_err(|err| err.to_string())?;
-    parse_manifest(&content)
 }
 
 /// The version string of the manifest currently active for `agent`, e.g.
@@ -905,26 +816,14 @@ fn validate_region_name(spec: &str) -> Result<(), String> {
     }
 }
 
-/// Directory the host may point at to override a bundled manifest, one
-/// `<agent-label>.toml` per agent.
+/// Does this manifest belong to `agent`? Verbatim from upstream.
 ///
-/// Upstream reads `crate::config::config_dir()`. This crate cannot: it must
-/// stay usable from `interfaces/tui`, which may not depend on `alephcore`, so
-/// it has no way to ask where Aleph keeps its config. Restating `~/.aleph/...`
-/// here would make this a second source for a fact `alephcore` owns
-/// (判据 §1), so the crate states no default at all: absent the variable
-/// there are no overrides and only `ManifestSource::Bundled` is ever used.
-/// The host opts in by setting it before the first detection call.
-pub const OVERRIDE_DIR_ENV: &str = "ALEPH_AGENT_DETECTION_DIR";
-
-fn override_path(agent: Agent) -> Option<PathBuf> {
-    let dir = std::env::var_os(OVERRIDE_DIR_ENV)?;
-    if dir.is_empty() {
-        return None;
-    }
-    Some(PathBuf::from(dir).join(format!("{}.toml", agent_label(agent))))
-}
-
+/// Upstream calls this on the override path, to reject a `codex.toml` that
+/// declares `id = "claude"`. That path is gone in phase 1, but the predicate is
+/// the only thing that reads `AgentManifest::id` and `::aliases`, and without a
+/// caller the `BUNDLED_MANIFESTS` table key and the `id` inside each `.toml`
+/// become two statements of one fact with nothing comparing them (判据 §1).
+/// [`bundled_manifest`] is now that caller.
 fn manifest_matches_agent(manifest: &AgentManifest, agent: Agent) -> bool {
     let id = agent_label(agent);
     manifest.id == id

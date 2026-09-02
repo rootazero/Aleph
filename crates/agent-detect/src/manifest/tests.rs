@@ -5,22 +5,27 @@
 
 use super::*;
 
-/// A manifest that declares a `version`, for the tests that assert the active
-/// version is reported. Upstream this was `remote_manifest()` and fed the
-/// remote cache; the Override source is the surviving non-bundled source.
-fn versioned_manifest(version: &str, state: &str, contains: &str) -> String {
-    format!(
-        r#"
-id = "codex"
-version = "{version}"
-min_engine_version = 1
-updated_at = "2026-06-10T12:00:00Z"
-
-[[rules]]
-id = "test"
-state = "{state}"
-contains = ["{contains}"]
-"#
+/// Build a `DetectionExplain` from manifest text directly, without the
+/// filesystem or the global cache.
+///
+/// Upstream reaches the same code by writing the manifest to the local
+/// override directory and calling `explain()`. Phase 1 ships `Bundled` only
+/// (spec §4.1), so there is no override directory to write to --- but the rule
+/// semantics under test live in `compile_manifest` / `evaluate_loaded_manifest`,
+/// not in the loader, and this reaches them with the same manifest text and the
+/// same assertions. The delivery changed; the subject under test did not.
+fn explain_manifest(agent: Agent, manifest_toml: &str, screen: &str) -> DetectionExplain {
+    let manifest = parse_manifest(manifest_toml).expect("test manifest parses");
+    let loaded =
+        loaded_manifest(manifest, ManifestSource::Bundled, None).expect("test manifest compiles");
+    evaluate_loaded_manifest(
+        agent,
+        DetectionInput {
+            screen,
+            osc_title: "",
+            osc_progress: "",
+        },
+        loaded,
     )
 }
 
@@ -32,45 +37,6 @@ id = "codex"
 {rules}
 "#
     )
-}
-
-/// Serializes the tests that mutate `OVERRIDE_DIR_ENV`. Upstream this is
-/// `crate::config::test_config_env_lock()`; the crate it lived in is not
-/// ported, and the lock has to be process-wide or two of these tests race on
-/// one environment.
-fn override_env_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-
-fn with_manifest_dirs<T>(name: &str, f: impl FnOnce() -> T) -> T {
-    let _guard = override_env_lock()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let old_override = std::env::var_os(OVERRIDE_DIR_ENV);
-    let base = std::env::temp_dir().join(format!(
-        "aleph-manifest-loader-{name}-{}",
-        std::process::id()
-    ));
-    let override_dir = base.join("agent-detection");
-    let _ = std::fs::remove_dir_all(&base);
-    std::env::set_var(OVERRIDE_DIR_ENV, &override_dir);
-    reload_manifests();
-    let result = f();
-    match old_override {
-        Some(value) => std::env::set_var(OVERRIDE_DIR_ENV, value),
-        None => std::env::remove_var(OVERRIDE_DIR_ENV),
-    }
-    reload_manifests();
-    let _ = std::fs::remove_dir_all(&base);
-    result
-}
-
-fn write_local_codex(content: &str) {
-    let path = override_path(Agent::Codex).unwrap();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, content).unwrap();
-    reload_manifests();
 }
 
 #[test]
@@ -87,9 +53,8 @@ fn known_agent_no_match_defaults_to_idle_fallback() {
 
 #[test]
 fn rule_semantics_apply_gates_priority_and_line_regex() {
-    with_manifest_dirs("rule-semantics", || {
-        write_local_codex(&rules_manifest(
-            r#"
+    let manifest = rules_manifest(
+        r#"
 [[rules]]
 id = "low_contains"
 state = "idle"
@@ -114,96 +79,93 @@ state = "blocked"
 priority = 20
 line_regex = ["^exact line$"]
 "#,
-        ));
+    );
 
-        let high = explain(Agent::Codex, "match win");
-        assert_eq!(high.state, AgentState::Working);
-        assert_eq!(
-            high.matched_rule.as_ref().map(|rule| rule.id.as_str()),
-            Some("high_nested_gates")
-        );
+    let high = explain_manifest(Agent::Codex, &manifest, "match win");
+    assert_eq!(high.state, AgentState::Working);
+    assert_eq!(
+        high.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("high_nested_gates")
+    );
 
-        let not_gate = explain(Agent::Codex, "match win blocked");
-        assert_eq!(not_gate.state, AgentState::Idle);
-        assert_eq!(
-            not_gate.matched_rule.as_ref().map(|rule| rule.id.as_str()),
-            Some("low_contains")
-        );
+    let not_gate = explain_manifest(Agent::Codex, &manifest, "match win blocked");
+    assert_eq!(not_gate.state, AgentState::Idle);
+    assert_eq!(
+        not_gate.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("low_contains")
+    );
 
-        let line = explain(Agent::Codex, "before\nexact line\nafter");
-        assert_eq!(line.state, AgentState::Blocked);
-        assert_eq!(
-            line.matched_rule.as_ref().map(|rule| rule.id.as_str()),
-            Some("line_regex")
-        );
-    });
+    let line = explain_manifest(Agent::Codex, &manifest, "before\nexact line\nafter");
+    assert_eq!(line.state, AgentState::Blocked);
+    assert_eq!(
+        line.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("line_regex")
+    );
 }
 
 /// Restored from the Remote cut. Upstream drove this through a downloaded
 /// manifest (`fallback_explain_preserves_active_manifest_version`, herdr
 /// `src/detect/manifest/tests.rs:176-194`); the property it asserts --- a
-/// no-rule-matched fallback still reports the ACTIVE manifest's version, not
-/// `None` --- is independent of which non-bundled source supplied it, and
-/// `manifest_version()` now depends on that field, so the coverage is kept
-/// here on the Override source rather than deleted with the Remote tests.
+/// no-rule-matched fallback still reports the ACTIVE manifest's version rather
+/// than `None` --- is independent of which source supplied it, and
+/// `manifest_version()` now depends on that field, so the coverage is kept here
+/// on the bundled source rather than deleted with the Remote tests.
+///
+/// It deliberately does NOT pin the literal version string: that would couple
+/// the test to `codex.toml`'s current contents, which change on every upstream
+/// manifest sync (判据 §5).
 #[test]
 fn fallback_explain_preserves_active_manifest_version() {
-    with_manifest_dirs("fallback-version", || {
-        write_local_codex(&versioned_manifest(
-            "9999.01.01.1",
-            "blocked",
-            "override-ready",
-        ));
+    let explain = explain(Agent::Codex, "ordinary prompt text");
 
-        let explain = explain(Agent::Codex, "ordinary prompt text");
-
-        assert_eq!(explain.state, AgentState::Idle);
-        assert_eq!(
-            explain.fallback_reason.as_deref(),
-            Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK)
-        );
-        assert_eq!(explain.manifest_version.as_deref(), Some("9999.01.01.1"));
-        assert!(matches!(explain.source, Some(ManifestSource::Override(_))));
-    });
+    assert_eq!(explain.state, AgentState::Idle);
+    assert_eq!(
+        explain.fallback_reason.as_deref(),
+        Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK)
+    );
+    assert!(
+        explain.manifest_version.is_some(),
+        "the fallback path still reports the active manifest's version"
+    );
+    assert_eq!(explain.manifest_version, manifest_version(Agent::Codex));
 }
 
 /// Guards the Aleph-added `manifest_version()` that Task 8/9 renders.
 ///
-/// Overriding Codex alone must move Codex's version and nothing else: that
-/// fails if `manifest_version` ignores its argument, returns a crate-wide
-/// constant, or reads the bundled manifest instead of the active one --- the
-/// three ways a per-agent lookup silently degrades into a fixed string.
+/// Asking each agent separately and comparing against what `explain()` reports
+/// for that same agent fails if `manifest_version` ignores its argument or
+/// returns one crate-wide string --- the two ways a per-agent lookup silently
+/// degrades into a fixed value. Every agent with a screen manifest must answer,
+/// and an agent without one must answer `None`.
 #[test]
-fn manifest_version_follows_the_active_source_per_agent() {
-    with_manifest_dirs("manifest-version", || {
-        let claude_before = manifest_version(Agent::Claude);
+fn manifest_version_is_per_agent_and_matches_explain() {
+    for agent in Agent::SCREEN_MANIFEST_AGENTS {
+        let version = manifest_version(agent);
         assert!(
-            claude_before.is_some(),
-            "the bundled claude manifest declares a version"
+            version.is_some(),
+            "{} has a bundled manifest, so it has a version",
+            agent_label(agent)
         );
-
-        write_local_codex(&versioned_manifest(
-            "9999.01.01.1",
-            "blocked",
-            "override-ready",
-        ));
-
         assert_eq!(
-            manifest_version(Agent::Codex).as_deref(),
-            Some("9999.01.01.1")
+            version,
+            explain(agent, "").manifest_version,
+            "manifest_version disagrees with explain() for {}",
+            agent_label(agent)
         );
-        assert_eq!(manifest_version(Agent::Claude), claude_before);
+    }
 
-        // Mastracode has no screen manifest at all (pinned by engine.rs's
-        // `mastracode_is_hook_authority_without_screen_manifest`). `None`
-        // there means "no manifest", never "version unknown but present".
-        assert_eq!(manifest_version(Agent::Mastracode), None);
-    });
+    // Mastracode has no screen manifest at all (pinned by engine.rs's
+    // `mastracode_is_hook_authority_without_screen_manifest`). `None` there
+    // means "no manifest", never "version unknown but present" (判据 §8).
+    assert_eq!(manifest_version(Agent::Mastracode), None);
 }
 
 #[test]
 fn all_bundled_manifests_parse_and_validate() {
     for agent in Agent::SCREEN_MANIFEST_AGENTS {
+        // This call is also what drives `bundled_manifest`'s two panics for
+        // every bundled manifest: invalid TOML, and a manifest whose declared
+        // `id` disagrees with the BUNDLED_MANIFESTS table key it sits under.
         assert!(
             bundled_manifest(agent).is_some(),
             "missing bundled manifest for {}",
@@ -669,9 +631,7 @@ fn claude_mcp_elicitation_is_blocked() {
         "MCP server \u{201c}my-server\u{201d} requests your input\n\nGrant temporary access to the demo gateway for 15 minutes?\n\n\u{276f} Accept    Decline\n\nEsc to cancel \u{b7} \u{2191}/\u{2193} to navigate\n",
         "MCP server \"my-server\" requests your input\n\nserver-supplied message\n\n\u{276f} Accept    Decline\n\nEsc to cancel \u{b7} \u{2191}/\u{2193} to navigate\n",
     ] {
-        let result = with_manifest_dirs("claude-mcp-elicitation", || {
-            osc_explain(Agent::Claude, screen, "\u{2733} Claude Code", "")
-        });
+        let result = osc_explain(Agent::Claude, screen, "\u{2733} Claude Code", "");
         assert_eq!(result.state, AgentState::Blocked, "{result:#?}");
         assert!(result.visible_blocker, "{result:#?}");
         assert_eq!(

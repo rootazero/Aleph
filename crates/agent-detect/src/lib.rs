@@ -21,7 +21,7 @@ pub mod manifest;
 pub mod screen_rules;
 
 pub use engine::{Agent, AgentDetection, AgentState};
-pub use manifest::{manifest_version, DetectionInput, ManifestSource, OVERRIDE_DIR_ENV};
+pub use manifest::{manifest_version, DetectionInput, ManifestSource};
 
 /// Identify which agent is running from the process name.
 /// Returns `None` for plain shells or unrecognized programs.

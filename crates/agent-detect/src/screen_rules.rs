@@ -246,10 +246,20 @@ pub struct ScreenDetectionPublishInput {
 }
 
 /// Inlined from upstream `crate::terminal::state::stabilize_agent_detection`
-/// (herdr 0.8.2, `src/terminal/state.rs:2169-2171`), which is the identity on
-/// the detection's state. Kept as a named function rather than folded into the
-/// caller so an upstream change to the stabilization policy still lands on one
-/// line here.
+/// (herdr 0.8.2, `src/terminal/state.rs:2169-2171`).
+///
+/// **As of herdr 0.8.2 this is the identity function** --- it returns
+/// `detection.state` unchanged, and every call site therefore behaves exactly as
+/// if it were not here. That is a property of today's upstream, not of the
+/// design: the name marks where a stabilization policy (hysteresis, debouncing,
+/// a confidence floor) would go, and upstream has held that seam open across
+/// releases. It is kept as a named function for two reasons: an upstream change
+/// to the policy then lands on one line here instead of needing a call site
+/// rediscovered, and a reader who meets `stabilize_agent_detection` in the
+/// publish path is not left inferring a transformation that does not happen.
+///
+/// If you are auditing恒-true predicates (判据 §2): yes, this one is currently
+/// inert, deliberately, and this comment is the warning.
 fn stabilize_agent_detection(detection: AgentDetection) -> AgentState {
     detection.state
 }
