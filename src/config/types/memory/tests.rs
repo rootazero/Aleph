@@ -183,4 +183,36 @@ mod tests {
         assert_eq!(cfg.curated.user_char_limit, 1_375);
         assert!((cfg.curated.legacy_warn_threshold - 0.95).abs() < 1e-6);
     }
+
+    /// The top-level `similarity_threshold` (a never-wired retrieval no-op)
+    /// and top-level `dedup_similarity_threshold` (a zero-reader twin of the
+    /// live `[memory.compound_ingest]` key) were cut. This pins the wire
+    /// shape the Panel's `memory_config.get` payload is built from, so
+    /// neither dead key can quietly reappear while the live dedup knob must
+    /// stay where its reader is.
+    #[test]
+    fn cut_top_level_threshold_keys_stay_off_the_wire() {
+        let v = serde_json::to_value(MemoryConfig::default()).unwrap();
+        let map = v.as_object().unwrap();
+        assert!(!map.contains_key("similarity_threshold"));
+        assert!(!map.contains_key("dedup_similarity_threshold"));
+        // The owner of write-time dedup is the compound_ingest section.
+        assert!(v["compound_ingest"]["dedup_similarity_threshold"].is_number());
+    }
+
+    /// An existing config.toml still carrying the removed top-level keys must
+    /// parse (ignored, not rejected): the keys never did anything, so a stale
+    /// file must not brick boot after the cut.
+    #[test]
+    fn legacy_config_with_removed_threshold_keys_still_parses() {
+        let cfg: MemoryConfig = toml::from_str(
+            r#"
+enabled = true
+similarity_threshold = 0.7
+dedup_similarity_threshold = 0.9
+"#,
+        )
+        .expect("stale keys must be ignored, not rejected");
+        assert!(cfg.enabled);
+    }
 }

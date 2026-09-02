@@ -205,7 +205,6 @@ enabled = true                          # master switch
 max_context_items = 5                   # max memories injected per turn
 retention_days = 90                     # 0 = never delete
 vector_db = "sqlite-vec"                # only backend today
-similarity_threshold = 0.3              # min score (1/(1+L2)) to include
 
 ai_retrieval_enabled = true             # LLM-picked vs pure-vector selection
 ai_retrieval_timeout_ms = 3000          # cap on LLM selection call
@@ -219,7 +218,6 @@ raw_memory_fallback_count = 3           # raws used if notes are insufficient
 rrf_k = 60                              # Reciprocal Rank Fusion constant
 bm25_bonus_weight = 0.15                # extra BM25 lift in fusion
 query_expansion_enabled = false         # synonym expansion (off by default)
-dedup_similarity_threshold = 0.95       # storage-time dedupe
 backup_enabled = true                   # JSONL backup of notes
 backup_max_files = 7                    # backup retention
 
@@ -442,27 +440,25 @@ Symptom: `~/.aleph/memory/note/` or the SQLite database grow unbounded.
 2. Raise the decay prune floor: `memory.memory_decay.min_strength = 0.2`.
 3. Shrink the decay half-life: `memory.memory_decay.half_life_days = 14.0` so stale notes fade faster.
 4. Cap backups: `memory.backup_max_files = 3` (or `memory.backup_enabled = false`).
-5. Tighten storage dedupe: `memory.dedup_similarity_threshold = 0.9`.
+5. Tighten write-time dedupe: `memory.compound_ingest.dedup_similarity_threshold = 0.9`.
 
 ### Slow memory search
 
 Symptom: `memory_search` latency exceeds ~1s.
 
 1. Reduce fan-out: `memory.max_context_items = 3` and `memory.max_facts_in_context = 3`.
-2. Raise the cutoff: `memory.similarity_threshold = 0.6` to drop weak candidates earlier.
-3. Shrink the LLM selection pool: `memory.ai_retrieval_max_candidates = 10`.
-4. Tighten the LLM timeout: `memory.ai_retrieval_timeout_ms = 1500` (fallback to pure vector faster).
-5. Turn off LLM selection entirely: `memory.ai_retrieval_enabled = false`.
+2. Shrink the LLM selection pool: `memory.ai_retrieval_max_candidates = 10`.
+3. Tighten the LLM timeout: `memory.ai_retrieval_timeout_ms = 1500` (fallback to pure vector faster).
+4. Turn off LLM selection entirely: `memory.ai_retrieval_enabled = false`.
 
 ### Missing relevant notes
 
 Symptom: a note you know exists does not surface in search results.
 
-1. Lower `memory.similarity_threshold = 0.2` to admit more candidates.
-2. Raise `memory.max_context_items` and `memory.max_facts_in_context` together.
-3. Enable query expansion: `memory.query_expansion_enabled = true`.
-4. Increase BM25 weight when the target note is a good lexical match: `memory.bm25_bonus_weight = 0.3`.
-5. Use `memory_explore` for multi-hop traversal when single-shot retrieval keeps missing the wikilink neighborhood — see [RETRIEVAL.md](memory/RETRIEVAL.md).
+1. Raise `memory.max_context_items` and `memory.max_facts_in_context` together.
+2. Enable query expansion: `memory.query_expansion_enabled = true`.
+3. Increase BM25 weight when the target note is a good lexical match: `memory.bm25_bonus_weight = 0.3`.
+4. Use `memory_explore` for multi-hop traversal when single-shot retrieval keeps missing the wikilink neighborhood — see [RETRIEVAL.md](memory/RETRIEVAL.md).
 
 ## 14. Orientation layer (Spec 5, shipped 2026-04-14)
 

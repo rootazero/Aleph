@@ -315,20 +315,8 @@ impl Config {
         Ok(())
     }
 
-    /// Validate memory thresholds, dreaming schedule, and decay settings.
+    /// Validate memory dreaming schedule and decay settings.
     fn validate_memory_config(&self) -> Result<()> {
-        // Validate memory config
-        if !(0.0..=1.0).contains(&self.memory.similarity_threshold) {
-            error!(
-                threshold = self.memory.similarity_threshold,
-                "Invalid similarity threshold"
-            );
-            return Err(AlephError::invalid_config(format!(
-                "memory.similarity_threshold must be between 0.0 and 1.0, got {}",
-                self.memory.similarity_threshold
-            )));
-        }
-
         if self.memory.dreaming.enabled {
             if self.memory.dreaming.max_duration_seconds == 0 {
                 error!("Dreaming max_duration_seconds is zero");
@@ -444,7 +432,6 @@ impl Config {
 
         debug!(
             memory_enabled = self.memory.enabled,
-            similarity_threshold = self.memory.similarity_threshold,
             "Memory config validated"
         );
 

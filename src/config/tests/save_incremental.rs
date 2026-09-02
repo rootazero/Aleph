@@ -30,7 +30,7 @@ system_prompt = "Custom assistant"
 
 [memory]
 enabled = true
-similarity_threshold = 0.5
+rrf_k = 42
 "##;
 
     fs::write(&config_path, initial_toml).expect("Should write initial config");
@@ -90,7 +90,7 @@ similarity_threshold = 0.5
 
     // Verify memory config is preserved
     assert!(
-        final_content.contains("similarity_threshold = 0.5"),
+        final_content.contains("rrf_k = 42"),
         "Memory config should be preserved"
     );
 }

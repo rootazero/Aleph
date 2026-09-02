@@ -237,29 +237,13 @@ impl MemorySearchTool {
         'current_session' (only this session's compressed summaries), \
         or 'both' (long-term memory plus current session summaries).";
 
-    /// Default similarity threshold when not specified by config.
-    ///
-    /// L2 distance in high-dimensional space (1536-dim) produces lower similarity
-    /// scores than one might expect. 0.3 is a pragmatic floor that balances
-    /// recall (not missing relevant memories) with precision (not returning noise).
-    // `DEFAULT_SIMILARITY_THRESHOLD` was removed: the value used to feed a
-    // `let _threshold = ...` binding that never reached `NoteFactRetrieval`.
-    // When the threshold gate lands upstream, re-introduce the constant
-    // alongside the `with_similarity_threshold` setter.
+    // A `similarity_threshold` parameter (and the `[memory]` config key that
+    // fed it) used to arrive here as a documented no-op. It was cut, not
+    // wired: `NoteFactRetrieval` ranks on RRF-fused rank scores (or
+    // rank-derived FTS scores), which carry no honest "similarity in [0,1]"
+    // dimension for such a gate to act on.
 
-    /// Create a new `MemorySearchTool` instance.
-    ///
-    /// `similarity_threshold`: currently a no-op (see `new_with_config`).
-    /// Preserved in the constructor signature for API stability with the
-    /// `[[memory]]` config block.
-    pub fn new_with_embedder(
-        database: MemoryBackend,
-        embedder: Arc<dyn EmbeddingProvider>,
-    ) -> Self {
-        Self::new_with_config(database, embedder, None, None, None, None)
-    }
-
-    /// Create a new `MemorySearchTool` with explicit similarity threshold from config.
+    /// Create a new `MemorySearchTool` from config.
     ///
     /// `rerank_config`: when `Some` and enabled, attaches a cross-encoder
     /// reranker to the long-term recall path. `None` / disabled leaves recall
@@ -270,15 +254,6 @@ impl MemorySearchTool {
     pub fn new_with_config(
         database: MemoryBackend,
         embedder: Arc<dyn EmbeddingProvider>,
-        // `similarity_threshold` is accepted for API stability with the
-        // `[[memory]]` config block but is currently a no-op: `NoteFactRetrieval`
-        // does not yet accept a per-tool threshold, so the operator's config
-        // value would be silently ignored here. The parameter is preserved
-        // so the config side can wire it up without a signature break when
-        // the threshold gate lands upstream. Until then, it is documented as
-        // a no-op rather than `#[deprecated]`, since callers reading the
-        // current shape expect to set it.
-        _similarity_threshold: Option<f32>,
         rerank_config: Option<&crate::memory::rerank::RerankConfig>,
         scoring_config: Option<&crate::config::types::memory::RetrievalScoringConfig>,
         expansion_config: Option<&crate::config::types::memory::ExpansionConfig>,
