@@ -479,12 +479,12 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(route_observability_global)]
     async fn a_route_patch_through_the_executor_republishes_config_problems() {
+        use crate::config::types::route::{ModelRouteConfig, RouteMode};
         use crate::providers::default_handle::StaticDefault;
         use crate::providers::mock::MockProvider;
         use crate::providers::route_observe::{
             global_route_observability, set_global_route_observability, test_observability,
         };
-        use crate::config::types::route::{ModelRouteConfig, RouteMode};
         use crate::providers::route_policy::EndpointTier;
         use crate::sync_primitives::Arc;
 

@@ -661,9 +661,197 @@ pub(crate) fn rust_sources_under(root: &std::path::Path) -> Vec<(String, String)
         .collect()
 }
 
+/// One `#[test]` / `#[tokio::test]` function found by [`scan_test_bodies`].
+#[cfg(test)]
+pub(crate) struct TestBody {
+    /// The `fn …` line, trimmed — the test's identity in a violation message.
+    pub name: String,
+    /// Every attribute line attached to it, trimmed: the ones ABOVE the
+    /// `#[test]` marker as well as the ones between it and the `fn` line.
+    /// Both sides, because `#[serial_test::serial(k)]` written above `#[test]`
+    /// is the same tag, and a census that only looked below would report a
+    /// tagged test as a violation — the expensive direction, since a guard
+    /// that misfires gets cited as evidence.
+    pub attrs: Vec<String>,
+    /// Whether the predicate matched a line of the brace-matched body.
+    pub reaches: bool,
+}
+
+/// What [`scan_test_bodies`] saw in one file.
+#[cfg(test)]
+pub(crate) struct TestBodyScan {
+    /// Every test function in the file, in source order.
+    pub tests: Vec<TestBody>,
+    /// Matching lines that landed in NO test body — `(1-based line, trimmed
+    /// text)`. A shared helper is the usual cause, and it is a finding rather
+    /// than a hit to drop: see [`scan_test_bodies`].
+    pub uncharged: Vec<(usize, String)>,
+}
+
+/// Attribute each line matching `reaches` to the `#[test]` / `#[tokio::test]`
+/// function whose brace-matched body contains it.
+///
+/// # Why this is one function and not one per census
+///
+/// A "membership derived from the CALL" census — the shape that replaced
+/// `gateway::handlers::pty`'s file-enumerating guard after a measured
+/// 3-failures-in-8-runs flake, and that `providers::route_observe` now carries
+/// over for the route globals (判据 #16) — is two separable halves: *which
+/// lines reach the singleton* (the census's own question) and *which test owns
+/// a line* (this walk). The second half is one fact, so it has one author:
+/// written twice, the two copies are free to disagree about which attributes
+/// belong to a test or where a body ends, and only one of them would ever get
+/// the next fix.
+///
+/// Feed it [`code_text`] of [`cfg_test_portion`]: literal payloads are blanked
+/// there, so a `{` inside a string cannot desynchronise the brace matching and
+/// a census's own needle constants cannot match themselves.
+///
+/// # The one case it refuses to guess
+///
+/// A hit that lands in no test body is returned in
+/// [`uncharged`](TestBodyScan::uncharged) rather than silently dropped or
+/// charged to the nearest test: the walk cannot tell which tests call a shared
+/// helper, and a verdict about the wrong function is worse than no verdict.
+/// Every caller so far turns those into failures naming themselves.
+#[cfg(test)]
+pub(crate) fn scan_test_bodies(code: &str, reaches: &dyn Fn(&str) -> bool) -> TestBodyScan {
+    let lines: Vec<&str> = code.lines().collect();
+    let mut charged = vec![false; lines.len()];
+    let mut tests: Vec<TestBody> = Vec::new();
+
+    let mut i = 0usize;
+    while i < lines.len() {
+        let marker = lines[i].trim();
+        if !(marker.starts_with("#[tokio::test") || marker == "#[test]") {
+            i += 1;
+            continue;
+        }
+        let mut attrs = Vec::new();
+        let mut above = i;
+        while above > 0 && lines[above - 1].trim().starts_with('#') {
+            above -= 1;
+            attrs.push(lines[above].trim().to_string());
+        }
+        // The rest of the attribute block, then the `fn` line.
+        let mut j = i + 1;
+        while j < lines.len() && lines[j].trim().starts_with("#[") {
+            attrs.push(lines[j].trim().to_string());
+            j += 1;
+        }
+        if j >= lines.len() {
+            break;
+        }
+        let name = lines[j].trim().to_string();
+
+        // Brace-match the body.
+        let (mut depth, mut opened, mut end) = (0i32, false, j);
+        for (k, l) in lines.iter().enumerate().skip(j) {
+            depth += i32::try_from(l.matches('{').count()).unwrap_or(0);
+            depth -= i32::try_from(l.matches('}').count()).unwrap_or(0);
+            opened |= l.contains('{');
+            end = k;
+            if opened && depth <= 0 {
+                break;
+            }
+        }
+
+        tests.push(TestBody {
+            name,
+            attrs,
+            reaches: lines[j..=end].iter().any(|l| reaches(l)),
+        });
+        for c in charged.iter_mut().take(end + 1).skip(j) {
+            *c = true;
+        }
+        i = end + 1;
+    }
+
+    let uncharged = lines
+        .iter()
+        .enumerate()
+        .filter(|(k, l)| !charged[*k] && reaches(l))
+        .map(|(k, l)| (k + 1, (*l).trim().to_string()))
+        .collect();
+
+    TestBodyScan { tests, uncharged }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`scan_test_bodies`] is the shared half of two census guards
+    /// (`gateway::handlers::pty`'s global `PtyManager`,
+    /// `providers::route_observe`'s route globals), so its own failure modes
+    /// are asserted here — on a fixture — instead of being rediscovered in
+    /// whichever guard misfires first. All four are load-bearing: a tag
+    /// written ABOVE `#[test]` is the false-positive direction (a tagged test
+    /// reported as a violation, and a guard that misfires gets cited as
+    /// evidence), a hit in a shared helper is the case the walk refuses to
+    /// guess, and a test whose body does not match must come back
+    /// `reaches: false` rather than be dropped — the pty census counts every
+    /// test in a reaching file to prove it is not scanning nothing.
+    #[test]
+    fn scan_test_bodies_attributes_hits_from_both_attribute_sides_and_reports_orphans() {
+        let src = r#"mod tests {
+    fn helper() {
+        manager();
+    }
+
+    #[serial_test::parallel(k)]
+    #[test]
+    fn tag_above_the_marker() {
+        manager();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial(k)]
+    async fn tag_below_the_marker() {
+        if true {
+            manager();
+        }
+    }
+
+    #[test]
+    fn reaches_nothing() {
+        assert!(true);
+    }
+}
+"#;
+        let scan = scan_test_bodies(src, &|l: &str| l.contains("manager()"));
+
+        let names: Vec<&str> = scan.tests.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names.len(), 3, "one entry per test function, got {names:?}");
+        assert!(names[0].contains("tag_above_the_marker"), "{names:?}");
+        assert!(
+            scan.tests[0].reaches
+                && scan.tests[0]
+                    .attrs
+                    .iter()
+                    .any(|a| a == "#[serial_test::parallel(k)]"),
+            "an attribute written above `#[test]` belongs to that test: {:?}",
+            scan.tests[0].attrs
+        );
+        assert!(
+            scan.tests[1].reaches
+                && scan.tests[1]
+                    .attrs
+                    .iter()
+                    .any(|a| a == "#[serial_test::serial(k)]"),
+            "a nested-brace body still ends at its own closing brace: {:?}",
+            scan.tests[1].attrs
+        );
+        assert!(
+            !scan.tests[2].reaches,
+            "a test that does not match is reported, not dropped"
+        );
+        assert_eq!(
+            scan.uncharged,
+            vec![(3usize, "manager();".to_string())],
+            "the helper's hit is charged to no test, with a 1-based line"
+        );
+    }
 
     /// The shape the old `split("#[cfg(test)]")` handles correctly: one
     /// trailing test module and nothing after it.

@@ -375,9 +375,21 @@ impl RouteObservability {
 
 /// Process-global observability bundle. The daemon is an OS-level singleton
 /// (flock), so one cell per process is the whole world — same contract as
-/// [`route_handle`](crate::providers::route_handle)'s global. Registered by
-/// the production boot path only (`orchestrator_init`), so library tests
-/// never see a populated global.
+/// [`route_handle`](crate::providers::route_handle)'s global. Production
+/// installs it from the boot path (`orchestrator_init`); the `--lib` binary
+/// installs chainless [`test_observability`] bundles here too, from the tests
+/// that exercise a `[route]` hot write against the face `route_status`
+/// actually reads.
+///
+/// The slot is install-once with NO uninstall, so from the first such test
+/// onward every later test in that process sees a populated global. Which
+/// tests those are is not a list anyone maintains: every test that reaches
+/// this slot — or the route handle the same arm pokes beside it — carries
+/// `#[serial_test::serial(route_observability_global)]`, and
+/// `tests::every_test_that_reaches_the_route_globals_is_tagged` derives that
+/// membership from the CALL across the whole crate. So a test that needs the
+/// absent (`None`) branch cannot get it by running first; build it a local
+/// [`RouteObservability`] instead.
 ///
 /// `ConsumerDecides`: six production call sites, each choosing differently.
 /// `self_config`'s `route_status` drops the whole `data.runtime` object and the
@@ -423,8 +435,10 @@ pub fn decline_global_route_observability(because: &'static str) {
     GLOBAL.decline(because);
 }
 
-/// The boot-registered bundle, if the production chain has been assembled.
-/// `None` in tests / before boot — callers degrade to config-only output.
+/// The registered bundle, if the production chain has been assembled. `None`
+/// before boot — and in the `--lib` binary only until the first test installs
+/// one (the `GLOBAL` slot doc above states that rule). Callers degrade to
+/// config-only output.
 pub fn global_route_observability() -> Option<&'static RouteObservability> {
     GLOBAL.get()
 }
@@ -666,6 +680,129 @@ mod tests {
             matches!(global_route_observability_slot().missing(), MissingSemantics::ConsumerDecides),
             "`providers/route-observability` is classified ConsumerDecides from its consumers; changing that \
              means re-reading them, not re-typing this line"
+        );
+    }
+
+    /// Every test in this crate that reaches the process-global route
+    /// observability bundle — or the process-global `RouteHandle` the same
+    /// `[route]` hot-apply arm pokes beside it — carries
+    /// `#[serial_test::serial(route_observability_global)]`.
+    ///
+    /// # Why membership is derived from the call, not written down
+    ///
+    /// Both globals are install-once with no uninstall: the bundle is a
+    /// `CapabilitySlot`, the handle a first-caller-wins `OnceLock`. So the
+    /// first test that installs either one changes what every LATER test in
+    /// the `--lib` binary sees, and the two tests that each assert
+    /// `config_problems.len() == 1` on the same bundle
+    /// (`config::live_apply`'s executor arm and
+    /// `gateway::handlers::route_config`'s handler face) interleave into a
+    /// flake if they run concurrently. The key excludes them from each other;
+    /// this census is what stops the third one from being written without it.
+    ///
+    /// The precedent is
+    /// `gateway::handlers::pty::tests::every_test_that_reaches_the_global_pty_manager_is_tagged`,
+    /// which replaced a hand-written list after a measured 3-failures-in-8-runs
+    /// flake. Its lesson — a guard that enumerates its own members, by name or
+    /// by file, is blind to the member not yet written (§0 「守卫的绿只覆盖它
+    /// 认得的那种形状」) — is carried here rather than rediscovered here
+    /// (判据 #16, 孪生子系统).
+    ///
+    /// # Needles, corpus, attribution
+    ///
+    /// Two substrings, which subsume every spelling: `set_` and `decline_`
+    /// prefix `global_route_observability(`, `try_` prefixes
+    /// `global_route_handle(`. A reader is as order-dependent as a writer, so
+    /// both faces are in scope. The corpus is `cfg_test_portion` of every
+    /// `.rs` file under `src/` — the production callers (`health_prober`,
+    /// `codex_token_refresher`, `self_config`, the `route` arm itself) are not
+    /// tests and must not be charged — and `code_text` blanks comments and
+    /// string-literal payloads, so this test's own constants cannot match
+    /// themselves.
+    ///
+    /// Attribution — which test owns a hit — is
+    /// [`scan_test_bodies`](crate::utils::source_scan::scan_test_bodies), the
+    /// same walk the pty census uses, because that half of the question is one
+    /// fact and a second copy of it would be free to disagree about where a
+    /// body ends. A hit in NO test body — a shared helper — fails too, naming
+    /// itself: the walk will not guess which tests call a helper, and charging
+    /// it to whichever test precedes it would be a verdict about the wrong
+    /// function.
+    #[test]
+    fn every_test_that_reaches_the_route_globals_is_tagged() {
+        use crate::utils::source_scan::{
+            cfg_test_portion, code_text, rust_sources_under, scan_test_bodies,
+        };
+
+        const TAG: &str = "#[serial_test::serial(route_observability_global)]";
+        const NEEDLES: [&str; 2] = ["global_route_observability(", "global_route_handle("];
+        // Asserted PRESENT, never asserted to be the whole set: a new file may
+        // reach these globals, it just has to be tagged. This list is here so
+        // that a scan which silently stops finding anything fails loudly
+        // instead of passing vacuously.
+        const KNOWN_REACHERS: [&str; 2] = [
+            "src/config/live_apply.rs",
+            "src/gateway/handlers/route_config.rs",
+        ];
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut reaching: Vec<String> = Vec::new();
+        let mut reaching_tests = 0usize;
+        let mut violations: Vec<String> = Vec::new();
+
+        for (path, src) in rust_sources_under(&root) {
+            let code = code_text(&cfg_test_portion(&src));
+            let reaches = |l: &str| NEEDLES.iter().any(|n| l.contains(n));
+            if !code.lines().any(&reaches) {
+                continue;
+            }
+            reaching.push(path.clone());
+
+            let scan = scan_test_bodies(&code, &reaches);
+            for test in &scan.tests {
+                if !test.reaches {
+                    continue;
+                }
+                reaching_tests += 1;
+                if !test.attrs.iter().any(|a| a == TAG) {
+                    violations.push(format!(
+                        "{path}: `{}` reaches a process-global route handle without {TAG}",
+                        test.name
+                    ));
+                }
+            }
+            for (line, text) in &scan.uncharged {
+                violations.push(format!(
+                    "{path}:{line}: `{text}` reaches a process-global route handle outside any \
+                     #[test] body (a shared helper?). This guard will not guess which tests \
+                     call it — move the call into the tests, or tag every test in that file \
+                     with {TAG}"
+                ));
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "untagged users of the process-global route observability bundle / route handle. \
+             Both are install-once with no uninstall, so an untagged test can install its own \
+             bundle between another test's `[route]` write and that test's assertion — the \
+             `config_problems.len() == 1` pair in `config::live_apply` and \
+             `gateway::handlers::route_config` is exactly that shape.\n  {}",
+            violations.join("\n  ")
+        );
+        for known in KNOWN_REACHERS {
+            assert!(
+                reaching.iter().any(|p| p.ends_with(known)),
+                "the scan no longer sees {known} reaching the route globals. Either the call \
+                 moved (fine — update this list) or the scanner stopped working (not fine: a \
+                 census that finds nothing passes vacuously). Files it did find: {reaching:?}"
+            );
+        }
+        assert!(
+            reaching_tests >= 2,
+            "the scanner charged only {reaching_tests} test bodies with a route-global call, \
+             fewer than the 2 that existed when this census was written — so it is passing \
+             vacuously. Files it did find: {reaching:?}"
         );
     }
 }

@@ -338,7 +338,9 @@ mod tests {
         );
         let start = source.find(needle).expect("literal counted above");
         let body = &source[start + needle.len()..];
-        let end = body.find("};").expect("unterminated RouteConfigUpdate literal");
+        let end = body
+            .find("};")
+            .expect("unterminated RouteConfigUpdate literal");
         body[..end]
             .lines()
             .filter_map(|line| {
