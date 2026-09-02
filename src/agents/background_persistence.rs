@@ -130,17 +130,32 @@ pub enum RunPhase {
     Abandoned,
 }
 
-impl RunPhase {
-    /// Wire label handed to the model. `Abandoned` deliberately does not read
-    /// as a failure: nothing about the task was judged, the daemon simply
-    /// stopped existing underneath it.
-    #[must_use]
-    pub const fn status_label(self) -> &'static str {
-        match self {
-            Self::Running => "running",
-            Self::Settled => "completed",
-            Self::Abandoned => "interrupted_by_restart",
-        }
+/// Wire label handed to the model for one record.
+///
+/// Takes the **record**, not the phase, because `Settled` alone does not name
+/// an outcome: it says the run reached a terminal state in the process that
+/// owned it, and that state can be a timeout, a cancellation or a failure. The
+/// phase-only version answered `"completed"` for all four, so a child that
+/// timed out was rendered to the model with the same word as one that
+/// succeeded — and the accompanying note told it not to re-run the task.
+///
+/// `Abandoned` deliberately still does not read as a failure: nothing about
+/// the task was judged, the daemon simply stopped existing underneath it.
+#[must_use]
+pub fn settled_label(record: &PersistedRun) -> &'static str {
+    match record.phase {
+        RunPhase::Running => "running",
+        RunPhase::Abandoned => "interrupted_by_restart",
+        // The four words the tracker actually settles with. An unrecognised or
+        // absent outcome is `settled_unknown`, never `completed`: a label the
+        // model reads as success has to be earned by a producer that said so.
+        RunPhase::Settled => match record.outcome.as_deref() {
+            Some("completed") => "completed",
+            Some("failed") => "failed",
+            Some("timed_out") => "timed_out",
+            Some("cancelled") => "cancelled",
+            _ => "settled_unknown",
+        },
     }
 }
 
@@ -384,9 +399,16 @@ fn summarize_orphans(runs: &[RecoveredRun]) -> String {
     // Telling the model a finished run "did not fail — its process
     // disappeared" would invite it to re-delegate work whose answer is printed
     // directly underneath.
-    let (finished, interrupted): (Vec<&RecoveredRun>, Vec<&RecoveredRun>) = runs
+    // Three populations, not two: a `Settled` record whose outcome was NOT
+    // success is neither "its process disappeared" nor "this work is done, do
+    // not repeat it". Both of the old two paragraphs said something false
+    // about it, and the second said the expensive one.
+    let (settled, interrupted): (Vec<&RecoveredRun>, Vec<&RecoveredRun>) = runs
         .iter()
         .partition(|r| r.record.phase == RunPhase::Settled);
+    let (finished, unsuccessful): (Vec<&RecoveredRun>, Vec<&RecoveredRun>) = settled
+        .into_iter()
+        .partition(|r| r.record.outcome.as_deref() == Some("completed"));
 
     let render = |out: &mut String, group: &[&RecoveredRun]| {
         for run in group {
@@ -429,6 +451,18 @@ fn summarize_orphans(runs: &[RecoveredRun]) -> String {
             finished.len()
         ));
         render(&mut out, &finished);
+    }
+    if !unsuccessful.is_empty() {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&format!(
+            "{} background sub-agent(s) ended without success before the daemon stopped — \
+             see each one's outcome. Whatever they recorded is below; the task itself may \
+             still be undone, so read it and decide whether to re-run.\n",
+            unsuccessful.len()
+        ));
+        render(&mut out, &unsuccessful);
     }
     out
 }
@@ -863,10 +897,7 @@ mod tests {
         // ...and it is still answerable.
         let looked_up = lookup("req-orphan", Some("agent:a:peer:user")).expect("still on disk");
         assert_eq!(looked_up.record.phase, RunPhase::Abandoned);
-        assert_eq!(
-            looked_up.record.phase.status_label(),
-            "interrupted_by_restart"
-        );
+        assert_eq!(settled_label(&looked_up.record), "interrupted_by_restart");
         disable_for_test();
     }
 

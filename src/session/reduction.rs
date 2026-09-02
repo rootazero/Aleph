@@ -568,6 +568,44 @@ fn note_duplicate(
     }
 }
 
+/// Index of the first event this session recorded **on its own behalf**.
+///
+/// A `context=fork` child's log does not start with the child's work:
+/// `subagent_spawner::fork::seed` copies a verbatim slice of the parent's
+/// transcript in first and stamps it with a `SessionForked` marker, and the
+/// spawner then emits the child's own `TurnStarted`. Reading such a log from
+/// index 0 charges the parent's tool calls and assistant turns to the child —
+/// and, on the path that matters, hands the parent's last answer back as the
+/// child's finding.
+///
+/// The **last** `SessionForked`, not the first: `context::compact::
+/// session_split` writes its own marker into a child that may already carry
+/// one, and only the newest marker bounds the newest copied prefix.
+///
+/// Two ends, two answers, and neither is "count everything":
+/// * **no fork marker** → `0`. An unforked log's own work starts at its
+///   beginning, byte-identical to reading the whole slice.
+/// * **a fork marker with no `TurnStarted` after it** → `events.len()`. The
+///   child was seeded and died before its own turn opened, so its own scope is
+///   empty. Answering `0` here would report the *parent's* dispatches as the
+///   child's in-flight calls, which is the one reading that makes a model
+///   re-run work it never started (judged the fail-closed way: an empty scope
+///   reads as "it had not begun", which is what happened).
+#[must_use]
+pub fn own_work_start(events: &[SessionEventRecord]) -> usize {
+    let Some(forked_at) = events
+        .iter()
+        .rposition(|r| matches!(r.event, SessionEvent::SessionForked { .. }))
+    else {
+        return 0;
+    };
+    let after = forked_at + 1;
+    events[after..]
+        .iter()
+        .position(|r| matches!(r.event, SessionEvent::TurnStarted { .. }))
+        .map_or(events.len(), |i| after + i)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1666,5 +1704,97 @@ mod tests {
             offenders.is_empty(),
             "a refused reduction is read as a value at: {offenders:#?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod own_scope_tests {
+    use super::*;
+    use crate::session::events::{MessageContent, TurnTrigger};
+
+    fn rec(seq: EventSeq, event: SessionEvent) -> SessionEventRecord {
+        SessionEventRecord {
+            seq,
+            event,
+            created_at_ms: seq as i64 * 10,
+        }
+    }
+
+    fn forked() -> SessionEvent {
+        SessionEvent::SessionForked {
+            parent_session_id: "main:parent".to_string(),
+            at: 1,
+        }
+    }
+
+    fn turn_started() -> SessionEvent {
+        SessionEvent::TurnStarted {
+            turn_id: TurnId::new_v4(),
+            trigger: TurnTrigger::SubagentRequest,
+            at: 1,
+        }
+    }
+
+    fn assistant(text: &str) -> SessionEvent {
+        SessionEvent::AssistantMessage {
+            turn_id: TurnId::new_v4(),
+            content: MessageContent {
+                text: text.to_string(),
+                blocks: Vec::new(),
+                thinking: None,
+                thinking_signature: None,
+            },
+            usage: None,
+            at: 1,
+        }
+    }
+
+    #[test]
+    fn an_unforked_log_owns_all_of_itself() {
+        let events = vec![rec(1, turn_started()), rec(2, assistant("mine"))];
+        assert_eq!(own_work_start(&events), 0);
+    }
+
+    #[test]
+    fn an_empty_log_owns_nothing_and_says_zero() {
+        assert_eq!(own_work_start(&[]), 0);
+    }
+
+    /// The defect: a forked child's log opens with the parent's transcript.
+    /// Own scope starts at the child's own `TurnStarted`, which the spawner
+    /// emits after `fork::seed` returns.
+    #[test]
+    fn a_forked_log_starts_at_its_own_turn_not_at_the_seeded_prefix() {
+        let events = vec![
+            rec(1, forked()),
+            rec(2, assistant("the parent's conclusion")),
+            rec(3, turn_started()),
+            rec(4, assistant("the child's finding")),
+        ];
+        assert_eq!(own_work_start(&events), 2);
+    }
+
+    /// `session_split` stamps a second marker into a child that already has
+    /// one; only the newest bounds the newest copied prefix.
+    #[test]
+    fn the_last_fork_marker_wins() {
+        let events = vec![
+            rec(1, forked()),
+            rec(2, turn_started()),
+            rec(3, forked()),
+            rec(4, assistant("re-seeded prefix")),
+            rec(5, turn_started()),
+        ];
+        assert_eq!(own_work_start(&events), 4);
+    }
+
+    /// Seeded and killed before its own turn opened. The scope is EMPTY, not
+    /// the whole log: answering 0 would report the parent's dispatches as the
+    /// child's own in-flight calls.
+    #[test]
+    fn a_fork_that_never_opened_its_own_turn_owns_nothing() {
+        let events = vec![rec(1, forked()), rec(2, assistant("the parent's answer"))];
+        assert_eq!(own_work_start(&events), events.len());
+        assert!(events[own_work_start(&events)..].is_empty());
     }
 }

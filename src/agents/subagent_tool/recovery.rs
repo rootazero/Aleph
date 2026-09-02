@@ -39,13 +39,66 @@ use std::collections::HashMap;
 
 use serde_json::{json, Value};
 
-use crate::agents::subagent_spawner::{parent_session_id_of, SUBAGENT_BG_CHILD_PREFIX};
+use crate::agents::subagent_spawner::{
+    background_child_session_key, parent_session_id_of, SUBAGENT_BG_CHILD_PREFIX,
+};
 use crate::routing::session_key::SessionKey;
 use crate::session::events::{SessionEvent, SessionEventRecord};
-use crate::session::reduction::{LogContradiction, RunProgress};
+use crate::session::reduction::{DanglingCall, LogContradiction, RunProgress};
 use crate::tools::runtime::ToolResult;
 
 use super::types::LIST_RESULT_PREVIEW_CHARS;
+
+/// How much of one recovered transcript line the parent is shown.
+const CHILD_TAIL_CHARS: usize = 400;
+/// How many trailing assistant/tool lines of the child's log are carried.
+const CHILD_TAIL_LINES: usize = 3;
+
+/// One line of a child's transcript tail.
+///
+/// A pointer at `child_session` is only a pointer: the model has to spend
+/// another tool call to learn whether the child had produced anything at all,
+/// and the answer is already in the events this module just read. `text` is
+/// bounded because this rides a `check_status` result, not a transcript view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TailLine {
+    pub role: &'static str,
+    pub text: String,
+}
+
+/// The last few assistant/tool lines of a child's own scope.
+///
+/// Reads the durable `session_events` slice the caller already loaded — never
+/// the `messages` projection, which is lossy by construction and would make
+/// this face disagree with `progress`, computed from the same slice.
+fn child_tail(events: &[SessionEventRecord]) -> Vec<TailLine> {
+    let mut out: Vec<TailLine> = Vec::new();
+    for record in events.iter().rev() {
+        let (role, text) = match &record.event {
+            SessionEvent::AssistantMessage { content, .. } if !content.text.is_empty() => {
+                ("assistant", content.text.clone())
+            }
+            SessionEvent::ToolResult { output, .. } => (
+                "tool",
+                output
+                    .value
+                    .as_str()
+                    .map_or_else(|| output.value.to_string(), str::to_string),
+            ),
+            SessionEvent::ToolError { error, .. } => ("tool_error", error.clone()),
+            _ => continue,
+        };
+        out.push(TailLine {
+            role,
+            text: text.chars().take(CHILD_TAIL_CHARS).collect(),
+        });
+        if out.len() == CHILD_TAIL_LINES {
+            break;
+        }
+    }
+    out.reverse();
+    out
+}
 
 /// What the parent's durable log still knows about a background child that the
 /// in-memory tracker has forgotten.
@@ -71,6 +124,14 @@ pub(crate) enum Recovered {
         /// progress". Only the detail face (`resolve_forgotten`) fills it in;
         /// the directory (`list_from_log`) leaves it `None` on purpose.
         progress: Option<RunProgress>,
+        /// Calls the child dispatched with no recorded result, filled in the
+        /// same pass as `progress` and empty for the same two reasons (the log
+        /// was clean, or this face did not ask). These are the calls whose
+        /// outcome is *unknown* — the model must not read them as landed.
+        in_flight: Vec<DanglingCall>,
+        /// The last few lines of the child's own transcript, so the pointer at
+        /// `child_session` carries evidence instead of only an address.
+        tail: Vec<TailLine>,
         /// What the child's log says that it must not say, read in the same
         /// pass as `progress`. Empty when the log is consistent or when this
         /// face did not ask; holds the REJECT kind alone when the reducer
@@ -86,7 +147,97 @@ pub(crate) enum Recovered {
     /// died has no event-log record at all — while the sidecar's `record_start`
     /// ran before the task was even spawned. The sidecar also carries the
     /// activity trail and the settled outcome, neither of which the log has.
-    Sidecar(Box<crate::agents::background_persistence::RecoveredRun>),
+    ///
+    /// It does not *replace* the log, though, which is what it used to do: the
+    /// sidecar arm was inserted over whatever `recover_from_log` had found, so
+    /// a child that was both recorded here AND spawned into the parent's log
+    /// lost its `child_session` pointer, its progress counters and its
+    /// in-flight calls — the sidecar knows the phase, only the log knows what
+    /// the child actually did. Both halves ride together now.
+    Sidecar {
+        record: Box<crate::agents::background_persistence::RecoveredRun>,
+        /// Address of the child's own transcript, derived from the record the
+        /// same way the spawner minted it. `None` only when the record carries
+        /// no agent to mint it from.
+        child_session: Option<SessionKey>,
+        /// Same contract as [`Recovered::Interrupted::progress`]: `None` means
+        /// **this face did not ask**, never "no progress". A `Settled` record
+        /// is not read at all — its work is over and its result is the answer.
+        progress: Option<RunProgress>,
+        in_flight: Vec<DanglingCall>,
+        tail: Vec<TailLine>,
+        contradictions: Vec<LogContradiction>,
+    },
+}
+
+impl Recovered {
+    /// The sidecar arm with nothing read from the child log yet — the shape
+    /// every face starts from, and the only shape the directory face keeps.
+    fn sidecar(run: crate::agents::background_persistence::RecoveredRun) -> Self {
+        let child_session = (!run.record.agent.is_empty())
+            .then(|| background_child_session_key(&run.record.agent, &run.record.request_id));
+        Self::Sidecar {
+            record: Box::new(run),
+            child_session,
+            progress: None,
+            in_flight: Vec::new(),
+            tail: Vec::new(),
+            contradictions: Vec::new(),
+        }
+    }
+
+    /// The child log this row still needs read, plus the four slots that read
+    /// fills — or `None` when there is nothing to ask.
+    ///
+    /// One accessor rather than one enrichment loop per arm: the loop used to
+    /// name `Interrupted` alone, and every arm added afterwards inherited
+    /// "silently not enriched" as its default.
+    fn enrichment_slots(
+        &mut self,
+    ) -> Option<(
+        SessionKey,
+        &mut Option<RunProgress>,
+        &mut Vec<DanglingCall>,
+        &mut Vec<TailLine>,
+        &mut Vec<LogContradiction>,
+    )> {
+        match self {
+            Self::Interrupted {
+                child_session,
+                progress,
+                in_flight,
+                tail,
+                contradictions,
+                ..
+            } => Some((
+                child_session.clone(),
+                progress,
+                in_flight,
+                tail,
+                contradictions,
+            )),
+            Self::Sidecar {
+                record,
+                child_session,
+                progress,
+                in_flight,
+                tail,
+                contradictions,
+            } => {
+                // A settled run is not asked about: its work is over and its
+                // recorded result is the answer, so a progress count would only
+                // invite the model to second-guess a finished job.
+                if record.record.phase == crate::agents::background_persistence::RunPhase::Settled {
+                    return None;
+                }
+                let child = child_session.clone()?;
+                Some((child, progress, in_flight, tail, contradictions))
+            }
+            // Its actual final text is already here; there is nothing a child
+            // log could add and a read would be pure cost.
+            Self::Completed { .. } => None,
+        }
+    }
 }
 
 /// True when `child_id` is the child session minted for `request_id`.
@@ -130,6 +281,8 @@ pub(crate) fn classify(events: &[SessionEventRecord], request_id: &str) -> Optio
                     child_session: child_id.clone(),
                     flow: flow.clone(),
                     progress: None,
+                    in_flight: Vec::new(),
+                    tail: Vec::new(),
                     contradictions: Vec::new(),
                 });
             }
@@ -171,6 +324,8 @@ pub(crate) fn enumerate(
                     child_session: child_id.clone(),
                     flow: flow.clone(),
                     progress: None,
+                    in_flight: Vec::new(),
+                    tail: Vec::new(),
                     contradictions: Vec::new(),
                 },
             ),
@@ -247,65 +402,53 @@ pub(crate) fn to_json(request_id: &str, recovered: &Recovered) -> Value {
             child_session,
             flow,
             progress,
+            in_flight,
+            tail,
+            contradictions,
+        } => json!({
+            "status": "interrupted",
+            "request_id": request_id,
+            "agent": flow,
+            "child_session": child_session.to_string(),
+            "progress": progress_json(progress.as_ref()),
+            "in_flight_calls": in_flight_json(in_flight),
+            "child_tail": tail_json(tail),
+            // The child log's contradictions, by finding tag, so the model
+            // reads a refused or inconsistent log as "unknown" rather than
+            // as a clean run with zero progress.
+            "log_contradictions": contradictions
+                .iter()
+                .map(LogContradiction::tag)
+                .collect::<Vec<_>>(),
+            "note": interrupted_note(
+                "This sub-agent was still running when the server restarted, so it never \
+                 produced a result and is not running now.",
+                progress.as_ref(),
+                in_flight,
+            ),
+        }),
+        Recovered::Sidecar {
+            record: run,
+            child_session,
+            progress,
+            in_flight,
+            tail,
             contradictions,
         } => {
-            let mut note = "This sub-agent was still running when the server restarted, so it \
-                            never produced a result and is not running now. Whatever it had \
-                            already done — including any file writes or commands — has landed. \
-                            Its partial transcript is at child_session; read that before \
-                            deciding whether to spawn the task again."
-                .to_string();
-            if let Some(p) = progress {
-                use std::fmt::Write as _;
-                let calls_word = if p.tool_calls_dispatched == 1 {
-                    "call"
-                } else {
-                    "calls"
-                };
-                let messages_word = if p.assistant_messages == 1 {
-                    "message"
-                } else {
-                    "messages"
-                };
-                let _ = write!(
-                    note,
-                    " Before it stopped it had dispatched {} tool {}, {} of which recorded a \
-                     result, and produced {} assistant {}. Read the child transcript to \
-                     judge what is done — this is a report of what happened, not a verdict on \
-                     what is left.",
-                    p.tool_calls_dispatched,
-                    calls_word,
-                    p.tool_calls_answered,
-                    p.assistant_messages,
-                    messages_word
-                );
-            }
+            use crate::agents::background_persistence::{settled_label, RunPhase};
+            let note = if run.record.phase == RunPhase::Settled {
+                settled_note(&run.record).to_string()
+            } else {
+                interrupted_note(
+                    "This sub-agent belonged to a previous daemon process, so its live state \
+                     is gone and it is not running now. Nothing about the task itself was \
+                     judged.",
+                    progress.as_ref(),
+                    in_flight,
+                )
+            };
             json!({
-                "status": "interrupted",
-                "request_id": request_id,
-                "agent": flow,
-                "child_session": child_session.to_string(),
-                "progress": progress.as_ref().map(|p| json!({
-                    "tool_calls_dispatched": p.tool_calls_dispatched,
-                    "tool_calls_answered": p.tool_calls_answered,
-                    "assistant_messages": p.assistant_messages,
-                    "last_activity_ms": p.last_activity_at,
-                })),
-                // The child log's contradictions, by finding tag, so the model
-                // reads a refused or inconsistent log as "unknown" rather than
-                // as a clean run with zero progress.
-                "log_contradictions": contradictions
-                    .iter()
-                    .map(LogContradiction::tag)
-                    .collect::<Vec<_>>(),
-                "note": note,
-            })
-        }
-        Recovered::Sidecar(run) => {
-            use crate::agents::background_persistence::RunPhase;
-            let settled = run.record.phase == RunPhase::Settled;
-            json!({
-                "status": run.record.phase.status_label(),
+                "status": settled_label(&run.record),
                 "request_id": request_id,
                 "task": run.record.task,
                 "agent": run.record.agent,
@@ -313,18 +456,142 @@ pub(crate) fn to_json(request_id: &str, recovered: &Recovered) -> Value {
                 "last_activity_ms": run.last_activity_ms,
                 "partial_result": run.partial_result,
                 "outcome": run.record.outcome,
-                "note": if settled {
-                    "This sub-agent FINISHED in a previous daemon process. What it recorded \
-                     before that process ended is above — the work is done, do NOT re-run it."
-                } else {
-                    "This sub-agent belonged to a previous daemon process, so its live state \
-                     is gone. Anything above is what it managed to record before the process \
-                     ended — it is NOT a failure of the task. Re-delegate whatever is still \
-                     needed."
-                },
+                "child_session": child_session.as_ref().map(SessionKey::to_string),
+                "progress": progress_json(progress.as_ref()),
+                "in_flight_calls": in_flight_json(in_flight),
+                "child_tail": tail_json(tail),
+                "log_contradictions": contradictions
+                    .iter()
+                    .map(LogContradiction::tag)
+                    .collect::<Vec<_>>(),
+                "note": note,
             })
         }
     }
+}
+
+/// The progress counters, or `null` for **"this face did not ask"**. One
+/// renderer for both arms: two `json!` literals is two answers to "what are
+/// these keys called".
+fn progress_json(progress: Option<&RunProgress>) -> Value {
+    progress.map_or(Value::Null, |p| {
+        json!({
+            "tool_calls_dispatched": p.tool_calls_dispatched,
+            "tool_calls_answered": p.tool_calls_answered,
+            "assistant_messages": p.assistant_messages,
+            "last_activity_ms": p.last_activity_at,
+        })
+    })
+}
+
+/// The calls that crossed the dispatch line with no recorded result.
+///
+/// `provenance` is deliberately not rendered: every dangling call in a *child*
+/// log is `EarlierRun` (the child has no open run of its own once its process
+/// is gone), so the field would be a constant dressed as a finding.
+fn in_flight_json(calls: &[DanglingCall]) -> Value {
+    Value::Array(
+        calls
+            .iter()
+            .map(|c| {
+                json!({
+                    "tool_name": c.tool_name,
+                    "call_id": c.call_id,
+                    "denied": c.denied,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn tail_json(tail: &[TailLine]) -> Value {
+    Value::Array(
+        tail.iter()
+            .map(|l| json!({ "role": l.role, "text": l.text }))
+            .collect(),
+    )
+}
+
+/// What a settled sidecar record earns as a note — read off its **outcome**,
+/// not off its phase.
+///
+/// `phase == Settled` says the run reached a terminal state in the process that
+/// owned it; it does not say the terminal state was success. Telling the model
+/// "the work is done, do NOT re-run it" about a child that timed out, was
+/// cancelled or failed is the expensive direction of that collapse: the task
+/// silently never gets done and the transcript says it did.
+fn settled_note(record: &crate::agents::background_persistence::PersistedRun) -> &'static str {
+    match record.outcome.as_deref() {
+        Some("completed") => {
+            "This sub-agent FINISHED in a previous daemon process. What it recorded before \
+             that process ended is above — the work is done, do NOT re-run it."
+        }
+        _ => {
+            "This sub-agent ended without success in a previous daemon process — see \
+             `outcome` for how. Whatever it recorded is above; the task itself may still be \
+             undone. Read it and decide whether to re-run."
+        }
+    }
+}
+
+/// The shared tail of every "it stopped without a result" note.
+///
+/// The old sentence promised that "whatever it had already done — including any
+/// file writes or commands — has landed", which is false for precisely the
+/// calls that matter: a dispatch with no recorded result may have run, may have
+/// half-run, may never have reached the tool at all, and a call the approval
+/// gate denied definitely did not run. Naming the calls is what lets the model
+/// decide; claiming they landed decides for it.
+fn interrupted_note(
+    opening: &str,
+    progress: Option<&RunProgress>,
+    in_flight: &[DanglingCall],
+) -> String {
+    use std::fmt::Write as _;
+    let mut note = opening.to_string();
+    if let Some(p) = progress {
+        let calls_word = if p.tool_calls_dispatched == 1 {
+            "call"
+        } else {
+            "calls"
+        };
+        let messages_word = if p.assistant_messages == 1 {
+            "message"
+        } else {
+            "messages"
+        };
+        let _ = write!(
+            note,
+            " Before it stopped it had dispatched {} tool {}, {} of which recorded a result, \
+             and produced {} assistant {}. Calls that recorded a result have landed.",
+            p.tool_calls_dispatched, calls_word, p.tool_calls_answered, p.assistant_messages,
+            messages_word
+        );
+    }
+    let (denied, unknown): (Vec<&DanglingCall>, Vec<&DanglingCall>) =
+        in_flight.iter().partition(|c| c.denied);
+    if !unknown.is_empty() {
+        let names: Vec<&str> = unknown.iter().map(|c| c.tool_name.as_str()).collect();
+        let _ = write!(
+            note,
+            " These calls were dispatched with no recorded result — their outcome is unknown: \
+             [{}].",
+            names.join(", ")
+        );
+    }
+    if !denied.is_empty() {
+        let names: Vec<&str> = denied.iter().map(|c| c.tool_name.as_str()).collect();
+        let _ = write!(
+            note,
+            " These calls were denied by the approval gate and did not run: [{}].",
+            names.join(", ")
+        );
+    }
+    note.push_str(
+        " Read child_session before deciding whether to spawn the task again — this is a \
+         report of what happened, not a verdict on what is left.",
+    );
+    note
 }
 
 /// Render a recovered child as a **directory row**: the summary is previewed,
@@ -370,7 +637,7 @@ pub(crate) fn to_list_row(request_id: &str, recovered: &Recovered) -> Value {
             "agent": flow,
             "child_session": child_session.to_string(),
         }),
-        Recovered::Sidecar(run) => {
+        Recovered::Sidecar { record: run, .. } => {
             let text = &run.partial_result;
             let head: String = text.chars().take(LIST_RESULT_PREVIEW_CHARS).collect();
             let preview = if head.chars().count() < text.chars().count() {
@@ -379,7 +646,7 @@ pub(crate) fn to_list_row(request_id: &str, recovered: &Recovered) -> Value {
                 head
             };
             json!({
-                "status": run.record.phase.status_label(),
+                "status": crate::agents::background_persistence::settled_label(&run.record),
                 "request_id": request_id,
                 "task": run.record.task,
                 "agent": run.record.agent,
@@ -459,24 +726,37 @@ impl super::SubagentTool {
                 continue;
             }
             if let Some(run) = crate::agents::background_persistence::lookup(id, scope) {
-                out.insert(id.clone(), Recovered::Sidecar(Box::new(run)));
+                out.insert(id.clone(), Recovered::sidecar(run));
             }
         }
         // The detail face pays for progress; the directory does not (see the
         // `progress` field's doc). One extra read per interrupted child, and
         // only for the ids the caller actually named.
+        //
+        // BOTH unfinished arms, not just `Interrupted`: the sidecar arm
+        // overwrites the log arm above, so gating the enrichment on
+        // `Interrupted` meant every child the sidecar also knew about — which
+        // is every background child spawned by a daemon with persistence on —
+        // silently lost its progress, its in-flight calls and its transcript
+        // tail. The one that reached the enrichment was the one the sidecar had
+        // never heard of.
         for recovered in out.values_mut() {
-            if let Recovered::Interrupted {
-                child_session,
-                progress,
-                contradictions,
-                ..
-            } = recovered
-            {
-                match self.session.get_events(child_session, None, None).await {
-                    Ok(events) => match crate::session::reduction::reduce_run(&events) {
+            let Some((child, progress, in_flight, tail, contradictions)) =
+                recovered.enrichment_slots()
+            else {
+                continue;
+            };
+            match self.session.get_events(&child, None, None).await {
+                Ok(events) => {
+                    // A forked child's log opens with a copy of the parent's
+                    // transcript; charging those dispatches to the child would
+                    // report the parent's calls as the child's in-flight work.
+                    let own = &events[crate::session::reduction::own_work_start(&events)..];
+                    *tail = child_tail(own);
+                    match crate::session::reduction::reduce_run(own) {
                         Ok(reduction) => {
                             *progress = Some(reduction.progress);
+                            *in_flight = reduction.dangling;
                             *contradictions = reduction.contradictions;
                         }
                         // Refused: progress stays absent (unknown, not zero)
@@ -489,12 +769,12 @@ impl super::SubagentTool {
                             );
                             *contradictions = vec![contradiction];
                         }
-                    },
-                    Err(error) => {
-                        // Absent, not zero. A store that could not be read has
-                        // not told us the child did nothing.
-                        tracing::debug!(%error, "subagent recovery: child event log unreadable");
                     }
+                }
+                Err(error) => {
+                    // Absent, not zero. A store that could not be read has
+                    // not told us the child did nothing.
+                    tracing::debug!(%error, "subagent recovery: child event log unreadable");
                 }
             }
         }
@@ -535,10 +815,7 @@ impl super::SubagentTool {
         let mut seen: Vec<String> = known.to_vec();
         seen.extend(out.iter().map(|(id, _)| id.clone()));
         for run in crate::agents::background_persistence::list_for_scope(scope, &seen) {
-            out.push((
-                run.record.request_id.clone(),
-                Recovered::Sidecar(Box::new(run)),
-            ));
+            out.push((run.record.request_id.clone(), Recovered::sidecar(run)));
         }
         out
     }
@@ -547,6 +824,7 @@ impl super::SubagentTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::background_persistence::{PersistedRun, RecoveredRun, RunPhase};
     use crate::session::events::{now_ms, SessionEventRecord, TurnId};
 
     fn rec(event: SessionEvent) -> SessionEventRecord {
@@ -885,6 +1163,10 @@ mod tests {
         SessionKey::main("recovery-g5-parent")
     }
 
+    /// Addressing scope for the G5 fixtures. See
+    /// `the_directory_face_reads_only_the_parent_log` for why it is not `None`.
+    const G5_SCOPE: &str = "recovery-g5-scope-owned-by-nobody-else";
+
     fn g5_tool(
         session: std::sync::Arc<dyn crate::session::service::SessionService>,
     ) -> super::super::SubagentTool {
@@ -948,6 +1230,15 @@ mod tests {
     ///
     /// Asserted on the READ COUNT, not on the rows: "asked and got nothing"
     /// and "did not ask" render identically in the output.
+    ///
+    /// `G5_SCOPE`, not `None`: `list_from_log`'s second half reads
+    /// `background_persistence`, whose `INDEX` is a **process-global**
+    /// `LazyLock<Mutex<HashMap>>`. Any other test in the same binary that
+    /// enables the sidecar leaks its records into this one, and `scope = None`
+    /// is documented to see *everything* — so under `--test-threads` > 1 this
+    /// test read rows it never wrote and its row assertion went red at random.
+    /// A scope no other fixture uses makes the sidecar half deterministically
+    /// empty through the same `addressable` predicate production uses.
     #[tokio::test]
     async fn the_directory_face_reads_only_the_parent_log() {
         let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -960,7 +1251,7 @@ mod tests {
                 at: 1,
             })],
         );
-        let rows = tool.list_from_log(&[], None).await;
+        let rows = tool.list_from_log(&[], Some(G5_SCOPE)).await;
         assert_eq!(rows.len(), 1);
         assert!(
             matches!(&rows[0].1, Recovered::Interrupted { progress: None, .. }),
@@ -1010,9 +1301,13 @@ mod tests {
                 ),
             ],
         );
-        let out = tool.resolve_forgotten(&["req-1".to_string()], None).await;
+        let out = tool
+            .resolve_forgotten(&["req-1".to_string()], Some(G5_SCOPE))
+            .await;
         let Some(Recovered::Interrupted {
-            progress: Some(p), ..
+            progress: Some(p),
+            in_flight,
+            ..
         }) = out.get("req-1")
         else {
             panic!(
@@ -1022,5 +1317,201 @@ mod tests {
         };
         assert_eq!(p.tool_calls_dispatched, 1);
         assert_eq!(p.tool_calls_answered, 0);
+        // The same pass that counted the dispatch names it: a count alone
+        // cannot tell the model WHICH call it must not assume landed.
+        assert_eq!(in_flight.len(), 1, "the dangling dispatch is named");
+        assert_eq!(in_flight[0].tool_name, "bash_exec");
+        assert!(!in_flight[0].denied);
+    }
+
+    // -- C: the sub-agent faces state facts -----------------------------
+
+    fn persisted(request_id: &str, phase: RunPhase, outcome: Option<&str>) -> RecoveredRun {
+        RecoveredRun {
+            record: PersistedRun {
+                request_id: request_id.to_string(),
+                root_session: G5_SCOPE.to_string(),
+                task: "count the widgets".to_string(),
+                agent: "agent-a".to_string(),
+                started_ms: 1,
+                phase,
+                ended_ms: None,
+                outcome: outcome.map(str::to_string),
+                partial_result_file: None,
+                announced: false,
+            },
+            partial_result: "half a widget".to_string(),
+            last_activity_ms: 2,
+        }
+    }
+
+    fn dangling(tool_name: &str, denied: bool) -> DanglingCall {
+        DanglingCall {
+            call_id: format!("call-{tool_name}"),
+            tool_name: tool_name.to_string(),
+            turn_id: TurnId::new_v4(),
+            seq: 7,
+            provenance: crate::session::reduction::DanglingProvenance::EarlierRun,
+            denied,
+        }
+    }
+
+    /// C1 — the sidecar arm used to *replace* whatever the event log had
+    /// found, so a child both sources knew about lost its child-session
+    /// pointer, its progress and its in-flight calls. A row that is not
+    /// settled is asked, and it knows which log to ask.
+    #[test]
+    fn a_running_sidecar_row_still_gets_asked_about_its_child_log() {
+        let mut row = Recovered::sidecar(persisted("req-live", RunPhase::Running, None));
+        let (child, progress, in_flight, tail, contradictions) = row
+            .enrichment_slots()
+            .expect("a running sidecar row is enriched from the child log");
+        assert_eq!(child, bg_child("agent-a", "req-live"));
+        assert!(progress.is_none(), "not asked yet");
+        assert!(in_flight.is_empty() && tail.is_empty() && contradictions.is_empty());
+    }
+
+    /// The other side of the same gate: a settled run's work is over, so the
+    /// detail face does not pay a read to second-guess it.
+    #[test]
+    fn a_settled_sidecar_row_is_not_asked_about() {
+        let mut row = Recovered::sidecar(persisted("req-done", RunPhase::Settled, Some("completed")));
+        assert!(row.enrichment_slots().is_none());
+    }
+
+    /// C2 — `phase == Settled` is not `outcome == completed`. The old label
+    /// answered "completed" for all four terminal outcomes and the note told
+    /// the model not to re-run the task.
+    #[test]
+    fn a_settled_but_failed_run_is_not_labelled_completed() {
+        let row = Recovered::sidecar(persisted("req-bad", RunPhase::Settled, Some("failed")));
+        let json = to_json("req-bad", &row);
+        assert_eq!(json["status"], "failed");
+        let note = json["note"].as_str().unwrap();
+        assert!(
+            note.contains("ended without success"),
+            "the note must say the outcome was not success: {note}"
+        );
+        assert!(
+            !note.contains("do NOT re-run"),
+            "a failed run must not be sealed as done: {note}"
+        );
+        // And the row face agrees with the detail face about the word.
+        assert_eq!(to_list_row("req-bad", &row)["status"], "failed");
+    }
+
+    /// The control case: an actually-completed run keeps its seal.
+    #[test]
+    fn a_completed_run_keeps_the_do_not_re_run_seal() {
+        let row = Recovered::sidecar(persisted("req-ok", RunPhase::Settled, Some("completed")));
+        let json = to_json("req-ok", &row);
+        assert_eq!(json["status"], "completed");
+        assert!(json["note"].as_str().unwrap().contains("do NOT re-run"));
+    }
+
+    /// C5 — the note used to promise that everything the child had done "has
+    /// landed", which is false for exactly the calls that have no recorded
+    /// result. Those are named, and the model is told their outcome is
+    /// unknown.
+    #[test]
+    fn the_interrupted_note_names_the_calls_whose_outcome_is_unknown() {
+        let row = Recovered::Interrupted {
+            child_session: bg_child("agent-a", "req-1"),
+            flow: "explore".into(),
+            progress: Some(RunProgress {
+                tool_calls_dispatched: 2,
+                tool_calls_answered: 1,
+                assistant_messages: 1,
+                last_activity_at: Some(9),
+            }),
+            in_flight: vec![dangling("apply_patch", false)],
+            tail: Vec::new(),
+            contradictions: Vec::new(),
+        };
+        let json = to_json("req-1", &row);
+        let note = json["note"].as_str().unwrap();
+        assert!(
+            note.contains("their outcome is unknown") && note.contains("apply_patch"),
+            "the in-flight call must be named as unknown: {note}"
+        );
+        assert!(
+            !note.contains("including any file writes or commands — has landed"),
+            "the blanket landed-claim is gone: {note}"
+        );
+        assert_eq!(json["in_flight_calls"][0]["tool_name"], "apply_patch");
+        assert_eq!(json["in_flight_calls"][0]["denied"], false);
+    }
+
+    /// A denied call did not run. Rendering it in the same breath as the
+    /// unknown ones would make the model re-check something the approval gate
+    /// already refused.
+    #[test]
+    fn a_denied_call_reads_as_did_not_run_not_as_unknown() {
+        let row = Recovered::Interrupted {
+            child_session: bg_child("agent-a", "req-1"),
+            flow: "explore".into(),
+            progress: None,
+            in_flight: vec![dangling("bash_exec", true)],
+            tail: Vec::new(),
+            contradictions: Vec::new(),
+        };
+        let note = to_json("req-1", &row)["note"].as_str().unwrap().to_string();
+        assert!(
+            note.contains("denied by the approval gate and did not run")
+                && note.contains("bash_exec"),
+            "{note}"
+        );
+        assert!(
+            !note.contains("their outcome is unknown"),
+            "a denied call has a known outcome: {note}"
+        );
+    }
+
+    /// C8 — the pointer at `child_session` carries evidence. The tail comes
+    /// from the durable event slice, oldest-of-the-last-three first.
+    #[test]
+    fn the_child_tail_carries_the_last_lines_of_the_childs_own_log() {
+        let assistant = |text: &str| {
+            rec(SessionEvent::AssistantMessage {
+                turn_id: TurnId::new_v4(),
+                content: crate::session::events::MessageContent {
+                    text: text.to_string(),
+                    blocks: Vec::new(),
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                usage: None,
+                at: 1,
+            })
+        };
+        let events = vec![
+            assistant("one"),
+            assistant("two"),
+            assistant("three"),
+            assistant("four"),
+        ];
+        let tail = child_tail(&events);
+        assert_eq!(
+            tail.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
+            vec!["two", "three", "four"],
+            "the LAST three, in log order"
+        );
+        assert!(tail.iter().all(|l| l.role == "assistant"));
+    }
+
+    /// The bound is a cap, not a promise of length.
+    #[test]
+    fn a_long_tail_line_is_bounded() {
+        let long = "x".repeat(CHILD_TAIL_CHARS * 3);
+        let events = vec![rec(SessionEvent::ToolError {
+            turn_id: TurnId::new_v4(),
+            call_id: "c1".into(),
+            error: long,
+            at: 1,
+        })];
+        let tail = child_tail(&events);
+        assert_eq!(tail.len(), 1);
+        assert_eq!(tail[0].role, "tool_error");
+        assert_eq!(tail[0].text.chars().count(), CHILD_TAIL_CHARS);
     }
 }
