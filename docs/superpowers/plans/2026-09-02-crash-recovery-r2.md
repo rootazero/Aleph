@@ -686,3 +686,39 @@ builtin_tools::bash_exec` = `628 passed; 0 failed; 0 ignored; 17249 filtered out
 fixture 往进程全局 `INDEX` 里写这个 scope 的记录），所以「计数读到 2」在当前代码里**读不出机制**。
 它只在全量并行的整个二进制里被观察到过两次（一绿一红），因此证伪只能放在 T8 的**全量**跑里——
 模块过滤的绿不为它背书。
+
+### T6 续做 3/3 — `cd28442cb`（Step 1 欠着的三条断言 + Step 4 的第三条变异）
+
+前两次续做把 C 片的代码全部落地了，欠的是**读者**：`request_ids` 的 serde 兼容、分组通知的头
+文本、以及委托臂两个半边——三处的代码都在，三处都没有任何东西会在它们停止生效时变红。
+本次补的就是这三条断言（详见 `cd28442cb` 正文），外加计划 Step 4 的第三条变异。
+
+**变异 ③**（`repair_and_close_abandoned` 里 `let repaired = repair_boundary(...).await?;`
+→ `RepairReport::default()`，即"关 marker、不修边界"）：
+
+| 面 | 命令 | 观察到变红的测试 |
+|---|---|---|
+| `--lib` | `cargo test -p alephcore --lib -- teams::dispatcher session::boundary_repair gateway::resume_coordinator`（`100 passed; 2 failed`，EXIT=101） | `session::boundary_repair::tests::handing_a_session_back_answers_the_call_and_closes_the_run` · `teams::dispatcher::schedule::reclaim::crashed_attempt_tests::a_crashed_member_run_is_repaired_closed_and_summarised` |
+| 集成 | `cargo test -p alephcore --features test-helpers --test resume_coordinator_integration`（`15 passed; 1 failed`，EXIT=101） | `a_delegated_session_is_repaired_and_its_own_marker_closed` |
+
+**故意没变红的那一条也是观察**：`a_delegated_session_the_engine_is_running_is_left_alone` 在同一次
+变异下保持绿——它守的是规则的另一半（引擎正在跑 ⇒ 一次 append 都不许有），修不修边界都与它无关。
+两条委托臂测试各守一半，不冗余。
+
+**绿基线（同一 commit，变异还原之后重测）**：
+`cargo test -p alephcore --lib -- agents:: teams::dispatcher session::reduction session::boundary_repair
+gateway::resume_coordinator gateway::subagent_announce event::types builtin_tools::process_journal
+builtin_tools::bash_exec` = `649 passed; 0 failed; 0 ignored; 17230 filtered out`，EXIT=0，零 warning；
+`cargo test -p alephcore --features test-helpers --test resume_coordinator_integration`
+= `16 passed; 0 failed`，EXIT=0。变异前 `cp` 到 scratchpad、还原后 `git status --porcelain`
+只剩本次的三个文件。
+
+**作用域**：本次**没有**跑全量 `--lib`、`--bins`、clippy、`--features test-helpers --all-targets`
+的 check、以及 panel/tui/cli/protocol——仍是 T8 Step 4 的活。本轮改的三个文件里
+`shared/protocol` 一个字节都没动（`SubAgentCompleted` 不在那个 crate 里，见续做 2/3 的记录）。
+
+**给 T8 的一条量具观察**：`cargo test -p alephcore --features test-helpers --test
+<单个target名>` 在本工作树里**跑得通**（本次两次都是 EXIT=0，编译＋运行都正常），
+与 [[alephcore-integration-tests-need-j1]] 记的 `--test '*'` 那条 E0463 不冲突——
+那条是"一次展开全部集成 target"时的资源上限，点名单个 target 不触发。
+T8 若要跑集成面，优先按 target 点名，而不是先试 `--test '*'` 再退化到 `-j 1`。
