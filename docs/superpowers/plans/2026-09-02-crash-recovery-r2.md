@@ -15,7 +15,7 @@
 - **分支隔离**：全程在 worktree `D:\Workspace\Aleph\.claude\worktrees\crash-recovery-r2`（Bash 路径 `/d/Workspace/Aleph/.claude/worktrees/crash-recovery-r2`），分支 `worktree-crash-recovery-r2`。**严禁触碰 `main`**、严禁 `git checkout main`、严禁在 `D:\Workspace\Aleph` 主检出里编辑。
 - **R10**：`src/harness/` 一个字节都不改（`src/harness/agent/prompt.rs` 只读）。**R7**：归约只陈述事实，不替模型做重跑决策。**判据 #10**：wire 键集放进 `shared/protocol` 并用它构造响应，不写 `json!` 字面量。
 - **熵减**：每个任务里列出的「删除」项必须真的删掉；删 `pub fn` / 字段的同一笔里跑 `--lib` 测试构建（`cargo check` 看不见 `#[cfg(test)]`）。
-- **提交**：英文，格式 `<scope>: <description>`，正文末尾加一行 `Claude-Session: https://claude.ai/code/session_016KwvvvKyN52JZiSRnhyU4S`。每个任务结束时 `git status --porcelain` 为空（只提交本任务的文件；不 `git add -A` 也不 stash/checkout 别人的文件）。
+- **提交**：英文，格式 `<scope>: <description>`。**不加任何 attribution / trailer 行**（无 `Claude-Session:`、无 `Co-Authored-By:`）——2026-09-02 用户中途改了这条规则，两个 agent 各自把它当成冲突报告了一次，这里改成新规则以免第三个再报。每个任务结束时 `git status --porcelain` 为空（只提交本任务的文件；不 `git add -A` 也不 stash/checkout 别人的文件）。
 - **注释与标识符英文**；spec/plan 中文。
 - **禁止**在 `reduce_run(` 结果上 `unwrap_or` / `unwrap_or_default` / `.ok()` 吞错——`Err` 只有资格说「我不知道」（判据 #8）。
 
