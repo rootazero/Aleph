@@ -27,7 +27,7 @@
 //! them in `on_cleanup` (Leptos 0.8's `window_event_listener` registers no
 //! cleanup on its own).
 
-use leptos::ev::{pointermove, pointerup};
+use leptos::ev::{pointercancel, pointermove, pointerup};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -149,20 +149,34 @@ pub fn AgentPanel() -> impl IntoView {
     // clamps (`shared_ui_logic`) — every write here goes through it, so the
     // divider can never leave the panel too small to grab back (判据 §14).
     let container_ref = NodeRef::<leptos::html::Div>::new();
-    let drag_handles: StoredValue<Option<(WindowListenerHandle, WindowListenerHandle)>> =
-        StoredValue::new(None);
+    #[allow(clippy::type_complexity)]
+    let drag_handles: StoredValue<
+        Option<(WindowListenerHandle, WindowListenerHandle, WindowListenerHandle)>,
+    > = StoredValue::new(None);
 
     let stop_drag = move || {
         drag_handles.update_value(|slot| {
-            if let Some((move_h, up_h)) = slot.take() {
+            if let Some((move_h, up_h, cancel_h)) = slot.take() {
                 move_h.remove();
                 up_h.remove();
+                cancel_h.remove();
             }
         });
     };
 
     let on_divider_pointerdown = move |ev: web_sys::PointerEvent| {
         ev.prevent_default();
+        // A prior drag that never saw its `pointerup` — the browser claimed
+        // a touch gesture mid-drag and fired only `pointercancel`, or the
+        // pointer was lost outside the window — must be torn down before
+        // starting a new one. Without this, the line below overwrites
+        // `drag_handles` and DROPS the previous `WindowListenerHandle`
+        // triple; those have no `Drop` impl (`leptos_dom-0.8.8`'s
+        // `WindowListenerHandle::remove` only runs on an explicit call), so
+        // the orphaned listeners leak for the life of the page and neither
+        // `stop_drag` nor `on_cleanup` can ever reach them again (Task 9
+        // review finding 3).
+        stop_drag();
         let Some(el) = container_ref.get_untracked() else {
             return;
         };
@@ -185,7 +199,17 @@ pub fn AgentPanel() -> impl IntoView {
         let up_h = window_event_listener(pointerup, move |_ev: web_sys::PointerEvent| {
             stop_drag();
         });
-        drag_handles.update_value(|slot| *slot = Some((move_h, up_h)));
+        // On touch, `prevent_default()` on `pointerdown` does not by itself
+        // stop the browser from claiming the gesture (e.g. for page scroll)
+        // — when it does, `pointerup` never arrives and only `pointercancel`
+        // fires. Without this listener the stale `pointermove` handler above
+        // keeps resizing the panel on every later pointer move with nothing
+        // held down (a "sticky drag"), and the orphaned pair then leaks on
+        // the next `pointerdown` per the comment above.
+        let cancel_h = window_event_listener(pointercancel, move |_ev: web_sys::PointerEvent| {
+            stop_drag();
+        });
+        drag_handles.update_value(|slot| *slot = Some((move_h, up_h, cancel_h)));
     };
 
     on_cleanup(move || stop_drag());
@@ -235,7 +259,7 @@ pub fn AgentPanel() -> impl IntoView {
                 }}
             </div>
             <div
-                class="h-1.5 cursor-row-resize hover:bg-primary/40 transition-colors shrink-0"
+                class="h-1.5 cursor-row-resize hover:bg-primary/40 transition-colors shrink-0 touch-none"
                 on:pointerdown=on_divider_pointerdown
             />
         </div>
