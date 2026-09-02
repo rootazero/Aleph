@@ -784,3 +784,46 @@ teams::dispatcher gateway::subagent_announce`，`527 passed; 4 failed`，EXIT=10
 `event/{filter,global_bus,types}.rs` · `event/tests/integration.rs` · `gateway/subagent_announce.rs`），
 不属于 review 允许的"trivial"。阻塞项 1 修好之后头文本已不再说谎（N>1 只计数，N=1 的判决
 来自 outcome），所以这是**缺信息**不是**错信息**。
+
+### T7 — `92353f2a1`（TUI）+ `0bb51e613`（Panel）
+
+两批变异各自一次跑完，红名单逐条对得上（每批的变异互不相交，红名单按名字可归属）。
+
+**TUI**（`cargo test -p aleph-tui --lib`，变异构建 `306 passed; 4 failed`）：
+
+| 变异 | 观察到变红的测试 |
+|---|---|
+| `last_run_mark` 的 `Interrupted` 臂返回 `None` | `tui::commands::last_run_face_tests::picker_marks_interrupted` · `::the_list_face_marks_from_the_word_never_from_an_empty_dangling_list` |
+| 「没有 marker 但有悬空调用」那一臂抬到 `n > 999` | `::dangling_calls_are_reported_even_when_the_word_is_not_interrupted` |
+| 标题不再读 `topic` | `::session_entry_label_uses_topic_not_name` |
+
+**Panel**（`cargo test -p aleph-panel --lib`，变异构建 `1221 passed; 4 failed`）：
+
+| 变异 | 观察到变红的测试 |
+|---|---|
+| `run_badge` 的 `Interrupted` 臂返回 `None` | `components::chat_sidebar::last_run_face_tests::sidebar_row_shows_interrupted_badge_from_list_face` |
+| 悬空-无 marker 那一臂抬到 `n > 999` | `::dangling_calls_are_reported_even_when_the_word_is_not_interrupted` |
+| 带 progress 的中断臂加 `if false`（永远退到不带数字的那句） | `::history_with_interrupted_last_run_pushes_one_system_notice` |
+| `hydrate_session_history` 不再调 `last_run_notice`（两端都在，中间断线） | `::the_notice_is_pushed_into_the_transcript_as_a_system_row` |
+
+> ⚠️ **两条在变异下保持绿的，同样是观察**：`an_interrupted_run_with_no_progress_prints_no_numbers`
+> 对第三条变异是绿的（它守的正是那句不带数字的话），`an_unknown_disposition_is_not_read_as_clean`
+> 对第一条是绿的（它断的是 `Unknown` 徽标）。各守各的那一问。
+
+**绿基线**：`cargo test -p aleph-tui -p aleph-cli` = 310 passed（tui lib，新增 10）+ 1（tui bin）
++ 230 passed（cli），0 failed；`cargo test -p aleph-panel --lib` = `1225 passed; 0 failed`
+（EXIT=0）；`cargo check -p aleph-panel --all-targets` 零错误零警告；
+`cargo check -p aleph-panel --target wasm32-unknown-unknown` = Finished in 1m 34s。
+变异还原后 `git diff --stat` 对 `chat_sidebar.rs` / `commands.rs` 为空——**还原的证据是差集为空，
+不是再跑一遍绿**。
+
+**`just wasm` 在本 worktree 跑不起来，且与本改动无关**：`tailwindcss v4` 解析不到
+`interfaces/webchat/styles` 下的 `tailwindcss` 包（worktree 没有自己的 `node_modules`；
+`justfile` 的 recipe 借的是主检出的 `.bin`，那只解决 CLI，解决不了样式表自己的 `@import`）。
+出厂形态的 Rust 那一半由上面的 wasm-target check 覆盖，CSS 那一半**没验证过**。
+
+**Panel 的 i18n 闸是本任务的意外一课**：计划写的是「通知文案（中文）一处一份」，而
+`aleph-panel` 有 `i18n_census` 三道闸——手写中文（phone 可达路径**零容忍**）、全 crate 中文行数
+棘轮、以及「不许自己手搓 `#[cfg(test)]` 切割、必须调 `production_lines`」。第一版 4 条红全在
+这三道闸上。文案因此进了 `locales/{en,zh}.json`，`run_badge` 也从返回字面量改成返回
+`RunBadge` 枚举（判据一次，措辞按面）。**计划里的一句「中文」不等于这个 crate 允许写中文。**

@@ -45,6 +45,16 @@ pub fn handle_resume_command(session_key: String, json: bool) -> Result<(), Box<
     // been writing for months (`delegated`, `already_resuming`,
     // `log_inconsistent`) — a wire vocabulary can grow silently, a `match`
     // cannot.
+    //
+    // Five of these sentences have **no renderer today**: `NotFound`,
+    // `InvalidSessionKey`, `AgentForbidden`, `Unavailable` and `Failed` cannot
+    // arrive over the one transport this command uses. `admin_api/resume.rs`
+    // turns those outcomes into 4xx/5xx, and `forward_to_server` returns `Err`
+    // on a non-2xx, so the receipt is never parsed and this `match` is never
+    // reached with them. They stay because the JSON-RPC face DOES produce them
+    // and because the exhaustiveness is the ratchet this round wanted — but
+    // they are unrendered arms, not evidence that the wording was ever seen,
+    // and nobody should read the five sentences below as tested output.
     match response.outcome() {
         ResumeStatus::Resumed => println!(
             "Resumed the interrupted run in {named}. Watch the session for output."
