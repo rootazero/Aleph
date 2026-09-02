@@ -401,14 +401,27 @@ fn spawn_drain(
                     // `heal_session` takes the same lock.
                     let dirty = lock_missed(&missed).is_dirty(&id);
                     if dirty {
-                        let _ =
-                            heal_session(&store, &id, &missed, &pinned_events, &mut run_start)
-                                .await;
+                        let _ = heal_session(
+                            &store,
+                            &id,
+                            &missed,
+                            &pinned_events,
+                            &mut run_start,
+                            HealScope::KnownGaps,
+                        )
+                        .await;
                     }
                 }
                 ProjectorMsg::Repair(id, reply) => {
-                    let report =
-                        heal_session(&store, &id, &missed, &pinned_events, &mut run_start).await;
+                    let report = heal_session(
+                        &store,
+                        &id,
+                        &missed,
+                        &pinned_events,
+                        &mut run_start,
+                        HealScope::WholeSession,
+                    )
+                    .await;
                     let _ = reply.send(report);
                 }
                 ProjectorMsg::Flush(reply) => {
@@ -436,19 +449,39 @@ fn resolve_events(
         .or_else(crate::session::store::global_session_event_store)
 }
 
+/// How far back a heal pass reads the log before answering "up to date".
+///
+/// The two callers ask different questions, and the floor is the difference: a
+/// drain-triggered pass exists BECAUSE this process recorded misses, while a
+/// requested repair is asking about gaps this process never saw.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum HealScope {
+    /// Drain-triggered. The recorded misses are the gaps, so the lowest of them
+    /// is the floor — the live path must not re-read a session's whole log on
+    /// every back-pressure event.
+    KnownGaps,
+    /// Explicitly requested: the boot [`crate::gateway::projection_reconciler`]
+    /// and the `core/projection-holes` doctor check. Sweeps from the first
+    /// event, because an in-process floor answers the wrong question here — the
+    /// holes such a caller is asking about were left by ANOTHER process, and
+    /// `missed` holding one recent seq would start the pass above every one of
+    /// them and report "filled 0" for a session the caller measured as holed.
+    WholeSession,
+}
+
 /// Re-project everything this session's transcript is missing.
 ///
 /// The predicate is a **set**, not a watermark: `present(seq)` answers from the
 /// transcript's own row ids, so a gap at seq 10 with 11 and 12 written is
-/// filled. `from` is the lowest known-missing seq (or 1), so a session with no
-/// recorded gaps still gets a full sweep when a caller asks for a repair —
-/// which is what makes this reachable for holes left by a previous process.
+/// filled. How far down the log the pass starts is [`HealScope`]'s job, not the
+/// missed set's: a requested repair always starts at 1.
 async fn heal_session(
     store: &Arc<dyn SessionStore>,
     id: &SessionId,
     missed: &Arc<StdMutex<MissedSeqs>>,
     pinned_events: &Option<Arc<dyn SessionEventStore>>,
     run_start: &mut HashMap<SessionId, EventSeq>,
+    scope: HealScope,
 ) -> RepairReport {
     let mut report = RepairReport::default();
     let key = id.to_key_string();
@@ -471,7 +504,10 @@ async fn heal_session(
     }
 
     let claimed = lock_missed(missed).take(id);
-    let from = claimed.iter().next().copied().unwrap_or(1);
+    let from = match scope {
+        HealScope::WholeSession => 1,
+        HealScope::KnownGaps => claimed.iter().next().copied().unwrap_or(1),
+    };
 
     let Some(event_store) = resolve_events(pinned_events) else {
         // No SSOT log installed: this pass cannot tell a whole session from a
@@ -1913,5 +1949,71 @@ mod tests {
         assert!(report.legacy, "a seq-less transcript must be named: {report:?}");
         assert_eq!(report.holes_filled, 0);
         assert_eq!(store.get_history(&id, None).await.unwrap().len(), 1);
+    }
+
+    /// A requested repair sweeps the WHOLE session, not the part above the
+    /// lowest seq this process happens to have recorded.
+    ///
+    /// Both callers of `request_repair` — the boot reconciler and the
+    /// `core/projection-holes` doctor check — are asking about holes left by
+    /// ANOTHER process, which by construction left no in-process record of
+    /// them. Taking the floor from `missed` starts the pass above those holes
+    /// and answers "filled 0" for a session the doctor's own unbounded
+    /// comparison just measured as holed: a no-op that reports success.
+    #[tokio::test]
+    async fn a_requested_repair_sweeps_below_the_seqs_this_process_missed() {
+        let events = crate::session::store::install_test_event_store();
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "floor.db");
+        let id = SessionId::ephemeral("floor");
+        store.get_or_create(&id).await.unwrap();
+        let projector = MessageProjector::new(store.clone(), None);
+
+        let tid = uuid::Uuid::new_v4();
+        let log: [(EventSeq, SessionEvent); 5] = [
+            (1, user_msg(tid)),
+            (2, assistant_msg(tid)),
+            (3, user_msg(tid)),
+            (4, assistant_msg(tid)),
+            (5, user_msg(tid)),
+        ];
+        for (seq, ev) in &log {
+            events.append(&id, *seq, ev, *seq as i64).await.unwrap();
+        }
+
+        // Seqs 1 and 2 are the previous process's hole: durable in the log,
+        // absent from the transcript, and unknown to anything in this one.
+        for (seq, ev) in &log[2..4] {
+            projector.on_appended(&id, &rec(*seq, ev.clone()));
+        }
+        projector.flush(Duration::from_secs(5)).await.unwrap();
+        assert_eq!(store.get_history(&id, None).await.unwrap().len(), 2);
+
+        // This process then records a miss of its own, ABOVE that hole.
+        projector.kill_drain();
+        projector.on_appended(&id, &rec(5, log[4].1.clone()));
+        assert_eq!(
+            projector.missed_seqs(&id),
+            [5u64].into_iter().collect::<BTreeSet<_>>(),
+            "the closed channel must record the seq it could not deliver"
+        );
+
+        let report = projector.request_repair(&id).await;
+        assert!(!report.errored, "the repair ran: {report:?}");
+
+        let key = id.to_key_string();
+        let projected: BTreeSet<EventSeq> = store
+            .get_history(&id, None)
+            .await
+            .unwrap()
+            .iter()
+            .filter_map(|m| parse_source_seq(&m.id, &key))
+            .collect();
+        assert_eq!(
+            projected,
+            [1u64, 2, 3, 4, 5].into_iter().collect::<BTreeSet<_>>(),
+            "a requested repair must reach the holes below this process's own \
+             missed seqs, not start at them: {projected:?}"
+        );
     }
 }
