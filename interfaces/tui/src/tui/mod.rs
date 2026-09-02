@@ -36,7 +36,9 @@ use tokio::sync::mpsc;
 use tui_textarea::TextArea;
 
 use aleph_protocol::providers::ProviderListResult;
-use aleph_protocol::runtime::{RuntimeAgentsListResponse, RUNTIME_AGENTS_CHANGED_TOPIC};
+use aleph_protocol::runtime::{
+    RuntimeAgentsListResponse, RUNTIME_AGENTS_CHANGED_TOPIC, RUNTIME_AGENTS_LIST_METHOD,
+};
 
 use aleph_client::{AlephClient, CliConfig, CliError, CliResult, ClientEvent};
 
@@ -124,16 +126,50 @@ fn agent_panel_data(result: CliResult<RuntimeAgentsListResponse>) -> AgentPanelD
 }
 
 /// Fetch `runtime.agents.list` and store the result in
-/// `state.runtime_agents`. Called once at startup and once per iteration of
-/// `main_loop` where `state.runtime_agents_refetch_due` is set (by a
-/// `runtime.agents.changed` topic event — see
-/// [`app::AppState::handle_topic_event`]).
+/// `state.runtime_agents`. Called once per iteration of `main_loop` where
+/// `state.runtime_agents_refetch_due` is set — by [`subscribe_runtime_agents`]
+/// at startup and after every reconnect, or by a `runtime.agents.changed`
+/// topic event (see [`app::AppState::handle_topic_event`]).
 async fn refresh_runtime_agents(state: &mut AppState, client: &AlephClient) {
     state.runtime_agents = agent_panel_data(
         client
-            .call::<_, RuntimeAgentsListResponse>("runtime.agents.list", None::<()>)
+            .call::<_, RuntimeAgentsListResponse>(RUNTIME_AGENTS_LIST_METHOD, None::<()>)
             .await,
     );
+}
+
+/// Subscribe to the agent panel's topic and mark a re-fetch as due.
+///
+/// One derivation, two callers (判据 §9/§1) — `run()` at startup, and the
+/// reconnect-success arm in `main_loop`, beside `reconcile_side_question`.
+/// Both need it: `events.subscribe` registers PER-CONNECTION server state
+/// (`subscription_manager.remove_connection` drops it on close), so
+/// `AlephClient::reconnect`'s new socket starts subscribed to nothing.
+/// Without re-subscribing there, the first reconnect silently and
+/// permanently kills this screen's agent-panel data path — R8-5 waives only
+/// *unsubscribe* for the process's life, not *re-subscribe* after a socket
+/// the gateway itself dropped.
+///
+/// Sets the flag rather than awaiting [`refresh_runtime_agents`] directly:
+/// the subscribe must complete before this screen can miss a notification
+/// (so it stays awaited), but the fetch itself does not need to block the
+/// caller — `main_loop`'s existing flag-check performs it on its next
+/// iteration, and doing it this way is also what makes
+/// [`app::AgentPanelData::Loading`] observable at all (awaiting the fetch
+/// here left it permanently unreachable before the first frame ever drew).
+async fn subscribe_runtime_agents(state: &mut AppState, client: &AlephClient) {
+    // A non-operator's subscribe still "succeeds" as an RPC — the operator
+    // gate lives on the event's publish side (`EventScopeGuard`), not on
+    // `events.subscribe` itself — so its result is not worth failing on;
+    // the eventual `runtime.agents.list` fetch this triggers is what
+    // actually reports the gate's answer.
+    let _ = client
+        .call::<_, Value>(
+            "events.subscribe",
+            Some(json!({ "topics": [RUNTIME_AGENTS_CHANGED_TOPIC] })),
+        )
+        .await;
+    state.runtime_agents_refetch_due = true;
 }
 
 /// Entry point: run the TUI application.
@@ -222,24 +258,11 @@ pub async fn run(
     }
 
     // 3b-iii. Agent panel (Task 8a): subscribe once for the life of this
-    // process — no unsubscribe this phase, and no re-subscribe on reconnect
-    // (R8-5) — then fetch the current table. Order matters: subscribing
-    // first means a change published between the subscribe and the fetch is
-    // not missed as a notification (it may just make the fetch answer with
-    // slightly newer data than the moment the subscribe was acknowledged,
-    // which is harmless — the fetch always reads the current table, not a
-    // snapshot pinned to the subscribe). A non-operator's subscribe still
-    // "succeeds" as an RPC — the operator gate lives on the event's publish
-    // side (`EventScopeGuard`), not on `events.subscribe` itself — so its
-    // result is not worth failing startup over; the fetch below is what
-    // actually reports the gate's answer.
-    let _ = client
-        .call::<_, Value>(
-            "events.subscribe",
-            Some(json!({ "topics": [RUNTIME_AGENTS_CHANGED_TOPIC] })),
-        )
-        .await;
-    refresh_runtime_agents(&mut state, &client).await;
+    // process, then mark a fetch as due — main_loop's first iteration
+    // performs it, so this does not block startup on a second round trip
+    // and AgentPanelData::Loading is briefly observable, as R8-6 intended.
+    // The reconnect arm calls this same helper again — see its own doc.
+    subscribe_runtime_agents(&mut state, &client).await;
 
     // 3c. Attach to the named conversation: transcript + the settings that
     // govern it (mode / tier / thinking depth / model / cumulative tokens /
@@ -492,6 +515,13 @@ async fn main_loop<'c>(
                     // implies a prior `agent.run`, but which conversation this
                     // screen is on has no bearing on whether one is in flight.
                     reconcile_side_question(state, client).await;
+                    // The agent panel's subscription is likewise NOT covered
+                    // by the reattach above — it is per-CONNECTION server
+                    // state, and this is a new connection. See
+                    // `subscribe_runtime_agents`'s own doc for why skipping
+                    // this silently and permanently freezes the panel after
+                    // the first reconnect.
+                    subscribe_runtime_agents(state, client).await;
                 }
                 Err(e) => {
                     backoff = next_backoff(backoff);
@@ -920,7 +950,13 @@ mod tests {
 
         assert!(matches!(ready, AgentPanelData::Ready(ref v) if v.len() == 1));
         match refused {
-            AgentPanelData::Refused(msg) => assert!(msg.contains("operator")),
+            // The mapping passes the message through untouched — assert
+            // equality with the shared constant, not a substring of its
+            // wording, so this test stays green if that wording ever
+            // changes (another page keys off it too — see
+            // `ADMIN_REQUIRED_MESSAGE`'s own doc) and only reddens if the
+            // pass-through itself breaks.
+            AgentPanelData::Refused(msg) => assert_eq!(msg, ADMIN_REQUIRED_MESSAGE),
             other => panic!("AUTH_REQUIRED must map to Refused, not {other:?}"),
         }
         match unavailable {
@@ -1001,9 +1037,20 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let start = code
+        // Bounded to `main_loop`'s own body, not the whole production slice:
+        // an identical `if state.runtime_agents_refetch_due { … }` block
+        // sitting in some OTHER function (including a dead one nothing calls)
+        // would otherwise satisfy this test while the assertion below claims
+        // it is "checked in main_loop" — which would then be false.
+        let main_loop_start = code
+            .find("async fn main_loop")
+            .expect("main_loop must still exist");
+        let main_loop_body = &code[main_loop_start..];
+
+        let start = main_loop_body
             .find("if state.runtime_agents_refetch_due {")
-            .expect("the flag must still be checked in main_loop");
+            .map(|i| main_loop_start + i)
+            .expect("the flag must still be checked inside main_loop");
         let end = code[start..]
             .find('}')
             .map(|i| start + i)

@@ -69,7 +69,15 @@ pub async fn follow_run(
     let mut tool_count = 0usize;
     let mut agent_trace_seen = false;
     let mut footer_rendered = false;
-    let mut saw_final_chunk = false;
+    // `Some` once the final `ResponseChunk` is seen — a single ABSOLUTE
+    // deadline set once, not a relative duration re-armed on every inner-loop
+    // iteration. A relative `timeout(FINAL_GRACE, …)` recomputed each time
+    // the inner drain loops back (which it does for every `ClientEvent::Topic`
+    // frame) would let a sustained drip of topic frames postpone this
+    // function's return indefinitely — the grace period would never actually
+    // elapse as long as *something* kept arriving before the previous
+    // relative window expired.
+    let mut final_deadline: Option<tokio::time::Instant> = None;
     let mut printed_body = false;
     let mut md = MarkdownStream::new();
 
@@ -91,10 +99,13 @@ pub async fn follow_run(
         // closes/times out, in which case it breaks the OUTER loop exactly
         // like the un-split code below used to `break` directly.
         let event = loop {
-            let ev = if saw_final_chunk {
+            let ev = if let Some(deadline) = final_deadline {
                 // Body complete — wait briefly for the RunComplete receipt
                 // (single-source emission) without hanging on a dead server.
-                match tokio::time::timeout(FINAL_GRACE, events.recv()).await {
+                // `timeout_at` an ABSOLUTE instant fixed when the final chunk
+                // arrived, so re-entering this inner loop for a topic frame
+                // does not push the deadline back out.
+                match tokio::time::timeout_at(deadline, events.recv()).await {
                     Ok(Some(ev)) => ev,
                     Ok(None) | Err(_) => break 'outer,
                 }
@@ -194,7 +205,7 @@ pub async fn follow_run(
                     }
                 }
                 if is_final {
-                    saw_final_chunk = true;
+                    final_deadline.get_or_insert_with(|| tokio::time::Instant::now() + FINAL_GRACE);
                 }
             }
             // Fallback path: coarse tool events when no AgentTrace stream is
