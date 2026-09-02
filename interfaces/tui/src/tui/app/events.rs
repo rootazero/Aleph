@@ -745,18 +745,19 @@ impl AppState {
     /// frame, surfaced by `aleph-client` as `ClientEvent::Topic` and routed
     /// here from the main loop's `select!` arm.
     ///
-    /// Sync, like [`Self::handle_gateway_event`] — it cannot itself await
-    /// the re-fetch RPC, so it only decides WHETHER one is due and leaves
-    /// performing it to the caller (`Action::FetchRuntimeAgents`, handled by
-    /// the main loop the same way it already handles
-    /// `Action::ProviderPickerRefresh`).
+    /// Returns nothing, unlike [`Self::handle_gateway_event`]: whether a
+    /// re-fetch is due is recorded as STATE
+    /// (`AppState::runtime_agents_refetch_due`), not an `Action` — see that
+    /// field's own doc for why. It cannot itself await the re-fetch RPC
+    /// either way; the main loop performs it once per iteration after
+    /// checking the flag.
     ///
     /// Only one topic is understood this phase: `runtime.agents.changed`.
     /// Every other topic is a no-op — this client subscribes to nothing
     /// else (R8-5), so an unrecognised topic here means a future feature
     /// has not wired its handler yet, not a defect, and must not be read as
-    /// license to trigger the one action that IS wired.
-    pub fn handle_topic_event(&mut self, topic: &str, _data: serde_json::Value) -> Action {
+    /// license to set the one flag that IS wired.
+    pub fn handle_topic_event(&mut self, topic: &str, _data: serde_json::Value) {
         if topic == aleph_protocol::runtime::RUNTIME_AGENTS_CHANGED_TOPIC {
             // Deliberately does NOT reset `self.runtime_agents` to `Loading`
             // here: the notification carries no agent data, only word that
@@ -765,9 +766,7 @@ impl AppState {
             // that has not actually gone stale from the viewer's
             // perspective. The re-fetch this triggers replaces it once the
             // answer is in hand.
-            Action::FetchRuntimeAgents
-        } else {
-            Action::None
+            self.runtime_agents_refetch_due = true;
         }
     }
 }

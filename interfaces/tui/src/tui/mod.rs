@@ -124,9 +124,10 @@ fn agent_panel_data(result: CliResult<RuntimeAgentsListResponse>) -> AgentPanelD
 }
 
 /// Fetch `runtime.agents.list` and store the result in
-/// `state.runtime_agents`. Called once at startup and once per
-/// `Action::FetchRuntimeAgents` (a `runtime.agents.changed` topic event) —
-/// see [`app::AppState::handle_topic_event`].
+/// `state.runtime_agents`. Called once at startup and once per iteration of
+/// `main_loop` where `state.runtime_agents_refetch_due` is set (by a
+/// `runtime.agents.changed` topic event — see
+/// [`app::AppState::handle_topic_event`]).
 async fn refresh_runtime_agents(state: &mut AppState, client: &AlephClient) {
     state.runtime_agents = agent_panel_data(
         client
@@ -347,13 +348,19 @@ fn should_redraw_after_tick(has_active_run: bool, connection_state_changed: bool
 /// Route one item off the gateway-event receiver to the right sync handler.
 ///
 /// `ClientEvent::Stream` is the run/session plane every arm below this one
-/// already existed to handle; `ClientEvent::Topic` is Task 8a's addition —
-/// `AppState::handle_topic_event` decides whether it names a re-fetch this
-/// screen understands.
+/// already existed to handle, and can return any `Action`. `ClientEvent::Topic`
+/// is Task 8a's addition and always returns `Action::None`: whether it names
+/// a re-fetch this screen understands is recorded as state
+/// (`AppState::runtime_agents_refetch_due`), not returned as an `Action` —
+/// see that field's own doc for why an `Action` here would be unsafe to
+/// coalesce away in the burst-drain below.
 fn dispatch_client_event(state: &mut AppState, event: ClientEvent) -> Action {
     match event {
         ClientEvent::Stream(se) => state.handle_gateway_event(*se),
-        ClientEvent::Topic { topic, data } => state.handle_topic_event(&topic, data),
+        ClientEvent::Topic { topic, data } => {
+            state.handle_topic_event(&topic, data);
+            Action::None
+        }
     }
 }
 
@@ -501,6 +508,23 @@ async fn main_loop<'c>(
                     reconnecting = Some(reconnect_after(client, config, backoff));
                 }
             }
+        }
+
+        // A pending agent-panel re-fetch is STATE
+        // (`state.runtime_agents_refetch_due`), checked and cleared once per
+        // iteration here — not an `Action`, and not folded into the match
+        // below. See the field's own doc: the burst-coalescing drain in the
+        // `gateway_events` branch above keeps only the LAST non-`None`
+        // action from a drained burst, so an `Action` that meant "go
+        // re-fetch the agent table" could be silently overwritten by a later
+        // frame in the same burst and never happen — and `runtime.agents.changed`
+        // fires exactly when `stream.*` chunks are also flying, which is not
+        // a rare shape for this loop to see. A `bool` on `AppState` cannot be
+        // coalesced away by a later frame the way a returned `Action` could.
+        if state.runtime_agents_refetch_due {
+            state.runtime_agents_refetch_due = false;
+            refresh_runtime_agents(state, client).await;
+            needs_redraw = true;
         }
 
         // Execute action
@@ -774,9 +798,6 @@ async fn main_loop<'c>(
             Action::ProviderPickerRefresh => {
                 refresh_picker_provider(state, client).await;
             }
-            Action::FetchRuntimeAgents => {
-                refresh_runtime_agents(state, client).await;
-            }
         }
 
         // Check quit flag
@@ -791,8 +812,8 @@ async fn main_loop<'c>(
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_panel_data, model_caption, should_redraw_after_tick, Action, AgentPanelData,
-        AppState, ModelCaption, RUNTIME_AGENTS_CHANGED_TOPIC,
+        agent_panel_data, model_caption, should_redraw_after_tick, AgentPanelData, AppState,
+        ModelCaption, RUNTIME_AGENTS_CHANGED_TOPIC,
     };
     use aleph_client::CliError;
     use aleph_protocol::jsonrpc::{ADMIN_REQUIRED_MESSAGE, AUTH_REQUIRED};
@@ -910,15 +931,19 @@ mod tests {
 
     /// The round trip R8-7 asks for: a `runtime.agents.changed` topic event
     /// arriving ends with `runtime_agents` holding entries it did not have
-    /// before — not merely a flag having flipped (判据 §4). Both halves are
-    /// the REAL functions production uses (`AppState::handle_topic_event`,
-    /// `agent_panel_data` — the same mapping `refresh_runtime_agents` applies
-    /// to a real RPC reply), driven in the sequence the main loop drives
-    /// them. The one link this cannot exercise without a live socket is
+    /// before — not merely a flag having flipped (判据 §4). A flag DOES flip
+    /// here (`runtime_agents_refetch_due` — see its doc for why the fix-round-1
+    /// design deliberately makes the pending re-fetch state, not an `Action`
+    /// that a burst-coalescing drain could silently lose), but this test does
+    /// not stop at that: it drives the REAL functions production uses
+    /// (`AppState::handle_topic_event`, `agent_panel_data` — the same mapping
+    /// `refresh_runtime_agents` applies to a real RPC reply) in the sequence
+    /// the main loop drives them, and asserts the state that comes out the
+    /// other end. The one link this cannot exercise without a live socket is
     /// `client.call` itself, already covered by `shared/client`'s own test
-    /// suite; `a_fetch_runtime_agents_action_is_wired_to_the_refetch` below
-    /// closes the remaining gap — that the main loop's dispatch arm actually
-    /// calls `refresh_runtime_agents` for this action.
+    /// suite; `a_runtime_agents_refetch_flag_is_wired_to_the_refetch_call`
+    /// below closes the remaining gap — that `main_loop` actually acts on the
+    /// flag this test sets.
     #[test]
     fn a_runtime_agents_changed_topic_ends_with_new_entries_in_state() {
         let mut state = AppState::new("s".into(), "m".into());
@@ -926,9 +951,16 @@ mod tests {
             matches!(state.runtime_agents, AgentPanelData::Loading),
             "must start with no answer yet"
         );
+        assert!(
+            !state.runtime_agents_refetch_due,
+            "must start with nothing pending"
+        );
 
-        let action = state.handle_topic_event(RUNTIME_AGENTS_CHANGED_TOPIC, serde_json::json!({}));
-        assert!(matches!(action, Action::FetchRuntimeAgents));
+        state.handle_topic_event(RUNTIME_AGENTS_CHANGED_TOPIC, serde_json::json!({}));
+        assert!(
+            state.runtime_agents_refetch_due,
+            "the one topic this phase understands must set the re-fetch flag"
+        );
 
         let fixture = RuntimeAgentsListResponse {
             agents: vec![agent_entry("s1"), agent_entry("s2")],
@@ -947,19 +979,20 @@ mod tests {
     }
 
     /// The last link in the chain the test above cannot reach: that
-    /// `Action::FetchRuntimeAgents` is actually wired, in `main_loop`'s
-    /// dispatch match, to `refresh_runtime_agents`.
+    /// `main_loop` actually reads `state.runtime_agents_refetch_due`, clears
+    /// it, and calls `refresh_runtime_agents` — not just that the flag gets
+    /// set (which the round-trip test above and `app::tests` already cover).
     ///
     /// `main_loop` owns a real terminal and two live channels, so (like
     /// `a_successful_reconnect_reconciles_the_side_question` in
     /// `reconnect_tests` below, which hits the identical wall for a
     /// different arm of the same match) there is no in-process way to drive
     /// it end to end. Source-level, for the same reason that one is: a
-    /// runtime check cannot tell "the arm calls the wrong function" from
-    /// "the arm was never reached", and comment lines are stripped first so
-    /// a comment naming the function cannot satisfy this on its own.
+    /// runtime check cannot tell "the check calls the wrong function" from
+    /// "the check was never reached", and comment lines are stripped first
+    /// so a comment naming the function cannot satisfy this on its own.
     #[test]
-    fn a_fetch_runtime_agents_action_is_wired_to_the_refetch() {
+    fn a_runtime_agents_refetch_flag_is_wired_to_the_refetch_call() {
         let src = include_str!("mod.rs").replace('\r', "");
         let production = src.split("#[cfg(test)]").next().expect("split yields one");
         let code: String = production
@@ -969,17 +1002,23 @@ mod tests {
             .join("\n");
 
         let start = code
-            .find("Action::FetchRuntimeAgents =>")
-            .expect("the dispatch arm must still exist");
+            .find("if state.runtime_agents_refetch_due {")
+            .expect("the flag must still be checked in main_loop");
         let end = code[start..]
             .find('}')
             .map(|i| start + i)
-            .expect("the arm's block must close");
+            .expect("the flag-check block must close");
+        let block = &code[start..end];
 
         assert!(
-            code[start..end].contains("refresh_runtime_agents(state, client)"),
-            "Action::FetchRuntimeAgents must be wired to the real re-fetch \
-             function, or a topic event silently does nothing"
+            block.contains("state.runtime_agents_refetch_due = false;"),
+            "the flag must be cleared before the fetch runs, or a topic event \
+             re-fetches on every single loop iteration forever"
+        );
+        assert!(
+            block.contains("refresh_runtime_agents(state, client)"),
+            "a pending re-fetch must be wired to the real re-fetch function, \
+             or a topic event silently does nothing"
         );
     }
 }

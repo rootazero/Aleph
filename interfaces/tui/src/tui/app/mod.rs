@@ -113,14 +113,6 @@ pub enum Action {
     /// Ask the highlighted provider's vendor what it serves now, then re-read
     /// the catalogue so the discovered ids appear in its roster.
     ProviderPickerRefresh,
-
-    // -- Agent panel (Task 8a: the wire; Task 8b: the widget that reads it) --
-    /// A `runtime.agents.changed` topic event arrived — re-fetch
-    /// `runtime.agents.list` and replace [`AppState::runtime_agents`]. The
-    /// handler that returns this (`AppState::handle_topic_event`) is sync
-    /// and cannot itself await the RPC; the main loop performs the fetch
-    /// when it sees this action (same idiom as `ProviderPickerRefresh`).
-    FetchRuntimeAgents,
 }
 
 // ---------------------------------------------------------------------------
@@ -637,10 +629,10 @@ pub struct ActiveRunJoin {
 pub enum AgentPanelData {
     /// Asked (or about to be asked), no answer yet. NOT "no agents" — the
     /// initial state before the first `runtime.agents.list` reply, and
-    /// while a re-fetch triggered by [`Action::FetchRuntimeAgents`] is in
-    /// flight the field keeps its PREVIOUS value rather than reverting to
-    /// this, so a change notification does not flash the panel to "loading"
-    /// over data that is still valid.
+    /// while a re-fetch triggered by [`AppState::runtime_agents_refetch_due`]
+    /// is in flight the field keeps its PREVIOUS value rather than reverting
+    /// to this, so a change notification does not flash the panel to
+    /// "loading" over data that is still valid.
     Loading,
     /// A `runtime.agents.list` reply. An empty `Vec` here really does mean
     /// "no agents running" — nothing upstream needs to guess.
@@ -894,6 +886,20 @@ pub struct AppState {
     /// Populated by a startup fetch and re-fetched on every
     /// `runtime.agents.changed` topic event — see [`AgentPanelData`].
     pub runtime_agents: AgentPanelData,
+    /// Set by [`AppState::handle_topic_event`], cleared by the main loop once
+    /// it has performed the re-fetch.
+    ///
+    /// STATE, not an `Action` — the main loop's gateway-event branch keeps
+    /// only the LAST non-`None` action out of a drained burst (see its own
+    /// comment at `mod.rs`'s `select!` arm), so an `Action` that named "go
+    /// re-fetch the agent table" could be silently overwritten by a later
+    /// frame in the same burst and never happen — and `runtime.agents.changed`
+    /// fires exactly when `stream.*` chunks are also flying, so that burst is
+    /// not a rare shape. A `bool` on `AppState` cannot be coalesced away by a
+    /// later frame the way a returned `Action` could: the main loop checks and
+    /// clears it itself, once per iteration, after the `select!` — see
+    /// `mod.rs::main_loop`.
+    pub runtime_agents_refetch_due: bool,
 }
 
 impl AppState {
@@ -960,6 +966,7 @@ impl AppState {
             chat_line_cache: crate::tui::widgets::chat_area::LineCache::default(),
 
             runtime_agents: AgentPanelData::Loading,
+            runtime_agents_refetch_due: false,
         }
     }
 
