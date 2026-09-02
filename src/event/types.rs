@@ -244,6 +244,34 @@ mod tests {
         assert_eq!(event.name(), "SubAgentCompleted");
     }
 
+    /// A completion written by a daemon that predates `request_ids` — the JSON
+    /// below is that writer's whole output, not a round-trip of today's struct.
+    ///
+    /// The field is the batch a notice speaks for, and the announcer falls back
+    /// to the single `request_id` when the list is empty. Without
+    /// `#[serde(default)]` this payload fails to decode and the announce for a
+    /// run that survived the upgrade is dropped on the floor — a missing key
+    /// must read as "no per-child list", never as "unreadable event".
+    #[test]
+    fn a_completion_written_before_request_ids_existed_decodes_as_no_list() {
+        let old_payload = r#"{
+            "agent_id": "main",
+            "child_session_id": "child-sid",
+            "summary": "result text",
+            "success": true,
+            "request_id": "req-1"
+        }"#;
+
+        let decoded: SubAgentCompletionEvent =
+            serde_json::from_str(old_payload).expect("an event written before the field decodes");
+
+        assert!(
+            decoded.request_ids.is_empty(),
+            "an absent list is no list, and the announcer falls back to request_id"
+        );
+        assert_eq!(decoded.request_id.as_deref(), Some("req-1"));
+    }
+
     #[test]
     fn test_event_serialization() {
         let event = AlephEvent::ProcessCompleted(ProcessCompletionEvent {

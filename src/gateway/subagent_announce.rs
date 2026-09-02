@@ -303,6 +303,25 @@ mod tests {
         )
     }
 
+    /// The grouped boot notice `background_persistence::init_and_announce_orphans`
+    /// sends: ONE event per parent session speaking for N children, with the
+    /// per-child verdicts inside `summary` and a single batch-wide `success`.
+    fn grouped_event(ids: &[String]) -> GlobalEvent {
+        GlobalEvent::for_test(
+            "agent:main:peer:user",
+            Some("main".into()),
+            AlephEvent::SubAgentCompleted(SubAgentCompletionEvent {
+                agent_id: "main".into(),
+                child_session_id: "child-sid".into(),
+                summary: "- one: completed\n- two: interrupted by a daemon restart".into(),
+                success: true,
+                error: None,
+                request_id: ids.first().cloned(),
+                request_ids: ids.to_vec(),
+            }),
+        )
+    }
+
     /// `mark_completed` on the global tracker so the consume check has a real
     /// entry. Uses a unique id per test to keep the process-global tracker
     /// isolated across `cargo test` invocations of this file (it accumulates).
@@ -386,6 +405,60 @@ mod tests {
         assert!(
             recorded.input.contains(&request_id),
             "announce input must reference the request_id so the parent can fetch via check_status"
+        );
+    }
+
+    /// A notice that speaks for N children counts them; it does not pass one
+    /// child's verdict off as the batch's.
+    ///
+    /// `success` is a single bool the producer computed over the whole batch,
+    /// and `request_id` is one arbitrary member of it. The old head rendered
+    /// both as a judgement — "Background subagent run <first id> succeeded" —
+    /// above a `summary` that said something different per child, and it named
+    /// that one id as the thing to ask `check_status` about while the other
+    /// N-1 results went unmentioned.
+    ///
+    /// RED before the batch head: the input opened with a single-run verdict
+    /// and the pointer carried one id.
+    #[tokio::test]
+    async fn a_grouped_notice_counts_its_children_instead_of_judging_one() {
+        let first = format!("grouped-a-{}", uuid::Uuid::new_v4());
+        let second = format!("grouped-b-{}", uuid::Uuid::new_v4());
+        seed_completed(&first);
+        seed_completed(&second);
+
+        let (registry, _tmp) = registry_with_main_agent().await;
+        let adapter = RecordingAdapter::new(0);
+        let event_bus = Arc::new(GatewayEventBus::new());
+
+        announce_one(
+            adapter.clone(),
+            registry,
+            event_bus,
+            grouped_event(&[first.clone(), second.clone()]),
+        )
+        .await;
+
+        assert_eq!(adapter.call_count(), 1);
+        let input = adapter
+            .calls
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pop()
+            .expect("one call recorded")
+            .input;
+
+        assert!(
+            input.contains("2 background subagent runs settled"),
+            "the grouped head counts the batch: {input}"
+        );
+        assert!(
+            !input.contains("Background subagent run "),
+            "no single child's verdict may stand in for the batch's: {input}"
+        );
+        assert!(
+            input.contains(&first) && input.contains(&second),
+            "every child the notice speaks for stays addressable: {input}"
         );
     }
 

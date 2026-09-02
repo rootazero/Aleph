@@ -1142,3 +1142,153 @@ async fn a_resumed_run_reaches_the_gateway_bus() {
     );
     assert_eq!(session_key, sid.to_key_string());
 }
+
+/// An adapter that reports one session as having a run in flight right now —
+/// the shape the real engine presents while the owning scheduler is mid-turn on
+/// a session the boot scan is walking past.
+struct RunningAdapter {
+    running: String,
+}
+
+#[async_trait]
+impl ExecutionAdapter for RunningAdapter {
+    async fn execute(
+        &self,
+        _request: RunRequest,
+        _agent: Arc<AgentInstance>,
+        _emitter: Arc<dyn EventEmitter + Send + Sync>,
+    ) -> Result<(), ExecutionError> {
+        panic!("a session with its own scheduler must never be re-dispatched here");
+    }
+
+    async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+        Err(ExecutionError::RunNotFound(run_id.to_string()))
+    }
+
+    async fn get_status(&self, _run_id: &str) -> Option<RunStatus> {
+        None
+    }
+
+    async fn active_run_count(&self) -> usize {
+        1
+    }
+
+    fn running_sessions(&self) -> Vec<String> {
+        vec![self.running.clone()]
+    }
+}
+
+/// The two facts the delegated arm may have written, counted off the log so
+/// both halves of this pair of tests read the same pair.
+async fn repair_marks(store: &Arc<dyn SessionEventStore>, sid: &SessionKey) -> (usize, usize) {
+    let all = store.load_all_events(sid).await.expect("load");
+    let errors = all
+        .iter()
+        .filter(|r| {
+            matches!(&r.event, SessionEvent::ToolError { call_id, .. } if call_id == "dangling-1")
+        })
+        .count();
+    let closers = all
+        .iter()
+        .filter(|r| {
+            matches!(
+                &r.event,
+                SessionEvent::RunFinished { run_id, outcome, .. }
+                    if run_id == "run-1" && *outcome == RunOutcome::Abandoned
+            )
+        })
+        .count();
+    (errors, closers)
+}
+
+/// C9: handing recovery back to the scheduler that owns a session is not the
+/// same as handing back its LOG. The dispatcher / cron / heartbeat decides
+/// whether the work is redone; only a reader of the log can answer the calls
+/// the crash left dangling and close the marker it left open.
+///
+/// Asserted as effects on the log (判据 #4): the old arm called a closer that
+/// minted a `delegated-<uuid>` matching no `RunStarted`, and repaired nothing
+/// at all — so the next attempt's replay silently dropped the orphan `tool_use`
+/// and every later boot re-classified the session `Interrupted`.
+#[tokio::test]
+async fn a_delegated_session_is_repaired_and_its_own_marker_closed() {
+    let store = store();
+    let sid = SessionKey::task("main", "cron", "daily-summary");
+    seed_interrupted_run(&store, &sid).await;
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let registry = registry_with_agent(sid.agent_id()).await;
+
+    let report = ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry,
+        sessions(),
+        test_bus(),
+    )
+    .resume_interrupted_runs()
+    .await;
+
+    assert_eq!(report.delegated, 1, "{report:?}");
+    assert_eq!(
+        report.resumed, 0,
+        "the owning scheduler re-dispatches, not us"
+    );
+    assert_eq!(report.busy, 0);
+    assert!(report.refused.is_empty(), "{:?}", report.refused);
+
+    let (errors, closers) = repair_marks(&store, &sid).await;
+    assert_eq!(errors, 1, "the dangling call was answered before hand-back");
+    assert_eq!(
+        closers, 1,
+        "the marker was closed with the open run's OWN id, so no later boot re-classifies it"
+    );
+    assert!(
+        calls.lock().await.is_empty(),
+        "the resume scan must not dispatch a session it delegated"
+    );
+}
+
+/// The same hand-back while the owning scheduler has a live turn on the
+/// session: both writes are appends, and a `RunFinished` landing in the middle
+/// of a running turn makes that turn's real finish read as `FinishWithoutStart`
+/// forever. `busy` is the honest count — nothing was handed back and nothing
+/// was written.
+#[tokio::test]
+async fn a_delegated_session_the_engine_is_running_is_left_alone() {
+    let store = store();
+    let sid = SessionKey::task("main", "cron", "hourly-digest");
+    seed_interrupted_run(&store, &sid).await;
+    let before = store.load_all_events(&sid).await.expect("load").len();
+
+    let adapter = Arc::new(RunningAdapter {
+        running: sid.to_key_string(),
+    });
+    let registry = registry_with_agent(sid.agent_id()).await;
+
+    let report = ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry,
+        sessions(),
+        test_bus(),
+    )
+    .resume_interrupted_runs()
+    .await;
+
+    assert_eq!(report.busy, 1, "{report:?}");
+    assert_eq!(report.delegated, 0, "nothing was handed back");
+    assert_eq!(
+        (0, 0),
+        repair_marks(&store, &sid).await,
+        "a live turn's log gets neither the repair nor the closer"
+    );
+    assert_eq!(
+        before,
+        store.load_all_events(&sid).await.expect("load").len(),
+        "not one append while somebody else is writing"
+    );
+}
