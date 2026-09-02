@@ -593,3 +593,49 @@ CUT（本条记录同一轮提交）。删掉后同一过滤器的绿是 `256 pa
 **一个命令陷阱，值得写进 §0**：`cargo test -p alephcore --lib a b`（两个过滤器直接跟在 `--lib`
 后面）会立刻以 `error: unexpected argument 'b' found` 退出，`EXIT=1`，**一条测试都没跑**，而日志
 里那行 `^error` 长得和编译失败一模一样。多个过滤器必须写在 `--` 之后：`--lib -- a b`。
+
+### T5 收尾 — 自愈的下界取错了源（续做 3/3，`b180b3ae8`）
+
+前两位续做把 T5 的七个 Step 逐条查完：Step 1 点名的测试全部按名存在，Step 4 的四项删除
+（`materialized_through` / `stamp_last_assistant_metadata` / `skipped_clean` /
+`clean_session_is_skipped`）在 `src/` `shared/` `interfaces/` 上都是零命中，三处「永久丢失 /
+只补尾巴」的模块 doc 与 `SESSION_SERVICE.md` L77 的 `src/session/shim.rs` 都已改写，Step 5 的
+三条变异与 Step 6 的六条命令都在仓库里留下了红/绿名单。**T5 的清单是做完了的**，所以这一轮
+改去读实现本身，读出来一条清单查不出来的东西。
+
+**`heal_session` 的下界对两个调用者用了同一个源，而它们问的不是同一个问题。**
+
+```rust
+let claimed = lock_missed(missed).take(id);
+let from = claimed.iter().next().copied().unwrap_or(1);   // 修复前
+```
+
+drain 触发的那一次是对的——它**存在的理由**就是本进程记下了那些 seq，从最低的一条起扫是正确的
+优化。而 `request_repair` 的两个调用者（boot 的 `ProjectionReconciler`、`core/projection-holes`
+doctor）问的是**别的进程**留下的洞，那种洞按定义在本进程里没有任何记录。于是只要 `missed` 里
+碰巧有一条较新的 seq，这一次修复就从它**上面**开始扫，而下面的洞原样留着。
+
+| 施于 `a2f80e059` + 本次测试的树 | 观察到的结果 |
+|---|---|
+| 修复前的下界（`claimed.iter().next()...`，本次用一处等价改写复现） | `30 passed; 1 failed` — `session_projector::…::a_requested_repair_sweeps_below_the_seqs_this_process_missed`，`left: {3, 4, 5}` / `right: {1, 2, 3, 4, 5}` |
+| `HealScope`（drain 臂 `KnownGaps` / `Repair` 臂 `WholeSession`） | `31 passed; 0 failed`，`EXIT=0`，整跑**零警告** |
+
+**为什么它躲过了 T5 自己的全部验证**：三条 Step 5 变异打的是 `present` 谓词、`NoRowInRange`
+计费臂、boot 候选集，没有一条动**下界**；而 T5 的全部测试里没有一条同时具备「一个本进程记下的
+miss」和「一个更低的、本进程没记过的洞」——单看任一半都绿。这是判据 #3 的又一次形态：**守卫认得
+几种形状，比守卫的规则对不对更值得先问**；也是 #13——一个界限「设在哪里」决定它约束什么，而这里
+它设在了一个**回答另一个问题**的集合上。
+
+**它同时是一次 #11**：doctor 那半是**无界比较**（日志 seq 集 vs transcript 行 id 集），刚刚
+量出「这两行缺了」，紧接着触发的修复回答 `Filled 0 missing transcript row(s)` 且
+`errored: false`。检测者与修复者的作用域不一样，而**读收据的人看到的是一句成功**。
+
+修复只改下界的取法，不动 drain 那半的优化：`HealScope::KnownGaps` / `WholeSession` 两个变体各
+带一句为什么。原来那句「`from` 回退到 1，所以一次请求式修复仍然是全扫」的注释**只在 `missed`
+恰好为空时成立**——而一个忙碌会话恰恰不在那个状态里；判据 #1 的「最贵的那份在注释里」。
+
+还原纪律同前：变异前 `cp` 到 scratchpad，变异后 `cp` 回来，`diff` 打印 identical，
+`git status --porcelain` 只剩这一个文件。**作用域**：本次只跑了
+`--lib -- gateway::session_projector gateway::projection_reconciler` 与
+`cargo check -p alephcore`（`Finished dev profile in 3m 15s`）——全量 `--lib`、`--bins`、
+`--features test-helpers --all-targets` 仍是 T8 Step 4 的活，本条不为它们背书。
