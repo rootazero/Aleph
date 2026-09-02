@@ -32,16 +32,21 @@ pub fn attention_rank(state: RuntimeAgentState) -> u8 {
     }
 }
 
-/// Order entries by attention rank, then by recency within a rank.
+/// Order entries by attention rank, then by recency, then by `session_id`.
 ///
-/// Uses a stable sort deliberately: two entries with the same rank and the
-/// same `updated_at` (e.g. both untouched since startup) must keep the
-/// order the server sent them in, not shuffle on every re-render.
+/// `session_id` is the key of the server-side agent table, so it is unique
+/// across entries: no two distinct entries can ever compare `Equal` on all
+/// three keys together, which makes this a total order. That is deliberate
+/// — the resulting order does not depend on the order the server sent
+/// entries in, and does not depend on whether the underlying sort is
+/// stable, so two rows that tie on state and `updated_at` still resolve to
+/// the same position on every call instead of shuffling between refreshes.
 pub fn sort_entries(entries: &mut [RuntimeAgentEntry]) {
     entries.sort_by(|a, b| {
         attention_rank(a.state)
             .cmp(&attention_rank(b.state))
             .then(b.updated_at.cmp(&a.updated_at))
+            .then_with(|| a.session_id.cmp(&b.session_id))
     });
 }
 
@@ -128,52 +133,17 @@ mod tests {
         assert_eq!(v[2].updated_at, 1);
     }
 
-    /// R7-7: two entries with EQUAL keys (same state, same updated_at) must
-    /// keep their input order. A basic sanity check, but NOT by itself proof
-    /// against `sort_unstable_by` — see
-    /// `unstable_sort_would_reorder_equal_keys_here` below for why.
+    /// A state tie AND an `updated_at` tie resolve by `session_id` — not by
+    /// input order. The input here is deliberately given in the OPPOSITE of
+    /// `session_id` order ("second" before "first"), so this reddens if the
+    /// `session_id` key is dropped (falling back to input order), reordered
+    /// ahead of `state`/`updated_at`, or reversed (`b.cmp(&a)`).
     #[test]
-    fn equal_keys_preserve_input_order() {
-        let mut v = vec![e("first", S::Idle, 100), e("second", S::Idle, 100)];
+    fn ties_on_state_and_updated_at_resolve_by_session_id() {
+        let mut v = vec![e("second", S::Idle, 100), e("first", S::Idle, 100)];
         sort_entries(&mut v);
         assert_eq!(v[0].session_id, "first");
         assert_eq!(v[1].session_id, "second");
-    }
-
-    /// R7-7's actual falsifier (判据 §3: 一条没被证伪过的守卫不算守卫).
-    ///
-    /// `[T]::sort_unstable_by` falls back to insertion sort below a size
-    /// threshold (currently 20), and insertion sort happens to be stable in
-    /// practice — so a 2-entry equal-key fixture like the test above passes
-    /// under `sort_by` AND `sort_unstable_by` alike; it cannot distinguish
-    /// them. Verified empirically: swapping `sort_entries` to
-    /// `sort_unstable_by` leaves this test green but turns THIS test red.
-    ///
-    /// 33 entries, ranks cycling Blocked/Idle/Working, identical
-    /// `updated_at` so every entry within a rank ties on both sort keys —
-    /// large and varied enough to force pdqsort's partitioning path (as
-    /// opposed to its small-slice insertion-sort fallback), which is where
-    /// an unstable sort can actually reorder equal elements.
-    #[test]
-    fn unstable_sort_would_reorder_equal_keys_here() {
-        const N: usize = 33;
-        let states = [S::Blocked, S::Idle, S::Working];
-        let rank_of = |i: usize| (N - i) % states.len();
-
-        let mut v: Vec<RuntimeAgentEntry> = (0..N)
-            .map(|i| e(&i.to_string(), states[rank_of(i)], 100))
-            .collect();
-        sort_entries(&mut v);
-
-        for state in states {
-            let orig_order: Vec<usize> = (0..N).filter(|&i| states[rank_of(i)] == state).collect();
-            let sorted_order: Vec<usize> = v
-                .iter()
-                .filter(|entry| entry.state == state)
-                .map(|entry| entry.session_id.parse().unwrap())
-                .collect();
-            assert_eq!(orig_order, sorted_order, "{state:?} entries were reordered");
-        }
     }
 
     #[test]
