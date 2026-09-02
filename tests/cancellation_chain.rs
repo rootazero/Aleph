@@ -183,6 +183,7 @@ fn base_with_hanging_llm(cancel: CancellationToken) -> SpawnerBase {
         context_budget_refiner: None,
         primary_context_window: None,
         cheap_summary_provider: None,
+        verifier_chain: None,
     }
 }
 
@@ -223,6 +224,7 @@ fn base_with_hanging_tool(cancel: CancellationToken) -> SpawnerBase {
         context_budget_refiner: None,
         primary_context_window: None,
         cheap_summary_provider: None,
+        verifier_chain: None,
     }
 }
 

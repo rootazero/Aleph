@@ -202,6 +202,7 @@ async fn h_t1_worktree_isolation_happy_path() {
         context_budget_refiner: None,
         primary_context_window: None,
         cheap_summary_provider: None,
+        verifier_chain: None,
     };
 
     let agent_def =
