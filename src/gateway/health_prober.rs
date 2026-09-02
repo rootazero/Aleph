@@ -69,10 +69,11 @@ fn probe_interval_secs() -> u64 {
 /// `(provider, probed_ok)` per attempted probe for the caller's logs — and for
 /// tests, which drive this directly with a stub `probe`.
 ///
-/// The enabled check goes through [`probe_disposition`], the same derivation
-/// `providers.healthcheck` and the `providers/connectivity` doctor check use,
-/// so "may I dial this provider" has one answer across all three faces. Only
-/// its [`ProbeDisposition::Disabled`] arm is honoured here:
+/// The enabled check goes through [`probe_disposition`] — the one derivation
+/// of "may I dial this provider", shared with every other face that asks it,
+/// so the answer cannot differ by surface (the census lives in
+/// `providers::probe`, not in a list here). Only its
+/// [`ProbeDisposition::Disabled`] arm is honoured here:
 /// [`ProbeDisposition::Unsupported`] means the preset's `GET /models` 404s,
 /// and this loop dials a `ping` completion instead — suppressing those would
 /// be a gate with no way for the operator to open it.

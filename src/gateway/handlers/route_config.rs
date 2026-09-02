@@ -289,6 +289,20 @@ mod tests {
         include_str!("../../../interfaces/webchat/src/api/settings.rs");
     const THIS_HANDLER: &str = include_str!("route_config.rs");
 
+    /// The two route faces that build a `RouteConfigUpdate` and POST it. Both
+    /// are scanned because a field wired on one face and dropped on the other
+    /// is exactly the asymmetry that hid `health_probe_interval_secs`.
+    const PANEL_ROUTE_FACES: [(&str, &str); 2] = [
+        (
+            "wide/views/settings/route.rs",
+            include_str!("../../../interfaces/webchat/src/platform/wide/views/settings/route.rs"),
+        ),
+        (
+            "phone/settings/model_route.rs",
+            include_str!("../../../interfaces/webchat/src/platform/phone/settings/model_route.rs"),
+        ),
+    ];
+
     /// Collect the field names of a struct from Rust source (`pub` optional).
     fn struct_fields(source: &str, struct_name: &str) -> Vec<String> {
         let start = source
@@ -305,6 +319,30 @@ mod tests {
                 let name = rest.split(':').next()?.trim();
                 (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
                     .then(|| name.to_string())
+            })
+            .collect()
+    }
+
+    /// Body of the single `RouteConfigUpdate { … }` literal in a Panel view,
+    /// as `(field, value expression)` pairs. Panics if the file builds the
+    /// struct in more than one place — a second save path would be a second
+    /// chance to drop a field, and this guard would only have read one.
+    fn update_literal_bindings(source: &str, face: &str) -> Vec<(String, String)> {
+        let needle = "RouteConfigUpdate {";
+        assert_eq!(
+            source.matches(needle).count(),
+            1,
+            "{face} builds RouteConfigUpdate more than once; this guard reads only the first"
+        );
+        let start = source.find(needle).expect("literal counted above");
+        let body = &source[start + needle.len()..];
+        let end = body.find("};").expect("unterminated RouteConfigUpdate literal");
+        body[..end]
+            .lines()
+            .filter_map(|line| {
+                let (name, value) = line.trim().split_once(':')?;
+                (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+                    .then(|| (name.to_string(), value.trim().to_string()))
             })
             .collect()
     }
@@ -351,6 +389,46 @@ mod tests {
                 "Panel {dto} never names {missing:?}; handle_update full-replaces \
                  [route], so a save from the Panel wipes those settings"
             );
+        }
+    }
+
+    /// Naming the field is not carrying its value. The guard above proves both
+    /// Panel DTOs *have* `health_probe_interval_secs`; it stays green if a save
+    /// closure hard-codes `health_probe_interval_secs: None` — which reproduces
+    /// the exact bug (a full-replace save silently switching a running prober
+    /// off) with the DTO still innocent. So: every field `handle_update`
+    /// replaces must be bound, in each face's `RouteConfigUpdate` literal, to an
+    /// expression that reads a signal (`.get()`) — the value that face loaded,
+    /// never a constant.
+    ///
+    /// The field list is derived from `RouteModePayload` rather than typed out,
+    /// so a field added to the handler is covered here the day it lands.
+    #[test]
+    fn panel_save_closures_forward_the_values_they_loaded() {
+        let replaced = struct_fields(THIS_HANDLER, "RouteModePayload");
+        assert!(
+            replaced.contains(&"health_probe_interval_secs".to_string()),
+            "derivation broke: RouteModePayload no longer parses"
+        );
+        for (face, source) in PANEL_ROUTE_FACES {
+            let bindings = update_literal_bindings(source, face);
+            for field in &replaced {
+                let value = bindings
+                    .iter()
+                    .find(|(name, _)| name == field)
+                    .map(|(_, value)| value.as_str())
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{face} never binds `{field}`; handle_update full-replaces [route], \
+                             so saving from this face erases it"
+                        )
+                    });
+                assert!(
+                    value.contains(".get()"),
+                    "{face} binds `{field}` to `{value}` — a constant, not the value this face \
+                     loaded; saving from here overwrites the operator's setting"
+                );
+            }
         }
     }
 

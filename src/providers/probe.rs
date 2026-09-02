@@ -1,10 +1,13 @@
 //! Lightweight provider connectivity probe — single source of truth.
 //!
-//! "Can this provider answer a ping?" is asked from two places: the gateway's
-//! `providers.test` / `providers.healthcheck` RPC handlers (Panel surface) and
-//! the diagnostics engine's `providers/connectivity` health check (the LLM
-//! `doctor` tool). Both call this one function so the probe semantics
-//! (create provider → one-shot ping → latency) never drift between surfaces.
+//! "Can this provider answer a ping?" is asked from several faces, and every
+//! one of them calls this one function, so the probe semantics (create
+//! provider → one-shot ping → latency) never drift between surfaces.
+//!
+//! This doc deliberately does *not* list the callers: the previous list said
+//! "two places" and was falsified the day the background health prober became
+//! the third, without anyone noticing that the file which *owns* the fact had
+//! gone stale. The census is `grep -rn probe_provider_bounded src/`.
 //!
 //! Lives in the providers domain (not the gateway) so the dependency
 //! direction stays `gateway → providers` / `diagnostics → providers` (P1) —
@@ -16,10 +19,11 @@ use crate::config::ProviderConfig;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
 
-/// Per-provider probe deadline, shared by every probe call site (the
-/// `providers.healthcheck` / `providers.test` RPC handlers, the config
-/// patcher's post-patch verification, and the `providers/connectivity`
-/// doctor check). A hung endpoint must not stall any of them.
+/// Per-provider probe deadline. It is applied inside
+/// [`probe_provider_bounded`], which is the only way to reach [`probe_provider`]
+/// from outside this module — so every call site inherits it by construction
+/// and no list of call sites has to be kept correct here. A hung endpoint must
+/// not stall any of them.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Result of one connectivity probe. The gateway maps this onto its
@@ -103,7 +107,11 @@ pub fn probe_disposition(provider_name: &str, enabled: bool) -> ProbeDisposition
 /// Probe a single provider with a lightweight `ping` round-trip and measure
 /// latency. Takes a fully-resolved [`ProviderConfig`] (`api_key` already
 /// injected from the vault). Read-only: never mutates config or health state.
-pub async fn probe_provider(label: &str, provider_config: ProviderConfig) -> ProbeOutcome {
+///
+/// Private on purpose: the unbounded probe is not an option any caller gets to
+/// pick, so [`PROBE_TIMEOUT`] cannot be opted out of. It had no callers outside
+/// this module while it was `pub`; the visibility now says so.
+async fn probe_provider(label: &str, provider_config: ProviderConfig) -> ProbeOutcome {
     let provider = match crate::providers::create_provider(label, provider_config) {
         Ok(p) => p,
         Err(e) => {
@@ -138,7 +146,8 @@ pub async fn probe_provider(label: &str, provider_config: ProviderConfig) -> Pro
 ///
 /// A timeout is reported as an ordinary failed probe (clear `error`, no
 /// latency) so callers need no `tokio::time::timeout` boilerplate of their
-/// own — every surface should call this variant, not the raw probe.
+/// own — and this is the only exported way in, so "every surface is bounded"
+/// is a property of the module, not a convention callers have to remember.
 pub async fn probe_provider_bounded(label: &str, provider_config: ProviderConfig) -> ProbeOutcome {
     match tokio::time::timeout(PROBE_TIMEOUT, probe_provider(label, provider_config)).await {
         Ok(outcome) => outcome,
