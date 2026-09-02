@@ -664,3 +664,25 @@ miss」和「一个更低的、本进程没记过的洞」——单看任一半�
 |---|---|---|
 | **T8** | `MessageProjector::deferred_count()` 在 `src/ interfaces/ shared/ qa/` **零读者**，且因为是 `pub` 所以 dead-code lint 看不见（判据 #7 + #11）。字段 doc 说它为 T8 的 burst 阶段而存在，而 T8 Step 2 现在写的是断言**日志行** `projector queue full; seq deferred`，不是这个计数器。**要么 T8 消费它，要么 CUT** —— 留着不消费就是一个「报成功的 no-op」。 | T5 review |
 | **T8 / 下一轮** | `run_start` 活在 drain 任务的局部作用域，`ensure_drain()` 重启后是空 map ⇒ stamp 区间退回「meta 之下最新的那条 assistant 行」。若本 run 自己那行随死掉的任务丢了，stamp 会落到**上一个 run** 的行上并计费；随后 heal 补回正确的行、meta 再处理一次（meta 不产生转录行，`present` 永远不抑制它）、区间找到新行、`already_stamped_by` 答 false ⇒ **第二次计费**。需要 drain panic 才触发，故 review 判非阻塞。修法：把 `run_start` 挪到 `MessageProjector` 上（与 `missed` 同一把 `StdMutex`），或让 `ensure_drain` 把每个有未闭合 run 的会话标脏。 | T5 review |
+
+### T6 续做 2/3 — `afc1ba5a3`（`process_journal` 孪生）
+
+| 变异 | 观察到变红的测试 |
+|---|---|
+| `settled_label` 的 `Settled` 臂恒 `"recorded"`（撤销「标签读 outcome」） | `builtin_tools::process_journal::tests::a_settled_label_reads_the_outcome_not_just_the_phase` · `::every_verdict_the_writer_records_has_its_own_label`（`50 passed; 2 failed`） |
+| 删掉 `init_and_reconcile` 里 `announce_attempts >= MAX_ANNOUNCE_ATTEMPTS` 那道闸 | `builtin_tools::process_journal::tests::a_completion_stops_being_offered_after_three_attempts`（`51 passed; 1 failed`，只有这一条） |
+
+绿基线（同一 commit）：`cargo test -p alephcore --lib -- agents:: teams::dispatcher
+session::reduction gateway::resume_coordinator builtin_tools::process_journal
+builtin_tools::bash_exec` = `628 passed; 0 failed; 0 ignored; 17249 filtered out`，
+`EXIT=0`，日志零 warning；`cargo check -p alephcore` = `Finished dev profile in 3m 16s`。
+两次变异都用 `cp` 的副本还原，还原后 `git status --porcelain` 为空。
+作用域**不含**全量 `--lib`、`--bins`、clippy、`--features test-helpers --all-targets`
+以及 panel/tui/cli/protocol —— 仍是 T8 Step 4 的活。
+
+**给 T8 的一条观察（flake）**：`agents::subagent_tool::recovery::tests::the_directory_face_reads_only_the_parent_log`
+在本轮的过滤跑里**绿**。按 `98bffd9ea` 之后的代码读，`list_from_log` 只有**一次** `get_events`，
+而 sidecar 那半被 `addressable` 的严格相等挡在 `G5_SCOPE` 之外（该常量全仓只此一处，且没有任何
+fixture 往进程全局 `INDEX` 里写这个 scope 的记录），所以「计数读到 2」在当前代码里**读不出机制**。
+它只在全量并行的整个二进制里被观察到过两次（一绿一红），因此证伪只能放在 T8 的**全量**跑里——
+模块过滤的绿不为它背书。
