@@ -94,8 +94,14 @@ pub struct ProviderConfig {
     /// connection but stalls before responding); (2) the Anthropic protocol
     /// adapter wraps each SSE event read so a stall *between* events also
     /// aborts. Both surface `AlephError::Timeout`, which the failover path
-    /// treats as transient. Distinct from `timeout_seconds` (total request
-    /// budget, not applied to the streaming path).
+    /// reads as *this window has already been spent*: while a later candidate
+    /// remains it advances the chain at once instead of paying a second full
+    /// window against the same silent endpoint, and the attempt is still
+    /// charged to the provider's circuit breaker
+    /// (`providers::failover::decision::decide`). On the terminal candidate
+    /// there is nowhere to advance to, so the ordinary in-place retry budget
+    /// applies. Distinct from `timeout_seconds` (total request budget, not
+    /// applied to the streaming path).
     ///
     /// `None` or unset: 60 seconds (default).
     /// `Some(0)`: both watchdogs disabled.

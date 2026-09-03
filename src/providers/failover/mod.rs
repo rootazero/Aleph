@@ -54,8 +54,14 @@ pub(crate) use decision::{decide, Decision};
 pub use health::{
     CircuitState, FailoverHealth, ModelCooldown, ProviderCooldown, ProviderHealthView,
 };
+/// Chain membership, exported so the membership rule can be asserted directly.
+/// Test-only: production has ONE caller and it lives inside this module. A
+/// render face that recomputes membership from here is a second call site, and
+/// that is exactly what lets a snapshot materialise members the walk would
+/// have materialised differently — re-exporting it offers that shortcut back.
+#[cfg(test)]
 pub(crate) use provider::effective_fallback_names;
-pub use provider::{FailoverProvider, RouteStep};
+pub use provider::{ChainMember, FailoverProvider, RoutePreview, RouteStep};
 
 /// Name of the sentinel node that wraps a whole *nested* chain rather than a
 /// real endpoint.
@@ -70,6 +76,55 @@ pub use provider::{FailoverProvider, RouteStep};
 /// sidelining (the nested chain runs its own breaker per real provider).
 pub const NESTED_CHAIN_NODE: &str = "__global_chain__";
 
+/// Phrase planted in the *rendered message* of an error the walk raises after
+/// model-authored text already reached the **user's transcript**.
+///
+/// "May this request be re-attempted?" has two faces: the walk answers it for
+/// the chain (it stops advancing — a second candidate would append its answer
+/// to a half-written one), and `orchestrator::harness_bridge::error` answers it
+/// for the gateway's outer dispatch loop. Before this marker the second face
+/// re-derived the answer from the provider's own wording, so a proxy that cut
+/// a long stream ("connection reset", "timed out") was read as
+/// `FlowError::Transient`, re-dispatched on the same `run_id` up to
+/// `MAX_FALLBACK_ATTEMPTS`, and the Panel appended a whole second answer under
+/// the half-written one. One fact, one derivation: the walk states it, the
+/// bridge reads it.
+///
+/// **It is not the chain-terminal predicate.** That one is
+/// `EmissionGuard::has_emitted`, which also latches on tool-call deltas; this
+/// marker rides only on `has_shown_user_output`. A stream cut after tool-call
+/// deltas alone is still terminal for the *chain* and still carries no marker,
+/// because the screen is blank and the gateway's fresh attempt is the right
+/// recovery.
+///
+/// It must survive `Display`, because that is what the bridge classifies —
+/// `AlephError::ProviderError` renders `message` only and drops `suggestion`
+/// (the same asymmetry `decision::retry_after_from_suggestion` exists to work
+/// around), so a marker parked on `suggestion` would be two ends with no wire.
+/// Hence [`mark_partial_output_emitted`] puts it in the message text.
+///
+/// The phrasing is prose because the audiences of that message are prose
+/// readers: `tracing` output, the model-visible error text, and route
+/// diagnostics. It is **not** what the user reads — a `DispatchFailure` becomes
+/// `ExecutionError::Orchestrator`, whose `ReceiptKind::Failed` renders a
+/// localized `user_receipt` that deliberately never echoes the internal string
+/// (pinned by `execution_engine::helpers`'
+/// `a_pre_outcome_failure_delivers_the_localized_receipt`).
+pub(crate) const PARTIAL_OUTPUT_EMITTED: &str = "partial output already delivered";
+
+/// Wrap a post-emission failure so every layer above the walk reads the same
+/// verdict from [`PARTIAL_OUTPUT_EMITTED`] instead of re-classifying the
+/// provider's wording. The original message is kept verbatim (it is the only
+/// diagnostic of *why* the stream died) and so is the original suggestion.
+pub(crate) fn mark_partial_output_emitted(
+    err: &crate::error::AlephError,
+) -> crate::error::AlephError {
+    crate::error::AlephError::ProviderError {
+        message: format!("{PARTIAL_OUTPUT_EMITTED}; the stream then failed: {err}"),
+        suggestion: err.suggestion().map(str::to_string),
+    }
+}
+
 /// Consecutive failures at which a provider's circuit breaker opens.
 const CIRCUIT_OPEN_THRESHOLD: u32 = 3;
 /// Hard ceiling on the circuit-breaker cooldown.
@@ -83,8 +138,16 @@ const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// overload* (429 "please wait a moment", 529). Higher than [`MAX_RETRY_DELAY`]
 /// so a large server `Retry-After` is honored in full rather than silently
 /// clamped to 30s — a paid primary (e.g. Kimi) that says "wait 60s" should be
-/// waited out on, not abandoned to a fallback. Also caps the proactive
-/// per-provider cooldown wait. Matches hermes' 120s `Retry-After` cap.
+/// waited out on, not abandoned to a fallback. Matches hermes' 120s
+/// `Retry-After` cap.
+///
+/// It is also the *threshold* — no longer a `min()` cap — on the last-resort
+/// proactive [`ProviderCooldown`] wait: a window still within it is slept out
+/// in FULL, a window beyond it is judged un-outlastable and not slept on at
+/// all (the walk dials inside it and lets the provider's own answer settle the
+/// question). Capping that wait instead bought a sleep that provably could not
+/// end the window and then dialed inside it anyway — while spending the whole
+/// default 120s turn watchdog on the way.
 const MAX_OVERLOAD_RETRY_DELAY: Duration = Duration::from_secs(120);
 /// In-place retry budget for a *transient server overload* — a 429 whose body
 /// says "please wait a moment and try again", or a 529 `overloaded`. In a

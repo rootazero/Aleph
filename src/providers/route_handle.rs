@@ -55,6 +55,21 @@ pub struct RouteState {
 }
 
 impl RouteState {
+    /// The generation a deployment with no `[route]` section runs on: auto
+    /// mode, no escalation, ordered, no pins, no ceilings, no probing.
+    ///
+    /// The single spelling of "safe defaults", shared by the two readers that
+    /// have to answer without a handle — the failover walk built by a test
+    /// ([`FailoverProvider::route_snapshot`](crate::providers::failover::FailoverProvider))
+    /// and a chain-less `route_status` render
+    /// ([`route_observe`](crate::providers::route_observe)). Two hand-written
+    /// copies of this literal is how the diagnostic and the walk end up
+    /// disagreeing about what an unconfigured deployment does.
+    #[must_use]
+    pub fn unconfigured() -> Self {
+        Self::from_config(&ModelRouteConfig::default())
+    }
+
     fn from_config(cfg: &ModelRouteConfig) -> Self {
         Self {
             mode: cfg.mode,

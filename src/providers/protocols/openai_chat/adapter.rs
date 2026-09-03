@@ -351,9 +351,20 @@ impl ProtocolAdapter for OpenAiProtocol {
             /// `finish_reason` and the usage chunk as *separate* chunks in that
             /// order; emitting `Done` immediately would end the stream before
             /// the usage chunk is read. Released on the usage chunk, the
-            /// `[DONE]` sentinel, or HTTP stream end — always kept last so the
-            /// `Done`-is-final contract holds for every consumer.
+            /// `[DONE]` sentinel, or HTTP stream end — kept last, so on an
+            /// unfaulted stream `Done` is still the final event. A queued
+            /// `ProviderDelta::Error` cancels the deferral instead (the `Done`
+            /// is released *ahead* of the fault): delivery order is the only
+            /// thing `TerminalFrames` has to tell "the turn ended, then the
+            /// relay complained" from "a hiccup the relay recovered from", so
+            /// it must stay the wire order. See `sse::defer_done_until_usage`.
             deferred_done: Option<Result<ProviderDelta>>,
+            /// A terminal `Done` has already gone downstream while the stream
+            /// reads on — the deferral was cancelled by a fault. Only the
+            /// end-of-stream truncation guard reads it: without it that guard
+            /// finds an empty `pending` and a `None` `deferred_done` and calls a
+            /// finished turn truncated.
+            done_emitted: bool,
             /// Set to true after a terminal event to stop the stream
             done: bool,
         }
@@ -364,6 +375,7 @@ impl ProtocolAdapter for OpenAiProtocol {
             index_tracker: crate::providers::delta::IndexIdTracker::new(),
             pending: VecDeque::new(),
             deferred_done: None,
+            done_emitted: false,
             done: false,
         };
 
@@ -408,11 +420,15 @@ impl ProtocolAdapter for OpenAiProtocol {
                             // Hold the terminal Done back until the trailing
                             // include_usage chunk lands, so the token count is
                             // not lost (see `defer_done_until_usage`).
-                            if super::sse::defer_done_until_usage(
+                            match super::sse::defer_done_until_usage(
                                 &mut state.pending,
                                 &mut state.deferred_done,
                             ) {
-                                state.done = true;
+                                super::sse::DeferOutcome::Continue => {}
+                                super::sse::DeferOutcome::DoneReleasedBeforeFault => {
+                                    state.done_emitted = true;
+                                }
+                                super::sse::DeferOutcome::Terminate => state.done = true,
                             }
                         }
                     }
@@ -443,14 +459,16 @@ impl ProtocolAdapter for OpenAiProtocol {
                         }
                         // Reaching here means no `[DONE]` sentinel arrived (that
                         // path sets `done` and never re-polls the byte stream).
-                        // A terminal signal can still exist: a deferred `Done`
+                        // A terminal signal can still exist: a `Done` already
+                        // released ahead of a fault, a deferred `Done`
                         // (finish_reason seen, trailing usage chunk lost) or a
                         // `Done` parsed from the flushed partial line. Without
                         // one, the connection dropped mid-response — surface a
                         // typed transient error instead of letting the collector
                         // default to `EndTurn` and present truncated output as a
                         // complete turn.
-                        let has_terminal = state.deferred_done.is_some()
+                        let has_terminal = state.done_emitted
+                            || state.deferred_done.is_some()
                             || crate::providers::delta::has_terminal_delta(&state.pending);
                         // Release a deferred Done that never received a
                         // trailing usage chunk or `[DONE]` sentinel.

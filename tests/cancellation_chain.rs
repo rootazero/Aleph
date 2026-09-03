@@ -98,6 +98,7 @@ impl AiProvider for FastToolCallProvider {
                 stop_reason: StopReason::ToolUse,
                 usage: None,
                 truncated_tool_call: None,
+                provider_error: None,
             })
         })
     }

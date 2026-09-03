@@ -65,11 +65,36 @@
 //!   `[pinned provider, <the entire global chain>]`; the sentinel is not an
 //!   endpoint (see `failover::NESTED_CHAIN_NODE`) and the inner chain records
 //!   the real provider itself. Recording the sentinel would publish a provider
-//!   name the operator never configured. Consequence, accepted: a pin that is
-//!   abandoned in favour of a global chain which then succeeds on *its* first
-//!   choice is under-reported here. That is an under-report, never a wrong
-//!   report, and the abandonment is still in the log
-//!   (`failover: provider unavailable, advancing chain`).
+//!   name the operator never configured.
+//!
+//!   A pin the outer chain *keeps* is no longer lost with it. The walk anchors
+//!   on its plan head via [`record_attempt`] before it dials anything, so the
+//!   pin is already in the record when the inner chain's [`record_success`]
+//!   lands and fills in `served`. Until that anchor existed the inner chain was
+//!   the only writer for a pinned run, so a failed pin followed by a failed
+//!   *global* primary published an `original_model` naming an endpoint the user
+//!   never selected — a wrong report, not the under-report this bullet used to
+//!   claim.
+//!
+//!   A pin that route policy *drops* is still lost, and knowingly so: the
+//!   sentinel then leads the plan, both writers exclude it, and the inner chain
+//!   becomes the run's only writer again. See `CandidatePlan::anchor` for why
+//!   anchoring the dropped head is not obviously the right answer either.
+//! * **A walk whose payload carries no `session_id`.** Only the main Think turn
+//!   stamps one (`harness::agent::think::build_request_payload`). MoA advisor
+//!   dials in particular build a bare `RequestPayload::new(view)`
+//!   (`providers::moa::fan_out::run_fan_out`), so an advisor — which shares the
+//!   turn's session and would otherwise be free to anchor it — writes nothing
+//!   here, before or after the plan-time anchor. The MoA *aggregation* dial does
+//!   carry the metadata, and it is the dial that answers the user.
+//!
+//! ## What an anchor that never gets an answer reads as
+//!
+//! [`record_attempt`] stores `served` as a copy of the anchor, so a run whose
+//! walk was anchored and then failed outright yields `first == served` at
+//! [`take`] time and [`RouteWitness::deviated`] is false — no banner. That is
+//! the right answer: a run that got no answer was not "served by a fallback",
+//! and its failure is surfaced on its own path.
 //!
 //! In-memory and best-effort by design, exactly like the trace mirror: this must
 //! never be able to fail a request or grow without bound. Entries are removed by
@@ -98,51 +123,112 @@ use std::sync::OnceLock;
 /// dropping the stalest history.
 const MAX_TRACKED_SESSIONS: usize = 256;
 
-/// One endpoint the walk dialed: a provider, and the model it was asked for.
+/// Which model an endpoint was asked for — three genuinely different
+/// statements, which is why this is not an `Option<String>`.
 ///
-/// `model` is `None` when the walk let the provider pick its own configured
-/// default — that is what an empty model list on a slot means, and it is a
-/// genuinely different statement from "we asked for model X".
+/// Collapsing [`Unresolved`](Self::Unresolved) into
+/// [`ProviderDefault`](Self::ProviderDefault) would make "no model has been
+/// chosen for this endpoint yet" render as "we deliberately let the provider
+/// choose", and [`RouteWitness::deviated`] would then compare a model that was
+/// never dialed against one that was — the wrong-report shape this module
+/// exists to avoid.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DialedModel {
+    /// The walk stamped this model id on the request.
+    Named(String),
+    /// The walk sent no model id at all: the provider picks its own configured
+    /// default. That is what an empty model list on a slot means.
+    ProviderDefault,
+    /// The endpoint is known but no request was ever built for it — the
+    /// plan-time anchor ([`record_attempt`]).
+    ///
+    /// Which model that slot *would* dial is only settled later in the walk, by
+    /// the capability floor (`retain_capable_models`) and the cooling sideline
+    /// (`drop_cooling_models`). Guessing the catalog head here would name a
+    /// model the walk then filtered out. The anchor is upgraded in place the
+    /// moment that same endpoint is actually dialed, so this state reaches a
+    /// reader only for an endpoint the run never dialed at all — which is not
+    /// an edge case but the *headline* one: a primary passed over pre-dial by
+    /// an open breaker, a rate ceiling or a 429 pacing park is precisely the
+    /// migration this module exists to announce, and it never gets a model.
+    Unresolved,
+}
+
+/// One endpoint the walk dialed: a provider, and the model it was asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Dialed {
     /// Provider name — the same key the circuit breaker uses.
     pub provider: String,
-    /// Model id stamped on the request, or `None` for the provider's default.
-    pub model: Option<String>,
+    /// What model this endpoint was asked for.
+    pub model: DialedModel,
 }
 
 impl Dialed {
-    /// Build a record for `provider` / `model`.
+    /// Build a record for an endpoint the walk built a request for; `model` is
+    /// `None` when that request carried no model id.
     pub fn new(provider: impl Into<String>, model: Option<String>) -> Self {
         Self {
             provider: provider.into(),
-            model,
+            model: model.map_or(DialedModel::ProviderDefault, DialedModel::Named),
+        }
+    }
+
+    /// Build the plan-time anchor for `provider`: the endpoint the walk set out
+    /// for, before any request was built for it.
+    pub fn endpoint(provider: impl Into<String>) -> Self {
+        Self {
+            provider: provider.into(),
+            model: DialedModel::Unresolved,
+        }
+    }
+
+    /// The model id stamped on the request, if there was one.
+    #[must_use]
+    pub fn model_id(&self) -> Option<&str> {
+        match &self.model {
+            DialedModel::Named(m) => Some(m),
+            DialedModel::ProviderDefault | DialedModel::Unresolved => None,
         }
     }
 
     /// How this endpoint reads in a user-facing fallback notice.
     ///
-    /// A `None` model means the walk let the provider choose, and no model id
-    /// exists to name. Naming the requested one instead would be a lie, and the
-    /// bare provider name would read as a model — so say what actually happened.
+    /// Neither model-less state has a model id to name. Naming the requested one
+    /// instead would be a lie, and the bare provider name would read as a model
+    /// — so each says what actually happened.
+    ///
+    /// [`Unresolved`](DialedModel::Unresolved) spells out its *kind* because of
+    /// where it lands: it is the label of the anchor half of the headline
+    /// notice (a primary skipped before any dial), it is carried in the
+    /// model-shaped `ModelInfo::original_model`, and three of the four
+    /// renderers print that field where a model id belongs
+    /// (`"model fallback: {original} → {model}"`). "openai (never dialed)"
+    /// there reads as a model named openai; "provider openai (never dialed)"
+    /// cannot.
     #[must_use]
     pub fn label(&self) -> String {
-        self.model
-            .clone()
-            .unwrap_or_else(|| format!("{}'s default model", self.provider))
+        match &self.model {
+            DialedModel::Named(m) => m.clone(),
+            DialedModel::ProviderDefault => format!("{}'s default model", self.provider),
+            DialedModel::Unresolved => format!("provider {} (never dialed)", self.provider),
+        }
     }
 }
 
 /// What the walk did for one session's run.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RouteWitness {
-    /// The first endpoint the walk *attempted* in this run — its own first
+    /// The first endpoint the walk *set out for* in this run — its own first
     /// choice, which is what would have served the run had nothing failed.
     ///
-    /// Attempted, not succeeded: the single most common migration is a primary
-    /// that is down for the whole run, where every successful dial is already on
-    /// the fallback. Anchoring on the first success would make exactly that case
-    /// read as "nothing deviated".
+    /// Set out for, not succeeded and not even dialed. The single most common
+    /// migration is a primary that is down for the whole run, and every reason
+    /// the walk has to pass a candidate over — an open circuit, a rate ceiling,
+    /// a denied escalation, a 429 pacing park — is settled *before* the first
+    /// request is built. Anchoring on the first success would make that case
+    /// read as "nothing deviated"; anchoring on the first dial would do the same
+    /// from the second run of an outage onward, because by then the first dial
+    /// *is* the fallback.
     pub first: Dialed,
     /// The endpoint that answered the most recent successful dial.
     pub served: Dialed,
@@ -157,7 +243,47 @@ impl RouteWitness {
     /// choice does not.
     #[must_use]
     pub fn deviated(&self) -> bool {
-        self.first != self.served
+        if self.first.provider != self.served.provider {
+            return true;
+        }
+        match (&self.first.model, &self.served.model) {
+            // Same endpoint, and one side is a plan-time anchor whose model was
+            // never settled. There is no model pair to compare, so the only
+            // honest answer is "nothing observed deviated" — claiming a
+            // migration here would render a model id the walk never dialed.
+            (DialedModel::Unresolved, _) | (_, DialedModel::Unresolved) => false,
+            (a, b) => a != b,
+        }
+    }
+
+    /// Fold one write into this record.
+    ///
+    /// The two writers ([`record_attempt`] and [`record_success`]) share this
+    /// one merge rule so they cannot disagree about what `first` means:
+    ///
+    /// * `first` is written once, by whoever gets here first, and is thereafter
+    ///   only ever *refined* — an [`Unresolved`](DialedModel::Unresolved) anchor
+    ///   adopts the model of the first real dial of that same endpoint. A dial
+    ///   of any other endpoint leaves it alone: the run still set out for the
+    ///   anchor, which is the whole point of anchoring before the dial.
+    /// * `served` follows the latest answer. While no answer has arrived it
+    ///   mirrors `first`, so an anchored run that never gets one reads as
+    ///   "nothing deviated" instead of inventing a migration.
+    fn absorb(&mut self, attempted: &Dialed, served: Option<Dialed>) {
+        if self.first.model == DialedModel::Unresolved
+            && self.first.provider == attempted.provider
+            && attempted.model != DialedModel::Unresolved
+        {
+            // `served == first` is exactly "nothing has answered yet"; keep the
+            // two in step so the mirror above survives the refinement.
+            if self.served == self.first {
+                self.served = attempted.clone();
+            }
+            self.first = attempted.clone();
+        }
+        if let Some(served) = served {
+            self.served = served;
+        }
     }
 }
 
@@ -195,7 +321,11 @@ struct BoundedWitnesses {
 }
 
 impl BoundedWitnesses {
-    fn record(&mut self, key: String, attempted: Dialed, served: Dialed) {
+    /// The single insert path, so both writers share one LRU discipline and one
+    /// merge rule. `served` is `None` for the plan-time anchor: nothing has
+    /// answered yet, so such a write may create an entry but never rewrites the
+    /// `served` an earlier turn already filled in.
+    fn record(&mut self, key: String, attempted: Dialed, served: Option<Dialed>) {
         if !self.map.contains_key(&key) && self.map.len() >= MAX_TRACKED_SESSIONS {
             // Evict exactly the stalest entry. O(n) at the cap only, and the
             // cap is the exceptional path — cheap insurance against wedging.
@@ -210,21 +340,21 @@ impl BoundedWitnesses {
         }
         self.seq += 1;
         let tick = self.seq;
-        self.map
-            .entry(key)
-            .and_modify(|(t, w)| {
-                *t = tick;
-                w.served = served.clone();
-            })
-            .or_insert_with(|| {
-                (
-                    tick,
-                    RouteWitness {
-                        first: attempted,
-                        served,
-                    },
-                )
-            });
+        match self.map.get_mut(&key) {
+            Some((t, witness)) => {
+                // An anchor for a session already in the map states nothing new
+                // about recency; only a real answer refreshes the eviction age.
+                if served.is_some() {
+                    *t = tick;
+                }
+                witness.absorb(&attempted, served);
+            }
+            None => {
+                let first = attempted;
+                let served = served.unwrap_or_else(|| first.clone());
+                self.map.insert(key, (tick, RouteWitness { first, served }));
+            }
+        }
     }
 
     fn take(&mut self, key: &str) -> Option<RouteWitness> {
@@ -233,6 +363,25 @@ impl BoundedWitnesses {
 
     fn clear(&mut self, key: &str) {
         self.map.remove(key);
+    }
+
+    /// Undo a plan-time anchor for `provider`, and only that.
+    ///
+    /// Three conditions must all hold, because this is the one path that
+    /// *removes* a record rather than folding into it: the anchor still names
+    /// `provider`, it was never refined by a dial (`Unresolved`), and nothing
+    /// has answered yet (`served` is still the mirror). A run spans many walks
+    /// — one per Think turn — so without the last two a turn-2 denial would
+    /// delete turn 1's real, dialed record.
+    fn retract(&mut self, key: &str, provider: &str) {
+        let is_bare_anchor = self.map.get(key).is_some_and(|(_, w)| {
+            w.first.provider == provider
+                && w.first.model == DialedModel::Unresolved
+                && w.served == w.first
+        });
+        if is_bare_anchor {
+            self.map.remove(key);
+        }
     }
 
     #[cfg(test)]
@@ -258,7 +407,51 @@ pub fn record_success(session_key: &str, attempted: Dialed, served: Dialed) {
     map()
         .write()
         .unwrap_or_else(|e| e.into_inner())
-        .record(key, attempted, served);
+        .record(key, attempted, Some(served));
+}
+
+/// Anchor `session_key`'s run on an endpoint the walk set out for, before any
+/// dial.
+///
+/// The walk calls this twice. Once with [`Dialed::endpoint`] the moment its
+/// candidate plan exists — every reason to pass a candidate over (open circuit,
+/// rate ceiling, denied escalation, 429 pacing park) is decided before the first
+/// request is built, so waiting for a dial anchors on the fallback and reports
+/// an ongoing outage as "nothing deviated". And once more with the fully
+/// resolved [`Dialed`] of the first endpoint it actually dials, which refines
+/// that anchor's model (see [`RouteWitness::absorb`]).
+///
+/// The earliest anchor of a run wins: a later walk (there is one per Think turn)
+/// and a chain nested behind `NESTED_CHAIN_NODE` both find the entry present and
+/// leave `first` alone.
+pub fn record_attempt(session_key: &str, attempted: Dialed) {
+    let key = witness_key(session_key);
+    map()
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .record(key, attempted, None);
+}
+
+/// Undo `session_key`'s plan-time anchor on `provider` — the walk set out for
+/// that endpoint and then learned it does not get to have it.
+///
+/// The one caller is the escalation gate's *denial* arm. An approval-gated
+/// cross-tier head is anchored like any other (the cheap gates ahead of the
+/// prompt — open breaker, rate ceiling — pass it over without ever asking, and
+/// being skipped for being dead is a migration worth announcing), but an actual
+/// refusal is not a migration: telling someone who just declined to borrow the
+/// cloud that their run "moved off" it is the wrong-report shape this module
+/// exists to avoid. So the anchor is written first and withdrawn on the one
+/// event that invalidates it, rather than never written at all.
+///
+/// A no-op unless the record is still that bare anchor — see
+/// [`BoundedWitnesses::retract`].
+pub fn retract(session_key: &str, provider: &str) {
+    let key = witness_key(session_key);
+    map()
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .retract(&key, provider);
 }
 
 /// Remove and return `session_key`'s record.
@@ -461,10 +654,55 @@ mod tests {
             store.record(
                 (*k).to_string(),
                 Dialed::new(format!("p{i}"), None),
-                Dialed::new(format!("p{i}"), None),
+                Some(Dialed::new(format!("p{i}"), None)),
             );
         }
         store
+    }
+
+    #[test]
+    fn retract_removes_a_bare_anchor_and_nothing_else() {
+        // The escalation denial arm's primitive. Three guards, one per way a
+        // blind `remove` would delete a record that is still wanted.
+        let mut store = BoundedWitnesses::default();
+
+        // 1. The bare anchor it is meant for.
+        store.record("k".to_string(), Dialed::endpoint("openai"), None);
+        store.retract("k", "openai");
+        assert!(store.take("k").is_none(), "the withdrawn anchor is gone");
+
+        // 2. An anchor already refined by a real dial of that endpoint — this
+        //    is a LATER turn of the same run, and turn 1 really did dial it.
+        store.record("k".to_string(), Dialed::endpoint("openai"), None);
+        store.record(
+            "k".to_string(),
+            Dialed::new("openai", Some("gpt-5".into())),
+            None,
+        );
+        store.retract("k", "openai");
+        assert!(
+            store.take("k").is_some(),
+            "a dialed record must survive a later turn's denial"
+        );
+
+        // 3. An anchor that already has an answer, and an anchor for someone
+        //    else. Neither is this candidate's bare anchor.
+        store.record(
+            "k".to_string(),
+            Dialed::endpoint("openai"),
+            Some(Dialed::new("ollama", None)),
+        );
+        store.retract("k", "openai");
+        assert!(
+            store.take("k").is_some(),
+            "a run that already got an answer is not withdrawable"
+        );
+        store.record("k".to_string(), Dialed::endpoint("openai"), None);
+        store.retract("k", "anthropic");
+        assert!(
+            store.take("k").is_some(),
+            "another candidate's denial must not touch this anchor"
+        );
     }
 
     #[test]
@@ -479,7 +717,7 @@ mod tests {
         store.record(
             "new".to_string(),
             Dialed::new("p", None),
-            Dialed::new("p", None),
+            Some(Dialed::new("p", None)),
         );
 
         assert_eq!(store.len(), MAX_TRACKED_SESSIONS);
@@ -501,12 +739,12 @@ mod tests {
         store.record(
             "k0".to_string(),
             Dialed::new("p0", None),
-            Dialed::new("p0-next", None),
+            Some(Dialed::new("p0-next", None)),
         );
         store.record(
             "new".to_string(),
             Dialed::new("p", None),
-            Dialed::new("p", None),
+            Some(Dialed::new("p", None)),
         );
 
         assert!(

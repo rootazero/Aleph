@@ -101,7 +101,6 @@ pub fn MemoryView() -> impl IntoView {
                                 <DreamingSettings config=config />
                                 <ReflectionSettings config=config />
                                 <CuratedEnvelopeSettings config=config />
-                                <StorageBackupSettings config=config />
                                 <RetrievalDebugPanel />
                                 <DreamInsightsPanel />
                                 <CorrectionsPanel />
@@ -167,26 +166,6 @@ fn BasicSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
                         {move || config.get().map(|c| c.vector_db).unwrap_or_else(|| "sqlite-vec".to_string())}
                     </div>
                     <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.vector_db_hint)}</p>
-                </div>
-
-                <div>
-                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.similarity_threshold)}</label>
-                    <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        max="1"
-                        prop:value=move || config.get().map(|c| c.similarity_threshold).unwrap_or(0.7)
-                        on:input=move |ev| {
-                            if let Some(mut cfg) = config.get() {
-                                if let Ok(val) = event_target_value(&ev).parse() {
-                                    cfg.similarity_threshold = val;
-                                    config.set(Some(cfg));
-                                }
-                            }
-                        }
-                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                    />
                 </div>
             </div>
         </div>
@@ -426,38 +405,9 @@ fn DreamingSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
     }
 }
 
-#[component]
-fn StorageBackupSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
-    let i18n = use_i18n();
-    view! {
-        <div class="bg-surface-raised p-6 rounded-lg border border-border">
-            <h2 class="text-lg font-semibold mb-2">{t!(i18n, settings.memory.storage_backup)}</h2>
-
-            <div class="space-y-4">
-                <div>
-                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.dedup_similarity_threshold)}</label>
-                    <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        max="1"
-                        prop:value=move || config.get().map(|c| c.dedup_similarity_threshold).unwrap_or(0.95)
-                        on:input=move |ev| {
-                            if let Some(mut cfg) = config.get() {
-                                if let Ok(val) = event_target_value(&ev).parse() {
-                                    cfg.dedup_similarity_threshold = val;
-                                    config.set(Some(cfg));
-                                }
-                            }
-                        }
-                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                    />
-                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.dedup_similarity_hint)}</p>
-                </div>
-            </div>
-        </div>
-    }
-}
+// A "Storage" card editing a top-level `dedup_similarity_threshold` used to
+// live here. That key was cut server-side (zero readers); the live write-time
+// dedup knob is `[memory.compound_ingest]`, which this page does not own.
 
 // ============================================================================
 // Section A: Retrieval Pipeline Settings

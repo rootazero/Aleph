@@ -40,8 +40,15 @@ pub(crate) fn parse_chat_sse_event(
     // `usage` nor `choices` and would be dropped silently — the stream
     // would end as if the provider had simply stopped talking, and the
     // failover machinery would never see the failure. Mapping it to
-    // `ProviderDelta::Error` reuses the same "promote to retryable
-    // transient error" path the Anthropic/Responses protocols already take.
+    // `ProviderDelta::Error` reaches the same consumer the Anthropic/Responses
+    // protocols do, which reads it three ways: with no content yet it is
+    // promoted to a retryable transient error; once content has been streamed
+    // and the fault also ended the stream, the partial answer is kept and the
+    // fault rides out on `ProviderResponse::provider_error` for the failover
+    // walk to strike the provider with; and if the stream went on to deliver a
+    // `finish_reason` anyway — a relay that hiccups and recovers — the turn
+    // completed and is charged nothing. Parsing continues past this chunk
+    // either way, which is what makes the third case observable.
     if let Some(error) = v.get("error") {
         let message = match error {
             serde_json::Value::String(s) => s.clone(),
@@ -247,17 +254,40 @@ pub(crate) fn parse_chat_sse_event(
 /// `pending` is the freshly-parsed event queue (a parsed event pushes its
 /// terminal `Done` last, if any). This function moves that `Done` into
 /// `deferred_done`; once a `Usage` delta is also present it re-appends `Done`
-/// as the final element — preserving the "`Done` is the last event" contract
-/// for every consumer regardless of buffering behaviour.
+/// as the final element, so on an unfaulted stream `Done` is still the last
+/// event every consumer sees.
 ///
-/// Returns `true` when usage and the deferred `Done` are both in hand and the
-/// stream should terminate.
+/// **A fault cancels the deferral.** Buffering is only allowed to move `Done`
+/// past *bookkeeping* frames. A `ProviderDelta::Error` is the stream's terminal
+/// fact in wire order, and
+/// [`TerminalFrames`](crate::providers::http_provider) reads exactly the
+/// delivered order of `Done` and `Error` to decide whether the provider
+/// recovered from the fault: holding the `Done` back here would turn a wire
+/// that said `Done -> Error` (the turn ended, then the relay reported a
+/// problem) into a delivered `Error -> Done` (a hiccup the relay recovered
+/// from) — opposite verdicts from one wire. So when a fault is queued while a
+/// `Done` is deferred, the `Done` is released *ahead* of it. The trailing usage
+/// chunk of a faulted turn is the cheaper thing to lose than the verdict.
+///
 pub(crate) fn defer_done_until_usage(
     pending: &mut VecDeque<Result<ProviderDelta>>,
     deferred_done: &mut Option<Result<ProviderDelta>>,
-) -> bool {
+) -> DeferOutcome {
     if matches!(pending.back(), Some(Ok(ProviderDelta::Done(_)))) {
         *deferred_done = pending.pop_back();
+    }
+    if deferred_done.is_some()
+        && pending
+            .iter()
+            .any(|d| matches!(d, Ok(ProviderDelta::Error(_))))
+    {
+        // Restore wire order: the deferred `Done` was parsed before this fault.
+        if let Some(done) = deferred_done.take() {
+            pending.push_front(done);
+        }
+        // Keep reading — no adapter stops parsing on a fault, and the stream
+        // may still carry usage or the `[DONE]` sentinel.
+        return DeferOutcome::DoneReleasedBeforeFault;
     }
     if deferred_done.is_some()
         && pending
@@ -267,7 +297,25 @@ pub(crate) fn defer_done_until_usage(
         if let Some(done) = deferred_done.take() {
             pending.push_back(done);
         }
-        return true;
+        return DeferOutcome::Terminate;
     }
-    false
+    DeferOutcome::Continue
+}
+
+/// What [`defer_done_until_usage`] did with this event.
+///
+/// A bool would answer only "terminate?", and the caller needs a second fact:
+/// whether the terminal `Done` has already been handed downstream. Its
+/// end-of-stream truncation guard asks "did any terminal signal exist?" and
+/// would otherwise look in an empty `pending` and a `None` `deferred_done` and
+/// answer no — reporting a truncated response for a turn that finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeferOutcome {
+    /// Nothing terminal delivered yet; keep reading.
+    Continue,
+    /// A queued fault cancelled the deferral: the `Done` went out ahead of it,
+    /// so a terminal frame *has* been delivered while the stream reads on.
+    DoneReleasedBeforeFault,
+    /// Usage and the deferred `Done` are both in hand — end the stream.
+    Terminate,
 }

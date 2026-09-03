@@ -79,6 +79,7 @@ impl AiProvider for UsageTextProvider {
                 text: Some("done".to_string()),
                 stop_reason: crate::providers::adapter::StopReason::EndTurn,
                 truncated_tool_call: None,
+                provider_error: None,
                 usage: Some(usage),
                 ..Default::default()
             })
@@ -120,6 +121,7 @@ impl AiProvider for OneShotToolProvider {
                     thinking_signature: None,
                     stop_reason: StopReason::ToolUse,
                     truncated_tool_call: None,
+                    provider_error: None,
                     usage: None,
                 })
             } else {
@@ -408,6 +410,7 @@ async fn tool_failure_recovers_in_next_think() {
                         thinking_signature: None,
                         stop_reason: StopReason::ToolUse,
                         truncated_tool_call: None,
+                        provider_error: None,
                         usage: None,
                     })
                 } else {
@@ -493,6 +496,7 @@ async fn partial_batch_failure_continues() {
                         thinking_signature: None,
                         stop_reason: StopReason::ToolUse,
                         truncated_tool_call: None,
+                        provider_error: None,
                         usage: None,
                     })
                 } else {
@@ -560,6 +564,7 @@ async fn consecutive_total_failure_caps_loop() {
                     thinking_signature: None,
                     stop_reason: StopReason::ToolUse,
                     truncated_tool_call: None,
+                    provider_error: None,
                     usage: None,
                 })
             })
@@ -832,6 +837,7 @@ async fn long_think_does_not_falsely_trip_stall() {
                         thinking_signature: None,
                         stop_reason: StopReason::ToolUse,
                         truncated_tool_call: None,
+                        provider_error: None,
                         usage: None,
                     })
                 } else {

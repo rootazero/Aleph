@@ -10,7 +10,9 @@ use crate::providers::openai::{
 use reqwest::Client;
 use std::collections::VecDeque;
 
-use crate::providers::protocols::openai_chat::sse::{defer_done_until_usage, parse_chat_sse_event};
+use crate::providers::protocols::openai_chat::sse::{
+    defer_done_until_usage, parse_chat_sse_event, DeferOutcome,
+};
 
 #[test]
 fn openai_chat_usage_deserializes_cache_and_reasoning_tokens() {
@@ -1783,8 +1785,12 @@ fn defer_done_releases_done_after_separate_usage_chunk() {
     pending.push_back(Ok(ProviderDelta::Done(StopReason::EndTurn)));
     let mut deferred: Option<crate::providers::Result<ProviderDelta>> = None;
 
-    let terminate = defer_done_until_usage(&mut pending, &mut deferred);
-    assert!(!terminate, "keep reading — usage not seen yet");
+    let outcome = defer_done_until_usage(&mut pending, &mut deferred);
+    assert_eq!(
+        outcome,
+        DeferOutcome::Continue,
+        "keep reading — usage not seen yet"
+    );
     assert!(deferred.is_some(), "Done held back");
     assert!(pending.is_empty(), "Done removed from pending");
 
@@ -1799,8 +1805,12 @@ fn defer_done_releases_done_after_separate_usage_chunk() {
             cost: None,
         },
     )));
-    let terminate = defer_done_until_usage(&mut pending, &mut deferred);
-    assert!(terminate, "usage in hand — stream should finish");
+    let outcome = defer_done_until_usage(&mut pending, &mut deferred);
+    assert_eq!(
+        outcome,
+        DeferOutcome::Terminate,
+        "usage in hand — stream should finish"
+    );
     assert!(deferred.is_none(), "deferred Done released");
     // Done must remain the LAST element so the Done-is-final contract holds.
     assert!(matches!(pending.back(), Some(Ok(ProviderDelta::Done(_)))));
@@ -1825,8 +1835,12 @@ fn defer_done_releases_done_with_inline_usage() {
     pending.push_back(Ok(ProviderDelta::Done(StopReason::EndTurn)));
     let mut deferred = None;
 
-    let terminate = defer_done_until_usage(&mut pending, &mut deferred);
-    assert!(terminate, "usage already present — finish immediately");
+    let outcome = defer_done_until_usage(&mut pending, &mut deferred);
+    assert_eq!(
+        outcome,
+        DeferOutcome::Terminate,
+        "usage already present — finish immediately"
+    );
     assert!(matches!(pending.back(), Some(Ok(ProviderDelta::Done(_)))));
 }
 
@@ -1837,8 +1851,67 @@ fn defer_done_keeps_reading_when_event_has_no_done() {
     pending.push_back(Ok(ProviderDelta::TextDelta("hi".into())));
     let mut deferred = None;
 
-    let terminate = defer_done_until_usage(&mut pending, &mut deferred);
-    assert!(!terminate);
+    let outcome = defer_done_until_usage(&mut pending, &mut deferred);
+    assert_eq!(outcome, DeferOutcome::Continue);
     assert!(deferred.is_none());
     assert_eq!(pending.len(), 1, "content delta untouched");
+}
+
+#[test]
+fn defer_done_releases_the_done_ahead_of_a_fault() {
+    // Wire order `finish_reason -> {"error": ...}`: the turn ended and *then*
+    // the relay complained. `HttpProvider::TerminalFrames` has only the
+    // delivered order to tell that apart from `{"error": ...} -> finish_reason`
+    // (a hiccup the relay recovered from), and the two get opposite verdicts —
+    // charged vs. advisory. So the buffering must not outlive the fault.
+    let mut pending: VecDeque<crate::providers::Result<ProviderDelta>> = Default::default();
+    pending.push_back(Ok(ProviderDelta::Done(StopReason::EndTurn)));
+    let mut deferred: Option<crate::providers::Result<ProviderDelta>> = None;
+
+    let outcome = defer_done_until_usage(&mut pending, &mut deferred);
+    assert_eq!(outcome, DeferOutcome::Continue, "usage not seen yet");
+    assert!(deferred.is_some(), "Done held back");
+
+    // The relay's in-band error chunk lands before any usage chunk.
+    pending.push_back(Ok(ProviderDelta::Error("upstream died".into())));
+    let outcome = defer_done_until_usage(&mut pending, &mut deferred);
+    assert_eq!(
+        outcome,
+        DeferOutcome::DoneReleasedBeforeFault,
+        "the caller must learn a terminal Done already went downstream"
+    );
+    assert!(deferred.is_none(), "the deferred Done was released");
+    assert!(
+        matches!(pending.front(), Some(Ok(ProviderDelta::Done(_)))),
+        "the Done was parsed first, so it must be delivered first: {pending:?}"
+    );
+    assert!(
+        matches!(pending.back(), Some(Ok(ProviderDelta::Error(_)))),
+        "the fault is the stream's terminal fact and must stay last: {pending:?}"
+    );
+}
+
+#[test]
+fn defer_done_still_holds_a_done_that_followed_a_fault() {
+    // The other wire order: the relay hiccups and then finishes the turn. Here
+    // the fault is already delivered, so deferring the trailing Done for the
+    // usage chunk changes nothing about which came first — and the turn did
+    // complete, so it stays advisory.
+    let mut pending: VecDeque<crate::providers::Result<ProviderDelta>> = Default::default();
+    pending.push_back(Ok(ProviderDelta::Error("hiccup".into())));
+    let mut deferred: Option<crate::providers::Result<ProviderDelta>> = None;
+    assert_eq!(
+        defer_done_until_usage(&mut pending, &mut deferred),
+        DeferOutcome::Continue
+    );
+    assert!(deferred.is_none(), "nothing to defer yet");
+    pending.clear(); // the Error delta is drained by the unfold loop
+
+    pending.push_back(Ok(ProviderDelta::Done(StopReason::EndTurn)));
+    assert_eq!(
+        defer_done_until_usage(&mut pending, &mut deferred),
+        DeferOutcome::Continue
+    );
+    assert!(deferred.is_some(), "Done still held for the usage chunk");
+    assert!(pending.is_empty());
 }

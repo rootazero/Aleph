@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::config::types::ProviderConfig;
 use crate::config::Config;
 use crate::providers::model_catalog::endpoint_kind_for_base_url;
-use crate::providers::route_observe::{ChainCandidate, RouteObservability};
+use crate::providers::route_observe::RouteObservability;
 use crate::providers::route_policy::EndpointTier;
 use crate::providers::{
     create_provider, AiProvider, DefaultProviderHandle, FailoverConfig, FailoverHealth,
@@ -46,8 +46,9 @@ pub struct ProviderChain {
     pub default: Arc<dyn DefaultProviderHandle>,
     pub agent_overrides: HashMap<String, Arc<dyn AiProvider>>,
     /// Live handles onto the chain's shared runtime state (breaker, cooldowns,
-    /// load) plus the boot-time chain composition. The production boot path
-    /// registers a clone as the process-global `route_observe` bundle so the
+    /// load) plus the chain itself, which is what answers composition — the
+    /// bundle carries no second copy of who is in the chain. The production
+    /// boot path registers a clone as the process-global `route_observe` bundle so the
     /// `self_config` `route_status` action can render live diagnostics.
     pub observability: RouteObservability,
 }
@@ -185,25 +186,13 @@ pub fn build_failover_chain(
         "failover chain assembled"
     );
 
-    // Chain composition for the read-only observability bundle, captured before
-    // `fallbacks` moves into the provider.
-    let chain_candidates: Vec<ChainCandidate> = fallbacks
-        .iter()
-        .map(|n| ChainCandidate {
-            // rust-doctor-disable-next-line excessive-clone
-            name: n.name.clone(),
-            // rust-doctor-disable-next-line excessive-clone
-            models: n.models.clone(),
-            tier: n.tier,
-        })
-        .collect();
-
     // `[route]` settings that are set but cannot take effect, resolved once from
     // the same provider/tier picture the chain is built from — so the diagnostic
     // and the engine can never describe different provider sets. Logged loudly
     // here (a silent no-op knob is the failure mode) and carried into
     // `route_status` for the model. This is only the BOOT generation: the
-    // `route_config.update` write path re-computes the list on every hot apply
+    // `route` arm of `config::live_apply::apply_live_sections` re-computes the
+    // list on every hot `[route]` write, whichever face it came through
     // (`RouteObservability::hot_apply_problems`), against the same tier catalog.
     let problems = crate::providers::route_policy::route_problems(&config.route, &tier_catalog);
     for problem in &problems {
@@ -269,7 +258,9 @@ pub fn build_failover_chain(
     let observability = RouteObservability {
         // rust-doctor-disable-next-line excessive-clone
         primary: default_provider_for_observability,
-        fallbacks: chain_candidates,
+        // The chain's own composition answers `fallback_chain` (it materialises
+        // members exactly as the walk does), so the bundle no longer carries a
+        // boot-time copy to disagree with it.
         auto_derived,
         // rust-doctor-disable-next-line excessive-clone
         health: health.clone(),
@@ -279,8 +270,9 @@ pub fn build_failover_chain(
         provider_cooldown: provider_cooldown.clone(),
         // rust-doctor-disable-next-line excessive-clone
         load: load.clone(),
-        // rust-doctor-disable-next-line excessive-clone
-        route: route_handle.clone(),
+        // The chain carries the route handle (`with_route_live` above) and the
+        // snapshot reads its generation through the preview, so the bundle does
+        // not keep a second copy of the handle to drift from it.
         chain: Some(global_chain),
         // Boot generation of the inert-`[route]` list; the hot write path
         // republishes it through the shared `ArcSwap` (cloned handles share

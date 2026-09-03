@@ -45,8 +45,11 @@ pub(crate) fn retry_after_secs(headers: &reqwest::header::HeaderMap) -> Option<S
 /// (streaming success responses are long-lived), and `stream_idle` only guards
 /// the *success* byte stream — the error path (`response.text()` on a non-OK
 /// status) is read unbounded. A provider or proxy that returns non-OK headers
-/// then stalls the body would otherwise hang the turn until the 300s per-turn
-/// watchdog fires — too late to fail over cleanly. Bounding the error-body read
+/// then stalls the body would otherwise hang the turn until the per-turn
+/// watchdog fires — the operator-configured `[stability] turn_timeout_secs`,
+/// which the library leaves unset and `aleph-server` defaults to 120s
+/// (`build_stability_triple`) — too late to fail over cleanly, and on a library
+/// embedding never at all. Bounding the error-body read
 /// keeps failover prompt. A2/P7: the model still sees a typed error and
 /// self-heals; the harness picks no recovery strategy.
 pub(crate) async fn read_error_body(response: reqwest::Response) -> String {

@@ -1396,7 +1396,11 @@ mod tests {
     /// # Attribution, and the one case it refuses to guess
     ///
     /// A hit is charged to the brace-matched body of the `#[test]` /
-    /// `#[tokio::test]` function containing it. A hit that lands in NO test
+    /// `#[tokio::test]` function containing it, by the shared walk
+    /// [`scan_test_bodies`](crate::utils::source_scan::scan_test_bodies) —
+    /// shared because "which test owns this line" is one fact and
+    /// `providers::route_observe`'s route-globals census asks it too. A hit
+    /// that lands in NO test
     /// body — a shared helper in the test module — fails too, naming itself:
     /// the guard cannot tell which tests call a helper, and silently charging
     /// it to whichever test happens to precede it in the file would be a
@@ -1412,7 +1416,9 @@ mod tests {
     #[test]
     #[serial_test::parallel(pty_global_manager)]
     fn every_test_that_reaches_the_global_pty_manager_is_tagged() {
-        use crate::utils::source_scan::{cfg_test_portion, code_text, rust_sources_under};
+        use crate::utils::source_scan::{
+            cfg_test_portion, code_text, rust_sources_under, scan_test_bodies,
+        };
 
         const PARALLEL_TAG: &str = "#[serial_test::parallel(pty_global_manager)]";
         const SERIAL_TAG: &str = "#[serial_test::serial(pty_global_manager)]";
@@ -1445,75 +1451,37 @@ mod tests {
             }
             let in_pty_module = path.contains("/gateway/pty/");
             let code = code_text(&cfg_test_portion(&src));
-            let lines: Vec<&str> = code.lines().collect();
             let reaches = |l: &str| {
                 l.contains(QUALIFIED)
                     || (in_pty_module && (l.contains(VIA_SUPER) || l.contains(BARE)))
             };
-            if !lines.iter().any(|l| reaches(l)) {
+            if !code.lines().any(&reaches) {
                 continue;
             }
             reaching.push(path.clone());
 
-            let mut charged = vec![false; lines.len()];
-            let mut i = 0usize;
-            while i < lines.len() {
-                let attr = lines[i].trim();
-                if !(attr.starts_with("#[tokio::test") || attr == "#[test]") {
-                    i += 1;
-                    continue;
-                }
-                // The rest of the attribute block, then the `fn` line.
-                let mut j = i + 1;
-                let mut tagged = false;
-                while j < lines.len() && lines[j].trim().starts_with("#[") {
-                    let a = lines[j].trim();
-                    tagged |= a == PARALLEL_TAG || a == SERIAL_TAG;
-                    j += 1;
-                }
-                if j >= lines.len() {
-                    break;
-                }
-                let name = lines[j].trim().to_string();
-
-                // Brace-match the body. Literal payloads are already blanked,
-                // so a `{` inside a string cannot desynchronise this.
-                let (mut depth, mut opened, mut end) = (0i32, false, j);
-                for (k, l) in lines.iter().enumerate().skip(j) {
-                    depth += i32::try_from(l.matches('{').count()).unwrap_or(0);
-                    depth -= i32::try_from(l.matches('}').count()).unwrap_or(0);
-                    opened |= l.contains('{');
-                    end = k;
-                    if opened && depth <= 0 {
-                        break;
-                    }
-                }
-
-                checked_tests += 1;
-                let body_reaches = lines[j..=end].iter().any(|l| reaches(l));
-                for c in charged.iter_mut().take(end + 1).skip(j) {
-                    *c = true;
-                }
-                if body_reaches && !tagged {
+            let scan = scan_test_bodies(&code, &reaches);
+            checked_tests += scan.tests.len();
+            for test in &scan.tests {
+                let tagged = test
+                    .attrs
+                    .iter()
+                    .any(|a| a == PARALLEL_TAG || a == SERIAL_TAG);
+                if test.reaches && !tagged {
                     violations.push(format!(
-                        "{path}: `{name}` reaches the process-global PtyManager but carries \
-                         neither {PARALLEL_TAG} nor {SERIAL_TAG}"
+                        "{path}: `{}` reaches the process-global PtyManager but carries \
+                         neither {PARALLEL_TAG} nor {SERIAL_TAG}",
+                        test.name
                     ));
                 }
-                i = end + 1;
             }
-
-            for (k, l) in lines.iter().enumerate() {
-                if !charged[k] && reaches(l) {
-                    violations.push(format!(
-                        "{path}:{}: `{}` reaches the process-global PtyManager outside any \
-                         #[test] body (a shared helper?). This guard will not guess which \
-                         tests call it — move the call into the tests, or tag every test in \
-                         that file with {PARALLEL_TAG}",
-                        k + 1,
-                        l.trim()
-                    ));
-                }
+            for (line, text) in &scan.uncharged {
+                violations.push(format!(
+                    "{path}:{line}: `{text}` reaches the process-global PtyManager outside any \
+                     #[test] body (a shared helper?). This guard will not guess which tests \
+                     call it — move the call into the tests, or tag every test in that file \
+                     with {PARALLEL_TAG}"
+                ));
             }
         }
 

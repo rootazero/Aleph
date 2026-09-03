@@ -321,6 +321,41 @@ pub trait RawMemoryStore: Send + Sync {
             .collect())
     }
 
+    /// Newest-first substring search over rows under a path prefix, scoped to
+    /// an agent. Matching is ASCII-case-insensitive on both ends (the `SQLite`
+    /// backend implements it with `LIKE`, whose default collation folds ASCII
+    /// only); non-ASCII text matches exactly. Used by the `memory_search`
+    /// transcripts leg over `aleph://transcript/` rows.
+    ///
+    /// Newest-first matters: `get_raw_by_path_prefix` is oldest-first with a
+    /// `LIMIT`, so filtering its window client-side would make recent
+    /// transcripts unreachable once history outgrows the window. The default
+    /// impl below still has that bounded-window shape (fine for small
+    /// in-memory test stores); the `SQLite` backend overrides with a real
+    /// newest-first query.
+    async fn search_raw_by_path_prefix(
+        &self,
+        path_prefix: &str,
+        agent_id: &str,
+        needle: &str,
+        limit: usize,
+    ) -> Result<Vec<RawMemory>, AlephError> {
+        let window = limit.saturating_mul(50).max(1000);
+        let all = self
+            .get_raw_by_path_prefix(path_prefix, agent_id, window)
+            .await?;
+        let needle_lower = needle.to_ascii_lowercase();
+        let mut hits: Vec<RawMemory> = all
+            .into_iter()
+            .filter(|r| r.content.to_ascii_lowercase().contains(&needle_lower))
+            .collect();
+        // `get_raw_by_path_prefix` returns oldest-first; flip to newest-first
+        // before applying the cap so the cap keeps the most recent matches.
+        hits.reverse();
+        hits.truncate(limit);
+        Ok(hits)
+    }
+
     /// Returns the single `RawMemory` row whose `(agent_id, path)` matches
     /// exactly, or `Ok(None)` if no such row exists. Default impl reuses
     /// `get_raw_by_path_prefix` and filters in-Rust; the `SQLite` backend

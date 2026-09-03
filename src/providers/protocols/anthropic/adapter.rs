@@ -1158,8 +1158,12 @@ mod error_classification_tests {
     /// could therefore hold while the live path did something else; the
     /// adapter comment about "the retry policy's status-code match" pointed
     /// at the same dead path.
+    ///
+    /// The trailing `true` is `has_later_candidate`: these assertions describe a
+    /// chain that still has somewhere to go, which is the shape the adapter's
+    /// classification matters in.
     fn is_retryable(e: &AlephError) -> bool {
-        matches!(decide(e, 0, 2), Decision::RetrySame(_))
+        matches!(decide(e, 0, 2, true), Decision::RetrySame(_))
     }
 
     #[test]
@@ -1207,7 +1211,7 @@ mod error_classification_tests {
             other => panic!("expected RateLimitError, got {other:?}"),
         }
         assert_eq!(
-            decide(&e, 0, 2),
+            decide(&e, 0, 2, true),
             Decision::RateLimited(Some(Duration::from_secs(12))),
             "a model-specific 429 cools this model for the server's hint"
         );

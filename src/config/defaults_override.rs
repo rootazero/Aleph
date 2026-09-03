@@ -17,13 +17,10 @@ use tracing::warn;
 // Override types
 // =============================================================================
 
-/// Memory system defaults
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct MemoryDefaultsOverride {
-    /// Override the default similarity threshold for memory retrieval
-    #[serde(default)]
-    pub similarity_threshold: Option<f32>,
-}
+// A `[memory]` override section (`similarity_threshold`) used to live here.
+// It fed `default_similarity_threshold()`, whose config field was cut as a
+// never-wired no-op; a `defaults.toml` still carrying the section parses
+// fine and is ignored (no `deny_unknown_fields`).
 
 /// Provider defaults
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -47,9 +44,6 @@ pub struct GenerationDefaultsOverride {
 /// deserialization of config.toml. Must be loaded before config parsing.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct DefaultsOverride {
-    /// Memory system default overrides
-    #[serde(default)]
-    pub memory: Option<MemoryDefaultsOverride>,
     /// Provider default overrides
     #[serde(default)]
     pub provider: Option<ProviderDefaultsOverride>,
@@ -108,11 +102,10 @@ static DEFAULTS_OVERRIDE: CapabilitySlot<DefaultsOverride> = CapabilitySlot::new
 /// **silently discarded the operator's `defaults.toml`**. Reading through a
 /// separate static cannot latch, so that later install now succeeds.
 ///
-/// Blast radius checked: all five `get_defaults_override()` callers `.clone()`
-/// or read a field immediately, so no long-lived `&'static` holds the
+/// Blast radius checked: every `get_defaults_override()` caller `.clone()`s
+/// or reads a field immediately, so no long-lived `&'static` holds the
 /// pre-install address across an install.
 static EMPTY_DEFAULTS_OVERRIDE: DefaultsOverride = DefaultsOverride {
-    memory: None,
     provider: None,
     generation: None,
 };
@@ -193,11 +186,6 @@ impl DefaultsOverride {
         self.provider.as_ref()?.timeout_seconds
     }
 
-    /// Get the memory similarity threshold override, if set.
-    pub fn memory_similarity_threshold(&self) -> Option<f32> {
-        self.memory.as_ref()?.similarity_threshold
-    }
-
     /// Get the generation timeout override, if set.
     pub fn generation_timeout_seconds(&self) -> Option<u64> {
         self.generation.as_ref()?.timeout_seconds
@@ -215,28 +203,25 @@ mod tests {
     #[test]
     fn test_empty_defaults_override() {
         let parsed: DefaultsOverride = toml::from_str("").unwrap();
-        assert!(parsed.memory.is_none());
         assert!(parsed.provider.is_none());
         assert!(parsed.generation.is_none());
         // Accessors should all return None
         assert!(parsed.provider_timeout_seconds().is_none());
-        assert!(parsed.memory_similarity_threshold().is_none());
         assert!(parsed.generation_timeout_seconds().is_none());
     }
 
+    /// A `defaults.toml` written for the removed `[memory]` override section
+    /// must keep parsing: the section is ignored, not rejected, so an operator
+    /// with a stale file gets compiled defaults instead of a broken boot.
     #[test]
-    fn test_memory_defaults_parse() {
+    fn stale_memory_override_section_is_ignored_not_rejected() {
         let toml_str = r#"
 [memory]
 similarity_threshold = 0.75
 "#;
         let parsed: DefaultsOverride = toml::from_str(toml_str).unwrap();
-
-        let mem = parsed.memory.as_ref().unwrap();
-        assert_eq!(mem.similarity_threshold, Some(0.75));
-
-        // Accessors
-        assert_eq!(parsed.memory_similarity_threshold(), Some(0.75));
+        assert!(parsed.provider.is_none());
+        assert!(parsed.generation.is_none());
     }
 
     #[test]
@@ -257,18 +242,11 @@ timeout_seconds = 600
     #[test]
     fn test_partial_override() {
         let toml_str = r#"
-[memory]
-similarity_threshold = 0.8
-
 [provider]
 timeout_seconds = 120
 # generation section is not present at all
 "#;
         let parsed: DefaultsOverride = toml::from_str(toml_str).unwrap();
-
-        // Memory: similarity_threshold is set
-        let mem = parsed.memory.as_ref().unwrap();
-        assert_eq!(mem.similarity_threshold, Some(0.8));
 
         // Provider: timeout_seconds is set
         assert_eq!(parsed.provider_timeout_seconds(), Some(120));
@@ -281,7 +259,6 @@ timeout_seconds = 120
     #[test]
     fn test_load_nonexistent_defaults_file() {
         let result = load_defaults_override(Path::new("/tmp/does-not-exist-aleph-defaults.toml"));
-        assert!(result.memory.is_none());
         assert!(result.provider.is_none());
         assert!(result.generation.is_none());
     }
@@ -303,13 +280,9 @@ timeout_seconds = 120
             reads_as.contains("empty override"),
             "must name what get_defaults_override() really hands back; got {reads_as:?}"
         );
-        assert!(EMPTY_DEFAULTS_OVERRIDE.memory.is_none());
         assert!(EMPTY_DEFAULTS_OVERRIDE.provider.is_none());
         assert!(EMPTY_DEFAULTS_OVERRIDE.generation.is_none());
         assert!(EMPTY_DEFAULTS_OVERRIDE.provider_timeout_seconds().is_none());
-        assert!(EMPTY_DEFAULTS_OVERRIDE
-            .memory_similarity_threshold()
-            .is_none());
         assert!(EMPTY_DEFAULTS_OVERRIDE
             .generation_timeout_seconds()
             .is_none());

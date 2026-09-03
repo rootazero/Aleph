@@ -91,7 +91,7 @@ Two bounds keep that from becoming an unbounded nightly bill:
 | bound | what it does | why it is not a correctness knob |
 |---|---|---|
 | `[memory.dreaming] max_corpus_cycles_per_night` (default = `MAX_CORPUS_CYCLES_PER_NIGHT`, the constant the fan-out used before the knob existed — *referenced*, not copied) | ceiling on **non-base** corpora visited per night | a corpus that does not fit tonight is **not lost**, it waits for the next window. Anything downstream that bounds itself by a fixed time window must treat that wait as legitimate — see `ToolFailureDistill`'s lookback in §5.8, which got that wrong on the first pass |
-| `corpus_needs_maintenance` (`project_cycle.rs`) | skips a quiet corpus **before any LLM dispatch**, so it costs nothing and does not spend budget | it is not a policy about how eager maintenance should be — it is the observation that re-judging unchanged bytes cannot produce a different answer |
+| `corpus_needs_maintenance` (`project_cycle.rs`) | skips a quiet corpus **before any LLM dispatch**, so it costs nothing and does not spend budget | it is not a policy about how eager maintenance should be — it is the observation that re-judging unchanged bytes cannot produce a different answer. Its corrections leg applies the **same quorum** the distill stage itself enforces (`meets_distill_quorum`: `len >= min_candidates` or any High/Critical) — a gate that only asks "are there rows?" while the stage asks "are there enough?" admits a sub-quorum corpus every night, runs the full maintenance subset, and never consumes the rows (round 4) |
 
 The activity gate has **four legs**, and the last two exist because a corpus can have real new work while every note on disk is untouched: notes changed since the last cycle started · a non-empty review queue · undistilled corrections (`has_undistilled_corrections`) · undistilled tool failures (`has_undistilled_tool_failures`). **Both distiller legs call the stage's own predicate** — same watermark, same window, same quorum — so the gate cannot disagree with the stage it is gating. A gate that guessed on its own would either strand work or pay for cycles that do nothing.
 
@@ -310,13 +310,13 @@ The fixed daily/weekly pair is gone. Each cycle a `DreamStrategy` (`src/memory/d
 
 `FeedbackDistill` is scheduled directly after `SkillDistill` so a single cycle picks up both implicit (synthesis-derived) and explicit (correction) learnings. Only one strategy runs per cycle, so `FeedbackDistill` never executes twice.
 
-### 6.3 Conserve (defensive, deterministic-only)
+### 6.3 Conserve (defensive)
 
 ```text
 [Lint] -> [Review] -> [IndexRefresher] -> [CoRecallEdges] -> [GraphRecompute]
 ```
 
-Skips every LLM stage.
+No corpus-mutating LLM *distill* stages — but `NoteReview` still adjudicates each queued candidate with an LLM call, so "Conserve" means *no new edits proposed*, not *zero LLM spend* (round 4 doc honesty fix; the `DreamStrategy::Conserve` rustdoc says the same). A corpus admitted **only** by the corrections/tool-failure legs is treated as `Idle` under Conserve and does not spend a fan-out slot: the pipeline contains no stage that could consume those signals, and they lose nothing by waiting (no watermark moves).
 
 ## 7. `DreamReport` Schema
 
@@ -456,7 +456,7 @@ Per-day bucketing plus `(note_path, query_hash, day_bucket, channel)` dedup keep
 
 ## 9. Safety
 
-- **Archive, never delete.** `NoteDecay` uses `tokio::fs::rename` into `archive/{category}/`; content stays recoverable by moving it back.
+- **Archive, never delete.** `NoteDecay` uses `tokio::fs::rename` into `archive/{category}/`; content stays recoverable by moving it back. Since round 4 the distill `Supersede` action honors the same rule: the superseded note is archived **verbatim** (raw bytes, no lossy `KnowledgeNote` round-trip) with a dated `## Superseded by [[new-path]]` marker naming its replacement, instead of being `fs::remove_file`d outright as it was before — the only lineage then was the `DistillActionRecord` in `dream_events.jsonl`, which recorded *that* a note was replaced but not *what it said*.
 - **Backup before merge.** `NoteConsolidate::execute_merge` copies both files to `.md.bak` before any write; removed best-effort on success, retained on failure.
 - **Interruption on activity.** `DreamPipeline::run` invokes `(ctx.activity_checker)()` before every stage; any user activity aborts at the stage boundary with `status = Interrupted`.
 - **Idempotent markers.** `mark_contradictory` / `mark_stale` check for prior application before writing; re-runs do not thrash files.

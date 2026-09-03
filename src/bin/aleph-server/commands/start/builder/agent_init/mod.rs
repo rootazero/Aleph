@@ -493,7 +493,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             tool_context: Some(alephcore::tools::new_tool_context_handle()),
             session_manager: Some(session_store.clone()),
             shared_token_manager: Some(shared_token_mgr.clone()),
-            memory_similarity_threshold: Some(app_config.memory.similarity_threshold),
             memory_project_scoped: app_config.memory.project_scoped,
             injection_mode: app_config.memory.injection_mode,
             coord_task_store: coord_store.clone(),
@@ -1041,9 +1040,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 if let Some(ref prov) = default_prov {
                     compactor = compactor.with_provider(prov.clone());
                 }
-                if let Some(ref emb) = embedder_out {
-                    compactor = compactor.with_embedder(emb.clone());
-                }
+                // Transcript indexing is unconditional: it writes plain
+                // raw_memories rows (no vectors), so gating it on an embedding
+                // provider — as the old `with_embedder` signature did — only
+                // starved embedder-less installs of transcript recall.
+                compactor = compactor.with_transcript_indexing();
                 // Spec 1 G1: wire pre-compress hook so chunks are captured before summarisation.
                 compactor = compactor.with_raw_memory_writer(memory_db.clone()
                     as std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>);
