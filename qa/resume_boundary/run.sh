@@ -234,7 +234,7 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
   case "$STAGE" in
     claims) FLOOR=13 ;;
     denied) FLOOR=5 ;;
-    rewind) FLOOR=5 ;;
+    rewind) FLOOR=11 ;;
     knobs)  FLOOR=10 ;;
     holes)  FLOOR=12 ;;
     *)      FLOOR=0 ;;
@@ -299,7 +299,12 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
       if [ "$RC" = "0" ]; then
         "$BIN" resume --json "$(cat "$SESSION_FILE")" >"$RECEIPT" 2>"$QA_ROOT/resume.err"
         echo "resume receipt after the rewind:"; cat "$RECEIPT"
-        grep -q "already_finished\|\"scanned\"" "$RECEIPT" || { echo "FAIL: the receipt does not report the rewound session as settled" >&2; RC=1; }
+        # Asserted in the driver, by PARSING the receipt: every counter of
+        # `ResumeReceipt` is serialised unconditionally (no
+        # `skip_serializing_if`), so grepping for one of their keys matches any
+        # well-formed receipt — the `no_runs` one included. It also has to be
+        # counted by `check()` to sit inside this stage's assertion floor.
+        drive rewind receipt "$RECEIPT" || RC=1
       fi
       ;;
     knobs)

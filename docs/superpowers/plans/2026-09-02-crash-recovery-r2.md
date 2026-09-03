@@ -940,7 +940,7 @@ someone else's conversation」这一句写明的理由。换会话之后没有�
 |---|---|---|
 | `claims` | 0 | 13 条断言。**A10 推迟的两处无上限读，数字在此**：`chat.history` 的 `load_all_events` 对本会话 = **5 events**；`sessions.list(limit:1)` 取回 1 行、0ms，背后是一次不受 filter 收窄的 marker 全表读 = **3 markers out of 10 events** |
 | `denied` | 0 | 4 条断言（wire：`dangling[].denied == true` 且 run 仍读 `interrupted`；model：下一次请求说 DENIED，且没有任何请求把这次调用的结局称作 UNKNOWN）。收据 `"contradictions": 1` |
-| `rewind` | 0 | 5 条断言。live events `5 -> 2`，rewind 落在 `seq 3`，`events_retired` 与日志一致，重启前后 marker 尾都平衡，之后的收据 `"scanned": 0` |
+| `rewind` | 0 | 5 条断言。live events `5 -> 2`，rewind 落在 `seq 3`，`events_retired` 与日志一致，重启前后 marker 尾都平衡，之后的收据 `"scanned": 0` （**已作废**，见文末「T8 review 修复」） |
 | `knobs` | **1（红）** | `session.update` **不存在**（`-32601`）⇒ 会话从未离开 model A ⇒ 旧的绿是空的。见下 |
 | `holes` | — | 本会话**没有重跑**；`802480cd6` 记的绿在 `QA_BURST=40` 下 deferral 那半是空的（队列根本没满，装置自己印了这句） |
 
@@ -967,7 +967,7 @@ envelope**的实现同样为真。新加的两条断言（回执无 error ＋ �
 |---|---|---|---|
 | `claims` | 0 | 13 | `chat.history` 的 `load_all_events` = **5 events**；`sessions.list(limit:1)` 取回 1 行、**2ms**，背后是不受 filter 收窄的 marker 全表读 = **3 markers out of 10 events** |
 | `denied` | 0 | 5 | 收据 `"contradictions": 1` |
-| `rewind` | 0 | 5 | 之后的收据 `"scanned": 0` |
+| `rewind` | 0 | 5 | 之后的收据 `"scanned": 0` （**已作废**，见文末「T8 review 修复」） |
 | `knobs` | **0（本次由红转绿）** | 5 | mock 的第三轮 `model=qa-model-a`，而会话行读回 `qa-model-b` |
 | `holes` | **0（本次第一次真的跑）** | 12 | `history total 83 == projectable 83`、`compaction_count 0`、`total_tokens 44 -> 44` |
 
@@ -1034,7 +1034,7 @@ envelope**的实现同样为真。新加的两条断言（回执无 error ＋ �
 |---|---|---|---|
 | `claims` | 0 | 13 / 13 | `load_all_events` = 5 events；`sessions.list(limit:1)` 1 行 2ms，背后 3 markers out of 10 events |
 | `denied` | 0 | 5 / 5 | 收据 `"contradictions": 1` |
-| `rewind` | 0 | 5 / 5 | 之后的收据 `"scanned": 0` |
+| `rewind` | 0 | 5 / 5 | 之后的收据 `"scanned": 0` （**这一行已作废**——见文末「T8 review 修复」：`scanned: 0` 正是阶段没生效的指纹）|
 | `knobs` | 0 | **10 / 10**（本次 5 → 10） | 恢复后的 marker envelope：`{"exec_tier":"ask",…,"model":"qa-model-a"}`，而会话行是 `full` + `qa-model-b` |
 | `holes` | 0 | 12 / 12 | history total 83 == projectable 83、`compaction_count 0`、`total_tokens 44 -> 44` |
 
@@ -1096,3 +1096,72 @@ FAIL  the resumed run runs under the SNAPSHOT exec tier (full), not the session'
 
 **本次未重跑**：Step 4 的六条全量命令与 `--lib` 全量比对——本次改动**只有 `qa/` 与 docs**，
 不进任何 cargo target（`git show --stat` 可核）。
+
+### T8 review 修复 — `rewind` 阶段瞄错了地方，整段是空判（2026-09-03）
+
+上面那张表里 `rewind` 那一行（`5 / 5`、收据 `"scanned": 0`）**记录的不是这个阶段在证明的东西**，
+而正是它什么都没证明的指纹。
+
+**病灶**：rewind 瞄在 `RunStarted` 自己那一行上（`seq` inclusive），于是**开场那半也被 retire 了**。
+`close_open_run_after_retire` 随即在 `reduction.open_run == None` 上 `return Ok(None)`
+（`src/session/marker_balance.rs:57-59`）——一个字节都不追加。也就是说：**平衡器不存在、或根本没被调用
+的构建上，这个阶段同样全绿**（判据 #2/#4）。两条 disposition 断言写成 `clean || never_ran`，
+分不开「平衡了」与「没有 marker 可平衡」；`run.sh` 那条 `grep -q "already_finished\|\"scanned\""`
+更是恒真——`scanned` 是 `ResumeReceipt` 无条件序列化的字段（`shared/protocol/src/resume.rs`，
+`#[serde(default)]`、无 `skip_serializing_if`），任何一份格式正确的收据都命中。
+而 `qa/README.md` 那一段却在替它说「rewind 走了 `RunStarted` 之后必须留下平衡的 marker 尾」——
+判据 #1：说这句话的那一份不是代码，代价最高。
+
+**改法**：rewind 瞄**开场 marker 之后的第一行**（`live.find(r => r.seq > started.seq)`，实测是
+`assistant_message@4`），`RunStarted` 留活 ⇒ 这一阶段里**唯一**能产出 `RunFinished` 的就是平衡器。
+断言改成效果本身，并把收据从 grep 换成 driver 里的 JSON 解析（进 `check()`，因此进 floor）。
+
+**实测 2026-09-03（`SKIP_BUILD=1`，debug 二进制，`rc=0`，`assertions: 11 (floor 11)`）**：
+
+```
+0.05s live events 5 -> 4 (rewound at seq 4 = assistant_message, run_started@3 deliberately left live)
+PASS  chat.rewind is accepted on a session whose run was cut off
+PASS  the rewind actually retired rows — otherwise the balance below is vacuous
+PASS  and the reply's events_retired agrees with the log
+PASS  the opening `RunStarted` survived the rewind — the marker really was left open for the balancer to close
+PASS  the retire appended a `RunFinished` of its own — nothing else in this stage writes one
+PASS  closed as `cancelled` — a deliberate user edit, not a failed recovery
+PASS  after the rewind the marker tail is balanced — the log no longer claims an open run
+PASS  the rewound session still reads balanced after a restart
+PASS  aleph-server resume --json printed a receipt for the rewound session
+PASS  the receipt reads `already_finished` — the balanced marker settles the session and nothing is re-run
+PASS  and it got there by SCANNING a session that still has run markers, not by finding none at all
+```
+
+收据（全文，替代旧记录里的 `"scanned": 0`）：
+
+```json
+{"status":"already_finished","session_key":"agent:main:main:s1","scanned":1,"resumed":0,
+ "abandoned":0,"skipped":1,"busy":0,"delegated":0,"refused":[],"contradictions":0,
+ "degraded":0,"unsnapshotted":0,"skipped_unknown_age":0,"error":null,"agent_id":null}
+```
+
+于是计划 Step 2 对 `rewind` 的两句要求（「marker 尾 Clean」＋「重启后 `already_finished`」）
+**这一轮才第一次真的被断言**；floor `5 → 11` 在同一笔里抬。
+
+**顺带量到的一件事（差点让新排布红在错的地方）**：平衡器的 closer 是在**同一次 `chat.rewind` 调用里**
+追加的，所以 live 行数只掉 `events_retired - 1`（实测 5 → 4 而 `events_retired: 2`）。
+第一版断言拿 live 行数差去对 `events_retired`，红的正是这个阶段要证明的那个效果。
+现在数的是 **retired 行数的增量**，与追加无关。
+
+**反空判的那一条**：`the opening RunStarted survived the rewind`。以后谁把瞄点改回 marker 自己，
+红的是它，而不是让下面几条悄悄退化成 no-op。
+
+**证伪（实测 2026-09-03）**：把瞄点改回 marker 自己（`const target = started;`）⇒
+
+```
+FAIL  the opening `RunStarted` survived the rewind — the marker really was left open for the balancer to close
+      | seq 3 among 1:turn_started,2:user_message
+FAIL  the retire appended a `RunFinished` of its own — nothing else in this stage writes one
+FAIL  closed as `cancelled` — a deliberate user edit, not a failed recovery
+FAIL  after the rewind the marker tail is balanced — the log no longer claims an open run
+      | {"disposition":"never_ran", … ,"trailing_starts":0}
+=== assertions: 3 (floor 11) ===   /   === verdict: rc=1 ===
+```
+
+即：旧排布现在**红**，且红在 `never_ran` 上——正是它当初被当成绿的那个值。已还原。

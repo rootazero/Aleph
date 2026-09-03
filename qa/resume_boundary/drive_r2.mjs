@@ -544,56 +544,128 @@ async function cmdDenied(sub) {
 /** Live (non-retired) rows of the durable log. A rewind retires, never deletes. */
 const liveEvents = (key) => eventsOf(key).filter((r) => r.retired_at === null);
 
-/** Stage `rewind`: a rewind past a RunStarted must leave the marker tail balanced. */
-async function cmdRewind(sub) {
+/**
+ * Stage `rewind`: a rewind that shortens a run's tail must leave the marker
+ * tail balanced.
+ *
+ * The rewind is aimed ONE ROW PAST the open `RunStarted`, never at the marker
+ * itself. Aiming at the marker retires the opening half too, and then
+ * `close_open_run_after_retire` finds `reduction.open_run == None` and returns
+ * `Ok(None)` without appending anything (src/session/marker_balance.rs:57-59):
+ * the stage is green on a build where the balancer does not exist or is never
+ * called, the tail reads `never_ran` instead of `clean`, and the receipt reads
+ * `no_runs` (`scanned: 0`) because the log has no markers left at all. That is
+ * the arrangement this stage shipped with in the first round and it could not
+ * go red. With the marker deliberately left OPEN, the only thing in this stage
+ * that can produce a `RunFinished` is the balancer.
+ */
+async function cmdRewind(sub, arg) {
+  if (sub === "receipt") {
+    // Parsed, not grepped. Every counter of `ResumeReceipt` is serialised
+    // unconditionally (`#[serde(default)]`, no `skip_serializing_if` —
+    // shared/protocol/src/resume.rs), so a `grep '"scanned"'` matches ANY
+    // well-formed receipt, the `no_runs` one included: it is a predicate with
+    // no red state.
+    let receipt = null;
+    try {
+      receipt = JSON.parse(fs.readFileSync(arg, "utf8"));
+    } catch (e) {
+      console.log(`      | could not read ${arg}: ${e.message}`);
+    }
+    check(Boolean(receipt), "aleph-server resume --json printed a receipt for the rewound session", String(arg));
+    check(
+      receipt?.status === "already_finished",
+      "the receipt reads `already_finished` — the balanced marker settles the session and nothing is re-run",
+      show(receipt),
+    );
+    check(
+      Number(receipt?.scanned ?? 0) > 0,
+      "and it got there by SCANNING a session that still has run markers, not by finding none at all",
+      show(receipt),
+    );
+    return;
+  }
   const key = readSession();
   const conn = new Conn("driver");
   await conn.open();
   if (sub === "do") {
     // `RewindParams` is `{session_key, seq}` — `seq` is the FIRST event to
-    // retire, inclusive, not a count of messages. Aim it at the `RunStarted`
-    // of the run that was cut off: that is the whole point of the stage, a
-    // rewind that takes the marker's opening half away with it.
+    // retire, inclusive, not a count of messages.
     const live = liveEvents(key);
     const started = [...live].reverse().find((r) => r.event_type === "run_started");
     if (!started) {
-      console.error("INSTRUMENT FAILURE: no live run_started row to rewind past");
+      console.error("INSTRUMENT FAILURE: no live run_started row to leave open");
       console.error(`  event types: ${live.map((r) => r.event_type).join(",")}`);
       process.exit(1);
     }
+    const target = live.find((r) => r.seq > started.seq);
+    if (!target) {
+      console.error("INSTRUMENT FAILURE: the run_started is the newest live row, so there is no tail to retire");
+      console.error(`  event types: ${live.map((r) => `${r.seq}:${r.event_type}`).join(",")}`);
+      process.exit(1);
+    }
     const before = live.length;
-    const r = await conn.attempt("chat.rewind", { session_key: key, seq: started.seq });
+    const retiredBefore = eventsOf(key).filter((e) => e.retired_at !== null).length;
+    const r = await conn.attempt("chat.rewind", { session_key: key, seq: target.seq });
     check(!r.error, "chat.rewind is accepted on a session whose run was cut off", show(r.error));
-    const after = liveEvents(key).length;
-    log(`live events ${before} -> ${after} (rewound at seq ${started.seq})`);
+    const after = liveEvents(key);
+    log(
+      `live events ${before} -> ${after.length} (rewound at seq ${target.seq} = ${target.event_type}, ` +
+        `run_started@${started.seq} deliberately left live)`,
+    );
+    // Counted as RETIRED rows, not as a drop in the live count: the balancer
+    // appends its closer inside the same call, so the live log shrinks by one
+    // less than the rewind retired (MEASURED 2026-09-03: 5 live -> 4 live while
+    // `events_retired` said 2). A live-count subtraction reads that difference
+    // as a disagreement and goes red on the very effect this stage proves.
+    const retiredAfter = eventsOf(key).filter((e) => e.retired_at !== null).length;
     check(
-      after < before,
-      "the rewind actually retired the tail — otherwise the balance below is vacuous",
-      `${before} -> ${after}`,
+      retiredAfter > retiredBefore,
+      "the rewind actually retired rows — otherwise the balance below is vacuous",
+      `retired ${retiredBefore} -> ${retiredAfter}, live ${before} -> ${after.length}`,
     );
     check(
-      Number(r.result?.events_retired ?? 0) === before - after,
+      Number(r.result?.events_retired ?? 0) === retiredAfter - retiredBefore,
       "and the reply's events_retired agrees with the log",
       show(r.result),
     );
+    // Anti-vacuity. If this ever goes red the stage has silently degraded back
+    // to retiring the marker itself, and everything below it becomes a no-op
+    // that still reports green.
+    check(
+      after.some((e) => e.seq === started.seq && e.event_type === "run_started"),
+      "the opening `RunStarted` survived the rewind — the marker really was left open for the balancer to close",
+      `seq ${started.seq} among ${after.map((e) => `${e.seq}:${e.event_type}`).join(",")}`,
+    );
+    const closer = after.find((e) => e.event_type === "run_finished" && e.seq > started.seq);
+    check(
+      Boolean(closer),
+      "the retire appended a `RunFinished` of its own — nothing else in this stage writes one",
+      show(after.map((e) => `${e.seq}:${e.event_type}`)),
+    );
+    check(
+      JSON.parse(closer?.payload_json ?? "{}").outcome === "cancelled",
+      "closed as `cancelled` — a deliberate user edit, not a failed recovery",
+      show(closer?.payload_json),
+    );
     const { lastRun } = await lastRunOf(conn, key);
     check(
-      lastRun?.disposition === "clean" || lastRun?.disposition === "never_ran",
+      lastRun?.disposition === "clean",
       "after the rewind the marker tail is balanced — the log no longer claims an open run",
       show(lastRun),
     );
   } else {
-    // After the restart: nothing to resume.
+    // After the restart: nothing to resume. `clean` and not `never_ran` — the
+    // markers are still there, they are simply balanced.
     const { lastRun } = await lastRunOf(conn, key);
     check(
-      lastRun?.disposition === "clean" || lastRun?.disposition === "never_ran",
+      lastRun?.disposition === "clean",
       "the rewound session still reads balanced after a restart",
       show(lastRun),
     );
   }
   conn.close();
 }
-
 /**
  * Write one key into a session row's identity metadata, with the server down.
  *
@@ -993,7 +1065,7 @@ const main = async () => {
       await cmdDenied(REST[0] ?? "wire");
       break;
     case "rewind":
-      await cmdRewind(REST[0] ?? "do");
+      await cmdRewind(REST[0] ?? "do", REST[1]);
       break;
     case "knobs":
       await cmdKnobs(REST[0], REST[1], REST[2]);

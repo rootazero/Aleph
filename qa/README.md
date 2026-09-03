@@ -100,15 +100,29 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                        # one process. Everything downstream — reduction, the
                                        # `denied` flag on the wire, the repair text, the receipt
                                        # — is the product reading its own log.
-./qa/resume_boundary/run.sh rewind     # a rewind that takes a `RunStarted` away with it must
-                                       # leave the marker tail BALANCED. Without it the log says
-                                       # a run is still open, and every later boot re-classifies
-                                       # the session `Interrupted` and re-runs a turn the user
-                                       # deleted — forever, because nothing else closes that
-                                       # marker. Resume is OFF: `balance_run_markers_after_retire`
-                                       # deliberately leaves a RUNNING session alone, so a stage
-                                       # that let the boot scan resume first would be green over
-                                       # a session it never tested.
+./qa/resume_boundary/run.sh rewind     # a rewind that cuts a run's tail away and leaves its
+                                       # `RunStarted` behind must end with the marker tail
+                                       # BALANCED. Without it the log SAYS a run is still open, and
+                                       # every later boot re-classifies the session `Interrupted`,
+                                       # re-runs a turn the user deleted, and does it forever —
+                                       # nothing else ever closes that marker. The rewind is aimed
+                                       # ONE ROW PAST the open `RunStarted` on purpose: aimed AT it,
+                                       # the opening half is retired too, `close_open_run_after_retire`
+                                       # returns `Ok(None)` without appending anything, and the stage
+                                       # is green on a build with no balancer at all (that was the
+                                       # first-round arrangement; the tail then read `never_ran` and
+                                       # the receipt `no_runs`). So the stage asserts the effects the
+                                       # balancer alone can produce: the `RunStarted` still live, a
+                                       # `RunFinished{cancelled}` appended after it, the wire face
+                                       # reading `clean` before AND after a restart, and a parsed
+                                       # `aleph-server resume --json` receipt reading
+                                       # `already_finished` with `scanned > 0` (parsed, not grepped:
+                                       # every counter of `ResumeReceipt` is serialised
+                                       # unconditionally, so grepping for one of their keys matches
+                                       # any well-formed receipt). Resume is OFF:
+                                       # `balance_run_markers_after_retire` deliberately leaves a
+                                       # RUNNING session alone, so a stage that let the boot scan
+                                       # resume first would be green over a session it never tested.
 ./qa/resume_boundary/run.sh knobs      # the resumed run follows the SNAPSHOT its `RunStarted`
                                        # carried, not the session's current row. The crashing
                                        # turn carries an explicit per-turn directive for model
