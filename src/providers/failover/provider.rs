@@ -23,8 +23,8 @@ use crate::sync_primitives::Arc;
 use super::decision::{cooldown_window, decide, strike_for, Decision, FailureKind};
 use super::health::{CircuitState, FailoverHealth, ModelCooldown, ProviderCooldown};
 use super::{
-    FailoverConfig, FailoverNode, CIRCUIT_OPEN_THRESHOLD, MAX_COOLDOWN, MAX_OVERLOAD_RETRY_DELAY,
-    MAX_RETRY_DELAY,
+    FailoverConfig, FailoverNode, CIRCUIT_OPEN_THRESHOLD, DEFAULT_MODEL_COOLDOWN, MAX_COOLDOWN,
+    MAX_OVERLOAD_RETRY_DELAY, MAX_RETRY_DELAY,
 };
 
 /// Cost-routing sort key for a model with no static rate card.
@@ -1230,8 +1230,16 @@ impl FailoverProvider {
                 // This runs BEFORE the escalation gate below: the gate can
                 // block on a user prompt, and asking someone to authorise
                 // spending on a cloud provider we are then going to skip for
-                // being dead is a prompt that buys nothing. Every cheap,
-                // local reason to pass over a candidate is settled first.
+                // being dead is a prompt that buys nothing.
+                //
+                // All THREE cheap, local reasons to pass over a candidate are
+                // settled before that prompt, and this is the whole list:
+                // breaker (here), rate ceiling (next), 429 pacing (the skip
+                // half below). The claim used to be stated here while the
+                // pacing skip actually sat *after* the prompt, so under
+                // `always_local + allow_cloud_escalation` a cooling cloud
+                // candidate cost a real human interruption and was then passed
+                // over anyway — one interruption per cooling candidate.
                 let circuit_ok = self.circuit_allows(&cand.name).await;
                 if !circuit_ok && has_later_candidate {
                     tracing::debug!(provider = %cand.name, "failover: circuit open, skipping");
@@ -1266,6 +1274,33 @@ impl FailoverProvider {
                          to a later candidate",
                     );
                     continue;
+                }
+
+                // 429 pacing gate — the *skip* half only, which is the half
+                // that belongs among the cheap local reasons. Its twin, the
+                // last-resort wait, stays below the model resolution: hoisting
+                // the wait here would block for up to two minutes BEFORE asking
+                // a human to authorise a borrow, which is worse than the prompt
+                // it would be trying to save.
+                //
+                // The skip must sit above the escalation gate for the same
+                // reason the breaker and the rate ceiling do: the gate can block
+                // on a user prompt, and asking someone to authorise spending on
+                // a provider the very next gate passes over for cooling is a
+                // prompt that buys nothing — and, with two cooling cloud
+                // candidates, one prompt per candidate.
+                if has_later_candidate {
+                    if let Some(pc) = &self.provider_cooldown {
+                        if let Some(remaining) = pc.remaining(&cand.name).await {
+                            tracing::debug!(
+                                provider = %cand.name,
+                                remaining_ms = remaining.as_millis() as u64,
+                                "failover: provider cooling from a recent 429, \
+                                 deferring to a later candidate",
+                            );
+                            continue;
+                        }
+                    }
                 }
 
                 // Route gate: an approval-gated cross-tier candidate (borrow
@@ -1326,58 +1361,88 @@ impl FailoverProvider {
                 // 3. Otherwise the C floor drops models that structurally cannot
                 //    serve this request (no vision / no tools / over context
                 //    window), failing open so the chain is never emptied.
-                let models: Vec<Option<String>> = match (slot, &req_model) {
-                    (SlotKind::Primary, Some(pinned)) => {
-                        retain_capable_models(vec![pinned.clone()], &reqs)
-                            .into_iter()
-                            .map(Some)
-                            .collect()
-                    }
-                    _ if cand.models.is_empty() => vec![None],
-                    // rust-doctor-disable-next-line excessive-clone
-                    _ => retain_capable_models(cand.models.clone(), &reqs)
-                        .into_iter()
-                        .map(Some)
-                        .collect(),
-                };
+                //
+                // The same match also answers "whose statement is this ladder?"
+                // — the boot CATALOG's, or one model the caller named. Only the
+                // catalog's answer can indict the provider (see the
+                // `NextModel` bookkeeping below), and deriving that here, where
+                // the list is actually chosen, is what keeps the pin exemption
+                // and the strike describing the same set.
+                let (models, ladder_from_catalog): (Vec<Option<String>>, bool) =
+                    match (slot, &req_model) {
+                        (SlotKind::Primary, Some(pinned)) => (
+                            retain_capable_models(vec![pinned.clone()], &reqs)
+                                .into_iter()
+                                .map(Some)
+                                .collect(),
+                            false,
+                        ),
+                        _ if cand.models.is_empty() => (vec![None], false),
+                        // rust-doctor-disable-next-line excessive-clone
+                        _ => (
+                            retain_capable_models(cand.models.clone(), &reqs)
+                                .into_iter()
+                                .map(Some)
+                                .collect(),
+                            true,
+                        ),
+                    };
                 // Sideline models still cooling from an earlier 429, preferring a
                 // healthy sibling (fail-open if all are cooling).
                 let models = self.drop_cooling_models(&cand.name, models).await;
+                // How many rungs this ladder has, and how many of them answered
+                // "no such model". Counted rather than latched on a flag,
+                // because the question after the loop is an *equality* between
+                // two numbers ("every rung 404'd") that no single boolean can
+                // state honestly: an early `break 'model` leaves rungs untried,
+                // and a ladder that never ran must never read as exhausted.
+                let ladder_len = models.len();
+                let mut missing_models: usize = 0;
 
-                // Proactive rate-limit pacing: this provider 429'd recently and
-                // is still inside its recorded cooldown.
+                // Proactive rate-limit pacing, the *wait* half: this provider
+                // 429'd recently, is still inside its recorded cooldown, and is
+                // the last resort (the skip half above already yielded to every
+                // later candidate).
                 //
                 // Waiting it out keeps a single paid primary (e.g. Kimi) in use
-                // instead of eating a fresh 429 — but only when there is nothing
-                // else to try. With a healthy candidate still ahead in the
-                // chain, blocking the turn for up to two minutes to insist on
-                // the parked provider is strictly worse than answering now: the
-                // window expires on its own and the provider returns to the head
-                // of the chain next turn. So the rule mirrors the circuit
-                // breaker's exactly — skip while a later candidate remains, and
-                // only wait when this is the last resort. (LiteLLM and Bifrost
-                // both drop a cooling deployment from selection outright; Aleph
-                // keeps it as the terminal candidate so a single-provider setup
-                // still gets its request served.)
+                // instead of eating a fresh 429. (LiteLLM and Bifrost both drop
+                // a cooling deployment from selection outright; Aleph keeps it
+                // as the terminal candidate so a single-provider setup still
+                // gets its request served — the binding invariant here is that
+                // the last candidate ALWAYS dials.)
+                //
+                // The wait is spent only when it can actually end the window.
+                // It used to be `remaining.min(MAX_OVERLOAD_RETRY_DELAY)`, so a
+                // window longer than the cap — a server `Retry-After` of 300s,
+                // capped by `cooldown_window` at `MAX_COOLDOWN` = 600s — bought
+                // a 120s sleep that provably could not outlast it and then
+                // dialed *inside* the very window it had just waited for. Worse
+                // than useless: `aleph-server` gives a turn a 120s wall-clock
+                // watchdog by default (`build_stability_triple`), so the sleep
+                // alone consumed the entire turn budget and the dial that
+                // followed it never got to happen. When the wait cannot finish
+                // the job, dial now and let the provider's own answer (a fresh
+                // 429 re-parks it, a success clears it) settle the question.
                 if let Some(pc) = &self.provider_cooldown {
                     if let Some(remaining) = pc.remaining(&cand.name).await {
-                        if has_later_candidate {
-                            tracing::debug!(
+                        if remaining <= MAX_OVERLOAD_RETRY_DELAY {
+                            tracing::warn!(
                                 provider = %cand.name,
-                                remaining_ms = remaining.as_millis() as u64,
-                                "failover: provider cooling from a recent 429, \
-                                 deferring to a later candidate",
+                                wait_ms = remaining.as_millis() as u64,
+                                "failover: last candidate is cooling from a recent 429, \
+                                 pacing out the whole window before re-request",
                             );
-                            continue;
+                            tokio::time::sleep(remaining).await;
+                        } else {
+                            tracing::warn!(
+                                provider = %cand.name,
+                                remaining_secs = remaining.as_secs(),
+                                cap_secs = MAX_OVERLOAD_RETRY_DELAY.as_secs(),
+                                "failover: last candidate's 429 window outlasts the pacing \
+                                 cap; dialing inside it rather than spending the turn \
+                                 budget on a wait that cannot end it",
+                            );
                         }
-                        let wait = remaining.min(MAX_OVERLOAD_RETRY_DELAY);
-                        tracing::warn!(
-                            provider = %cand.name,
-                            wait_ms = wait.as_millis() as u64,
-                            "failover: last candidate is cooling from a recent 429, \
-                             pacing before re-request",
-                        );
-                        tokio::time::sleep(wait).await;
                     }
                 }
 
@@ -1643,6 +1708,25 @@ impl FailoverProvider {
                                         provider = %cand.name, model = ?model, error = %e,
                                         "failover: model unavailable, trying next model",
                                     );
+                                    // Sideline the missing model the same way a
+                                    // 429'd one is sidelined, so the *next*
+                                    // turn prefers a sibling that exists
+                                    // instead of re-paying the 404 round-trip.
+                                    // `DEFAULT_MODEL_COOLDOWN` (60s), not
+                                    // `MAX_COOLDOWN`: "model not found" is
+                                    // routinely a deploy in flight — an
+                                    // `ollama pull` finishing, a serverless
+                                    // endpoint warming, a catalog entry the
+                                    // operator is in the middle of adding — so
+                                    // the window has to be short enough that a
+                                    // model deployed a minute later is used a
+                                    // minute later. `drop_cooling_models` is
+                                    // fail-open, so cooling every rung never
+                                    // empties the ladder.
+                                    if let (Some(cd), Some(m)) = (&self.model_cooldown, &model) {
+                                        cd.cool(&cand.name, m, DEFAULT_MODEL_COOLDOWN).await;
+                                    }
+                                    missing_models += 1;
                                     last_error = Some(e);
                                     continue 'model;
                                 }
@@ -1698,6 +1782,36 @@ impl FailoverProvider {
                             },
                         }
                     }
+                }
+
+                // Every rung of a CATALOG ladder answered "no such model". That
+                // is a statement about the PROVIDER, not about any one model:
+                // the endpoint is up, authenticated and answering, and serves
+                // nothing we know how to ask it for (a base_url pointed at the
+                // wrong gateway, a proxy whose model set was renamed, a local
+                // server with no models pulled). `NextModel` used to be the one
+                // failure exit that recorded no strike at all, so the answer to
+                // "in what state does this breaker go red for a provider that
+                // 404s everything?" was *never*: circuit closed forever,
+                // `cooling` false forever, LeastBusy/LatencyAware still ranking
+                // it first, and every turn paying N wasted round-trips.
+                // `Transient` (not `Permanent`) keeps the 3-strike threshold, so
+                // a catalog that is briefly out of step with a redeploy is not
+                // shed on one walk.
+                //
+                // Read from the ladder's own provenance (`ladder_from_catalog`,
+                // derived where the list was chosen): a single model the CALLER
+                // named — a `select_model` pick, an agent `model_hint`, a
+                // `BrainRef::Strict` id, or simply a typo — indicts that name,
+                // never the endpoint, so it must not shed a healthy provider.
+                if ladder_from_catalog && ladder_len > 0 && missing_models == ladder_len {
+                    tracing::warn!(
+                        provider = %cand.name,
+                        models = ladder_len,
+                        "failover: provider serves none of its catalog models; \
+                         recording a strike against the provider",
+                    );
+                    tripped.get_or_insert(FailureKind::Transient);
                 }
 
                 if let Some(kind) = tripped {

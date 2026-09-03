@@ -3302,3 +3302,152 @@ async fn an_unpinned_saturated_step_is_reported_rate_sidelined() {
     assert_eq!(resp.text_content(), "fb");
     assert_eq!(primary.call_count(), 0);
 }
+
+// --- round-6 T8: walk-gate hygiene ------------------------------------------
+//
+// Three defects in the same gate region, each with the same shape: a statement
+// the walk makes about itself that its own code did not carry out.
+
+#[tokio::test]
+async fn a_cooling_approval_gated_candidate_is_skipped_without_asking() {
+    // The twin of `no_approval_is_requested_for_a_candidate_the_breaker_will_skip`,
+    // for the third cheap gate. The breaker and the rate ceiling were hoisted
+    // above the approval prompt; the 429 pacing skip was not, so it sat AFTER
+    // the blocking prompt while the comment above the breaker claimed every
+    // cheap local reason was already settled. Under
+    // `always_local + allow_cloud_escalation` that cost one real human
+    // interruption per cooling cloud candidate, each authorising a borrow the
+    // very next gate refused to take.
+    let cool_cloud = ScriptProvider::ok("cool_cloud");
+    let live_cloud = ScriptProvider::ok("live_cloud");
+    let approver = MockApprover::new(true);
+    let pacing = ProviderCooldown::default();
+    pacing.cool("cool_cloud", Duration::from_secs(60)).await;
+
+    let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
+        cool_cloud.clone() as Arc<dyn AiProvider>,
+        vec![],
+        vec![tiered_node(
+            "live_cloud",
+            live_cloud as Arc<dyn AiProvider>,
+            EndpointTier::Cloud,
+        )],
+    )
+    // rust-doctor-disable-next-line excessive-clone
+    .with_route(RouteMode::AlwaysLocal, true, Some(approver.clone()))
+    .with_primary_tier(EndpointTier::Cloud)
+    .with_provider_cooldown(pacing);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "live_cloud");
+    assert_eq!(cool_cloud.call_count(), 0, "the pacing window skipped it");
+    assert_eq!(
+        approver.call_count(),
+        1,
+        "only the candidate that was actually dialed may cost a prompt"
+    );
+}
+
+#[tokio::test]
+async fn a_provider_whose_whole_ladder_404s_trips_after_three_walks() {
+    // `Decision::NextModel` was the one failure exit that recorded no strike at
+    // all, so "in what state does this breaker go red for a provider that 404s
+    // everything?" answered *never*: circuit closed forever, LeastBusy /
+    // LatencyAware still ranking it first (zero in-flight, zero latency
+    // samples), and every turn paying one wasted round-trip per catalog model.
+    let primary = ScriptProvider::err("dead_gateway", "HTTP 404 model not found");
+    let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![("dead_gateway", vec!["m1", "m2"])],
+        vec![],
+    );
+
+    let msgs = [UnifiedMessage::user("hi")];
+    for walk in 1..=CIRCUIT_OPEN_THRESHOLD {
+        let _ = fp.process(RequestPayload::new(&msgs)).await;
+        let open = fp.circuit_open("dead_gateway").await;
+        assert_eq!(
+            open,
+            walk == CIRCUIT_OPEN_THRESHOLD,
+            "walk {walk}: transient strikes must still take {CIRCUIT_OPEN_THRESHOLD} \
+             walks to open the breaker"
+        );
+    }
+    assert_eq!(
+        primary.call_count(),
+        2 * CIRCUIT_OPEN_THRESHOLD as usize,
+        "both catalog models are tried on each walk"
+    );
+}
+
+#[tokio::test]
+async fn a_pinned_model_404_does_not_shed_the_provider() {
+    // The negative half, and the reason the strike is derived from where the
+    // model list was CHOSEN rather than from the 404 alone: a single model the
+    // caller named — a `select_model` pick, an agent `model_hint`, a
+    // `BrainRef::Strict` id, or plain typo — indicts that name, never the
+    // endpoint. Shedding the provider would let one bad id take out a healthy
+    // one for five minutes.
+    let primary = ScriptProvider::err("anthropic", "HTTP 404 model not found");
+    let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![("anthropic", vec!["opus", "sonnet"])],
+        vec![],
+    );
+
+    let msgs = [UnifiedMessage::user("hi")];
+    for _ in 0..CIRCUIT_OPEN_THRESHOLD {
+        let payload = RequestPayload::new(&msgs).with_model(Some("opsu-typo".to_string()));
+        let _ = fp.process(payload).await;
+    }
+    assert!(
+        !fp.circuit_open("anthropic").await,
+        "a model id the caller named must not shed the endpoint that answered it"
+    );
+    assert_eq!(
+        primary.call_count(),
+        CIRCUIT_OPEN_THRESHOLD as usize,
+        "the pin replaces the catalog ladder, so one dial per walk"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pacing_window_longer_than_the_cap_is_not_waited_out_at_all() {
+    // The last candidate ALWAYS dials — that invariant is not up for
+    // negotiation here. What changed is the wait in front of the dial: it was
+    // `remaining.min(MAX_OVERLOAD_RETRY_DELAY)`, so a 300s server `Retry-After`
+    // bought a 120s sleep that provably could not outlast the window and then
+    // dialed *inside* it anyway. `aleph-server` caps a turn at 120s of
+    // wall-clock by default (`build_stability_triple`), so that sleep alone
+    // spent the entire turn budget and the dial it was preparing for never
+    // happened. A wait that cannot finish the job is not spent.
+    let solo = ScriptProvider::ok("solo");
+    let pacing = ProviderCooldown::default();
+    pacing.cool("solo", Duration::from_secs(300)).await;
+
+    let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
+        solo.clone() as Arc<dyn AiProvider>,
+        vec![],
+        vec![],
+    )
+    .with_provider_cooldown(pacing);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let started = tokio::time::Instant::now();
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    let elapsed = started.elapsed();
+
+    assert_eq!(resp.text_content(), "solo");
+    assert_eq!(solo.call_count(), 1, "the last candidate still dials");
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "a window longer than the cap must not be slept on at all; waited {elapsed:?}"
+    );
+}
