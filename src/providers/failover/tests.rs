@@ -2629,12 +2629,14 @@ async fn the_order_preview_matches_the_walk_and_consumes_no_rotation() {
     let first: Vec<String> = fp
         .preview_order()
         .await
+        .steps
         .into_iter()
         .map(|s| s.provider)
         .collect();
     let second: Vec<String> = fp
         .preview_order()
         .await
+        .steps
         .into_iter()
         .map(|s| s.provider)
         .collect();
@@ -2646,7 +2648,7 @@ async fn the_order_preview_matches_the_walk_and_consumes_no_rotation() {
     );
     // The primary leads its own chain and is tagged as such.
     assert_eq!(first[0], "primary");
-    let steps = fp.preview_order().await;
+    let steps = fp.preview_order().await.steps;
     assert!(steps[0].primary);
     assert!(!steps[1].primary);
 }
@@ -3100,4 +3102,179 @@ async fn a_run_that_never_gets_an_answer_announces_nothing() {
         !w.deviated(),
         "an anchored run with no answer must not manufacture a migration"
     );
+}
+
+// --- round-6: the preview states the walk's verdict -------------------
+//
+// `route_status.next_order` is what the tool text tells the model to read
+// before guessing why a provider was chosen, so a step it renders as a
+// healthy first dial that the walk then passes over is worse than no field
+// at all — a wrong label reads as fact (判据 #17). Both flags are therefore
+// asserted the only way that cannot drift: next to the walk's own behaviour
+// on the SAME provider, in one test.
+
+#[tokio::test]
+async fn the_preview_flags_a_primary_the_walk_will_skip() {
+    // The health sideline set used to be computed over the FALLBACKS only and
+    // dropped into the ordering closure — the primary slot is not part of the
+    // pool being sorted, so nothing ever asked whether it was cooling. An
+    // open-circuit primary rendered `{slot: primary, gate: allow}` with no
+    // skip flag while the walk passed straight over it.
+    let primary = ScriptProvider::ok("primary");
+    let fb = ScriptProvider::ok("fb");
+    let health = FailoverHealth::default();
+    health.open_for_test("primary").await;
+    let fp = build_with_health(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone(),
+        vec![],
+        // rust-doctor-disable-next-line excessive-clone
+        vec![node("fb", fb.clone())],
+        health,
+    );
+
+    let steps = fp.preview_order().await.steps;
+    assert_eq!(steps[0].provider, "primary");
+    assert!(
+        steps[0].health_sidelined,
+        "an open circuit on the primary must be visible in the order it shapes"
+    );
+    assert!(!steps[1].health_sidelined, "the fallback is healthy");
+    // Neither flag is the other: the ceiling is unconfigured here.
+    assert!(!steps[0].rate_sidelined);
+
+    // Parity — the half that makes the flag a verdict rather than a decoration:
+    // the walk really does pass over exactly that step.
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "fb");
+    assert_eq!(
+        primary.call_count(),
+        0,
+        "the step the preview flagged is the step the walk skipped"
+    );
+}
+
+#[tokio::test]
+async fn previewing_an_open_circuit_does_not_spend_its_probe() {
+    // The read-only invariant, now that the preview reads the breaker map for
+    // every slot: looking must not perform the `Open → HalfOpen` transition
+    // that admits probe traffic — that belongs to a real dial. (The rotation
+    // half of the same invariant is pinned by
+    // `the_order_preview_matches_the_walk_and_consumes_no_rotation`.)
+    let primary = ScriptProvider::ok("primary");
+    let fb = ScriptProvider::ok("fb");
+    let health = FailoverHealth::default();
+    health.open_for_test("primary").await;
+    let fp = build_with_health(primary, vec![], vec![node("fb", fb)], health);
+
+    for _ in 0..3 {
+        let _ = fp.preview_order().await;
+    }
+    assert!(
+        fp.circuit_open("primary").await,
+        "a preview must not half-open a circuit it looked at"
+    );
+}
+
+#[tokio::test]
+async fn a_pinned_saturated_step_is_not_reported_rate_sidelined() {
+    use crate::config::types::{ModelRouteConfig, ProviderRateLimit};
+    // The walk's ceiling gate exempts an operator pin (round-5 F3, pinned by
+    // `a_pinned_provider_is_dialed_even_when_saturated`); the preview restated
+    // only the first half of that rule — `saturated.contains(name)` — so the
+    // one step the walk dials FIRST was rendered as skipped. Both now derive
+    // from `CandidatePlan::rate_deferred`, so this test and that one go red
+    // together if only one caller is changed.
+    let primary = ScriptProvider::ok("primary");
+    let fb = ScriptProvider::ok("fb");
+    let stats = Arc::new(LoadStats::new());
+    let handle = Arc::new(RouteHandle::from_config(&ModelRouteConfig {
+        cloud_provider: Some("primary".to_string()),
+        rate_limits: [(
+            "primary".to_string(),
+            ProviderRateLimit {
+                rpm: Some(1),
+                tpm: None,
+            },
+        )]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    }));
+    let fp = FailoverProvider::new(
+        // rust-doctor-disable-next-line excessive-clone
+        Arc::new(StaticDefault::new(primary.clone())),
+        vec![tiered_node("fb", fb, EndpointTier::Cloud)],
+        HashMap::new(),
+        FailoverHealth::default(),
+        FailoverConfig::default(),
+    )
+    .with_route_live(handle)
+    // rust-doctor-disable-next-line excessive-clone
+    .with_load_stats(stats.clone());
+
+    // Saturate the pinned primary's rpm window.
+    drop(stats.begin("primary"));
+
+    let steps = fp.preview_order().await.steps;
+    assert_eq!(steps[0].provider, "primary");
+    assert!(
+        !steps[0].rate_sidelined,
+        "a pinned provider is exempt from the ceiling, so it is not deferred"
+    );
+
+    // Parity with the walk on the same plan: it is dialed, and dialed first.
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "primary");
+    assert_eq!(primary.call_count(), 1);
+}
+
+#[tokio::test]
+async fn an_unpinned_saturated_step_is_reported_rate_sidelined() {
+    use crate::config::types::{ModelRouteConfig, ProviderRateLimit};
+    // The other direction of the same helper (判据 #14, both sides of a gate):
+    // drop the pin and the identical setup must flip both halves — the preview
+    // flags the step and the walk yields it to the fallback.
+    let primary = ScriptProvider::ok("primary");
+    let fb = ScriptProvider::ok("fb");
+    let stats = Arc::new(LoadStats::new());
+    let handle = Arc::new(RouteHandle::from_config(&ModelRouteConfig {
+        rate_limits: [(
+            "primary".to_string(),
+            ProviderRateLimit {
+                rpm: Some(1),
+                tpm: None,
+            },
+        )]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    }));
+    let fp = FailoverProvider::new(
+        // rust-doctor-disable-next-line excessive-clone
+        Arc::new(StaticDefault::new(primary.clone())),
+        vec![tiered_node("fb", fb, EndpointTier::Cloud)],
+        HashMap::new(),
+        FailoverHealth::default(),
+        FailoverConfig::default(),
+    )
+    .with_route_live(handle)
+    // rust-doctor-disable-next-line excessive-clone
+    .with_load_stats(stats.clone());
+    drop(stats.begin("primary"));
+
+    let steps = fp.preview_order().await.steps;
+    assert_eq!(steps[0].provider, "primary");
+    assert!(steps[0].rate_sidelined);
+    assert!(!steps[0].health_sidelined, "the breaker is closed");
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "fb");
+    assert_eq!(primary.call_count(), 0);
 }

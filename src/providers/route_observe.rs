@@ -26,10 +26,8 @@ use crate::config::types::{LoadBalanceStrategy, ModelRouteConfig, RouteMode};
 use crate::providers::default_handle::DefaultProviderHandle;
 use crate::providers::failover::{FailoverHealth, ModelCooldown, ProviderCooldown};
 use crate::providers::load_stats::LoadStats;
-use crate::providers::route_handle::RouteHandle;
-use crate::providers::route_policy::{
-    route_problems, EndpointTier, RateLimits, RouteProblem, RouteTargets,
-};
+use crate::providers::route_handle::{RouteHandle, RouteState};
+use crate::providers::route_policy::{route_problems, EndpointTier, RouteGate, RouteProblem};
 use crate::sync_primitives::Arc;
 
 /// Boot-time composition of one fallback candidate: name, model walk order,
@@ -71,11 +69,17 @@ pub struct RouteObservability {
     pub provider_cooldown: ProviderCooldown,
     /// Shared in-flight / latency / rolling-usage registry.
     pub load: Arc<LoadStats>,
-    /// Live route handle (mode / strategy / pins / limits). `None` in tests —
-    /// the snapshot then reports the safe defaults (auto / ordered / no pins).
+    /// Live route handle (mode / strategy / pins / limits). The SAME handle
+    /// [`chain`](Self::chain) reads, so when a chain is attached the snapshot
+    /// renders the generation the chain ordered with and this field is only the
+    /// chain-less fallback. `None` in tests — the snapshot then reports
+    /// [`RouteState::unconfigured`] (auto / ordered / no pins).
     pub route: Option<Arc<RouteHandle>>,
     /// The global chain itself, asked (read-only) for the order the next request
-    /// will walk. `None` in tests — the snapshot then omits `next_order`.
+    /// will walk **and for the route generation that order was computed from**
+    /// ([`RoutePreview`](crate::providers::failover::RoutePreview)). `None` in
+    /// tests — the snapshot then omits `next_order` and falls back to
+    /// [`route`](Self::route) for the header.
     ///
     /// Holding the chain rather than re-deriving the order here is the whole
     /// point: the ordering is the product of the route mode, the pins, the
@@ -164,27 +168,34 @@ impl RouteObservability {
     /// chain composition, per-provider runtime health/load, and any active
     /// model cooldowns. Consumed by the `self_config` `route_status` action.
     pub async fn snapshot(&self) -> serde_json::Value {
-        // Live route knobs; safe defaults when no handle is wired (tests).
-        let (mode, allow_escalation, strategy, targets, limits) = match &self.route {
-            Some(h) => {
-                // One coherent generation for the whole status render.
-                let s = h.snapshot();
-                (
-                    s.mode,
-                    s.allow_escalation,
-                    s.load_balance,
-                    Arc::clone(&s.targets),
-                    Arc::clone(&s.limits),
-                )
-            }
-            None => (
-                RouteMode::Auto,
-                false,
-                LoadBalanceStrategy::Ordered,
-                Arc::new(RouteTargets::default()),
-                Arc::new(RateLimits::default()),
-            ),
+        // The order the next request will actually walk, straight from the
+        // chain. This is the field that answers "why that provider" — the rest
+        // of the snapshot is the evidence, this is the verdict.
+        //
+        // Asked FIRST because it also settles which route generation this whole
+        // render describes. The chain loads its own generation to order with;
+        // loading a second one here for the header is how a `route_config
+        // .update` landing between the two publishes a header naming one
+        // strategy beside an order produced under another.
+        let preview = match &self.chain {
+            Some(chain) => Some(chain.preview_order().await),
+            None => None,
         };
+        // One coherent generation for the whole status render, in this
+        // precedence: the one the order was computed from, else the live handle
+        // (chain-less tests), else the unconfigured defaults (no handle either).
+        // The first two are the SAME handle in production — `build_failover_chain`
+        // hands one `Arc<RouteHandle>` to both — so this picks which *load* is
+        // rendered, never a different source.
+        let route: Arc<RouteState> = match (&preview, &self.route) {
+            (Some(p), _) => Arc::clone(&p.route),
+            (None, Some(h)) => h.snapshot(),
+            (None, None) => Arc::new(RouteState::unconfigured()),
+        };
+        let (mode, allow_escalation, strategy) =
+            (route.mode, route.allow_escalation, route.load_balance);
+        let targets = Arc::clone(&route.targets);
+        let limits = Arc::clone(&route.limits);
 
         let primary_name = self.primary.current().name().to_string();
         // Chain membership for the *next* request, through the same function the
@@ -294,37 +305,34 @@ impl RouteObservability {
             })
             .collect();
 
-        // The order the next request will actually walk, straight from the
-        // chain. This is the field that answers "why that provider" — the rest
-        // of the snapshot is the evidence, this is the verdict.
-        let next_order: Option<Vec<serde_json::Value>> = match &self.chain {
-            Some(chain) => Some(
-                chain
-                    .preview_order()
-                    .await
-                    .into_iter()
-                    .map(|step| {
-                        json!({
-                            "provider": step.provider,
-                            "tier": tier_str(step.tier),
-                            "slot": if step.primary { "primary" } else { "fallback" },
-                            "gate": match step.action {
-                                crate::providers::route_policy::CandidateAction::Allow => "allow",
-                                crate::providers::route_policy::CandidateAction::CrossTier {
-                                    requires_approval: true,
-                                } => "cross_tier_needs_approval",
-                                crate::providers::route_policy::CandidateAction::CrossTier {
-                                    requires_approval: false,
-                                } => "cross_tier_degrade",
-                                crate::providers::route_policy::CandidateAction::Skip => "skip",
-                            },
-                            "rate_sidelined": step.sidelined,
-                        })
+        // Render of the preview taken above. Three gate values, not four: a
+        // dropped candidate is not IN the chain, so there is no "skip" step to
+        // report (the type says so — see `RouteGate`).
+        let next_order: Option<Vec<serde_json::Value>> = preview.map(|p| {
+            p.steps
+                .into_iter()
+                .map(|step| {
+                    json!({
+                        "provider": step.provider,
+                        "tier": tier_str(step.tier),
+                        "slot": if step.primary { "primary" } else { "fallback" },
+                        "gate": match step.action {
+                            RouteGate::Allow => "allow",
+                            RouteGate::CrossTier { requires_approval: true } =>
+                                "cross_tier_needs_approval",
+                            RouteGate::CrossTier { requires_approval: false } =>
+                                "cross_tier_degrade",
+                        },
+                        // Both flags mean the same thing to a reader: the walk
+                        // passes this step over **while a later candidate
+                        // remains**, and dials it anyway when it is the last
+                        // one. They differ only in which registry says so.
+                        "rate_sidelined": step.rate_sidelined,
+                        "health_sidelined": step.health_sidelined,
                     })
-                    .collect(),
-            ),
-            None => None,
-        };
+                })
+                .collect()
+        });
 
         json!({
             "mode": mode_str(mode),
@@ -579,85 +587,187 @@ mod tests {
         assert!(snap["providers"]["kimi"]["endpoint_tier"].is_null());
     }
 
-    #[tokio::test]
-    async fn snapshot_schema_is_locked() {
-        // `route_status` is consumed by the Panel route page and by operators
-        // reading raw JSON — neither is compiled against this shape, so a
-        // field rename would ship silently. Pin the full key set: any rename
-        // or accidental drop turns this test red.
-        let obs = observability(vec![ChainCandidate {
+    /// A bundle with a real chain behind it — the production shape, where
+    /// `next_order` is present and the header renders the generation that
+    /// chain ordered with. `route` is the chain's own boot route snapshot.
+    fn observability_with_chain(route: Option<(RouteMode, bool)>) -> RouteObservability {
+        use crate::providers::failover::{FailoverConfig, FailoverNode, FailoverProvider};
+        let mut obs = observability(vec![ChainCandidate {
             name: "x302".to_string(),
             models: vec!["gpt-5".to_string()],
             tier: EndpointTier::Cloud,
         }]);
+        let chain = FailoverProvider::new(
+            Arc::new(StaticDefault::new(Arc::new(NamedProvider("kimi")))),
+            vec![FailoverNode::with_tier(
+                "x302".to_string(),
+                vec!["gpt-5".to_string()],
+                Arc::new(NamedProvider("x302")),
+                EndpointTier::Cloud,
+            )],
+            std::collections::HashMap::new(),
+            FailoverHealth::default(),
+            FailoverConfig::default(),
+        );
+        let chain = match route {
+            Some((mode, escalate)) => chain.with_route(mode, escalate, None),
+            None => chain,
+        };
+        obs.chain = Some(Arc::new(chain));
+        obs
+    }
+
+    #[tokio::test]
+    async fn snapshot_schema_is_locked() {
+        // `route_status` is read by the model (the `self_config` tool text
+        // points it at `data.runtime`) and by operators reading raw JSON —
+        // neither is compiled against this shape, so a field rename would ship
+        // silently. There is no Panel consumer: `next_order` and the rest of
+        // this snapshot exist for those two readers only.
+        //
+        // BOTH bundle shapes are pinned. The chain-less one is what most tests
+        // in this crate build; the chain-attached one is what production
+        // always is, and it is the only one that renders `next_order` steps —
+        // locking only the first would document a shape production never emits.
+        for (label, obs) in [
+            (
+                "chain-less",
+                observability(vec![ChainCandidate {
+                    name: "x302".to_string(),
+                    models: vec!["gpt-5".to_string()],
+                    tier: EndpointTier::Cloud,
+                }]),
+            ),
+            ("with chain", observability_with_chain(None)),
+        ] {
+            let snap = obs.snapshot().await;
+
+            let top: std::collections::BTreeSet<&str> = snap
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            let expected_top: std::collections::BTreeSet<&str> = [
+                "mode",
+                "allow_cloud_escalation",
+                "load_balance",
+                "pins",
+                "primary",
+                "chain_source",
+                "fallback_chain",
+                "next_order",
+                "providers",
+                "cooling_models",
+                "config_problems",
+            ]
+            .into_iter()
+            .collect();
+            assert_eq!(
+                top, expected_top,
+                "route_status top-level schema drifted ({label})"
+            );
+
+            let provider: std::collections::BTreeSet<&str> = snap["providers"]["x302"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            let expected_provider: std::collections::BTreeSet<&str> = [
+                "circuit",
+                "failure_count",
+                "last_error",
+                "breaker_cooldown_remaining_secs",
+                "rate_pacing_remaining_secs",
+                "in_flight",
+                "latency_ms",
+                "rpm_used",
+                "tpm_used",
+                "rpm_limit",
+                "tpm_limit",
+                "utilization_permille",
+                "rate_limited",
+                "over_limit",
+                "price_milli_per_mtok",
+                "endpoint_tier",
+            ]
+            .into_iter()
+            .collect();
+            assert_eq!(
+                provider, expected_provider,
+                "route_status per-provider schema drifted ({label})"
+            );
+
+            let chain_step: std::collections::BTreeSet<&str> = snap["fallback_chain"][0]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            let expected_step: std::collections::BTreeSet<&str> =
+                ["provider", "tier", "models"].into_iter().collect();
+            assert_eq!(
+                chain_step, expected_step,
+                "route_status fallback_chain schema drifted ({label})"
+            );
+
+            // `next_order` is absent (null), not empty, without a chain — a
+            // consumer must be able to tell "nothing to walk" from "nobody
+            // asked the chain". With one, every step carries the full key set,
+            // including BOTH skip flags: a step rendered without them reads as
+            // a healthy dial the walk is about to make.
+            match &obs.chain {
+                None => assert!(snap["next_order"].is_null(), "{label}"),
+                Some(_) => {
+                    let step: std::collections::BTreeSet<&str> = snap["next_order"][0]
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .map(String::as_str)
+                        .collect();
+                    let expected: std::collections::BTreeSet<&str> = [
+                        "provider",
+                        "tier",
+                        "slot",
+                        "gate",
+                        "rate_sidelined",
+                        "health_sidelined",
+                    ]
+                    .into_iter()
+                    .collect();
+                    assert_eq!(step, expected, "route_status next_order schema drifted");
+                    assert_eq!(snap["next_order"][0]["slot"], "primary");
+                    assert_eq!(snap["next_order"][0]["gate"], "allow");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_header_renders_the_generation_the_order_was_computed_from() {
+        // `snapshot` used to load the route state once for the header and the
+        // chain loaded a SECOND one to order with, so a `route_config.update`
+        // landing between the two published a header naming one policy beside
+        // an order produced under another — the round-5 fix that gave the walk
+        // one generation (`CandidatePlan.route`) had never been carried to the
+        // diagnostic face.
+        //
+        // Production shares one `RouteHandle` between the bundle and the chain,
+        // so the divergence they can really exhibit is a timing one and not
+        // reproducible on demand. Here the two sources are deliberately given
+        // DIFFERENT policies — the chain carries a boot snapshot, the bundle no
+        // handle at all — which makes "which one does the header render" a
+        // deterministic question with one right answer: the chain's, because
+        // that is the generation `next_order` was ordered under.
+        let obs = observability_with_chain(Some((RouteMode::AlwaysCloud, true)));
+
         let snap = obs.snapshot().await;
-
-        let top: std::collections::BTreeSet<&str> = snap
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect();
-        let expected_top: std::collections::BTreeSet<&str> = [
-            "mode",
-            "allow_cloud_escalation",
-            "load_balance",
-            "pins",
-            "primary",
-            "chain_source",
-            "fallback_chain",
-            "next_order",
-            "providers",
-            "cooling_models",
-            "config_problems",
-        ]
-        .into_iter()
-        .collect();
-        assert_eq!(top, expected_top, "route_status top-level schema drifted");
-
-        let provider: std::collections::BTreeSet<&str> = snap["providers"]["x302"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect();
-        let expected_provider: std::collections::BTreeSet<&str> = [
-            "circuit",
-            "failure_count",
-            "last_error",
-            "breaker_cooldown_remaining_secs",
-            "rate_pacing_remaining_secs",
-            "in_flight",
-            "latency_ms",
-            "rpm_used",
-            "tpm_used",
-            "rpm_limit",
-            "tpm_limit",
-            "utilization_permille",
-            "rate_limited",
-            "over_limit",
-            "price_milli_per_mtok",
-            "endpoint_tier",
-        ]
-        .into_iter()
-        .collect();
         assert_eq!(
-            provider, expected_provider,
-            "route_status per-provider schema drifted"
+            snap["mode"], "always_cloud",
+            "the header must describe the generation the order came from"
         );
-
-        let chain_step: std::collections::BTreeSet<&str> = snap["fallback_chain"][0]
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect();
-        let expected_step: std::collections::BTreeSet<&str> =
-            ["provider", "tier", "models"].into_iter().collect();
-        assert_eq!(
-            chain_step, expected_step,
-            "route_status fallback_chain schema drifted"
-        );
+        assert_eq!(snap["allow_cloud_escalation"], true);
     }
 
     /// The variant is the operator-facing severity of this handle going

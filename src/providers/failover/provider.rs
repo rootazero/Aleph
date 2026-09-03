@@ -14,8 +14,7 @@ use crate::providers::llm_retry::{backoff_delay, is_transient_overload};
 use crate::providers::load_stats::LoadStats;
 use crate::providers::route_handle::{RouteHandle, RouteState};
 use crate::providers::route_policy::{
-    classify_candidate, order_candidates, order_candidates_balanced, CandidateAction, EndpointTier,
-    RateLimits, RouteTargets,
+    classify_candidate, order_candidates, order_candidates_balanced, EndpointTier, RouteGate,
 };
 use crate::providers::{AiProvider, DefaultProviderHandle, DeltaSink, ProviderDelta};
 use crate::sandbox::exec_approval::gate::ApprovalRequester;
@@ -104,13 +103,27 @@ enum SlotKind {
 /// chain, and the two disagreeing is how a candidate ends up sorted last for a
 /// reason the walk then declines to act on.
 struct CandidatePlan {
-    /// The chain to walk, in order, each entry with the route action it must
+    /// The chain to walk, in order, each entry with the route gate it must
     /// enforce and the slot that decides whose model list wins.
-    candidates: Vec<(FailoverNode, CandidateAction, SlotKind)>,
+    candidates: Vec<(FailoverNode, RouteGate, SlotKind)>,
     /// Providers at or over a configured `[route].rate_limits` ceiling right
     /// now. Empty whenever no ceilings are configured (the default), so the
     /// gate below is a no-op on an unconfigured deployment.
+    ///
+    /// Read only through [`rate_deferred`](Self::rate_deferred) — membership
+    /// alone is not the gate's answer (a pin is exempt).
     saturated: std::collections::HashSet<String>,
+    /// Providers the shared health registries currently sideline: circuit open
+    /// and still cooling, or parked in a rate-limit pacing window. Computed
+    /// over the WHOLE chain (primary included) by
+    /// [`sidelined_providers`](FailoverProvider::sidelined_providers), the
+    /// read-only twin of the walk's two health gates.
+    ///
+    /// Two consumers: the ordering pass folds it into `LoadMetric.cooling`, and
+    /// `route_status`'s preview renders it, so the diagnostic states the same
+    /// verdict the walk is about to reach instead of showing an open-circuit
+    /// primary as a healthy first dial.
+    health_sidelined: std::collections::HashSet<String>,
     /// The single route-state generation this plan was ordered from. Carried
     /// so the walk's gates (the saturation gate's pin exemption) and the
     /// empty-chain error read the SAME snapshot that produced the candidate
@@ -121,6 +134,25 @@ struct CandidatePlan {
 }
 
 impl CandidatePlan {
+    /// Whether the rate-ceiling gate defers `name`: it is at or over its
+    /// configured `[route].rate_limits` window AND it is not operator-pinned.
+    ///
+    /// The ONE spelling of that rule. Its two callers are the walk's gate and
+    /// `route_status`'s [`preview_order`](FailoverProvider::preview_order) —
+    /// the preview used to restate the first half only, so a pinned saturated
+    /// provider was rendered "skipped" and then dialed first (the pin exemption
+    /// is `order_candidates_balanced`'s promise, and the preview was the half
+    /// that had not been told). Both callers must read this, never
+    /// `saturated` directly.
+    ///
+    /// Position is deliberately NOT part of it: whether a deferral actually
+    /// happens also needs "is there a later candidate", which is a fact about
+    /// the index, not about the provider. The walk adds that; the preview
+    /// renders the per-provider half.
+    fn rate_deferred(&self, name: &str) -> bool {
+        self.saturated.contains(name) && !self.route.targets.is_pinned(name)
+    }
+
     /// The endpoint this plan sets out for, as the route witness's anchor — or
     /// `None` when the head is not an endpoint at all.
     ///
@@ -133,7 +165,8 @@ impl CandidatePlan {
     /// That head is reachable and the gap is real: a `provider_hint` pin builds
     /// `[pin, NESTED_CHAIN_NODE]` carrying the pin's true tier, so a cloud pin
     /// under `AlwaysLocal` with `allow_cloud_escalation = false` classifies the
-    /// pin [`Skip`](CandidateAction::Skip) and leaves the sentinel leading. The run
+    /// pin [`Skip`](crate::providers::route_policy::CandidateAction::Skip) and
+    /// leaves the sentinel leading. The run
     /// is then reported as whatever the *global* chain set out for, not as the
     /// pin the caller asked for. Anchoring the dropped head instead is not
     /// obviously right — the identical drop on an operator-configured primary
@@ -176,13 +209,42 @@ pub struct RouteStep {
     /// Endpoint locality the route policy gated on.
     pub tier: EndpointTier,
     /// What the walk will enforce before dialing it.
-    pub action: CandidateAction,
+    pub action: RouteGate,
     /// Whether this is the primary slot (the only slot that honours an
     /// explicitly pinned request model).
     pub primary: bool,
-    /// Whether a configured rate ceiling currently sidelines it — deprioritised
-    /// within its tier and skipped while a healthier candidate remains.
-    pub sidelined: bool,
+    /// Whether a configured rate ceiling currently sidelines it: at or over its
+    /// `[route].rate_limits` window and not operator-pinned, so the walk
+    /// **skips it while a later candidate remains** (the last candidate is
+    /// always attempted — the ceiling defers, it never starves).
+    ///
+    /// Derived through [`CandidatePlan::rate_deferred`], the same helper the
+    /// walk's gate calls.
+    pub rate_sidelined: bool,
+    /// Whether the health registries currently sideline it: circuit open and
+    /// still cooling, or parked in a rate-limit pacing window. Same rule as
+    /// above — the walk **skips it while a later candidate remains**, and
+    /// attempts it anyway when it is the last one.
+    ///
+    /// Derived from [`FailoverProvider::sidelined_providers`], the read-only
+    /// twin of the walk's breaker and pacing gates (it must not spend the
+    /// `Open → HalfOpen` probe that a real dial spends).
+    pub health_sidelined: bool,
+}
+
+/// What [`FailoverProvider::preview_order`] answers: the chain the next request
+/// would walk, plus the route generation that ordering was computed from.
+///
+/// The generation travels with the order because `route_status` renders both
+/// halves — the header (mode, strategy, pins, ceilings) and the order — and a
+/// concurrent `route_config.update` between two separate loads would publish a
+/// header naming one strategy next to an order produced under another. Same
+/// rule, one level up, as [`CandidatePlan::route`].
+pub struct RoutePreview {
+    /// The dial order, gates included.
+    pub steps: Vec<RouteStep>,
+    /// The single route-state generation `steps` was ordered from.
+    pub route: Arc<RouteState>,
 }
 
 /// Why a chain came back empty, phrased for whoever has to read it.
@@ -557,13 +619,14 @@ impl FailoverProvider {
     fn route_snapshot(&self) -> Arc<RouteState> {
         match &self.route_handle {
             Some(h) => h.snapshot(),
+            // No live handle (tests, non-config boot): the boot snapshot from
+            // `with_route`, over the one shared spelling of "no `[route]`
+            // section" — so this and a chain-less `route_status` render cannot
+            // disagree about what unconfigured means.
             None => Arc::new(RouteState {
                 mode: self.route_mode,
                 allow_escalation: self.allow_cloud_escalation,
-                load_balance: LoadBalanceStrategy::default(),
-                targets: Arc::new(RouteTargets::default()),
-                limits: Arc::new(RateLimits::default()),
-                health_probe_interval_secs: 0,
+                ..RouteState::unconfigured()
             }),
         }
     }
@@ -642,19 +705,21 @@ impl FailoverProvider {
     /// * the global default chain tags it [`EndpointTier::Unknown`] — its
     ///   `base_url` is not resolvable from the live `DefaultProviderHandle` and
     ///   it is the operator's configured default, so it always classifies to
-    ///   [`Allow`](CandidateAction::Allow) (byte-identical to before);
+    ///   [`Allow`](RouteGate::Allow) (byte-identical to before);
     /// * a *pinned* override chain tags it with the pin's real tier (via
     ///   [`with_primary_tier`](Self::with_primary_tier)), so a hard-guardrail
     ///   `AlwaysLocal` can turn an explicit cloud pin into a
-    ///   [`CrossTier`](CandidateAction::CrossTier) (borrow-cloud approval) or a
-    ///   [`Skip`](CandidateAction::Skip) (escalation off) — the dynamic pick no
+    ///   [`CrossTier`](RouteGate::CrossTier) (borrow-cloud approval) or dropped
+    ///   outright (escalation off) — the dynamic pick no
     ///   longer bypasses the operator's policy.
     ///
     /// The primary is never reordered below its own fallbacks (it is the
     /// operator default or the explicitly-chosen provider); only the *fallback*
     /// list is run through [`order_candidates`] for local-first ordering, pin
-    /// promotion and tier gating. Each entry carries the [`CandidateAction`] the
-    /// walk must enforce plus the [`SlotKind`] that decides whose model list wins.
+    /// promotion and tier gating. Each entry carries the [`RouteGate`] the walk
+    /// must enforce plus the [`SlotKind`] that decides whose model list wins —
+    /// the dropped candidates are gone by construction, not carried as a state
+    /// nothing downstream can act on.
     ///
     /// `advance_rotation` consumes a round-robin tick (what a real request
     /// does); the read-only [`preview_order`](Self::preview_order) passes
@@ -721,11 +786,12 @@ impl FailoverProvider {
         // Classify the primary in place. A `Skip` (a hard-guardrail mode with
         // escalation off, on a cross-tier pin) drops it so the chain falls
         // straight through to the fallbacks; `Allow`/`CrossTier` keep it first.
-        let mut out: Vec<(FailoverNode, CandidateAction, SlotKind)> =
+        let mut out: Vec<(FailoverNode, RouteGate, SlotKind)> =
             Vec::with_capacity(fallbacks.len() + 1);
-        match classify_candidate(mode, primary_node.tier, allow_escalation) {
-            CandidateAction::Skip => {}
-            action => out.push((primary_node, action, SlotKind::Primary)),
+        if let Some(gate) =
+            RouteGate::retained(classify_candidate(mode, primary_node.tier, allow_escalation))
+        {
+            out.push((primary_node, gate, SlotKind::Primary));
         }
         // Order the fallback pool. The balanced path runs when there is a load
         // registry AND either a non-`Ordered` strategy (sort by live signals) or
@@ -742,15 +808,27 @@ impl FailoverProvider {
         // `_filter_cooldown_deployments` ahead of every strategy; Aleph
         // deprioritises rather than removes, so a chain of cooling providers
         // still resolves instead of raising "no deployments available".
+        //
+        // Gathered over the WHOLE chain, primary included. Ordering only ever
+        // reads the fallback half (the primary keeps position 0 and is not part
+        // of the pool being sorted), but the walk's health gates apply to every
+        // slot — so a fallbacks-only set left `route_status` rendering an
+        // open-circuit primary as a healthy first dial while the walk passed
+        // straight over it.
         let sidelined = self
-            .sidelined_providers(fallbacks.iter().map(|n| n.name.as_str()))
+            .sidelined_providers(
+                std::iter::once(primary_name.as_str())
+                    .chain(fallbacks.iter().map(|n| n.name.as_str())),
+            )
             .await;
         // Rate-window saturation, folded ONCE per pass for every candidate the
-        // primary included. Two consumers read this single answer: the ordering
-        // below (deprioritise to the back of the tier) and the walk's gate
-        // (skip while a healthier candidate is still ahead) — so a provider
-        // cannot be sorted last for a ceiling the walk then ignores. Empty
-        // without `[route].rate_limits`, which is the default.
+        // primary included. Three consumers read this single answer: the
+        // ordering below (deprioritise to the back of the tier), the walk's
+        // gate and `route_status`'s preview (both through
+        // `CandidatePlan::rate_deferred`, which adds the pin exemption) — so a
+        // provider cannot be sorted last for a ceiling the walk then ignores,
+        // nor reported skipped for one it is exempt from. Empty without
+        // `[route].rate_limits`, which is the default.
         let saturated: std::collections::HashSet<String> = match &self.load {
             Some(load) if !limits.is_empty() => std::iter::once(primary_name.as_str())
                 .chain(fallbacks.iter().map(|n| n.name.as_str()))
@@ -825,20 +903,30 @@ impl FailoverProvider {
                 |n| n.name.as_str(),
             ),
         };
-        out.extend(
-            ordered
-                .into_iter()
-                .map(|(node, action)| (node, action, SlotKind::Fallback)),
-        );
+        out.extend(ordered.into_iter().filter_map(|(node, action)| {
+            // Both ordering functions already dropped every `Skip`
+            // (`route_policy::order_candidates` / `order_candidates_balanced`),
+            // and the primary's own `Skip` was dropped above. This is the
+            // second half of that same statement — typed, so the chain cannot
+            // carry a state the walk has no arm for.
+            let gate = RouteGate::retained(action);
+            debug_assert!(
+                gate.is_some(),
+                "route ordering returned a Skip it promises to drop: {action:?}"
+            );
+            gate.map(|gate| (node, gate, SlotKind::Fallback))
+        }));
         CandidatePlan {
             candidates: out,
             saturated,
+            health_sidelined: sidelined,
             route,
         }
     }
 
-    /// The chain the *next* request would walk: `(provider, tier, action, slot)`
-    /// per candidate, in dial order.
+    /// The chain the *next* request would walk — one [`RouteStep`] per
+    /// candidate in dial order, plus the route generation they were ordered
+    /// from ([`RoutePreview`]).
     ///
     /// Read-only twin of [`candidates`](Self::candidates) — same function, same
     /// route snapshot, same gates — so `route_status` cannot report an order the
@@ -849,18 +937,35 @@ impl FailoverProvider {
     ///
     /// Observes without disturbing: it consumes no round-robin tick and performs
     /// no `Open → HalfOpen` breaker transition (that belongs to a real dial).
-    pub async fn preview_order(&self) -> Vec<RouteStep> {
+    ///
+    /// Both skip flags are DERIVED from the plan the walk would use — the rate
+    /// one through [`CandidatePlan::rate_deferred`] (the walk's own gate calls
+    /// the same helper) and the health one from the set
+    /// [`sidelined_providers`](Self::sidelined_providers) computed for that
+    /// plan. Restating either condition here is what made the preview describe
+    /// a chain the walk does not walk.
+    ///
+    /// The route generation comes back with the order so the caller renders one
+    /// coherent picture — see [`RoutePreview`].
+    pub async fn preview_order(&self) -> RoutePreview {
         let plan = self.candidates(false).await;
-        plan.candidates
-            .into_iter()
+        let steps = plan
+            .candidates
+            .iter()
             .map(|(node, action, slot)| RouteStep {
-                sidelined: plan.saturated.contains(&node.name),
-                provider: node.name,
+                rate_sidelined: plan.rate_deferred(&node.name),
+                health_sidelined: plan.health_sidelined.contains(&node.name),
+                // rust-doctor-disable-next-line excessive-clone
+                provider: node.name.clone(),
                 tier: node.tier,
-                action,
-                primary: slot == SlotKind::Primary,
+                action: *action,
+                primary: *slot == SlotKind::Primary,
             })
-            .collect()
+            .collect();
+        RoutePreview {
+            steps,
+            route: plan.route,
+        }
     }
 
     /// The subset of `names` the shared registries currently consider unhealthy:
@@ -1069,7 +1174,7 @@ impl FailoverProvider {
             RequestRequirements::from_request(messages, tools.is_some_and(|t| !t.is_empty()));
 
         Box::pin(async move {
-            let plan = self.candidates(true).await;
+            let mut plan = self.candidates(true).await;
             let total = plan.candidates.len();
             let mut last_error: Option<AlephError> = None;
             // The route witness's `session_id`, read once: the same
@@ -1104,7 +1209,11 @@ impl FailoverProvider {
             // caller's sink; see the note on `walk`.
             let emission = sink.map(EmissionGuard::new);
 
-            for (idx, (cand, action, slot)) in plan.candidates.into_iter().enumerate() {
+            // The chain is taken OUT of the plan rather than the plan being
+            // consumed: the gates below are the plan's own methods
+            // (`rate_deferred`), and a partially-moved plan cannot answer them.
+            let chain = std::mem::take(&mut plan.candidates);
+            for (idx, (cand, action, slot)) in chain.into_iter().enumerate() {
                 // "Is there somewhere else to go?" — derived once per candidate
                 // and read by every gate below plus `decide`. Four rules yield
                 // to a later candidate and insist on the last one (breaker,
@@ -1150,10 +1259,7 @@ impl FailoverProvider {
                 // ignored it completely: on a single-provider or primary-heavy
                 // deployment `[route].rate_limits` changed nothing at all
                 // except a number in `route_status`.
-                if plan.saturated.contains(&cand.name)
-                    && !plan.route.targets.is_pinned(&cand.name)
-                    && has_later_candidate
-                {
+                if plan.rate_deferred(&cand.name) && has_later_candidate {
                     tracing::debug!(
                         provider = %cand.name,
                         "failover: provider at its configured rate ceiling, deferring \
@@ -1167,7 +1273,7 @@ impl FailoverProvider {
                 // — fail-closed, exactly like an open circuit. Cloud→local
                 // degrade is `CrossTier{requires_approval:false}` and is never
                 // gated (degrading to local spends nothing).
-                if let CandidateAction::CrossTier {
+                if let RouteGate::CrossTier {
                     requires_approval: true,
                 } = action
                 {

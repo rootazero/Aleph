@@ -55,7 +55,7 @@ pub use health::{
     CircuitState, FailoverHealth, ModelCooldown, ProviderCooldown, ProviderHealthView,
 };
 pub(crate) use provider::effective_fallback_names;
-pub use provider::{FailoverProvider, RouteStep};
+pub use provider::{FailoverProvider, RoutePreview, RouteStep};
 
 /// Name of the sentinel node that wraps a whole *nested* chain rather than a
 /// real endpoint.

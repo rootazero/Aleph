@@ -228,6 +228,44 @@ pub enum CandidateAction {
     Skip,
 }
 
+/// The gate a candidate that SURVIVED ordering carries — [`CandidateAction`]
+/// without the one variant no surviving candidate can hold.
+///
+/// Both ordering functions drop every [`Skip`](CandidateAction::Skip) before
+/// returning ([`order_candidates`] and [`order_candidates_balanced`]), and the
+/// failover walk drops it for the primary slot the same way. So a chain entry
+/// typed `CandidateAction` had a fourth state that could not occur, and the
+/// `route_status` renderer carried an arm for it that could never be reached —
+/// an "always-true predicate" wearing a match arm's clothes.
+///
+/// [`retained`](Self::retained) is the ONLY conversion. A future
+/// `CandidateAction` variant therefore stops the build there, in one place,
+/// with the question "does this one survive ordering?" — instead of silently
+/// picking up whichever arm a second, hand-written match happened to have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteGate {
+    /// Dial it with no further gate.
+    Allow,
+    /// Dial it only after the cross-tier rule is satisfied — see
+    /// [`CandidateAction::CrossTier`].
+    CrossTier { requires_approval: bool },
+}
+
+impl RouteGate {
+    /// The gate a retained candidate carries, or `None` when the policy drops
+    /// the candidate outright.
+    #[must_use]
+    pub const fn retained(action: CandidateAction) -> Option<Self> {
+        match action {
+            CandidateAction::Allow => Some(Self::Allow),
+            CandidateAction::CrossTier { requires_approval } => {
+                Some(Self::CrossTier { requires_approval })
+            }
+            CandidateAction::Skip => None,
+        }
+    }
+}
+
 /// Classify one candidate from the two hard signals.
 ///
 /// Pure total function over `(mode, tier, allow_cloud_escalation)`:
