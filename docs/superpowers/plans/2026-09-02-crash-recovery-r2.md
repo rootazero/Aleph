@@ -1025,3 +1025,74 @@ envelope**的实现同样为真。新加的两条断言（回执无 error ＋ �
 **本次未重跑**：Step 4 的六条全量命令（记录在 `0611e72d1` 那一段，其后只有 `qa/` 与 docs 变更，无 `src/` 改动）；
 `cargo test -p alephcore --lib` 与 `baseline_failures.txt` 的按名比对（记录在 `802480cd6`，同理）。
 本次改动**只有 `qa/` 与 docs**，不进任何 cargo target。
+
+### T8 收尾 — 仪器自身的两个空判 + `knobs` 的第二根旋钮（续做 3/3，`5a4ad79eb` / `9c6471465`）
+
+**五个阶段在最终树上重跑，全绿**（`SKIP_BUILD=1`；binary 与 `src/` 同步——`df9171751` 之后只有 `qa/` 与 docs 改动）：
+
+| 阶段 | rc | 断言数 / floor | 关键行 |
+|---|---|---|---|
+| `claims` | 0 | 13 / 13 | `load_all_events` = 5 events；`sessions.list(limit:1)` 1 行 2ms，背后 3 markers out of 10 events |
+| `denied` | 0 | 5 / 5 | 收据 `"contradictions": 1` |
+| `rewind` | 0 | 5 / 5 | 之后的收据 `"scanned": 0` |
+| `knobs` | 0 | **10 / 10**（本次 5 → 10） | 恢复后的 marker envelope：`{"exec_tier":"ask",…,"model":"qa-model-a"}`，而会话行是 `full` + `qa-model-b` |
+| `holes` | 0 | 12 / 12 | history total 83 == projectable 83、`compaction_count 0`、`total_tokens 44 -> 44` |
+
+#### 仪器自己的两个「恒真的谓词」（判据 #2 的第四张脸：没装上）
+
+1. **每个 `drive` 都是独立进程，各自数各自的**——一个阶段打出的最后一行是**最后跑的那个 phase** 的
+   小结。`claims` 最后跑的是 `cost`，它一条断言都没有，于是绿色阶段的 tail 是 `0 passed, 0 failed`。
+   贵的是反面：一个**断言全部消失**的 phase（提前 `return`、wire 键改名让 driver 在检查之前就 bail）
+   打出的是**同一行**，rc 照样 0。现在 `run.sh` 把各 phase 的数目累加，并与一个**实测出来的 floor**
+   比较：`claims` 13 / `denied` 5 / `rewind` 5 / `knobs` 10 / `holes` 12。加断言的同一笔抬 floor；
+   floor 只在阶段其余部分**通过**时才检查（提前失败的阶段本来就少断言，那里再喊「测少了」会盖住真正的失败）。
+   **证伪**：注释掉 claims 收据 phase 里的一条 `check`（`refused` 是列表那条）⇒
+   `=== assertions: 12 (floor 13) ===` ＋ `FAIL: stage 'claims' passed while asserting only 12 times…` ＋ `rc=1`；已还原。
+2. **round-1 的 `crash` / `attribute` 在本机跑不了，而且以前是**默默**跑不了**。这个 fixture 里有三处注释
+   写着本机的 `python3`「exits 0 having done nothing」。**实测 2026-09-03：`python3` 与 `python` 都是
+   `WindowsApps` stub，无输出、退出码 49。** 那三处注释的**结论**是对的（被捕获的是空**输出**，所以值是空的），
+   **机制**是错的——而机制正是有用的那一半：非零退出是阶段**可以拒绝**的信号。三处注释已按实测改写，
+   两个 round-1 阶段现在用「探它的**输出**」的探针 fail-fast，`exit 78` 并说明原因，
+   而不是死在 `patch_config.py || exit 1` 的一个光秃秃的退出码上（读起来像那个脚本坏了）。
+   **实测**：`run.sh crash` ⇒ rc=78，"this host has no usable python3"。
+   **因此：round-1 两个阶段本轮没有在本机复测过**，`qa/README.md` 现在明说这一点，
+   不让它们的沉默被读成一次通过（判据 #17：不认识的状态词一律读作「我无法担保」）。
+
+#### `knobs` 的第二根旋钮：计划写的那个方向是空判
+
+计划 Step 2 写的是「快照 `full`、会话改 `ask`、恢复后走 `ask`」。**那个排布对一个根本没有 ceiling 的
+实现同样为真**——会话那一档本身就答 `ask`，`resolve_exec_tier` 与 `resolve_exec_tier_with_ceiling`
+返回同一个值，阶段分不开它们（判据 #2）。能分开的是**另一个方向**，而且它正是错了要付账的那个方向
+（判据 #14）：崩溃那一轮跑在 `ask`，崩溃后**把会话放宽到 `full`**，恢复出来的那一轮必须仍是 `ask`。
+一次跑得太松的恢复，会在**无人值守**下用一个操作员在守护进程停机期间收回的档位去执行。
+
+**oracle 是恢复那一轮自己的 `RunStarted` envelope**（durable，driver 用 `node:sqlite` 直接读）：
+`run_envelope_snapshot` 是从该轮真正在用的 `TurnEnvelope` 上取的，所以那是它**实际拿到**的档位——
+不是一个请求、不是日志行（`Execution permissions resolved` 那条 info 在 fixture 的默认过滤器下**不发出**：
+实测在保留的 `server.log` 里 0 次），也不是快照自己读自己（那个值在**更老**的 marker 上，
+所以另加一条「至少两条 live run marker」把这两行分开）。崩溃那一轮用 `chat.send` 的 `exec_tier` 参数
+（`requested` 档）显式带上 `ask`，它同时会 stamp 会话行 —— 于是 run 与 row 一开始是一致的，
+后面的分歧是装置故意造的。
+
+**证伪**：把期望反过来写成 `full`（也就是一个没有 ceiling 的实现会产出的值）⇒
+
+```
+FAIL  the resumed run runs under the SNAPSHOT exec tier (full), not the session's looser one
+      | {"resumed_envelope":{"exec_tier":"ask","session_mode":"work","memory_mode":"off",
+      |  "model":"qa-model-a","model_provider":"qa-mock"},"markers":[3,7]}
+=== assertions: 9 (floor 10) ===   /   === verdict: rc=1 ===
+```
+
+已还原，阶段 10/10 绿。
+
+#### 与计划不符、如实记账的三条
+
+* **Step 3 的「`SKIP_BUILD=0` 构建 release 二进制」在本 fixture 里做不到**：`run.sh` 的 `qa_build -p alephcore
+  --bin aleph-server` 建的是 **debug**，且 `BIN="$TARGET_DIR/debug/aleph-server"` 写死了 debug 路径——
+  就算另外建了 release，阶段仍会去跑 debug 那个。本次**跑过一次 `SKIP_BUILD=0`**（`claims`，让 fixture 自己走它的构建路径，
+  rc=0），其余四个用 `SKIP_BUILD=1` 跑在同一个二进制上。要真上 release 得改 fixture，不在本任务范围。
+* **`knobs` 的排布与计划相反**，理由见上（计划那个方向是空判）。
+* **round-1 两阶段本轮未复测**（本机无 python3），见上。
+
+**本次未重跑**：Step 4 的六条全量命令与 `--lib` 全量比对——本次改动**只有 `qa/` 与 docs**，
+不进任何 cargo target（`git show --stat` 可核）。
