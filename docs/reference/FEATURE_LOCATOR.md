@@ -163,7 +163,7 @@
 | 横切 | 装个 MCP / 装技能插件 / 扩展商店 / Aleph Hub / 目录搜不到 / 更新徽标不亮 / 装完用不了 / 远程 MCP 要 key | Aleph Hub · Extension Catalog & Install | `src/hub/`（`catalog_client.rs` 唯一 HTTP 源 + `origin.rs` 安装出处账本 + `verify.rs` 唯一判决）· `src/gateway/handlers/extensions/` · `src/builtin_tools/hub/`（入口＝`catalog_search.rs`） | ✅ 深化轮(§5.21, 2026-07-30) |
 | 横切 | 打字机模式 / 即时输出全局开关 | Output Mode | `src/config/types/general.rs` + `event_emitter/instant_buffer.rs` | ✅ |
 | 横切 | self 自我管理 / 改完配置生效了吗 | Self-Config / Self-Manage | `src/builtin_tools/self_config.rs` `self_manage.rs` + **`src/config/live_apply.rs`**(Live 声明的执行单一源) | ✅ (路径与 Live 声明加固 2026-08-05) |
-| 横切 | doctor / doctor+f / doctor 卡住了 | Doctor & Auto-Fix | `src/builtin_tools/doctor.rs` + `src/diagnostics/`(11 checks，每项带死线) + `diagnostics.run` RPC + `interfaces/webchat/src/state/hotkey.rs`(`f`) | ✅ (G1 2026-06-16；深度强化轮 2026-07-30；死线/脱敏咽喉/传感器自造轮 2026-08-05) |
+| 横切 | doctor / doctor+f / doctor 卡住了 | Doctor & Auto-Fix | `src/builtin_tools/doctor.rs` + `src/diagnostics/`（**别在这里维护一个数目**——这一格曾写着 11；2026-09-02 实测是 13 条无条件 + 5 条经 `with_*` 按句柄有无追加（`capability_wiring` / `providers_connectivity` / `projection_holes` / `session_log` / `idle_extensions`），名单是 `src/diagnostics/checks/` 这个目录本身，每项带死线） + `diagnostics.run` RPC + `interfaces/webchat/src/state/hotkey.rs`(`f`) | ✅ (G1 2026-06-16；深度强化轮 2026-07-30；死线/脱敏咽喉/传感器自造轮 2026-08-05) |
 | 横切 | hook | Hook System | `src/verification/stop_hooks.rs` `src/verification/extension_stop_gate.rs` `src/sandbox/hooks.rs` `src/extension/hooks/` | ✅ |
 | 横切 | CLI | Command Line Interface | `src/bin/aleph-server/commands/` | ✅ |
 | UI | 流式回显 / 工作区面板 | Streaming Echo & Workspace Panel | `interfaces/webchat/src/platform/wide/views/chat/` + `components/inspector/` | ✅ |
