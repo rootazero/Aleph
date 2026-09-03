@@ -1298,4 +1298,48 @@ ARCHITECTURE.md / SESSION_SERVICE.md 上一笔改过的那几处。`FlushTimeout
 这一笔的第一个发现正是「继承上一份报告的结论」的代价。
 **没有变异证伪、没有测试计数、没跑 cargo**：本任务不改 `.rs`，这三栏留空是如实。
 
+---
+
+### T9 续³ — `af13d2fe0` / `f45ae1981`（同样不含 `.rs` 改动，故没跑 cargo，也不声称跑过）
+
+树到手干净，T9 复选框仍是 `[x]`，前三笔的**每一个点名交付物**逐条复核后**都在**：CLAUDE.md 路由表那行已带
+`qa/resume_boundary/run.sh {crash,attribute,claims,denied,rewind,knobs,holes}`、`qa/README.md` 七个阶段齐、
+`2026-08-31-run-reduction-design.md` §8 六条「→ 2026-09-02 已做」全在。所以这一笔换的是**第四个输入**：
+前三笔分别读了**本轮改过的章节** / **被删标识符的名字** / **本轮的整份 diff**，这一笔读的是
+**spec §6 熵减清单——当断言读，而不是当名字读**，因为 T9 的复选框自己写着「每一处说谎的文档都对应 spec §6 的清单」。
+
+**一、删除清单有两栏，而三次清扫只扫得动能 grep 的那一栏（`af13d2fe0`）。**
+本轮从 `resume_coordinator.rs` 删掉的不只是标识符，还有一句**断言**：两个并发 resume 给同一个 `call_id`
+写下两条应答，「provider 会在此后每一轮拒绝这个会话」——自 7929bbda6 起为假。GATEWAY.md 用**自己的话**
+留着它（"the provider rejects on every later turn of that session"），**一个被删的名字都不含**，
+也不在本轮编辑过的章里，更不是本轮**加**的东西——三个输入同时失明。三处按本次会话读过的源码改写：
+
+| 改的 | 依据（本次会话读过行号） |
+|---|---|
+| GATEWAY.md「One resume per session at a time」：`repair_boundary` 点出新家、两条应答是 `ToolError` 不是 `tool_result`、代价是重复散文不是 API 拒绝 | `resume_coordinator.rs:110-113` / `:748-751` |
+| GATEWAY.md「Crash-boundary wording」：三臂全文 + 共享的 `VERIFY_CLOSE` + 为什么 `denied` 是 `DanglingCall` 的字段 | `session/boundary_repair.rs:69-122` |
+| FEATURE_LOCATOR §0 那一行：`boundary_repair_text` 指向它这一轮**搬走**的文件 | 与同文件 ⑪（`:2317`）直接矛盾 |
+
+第二条是**判据 #5 的一个不常见形态**：那段推理没写错枚举（派发后确实只有 guardrail `Block` 与审批拒绝两件事
+能拦住调用），它错在**那个推论依赖「这两件事的应答事件保证已落盘」**，而一次崩溃就能让它不成立——
+本轮加的第三臂 `denied` 正是那个窗口。**枚举被扩容时，从它出发的推理不会报错，只会继续正确地往下推**。
+
+**二、第三条发现可以变成一道一行的机械闸，而它当场又抓到两条（`f45ae1981`）。**
+「§0 索引表不属于任何一章」是可执行的：把表里每个 `src|shared|interfaces|qa/*.rs` 路径抠出来逐个 `test -f`。
+37 条里两条不存在——`shared/ui_logic/.../composer_dials.rs`（**省略号当路径**，而 §5.23b 自己的锚点行写着全路径，
+即判据 #1 第三形态「削弱版」，也是本轮 ⑯ 那条「用手势代替名字就 grep 不到」的同款；本轮已改）
+与 `src/builtin_tools/note_manage.rs`（它是**目录**，D.0.167 ③ 的又一例）。
+⚠️ **后者记录在案、本轮未修**：属 §2.9/§2.10，早于本轮，同一漂移在几处锚点段里还有约五处，
+逐处要先确认符号搬进了 `note_manage/` 的哪个文件——**不扩张范围**。
+这道闸只认「路径不存在」一种形状（认不出搬了家而两处都存在的名字，也认不出散文里的假断言），
+但它认得的那一种，三次人工清扫都没认出来。
+
+新增**附录 D.0.169** + E.0 触发器。**CLAUDE.md 判据索引不加行**——落在既有 #1 / #5 / #17 下。
+
+**这一笔自己的验证纪律**：三处正文改写全部走 `Edit` 的**唯一匹配**语义（`old_string` 不唯一即拒绝写入），
+即前两笔那个 Node 脚本「恰好出现一次」闸的同一条保证，只是由工具而不是脚本执行；
+写完 `CR 数 == 行数` 仍成立（FEATURE_LOCATOR 5423 / GATEWAY 1268）；
+改完复验 `grep -rn "rejects on every later turn" docs/reference/` 只剩附录里那一处**加引号的历史引用**。
+**没有变异证伪、没有测试计数、没跑 cargo**：本任务不改 `.rs`，这三栏留空是如实。
+
 
