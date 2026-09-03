@@ -60,6 +60,38 @@ impl NoteManageTool {
                      contain NUL, or contain '..', '/', or '\\'"
                 )));
             }
+
+            // A composed id (`{base}__u-*` / `__p-*` / `__proj-*`) is the
+            // OUTPUT of scope composition
+            // (`project_scope::session_write_id`), never a value the model
+            // was handed to type back in — `agent_id: "main__u-alice"`
+            // would otherwise address u-alice's vault byte-for-byte.
+            // Refuse it FIRST and unconditionally: this is the load-bearing
+            // gate, because `partition_visible_to(_, None)` is
+            // unconditionally `true` (see its doc), so it only catches a
+            // composed id here by the accident that `ambient_actor()`'s
+            // fallback arms happen to disagree with the named suffix. A
+            // genuinely actor-less run (cron / heartbeat) has no ambient
+            // actor at all and would sail straight through without this
+            // arm — see `refuses_a_composed_agent_id_even_with_no_ambient_actor`.
+            if crate::memory::project_scope::is_composed_id(id) {
+                return Err(invalid_agent_id_partition_error(id));
+            }
+
+            // Defence in depth: even an id `is_composed_id` does not
+            // recognize as a scoped-suffix family (e.g. an arbitrary
+            // `__`-separated string) must still be visible to the actor
+            // driving this turn. `ambient_actor` — not
+            // `scope::ambient_owner` — is the resolver every tool-face
+            // predicate in `gateway::visibility` uses, because inside a
+            // project room it prefers the turn's SPEAKER over the room's
+            // creator. `None` (no ambient actor: cron / internal / a bare
+            // turn with no scope stamped) is unconditionally unrestricted,
+            // matching every sibling predicate's convention.
+            let actor = crate::gateway::visibility::ambient_actor();
+            if !crate::gateway::visibility::partition_visible_to(id, actor.as_deref()) {
+                return Err(invalid_agent_id_partition_error(id));
+            }
         }
         // Resolution priority:
         //   1. explicit `args.agent_id` (validated above) — an intentional LLM
@@ -134,6 +166,18 @@ impl NoteManageTool {
              not always in your prompt)"
         )
     }
+}
+
+/// Shared refusal text for both the `is_composed_id` gate and the
+/// `partition_visible_to` gate in [`NoteManageTool::resolve_agent_id`], so a
+/// caller cannot distinguish "refused outright as a composed id" from
+/// "refused as invisible to this actor" from "the named vault does not
+/// exist" — none of that is information a refusal should leak (P7: fail
+/// closed, no existence oracle).
+pub(super) fn invalid_agent_id_partition_error(id: &str) -> AlephError {
+    AlephError::tool(format!(
+        "invalid agent_id `{id}`: not a partition this caller may address"
+    ))
 }
 
 /// Truncate to at most `max` characters on a char boundary (P7 UTF-8 safety),
