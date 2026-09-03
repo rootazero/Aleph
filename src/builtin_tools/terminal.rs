@@ -452,13 +452,17 @@ mod tests {
             .session_id;
 
         let result = read_session(Some(&id), Some("u-someone-else"));
+
+        // Close BEFORE asserting: this spawns on the process-global manager,
+        // so a failing assert would leak a live PTY for the rest of the test
+        // binary and every later test sharing that singleton would inherit it.
+        let _ = pty::manager().close(&id);
+
         assert_eq!(
             result,
             Err(pty::no_such_session(&id)),
             "an unowned session and a nonexistent one must produce byte-identical \
              refusals, or `read` becomes an id-enumeration oracle"
         );
-
-        let _ = pty::manager().close(&id);
     }
 }

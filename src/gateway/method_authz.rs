@@ -137,7 +137,7 @@ const OPERATOR_TOOLS: &[&str] = &[
     // Before deleting this entry to "clean up" an apparent `*_read`
     // exception: re-read the paragraph above, not just this line.
     //
-    // ⚠️ The escalation card membership here triggers
+    // ⚠️ The escalation card that membership here triggers
     // (`gate_chain::GateRule::OperatorRequired::reason`, in
     // `tools/scoped/gate_chain.rs`) reads "… which changes Aleph's own
     // configuration. Approve to allow this change." That sentence is false
