@@ -180,7 +180,7 @@ pub fn order_by_source_seq<T>(rows: &mut Vec<T>, seq_of: impl Fn(&T) -> Option<u
     // Stable: equal anchors stay in insert order, matching the `, id` tail of
     // the SQL below. `None` sorts before `Some`, matching SQLite's NULLS FIRST
     // on an ASC ordering.
-    anchored.sort_by(|left, right| left.0.cmp(&right.0));
+    anchored.sort_by_key(|(anchor, _)| *anchor);
     rows.extend(anchored.into_iter().map(|(_, row)| row));
 }
 
