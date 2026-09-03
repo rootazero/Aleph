@@ -1567,6 +1567,14 @@ impl ToolRegistry for BuiltinToolRegistry {
                     .call_json(arguments)
                     .await
             }),
+            // Read-only agent panel, model-facing (herdr runtime port, phase
+            // 1, Task 11) — reads two process-global statics, so it is
+            // dependency-free like `select_model`/`doctor` above.
+            "terminal" => Box::pin(async move {
+                crate::builtin_tools::TerminalTool
+                    .call_json(arguments)
+                    .await
+            }),
             "doctor" => Box::pin(async move { self.doctor_tool.call_json(arguments).await }),
             "config_audit" => Box::pin(async move {
                 let cfg = self.config.as_ref().ok_or_else(|| {

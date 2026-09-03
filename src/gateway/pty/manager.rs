@@ -364,6 +364,22 @@ impl PtyManager {
         self.with_session(session_id, |s| Ok(s.attach_snapshot()))
     }
 
+    /// The current visible screen as plain text (no scrollback) — the same
+    /// input [`crate::gateway::runtime::flush_session`]'s sampler reads off
+    /// [`super::screen::Screen::visible_text`].
+    ///
+    /// Deliberately narrower than [`Self::attach_snapshot`]: that response
+    /// carries a diff-encoded [`aleph_protocol::pty::PtyScreenPatch`] meant
+    /// for a terminal renderer, not a string a model can read. Same posture
+    /// as `attach_snapshot` otherwise — an unknown session is an error, never
+    /// an empty screen, because a blank grid would read as "the terminal is
+    /// idle".
+    pub fn visible_text(&self, session_id: &str) -> Result<String, String> {
+        self.with_session(session_id, |s| {
+            Ok(s.with_screen(super::screen::Screen::visible_text))
+        })
+    }
+
     /// Terminate and remove a session.
     pub fn close(&self, session_id: &str) -> Result<(), String> {
         let session = {

@@ -834,6 +834,7 @@ impl BuiltinToolRegistry {
             );
             let select_model_meta = crate::builtin_tools::SelectModelTool;
             let doctor_meta = crate::builtin_tools::DoctorTool::default();
+            let terminal_meta = crate::builtin_tools::TerminalTool;
             let extra_defs = [
                 apply_patch_tool.definition(),
                 desktop_ax_query_focused_tool.definition(),
@@ -847,6 +848,7 @@ impl BuiltinToolRegistry {
                 google_meet_meta.definition(),
                 select_model_meta.definition(),
                 doctor_meta.definition(),
+                terminal_meta.definition(),
             ];
             for td in &extra_defs {
                 let mut ut = UnifiedTool::new(
@@ -860,7 +862,7 @@ impl BuiltinToolRegistry {
             }
             info!(
                 "Registered schemas for apply_patch, desktop AX/SoM/locate, gateway_route, \
-                 google_meet, select_model, doctor in BuiltinToolRegistry"
+                 google_meet, select_model, doctor, terminal in BuiltinToolRegistry"
             );
         }
 

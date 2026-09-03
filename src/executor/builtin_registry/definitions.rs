@@ -55,7 +55,7 @@ use crate::builtin_tools::{
     DesktopCheckPermissions, DesktopGuiLocate, DesktopSom, DesktopTool, DoctorTool, FileEditTool,
     FileOpsTool, FileReadTool, FileWriteTool, FindTool, FlagUserCorrectionTool, GrepTool,
     ImageGenerateTool, PdfGenerateTool, ReadConfigGuideTool, RecallEventsTool, RememberTool,
-    SearchTool, SelectModelTool, SelfManageTool, VaultStoreTool, WebFetchTool,
+    SearchTool, SelectModelTool, SelfManageTool, TerminalTool, VaultStoreTool, WebFetchTool,
 };
 use crate::tools::AlephToolDyn;
 
@@ -232,6 +232,17 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "select_model",
         description: <crate::builtin_tools::select_model::SelectModelTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    // Read-only agent panel, model-facing (herdr runtime port, phase 1, Task
+    // 11): a third lens over the same PTY sessions `pty.*`/`runtime.*` gate
+    // operator-only on both their faces — see `terminal.rs`'s module doc.
+    // Reads two process-global statics (`gateway::pty::manager()`,
+    // `gateway::runtime::agents()`), so `requires_config: false` like
+    // `select_model`/`doctor`.
+    BuiltinToolDefinition {
+        name: "terminal",
+        description: <crate::builtin_tools::terminal::TerminalTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -1070,6 +1081,7 @@ pub fn create_tool_boxed(
             Some(Box::new(tool))
         }
         "select_model" => Some(Box::new(SelectModelTool)),
+        "terminal" => Some(Box::new(TerminalTool)),
         "self_manage" => Some(Box::new(SelfManageTool::default())),
         "hooks_manage" => Some(Box::new(
             crate::builtin_tools::hooks_manage::HooksManageTool::new(),

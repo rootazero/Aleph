@@ -108,6 +108,12 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             // `verify` agent denies that whole family, and denying a pure read
             // to an agent whose job is reading would be backwards.
             "tool_usage",
+            // Read-only agent panel over PTY sessions this server owns —
+            // no PTY-ish group exists yet (herdr runtime port is phase 1),
+            // so it sits with the other operator-only introspection tools
+            // (`doctor`, `config_audit`, `agent_identity`) rather than get
+            // a one-tool group of its own.
+            "terminal",
             "select_model",
             "list_models",
             "moa",
