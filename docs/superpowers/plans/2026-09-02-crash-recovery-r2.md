@@ -1193,3 +1193,38 @@ FAIL  after the rewind the marker tail is balanced — the log no longer claims 
 locales 的 5 + 3 条文案键 · `last-run-notice` · 以及五处「已删」的确实 grep 不到。
 `core/session-log` 的描述**改过一次**：初稿照计划写它还带一条 store 面查询「活 `RunStarted` 之后有退休的 `RunFinished`」，
 grep 之后发现没有——它是 report-only 的纯归约渲染器，已按代码改写。
+
+
+### T9 续 — `5a727181d`（文档清扫；同样不含 `.rs` 改动，故没跑 cargo，也不声称跑过）
+
+第一次 T9 pass 的输入是**本轮改过的章节**（§4.11 / §4.13a / §6.9 + 那几份 reference）。续做换了输入：
+**拿每个被删标识符的名字去 grep 整个 `docs/` 树**。又找出 18 处，**没有一处落在本轮编辑过的节里**：
+
+| 被删的东西 | 还在说它活着的地方 |
+|---|---|
+| `announced: bool`（换成 `announce_attempts` + `announced_boot`）| FL §0 速查索引 ×2、§4.11 ×3 |
+| alephcore 的 `SessionInfo`（换成 `aleph_protocol::SessionListRow`）| FL §5.12、§5.16、MODE_SYSTEM.md |
+| Panel 与 shared/client 的手写 `SessionRow` | FL §0 速查索引、§5.11、§5.23b ×3 |
+| 两个后端的 `stamp_last_assistant_metadata` | FL §5.26（还在把它当"默认后端每回合一次的整文件重写"）|
+| `src/session/shim.rs`（不存在的文件）| ARCHITECTURE.md —— SESSION_SERVICE.md 与 GATEWAY.md 上的那份 `18dcb9a84` 已修，这份是它的孪生 |
+| `session_manager.rs`（其实是目录）| ARCHITECTURE.md ×2 —— 同上，GATEWAY.md L880 已修 |
+
+**两件只有按名字扫才看得见的事**：
+
+1. **`SessionInfo` 今天仍然 grep 得到**——因为 `src/gateway/pty/manager.rs` 有一个**同名而无关**的类型。
+   一次删除清扫要问的不是「这个名字还在不在仓里」，而是「**这一句指的那一个**还在不在」。已在 §5.12 就地写下这个陷阱。
+2. **§4.11 写的 `init_and_announce` 从来没有存在过**（真名 `init_and_reconcile`）——这一条**本轮之前就是假的**，
+   说明按名字 grep 的收益不止于本轮的删除。
+
+新增 **附录 D.0.167** + E.0 触发器记下形状。**CLAUDE.md 判据索引仍不加行**——它落在既有 #1 / #6 / #16 下。
+
+**这一笔自己的验证纪律**：每个锚点在写任何文件之前都验过「恰好出现一次」（不满足就整批拒绝，一个字节都不写）；
+18 处改动分布在哪些 §，是用 `awk` 对着文件量出来的**不是回忆的**——初稿里有四个 § 号是错的（写着 §5.2 / §5.7 / §5.23 / §6.5，
+实测是 §5.12 / §5.16 / §5.11 / §5.26），量完才改对。三个文件都是 CRLF，改完 `CR 数 == 行数`仍成立。
+
+**复核了但没改**（免得第三个 agent 重做）：`MULTI_AGENT_SYSTEM.md` 的四种裁决段（T6 已落地，L209–229）、
+`qa/README.md` 的五个 r2 阶段与断言地板（T8 已落地）、`SESSION_KNOBS.md` 的崩溃恢复段（T4 已落地）、
+`GATEWAY.md` 的 `messages` 投影段（`18dcb9a84` 已落地，L913–934）、`SESSION_SERVICE.md` L38/L77、
+CLAUDE.md 路由表的五个 r2 阶段、spec `2026-08-31` §8 的六条指针、FL §4.13a ⑩–⑯ 与 ⑨ 的四臂订正、
+以及计划点名的 L2309 / L2310 / L2315 / L3811 / L4043 / L345 —— 六处逐条比对过，都已改。
+
