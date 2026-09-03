@@ -268,30 +268,26 @@ fn require_directory_choice(id: Option<Value>) -> Result<(), JsonRpcResponse> {
 
 /// Reject a roster mutation naming somebody who is not an active principal.
 ///
-/// A deactivated user reads as unknown here on purpose: adding one grants
-/// access that only materialises if they are ever reactivated, which is a
-/// decision `users.update` owns, not this RPC. Fails closed on a store error —
-/// an unverifiable id is not a verified one.
+/// A thin `JsonRpcResponse` wrapper over
+/// [`crate::projects::authz::is_active_principal`] — the decision core (a
+/// deactivated user reads as unknown, a store error fails closed) lives
+/// there so this face and the tool face
+/// (`builtin_tools::project_manage::ProjectManageTool::require_known_user`)
+/// ask the same question rather than each keeping their own answer.
 #[allow(clippy::result_large_err)] // house shape for Result<_, JsonRpcResponse> gates
 fn require_known_user(
     users: &SecurityStore,
     id: Option<Value>,
     user_id: &str,
 ) -> Result<(), JsonRpcResponse> {
-    let known = match users.get_user(user_id) {
-        Ok(u) => u,
-        Err(e) => {
-            tracing::warn!(user_id = %user_id, error = %e, "projects: member check failed closed");
-            None
-        }
-    };
-    match known {
-        Some(u) if u.status == UserStatus::Active => Ok(()),
-        _ => Err(JsonRpcResponse::error(
+    if crate::projects::authz::is_active_principal(users, user_id) {
+        Ok(())
+    } else {
+        Err(JsonRpcResponse::error(
             id,
             INVALID_PARAMS,
-            format!("unknown user: {user_id}"),
-        )),
+            crate::projects::authz::unknown_user_refusal(user_id),
+        ))
     }
 }
 
@@ -836,15 +832,17 @@ pub async fn handle_member_remove(
     if let Err(denial) = require_owner(&users, request.id.clone(), &project) {
         return denial;
     }
-    // The owner is the one member who cannot be removed: the roster IS the
-    // visibility predicate, so dropping them would make the room invisible to
-    // the only person who can archive or delete it. Hand the room over first
-    // (an admin operation), then remove.
-    if params.user_id == visibility::owner_or_legacy(project.owner_user_id.as_deref()) {
+    // The decision core is `authz::may_remove_member` (the owner is the one
+    // member who cannot be dropped — the roster IS the visibility predicate,
+    // so removing them would make the room invisible to the only person who
+    // can archive or delete it); this face and the tool face
+    // (`ProjectManageTool::require_removable`) both ask it rather than each
+    // re-typing `== project.owner_user_id`.
+    if !crate::projects::authz::may_remove_member(&project, &params.user_id) {
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
-            "cannot remove the project owner from its own roster",
+            crate::projects::authz::OWNER_REMOVAL_REFUSAL,
         );
     }
     match store.remove_member(&params.id, &params.user_id) {

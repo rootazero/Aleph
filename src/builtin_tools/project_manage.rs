@@ -219,6 +219,37 @@ impl ProjectManageTool {
         ))
     }
 
+    /// Refuse unless `target` may be dropped from `project`'s roster.
+    ///
+    /// The decision core lives in [`authz::may_remove_member`] — this is a
+    /// thin wrapper so the tool face asks the same question the RPC face
+    /// does (`handlers/projects.rs::handle_member_remove`), not a second
+    /// spelling of it.
+    fn require_removable(project: &Project, target: &str) -> Result<()> {
+        if authz::may_remove_member(project, target) {
+            return Ok(());
+        }
+        Err(AlephError::tool(authz::OWNER_REMOVAL_REFUSAL.to_string()))
+    }
+
+    /// Refuse a roster mutation naming somebody who is not an active
+    /// principal.
+    ///
+    /// Skipped entirely when no security store was injected — `self.users ==
+    /// None` reads as unrestricted here, matching [`Self::require_owner`]'s
+    /// admin escalation and every other predicate on this face that depends
+    /// on the store. The decision core, when the store is present, is
+    /// [`authz::is_active_principal`] — the same one
+    /// `handlers/projects.rs::require_known_user` asks.
+    fn require_known_user(&self, user_id: &str) -> Result<()> {
+        match self.users.as_deref() {
+            Some(users) if !authz::is_active_principal(users, user_id) => {
+                Err(AlephError::tool(authz::unknown_user_refusal(user_id)))
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Announce a mutation on the same channel the RPC face uses.
     fn announce(&self, project_id: &str, change: ChangeKind, affected_user: Option<&str>) {
         if let Some(bus) = self.events.as_ref() {
@@ -382,6 +413,7 @@ impl AlephTool for ProjectManageTool {
                 let user = Self::need(args.user_id.as_ref(), "user_id", action)?;
                 let project = self.room(id, actor)?;
                 self.require_owner(&project, actor)?;
+                self.require_known_user(user)?;
                 self.store
                     .add_member(id, user)
                     .map_err(|e| AlephError::tool(format!("failed to add member: {e}")))?;
@@ -407,6 +439,7 @@ impl AlephTool for ProjectManageTool {
                 let user = Self::need(args.user_id.as_ref(), "user_id", action)?;
                 let project = self.room(id, actor)?;
                 self.require_owner(&project, actor)?;
+                Self::require_removable(&project, user)?;
                 self.store
                     .remove_member(id, user)
                     .map_err(|e| AlephError::tool(format!("failed to remove member: {e}")))?;
@@ -636,6 +669,123 @@ mod tests {
             .members(&project.id)
             .unwrap()
             .contains(&"u-bob".to_string()));
+    }
+
+    /// `project_manage.rs:4-9` claims both faces go through `projects::authz`
+    /// for who-may-do-what. This is the tool-face half of the owner-removal
+    /// rule the RPC face already had (`handlers/projects.rs`'s
+    /// `the_owner_cannot_be_removed_from_their_own_roster`): neither the
+    /// owner themself nor an org admin may drop the owner off the roster,
+    /// because the roster IS the visibility predicate and doing so would
+    /// leave the room addressable by nobody.
+    #[tokio::test]
+    async fn the_tool_face_also_refuses_to_remove_the_owner() {
+        let (tool, project, store, _g) = fixture();
+        let before = store.members(&project.id).unwrap();
+
+        for actor in ["u-alice", "u-carol"] {
+            let denied = as_user(actor, async {
+                tool.call(ProjectManageArgs {
+                    action: ProjectAction::MemberRemove,
+                    project_id: Some(project.id.clone()),
+                    name: None,
+                    user_id: Some("u-alice".into()),
+                    path: None,
+                })
+                .await
+            })
+            .await;
+            let msg = denied
+                .expect_err(&format!("{actor} may not remove the owner"))
+                .to_string();
+            assert!(
+                msg.contains(authz::OWNER_REMOVAL_REFUSAL),
+                "tool-face refusal must be the shared authz text, got: {msg}"
+            );
+        }
+        assert_eq!(
+            store.members(&project.id).unwrap(),
+            before,
+            "the roster must be unchanged by either refused attempt"
+        );
+    }
+
+    /// The other half of the same claim: `handlers/projects.rs`'s
+    /// `require_known_user` gates `member_add` on the security store before
+    /// the tool face did. A nonexistent id and a deactivated one must both
+    /// be refused, and neither may leave a `project_members` row behind.
+    #[tokio::test]
+    async fn the_tool_face_also_refuses_an_unknown_or_deactivated_member() {
+        let (tool, project, store, _g) = fixture();
+        tool.users
+            .as_ref()
+            .expect("fixture injects a security store")
+            .create_user("u-dana", "u-dana", crate::gateway::security::store::UserRole::Member)
+            .unwrap();
+        tool.users
+            .as_ref()
+            .unwrap()
+            .update_user(
+                "u-dana",
+                None,
+                None,
+                Some(crate::gateway::security::store::UserStatus::Deactivated),
+            )
+            .unwrap();
+        let before = store.members(&project.id).unwrap();
+
+        for candidate in ["u-nobody", "u-dana"] {
+            let denied = as_user("u-alice", async {
+                tool.call(ProjectManageArgs {
+                    action: ProjectAction::MemberAdd,
+                    project_id: Some(project.id.clone()),
+                    name: None,
+                    user_id: Some(candidate.into()),
+                    path: None,
+                })
+                .await
+            })
+            .await;
+            let msg = denied.expect_err(candidate).to_string();
+            assert!(
+                msg.contains(&authz::unknown_user_refusal(candidate)),
+                "got: {msg}"
+            );
+        }
+        assert_eq!(
+            store.members(&project.id).unwrap(),
+            before,
+            "no project_members row for either candidate"
+        );
+    }
+
+    /// When no security store was injected, the known-user check does not
+    /// apply — matching every other predicate on this face (see
+    /// `ProjectManageTool::users`'s doc). The owner-removal rule needs no
+    /// store at all, so it still refuses.
+    #[tokio::test]
+    async fn without_a_security_store_the_known_user_check_is_unrestricted() {
+        let _guard = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = Arc::new(ProjectStore::new(Connection::open_in_memory().unwrap()));
+        store.create_schema().unwrap();
+        let project = store.create("solo room", Some("u-alice"), None).unwrap();
+        let tool = ProjectManageTool::new(Arc::clone(&store), None, None);
+
+        let added = as_user("u-alice", async {
+            tool.call(ProjectManageArgs {
+                action: ProjectAction::MemberAdd,
+                project_id: Some(project.id.clone()),
+                name: None,
+                user_id: Some("u-anyone".into()),
+                path: None,
+            })
+            .await
+        })
+        .await;
+        assert!(
+            added.is_ok(),
+            "no security store injected ⇒ the known-user gate does not apply: {added:?}"
+        );
     }
 
     /// The half of the 2026-08-25 ruling that did NOT change: pointing a room
