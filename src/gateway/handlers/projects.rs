@@ -392,7 +392,10 @@ pub struct AddParams {
 /// Register an existing folder — the picker's write path. Creation surface,
 /// same ruling as [`handle_create`]: `ProjectStore::add` resolves the caller
 /// off the ambient scope and collapses onto THEIR existing row for that path,
-/// never onto somebody else's.
+/// never onto somebody else's — guaranteed by `find_by_path_for`'s
+/// owner-scoped comparison, which resolves an unset `owner_user_id` to the
+/// fixed `OWNER_USER_ID` constant rather than to whichever caller happens to
+/// be asking (see that method's doc for the query this claim depends on).
 ///
 /// Gated by [`require_directory_choice`]: the row this writes carries a
 /// `workspace_path`, which since P2 becomes a run's cwd.
