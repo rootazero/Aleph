@@ -72,11 +72,8 @@ impl AlephTool for SkillInstallTool {
         // Successful installs reshape the skill's runtime (new binaries,
         // env, eligibility) — record as a patch event so the curator /
         // status surface reflects the install activity.
-        match &result {
-            Ok(_) => {
-                self.system.record_patch(&skill_id).await;
-            }
-            Err(_) => {}
+        if result.is_ok() {
+            self.system.record_patch(&skill_id).await;
         }
 
         // Convert the typed Result into the existing wire-format output
