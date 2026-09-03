@@ -274,6 +274,23 @@ pub fn attach_event_bus(bus: Arc<GatewayEventBus>) {
     manager().start_flush_loop();
 }
 
+/// The one wording for "this session id does not exist", shared by
+/// [`PtyManager::with_session`]'s own not-found branch,
+/// `gateway::handlers::pty::require_owned`, and `builtin_tools::terminal`'s
+/// `read` action.
+///
+/// Three call sites used to format this literal independently
+/// (task-11 review F9). That mattered because two of them have to produce
+/// BYTE-IDENTICAL text on purpose: `require_owned` and `terminal::read`
+/// both refuse a session the caller does not own with exactly this string,
+/// not a distinct "not yours" — an addressed lookup that could tell the two
+/// apart would let a caller enumerate other operators' session ids. A
+/// wording change to one of three independent literals would have silently
+/// re-opened that oracle; a change here changes all three at once.
+pub(crate) fn no_such_session(session_id: &str) -> String {
+    format!("no such session: {session_id}")
+}
+
 impl PtyManager {
     fn new() -> Self {
         Self {
@@ -552,7 +569,7 @@ impl PtyManager {
         };
         match session {
             Some(s) => f(&s),
-            None => Err(format!("no such session: {session_id}")),
+            None => Err(no_such_session(session_id)),
         }
     }
 

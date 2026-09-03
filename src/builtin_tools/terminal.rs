@@ -229,7 +229,9 @@ fn status(actor: Option<&str>) -> std::result::Result<serde_json::Value, String>
 /// is checked BEFORE reading the screen (`PtyManager::visible_text` only
 /// checks existence), and a session the caller does not own is refused with
 /// exactly `require_owned`'s wording — an unowned session and a nonexistent
-/// one must look identical, or `read` becomes an id-enumeration oracle.
+/// one must look identical, or `read` becomes an id-enumeration oracle. Both
+/// call [`pty::no_such_session`] so a future wording change cannot land in
+/// one of the two and re-open that oracle.
 fn read_session(
     session_id: Option<&str>,
     actor: Option<&str>,
@@ -239,7 +241,7 @@ fn read_session(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "read requires `session_id`".to_string())?;
     if !pty::manager().owner_of(session_id).admits(actor) {
-        return Err(format!("no such session: {session_id}"));
+        return Err(pty::no_such_session(session_id));
     }
     let text = pty::manager().visible_text(session_id)?;
     Ok(serde_json::json!({ "session_id": session_id, "text": text }))

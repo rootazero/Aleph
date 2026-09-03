@@ -422,7 +422,7 @@ fn require_owned(request: &JsonRpcRequest, session_id: &str) -> Result<(), JsonR
     Err(JsonRpcResponse::error(
         request.id.clone(),
         INVALID_PARAMS,
-        format!("no such session: {session_id}"),
+        pty::no_such_session(session_id),
     ))
 }
 
