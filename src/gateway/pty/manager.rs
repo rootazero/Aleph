@@ -391,7 +391,7 @@ impl PtyManager {
     /// as `attach_snapshot` otherwise — an unknown session is an error, never
     /// an empty screen, because a blank grid would read as "the terminal is
     /// idle".
-    pub fn visible_text(&self, session_id: &str) -> Result<String, String> {
+    pub(crate) fn visible_text(&self, session_id: &str) -> Result<String, String> {
         self.with_session(session_id, |s| {
             Ok(s.with_screen(super::screen::Screen::visible_text))
         })

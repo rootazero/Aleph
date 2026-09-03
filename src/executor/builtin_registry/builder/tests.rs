@@ -372,3 +372,41 @@ mod canvas_wiring_tests {
         );
     }
 }
+
+/// `terminal` (herdr runtime port, phase 1, Task 11) registers its schema
+/// through the unconditional `extra_defs` back-fill in `constructor/mod.rs`,
+/// not through `register_core_tools`/`register_optional_tools`, so neither
+/// `workspace_manage`'s nor `canvas`'s five-registration census above walks
+/// it, and `terminal`'s own unit tests construct `TerminalTool` directly and
+/// prove only the last link. Pins the one link they cannot reach (task-11
+/// review F12): deleting the `terminal_meta.definition()` line from
+/// `extra_defs` reddens nothing else in the repo today — the catalog row and
+/// the dispatch arm are untouched — so this is the only place that would
+/// catch it.
+#[cfg(test)]
+mod terminal_wiring_tests {
+    use crate::config::types::memory::MemoryInjectionMode;
+    use crate::executor::builtin_registry::{BuiltinToolConfig, BuiltinToolRegistry};
+
+    /// `terminal` needs no store or handle of any kind — the default config
+    /// is the whole fixture.
+    async fn minimal_registry() -> BuiltinToolRegistry {
+        BuiltinToolRegistry::with_config(BuiltinToolConfig {
+            injection_mode: MemoryInjectionMode::Hybrid,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn terminal_registers_its_schema() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let registry = minimal_registry().await;
+        assert!(
+            registry.get_tool_schema("terminal").is_some(),
+            "terminal must register a parameters schema, or the agent loop advertises it \
+             with an empty one and the model has to guess the argument shape"
+        );
+    }
+}
