@@ -133,6 +133,146 @@ impl std::fmt::Debug for HttpProvider {
     }
 }
 
+/// The stream's *terminal* frames, read while the deltas go past.
+///
+/// [`DeltaCollector`](crate::providers::DeltaCollector) folds both facts away:
+/// it drops `ProviderDelta::Error` outright, and it reports
+/// `StopReason::EndTurn` both for a `Done(EndTurn)` the provider actually
+/// stated and for a stream that produced no `Done` at all. After `finish()`
+/// neither is recoverable, so they are captured here — the one place that can
+/// still see them — instead of being asserted in prose at the use site.
+#[derive(Default)]
+struct TerminalFrames {
+    /// The first fault reported on the stream. Later ones are the same
+    /// incident told twice; the first is the one with a cause in it.
+    fault: Option<String>,
+    /// The fault was the last terminal frame — no `Done` followed it. No
+    /// adapter stops parsing on an error frame (`anthropic/sse.rs` and
+    /// `openai_chat/sse.rs` both push the delta and keep consuming), so a relay
+    /// that emits a non-fatal `{"error": ...}` chunk and then finishes the turn
+    /// normally ends `Error -> ... -> Done`, and that turn did complete.
+    ///
+    /// This reads the order the deltas are *delivered* in, which is the wire
+    /// order only because no adapter is allowed to buffer a `Done` past a
+    /// fault. One adapter does buffer: `openai_chat` holds the terminal `Done`
+    /// back until the trailing `include_usage` chunk lands, and so releases it
+    /// *ahead* of a queued `Error` rather than after it
+    /// (`openai_chat::sse::defer_done_until_usage`) — buffering that outlived a
+    /// fault would hand this field the opposite verdict for the same wire.
+    fault_is_last: bool,
+    /// A `Done` frame arrived at all, so the collector's stop reason is one the
+    /// provider stated rather than its `EndTurn` default.
+    stop_stated: bool,
+}
+
+/// What a reported fault means for the attempt. Derived once by
+/// [`TerminalFrames::classify`] and applied once by [`apply_fault`], which
+/// matches every variant exhaustively.
+enum StreamFault<'a> {
+    /// Nothing usable came through: the fault is the whole answer, so it
+    /// becomes a hard `Err` and the retry/failover path classifies it as usual.
+    Fatal(&'a str),
+    /// A `Done` frame followed the fault: the error chunk was advisory inside
+    /// a stream that then completed. The provider answered, so there is nothing
+    /// to charge and no stop reason to doubt — but it is logged, because a
+    /// provider doing this on every turn is worth an operator's attention.
+    Advisory(&'a str),
+    /// Content was emitted *and* the fault was how the stream ended. The
+    /// partial answer is still returned — the user has already seen it and no
+    /// later candidate can un-show it — but the fault rides out on
+    /// [`ProviderResponse::provider_error`] for the failover walk to charge a
+    /// circuit strike with.
+    Charged {
+        message: &'a str,
+        /// No `Done` frame ever arrived, so the response's `EndTurn` is the
+        /// collector's default, not a claim the provider made. Downgrading
+        /// *that* to `Unknown` stops a faulted turn from reading as a natural
+        /// completion; a stated stop reason is a fact and is kept.
+        stop_reason_is_default: bool,
+    },
+}
+
+impl TerminalFrames {
+    fn observe(&mut self, delta: &ProviderDelta) {
+        match delta {
+            ProviderDelta::Error(msg) => {
+                if self.fault.is_none() {
+                    // rust-doctor-disable-next-line excessive-clone
+                    self.fault = Some(msg.clone());
+                }
+                self.fault_is_last = true;
+            }
+            ProviderDelta::Done(_) => {
+                self.stop_stated = true;
+                self.fault_is_last = false;
+            }
+            _ => {}
+        }
+    }
+
+    /// `None` when the stream reported no fault at all.
+    fn classify(&self, has_content: bool) -> Option<StreamFault<'_>> {
+        let message = self.fault.as_deref()?;
+        if !has_content {
+            // A fault with nothing to show for it is the whole answer,
+            // whatever frame order produced it.
+            return Some(StreamFault::Fatal(message));
+        }
+        if !self.fault_is_last {
+            return Some(StreamFault::Advisory(message));
+        }
+        Some(StreamFault::Charged {
+            message,
+            stop_reason_is_default: !self.stop_stated,
+        })
+    }
+}
+
+/// Apply a fault verdict to the assembled response.
+///
+/// Split out of [`HttpProvider::execute_once`] so the *effects* of each verdict
+/// can be asserted on their own: "the derivation picked `Charged`" is a
+/// different claim from "the fault reached
+/// [`ProviderResponse::provider_error`]", and the walk only ever reads the
+/// second one. Every verdict is spelled out, so a new one is a compile error
+/// rather than a silent no-op.
+fn apply_fault(
+    provider: &str,
+    response: &mut ProviderResponse,
+    fault: Option<StreamFault<'_>>,
+) -> Result<()> {
+    match fault {
+        None => {}
+        Some(StreamFault::Fatal(message)) => {
+            return Err(crate::error::AlephError::provider(message.to_string()));
+        }
+        Some(StreamFault::Advisory(message)) => {
+            tracing::warn!(
+                provider = %provider,
+                error = %message,
+                "Provider reported a fault mid-stream but then completed the turn \
+                 — keeping it as a success"
+            );
+        }
+        Some(StreamFault::Charged {
+            message,
+            stop_reason_is_default,
+        }) => {
+            tracing::warn!(
+                provider = %provider,
+                error = %message,
+                "Provider reported a fault after emitting content — returning the \
+                 partial answer and recording the attempt as a failure"
+            );
+            if stop_reason_is_default {
+                response.stop_reason = StopReason::Unknown;
+            }
+            response.provider_error = Some(message.to_string());
+        }
+    }
+    Ok(())
+}
+
 impl HttpProvider {
     /// Create a new `HttpProvider` with the given adapter
     pub fn new(
@@ -381,20 +521,13 @@ impl HttpProvider {
             }
         };
         let mut collector = crate::providers::DeltaCollector::new();
-        // A provider-level semantic error (OpenAI Responses `response.failed`
-        // or a top-level `error` frame, Anthropic error SSE) arrives as a
-        // `ProviderDelta::Error`, which `DeltaCollector` intentionally drops.
-        // Capture the first one so an errored, content-less response surfaces
-        // as a real error instead of a silent empty turn that triggers a
-        // wasteful empty-response retry loop.
-        let mut provider_error: Option<String> = None;
+        // Read the stream's terminal frames on the way past — the collector
+        // folds them away and `finish()` cannot give them back.
+        let mut frames = TerminalFrames::default();
         futures::pin_mut!(stream);
         while let Some(delta) = stream.next().await {
             let delta = delta?;
-            if let crate::providers::ProviderDelta::Error(msg) = &delta {
-                // rust-doctor-disable-next-line excessive-clone
-                provider_error.get_or_insert_with(|| msg.clone());
-            }
+            frames.observe(&delta);
             // Live observer (harness streaming): forward the delta before it is
             // folded into the collector. Cheap no-op when no sink is wired.
             if let Some(observer) = sink {
@@ -404,31 +537,15 @@ impl HttpProvider {
         }
         let mut provider_response = collector.finish();
 
-        // Promote a reported error to a hard failure only when nothing usable
-        // came through. With partial content the answer is still returned — the
-        // user has already seen it and no later candidate can un-show it — but
-        // the fault rides along on `provider_error` so the failover walk records
-        // the attempt as failed instead of as a healthy round-trip.
-        if let Some(msg) = provider_error {
-            if provider_response.text.is_none() && provider_response.tool_calls.is_empty() {
-                return Err(crate::error::AlephError::provider(msg));
-            }
-            tracing::warn!(
-                provider = %self.name,
-                error = %msg,
-                "Provider reported a fault after emitting content — returning the \
-                 partial answer and recording the attempt as a failure"
-            );
-            // The stream ended on the fault, so no `Done` frame ever arrived and
-            // `stop_reason` is sitting on its `EndTurn` default — indistinguishable
-            // from a natural completion. Downgrade *that default* to `Unknown`
-            // ("we cannot vouch for this turn"), which `validate()` already logs.
-            // A stop reason the provider actually stated is a fact and is kept.
-            if provider_response.stop_reason == StopReason::EndTurn {
-                provider_response.stop_reason = StopReason::Unknown;
-            }
-            provider_response.provider_error = Some(msg);
-        }
+        // What a reported fault means for this attempt is derived once
+        // (`TerminalFrames::classify`) and applied once (`apply_fault`).
+        let has_content =
+            provider_response.text.is_some() || !provider_response.tool_calls.is_empty();
+        apply_fault(
+            &self.name,
+            &mut provider_response,
+            frames.classify(has_content),
+        )?;
 
         // A tool call whose streamed arguments were truncated mid-stream (the
         // upstream closed the body before the JSON finished) is unusable:
@@ -778,6 +895,199 @@ impl AiProvider for HttpProvider {
 
 #[cfg(test)]
 mod tests {
+
+    use super::{ProviderDelta, StreamFault, TerminalFrames};
+    use crate::providers::adapter::{ProviderResponse, StopReason};
+
+    /// Feed a scripted delta sequence through the terminal-frame reader.
+    fn frames(deltas: Vec<ProviderDelta>) -> TerminalFrames {
+        let mut f = TerminalFrames::default();
+        for d in &deltas {
+            f.observe(d);
+        }
+        f
+    }
+
+    /// A response as the collector would hand it over: content, and the
+    /// `EndTurn` the collector reports for a stated *and* an absent `Done`.
+    fn answered() -> ProviderResponse {
+        ProviderResponse {
+            text: Some("partial".into()),
+            stop_reason: StopReason::EndTurn,
+            ..ProviderResponse::default()
+        }
+    }
+
+    fn text() -> ProviderDelta {
+        ProviderDelta::TextDelta("partial".into())
+    }
+
+    #[test]
+    fn a_stream_that_reported_no_fault_classifies_as_nothing() {
+        let f = frames(vec![text(), ProviderDelta::Done(StopReason::EndTurn)]);
+        assert!(f.classify(true).is_none());
+    }
+
+    #[test]
+    fn a_fault_with_nothing_to_show_is_fatal_even_when_a_done_followed() {
+        // Order does not rescue an empty answer: with no text and no tool call
+        // the fault IS the response, so it must become a hard `Err` the retry
+        // path can classify instead of a silent empty turn.
+        let f = frames(vec![
+            ProviderDelta::Error("overloaded".into()),
+            ProviderDelta::Done(StopReason::EndTurn),
+        ]);
+        assert!(matches!(
+            f.classify(false),
+            Some(StreamFault::Fatal("overloaded"))
+        ));
+    }
+
+    #[test]
+    fn a_fault_that_ended_the_stream_is_charged_and_its_end_turn_is_a_default() {
+        let f = frames(vec![text(), ProviderDelta::Error("overloaded".into())]);
+        assert!(matches!(
+            f.classify(true),
+            Some(StreamFault::Charged {
+                message: "overloaded",
+                stop_reason_is_default: true,
+            })
+        ));
+    }
+
+    #[test]
+    fn a_done_after_the_fault_makes_it_advisory_and_charges_nothing() {
+        // No adapter stops parsing on an error frame, so a relay that pushes a
+        // non-fatal `{"error": ...}` chunk and then finishes the turn normally
+        // ends `Error -> ... -> Done`. That turn completed; charging it a
+        // circuit strike would open the breaker on a provider that is answering.
+        let f = frames(vec![
+            text(),
+            ProviderDelta::Error("upstream hiccup".into()),
+            ProviderDelta::Done(StopReason::EndTurn),
+        ]);
+        assert!(
+            matches!(f.classify(true), Some(StreamFault::Advisory(_))),
+            "a fault the provider recovered from must not be charged"
+        );
+    }
+
+    #[test]
+    fn an_end_turn_the_provider_stated_before_faulting_is_not_a_default() {
+        // `Done(EndTurn)` then a fault: the stop reason is a fact the provider
+        // asserted, not the collector's placeholder, so it must survive. Reading
+        // it off the folded `StopReason` value alone cannot tell the two apart.
+        let f = frames(vec![
+            text(),
+            ProviderDelta::Done(StopReason::EndTurn),
+            ProviderDelta::Error("died after finishing".into()),
+        ]);
+        assert!(matches!(
+            f.classify(true),
+            Some(StreamFault::Charged {
+                stop_reason_is_default: false,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn only_the_first_fault_is_reported() {
+        let f = frames(vec![
+            text(),
+            ProviderDelta::Error("first".into()),
+            ProviderDelta::Error("second".into()),
+        ]);
+        assert!(matches!(
+            f.classify(true),
+            Some(StreamFault::Charged {
+                message: "first",
+                ..
+            })
+        ));
+    }
+    // ── The apply step ──────────────────────────────────────────────────
+    // The derivation being right is not the same claim as its verdict reaching
+    // the response. These assert the *effects* the failover walk reads, so
+    // dropping the `provider_error` assignment or the stop-reason downgrade
+    // turns a test red instead of leaving the walk silently un-charged.
+
+    #[test]
+    fn a_fatal_verdict_becomes_an_err_carrying_the_message() {
+        let mut resp = ProviderResponse::default();
+        let err = super::apply_fault("p", &mut resp, Some(StreamFault::Fatal("overloaded")))
+            .expect_err("a fault with nothing to show must not return Ok");
+        assert!(
+            err.to_string().contains("overloaded"),
+            "the provider's own message must survive into the error: {err}"
+        );
+    }
+
+    #[test]
+    fn a_charged_verdict_parks_the_fault_on_the_response() {
+        let mut resp = answered();
+        super::apply_fault(
+            "p",
+            &mut resp,
+            Some(StreamFault::Charged {
+                message: "upstream died",
+                stop_reason_is_default: true,
+            }),
+        )
+        .expect("a charged fault still returns the partial answer");
+        assert_eq!(
+            resp.provider_error.as_deref(),
+            Some("upstream died"),
+            "the walk reads this field and nothing else"
+        );
+        assert_eq!(
+            resp.stop_reason,
+            StopReason::Unknown,
+            "no Done arrived, so the collector's EndTurn is a default and must be downgraded"
+        );
+        assert_eq!(resp.text.as_deref(), Some("partial"), "content is kept");
+    }
+
+    #[test]
+    fn a_charged_verdict_keeps_a_stop_reason_the_provider_stated() {
+        let mut resp = answered();
+        super::apply_fault(
+            "p",
+            &mut resp,
+            Some(StreamFault::Charged {
+                message: "died after finishing",
+                stop_reason_is_default: false,
+            }),
+        )
+        .expect("a charged fault still returns the partial answer");
+        assert_eq!(resp.provider_error.as_deref(), Some("died after finishing"));
+        assert_eq!(
+            resp.stop_reason,
+            StopReason::EndTurn,
+            "the provider said EndTurn — that is a fact, not the collector's placeholder"
+        );
+    }
+
+    #[test]
+    fn an_advisory_verdict_touches_nothing() {
+        let mut resp = answered();
+        super::apply_fault("p", &mut resp, Some(StreamFault::Advisory("hiccup")))
+            .expect("a recovered fault is a success");
+        assert!(
+            resp.provider_error.is_none(),
+            "charging a provider that finished the turn opens the breaker on one that is answering"
+        );
+        assert_eq!(resp.stop_reason, StopReason::EndTurn);
+    }
+
+    #[test]
+    fn no_fault_touches_nothing() {
+        let mut resp = answered();
+        super::apply_fault("p", &mut resp, None).expect("no fault, no error");
+        assert!(resp.provider_error.is_none());
+        assert_eq!(resp.stop_reason, StopReason::EndTurn);
+    }
+
     #[test]
     fn test_http_provider_creation() {
         // This test just verifies the type compiles correctly

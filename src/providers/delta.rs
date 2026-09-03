@@ -221,9 +221,11 @@ impl DeltaCollector {
                 // Error deltas are observed by DeltaSink consumers; the collector
                 // ignores them because a fault is not content. The owner of the
                 // stream (`HttpProvider::execute_once`) captures the first one and
-                // either promotes it to a hard `Err` (nothing usable arrived) or
-                // parks it on `ProviderResponse::provider_error` (partial answer),
-                // so it is never simply dropped.
+                // decides its fate in one place (`TerminalFrames::classify`): a
+                // hard `Err` when nothing usable arrived, a park on
+                // `ProviderResponse::provider_error` when it ended a stream that
+                // had already emitted content, or nothing at all when a `Done`
+                // followed it. It is never simply dropped.
             }
         }
     }
