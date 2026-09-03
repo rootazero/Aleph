@@ -4,11 +4,13 @@
 //   drive_r2.mjs <gateway-port> <qa-root> <cmd> [args…]
 //
 // Node, not Python, for the same reason every fixture written on this host
-// since 2026-08 is Node: there is no usable `python3` here (the Windows
-// `WindowsApps` shim exits 0 having done nothing, so a Python fixture reports
-// success while measuring nothing), and the gateway's only client transport is
-// a WebSocket. The round-1 stages stay Python — they were measured on a host
-// that had one, and rewriting a green fixture to prove nothing new is churn.
+// since 2026-08 is Node: there is no usable `python3` here — `python3` and
+// `python` are both the Windows `WindowsApps` stub, which prints nothing and
+// exits 49 (measured 2026-09-03; this comment previously claimed it "exits 0
+// having done nothing", a mechanism nobody had checked) — and the gateway's
+// only client transport is a WebSocket. The round-1 stages stay Python; they
+// were measured on a host that had one, and `run.sh` now refuses them here by
+// name rather than letting them fail on an unexplained exit code.
 //
 // ## Every assertion is an effect
 //

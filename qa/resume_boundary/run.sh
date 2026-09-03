@@ -122,9 +122,15 @@ fi
 # `.cargo/config.toml` pins a shared absolute target dir, so `$REPO/target` is
 # wrong from any git worktree — ask cargo.
 # Ask cargo, then parse with whichever of node/python3 this host actually has.
-# A `python3` that is the Windows `WindowsApps` shim exits 0 having printed
-# nothing, so the fixture would go looking for a binary at `/debug/aleph-server`
-# and report "no binary" — which reads like a build failure and is not one.
+# A `python3` that is the Windows `WindowsApps` stub prints NOTHING, so the
+# command substitution below yields an empty path and the fixture goes looking
+# for a binary at `/debug/aleph-server` — a message that reads like a build
+# failure and is not one. (What the stub does with its exit code was written
+# here as "exits 0" for two rounds and was never measured; measured on this
+# host 2026-09-03, both `python3` and `python` exit **49**. The symptom is the
+# same either way because it is the captured OUTPUT that is empty — but the
+# difference matters downstream, where a non-zero exit is something a stage can
+# refuse on. See the round-1 guard below.)
 META="$(cd "$REPO" && HOME="$REAL_HOME" cargo metadata --format-version 1 --no-deps 2>/dev/null)"
 if [ -n "${CARGO_TARGET_DIR:-}" ]; then
   # An operator (or this repo's own build recipe) who pinned a shared target
@@ -157,12 +163,13 @@ kill "$GEN_PID" 2>/dev/null; wait "$GEN_PID" 2>/dev/null
 [ -f "$CONFIG" ] || { echo "no config generated at $CONFIG" >&2; tail -20 "$QA_ROOT/gen.log" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
-# Round-2 stages. Node, not Python: this host has no usable `python3` (the
-# WindowsApps shim exits 0 having done nothing), and a fixture that reports
-# success while measuring nothing is the exact failure `qa/lib/build.sh` was
-# written for. The round-1 `crash` / `attribute` stages below stay Python —
-# they were measured on a host that had one, and rewriting a green fixture to
-# prove nothing new is churn.
+# Round-2 stages. Node, not Python: this host has no usable `python3` at all —
+# both `python3` and `python` resolve to the Windows `WindowsApps` stub, which
+# prints nothing and exits 49 (measured 2026-09-03; an earlier version of this
+# comment said "exits 0 having done nothing", which was inherited rather than
+# measured). The round-1 `crash` / `attribute` stages below stay Python — they
+# were measured on a host that had one, and rewriting a green fixture to prove
+# nothing new is churn; what they get instead is a guard that says so.
 # ---------------------------------------------------------------------------
 if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
   command -v node >/dev/null 2>&1 || { echo "node is required for the r2 stages" >&2; exit 1; }
@@ -173,7 +180,27 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
   R2_REQUESTS="$QA_ROOT/requests.jsonl"
   RECEIPT="$QA_ROOT/receipt.json"
   : > "$R2_REQUESTS"
-  drive() { node "$HERE/drive_r2.mjs" "$GATEWAY_PORT" "$QA_ROOT_M" "$@"; }
+  # Every `drive` invocation is its own node process with its own counters, so
+  # the last line a stage prints is whichever phase ran last — for `claims`
+  # that is `cost`, which asserts nothing and prints `0 passed, 0 failed`.
+  # Tailing a green stage therefore reads as "this measured nothing", and the
+  # expensive half of that is the converse: a phase whose assertions all
+  # vanished — an early `return`, a renamed wire key that makes the driver bail
+  # before its checks, a `case` arm that stops being reached — prints the SAME
+  # line and still exits 0. So the per-phase counts are summed here and
+  # compared against a floor below (判据 #2: a stage that asserts nothing is
+  # not green, it is unmeasured; the four faces of a predicate that never goes
+  # red include "not installed").
+  ASSERTS=0
+  drive() {
+    local out rc n
+    out="$(node "$HERE/drive_r2.mjs" "$GATEWAY_PORT" "$QA_ROOT_M" "$@" 2>&1)"
+    rc=$?
+    printf '%s\n' "$out"
+    n="$(printf '%s\n' "$out" | sed -n 's/^\([0-9][0-9]*\) passed, [0-9][0-9]* failed$/\1/p' | tail -1)"
+    [ -n "$n" ] && ASSERTS=$((ASSERTS + n))
+    return "$rc"
+  }
   # How the dangle is MADE on this host — patch_r2.mjs's header, point 3, has
   # the two measurements that rule out a long-running command. `ask` parks the
   # dispatched call on a card nobody answers, which IS "dispatched, no
@@ -199,6 +226,19 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
   kill -0 "$MOCK_PID" 2>/dev/null || { echo "mock died on startup — port $MOCK_PORT taken?" >&2; tail -5 "$QA_ROOT/mock.log" >&2; exit 70; }
 
   RC=0
+  # The floor each stage's phases have to reach to be called green. These are
+  # MEASURED values, not targets: each is the count the stage printed on the
+  # tree that introduced it (2026-09-03, this worktree). Adding an assertion
+  # raises the number here in the same commit; a number that drops on its own
+  # is the defect this guard exists for.
+  case "$STAGE" in
+    claims) FLOOR=13 ;;
+    denied) FLOOR=5 ;;
+    rewind) FLOOR=5 ;;
+    knobs)  FLOOR=5 ;;
+    holes)  FLOOR=12 ;;
+    *)      FLOOR=0 ;;
+  esac
   case "$STAGE" in
     claims)
       # Boot with resume OFF so the receipt below is the ONLY pass over this
@@ -298,8 +338,29 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
 
   say "mock provider log"; tail -20 "$QA_ROOT/mock.log"
   say "server log tail"; tail -30 "$QA_ROOT/server.log"
+  # Only meaningful on a stage that otherwise passed: a stage that failed early
+  # legitimately stops asserting, and saying "under-measured" there would bury
+  # the failure that actually happened.
+  say "assertions: $ASSERTS (floor $FLOOR)"
+  if [ "$RC" = "0" ] && [ "$ASSERTS" -lt "$FLOOR" ]; then
+    echo "FAIL: stage '$STAGE' passed while asserting only $ASSERTS times, below its measured floor of $FLOOR — a phase stopped asserting" >&2
+    RC=1
+  fi
   say "verdict: rc=$RC"
   exit "$RC"
+fi
+
+# The round-1 stages need a real interpreter, and this host does not have one:
+# `python3` and `python` are both the `WindowsApps` stub. Without this probe the
+# first Python line below fails with a bare exit code and no sentence, which
+# reads as "patch_config.py is broken" — the reader then goes debugging a script
+# that was never executed. Probe the interpreter by its OUTPUT, not its exit
+# status: the whole reason this stub was mis-described for two rounds is that
+# nobody had checked which of the two it gets wrong.
+if [ "$(python3 -c 'print("py-ok")' 2>/dev/null)" != "py-ok" ]; then
+  echo "stage '$STAGE' is Python and this host has no usable python3 (both python3 and python are the WindowsApps stub: no output, exit 49)." >&2
+  echo "The round-2 stages cover this tree and are Node: claims | denied | rewind | knobs | holes" >&2
+  exit 78
 fi
 
 say "patch config"
