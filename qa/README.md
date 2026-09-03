@@ -218,6 +218,8 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # remote-pairing half — a loopback peer is authorised before
                                  # `bootstrap_ticket` is ever read, so a ticket redeemed over
                                  # 127.0.0.1 creates no device row, silently and successfully.
+                                 # Node, not Python, and it shares `teamchat_rooms`'
+                                 # `patch_config.mjs` rather than keeping a patcher of its own.
 
 ./qa/teamchat_rooms/run.sh       # §5.22 round-8: three humans in one project room. A model's
                                  # `team_create` inside a room lands room-scoped; the activation
@@ -284,6 +286,16 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # never a PASS.
 ./qa/webview_compat/run.sh linux # the WebKitGTK half; its `flat-on-linux` step is manual and
                                  # that platform's SHELL_MARKER_JS arm is still unrun
+
+./qa/spend_budget/run.sh         # NEEDS A REAL python3, and therefore does not run on a
+                                 # Windows host, where the only `python3` on PATH is the
+                                 # WindowsApps stub (it prints nothing and exits 0 — a
+                                 # heredoc leg silently does nothing). Its sibling
+                                 # `multiuser_audit` was ported to Node; this one was not,
+                                 # deliberately: `spend_rpc.py`, `mock_anthropic.py`, the
+                                 # float comparisons and the `jf` helper are a much larger
+                                 # surface than a port should carry in one round. On such a
+                                 # host it is UNRUN, which is not the same as passing.
 ```
 
 `plugins` uses a **short scratch root under `/tmp`** rather than `$TMPDIR` like
