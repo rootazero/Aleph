@@ -1,7 +1,12 @@
 # Build a cargo target for a QA fixture, with cargo's exit code intact.
 #
-# Sourced by every `run.sh` next to `scratch_home.sh`, and it exists because of
-# one measurement.
+# Sourced by every fixture `run.sh` that runs cargo — source it ABOVE that
+# fixture's build block, which is NOT necessarily next to `scratch_home.sh`:
+# several fixtures hoist the build ahead of the HOME redirect (Windows; the
+# reasoning is in `qa/teamchat_rooms/run.sh`), and a `qa_build` above its own
+# `. build.sh` dies as `qa_build: command not found` before one assertion runs.
+#
+# It exists because of one measurement.
 #
 # Every fixture here built its binaries as
 #
