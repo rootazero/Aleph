@@ -2484,7 +2484,50 @@ mod tests {
     /// exactly the failure mode this constant's own rule warns about.
     /// A future round that adds bytes MUST re-run the ratchet and copy the
     /// printed total, not compute it from prior deltas.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 112_772;
+    ///
+    /// 2026-09-02: 112_772 -> 113_089 B (+317), all of it `TerminalTool`'s
+    /// `DESCRIPTION` (herdr runtime port, phase 1, Task 11 fix round 1). This
+    /// tool's catalog row shipped in `ab30a9f1c` without this constant moving
+    /// — the merge-base 112_772 was flush BEFORE that commit's 255 B, so the
+    /// tree went red the moment the ratchet was actually run instead of only
+    /// name-filtered (task-11 review F0). The fix round also reworded the
+    /// DESCRIPTION itself (255 -> 317 B: it named the wrong owner — "this
+    /// server owns" where the code scopes by caller — and said nothing about
+    /// the policy-disabled case reading as "no sessions exist" rather than
+    /// "this feature is off", review F5/F6), so the number below is measured
+    /// post-reword, not the commit's original 255 B. Measured via
+    /// `cargo test -p alephcore --lib catalog_description_bytes_ratchet --
+    /// --nocapture`, total copied verbatim from the panic message
+    /// (113089 B = 93493 catalog + 16613 registry-only + 1039 injected +
+    /// 1944 bridge); the 112_772 + 317 = 113_089 arithmetic agrees only
+    /// because no other tool's description moved between the two
+    /// measurements — it is not a substitute for having run the ratchet.
+    ///
+    /// Against the three questions:
+    /// (1) No schema field can carry either fact this DESCRIPTION states.
+    /// `TerminalArgs`'s schema says `action` is one of three strings; it
+    /// cannot say WHICH sessions `list`/`status` return (this server's
+    /// runtime scopes them by caller identity via `pty::owner_admits`, a
+    /// filter with no argument to attach a description to) or that a
+    /// disabled `[policies.terminal]` kill switch makes every action answer
+    /// "no sessions" without saying "the feature is off" (there is no
+    /// `enabled` parameter on this tool for a schema description to sit on
+    /// — reading the config live and returning a distinct message is a
+    /// follow-up, not phase 1's scope).
+    /// (2) A stronger model cannot infer either fact: that a session list
+    /// is scoped per-caller rather than per-server-instance is this
+    /// deployment's ownership model, not a convention a terminal-emulator
+    /// prior would predict, and a model that assumed "no sessions" always
+    /// means "none exist" would report the policy-disabled case as a
+    /// finding rather than recognising the feature is turned off.
+    /// (3) The consumers are shipped and dispatched: `list_sessions`,
+    /// `status`, and `read_session` each apply `pty::owner_admits` /
+    /// `SessionOwner::admits` before returning data (`terminal.rs`), the
+    /// `[policies.terminal] enabled = false` kill switch really does call
+    /// `PtyManager::close_all()` (`config/types/policies/terminal.rs`), and
+    /// the "no write verb" half is pinned by a falsifiable test
+    /// (`the_tool_exposes_no_write_verb`).
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 113_089;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -3136,6 +3179,27 @@ mod tests {
     /// refuses to open its own store above. The deterministic map therefore
     /// has no instance to ask for a schema. In a wired deployment the tool
     /// does carry one.)
+    ///
+    /// 2026-09-02: 132 (+1: `terminal`, herdr runtime port phase 1, Task 11
+    /// fix round 1). This test was already red the moment `terminal` was
+    /// added to `BUILTIN_TOOL_DEFINITIONS` (`ab30a9f1c`) — missed there for
+    /// the same reason F0 (`CATALOG_DESCRIPTION_CEILING_BYTES`) was: the
+    /// task's own verification ran name-filtered subsets, never this whole
+    /// `--lib` suite. Same class as `doctor` / `select_model` /
+    /// `gateway_route` / `google_meet`, already counted in an earlier round
+    /// of this pin above: all five register their schema through the
+    /// unconditional `extra_defs` back-fill in
+    /// `builder/constructor/mod.rs`, which `unconditional_registry_map()`
+    /// here does not call (it calls only `register_core_tools` and
+    /// `register_optional_tools`) — a real gap in what THIS deterministic
+    /// test can reach, not in production: `extra_defs` is unconditional, so
+    /// in a running server `get_tool_schema("terminal")` returns `Some`
+    /// (pinned separately by `terminal_wiring_tests::terminal_registers_its_schema`
+    /// in `builder/tests.rs`). Unlike the schema-bytes ratchet this residue
+    /// feeds, `terminal`'s DESCRIPTION bytes are NOT blind here: the
+    /// catalog-description ceiling sums `BUILTIN_TOOL_DEFINITIONS` directly,
+    /// independent of `unconditional_registry_map()`, and already counts it
+    /// (see `CATALOG_DESCRIPTION_CEILING_BYTES`'s own 2026-09-02 entry).
     #[test]
     fn tools_without_an_unconditional_schema_are_pinned() {
         let map = unconditional_registry_map();
@@ -3152,8 +3216,8 @@ mod tests {
         missing.dedup();
 
         assert!(
-            missing.len() <= 131,
-            "{} tools have no schema in the unconditionally-built registry map, up from the 131 \
+            missing.len() <= 132,
+            "{} tools have no schema in the unconditionally-built registry map, up from the 132 \
              recorded here, so `registry_schema_bytes_ratchet` does not bound them. Either a \
              tool ships with no parameters at all (free, and fine), or it registers only once a \
              dependency is live and its schema is unmeasured (not fine, just not cheap to fix). \
