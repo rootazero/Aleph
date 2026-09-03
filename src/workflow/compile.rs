@@ -27,7 +27,7 @@ use crate::json_canvas_io::sanitise_name;
 use crate::strategy::{render_workflow_global_frame, Strategy};
 use crate::teams::dispatcher::{MANAGED_BY_DISPATCHER, MANAGED_BY_KEY};
 use crate::workflow::clarify::{ClarifyContext, ClarifyTaskMeta, CLARIFY_META_KEY, CLARIFY_OWNER};
-use crate::workflow::def::{render_prompt, WorkflowDef};
+use crate::workflow::def::{render_prompt, RunInputs, WorkflowDef};
 
 /// Metadata key carrying the workflow template name on every materialised task.
 pub const WORKFLOW_NAME_KEY: &str = "workflow";
@@ -298,8 +298,9 @@ pub struct MaterializedWorkflow {
     pub task_ids: Vec<CoordTaskId>,
 }
 
-/// Materialise `def` into `coord_tasks` under `team_id`, substituting `input`
-/// into each step's prompt. Returns the created task ids in topological order.
+/// Materialise `def` into `coord_tasks` under `team_id`, substituting the run's
+/// [`RunInputs`] into each step's prompt. Returns the created task ids in
+/// topological order.
 ///
 /// The caller is responsible for ensuring `team_id` refers to a team whose
 /// members cover every agent step's `step.agent` (create one with `team_create`
@@ -327,9 +328,13 @@ pub struct MaterializedWorkflow {
 /// creating session's goal tree budget — the same anchor `task_create` and the
 /// workflow canvas stamp. `None` (non-interactive run) leaves rows
 /// byte-identical and the children run unaccounted, exactly as before.
+/// `inputs` carries both placeholder forms the run substitutes: the anonymous
+/// `{input}` and the named `{{var}}` args. It is one parameter rather than two
+/// because this signature is already at eight, and because the two are one
+/// fact — see [`RunInputs`].
 pub async fn materialize(
     def: &WorkflowDef,
-    input: &str,
+    inputs: &RunInputs,
     team_id: &str,
     store: &dyn CoordTaskStore,
     clarify_ctx: Option<&ClarifyContext>,
@@ -378,7 +383,7 @@ pub async fn materialize(
         }
 
         // The rendered prompt doubles as the clarify question.
-        let rendered = render_prompt(&step.prompt, input);
+        let rendered = render_prompt(&step.prompt, inputs);
 
         // A clarify step is owned by the sentinel and carries its awaiting
         // record in metadata; an agent step is owned by its agent. Both keep the
@@ -451,6 +456,14 @@ pub async fn materialize(
             // `read_max_retries` on failure) pick them up with zero new
             // plumbing. `None` leaves the row byte-identical (helpers are
             // no-ops on None).
+            // Tolerant fan-in: the readiness derivation (which never sees the
+            // template) reads this stamp off the row, so it must be written
+            // here or the flag is inert. `false` is a pass-through, so an
+            // ordinary step's row is byte-identical.
+            let meta = crate::agents::swarm::tasks::acceptance::with_tolerate_failed_deps(
+                meta,
+                step.tolerate_failed_deps,
+            );
             let meta =
                 crate::agents::swarm::tasks::timeout::with_task_timeout(meta, step.timeout_seconds);
             let meta = crate::agents::swarm::tasks::retry::with_max_retries(meta, step.max_retries);
@@ -595,7 +608,14 @@ async fn cancel_partial(store: &dyn CoordTaskStore, ids: &[CoordTaskId]) {
 }
 
 /// Epoch seconds, the unit [`WORKFLOW_NOTIFIED_KEY`] is stored in.
-fn now_epoch_secs() -> u64 {
+///
+/// `pub(crate)` because the key has more than one stamper: `materialize`'s
+/// partial rollback (below) and the `workflow` tool's `cancel` arm both write
+/// it, and the settle sweep then subtracts one from `now` to grace-gate the
+/// re-arm. A unit derived independently at each write site is one edit away
+/// from a comparison between two different units, so the derivation lives with
+/// the key it is the unit of.
+pub(crate) fn now_epoch_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
@@ -625,6 +645,7 @@ mod tests {
             choices: vec![],
             review: false,
             require_grounding: false,
+            tolerate_failed_deps: false,
             timeout_seconds: None,
             max_retries: None,
         }
@@ -640,6 +661,7 @@ mod tests {
             choices: choices.iter().map(|s| s.to_string()).collect(),
             review: false,
             require_grounding: false,
+            tolerate_failed_deps: false,
             timeout_seconds: None,
             max_retries: None,
         }
@@ -661,7 +683,7 @@ mod tests {
         let store = setup_store().await;
         let mat = materialize(
             &linear_def(),
-            "the topic",
+            &RunInputs::from_input("the topic"),
             "team-1",
             &store,
             None,
@@ -679,7 +701,7 @@ mod tests {
         let store = setup_store().await;
         let mat = materialize(
             &linear_def(),
-            "quantum computing",
+            &RunInputs::from_input("quantum computing"),
             "team-1",
             &store,
             None,
@@ -707,9 +729,18 @@ mod tests {
     #[tokio::test]
     async fn materialize_stamps_one_run_id_on_every_task() {
         let store = setup_store().await;
-        let first = materialize(&linear_def(), "x", "team-1", &store, None, None, None, None)
-            .await
-            .unwrap();
+        let first = materialize(
+            &linear_def(),
+            &RunInputs::from_input("x"),
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert!(!first.run_id.is_empty(), "run id is minted");
         for id in &first.task_ids {
             let task = store.get_task(id).await.unwrap().unwrap();
@@ -722,18 +753,36 @@ mod tests {
             );
         }
         // A second run of the same template mints a distinct identity.
-        let second = materialize(&linear_def(), "x", "team-1", &store, None, None, None, None)
-            .await
-            .unwrap();
+        let second = materialize(
+            &linear_def(),
+            &RunInputs::from_input("x"),
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_ne!(first.run_id, second.run_id, "runs are distinguishable");
     }
 
     #[tokio::test]
     async fn materialize_wires_dependency_so_dependent_is_blocked() {
         let store = setup_store().await;
-        let mat = materialize(&linear_def(), "x", "team-1", &store, None, None, None, None)
-            .await
-            .unwrap();
+        let mat = materialize(
+            &linear_def(),
+            &RunInputs::from_input("x"),
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
 
         // task_ids[0] is "gather" (root), [1] is "write" (depends on gather).
         let root = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
@@ -772,9 +821,18 @@ mod tests {
             description: String::new(),
             steps: vec![step("a", "w", &[]), step("b", "w", &["a", "a"])],
         };
-        let mat = materialize(&def, "x", "t", &store, None, None, None, None)
-            .await
-            .expect("duplicate dep collapses instead of aborting");
+        let mat = materialize(
+            &def,
+            &RunInputs::from_input("x"),
+            "t",
+            &store,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("duplicate dep collapses instead of aborting");
         assert_eq!(mat.task_ids.len(), 2);
         let dependent = store.get_task(&mat.task_ids[1]).await.unwrap().unwrap();
         assert_eq!(dependent.subject, "dup:b");
@@ -786,11 +844,18 @@ mod tests {
         let store = setup_store().await;
         let mut def = linear_def();
         def.steps[1].depends_on = vec!["ghost".into()];
-        assert!(
-            materialize(&def, "x", "team-1", &store, None, None, None, None)
-                .await
-                .is_err()
-        );
+        assert!(materialize(
+            &def,
+            &RunInputs::from_input("x"),
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None
+        )
+        .await
+        .is_err());
     }
 
     #[tokio::test]
@@ -806,9 +871,18 @@ mod tests {
                 step("d", "w", &["b", "c"]),
             ],
         };
-        let mat = materialize(&def, "x", "t", &store, None, None, None, None)
-            .await
-            .unwrap();
+        let mat = materialize(
+            &def,
+            &RunInputs::from_input("x"),
+            "t",
+            &store,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(mat.task_ids.len(), 4);
         // The final task "d" must be blocked until both b and c complete.
         let last = store
@@ -839,7 +913,7 @@ mod tests {
         };
         let mat = materialize(
             &def,
-            "us-east",
+            &RunInputs::from_input("us-east"),
             "team-1",
             &store,
             Some(&ctx),
@@ -872,9 +946,18 @@ mod tests {
         let store = setup_store().await;
         let mut def = linear_def();
         def.steps[1].review = true;
-        let mat = materialize(&def, "x", "team-1", &store, None, None, None, None)
-            .await
-            .unwrap();
+        let mat = materialize(
+            &def,
+            &RunInputs::from_input("x"),
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
 
         // Non-reviewed step: no flag key at all (byte-identical to legacy rows).
         let first = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
@@ -890,6 +973,53 @@ mod tests {
         );
     }
 
+
+    /// The tolerant-fan-in flag only exists at run time as a metadata stamp:
+    /// readiness is derived from the stored row + its edges, and that
+    /// derivation never sees the template. An unstamped step must stay
+    /// byte-identical (no key at all), or every legacy row acquires a field.
+    #[tokio::test]
+    async fn materialize_tolerant_step_stamps_the_readiness_flag() {
+        use crate::agents::swarm::tasks::acceptance::{
+            tolerate_failed_deps, TOLERATE_FAILED_DEPS_METADATA_KEY,
+        };
+        let store = setup_store().await;
+        let mut def = linear_def();
+        def.steps[1].tolerate_failed_deps = true;
+        let mat = materialize(
+            &def,
+            &RunInputs::from_input("x"),
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let first = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
+        assert!(
+            first
+                .metadata
+                .get(TOLERATE_FAILED_DEPS_METADATA_KEY)
+                .is_none(),
+            "an ordinary step's row carries no key (byte-identical legacy row)"
+        );
+        assert!(!tolerate_failed_deps(&first.metadata));
+
+        let second = store.get_task(&mat.task_ids[1]).await.unwrap().unwrap();
+        assert!(
+            tolerate_failed_deps(&second.metadata),
+            "the tolerant step's row carries the stamp the store reads: {:?}",
+            second.metadata
+        );
+        assert_eq!(
+            second.metadata.get(MANAGED_BY_KEY).and_then(|v| v.as_str()),
+            Some(MANAGED_BY_DISPATCHER)
+        );
+    }
     #[tokio::test]
     async fn materialize_clarify_without_context_has_empty_address() {
         use crate::workflow::clarify::ClarifyTaskMeta;
@@ -899,9 +1029,18 @@ mod tests {
             description: String::new(),
             steps: vec![clarify_step("ask", "Which file?", &[], &[])],
         };
-        let mat = materialize(&def, "x", "t", &store, None, None, None, None)
-            .await
-            .unwrap();
+        let mat = materialize(
+            &def,
+            &RunInputs::from_input("x"),
+            "t",
+            &store,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         let ask = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
         let meta = ClarifyTaskMeta::from_metadata(&ask.metadata).expect("clarify meta present");
         assert!(meta.channel_id.is_empty());
@@ -924,7 +1063,7 @@ mod tests {
         );
         let mat = materialize(
             &linear_def(),
-            "x",
+            &RunInputs::from_input("x"),
             "team-1",
             &store,
             None,
@@ -992,7 +1131,7 @@ mod tests {
         );
         let mat = materialize(
             &linear_def(),
-            "x",
+            &RunInputs::from_input("x"),
             "team-1",
             &store,
             None,
@@ -1059,7 +1198,7 @@ mod tests {
 
         let mat = materialize(
             &def,
-            "x",
+            &RunInputs::from_input("x"),
             "team-1",
             &store,
             None,
@@ -1099,9 +1238,18 @@ mod tests {
         let mut def = linear_def();
         def.steps[0].timeout_seconds = Some(1800);
         def.steps[0].max_retries = Some(0);
-        let mat = materialize(&def, "x", "team-1", &store, None, None, None, None)
-            .await
-            .unwrap();
+        let mat = materialize(
+            &def,
+            &RunInputs::from_input("x"),
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
 
         // The overridden step carries both keys, readable through the exact
         // dispatcher-side consumers.
@@ -1127,7 +1275,7 @@ mod tests {
         };
         let mat = materialize(
             &linear_def(),
-            "x",
+            &RunInputs::from_input("x"),
             "team-1",
             &store,
             Some(&ctx),
@@ -1146,9 +1294,18 @@ mod tests {
             );
         }
         // Non-interactive runs stay byte-identical (no origin key).
-        let silent = materialize(&linear_def(), "x", "team-1", &store, None, None, None, None)
-            .await
-            .unwrap();
+        let silent = materialize(
+            &linear_def(),
+            &RunInputs::from_input("x"),
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         for id in &silent.task_ids {
             let task = store.get_task(id).await.unwrap().unwrap();
             assert!(task.metadata.get(WORKFLOW_ORIGIN_KEY).is_none());
@@ -1162,7 +1319,7 @@ mod tests {
         let store = setup_store().await;
         let mat = materialize(
             &linear_def(),
-            "x",
+            &RunInputs::from_input("x"),
             "team-1",
             &store,
             None,
@@ -1181,9 +1338,18 @@ mod tests {
             );
         }
         // No session context → byte-identical rows (no key at all).
-        let silent = materialize(&linear_def(), "x", "team-1", &store, None, None, None, None)
-            .await
-            .unwrap();
+        let silent = materialize(
+            &linear_def(),
+            &RunInputs::from_input("x"),
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         for id in &silent.task_ids {
             let task = store.get_task(id).await.unwrap().unwrap();
             assert!(origin_session_from_metadata(&task.metadata).is_none());
@@ -1193,9 +1359,18 @@ mod tests {
     #[tokio::test]
     async fn materialize_without_strategy_is_byte_identical() {
         let store = setup_store().await;
-        let mat = materialize(&linear_def(), "x", "team-1", &store, None, None, None, None)
-            .await
-            .unwrap();
+        let mat = materialize(
+            &linear_def(),
+            &RunInputs::from_input("x"),
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         for id in &mat.task_ids {
             let task = store.get_task(id).await.unwrap().unwrap();
             assert!(task.metadata.get(WORKFLOW_STRATEGY_KEY).is_none());
@@ -1219,7 +1394,7 @@ mod tests {
         );
         let mat = materialize(
             &linear_def(),
-            "x",
+            &RunInputs::from_input("x"),
             "team-1",
             &store,
             None,

@@ -360,7 +360,58 @@ async fn render_dependency(
                 dep.subject
             ),
         },
-        // Any other status shouldn't occur for a task that unblocked us;
+        // A dead upstream reaches this renderer only for a consumer that opted
+        // into tolerant fan-in (`tolerate_failed_deps`): a strict consumer is
+        // never dispatched at all, so this arm cannot fire for it. Say what
+        // happened and what is therefore missing — the alternative is a member
+        // that was launched deliberately without one of its inputs and is told
+        // nothing about which one, or why. The error text lives in `result`
+        // (there is no error column), and it is the only evidence of the
+        // failure that exists at this point.
+        CoordTaskStatus::Failed | CoordTaskStatus::Cancelled => {
+            let what = if dep.status == CoordTaskStatus::Failed {
+                "failed"
+            } else {
+                "was cancelled"
+            };
+            match dep
+                .result
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                Some(err) => format!(
+                    "### {} — {what}\n*(this step produced NO deliverable; you were started \
+                     anyway because your step tolerates a failed dependency. Its last recorded \
+                     error follows — do not treat it as this input's content.)*\n{}\n",
+                    dep.subject,
+                    truncate_utf8(err, budget)
+                ),
+                None => format!(
+                    "### {} — {what}\n*(this step produced NO deliverable and recorded no error; \
+                     you were started anyway because your step tolerates a failed dependency. \
+                     Treat this input as missing.)*\n",
+                    dep.subject
+                ),
+            }
+        }
+        // The two arms above hand-render the two statuses that satisfy a
+        // dependency TODAY. `CoordTaskStatus::satisfies_dependency` is the
+        // single source of that set (the SQL `IN ('completed','skipped')`
+        // copies are pinned to it), so the fallthrough is split on the
+        // predicate rather than left as one silent `String::new()`: a status
+        // that DID unblock us but that this renderer cannot read must be
+        // named, not contribute an empty section a downstream member reads as
+        // "no such input" (criterion 3 — a guard covers only the shapes it
+        // knows; criterion 17 — an unknown state word reads as "I cannot
+        // vouch for this").
+        other if other.satisfies_dependency() => format!(
+            "### {}\n*(upstream status '{}' satisfies this dependency, but this renderer does \
+             not know how to read its output — treat this input as unavailable)*\n",
+            dep.subject,
+            other.as_str()
+        ),
+        // A non-satisfying status did not unblock us and has nothing to say;
         // contribute nothing (matches the legacy envelope).
         _ => String::new(),
     }
@@ -597,6 +648,126 @@ mod tests {
         Arc::new(store)
     }
 
+    /// Drift guard over the WHOLE status vocabulary, in three classes:
+    /// a status that SATISFIES the edge must render a NAMED section; a
+    /// terminally DEAD one (`failed`/`cancelled`) must also render a named
+    /// section, because a consumer stamped `tolerate_failed_deps` is dispatched
+    /// over exactly that edge and must be told which input it is not getting;
+    /// every other status must render nothing (it did not unblock anyone).
+    ///
+    /// What makes it red: adding a satisfying variant to `CoordTaskStatus`
+    /// (the wildcard-free match below compile-fails first, then this
+    /// assertion catches a renderer that still contributes silence), or
+    /// deleting the fallthrough arm that names an unreadable-but-satisfying
+    /// upstream. Before that arm existed, such a status contributed an empty
+    /// section to a downstream prompt — indistinguishable from "this input
+    /// does not exist".
+    #[tokio::test]
+    async fn every_satisfying_status_renders_a_named_section() {
+        use CoordTaskStatus::*;
+        let cs = coord_store().await;
+        let arts = artifact_store().await;
+        let mut dep = cs.create_task(plain_task("analyse")).await.unwrap();
+
+        for status in [
+            Pending,
+            Blocked,
+            InProgress,
+            WaitingReview,
+            Completed,
+            Failed,
+            Cancelled,
+            Skipped,
+            Paused,
+            Unsatisfiable,
+        ] {
+            // Wildcard-free so a new variant forces a conscious decision here.
+            let must_be_named = match status {
+                Completed | Skipped => {
+                    assert!(status.satisfies_dependency());
+                    true
+                }
+                // Dead, so it never satisfies the edge — but a tolerant
+                // consumer runs anyway and is owed the reason.
+                Failed | Cancelled => {
+                    assert!(!status.satisfies_dependency());
+                    true
+                }
+                Pending | Blocked | InProgress | WaitingReview | Paused | Unsatisfiable => {
+                    assert!(!status.satisfies_dependency());
+                    false
+                }
+            };
+            dep.status = status;
+            let rendered = render_dependency(&cs, Some(&arts), &dep, 4096).await;
+            if must_be_named {
+                assert!(
+                    rendered.contains("analyse"),
+                    "{status} can reach a dispatched consumer, so the fan-in section must \
+                     NAME it instead of contributing silence: {rendered:?}"
+                );
+            } else {
+                assert!(
+                    rendered.is_empty(),
+                    "{status} did not unblock the downstream node; it must contribute \
+                     nothing: {rendered:?}"
+                );
+            }
+        }
+    }
+
+
+    /// A failed dependency reaches the renderer only for a consumer that opted
+    /// into tolerant fan-in — and that consumer was started deliberately
+    /// WITHOUT one of its inputs. The section must say which input is missing
+    /// and hand over the failure's only evidence (`result`, there is no error
+    /// column), labelled as an error rather than as the input's content
+    /// (criterion 17 — a wrong label costs more than a missing one).
+    #[tokio::test]
+    async fn a_failed_dependency_is_named_as_a_missing_input_not_as_output() {
+        let cs = coord_store().await;
+        let arts = artifact_store().await;
+        let mut dep = cs.create_task(plain_task("analyse")).await.unwrap();
+        dep.status = CoordTaskStatus::Failed;
+        dep.result = Some("provider 503 after 3 attempts".into());
+
+        let rendered = render_dependency(&cs, Some(&arts), &dep, 4096).await;
+        assert!(rendered.contains("analyse"), "{rendered}");
+        assert!(rendered.contains("failed"), "{rendered}");
+        assert!(
+            rendered.contains("NO deliverable"),
+            "the section says the input is missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("provider 503 after 3 attempts"),
+            "the failure's only evidence crosses the edge: {rendered}"
+        );
+
+        // Truncated to the same budget as every other arm — a runaway error
+        // string must not blow the fan-in slice.
+        dep.result = Some("x".repeat(500));
+        let bounded = render_dependency(&cs, Some(&arts), &dep, 64).await;
+        assert!(
+            bounded.len() < 400,
+            "the error text obeys the caller's budget: {} bytes",
+            bounded.len()
+        );
+
+        // A failure with nothing recorded still names itself rather than
+        // rendering an empty heading.
+        dep.result = None;
+        let silent = render_dependency(&cs, Some(&arts), &dep, 4096).await;
+        assert!(
+            silent.contains("recorded no error") && silent.contains("analyse"),
+            "{silent}"
+        );
+
+        // Cancelled takes the same arm with its own word.
+        dep.status = CoordTaskStatus::Cancelled;
+        dep.result = Some("cancelled: run cancelled".into());
+        let cancelled = render_dependency(&cs, Some(&arts), &dep, 4096).await;
+        assert!(cancelled.contains("was cancelled"), "{cancelled}");
+    }
     /// The `task_submit` shape end to end: the member puts its deliverable in
     /// the artifact store, the tool flips the row to WaitingReview mid-run (so
     /// the dispatcher's finalize fence never writes `result`), the lead

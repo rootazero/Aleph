@@ -48,6 +48,13 @@ pub fn render_workflow_js(manifest: &WorkflowManifest) -> String {
     out.push_str(&render_meta(manifest, levels.as_deref()));
     out.push('\n');
 
+    // 2b. Disclose the one thing the body skeleton cannot say (P7). Rendered
+    // before the body so a reader hits it before the code it qualifies.
+    if let Some(note) = partial_fan_in_disclosure(manifest, levels.as_deref()) {
+        out.push_str(&note);
+        out.push('\n');
+    }
+
     // 3. Body: topological layers → parallel/sequential agent() skeleton.
     match &levels {
         Some(levels) => {
@@ -156,6 +163,114 @@ fn render_meta(manifest: &WorkflowManifest, levels: Option<&[Vec<usize>]>) -> St
     )
 }
 
+/// Step indices whose exact dependency set the body skeleton cannot express.
+///
+/// The body renders topological *layers*: a layer with more than one member
+/// becomes `parallel([...])`. The bare-scan importer can derive exactly one
+/// edge rule from that shape — "depend on every step of the preceding layer".
+/// That is the inverse of this rendering **only** when each step's
+/// `depends_on` is precisely its whole preceding layer.
+///
+/// Two shapes break it, and both used to break it silently:
+/// - **partial fan-in** — `a` and `b` independent, `c` depends on `a` only. A
+///   header-stripped round trip gives `c` `depends_on: [a, b]`, so a failing
+///   `b` makes `c` `Unsatisfiable` where the original template ran it fine.
+/// - **skip edges** — an edge reaching back *past* the preceding layer is not
+///   recoverable from the layer shape at all.
+///
+/// Returned in body order (layer by layer, list order within a layer).
+fn partial_fan_in_steps(manifest: &WorkflowManifest, levels: Option<&[Vec<usize>]>) -> Vec<usize> {
+    // No topo order means the renderer already degraded to a flat sequence;
+    // there is no layer shape to compare an edge set against.
+    let Some(levels) = levels else {
+        return Vec::new();
+    };
+    let index_of: HashMap<&str, usize> = manifest
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.id.as_str(), i))
+        .collect();
+    let mut offenders = Vec::new();
+    let mut prev: HashSet<usize> = HashSet::new();
+    for layer in levels {
+        for &i in layer {
+            let actual: HashSet<usize> = manifest.steps[i]
+                .depends_on
+                .iter()
+                .filter_map(|d| index_of.get(d.as_str()).copied())
+                .collect();
+            if actual != prev {
+                offenders.push(i);
+            }
+        }
+        prev = layer.iter().copied().collect();
+    }
+    offenders
+}
+
+/// One `"<step id> depends on: <deps>"` line per step whose edge set the body
+/// skeleton cannot express; empty when the render is the exact inverse of a
+/// bare re-import.
+///
+/// The same predicate the in-file `//` disclosure uses, exposed for the tool's
+/// export MESSAGE — a caller who exports through the `workflow` tool reads the
+/// message, not the rendered file, so the two faces of one fact must share the
+/// derivation instead of each carrying their own (criterion 9).
+#[must_use]
+pub(crate) fn partial_fan_in_notes(manifest: &WorkflowManifest) -> Vec<String> {
+    let levels = topo_levels(manifest);
+    partial_fan_in_notes_at(manifest, levels.as_deref())
+}
+
+/// [`partial_fan_in_notes`] against layers the caller already computed, so the
+/// in-file disclosure and the tool message render the identical line text.
+fn partial_fan_in_notes_at(manifest: &WorkflowManifest, levels: Option<&[Vec<usize>]>) -> Vec<String> {
+    partial_fan_in_steps(manifest, levels)
+        .into_iter()
+        .map(|i| {
+            let step = &manifest.steps[i];
+            let deps = if step.depends_on.is_empty() {
+                "nothing".to_string()
+            } else {
+                step.depends_on.join(", ")
+            };
+            format!("{} depends on: {deps}", step.id)
+        })
+        .collect()
+}
+
+/// The `//` comment block warning that this file's body is a lossy encoding of
+/// its DAG, or `None` when the skeleton *is* the exact inverse.
+///
+/// Rendered into the file rather than only into the tool's message because the
+/// population this protects is precisely the reader who ends up holding the
+/// body without the header (P7 / criterion 17: a missing label is cheaper than
+/// a wrong one, and "no note" here reads as "lossless").
+fn partial_fan_in_disclosure(
+    manifest: &WorkflowManifest,
+    levels: Option<&[Vec<usize>]>,
+) -> Option<String> {
+    let offenders = partial_fan_in_notes_at(manifest, levels);
+    if offenders.is_empty() {
+        return None;
+    }
+    let mut out = String::from(
+        "// NOTE - the body below is NOT a lossless encoding of this workflow's DAG.\n\
+         // A parallel([...]) layer only says \"these run together\"; re-importing a\n\
+         // header-stripped copy of this file makes each following step depend on ALL\n\
+         // of the preceding layer. These steps depend on only part of it:\n",
+    );
+    for note in offenders {
+        out.push_str(&format!("//   - {note}\n"));
+    }
+    out.push_str(
+        "// Keep the @aleph-workflow header at the top of this file - it is what\n\
+         // makes a re-import lossless.\n",
+    );
+    Some(out)
+}
+
 /// Render a step's body call, dispatching on kind: a clarify step becomes a
 /// `clarify(prompt, [choices])` call (an Aleph extension to the `.workflow.js`
 /// vocabulary), every other step an `agent(...)` call. The embedded
@@ -223,6 +338,12 @@ fn render_agent_call(step: &WorkflowManifestStep) -> String {
         // Same reasoning as `review`: the grounding demand is an oversight
         // attribute, so it must survive a header-stripped round trip.
         opts.push("requireGrounding: true".to_string());
+    }
+    if step.tolerate_failed_deps {
+        // Whether a step still runs after an upstream failure is the opposite
+        // of decoration: dropping it on a header-stripped re-import turns a
+        // fault-tolerant synthesis step back into a structurally dead one.
+        opts.push("tolerateFailedDeps: true".to_string());
     }
     if let Some(t) = step.timeout_secs {
         opts.push(format!("timeoutSecs: {t}"));
@@ -342,6 +463,7 @@ mod tests {
             choices: vec![],
             review: false,
             require_grounding: false,
+            tolerate_failed_deps: false,
             timeout_secs: None,
             max_retries: None,
         }
@@ -369,6 +491,7 @@ mod tests {
             choices: choices.iter().map(|s| s.to_string()).collect(),
             review: false,
             require_grounding: false,
+            tolerate_failed_deps: false,
             timeout_secs: None,
             max_retries: None,
         }
@@ -632,5 +755,84 @@ mod tests {
         // pre-reconciliation output (empty phases list).
         let js = render_workflow_js(&manifest(vec![step("a", &[]), step("b", &["a"])]));
         assert!(js.contains("phases: [\n  ],"), "empty phase plan: {js}");
+    }
+
+    #[test]
+    fn partial_fan_in_is_disclosed_in_the_rendered_body() {
+        // a, b independent; c depends on a ONLY. topo_levels → [[a,b],[c]] and
+        // the body renders `parallel([a, b])` then `await c` — a shape a
+        // header-stripped re-import can only read as "c depends on a AND b".
+        let js = render_workflow_js(&manifest(vec![
+            step("a", &[]),
+            step("b", &[]),
+            step("c", &["a"]),
+        ]));
+        assert!(
+            js.contains("NOT a lossless encoding"),
+            "partial fan-in must be disclosed: {js}"
+        );
+        assert!(
+            js.contains("//   - c depends on: a"),
+            "the disclosure names the step and its real edges: {js}"
+        );
+        assert!(
+            js.contains("@aleph-workflow header"),
+            "the disclosure points at the lossless path: {js}"
+        );
+    }
+
+    #[test]
+    fn complete_bipartite_fan_in_is_not_disclosed() {
+        // a, b independent; c and d each depend on BOTH. Every step's
+        // depends_on is exactly its whole preceding layer, so the skeleton IS
+        // the exact inverse and there is nothing to warn about.
+        let js = render_workflow_js(&manifest(vec![
+            step("a", &[]),
+            step("b", &[]),
+            step("c", &["a", "b"]),
+            step("d", &["a", "b"]),
+        ]));
+        assert!(
+            !js.contains("NOT a lossless encoding"),
+            "a lossless skeleton must not carry the warning: {js}"
+        );
+    }
+
+    #[test]
+    fn linear_chain_is_not_disclosed() {
+        // Singleton layers throughout: each step depends on exactly its
+        // predecessor, which is its whole preceding layer.
+        let js = render_workflow_js(&manifest(vec![
+            step("a", &[]),
+            step("b", &["a"]),
+            step("c", &["b"]),
+        ]));
+        assert!(!js.contains("NOT a lossless encoding"), "{js}");
+    }
+
+    #[test]
+    fn a_skip_edge_past_the_preceding_layer_is_disclosed() {
+        // a → b → c plus a direct a → c edge. `c` sits one layer after `b`, so
+        // the layer rule reconstructs `depends_on: [b]` and the a → c edge is
+        // simply gone — the second shape the skeleton cannot carry.
+        let js = render_workflow_js(&manifest(vec![
+            step("a", &[]),
+            step("b", &["a"]),
+            step("c", &["a", "b"]),
+        ]));
+        assert!(js.contains("//   - c depends on: a, b"), "{js}");
+    }
+
+    #[test]
+    fn the_disclosure_is_a_comment_and_does_not_alter_the_import() {
+        // The note is a `//` comment: `blank_comments` erases it before the
+        // scan, so it can never be mistaken for a step or a meta field. The
+        // embedded header still drives this import, so the DAG is exact.
+        use crate::workflow::interop::import::parse_workflow_js;
+        let original = manifest(vec![step("a", &[]), step("b", &[]), step("c", &["a"])]);
+        let js = render_workflow_js(&original);
+        let back = parse_workflow_js(&js).expect("import").manifest;
+        assert_eq!(back.steps.len(), 3, "no phantom step from the note");
+        assert_eq!(back.steps[2].depends_on, vec!["a".to_string()]);
     }
 }

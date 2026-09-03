@@ -24,8 +24,8 @@ use crate::sync_primitives::Arc;
 use crate::tools::turn_context::current_turn_context;
 use crate::tools::AlephTool;
 use crate::workflow::{
-    self, ClarifyContext, WorkflowDef, WorkflowManifest, WORKFLOW_MODEL_KEY, WORKFLOW_NAME_KEY,
-    WORKFLOW_RUN_ID_KEY, WORKFLOW_STEP_KEY,
+    self, ClarifyContext, RunInputs, WorkflowDef, WorkflowManifest, WORKFLOW_MODEL_KEY,
+    WORKFLOW_NAME_KEY, WORKFLOW_RUN_ID_KEY, WORKFLOW_STEP_KEY,
 };
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -53,6 +53,13 @@ pub enum WorkflowArgs {
         /// Run input substituted for `{input}` in each step's prompt.
         #[serde(default)]
         input: String,
+        /// Named values substituted for `{{name}}` placeholders in the step
+        /// prompts. The names are read off the prompts themselves (`describe`
+        /// and `list` report them as `vars`), so this map must cover every one
+        /// of them — a run missing an arg is refused rather than launched with
+        /// the placeholder left in the prompt.
+        #[serde(default)]
+        args: std::collections::HashMap<String, String>,
     },
     /// Report the live status of a workflow run: one row per step with the
     /// backing task id, status, and owner. Defaults to the most recently
@@ -115,6 +122,32 @@ pub enum WorkflowArgs {
         /// Team hosting the run.
         team_id: String,
         /// Specific run to resume; omitted → the latest run.
+        #[serde(default)]
+        run_id: Option<String>,
+    },
+    /// List every run of a workflow on a team — one row per run id, newest
+    /// first, with its step count, per-status summary and whether it has
+    /// settled. `status` inspects ONE run (the latest by default); this is how
+    /// you find the older ones, and how you tell "that run finished" from
+    /// "that run is still going" without polling each in turn.
+    Runs {
+        /// Name of the workflow template.
+        name: String,
+        /// Team hosting the runs.
+        team_id: String,
+    },
+    /// Re-queue the failed steps of a run: every step that failed, plus every
+    /// step left `unsatisfiable` by one, goes back to pending with a fresh
+    /// retry budget, and the dispatcher picks the DAG back up. Completed steps
+    /// keep their results and are not re-run. Use after fixing whatever made
+    /// the step fail (a missing team member, a wrong model pin, a service that
+    /// was down).
+    RerunFailed {
+        /// Name of the workflow template the run was started from.
+        name: String,
+        /// Team hosting the run.
+        team_id: String,
+        /// Specific run to re-arm; omitted → the latest run.
         #[serde(default)]
         run_id: Option<String>,
     },
@@ -254,9 +287,34 @@ pub struct WorkflowListEntry {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub when_to_use: String,
     pub steps: usize,
+    /// The `{{name}}` placeholders this template's prompts reference — every
+    /// key `run` will demand in `args`. Derived from the prompts, so it cannot
+    /// disagree with them. Empty (and omitted from the wire) for a template
+    /// that uses no named args.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub vars: Vec<String>,
 }
 
+/// One run of a workflow in a `runs` listing — the identity plus enough state
+/// to decide whether it is worth a `status` call.
 #[derive(Debug, Clone, Serialize)]
+pub struct WorkflowRunSummary {
+    /// Pass verbatim to `status` / `cancel` / `rerun_failed` as `run_id`.
+    pub run_id: String,
+    /// Epoch seconds of the run's earliest task — when it was materialised.
+    pub started_at: u64,
+    /// How many steps the run materialised.
+    pub steps: usize,
+    /// Whether every step has settled, read through
+    /// `CoordTaskStatus::is_settled` — the same predicate the dispatcher's
+    /// settle sweep uses, not a hand-listed set of statuses that would go
+    /// stale the next time one is added.
+    pub settled: bool,
+    /// Per-status tally, the same rendering `status` puts in its message.
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct WorkflowToolOutput {
     pub action: String,
     pub message: String,
@@ -303,25 +361,71 @@ pub struct WorkflowToolOutput {
     /// indistinguishable from one that was never saved.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub problems: Option<Vec<String>>,
+    /// Populated by `describe` — the `{{name}}` placeholders the template's
+    /// prompts reference, i.e. exactly the keys `run` will require in `args`.
+    /// Omitted for a template that uses none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vars: Option<Vec<String>>,
+    /// Populated by `runs` — one row per run of the template on the team,
+    /// newest first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runs: Option<Vec<WorkflowRunSummary>>,
 }
 
 impl WorkflowToolOutput {
+    /// The two fields every action populates; every other field defaults to
+    /// absent. Hand-writing `None` for the rest made adding a field an edit to
+    /// this function as well as to the struct — and the struct is where the
+    /// compiler would otherwise have caught the omission.
     fn msg(action: &str, message: impl Into<String>) -> Self {
         Self {
             action: action.into(),
             message: message.into(),
-            workflows: None,
-            definition: None,
-            when_to_use: None,
-            phases: None,
-            task_ids: None,
-            run_id: None,
-            steps: None,
-            rendered: None,
-            dropped: None,
-            pins: None,
-            problems: None,
+            ..Default::default()
         }
+    }
+}
+
+/// The `{{name}}` placeholders a stored template's prompts reference — the
+/// exact key set `run` will demand in `args`.
+///
+/// Derived from the prompts by [`WorkflowDef::referenced_vars`], never from a
+/// declared list: a declared list is a second spelling of a fact the prompts
+/// already state, and it would go stale the first time a prompt is edited
+/// without it.
+fn referenced_vars(manifest: &WorkflowManifest) -> Vec<String> {
+    manifest.to_def().referenced_vars().into_iter().collect()
+}
+
+/// Same, for a template addressed by its storage name. A template that will
+/// not load reports NO vars rather than an error: the `list` row it decorates
+/// is already named in `problems`, and the caller's question there is "which
+/// workflow do I want", not "why is this one broken".
+fn stored_vars(name: &str) -> Vec<String> {
+    workflow::store::load(name)
+        .map(|m| referenced_vars(&m))
+        .unwrap_or_default()
+}
+
+/// Report a step's `effort` pin the way the runtime will actually treat it.
+///
+/// `save` and `import` validate the effort vocabulary, but `run` loads the
+/// stored manifest and validates only the lean [`WorkflowDef`] — which knows
+/// nothing about `effort` — so a hand-edited (or pre-vocabulary) template can
+/// carry `effort: "turbo"` all the way to `StepPins::stamp`. The dispatcher
+/// then resolves it through `workflow_effort_think_level`, gets `None`, and
+/// applies nothing. Echoing the raw word back on three reporting faces told
+/// the model the step was pinned to `turbo` while nothing was pinned; a wrong
+/// label reads as fact where a missing one reads as "no value".
+///
+/// Recognised values are returned verbatim (the vocabulary is a synonym table,
+/// so `high` must not be rewritten into an internal id the template never
+/// used); anything the dispatcher will discard says so in the same breath.
+fn effort_disclosure(raw: &str) -> String {
+    if crate::agents::thinking::normalize_think_level(raw).is_some() {
+        raw.to_string()
+    } else {
+        format!("{raw} (unrecognised — not applied)")
     }
 }
 
@@ -343,7 +447,7 @@ fn manifest_step_pins(manifest: &WorkflowManifest) -> Option<Vec<WorkflowStepPin
             pins.get(&s.id).map(|p| WorkflowStepPin {
                 step: s.id.clone(),
                 model: p.model.clone(),
-                effort: p.effort.clone(),
+                effort: p.effort.as_deref().map(effort_disclosure),
                 phase: p.phase.clone(),
                 schema: p.schema.is_some(),
             })
@@ -493,6 +597,30 @@ impl WorkflowTool {
         )))
     }
 
+    /// Re-read `task` immediately before writing to it, degrading to the
+    /// snapshot the `run_tasks` listing produced when the store cannot answer.
+    ///
+    /// Every terminal-write arm (`cancel` / `pause` / `resume`) needs this and
+    /// needs it for the same reason: the listing is a snapshot, and a step can
+    /// complete, be cancelled, start, or have a verdict land between the
+    /// listing and this iteration's write. Writing against the stale row
+    /// clobbers finished work — `Completed → Cancelled`, or a reviewed step
+    /// flattened back to `Pending` and re-executed.
+    ///
+    /// The degradation rule, documented once instead of three times: a fetch
+    /// FAILURE falls back to the snapshot (P7 — an unreachable store must not
+    /// turn every step into an unknown and abort the whole action); it does not
+    /// fail closed, because the snapshot is a real observation of this run made
+    /// moments ago and the per-status guards downstream still apply to it.
+    async fn live_or_snapshot(&self, task: &CoordTask) -> CoordTask {
+        self.coord_store
+            .get_task(&task.id)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| task.clone())
+    }
+
     /// Resolve the tasks of one materialised run of `name` on `team_id`.
     ///
     /// Tasks are grouped by the `workflow_run_id` the compiler stamped at
@@ -506,44 +634,11 @@ impl WorkflowTool {
         team_id: &str,
         run_id: Option<&str>,
     ) -> Result<(String, Vec<CoordTask>)> {
-        let tasks = self
-            .coord_store
-            .list_tasks(CoordTaskFilter {
-                team_id: Some(team_id.to_string()),
-                ..Default::default()
-            })
-            .await?;
-
-        // Compare CANONICAL names on both sides: the store saves under
-        // `sanitise_name(name)` (so `list` shows e.g. `research_report`), but
-        // materialisation stamps the manifest's raw inner name (`research
-        // report`). A raw string compare against the only discoverable
-        // (sanitised) name would report "no runs found" for every template
-        // whose name contains a char outside [A-Za-z0-9._-] — right after a
-        // successful `run`. Canonicalising both sides matches every historic
-        // row regardless of which form was stamped.
-        let wanted = crate::json_canvas_io::sanitise_name(name);
-        let mut groups: std::collections::HashMap<String, Vec<CoordTask>> =
-            std::collections::HashMap::new();
-        for task in tasks {
-            if task
-                .metadata
-                .get(WORKFLOW_NAME_KEY)
-                .and_then(|v| v.as_str())
-                .map(crate::json_canvas_io::sanitise_name)
-                .as_deref()
-                != Some(wanted.as_str())
-            {
-                continue;
-            }
-            let rid = task
-                .metadata
-                .get(WORKFLOW_RUN_ID_KEY)
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            groups.entry(rid).or_default().push(task);
-        }
+        let mut groups = self.run_groups(name, team_id).await?;
+        // "This workflow has never run here" is an answer only the faces that
+        // NEED a run can treat as a failure — `run_groups` itself must not
+        // decide that for the listing face (which answers "none"). Raised here,
+        // where the caller is asking about one specific run.
         if groups.is_empty() {
             return Err(AlephError::invalid_input(format!(
                 "no runs of workflow '{name}' found on team '{team_id}' — start one with \
@@ -594,6 +689,60 @@ impl WorkflowTool {
                 .then_with(|| a.id.cmp(&b.id))
         });
         Ok((selected, tasks))
+    }
+
+    /// Every materialised run of `name` on `team_id`, grouped by the
+    /// `workflow_run_id` the compiler stamped. An empty map means "no runs" —
+    /// a fact, not an error: `runs` reports it as an empty listing, while
+    /// `run_tasks` (which cannot proceed without one) turns it into the error.
+    ///
+    /// Extracted from [`Self::run_tasks`], which computed exactly this map and
+    /// then discarded every group but one — so "which runs of this workflow
+    /// exist" was data the tool already held and no face could ask for.
+    async fn run_groups(
+        &self,
+        name: &str,
+        team_id: &str,
+    ) -> Result<std::collections::HashMap<String, Vec<CoordTask>>> {
+        let tasks = self
+            .coord_store
+            .list_tasks(CoordTaskFilter {
+                team_id: Some(team_id.to_string()),
+                ..Default::default()
+            })
+            .await?;
+
+        // Compare CANONICAL names on both sides: the store saves under
+        // `sanitise_name(name)` (so `list` shows e.g. `research_report`), but
+        // materialisation stamps the manifest's raw inner name (`research
+        // report`). A raw string compare against the only discoverable
+        // (sanitised) name would report "no runs found" for every template
+        // whose name contains a char outside [A-Za-z0-9._-] — right after a
+        // successful `run`. Canonicalising both sides matches every historic
+        // row regardless of which form was stamped.
+        let wanted = crate::json_canvas_io::sanitise_name(name);
+        let mut groups: std::collections::HashMap<String, Vec<CoordTask>> =
+            std::collections::HashMap::new();
+        for task in tasks {
+            if task
+                .metadata
+                .get(WORKFLOW_NAME_KEY)
+                .and_then(|v| v.as_str())
+                .map(crate::json_canvas_io::sanitise_name)
+                .as_deref()
+                != Some(wanted.as_str())
+            {
+                continue;
+            }
+            let rid = task
+                .metadata
+                .get(WORKFLOW_RUN_ID_KEY)
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            groups.entry(rid).or_default().push(task);
+        }
+        Ok(groups)
     }
 
     /// Tool-free planner for a workflow run, fail-soft. Returns `None` when no
@@ -705,8 +854,12 @@ fn step_row(task: &CoordTask, include_output: bool) -> WorkflowRunStep {
         // same `workflow_model` metadata `workflow_model_override` consumes, so
         // status reports exactly the model the run uses. Absent → agent default.
         model: pin(WORKFLOW_MODEL_KEY),
-        // Its twin: `workflow_effort` → the member run's think_level.
-        effort: pin(crate::workflow::WORKFLOW_EFFORT_KEY),
+        // Its twin: `workflow_effort` → the member run's think_level. Passed
+        // through the same honesty filter `describe`/`run` use, so a value the
+        // dispatcher discards is never reported as an applied pin.
+        effort: pin(crate::workflow::WORKFLOW_EFFORT_KEY)
+            .as_deref()
+            .map(effort_disclosure),
         error: match task.status {
             CoordTaskStatus::Failed => task
                 .result
@@ -715,18 +868,21 @@ fn step_row(task: &CoordTask, include_output: bool) -> WorkflowRunStep {
                 .map(|r| bound_chars(r, 400)),
             _ => None,
         },
-        // `task.result` is only written on Completed (a partial from a failed
-        // attempt lives on the run row, never here), so this cannot hand back a
-        // half-finished answer dressed as a deliverable.
-        output: include_output
-            .then(|| {
-                task.result
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|r| !r.is_empty())
-                    .map(|r| bound_chars(r, MAX_STEP_OUTPUT_CHARS))
-            })
-            .flatten(),
+        // Gate on the STATUS, the same way `error:` above does. `result` is the
+        // task's one free-text slot and several non-terminal transitions write
+        // it — a retry notice, a cancellation reason, an error — so reading it
+        // unconditionally hands the model a dispatcher diagnostic under a field
+        // documented as "the step's recorded output". Only the two statuses
+        // that mean "this step produced its deliverable" may speak here.
+        output: match task.status {
+            CoordTaskStatus::Completed | CoordTaskStatus::WaitingReview if include_output => task
+                .result
+                .as_deref()
+                .map(str::trim)
+                .filter(|r| !r.is_empty())
+                .map(|r| bound_chars(r, MAX_STEP_OUTPUT_CHARS)),
+            _ => None,
+        },
     }
 }
 
@@ -744,7 +900,7 @@ struct PhaseTally {
 }
 
 impl PhaseTally {
-    /// One character for the whole phase, most-alarming-first.
+    /// One character for the whole phase: has it stopped, and if so, how.
     ///
     /// The three predicates are deliberately distinct: "produced a result"
     /// (`Completed`), "stopped badly" (`Failed`/`Cancelled`/`Unsatisfiable`),
@@ -755,13 +911,31 @@ impl PhaseTally {
     /// deliberately `Skipped` as `0/1 ▶` — running, forever, when it had in
     /// fact finished. That is the same "stopped is not succeeded" mistake as
     /// counting a cancelled step as done, pointed the other way.
+    /// `✗` is reserved for a phase that has actually STOPPED: a failure inside
+    /// a phase whose other steps are still executing used to short-circuit the
+    /// settled check, so a four-step phase with one failure and three runs in
+    /// flight rendered `Analyze 0/4 ✗` — "stopped badly" about work that had
+    /// not stopped. The two axes are now read in order: has it stopped, and
+    /// then did anything fail. The failure stays visible while running via
+    /// [`Self::failed_note`], not by borrowing the terminal marker.
     const fn marker(self) -> &'static str {
-        if self.failed > 0 {
-            "✗"
-        } else if self.settled == self.total {
-            "✓"
-        } else {
+        if self.settled != self.total {
             "▶"
+        } else if self.failed > 0 {
+            "✗"
+        } else {
+            "✓"
+        }
+    }
+
+    /// The failure count, spelled out while the phase is still running — the
+    /// marker cannot carry it there without lying about whether the phase has
+    /// stopped. Empty once settled: `✗` already says it.
+    fn failed_note(self) -> String {
+        if self.failed > 0 && self.settled != self.total {
+            format!(" ({} failed)", self.failed)
+        } else {
+            String::new()
         }
     }
 }
@@ -826,7 +1000,13 @@ fn summarize_phases(tasks: &[CoordTask]) -> Option<String> {
             } else {
                 String::new()
             };
-            format!("{phase} {}/{} {}{skipped}", t.done, t.total, t.marker())
+            format!(
+                "{phase} {}/{} {}{skipped}{}",
+                t.done,
+                t.total,
+                t.marker(),
+                t.failed_note()
+            )
         })
         .collect();
     Some(parts.join(" · "))
@@ -864,36 +1044,37 @@ impl AlephTool for WorkflowTool {
     const DESCRIPTION: &'static str =
         "Manage and run reusable workflow templates. A template is a named, \
          declarative multi-step pipeline (each step = one agent + a prompt + \
-         dependencies); running it compiles the steps into a coordination-task \
-         DAG that executes concurrently where dependencies allow. \
-         Actions: save / list / describe / delete / run / status / cancel / \
-         pause / resume / export / import / proposals / describe_proposal / \
-         accept_proposal / reject_proposal. \
+         dependencies); running it compiles the steps into a task DAG that \
+         runs concurrently where dependencies allow. \
+         Actions: save / list / describe / delete / run / status / runs / \
+         rerun_failed / cancel / pause / resume / export / import / proposals / \
+         describe_proposal / accept_proposal / reject_proposal. \
          `run` returns a run_id plus the backing task_ids — to block until the \
          run settles, pass those task_ids (or the team_id) to the `task_wait` \
          tool. `status` reports the per-step task states of \
          a run (latest by default), grouped by phase when the template declares \
          phases. \
+         `runs` lists a template's runs on a team (`status` defaults to the \
+         latest), `rerun_failed` re-queues a run's failed (and consequently \
+         unsatisfiable) steps, and a step prompt's `{{name}}` placeholders are \
+         supplied per run in `args` (names reported as `vars`). \
          `cancel` aborts a run's unfinished steps — \
          finished steps keep their results, and a step caught mid-execution \
-         finishes its member run but stays cancelled. `pause` parks a run's \
+         stays cancelled once its member run ends. `pause` parks a run's \
          not-yet-started steps and `resume` releases them (a clarify step \
-         awaiting the user's reply stays parked). \
-         `export` renders a template to a Claude-Code-compatible dynamic-workflow \
-         .mjs (writes `<name>.mjs` when write_file=true); `import` parses one \
-         (a `.mjs`/`.js`/`.workflow.js` or AWI manifest JSON — import reads the \
-         raw text, so the extension is immaterial) back into a template. \
+         awaiting a reply stays parked). \
+         `export` renders a template to a Claude Code dynamic-workflow \
+         .mjs (writes `<name>.mjs` when write_file=true); `import` parses the \
+         raw text of one (`.mjs` source or manifest JSON) back into a template. \
          `proposals` lists MetaSkill \
-         drafts the dream pipeline auto-grew from recurring skill use; \
+         drafts the dream pipeline grew from recurring skill use; \
          `describe_proposal` reviews one's steps + provenance before \
          `accept_proposal` activates it or `reject_proposal` dismisses the \
          draft. For `run`, create a team first so \
-         each step's agent resolves to a member. `describe` and `run` report \
-         each step's pins in `pins` (model, reasoning effort, phase, and \
-         whether it declares an output contract), and `status` shows the model \
-         and effort every step runs on — so you can see those assignments \
-         without exporting the template. A step's output contract is a shape \
-         the step's agent is asked to return; it is not validated for you.";
+         each step's agent resolves to a member. `describe`, `run` and `status` \
+         report each step's pins (model, effort, phase, output contract). A \
+         step's output contract is a shape the step's agent is asked to \
+         return; it is not validated for you.";
 
     type Args = WorkflowArgs;
     type Output = WorkflowToolOutput;
@@ -909,7 +1090,42 @@ impl AlephTool for WorkflowTool {
                 // WORKFLOW_MODEL_KEY / WORKFLOW_EFFORT_KEY stamps at
                 // materialisation), and import's own "edit + save to retarget
                 // the agents" advice walked users straight into it.
-                let existing = workflow::store::load(&definition.name).ok();
+                //
+                // Three-way, not two-way: `store::load` errors on BOTH "no such
+                // file" and "the file is there and did not parse", and `.ok()`
+                // collapsed those into "nothing to preserve" — the fail-closed
+                // answer consumed as a value, on the one path that DELETES
+                // (criterion 8). A step carries `deny_unknown_fields`, so one
+                // typo'd key in a hand-edited file makes a template that still
+                // holds every model/effort/schema/phase pin unreadable; the
+                // save then wrote a lean copy over it and said `saved …` with
+                // no `(preserved: …)` suffix, which is byte-identical to a
+                // first-ever save. So probe the path first — the same
+                // discipline `loop_graph_manage`'s workflow arm applies to this
+                // very store — and refuse rather than overwrite what we cannot
+                // read.
+                let stored_path = workflow::store::resolve_path_at(
+                    &workflow::store::workflow_dir(),
+                    &definition.name,
+                );
+                let existing = if stored_path.exists() {
+                    match workflow::store::load(&definition.name) {
+                        Ok(prev) => Some(prev),
+                        Err(e) => {
+                            return Err(AlephError::invalid_input(format!(
+                                "refusing to overwrite workflow '{}': {} exists but could not be \
+                                 read ({e}). Saving now would delete whatever model / effort / \
+                                 schema / phase / whenToUse it still holds. Repair the file, or \
+                                 discard it with action='delete' first, or re-author it with \
+                                 action='import' (save=true).",
+                                definition.name,
+                                stored_path.display()
+                            )));
+                        }
+                    }
+                } else {
+                    None
+                };
                 let manifest = match &existing {
                     Some(prev) => prev.with_core_from(&definition),
                     None => WorkflowManifest::from_def(&definition),
@@ -943,6 +1159,15 @@ impl AlephTool for WorkflowTool {
                     .entries
                     .into_iter()
                     .map(|m| WorkflowListEntry {
+                        // The listing carries no prompts, so the vars are read
+                        // back off the stored manifest. A second read of a file
+                        // the listing already opened, deliberately: the
+                        // alternative is a `vars` column on the listing row,
+                        // which would be a second derivation of a fact the
+                        // prompts own. A row that will not load is already
+                        // named in `problems`; it reports no vars rather than
+                        // guessing at them.
+                        vars: stored_vars(&m.name),
                         name: m.name,
                         description: m.description,
                         when_to_use: m.when_to_use,
@@ -990,12 +1215,22 @@ impl AlephTool for WorkflowTool {
                         }
                     })
                     .collect();
-                let message = format!("workflow '{name}' has {} step(s)", manifest.steps.len());
+                let vars = referenced_vars(&manifest);
+                let message = format!(
+                    "workflow '{name}' has {} step(s){}",
+                    manifest.steps.len(),
+                    if vars.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" and requires args: {}", vars.join(", "))
+                    }
+                );
                 Ok(WorkflowToolOutput {
                     definition: Some(manifest.to_def()),
                     when_to_use,
                     phases: (!phases.is_empty()).then_some(phases),
                     pins,
+                    vars: (!vars.is_empty()).then_some(vars),
                     ..WorkflowToolOutput::msg("describe", message)
                 })
             }
@@ -1012,6 +1247,7 @@ impl AlephTool for WorkflowTool {
                 name,
                 team_id,
                 input,
+                args,
             } => {
                 debug!(name = %name, team_id = %team_id, "workflow: run");
                 // Load the full manifest: the executable core (`to_def`) drives
@@ -1021,6 +1257,23 @@ impl AlephTool for WorkflowTool {
                 // interchange-only (R10).
                 let manifest = workflow::store::load(&name)?;
                 let def = manifest.to_def();
+                // Fail closed on a missing named arg (P7). An unsupplied
+                // `{{region}}` renders as the literal `{{region}}`, which the
+                // step's agent then reads as part of its instruction — a run
+                // that looks launched, produces output, and answers a question
+                // nobody asked. The names come off the prompts, so this cannot
+                // demand a var no step uses.
+                let missing = def.missing_vars(&args);
+                if !missing.is_empty() {
+                    return Err(AlephError::invalid_input(format!(
+                        "workflow '{name}' needs run args [{}] that were not supplied — its step \
+                         prompts reference {{{{{}}}}}. Pass them in `args` (see `vars` in \
+                         action='describe').",
+                        missing.join(", "),
+                        missing.join("}}, {{"),
+                    )));
+                }
+                let inputs = RunInputs { input, args };
                 // step-local id → StepPins; empty when nothing is pinned.
                 let pins = manifest.step_pins();
                 // Deterministic, step-ordered projection of the SAME map to echo
@@ -1082,7 +1335,7 @@ impl AlephTool for WorkflowTool {
                 // Plan ONCE before materialisation: the planner sees the run
                 // input + WorkflowDef and produces a run-global Strategy. It does
                 // not need the run_id (minted inside materialize). Fail-soft.
-                let strategy = self.plan_workflow_strategy(&def, &input).await;
+                let strategy = self.plan_workflow_strategy(&def, &inputs.input).await;
                 // Capture the launching session for the goal-tree budget anchor
                 // (`origin_session`) — the same wire `task_create` stamps, so a
                 // goal-budgeted session launching a workflow has its member-run
@@ -1090,7 +1343,7 @@ impl AlephTool for WorkflowTool {
                 let origin_session = crate::tools::turn_context::current_session_key();
                 let mat = workflow::materialize(
                     &def,
-                    &input,
+                    &inputs,
                     &team_id,
                     self.coord_store.as_ref(),
                     clarify_ctx.as_ref(),
@@ -1171,10 +1424,10 @@ impl AlephTool for WorkflowTool {
                 // the user initiated the cancel and has this tool's output.
                 if let Some(anchor) = tasks.iter().min_by(|a, b| a.id.cmp(&b.id)) {
                     // Epoch-seconds value (not `true`): the settle sweep's
-                    // reopen re-arm grace-gates on the stamp's age.
-                    let stamped_at = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |d| d.as_secs());
+                    // reopen re-arm grace-gates on the stamp's age. Derived by
+                    // the key's own module rather than re-derived here — the
+                    // unit and the thing it is the unit of belong in one place.
+                    let stamped_at = crate::workflow::compile::now_epoch_secs();
                     let merged = crate::agents::swarm::tasks::merge_metadata_patch(
                         &anchor.metadata,
                         serde_json::json!({
@@ -1205,18 +1458,11 @@ impl AlephTool for WorkflowTool {
                 let mut in_flight = 0usize;
                 let mut finished = 0usize;
                 for task in &tasks {
-                    // Re-fetch immediately before writing: a step completing
-                    // between the run_tasks snapshot and this iteration must
-                    // not be clobbered Completed → Cancelled (mirror of the
-                    // dispatcher's terminal-sticky guard). A fetch failure
-                    // falls back to the snapshot status (P7 degradation).
-                    let live_status = self
-                        .coord_store
-                        .get_task(&task.id)
-                        .await
-                        .ok()
-                        .flatten()
-                        .map_or(task.status, |t| t.status);
+                    // A step completing between the run_tasks snapshot and
+                    // this iteration must not be clobbered Completed →
+                    // Cancelled (mirror of the dispatcher's terminal-sticky
+                    // guard). See `live_or_snapshot` for the degradation rule.
+                    let live_status = self.live_or_snapshot(task).await.status;
                     match live_status {
                         // Terminal — already settled, leave untouched.
                         s if s.is_terminal() => finished += 1,
@@ -1263,19 +1509,12 @@ impl AlephTool for WorkflowTool {
                 let mut paused: Vec<String> = Vec::new();
                 let mut in_flight = 0usize;
                 for task in &tasks {
-                    // Re-fetch immediately before writing (mirror of the
-                    // cancel arm): a step that completed / was cancelled /
-                    // started between the snapshot and this iteration must not
-                    // be clobbered to Paused — resume would then RE-EXECUTE
-                    // finished work, and a paused terminal step blocks the
-                    // run's settle accounting forever.
-                    let live = self
-                        .coord_store
-                        .get_task(&task.id)
-                        .await
-                        .ok()
-                        .flatten()
-                        .unwrap_or_else(|| task.clone());
+                    // A step that completed / was cancelled / started between
+                    // the snapshot and this iteration must not be clobbered to
+                    // Paused — resume would then RE-EXECUTE finished work, and
+                    // a paused terminal step blocks the run's settle accounting
+                    // forever.
+                    let live = self.live_or_snapshot(task).await;
                     match live.status {
                         // Not yet started — park it. (Unsatisfiable, though
                         // also stored as pending, is structurally dead and is
@@ -1323,7 +1562,7 @@ impl AlephTool for WorkflowTool {
                                 &live.metadata,
                                 serde_json::json!({
                                     crate::agents::swarm::tasks::PAUSED_FROM_KEY:
-                                        "waiting_review",
+                                        crate::agents::swarm::tasks::PAUSED_FROM_WAITING_REVIEW,
                                 }),
                             );
                             self.coord_store
@@ -1399,17 +1638,10 @@ impl AlephTool for WorkflowTool {
                 let mut resumed: Vec<String> = Vec::new();
                 let mut awaiting_reply = 0usize;
                 for task in &tasks {
-                    // Live re-fetch (same discipline as the pause/cancel
-                    // arms): a verdict landing between the snapshot and this
-                    // write moves the task out of Paused — clobbering it back
-                    // to Pending would re-execute the just-reviewed step.
-                    let live = self
-                        .coord_store
-                        .get_task(&task.id)
-                        .await
-                        .ok()
-                        .flatten()
-                        .unwrap_or_else(|| task.clone());
+                    // A verdict landing between the snapshot and this write
+                    // moves the task out of Paused — clobbering it back to
+                    // Pending would re-execute the just-reviewed step.
+                    let live = self.live_or_snapshot(task).await;
                     if live.status != CoordTaskStatus::Paused {
                         // Not paused — but it may still be carrying the pause
                         // INTENT this resume exists to cancel. `pause` stamps
@@ -1470,7 +1702,9 @@ impl AlephTool for WorkflowTool {
                     // re-derived from stored pending) and clear the stamp in
                     // the same atomic write.
                     let restore = match crate::agents::swarm::tasks::paused_from(&live.metadata) {
-                        Some("waiting_review") => CoordTaskStatus::WaitingReview,
+                        Some(crate::agents::swarm::tasks::PAUSED_FROM_WAITING_REVIEW) => {
+                            CoordTaskStatus::WaitingReview
+                        }
                         _ => CoordTaskStatus::Pending,
                     };
                     let cleared = crate::agents::swarm::tasks::merge_metadata_patch(
@@ -1509,6 +1743,178 @@ impl AlephTool for WorkflowTool {
                     ..WorkflowToolOutput::msg("resume", message)
                 })
             }
+            WorkflowArgs::Runs { name, team_id } => {
+                debug!(name = %name, team_id = %team_id, "workflow: runs");
+                let groups = self.run_groups(&name, &team_id).await?;
+                let mut runs: Vec<WorkflowRunSummary> = groups
+                    .into_iter()
+                    .map(|(run_id, tasks)| WorkflowRunSummary {
+                        run_id,
+                        // The run's BIRTH, not its latest activity: `status`
+                        // selects the latest run by max(created_at), and a row
+                        // labelled "started_at" that moved as steps were
+                        // created would be a different fact wearing the same
+                        // name.
+                        started_at: tasks.iter().map(|t| t.created_at).min().unwrap_or(0),
+                        steps: tasks.len(),
+                        // The dispatcher's own completion predicate. Hand-listing
+                        // the terminal statuses here would be a second copy of a
+                        // set that has already grown once (`Unsatisfiable` is
+                        // settled without being terminal).
+                        settled: tasks.iter().all(|t| t.status.is_settled()),
+                        summary: summarize_statuses(&tasks),
+                    })
+                    .collect();
+                // Newest first — the run a caller means when they say "the
+                // run". `created_at` is epoch seconds, so runs started in the
+                // same second tie; the run id breaks it deterministically.
+                runs.sort_by(|a, b| {
+                    b.started_at
+                        .cmp(&a.started_at)
+                        .then_with(|| b.run_id.cmp(&a.run_id))
+                });
+                let unsettled = runs.iter().filter(|r| !r.settled).count();
+                // "None" is an answer this face can give; it is not a failure.
+                // Erroring here (inherited from `run_groups`) made "never run
+                // on this team" read like a broken listing, and a caller
+                // cannot tell those apart from an `Err`.
+                let message = if runs.is_empty() {
+                    format!(
+                        "no runs of '{name}' on team '{team_id}' — start one with action='run'"
+                    )
+                } else {
+                    format!(
+                        "{} run(s) of workflow '{name}' on team '{team_id}', newest first \
+                         ({unsettled} still running) — inspect one with action='status', re-arm \
+                         its failures with action='rerun_failed'",
+                        runs.len()
+                    )
+                };
+                Ok(WorkflowToolOutput {
+                    runs: Some(runs),
+                    ..WorkflowToolOutput::msg("runs", message)
+                })
+            }
+            WorkflowArgs::RerunFailed {
+                name,
+                team_id,
+                run_id,
+            } => {
+                debug!(name = %name, team_id = %team_id, "workflow: rerun_failed");
+                let (run_id, tasks) = self.run_tasks(&name, &team_id, run_id.as_deref()).await?;
+                let mut rearmed: Vec<String> = Vec::new();
+                // Decide the SET from the one snapshot, before any write.
+                //
+                // `Unsatisfiable` rides along with `Failed` on purpose: it is
+                // not a failure of its own, it is the shadow one casts down the
+                // DAG. But it is also DERIVED — the row is stored pending and
+                // reads unsatisfiable only while an upstream is terminally
+                // failed — so the first write of this loop stops the downstream
+                // rows from matching. Re-reading membership per iteration would
+                // therefore make the set depend on the order the steps happen
+                // to be visited rather than on the run's state: select in one
+                // order and apply in another and you have named a different set
+                // (the run's own criterion 12).
+                let targets: Vec<&CoordTask> = tasks
+                    .iter()
+                    .filter(|t| {
+                        matches!(
+                            t.status,
+                            CoordTaskStatus::Failed | CoordTaskStatus::Unsatisfiable
+                        )
+                    })
+                    .collect();
+                for task in targets {
+                    let live = self.live_or_snapshot(task).await;
+                    // The live read guards only against the step having moved
+                    // on under us between the listing and this write — a late
+                    // retry that succeeded, a step someone restarted, a verdict
+                    // that landed. `Pending`/`Blocked` here are this loop's own
+                    // earlier writes rippling down the DAG, not a change of
+                    // mind, so they must not disqualify a selected step.
+                    if matches!(
+                        live.status,
+                        CoordTaskStatus::InProgress
+                            | CoordTaskStatus::Completed
+                            | CoordTaskStatus::WaitingReview
+                            | CoordTaskStatus::Skipped
+                            | CoordTaskStatus::Cancelled
+                    ) {
+                        continue;
+                    }
+                    // Snapshot the leftover lock holder BEFORE the reset, so it
+                    // can be released with its ACTUAL holder below — the store
+                    // checks holder equality, so releasing with "" never clears
+                    // a genuinely held lock and would leave the step
+                    // pending-but-unschedulable until the stale-lock sweep runs
+                    // (the same reason `workflow_step_review`'s retry arm does
+                    // this).
+                    let locked_by = live.locked_by.clone();
+                    // Re-arm the automatic retry ladder: without the budget
+                    // anchor the step dies on its first new failure, having
+                    // already spent its attempts on the cause the caller just
+                    // fixed.
+                    let metadata = crate::agents::swarm::tasks::retry::with_retry_budget_reset_at(
+                        live.metadata.clone(),
+                        crate::workflow::compile::now_epoch_secs(),
+                    );
+                    self.coord_store
+                        .update_task(
+                            &live.id,
+                            CoordTaskUpdate {
+                                status: Some(CoordTaskStatus::Pending),
+                                // Clear the failure text: it describes the
+                                // attempt being replaced, and `status` would
+                                // otherwise report it against a step that is
+                                // queued to run again.
+                                result: Some(String::new()),
+                                metadata: Some(metadata),
+                                ..Default::default()
+                            },
+                        )
+                        .await?;
+                    if let Some(holder) = locked_by.as_deref() {
+                        if let Err(e) = self.coord_store.release_lock(&live.id, holder).await {
+                            tracing::warn!(
+                                task_id = %live.id, holder = %holder, error = %e,
+                                "workflow rerun_failed: could not release leftover lock"
+                            );
+                        }
+                    }
+                    rearmed.push(live.id.clone());
+                }
+                // Deliberately NO `workflow_notified` stamp — the opposite of
+                // `cancel`. The settle sweep re-arms its own terminal
+                // notification the moment the run stops being fully settled,
+                // which is precisely what these writes just did; stamping here
+                // would suppress the summary for the re-run.
+                if !rearmed.is_empty() {
+                    if let Some(signal) = &self.dispatch_signal {
+                        signal.notify_one();
+                    }
+                }
+                // Zero matches is an honest answer, not an error: "there is
+                // nothing failed in this run" is exactly what the caller asked
+                // and exactly what they want to hear.
+                let message = if rearmed.is_empty() {
+                    format!(
+                        "nothing to rerun in workflow '{name}' run {run_id}: no step is failed or \
+                         unsatisfiable ({})",
+                        summarize_statuses(&tasks)
+                    )
+                } else {
+                    format!(
+                        "re-armed {} step(s) of workflow '{name}' run {run_id} — they are queued \
+                         again with a fresh retry budget (inspect with action='status')",
+                        rearmed.len()
+                    )
+                };
+                Ok(WorkflowToolOutput {
+                    task_ids: Some(rearmed),
+                    run_id: Some(run_id),
+                    ..WorkflowToolOutput::msg("rerun_failed", message)
+                })
+            }
             WorkflowArgs::Export { name, write_file } => {
                 debug!(name = %name, write_file, "workflow: export");
                 // The stored manifest carries the full `.workflow.js` metadata,
@@ -1516,6 +1922,14 @@ impl AlephTool for WorkflowTool {
                 // label/model/phase/schema) rather than a bare skeleton.
                 let manifest = workflow::store::load(&name)?;
                 let rendered = workflow::render_workflow_js(&manifest);
+                // The rendered file already discloses partial fan-in in a `//`
+                // block — but a caller exporting through this tool reads the
+                // MESSAGE, not the file, and would be told nothing about the
+                // one thing the body cannot express. Same predicate, second
+                // face (criterion 9): re-importing a header-stripped copy of
+                // this file widens those steps' dependency sets.
+                let lossy =
+                    crate::workflow::interop::export::partial_fan_in_notes(&manifest);
                 let message = if write_file {
                     // `.mjs` — the extension Claude Code's workflow menu / the
                     // `~/.claude/workflows` loader recognise for a dynamic
@@ -1526,6 +1940,16 @@ impl AlephTool for WorkflowTool {
                     format!("exported workflow '{name}' → {}", path.display())
                 } else {
                     format!("rendered workflow '{name}' ({} bytes)", rendered.len())
+                };
+                let message = if lossy.is_empty() {
+                    message
+                } else {
+                    format!(
+                        "{message} — NOTE: partial fan-in, the body skeleton cannot express it \
+                         ({}); keep the @aleph-workflow header at the top of the file or a \
+                         re-import will widen those steps' dependencies",
+                        lossy.join("; ")
+                    )
                 };
                 Ok(WorkflowToolOutput {
                     rendered: Some(rendered),
@@ -1602,6 +2026,13 @@ impl AlephTool for WorkflowTool {
                     .entries
                     .into_iter()
                     .map(|m| WorkflowListEntry {
+                        // A draft is not runnable until accepted, so its vars
+                        // are informational — but omitting them here would make
+                        // `proposals` the one listing face that hides an input
+                        // requirement.
+                        vars: workflow::proposal::load_proposal(&m.name)
+                            .map(|man| referenced_vars(&man))
+                            .unwrap_or_default(),
                         name: m.name,
                         description: m.description,
                         when_to_use: m.when_to_use,
@@ -1745,6 +2176,7 @@ mod tests {
                     choices: vec![],
                     review: false,
                     require_grounding: false,
+                    tolerate_failed_deps: false,
                     timeout_seconds: None,
                     max_retries: None,
                 },
@@ -1757,10 +2189,30 @@ mod tests {
                     choices: vec![],
                     review: false,
                     require_grounding: false,
+                    tolerate_failed_deps: false,
                     timeout_seconds: None,
                     max_retries: None,
                 },
             ],
+        }
+    }
+
+    /// One agent step — the shapes below differ only in id/agent/deps, and a
+    /// literal per step means every new `WorkflowStepDef` field edits a dozen
+    /// fixtures instead of one.
+    fn step(id: &str, agent: &str, deps: &[&str]) -> WorkflowStepDef {
+        WorkflowStepDef {
+            id: id.into(),
+            agent: agent.into(),
+            prompt: format!("do {id}"),
+            depends_on: deps.iter().map(|d| (*d).to_string()).collect(),
+            kind: crate::workflow::WorkflowStepKind::Agent,
+            choices: vec![],
+            review: false,
+            require_grounding: false,
+            tolerate_failed_deps: false,
+            timeout_seconds: None,
+            max_retries: None,
         }
     }
 
@@ -1781,10 +2233,12 @@ mod tests {
                 name,
                 team_id,
                 input,
+                args,
             } => {
                 assert_eq!(name, "p");
                 assert_eq!(team_id, "t");
                 assert_eq!(input, "", "missing input defaults to empty string");
+                assert!(args.is_empty(), "missing args defaults to no named vars");
             }
             other => panic!("expected Run, got {other:?}"),
         }
@@ -1862,6 +2316,7 @@ mod tests {
                     name: "pipeline".into(),
                     team_id: "team-7".into(),
                     input: "quantum".into(),
+                    args: std::collections::HashMap::new(),
                 })
                 .await;
             // SAFETY: same guarded invariant; restore prior value.
@@ -1920,6 +2375,7 @@ mod tests {
                 name: "pipeline".into(),
                 team_id: "team-7".into(),
                 input: "x".into(),
+                args: std::collections::HashMap::new(),
             })
             .await;
         // SAFETY: same guarded invariant; restore prior value.
@@ -1956,6 +2412,7 @@ mod tests {
                 name: "pipeline".into(),
                 team_id: "team-7".into(),
                 input: String::new(),
+                args: std::collections::HashMap::new(),
             })
             .await;
         // SAFETY: same guarded invariant; restore prior value.
@@ -1986,6 +2443,7 @@ mod tests {
                 name: "does-not-exist".into(),
                 team_id: "team-7".into(),
                 input: String::new(),
+                args: std::collections::HashMap::new(),
             })
             .await;
         // SAFETY: same guarded invariant; restore prior value.
@@ -2008,7 +2466,7 @@ mod tests {
     ) -> (String, Vec<String>) {
         let mat = workflow::materialize(
             def,
-            "x",
+            &RunInputs::from_input("x"),
             team,
             t.coord_store.as_ref(),
             None,
@@ -2230,7 +2688,7 @@ mod tests {
         assert_eq!(root.status, CoordTaskStatus::Paused);
         assert_eq!(
             crate::agents::swarm::tasks::paused_from(&root.metadata),
-            Some("waiting_review")
+            Some(crate::agents::swarm::tasks::PAUSED_FROM_WAITING_REVIEW)
         );
 
         let out = t
@@ -2626,6 +3084,7 @@ mod tests {
                     choices: vec!["staging".into(), "prod".into()],
                     review: false,
                     require_grounding: false,
+                    tolerate_failed_deps: false,
                     timeout_seconds: None,
                     max_retries: None,
                 },
@@ -2638,6 +3097,7 @@ mod tests {
                     choices: vec![],
                     review: false,
                     require_grounding: false,
+                    tolerate_failed_deps: false,
                     timeout_seconds: None,
                     max_retries: None,
                 },
@@ -2685,6 +3145,7 @@ mod tests {
                     name: "pipeline".into(),
                     team_id,
                     input: "x".into(),
+                    args: std::collections::HashMap::new(),
                 })
                 .await;
             // SAFETY: same guarded invariant; restore prior value.
@@ -2735,6 +3196,7 @@ mod tests {
                     name: "pipeline".into(),
                     team_id,
                     input: "x".into(),
+                    args: std::collections::HashMap::new(),
                 })
                 .await;
             // SAFETY: same guarded invariant; restore prior value.
@@ -3396,6 +3858,7 @@ mod tests {
                     name: "pipeline".into(),
                     team_id: "team-7".into(),
                     input: "x".into(),
+                    args: std::collections::HashMap::new(),
                 })
                 .await;
             // SAFETY: same guarded invariant; restore prior value.
@@ -3520,6 +3983,44 @@ mod tests {
     }
 
     #[test]
+    fn an_effort_the_runtime_cannot_apply_is_reported_as_not_applied() {
+        // `run` validates only the lean def, so a template on disk can carry an
+        // effort the think-level vocabulary does not know. The dispatcher then
+        // applies NOTHING (`workflow_effort_think_level` → None) while this
+        // projection echoed the word back verbatim — three faces telling the
+        // model a step is pinned to `turbo` when nothing is pinned. A wrong
+        // label reads as fact where a missing one reads as "no value".
+        let mut m = WorkflowManifest::from_def(&linear_def());
+        m.steps[0].effort = Some("turbo".into());
+        m.steps[1].effort = Some("high".into());
+        let rows = manifest_step_pins(&m).expect("pinned");
+        let by_step = |id: &str| {
+            rows.iter()
+                .find(|r| r.step == id)
+                .and_then(|r| r.effort.clone())
+                .expect("effort reported")
+        };
+        assert_eq!(by_step("write"), "high", "a recognised effort reads as-is");
+        assert_eq!(
+            by_step("gather"),
+            "turbo (unrecognised — not applied)",
+            "an effort the dispatcher discards must say so"
+        );
+
+        // `status`'s row is the third face of the same value and answers the
+        // same way — it reads the stamp the compiler wrote.
+        let mut task = phase_task("Scan", CoordTaskStatus::Pending);
+        task.metadata = crate::agents::swarm::tasks::merge_metadata_patch(
+            &task.metadata,
+            serde_json::json!({ crate::workflow::WORKFLOW_EFFORT_KEY: "turbo" }),
+        );
+        assert_eq!(
+            step_row(&task, false).effort.as_deref(),
+            Some("turbo (unrecognised — not applied)")
+        );
+    }
+
+    #[test]
     fn manifest_step_pins_skips_blank_model() {
         // A whitespace-only model string is not a real override — it must not
         // surface as a pinned model (mirrors the run-time override parser, which
@@ -3590,7 +4091,7 @@ mod tests {
         );
         let mat = workflow::materialize(
             &linear_def(),
-            "x",
+            &RunInputs::from_input("x"),
             "team-9",
             t.coord_store.as_ref(),
             None,
@@ -3640,6 +4141,22 @@ mod tests {
             )
             .await
             .unwrap();
+        // The still-pending step carries a retry NOTICE in `result` — which is
+        // what `schedule/failure.rs` actually writes when it re-queues a failed
+        // attempt. Without this the fixture proved nothing: the guard was green
+        // because the pending row's `result` happened to be NULL, not because
+        // the code ever looked at the status.
+        t.coord_store
+            .update_task(
+                &ids[1],
+                crate::agents::swarm::tasks::CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::Pending),
+                    result: Some("retry 1/3 in 8s after: Timed out after 900 seconds".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
 
         let plain = t
             .call(WorkflowArgs::Status {
@@ -3673,11 +4190,57 @@ mod tests {
             "bounded (ellipsis-terminated): {} chars",
             out.chars().count()
         );
-        // The still-pending step has no output even when asked.
+        // The still-pending step has no output even when asked — even though
+        // it HAS a `result`. A retry notice is not a deliverable, and handing
+        // it back under `output` (documented to the model as "the step's
+        // recorded output") folds a dispatcher diagnostic into the synthesis.
+        let pending = rows
+            .iter()
+            .find(|r| r.status == "pending")
+            .expect("the retry-scheduled step is still pending");
+        assert!(
+            pending.output.is_none(),
+            "a retry notice is not this step's output: {:?}",
+            pending.output
+        );
         assert!(rows
             .iter()
             .filter(|r| r.status != "completed")
             .all(|r| r.output.is_none()));
+    }
+
+    #[test]
+    fn only_result_bearing_statuses_echo_output() {
+        // Which statuses may speak through `output`, asserted per status rather
+        // than through a fixture that happens to leave `result` NULL. Every
+        // status here carries the SAME non-empty result string, so the only
+        // thing that can separate the arms is the status itself.
+        let row = |status| {
+            let mut task = phase_task("Scan", status);
+            task.result = Some("a string that is not necessarily a deliverable".into());
+            step_row(&task, true)
+        };
+        for produces in [CoordTaskStatus::Completed, CoordTaskStatus::WaitingReview] {
+            assert!(
+                row(produces).output.is_some(),
+                "{produces:?} holds a real deliverable"
+            );
+        }
+        for silent in [
+            CoordTaskStatus::Pending,
+            CoordTaskStatus::Blocked,
+            CoordTaskStatus::InProgress,
+            CoordTaskStatus::Paused,
+            CoordTaskStatus::Failed,
+            CoordTaskStatus::Cancelled,
+            CoordTaskStatus::Unsatisfiable,
+            CoordTaskStatus::Skipped,
+        ] {
+            assert!(
+                row(silent).output.is_none(),
+                "{silent:?} writes `result` too, and it is not an output"
+            );
+        }
     }
 
     #[tokio::test]
@@ -3704,7 +4267,7 @@ mod tests {
         );
         let mat = workflow::materialize(
             &linear_def(),
-            "x",
+            &RunInputs::from_input("x"),
             "team-ph",
             t.coord_store.as_ref(),
             None,
@@ -3822,6 +4385,401 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_phase_still_running_is_not_marked_stopped_by_one_failure() {
+        // `✗` in this table means "stopped badly". A phase with three steps
+        // still executing has not stopped, so it must not wear the stopped
+        // marker — but the failure must not vanish either, which is why the
+        // count is spelled out beside the running marker.
+        let mut tasks = vec![phase_task("Analyze", CoordTaskStatus::Failed)];
+        for _ in 0..3 {
+            tasks.push(phase_task("Analyze", CoordTaskStatus::InProgress));
+        }
+        assert_eq!(
+            summarize_phases(&tasks).as_deref(),
+            Some("Analyze 0/4 ▶ (1 failed)"),
+            "still running, and the failure is still visible"
+        );
+
+        // Once the last step settles, the phase HAS stopped badly — and the
+        // count is not repeated, because `✗` already says it.
+        let settled = vec![
+            phase_task("Analyze", CoordTaskStatus::Failed),
+            phase_task("Analyze", CoordTaskStatus::Completed),
+        ];
+        assert_eq!(summarize_phases(&settled).as_deref(), Some("Analyze 1/2 ✗"));
+    }
+
+    /// `linear_def()` with named-var placeholders in both step prompts.
+    fn var_def() -> WorkflowDef {
+        let mut d = linear_def();
+        d.name = "varflow".into();
+        d.steps[0].prompt = "research {{topic}} in {{region}}".into();
+        d.steps[1].prompt = "write a report about {{topic}}".into();
+        d
+    }
+
+    #[tokio::test]
+    async fn run_substitutes_named_args_into_the_materialised_prompts() {
+        let store = setup_store().await;
+        let t = tool(store, None);
+        let mut args = std::collections::HashMap::new();
+        args.insert("topic".to_string(), "sea ice".to_string());
+        args.insert("region".to_string(), "the Arctic".to_string());
+        let mat = workflow::materialize(
+            &var_def(),
+            &crate::workflow::RunInputs {
+                input: String::new(),
+                args,
+            },
+            "team-vars",
+            t.coord_store.as_ref(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("materialise");
+        let first = t
+            .coord_store
+            .get_task(&mat.task_ids[0])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            first.description, "research sea ice in the Arctic",
+            "both placeholders substituted, in the task the agent actually reads"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_refuses_a_launch_missing_a_referenced_var() {
+        // Fail closed: an unsupplied `{{region}}` would reach the agent as the
+        // literal text `{{region}}`, i.e. a question rendered as an
+        // instruction. The refusal names the missing vars.
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store().await;
+        let t = tool(store, None);
+        let mut args = std::collections::HashMap::new();
+        args.insert("topic".to_string(), "sea ice".to_string());
+
+        let (refused, accepted) = {
+            let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = std::env::var_os("ALEPH_HOME");
+            // SAFETY: guarded single mutator; restored below.
+            unsafe {
+                std::env::set_var("ALEPH_HOME", tmp.path());
+            }
+            workflow::store::save(&WorkflowManifest::from_def(&var_def())).expect("save");
+            let refused = t
+                .call(WorkflowArgs::Run {
+                    name: "varflow".into(),
+                    team_id: "team-vars".into(),
+                    input: String::new(),
+                    args: args.clone(),
+                })
+                .await;
+            args.insert("region".to_string(), "the Arctic".to_string());
+            let accepted = t
+                .call(WorkflowArgs::Run {
+                    name: "varflow".into(),
+                    team_id: "team-vars".into(),
+                    input: String::new(),
+                    args,
+                })
+                .await;
+            // SAFETY: same guarded invariant; restore prior value.
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var("ALEPH_HOME", v),
+                    None => std::env::remove_var("ALEPH_HOME"),
+                }
+            }
+            (refused, accepted)
+        };
+        let err = refused
+            .expect_err("a missing var must refuse the run")
+            .to_string();
+        assert!(err.contains("region"), "names the missing var: {err}");
+        assert!(
+            !err.contains("topic"),
+            "does not name a supplied one: {err}"
+        );
+        assert!(accepted.is_ok(), "complete args launch: {accepted:?}");
+    }
+
+    #[tokio::test]
+    async fn describe_reports_the_vars_a_run_will_require() {
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store().await;
+        let t = tool(store, None);
+
+        let (varry, plain) = {
+            let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = std::env::var_os("ALEPH_HOME");
+            // SAFETY: guarded single mutator; restored below.
+            unsafe {
+                std::env::set_var("ALEPH_HOME", tmp.path());
+            }
+            workflow::store::save(&WorkflowManifest::from_def(&var_def())).expect("save");
+            workflow::store::save(&WorkflowManifest::from_def(&linear_def())).expect("save");
+            let varry = t
+                .call(WorkflowArgs::Describe {
+                    name: "varflow".into(),
+                })
+                .await
+                .expect("describe");
+            let plain = t
+                .call(WorkflowArgs::Describe {
+                    name: "pipeline".into(),
+                })
+                .await
+                .expect("describe");
+            // SAFETY: same guarded invariant; restore prior value.
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var("ALEPH_HOME", v),
+                    None => std::env::remove_var("ALEPH_HOME"),
+                }
+            }
+            (varry, plain)
+        };
+        assert_eq!(
+            varry.vars.as_deref(),
+            Some(["region".to_string(), "topic".to_string()].as_slice()),
+            "derived from the prompts, sorted"
+        );
+        assert!(varry.message.contains("requires args: region, topic"));
+        // A template with no named vars is byte-identical to before: no field,
+        // no suffix on the message.
+        assert!(plain.vars.is_none(), "no vars => field omitted");
+        assert_eq!(plain.message, "workflow 'pipeline' has 2 step(s)");
+    }
+
+    #[tokio::test]
+    async fn runs_lists_every_run_newest_first() {
+        let store = setup_store().await;
+        let t = tool(store, None);
+        let (older, older_ids) = materialize_run(&t, &linear_def(), "team-runs").await;
+        let (newer, _) = materialize_run(&t, &linear_def(), "team-runs").await;
+        // Settle the older run so the two rows differ on more than identity.
+        for id in &older_ids {
+            t.coord_store
+                .update_task(
+                    id,
+                    crate::agents::swarm::tasks::CoordTaskUpdate {
+                        status: Some(CoordTaskStatus::Completed),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+        }
+
+        let out = t
+            .call(WorkflowArgs::Runs {
+                name: "pipeline".into(),
+                team_id: "team-runs".into(),
+            })
+            .await
+            .expect("runs");
+        let rows = out.runs.as_ref().expect("one row per run");
+        assert_eq!(rows.len(), 2, "both runs listed: {rows:?}");
+        let ids: Vec<&str> = rows.iter().map(|r| r.run_id.as_str()).collect();
+        assert!(ids.contains(&older.as_str()) && ids.contains(&newer.as_str()));
+        let old_row = rows.iter().find(|r| r.run_id == older).unwrap();
+        let new_row = rows.iter().find(|r| r.run_id == newer).unwrap();
+        assert_eq!(old_row.steps, 2);
+        assert!(old_row.settled, "every step completed: {old_row:?}");
+        assert!(!new_row.settled, "untouched run is still going");
+        assert!(old_row.summary.contains("2 completed"), "{old_row:?}");
+        assert!(out.message.contains("1 still running"), "{}", out.message);
+    }
+
+
+    /// End to end through the tool: a tolerant step keeps running after its
+    /// upstream fails, and the two reporting faces must not miscount it.
+    /// `status` tallies whatever the store derives (so the tolerant step reads
+    /// `pending`, not `unsatisfiable`), and `rerun_failed` — whose target set
+    /// is `Failed | Unsatisfiable` — must re-arm only the step that actually
+    /// failed, never the dependent that is on its way to running.
+    #[tokio::test]
+    async fn a_tolerant_step_survives_its_failed_upstream_end_to_end() {
+        let store = setup_store().await;
+        let t = tool(store, None);
+        let mut def = linear_def();
+        // gather → write, plus a tolerant synthesis that also waits on gather.
+        let mut synth = step("synth", "writer", &["gather"]);
+        synth.tolerate_failed_deps = true;
+        def.steps.push(synth);
+        let (run_id, ids) = materialize_run(&t, &def, "team-tolerant").await;
+
+        t.coord_store
+            .update_task(
+                &ids[0],
+                crate::agents::swarm::tasks::CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::Failed),
+                    result: Some("boom".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let status = t
+            .call(WorkflowArgs::Status {
+                name: "pipeline".into(),
+                team_id: "team-tolerant".into(),
+                run_id: Some(run_id.clone()),
+                include_output: false,
+            })
+            .await
+            .expect("status");
+        let rows = status.steps.as_ref().expect("rows");
+        let of = |step_id: &str| {
+            rows.iter()
+                .find(|r| r.step == step_id)
+                .unwrap_or_else(|| panic!("row for {step_id}"))
+                .status
+                .clone()
+        };
+        assert_eq!(of("gather"), "failed");
+        assert_eq!(
+            of("write"),
+            "unsatisfiable",
+            "an ordinary dependent is still structurally dead"
+        );
+        assert_eq!(
+            of("synth"),
+            "pending",
+            "the tolerant dependent is ready to run: {rows:?}"
+        );
+        assert!(
+            status.message.contains("1 unsatisfiable") && status.message.contains("1 pending"),
+            "the tally counts what the rows say: {}",
+            status.message
+        );
+
+        let rerun = t
+            .call(WorkflowArgs::RerunFailed {
+                name: "pipeline".into(),
+                team_id: "team-tolerant".into(),
+                run_id: Some(run_id),
+            })
+            .await
+            .expect("rerun_failed");
+        let rearmed = rerun.task_ids.as_ref().expect("ids");
+        assert!(
+            rearmed.contains(&ids[0]) && rearmed.contains(&ids[1]),
+            "the failed step and its dead dependent are re-armed: {rearmed:?}"
+        );
+        assert!(
+            !rearmed.contains(&ids[2]),
+            "the tolerant step was never dead, so it is not re-armed: {rearmed:?}"
+        );
+    }
+    #[tokio::test]
+    async fn rerun_failed_rearms_only_the_failed_and_unsatisfiable_steps() {
+        // Three steps: one Completed (keeps its result), one Failed, one left
+        // Unsatisfiable by it. Both of the latter go back to pending with a
+        // cleared result; the completed one is untouched.
+        let store = setup_store().await;
+        let t = tool(store, None);
+        let mut def = linear_def();
+        def.steps.push(crate::workflow::WorkflowStepDef {
+            id: "polish".into(),
+            agent: "writer".into(),
+            prompt: "polish it".into(),
+            depends_on: vec!["write".into()],
+            kind: crate::workflow::WorkflowStepKind::Agent,
+            choices: vec![],
+            review: false,
+            require_grounding: false,
+            tolerate_failed_deps: false,
+            timeout_seconds: None,
+            max_retries: None,
+        });
+        let (run_id, ids) = materialize_run(&t, &def, "team-rerun").await;
+        let set = |id: &str, status, result: &str| {
+            let store = t.coord_store.clone();
+            let id = id.to_string();
+            let result = result.to_string();
+            async move {
+                store
+                    .update_task(
+                        &id,
+                        crate::agents::swarm::tasks::CoordTaskUpdate {
+                            status: Some(status),
+                            result: Some(result),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+        };
+        set(&ids[0], CoordTaskStatus::Completed, "the finding").await;
+        set(&ids[1], CoordTaskStatus::Failed, "boom").await;
+        // `polish` depends on the failed `write`, so it reads Unsatisfiable.
+        let polish = t.coord_store.get_task(&ids[2]).await.unwrap().unwrap();
+        assert_eq!(polish.status, CoordTaskStatus::Unsatisfiable);
+
+        let out = t
+            .call(WorkflowArgs::RerunFailed {
+                name: "pipeline".into(),
+                team_id: "team-rerun".into(),
+                run_id: Some(run_id.clone()),
+            })
+            .await
+            .expect("rerun_failed");
+        let rearmed = out.task_ids.as_ref().expect("ids");
+        assert_eq!(
+            rearmed.len(),
+            2,
+            "exactly the failed + unsatisfiable: {rearmed:?}"
+        );
+        assert!(rearmed.contains(&ids[1]) && rearmed.contains(&ids[2]));
+        // `polish` was selected even though re-arming `write` (visited first)
+        // had already turned it from unsatisfiable into merely blocked. The set
+        // is decided from ONE snapshot; re-reading it per step would make the
+        // answer depend on the order the DAG happens to be walked.
+        let dependent = t.coord_store.get_task(&ids[2]).await.unwrap().unwrap();
+        assert_eq!(dependent.status, CoordTaskStatus::Blocked);
+
+        let done = t.coord_store.get_task(&ids[0]).await.unwrap().unwrap();
+        assert_eq!(done.status, CoordTaskStatus::Completed);
+        assert_eq!(
+            done.result.as_deref(),
+            Some("the finding"),
+            "a completed step keeps its result and is not re-run"
+        );
+        let failed = t.coord_store.get_task(&ids[1]).await.unwrap().unwrap();
+        assert_eq!(failed.status, CoordTaskStatus::Pending);
+        assert_eq!(failed.result.as_deref().unwrap_or_default(), "");
+        assert!(
+            crate::agents::swarm::tasks::retry::read_retry_budget_reset_at(&failed.metadata)
+                .is_some(),
+            "the retry ladder is re-armed, or the step dies on its first new failure"
+        );
+
+        // Nothing failed any more → an honest message, not an error.
+        let again = t
+            .call(WorkflowArgs::RerunFailed {
+                name: "pipeline".into(),
+                team_id: "team-rerun".into(),
+                run_id: Some(run_id),
+            })
+            .await
+            .expect("a run with nothing to rerun is not an error");
+        assert!(again.task_ids.as_ref().is_some_and(Vec::is_empty));
+        assert!(
+            again.message.contains("nothing to rerun"),
+            "{}",
+            again.message
+        );
+    }
+
     #[tokio::test]
     async fn list_carries_selection_fields_and_names_problems() {
         // `list` answers "which should I run?" in one call: description,
@@ -3934,6 +4892,7 @@ await agent('fix what scan found', { label: 'fix' })
                     name: "audit".into(),
                     team_id: "team-e2e".into(),
                     input: String::new(),
+                    args: std::collections::HashMap::new(),
                 })
                 .await
                 .expect("run");
@@ -3972,5 +4931,171 @@ await agent('fix what scan found', { label: 'fix' })
         );
         let rows = status.steps.as_ref().unwrap();
         assert!(rows.iter().any(|r| r.phase.as_deref() == Some("Fix")));
+    }
+
+    /// `save` must not read "the stored file is there but will not parse" as
+    /// "there is nothing to preserve". `store::load` errors on BOTH a missing
+    /// file and an unparseable one; collapsing them with `.ok()` routed a
+    /// corrupt-but-rich template through `from_def`, which deletes every
+    /// `model` / `effort` / `schema` / `phase` / `whenToUse` it still held —
+    /// with a success message byte-identical to a first-ever save (criterion 8
+    /// on a destructive overwrite path). Same three-way discipline
+    /// `loop_graph_manage`'s workflow arm already applies to this very store.
+    #[tokio::test]
+    async fn save_refuses_to_overwrite_an_unreadable_stored_manifest() {
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store().await;
+        let t = tool(store, None);
+
+        let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var_os("ALEPH_HOME");
+        // SAFETY: guarded single mutator; restored below.
+        unsafe {
+            std::env::set_var("ALEPH_HOME", tmp.path());
+        }
+        // A stored template that carries a real per-step pin and one typo'd
+        // key: `deny_unknown_fields` refuses it, so the pin is unreachable but
+        // NOT gone.
+        let dir = tmp.path().join("workflows");
+        std::fs::create_dir_all(&dir).expect("workflows dir");
+        let corrupt = r#"{"name":"pipeline","description":"d","steps":[{"id":"gather","agent":"researcher","prompt":"p","model":"opus","maxRetires":3}]}"#;
+        std::fs::write(dir.join("pipeline.json"), corrupt).expect("seed corrupt template");
+
+        let refused = t
+            .call(WorkflowArgs::Save {
+                definition: linear_def(),
+            })
+            .await;
+        // A name with nothing on disk is unaffected — absent still means
+        // "author it fresh".
+        let mut fresh = linear_def();
+        fresh.name = "fresh".into();
+        let saved_fresh = t.call(WorkflowArgs::Save { definition: fresh }).await;
+        let on_disk = std::fs::read_to_string(dir.join("pipeline.json")).expect("file still there");
+        // SAFETY: same guarded invariant; restore prior value.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("ALEPH_HOME", v),
+                None => std::env::remove_var("ALEPH_HOME"),
+            }
+        }
+
+        let err = refused
+            .expect_err("saving over a file that will not parse must refuse, not overwrite")
+            .to_string();
+        assert!(
+            err.contains("maxRetires") || err.contains("unknown field"),
+            "the refusal carries the parse error so the file can be repaired: {err}"
+        );
+        assert!(
+            err.contains("delete") && err.contains("import"),
+            "the refusal names the two ways out: {err}"
+        );
+        assert_eq!(on_disk, corrupt, "the unreadable file is left byte-identical");
+        saved_fresh.expect("an absent name still saves");
+    }
+
+    /// A listing face answers "none"; it does not error. `runs` inherited
+    /// `run_groups`' "no runs found" error, which made "this workflow has never
+    /// run on this team" indistinguishable from a real failure — while the
+    /// faces that genuinely need a run (`status` / `cancel` / …) still do.
+    #[tokio::test]
+    async fn runs_with_no_runs_lists_nothing_instead_of_erroring() {
+        let store = setup_store().await;
+        let t = tool(store, None);
+
+        let out = t
+            .call(WorkflowArgs::Runs {
+                name: "pipeline".into(),
+                team_id: "team-empty".into(),
+            })
+            .await
+            .expect("a listing face answers 'none' honestly");
+        assert!(
+            out.runs.as_ref().expect("runs field present").is_empty(),
+            "empty list, not an absent field: {out:?}"
+        );
+        assert!(
+            out.message.contains("no runs of 'pipeline'") && out.message.contains("team-empty"),
+            "{}",
+            out.message
+        );
+
+        // The run-needing faces are unchanged: they cannot answer without one.
+        let status = t
+            .call(WorkflowArgs::Status {
+                name: "pipeline".into(),
+                team_id: "team-empty".into(),
+                run_id: None,
+                include_output: false,
+            })
+            .await;
+        assert!(status.is_err(), "status needs a run to report on");
+    }
+
+    /// The rendered file discloses partial fan-in in a `//` comment; the tool's
+    /// MESSAGE is the other face of that same fact, and the caller who exports
+    /// through the tool reads the message, not the file (criterion 9 — one
+    /// verb, several faces, one derivation).
+    #[tokio::test]
+    async fn export_message_discloses_partial_fan_in() {
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store().await;
+        let t = tool(store, None);
+
+        let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var_os("ALEPH_HOME");
+        // SAFETY: guarded single mutator; restored below.
+        unsafe {
+            std::env::set_var("ALEPH_HOME", tmp.path());
+        }
+        // a and b are independent; c waits for a ONLY — the body's
+        // `parallel([a, b]) / c` skeleton cannot say that.
+        let mut partial = linear_def();
+        partial.name = "partial".into();
+        partial.steps = vec![
+            step("a", "researcher", &[]),
+            step("b", "researcher", &[]),
+            step("c", "writer", &["a"]),
+        ];
+        let saved_partial = workflow::store::save(&WorkflowManifest::from_def(&partial));
+        let exported = t
+            .call(WorkflowArgs::Export {
+                name: "partial".into(),
+                write_file: false,
+            })
+            .await;
+        // A complete-bipartite (here: linear) DAG says nothing extra.
+        let saved_linear = workflow::store::save(&WorkflowManifest::from_def(&linear_def()));
+        let clean = t
+            .call(WorkflowArgs::Export {
+                name: "pipeline".into(),
+                write_file: false,
+            })
+            .await;
+        // SAFETY: same guarded invariant; restore prior value.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("ALEPH_HOME", v),
+                None => std::env::remove_var("ALEPH_HOME"),
+            }
+        }
+        saved_partial.expect("seed partial");
+        saved_linear.expect("seed linear");
+
+        let msg = exported.expect("export").message;
+        assert!(
+            msg.contains("partial fan-in") && msg.contains("c depends on: a"),
+            "the export message names the lossy steps: {msg}"
+        );
+        assert!(
+            msg.contains("@aleph-workflow"),
+            "and says which header keeps the re-import lossless: {msg}"
+        );
+        let clean_msg = clean.expect("export").message;
+        assert!(
+            !clean_msg.contains("partial fan-in"),
+            "a losslessly-expressible DAG gets no note: {clean_msg}"
+        );
     }
 }

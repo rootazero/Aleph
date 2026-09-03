@@ -317,9 +317,22 @@ pub(super) async fn list_tasks(
                 })
                 .unwrap_or_default();
             task.status = if task.status == CoordTaskStatus::Pending && unresolved > 0 {
-                // A terminally-failed dependency makes the task permanently
-                // stuck (Unsatisfiable); otherwise it is merely Blocked.
-                if dead > 0 {
+                if crate::agents::swarm::tasks::acceptance::tolerate_failed_deps(&task.metadata) {
+                    // Opted out of the dead-dependency rule: a failed/cancelled
+                    // upstream will never deliver, so it stops blocking rather
+                    // than killing the branch. `unresolved - dead` is what is
+                    // still capable of arriving — the same partition
+                    // `row_decode::has_live_unresolved_deps` expresses as a
+                    // query, kept as arithmetic here because this pass already
+                    // counts both sets in one scan.
+                    if unresolved - dead > 0 {
+                        CoordTaskStatus::Blocked
+                    } else {
+                        CoordTaskStatus::Pending
+                    }
+                } else if dead > 0 {
+                    // A terminally-failed dependency makes the task permanently
+                    // stuck (Unsatisfiable); otherwise it is merely Blocked.
                     CoordTaskStatus::Unsatisfiable
                 } else {
                     CoordTaskStatus::Blocked

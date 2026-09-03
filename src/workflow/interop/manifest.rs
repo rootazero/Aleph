@@ -41,8 +41,21 @@ use crate::workflow::def::{WorkflowDef, WorkflowStepDef, WorkflowStepKind};
 
 /// Declarative interchange manifest. JSON keys are camelCase to match the
 /// `.workflow.js` `meta` block (`dependsOn`, `whenToUse`).
+///
+/// `deny_unknown_fields`, like its step. Without it the two halves of one type
+/// answered the same question differently: a typo'd or renamed key on a STEP
+/// failed the import loudly, while the same typo at the TOP level was dropped
+/// wordlessly — `whenToUsed`, `phase` for `phases`, a hand-edited document with
+/// a stale key, all imported as "fine" with the field silently absent. Nothing
+/// legitimately produces an unknown top-level key: the manifest is written by
+/// `serde` (`store::save_at`, `export`'s embed header) and the only foreign
+/// documents that reach it are a `WorkflowDef` (`name`/`description`/`steps`,
+/// all declared here) and a hand-written manifest. Forward compatibility is not
+/// a need this store has — one binary owns `$ALEPH_HOME/workflows`, and a file
+/// from a newer Aleph is exactly the case where a loud refusal beats a partial
+/// load (P7, fail-closed).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowManifest {
     pub name: String,
     #[serde(default)]
@@ -140,6 +153,17 @@ pub struct WorkflowManifestStep {
     /// serialised `WorkflowDef` round-trips.
     #[serde(default, skip_serializing_if = "is_false", alias = "require_grounding")]
     pub require_grounding: bool,
+    /// Tolerant fan-in (see `WorkflowStepDef::tolerate_failed_deps`): run this
+    /// step even when a direct dependency ended failed/cancelled. Executable
+    /// core, so it round-trips through [`to_def`](WorkflowManifest::to_def);
+    /// omitted on the wire when false. The snake_case alias accepts a
+    /// serialised `WorkflowDef` — the document `describe` hands back.
+    #[serde(
+        default,
+        skip_serializing_if = "is_false",
+        alias = "tolerate_failed_deps"
+    )]
+    pub tolerate_failed_deps: bool,
     /// Per-step run timeout in seconds (see `WorkflowStepDef::timeout_seconds`).
     /// Executable core; omitted on the wire when unset.
     ///
@@ -181,7 +205,7 @@ pub struct WorkflowManifestStep {
 /// alarming direction, and false. What is worth doing here is refusing a value
 /// nobody can interpret, so a typo (`"worktee"`) fails at the boundary instead
 /// of riding through import → save → export as data that looks meaningful.
-pub const ISOLATION_VOCABULARY: &[&str] = &["worktree", "none"];
+pub(crate) const ISOLATION_VOCABULARY: &[&str] = &["worktree", "none"];
 const fn is_false(v: &bool) -> bool {
     !*v
 }
@@ -215,6 +239,7 @@ impl WorkflowManifest {
                     choices: s.choices.clone(),
                     review: s.review,
                     require_grounding: s.require_grounding,
+                    tolerate_failed_deps: s.tolerate_failed_deps,
                     timeout_secs: s.timeout_seconds,
                     max_retries: s.max_retries,
                 })
@@ -404,6 +429,7 @@ impl WorkflowManifest {
                     choices: s.choices.clone(),
                     review: s.review,
                     require_grounding: s.require_grounding,
+                    tolerate_failed_deps: s.tolerate_failed_deps,
                     timeout_seconds: s.timeout_secs,
                     max_retries: s.max_retries,
                 })
@@ -430,6 +456,7 @@ mod tests {
                     choices: vec![],
                     review: false,
                     require_grounding: false,
+                    tolerate_failed_deps: false,
                     timeout_seconds: None,
                     max_retries: None,
                 },
@@ -442,6 +469,7 @@ mod tests {
                     choices: vec![],
                     review: false,
                     require_grounding: false,
+                    tolerate_failed_deps: false,
                     timeout_seconds: None,
                     max_retries: None,
                 },
@@ -555,6 +583,7 @@ mod tests {
                 choices: vec![],
                 review: false,
                 require_grounding: false,
+                tolerate_failed_deps: false,
                 timeout_secs: None,
                 max_retries: None,
             }],
@@ -590,6 +619,7 @@ mod tests {
                 choices: vec![],
                 review: false,
                 require_grounding: false,
+                tolerate_failed_deps: false,
                 timeout_secs: None,
                 max_retries: None,
             }],
@@ -662,6 +692,41 @@ mod tests {
         assert_eq!(manifest, back);
     }
 
+
+    #[test]
+    fn tolerate_failed_deps_roundtrips_through_def_and_json() {
+        let mut def = core_def();
+        def.steps[1].tolerate_failed_deps = true;
+
+        // Executable core: it survives the manifest projection both ways, so a
+        // `describe` → edit → `save` cycle cannot quietly drop it.
+        let manifest = WorkflowManifest::from_def(&def);
+        assert!(!manifest.steps[0].tolerate_failed_deps);
+        assert!(manifest.steps[1].tolerate_failed_deps);
+        assert_eq!(manifest.to_def(), def);
+
+        // On the wire: camelCase, present only on the tolerant step.
+        let v = serde_json::to_value(&manifest).unwrap();
+        assert!(
+            v["steps"][0].get("tolerateFailedDeps").is_none(),
+            "an ordinary step omits the key (legacy byte-identical)"
+        );
+        assert_eq!(v["steps"][1]["tolerateFailedDeps"], true);
+        let back: WorkflowManifest =
+            serde_json::from_str(&serde_json::to_string(&manifest).unwrap()).unwrap();
+        assert_eq!(manifest, back);
+
+        // A def-shaped document (what `describe` hands back) uses snake_case —
+        // the alias keeps that path from dropping the flag silently.
+        let step: WorkflowManifestStep = serde_json::from_value(serde_json::json!({
+            "id": "synth",
+            "agent": "writer",
+            "prompt": "go",
+            "tolerate_failed_deps": true
+        }))
+        .unwrap();
+        assert!(step.tolerate_failed_deps);
+    }
     #[test]
     fn clarify_step_roundtrips_through_def_and_json() {
         let def = WorkflowDef {
@@ -676,6 +741,7 @@ mod tests {
                 choices: vec!["staging".into(), "prod".into()],
                 review: false,
                 require_grounding: false,
+                tolerate_failed_deps: false,
                 timeout_seconds: None,
                 max_retries: None,
             }],
@@ -735,5 +801,26 @@ mod tests {
         assert!(err.contains("unknown isolation"), "{err}");
         m.steps[0].isolation = Some("worktree".into());
         assert!(m.validate().is_ok(), "{:?}", m.validate());
+    }
+
+    #[test]
+    fn an_unknown_top_level_key_fails_the_parse() {
+        // The step half already refused unknown keys; the manifest half dropped
+        // them wordlessly, so a typo'd `whenToUsed` imported as "no whenToUse".
+        let json = r#"{"name":"wf","whenToUsed":"typo","steps":[]}"#;
+        let err = serde_json::from_str::<WorkflowManifest>(json)
+            .expect_err("an unknown top-level key must not be swallowed");
+        assert!(err.to_string().contains("whenToUsed"), "{err}");
+    }
+
+    #[test]
+    fn a_def_shaped_document_still_parses_as_a_manifest() {
+        // The fail-closed direction must not close the door on the document
+        // `describe` hands back: a serialised `WorkflowDef` has only
+        // name/description/steps at the top level, all declared here.
+        let json = serde_json::to_string(&core_def()).expect("serialise def");
+        let m: WorkflowManifest = serde_json::from_str(&json).expect("def-shaped doc parses");
+        assert_eq!(m.name, core_def().name);
+        assert_eq!(m.steps.len(), core_def().steps.len());
     }
 }

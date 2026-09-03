@@ -784,3 +784,211 @@ async fn delete_team_tasks_cascades_all_child_tables() {
     assert!(store.get_task(&t_b.id).await.unwrap().is_some());
     assert_eq!(store.list_task_comments(&t_b.id).await.unwrap().len(), 1);
 }
+
+/// Tolerant fan-in: a task stamped `tolerate_failed_deps` stops waiting on a
+/// dependency that ended `failed` — it is Pending (ready), never
+/// `Unsatisfiable` — while an unstamped sibling on the same edge stays
+/// `Unsatisfiable`. Both read paths must agree: `get_task` derives per row
+/// (`row_decode::derive_status`) and `list_tasks` derives from a counting join,
+/// two hand-copied expressions of one rule.
+#[tokio::test]
+async fn tolerant_dependent_of_a_failed_dep_is_ready_on_both_read_paths() {
+    let store = setup_store().await;
+    let new = |subject: &str, deps: Vec<String>, meta: serde_json::Value| NewCoordTask {
+        team_id: Some("team-tol".into()),
+        subject: subject.into(),
+        description: String::new(),
+        owner: Some("agent-1".into()),
+        priority: Priority::Normal,
+        blocked_by: deps,
+        metadata: meta,
+    };
+
+    let upstream = store.create_task(new("upstream", vec![], json!({}))).await.unwrap();
+    let tolerant = store
+        .create_task(new(
+            "synthesis",
+            vec![upstream.id.clone()],
+            json!({ "tolerate_failed_deps": true }),
+        ))
+        .await
+        .unwrap();
+    let strict = store
+        .create_task(new("strict", vec![upstream.id.clone()], json!({})))
+        .await
+        .unwrap();
+
+    // While the upstream is merely pending, BOTH dependents are Blocked —
+    // tolerance is about dead deps, not about skipping the wait.
+    assert_eq!(
+        store.get_task(&tolerant.id).await.unwrap().unwrap().status,
+        CoordTaskStatus::Blocked,
+        "a live upstream still blocks a tolerant task"
+    );
+
+    store
+        .update_task(
+            &upstream.id,
+            CoordTaskUpdate {
+                status: Some(CoordTaskStatus::Failed),
+                result: Some("boom".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store.get_task(&tolerant.id).await.unwrap().unwrap().status,
+        CoordTaskStatus::Pending,
+        "get_task: a tolerant dependent runs after its dep failed"
+    );
+    assert_eq!(
+        store.get_task(&strict.id).await.unwrap().unwrap().status,
+        CoordTaskStatus::Unsatisfiable,
+        "get_task: an unstamped dependent is still structurally dead"
+    );
+
+    let listed = store
+        .list_tasks(CoordTaskFilter {
+            team_id: Some("team-tol".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let status_of = |id: &str| listed.iter().find(|t| t.id == id).unwrap().status;
+    assert_eq!(
+        status_of(&tolerant.id),
+        CoordTaskStatus::Pending,
+        "list_tasks agrees with get_task — the dispatcher only ever sees this path"
+    );
+    assert_eq!(status_of(&strict.id), CoordTaskStatus::Unsatisfiable);
+}
+
+/// Tolerance is per-dependency-state, not per-task: one failed dep and one
+/// still-running dep leaves a tolerant task `Blocked`, because the live one may
+/// still deliver. (The bug this pins would be reading the flag as "ignore all
+/// deps".)
+#[tokio::test]
+async fn tolerant_task_with_a_live_dep_left_is_still_blocked() {
+    let store = setup_store().await;
+    let new = |subject: &str, deps: Vec<String>, meta: serde_json::Value| NewCoordTask {
+        team_id: Some("team-tol2".into()),
+        subject: subject.into(),
+        description: String::new(),
+        owner: Some("agent-1".into()),
+        priority: Priority::Normal,
+        blocked_by: deps,
+        metadata: meta,
+    };
+    let dead = store.create_task(new("dead", vec![], json!({}))).await.unwrap();
+    let live = store.create_task(new("live", vec![], json!({}))).await.unwrap();
+    let tolerant = store
+        .create_task(new(
+            "synthesis",
+            vec![dead.id.clone(), live.id.clone()],
+            json!({ "tolerate_failed_deps": true }),
+        ))
+        .await
+        .unwrap();
+
+    store
+        .update_task(
+            &dead.id,
+            CoordTaskUpdate {
+                status: Some(CoordTaskStatus::Failed),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store.get_task(&tolerant.id).await.unwrap().unwrap().status,
+        CoordTaskStatus::Blocked,
+        "one dep is dead, but the other can still arrive"
+    );
+    let listed = store
+        .list_tasks(CoordTaskFilter {
+            team_id: Some("team-tol2".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        listed.iter().find(|t| t.id == tolerant.id).unwrap().status,
+        CoordTaskStatus::Blocked
+    );
+
+    // The live dep completing is what releases it.
+    store
+        .update_task(
+            &live.id,
+            CoordTaskUpdate {
+                status: Some(CoordTaskStatus::Completed),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_task(&tolerant.id).await.unwrap().unwrap().status,
+        CoordTaskStatus::Pending
+    );
+}
+
+/// `get_newly_unblocked` answers for the FAILURE transition too: a tolerant
+/// dependent whose last blocking dep just failed is now runnable, and a caller
+/// asking "what did this transition release?" must be told. The strict
+/// dependent on the same edge is not released.
+#[tokio::test]
+async fn get_newly_unblocked_reports_a_tolerant_dependent_when_its_dep_fails() {
+    let store = setup_store().await;
+    let new = |subject: &str, deps: Vec<String>, meta: serde_json::Value| NewCoordTask {
+        team_id: Some("team-tol3".into()),
+        subject: subject.into(),
+        description: String::new(),
+        owner: Some("agent-1".into()),
+        priority: Priority::Normal,
+        blocked_by: deps,
+        metadata: meta,
+    };
+    let upstream = store.create_task(new("upstream", vec![], json!({}))).await.unwrap();
+    let tolerant = store
+        .create_task(new(
+            "synthesis",
+            vec![upstream.id.clone()],
+            json!({ "tolerate_failed_deps": true }),
+        ))
+        .await
+        .unwrap();
+    let _strict = store
+        .create_task(new("strict", vec![upstream.id.clone()], json!({})))
+        .await
+        .unwrap();
+
+    assert!(
+        store.get_newly_unblocked(&upstream.id).await.unwrap().is_empty(),
+        "nothing is released while the upstream is still pending"
+    );
+
+    store
+        .update_task(
+            &upstream.id,
+            CoordTaskUpdate {
+                status: Some(CoordTaskStatus::Failed),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let released = store.get_newly_unblocked(&upstream.id).await.unwrap();
+    let ids: Vec<&str> = released.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec![tolerant.id.as_str()],
+        "only the tolerant dependent is released by a failure"
+    );
+    assert_eq!(released[0].status, CoordTaskStatus::Pending);
+}

@@ -119,17 +119,61 @@ pub(super) fn has_dead_deps(conn: &Connection, task_id: &str) -> rusqlite::Resul
     )
 }
 
+/// Determine if a pending task has at least one unresolved dependency that is
+/// still ALIVE — neither satisfying (`completed`/`skipped`) nor terminally dead
+/// (`failed`/`cancelled`). This is what still blocks a task whose metadata
+/// tolerates dead deps: a dead upstream will never deliver, so waiting on it is
+/// waiting forever, but a `pending`/`in_progress`/`waiting_review` upstream
+/// still might.
+///
+/// Both status sets are the SAME literals the strict pair above uses, copied
+/// verbatim rather than re-partitioned, so the drift-guard in
+/// `tasks/mod.rs::dependency_resolution_rule_is_pinned_across_all_statuses`
+/// still covers every literal in this file.
+pub(super) fn has_live_unresolved_deps(
+    conn: &Connection,
+    task_id: &str,
+) -> rusqlite::Result<bool> {
+    conn.query_row(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM coord_task_dependencies d
+            JOIN coord_tasks dep ON dep.id = d.depends_on
+            WHERE d.task_id = ?1
+              AND dep.status NOT IN ('completed', 'skipped')
+              AND dep.status NOT IN ('failed', 'cancelled')
+        )
+        "#,
+        params![task_id],
+        |row| row.get(0),
+    )
+}
+
 /// Derive the effective status for a task (`Blocked`/`Unsatisfiable` are
 /// computed, not stored). A pending task with unresolved deps is
 /// `Unsatisfiable` when one of those deps terminally failed, otherwise
 /// `Blocked`.
+///
+/// `metadata` is the task's own row metadata: a task stamped
+/// [`TOLERATE_FAILED_DEPS_METADATA_KEY`](crate::agents::swarm::tasks::acceptance::TOLERATE_FAILED_DEPS_METADATA_KEY)
+/// opts out of the dead-dependency rule — a failed/cancelled upstream stops
+/// blocking it (and can never make it `Unsatisfiable`), while any dep still
+/// capable of delivering keeps it `Blocked`. The flag is per-task and covers
+/// only its DIRECT dependencies; it is not inherited down the DAG.
 pub(super) fn derive_status(
     conn: &Connection,
     task_id: &str,
     stored: CoordTaskStatus,
+    metadata: &serde_json::Value,
 ) -> rusqlite::Result<CoordTaskStatus> {
     if stored == CoordTaskStatus::Pending && has_unresolved_deps(conn, task_id)? {
-        if has_dead_deps(conn, task_id)? {
+        if crate::agents::swarm::tasks::acceptance::tolerate_failed_deps(metadata) {
+            if has_live_unresolved_deps(conn, task_id)? {
+                Ok(CoordTaskStatus::Blocked)
+            } else {
+                Ok(CoordTaskStatus::Pending)
+            }
+        } else if has_dead_deps(conn, task_id)? {
             Ok(CoordTaskStatus::Unsatisfiable)
         } else {
             Ok(CoordTaskStatus::Blocked)
@@ -149,7 +193,7 @@ pub(super) fn load_task(conn: &Connection, task_id: &str) -> rusqlite::Result<Op
     match task_opt {
         Some(mut task) => {
             task.dependencies = load_dependencies(conn, &task.id)?;
-            task.status = derive_status(conn, &task.id, task.status)?;
+            task.status = derive_status(conn, &task.id, task.status, &task.metadata)?;
             Ok(Some(task))
         }
         None => Ok(None),

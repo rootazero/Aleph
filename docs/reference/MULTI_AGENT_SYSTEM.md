@@ -1062,8 +1062,12 @@ coordination-task DAG to completion without leader micro-management.
   (`execute_member_task`) — real cancellation, no process-spawn cost, no
   scheduling latency.
 - **DAG as protocol**: a task created with `blocked_by` edges runs only once
-  every dependency is `Completed` (`CoordTaskStore` derives the `Blocked`
-  status dynamically). Fan-in is simply a task that depends on several others.
+  every dependency **satisfies** it — `Completed` or `Skipped`, the set
+  `CoordTaskStatus::satisfies_dependency` owns. `Blocked` and `Unsatisfiable`
+  are *derived at read time*, never stored: a pending task with unresolved
+  deps is `Unsatisfiable` when one of them is terminally dead
+  (`failed`/`cancelled`) and merely `Blocked` otherwise. Fan-in is simply a
+  task that depends on several others.
 - **Claiming**: each runnable task is claimed with an atomic lock; a
   concurrency cap (`DispatcherConfig::max_concurrent`, default 4) bounds
   parallelism.
@@ -1071,6 +1075,45 @@ coordination-task DAG to completion without leader micro-management.
   process are reclaimed and rescheduled.
 - **Unknown owner** is an explicit failure — the task is marked `Failed` with a
   clear error rather than left silently stuck.
+
+### Tolerant fan-in — a metadata-gated exception to that rule (2026-09-03)
+
+A task stamped `TOLERATE_FAILED_DEPS_METADATA_KEY`
+(`agents/swarm/tasks/acceptance.rs`; written by `workflow::compile::materialize`
+for a step declaring `tolerate_failed_deps`, and only then — an unstamped row
+is byte-identical) opts out of the **terminal-dead half** only: a
+`failed`/`cancelled` dependency stops blocking it and can never make it
+`Unsatisfiable`, while a dependency still capable of delivering
+(`pending`/`in_progress`/`waiting_review`) keeps it `Blocked`. It covers that
+task's **direct** dependencies only and is not inherited down the DAG.
+
+The rule "a dep is satisfied iff its status ∈ {completed, skipped}" is
+expressed once as `CoordTaskStatus::satisfies_dependency` and hand-copied as
+raw SQL in the store; the tolerant exception therefore lives in exactly the
+**three derivation sites**, each reading the stamp off the task's own
+metadata:
+
+| site | how the exception reads |
+|---|---|
+| `store/row_decode.rs::derive_status` | new `has_live_unresolved_deps` (unresolved **and not** dead) → `Blocked`; nothing live left → `Pending` |
+| `store/crud.rs::list_tasks` | the same partition as arithmetic over the counts this pass already scans: `unresolved - dead == 0` ⇒ `Pending`, never `Unsatisfiable` |
+| `store/deps.rs::get_newly_unblocked(settled_id)` | counts satisfied **and** dead deps, so a tolerant dependent is reported when its last blocking dep *fails* |
+
+**`CoordTaskStatus::satisfies_dependency` is deliberately unchanged.** A
+failed producer still satisfies nobody; the *consumer* merely decides to stop
+waiting. Putting the exception in the predicate would make the classification
+depend on who is asking. The drift guard
+`tasks/mod.rs::dependency_resolution_rule_is_pinned_across_all_statuses`
+(wildcard-free match + literal assertions) documents the exception and pins
+the exact `as_str()` literals the SQL copies depend on — **change one site and
+you change them all in the same edit**.
+
+Tests: `tolerant_dependent_of_a_failed_dep_is_ready_on_both_read_paths` (which
+also asserts the strict twin still derives `Unsatisfiable`),
+`tolerant_task_with_a_live_dep_left_is_still_blocked`,
+`get_newly_unblocked_reports_a_tolerant_dependent_when_its_dep_fails`
+(`agents/swarm/tasks/store/tests.rs`). The downstream prompt side is
+[WORKFLOW_TEMPLATES.md](WORKFLOW_TEMPLATES.md) *Tolerant fan-in*.
 
 ### Outcomes that are not verdicts (2026-08-08)
 
