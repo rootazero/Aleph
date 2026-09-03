@@ -572,7 +572,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // a run-tree-wide task-local next to `FsScope`/agent-id so the channel
         // approval bridge can stamp it onto a pending record. `None` for
         // non-channel runs — the gate then degrades to the prior behaviour.
-        let originator = request.metadata.get("originator_user_id").cloned();
+        let originator = request.metadata.get(super::ORIGINATOR_USER_KEY).cloned();
         // This run's channel-delivery buffer, published run-tree-wide for the
         // same reason as `originator`: the tool chokepoint that harvests a
         // tool's `_media` sits many frames below here and must not have the
