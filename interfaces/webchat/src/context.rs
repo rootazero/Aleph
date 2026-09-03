@@ -1304,8 +1304,16 @@ impl DashboardState {
                                         } else {
                                             // This is an event notification
                                             // Parse event format: { "method": "event", "params": { "topic": "...", "data": {...} } }
+                                            //
+                                            // The method name comes from the
+                                            // shared constant, not a literal:
+                                            // it is a wire key, and this was
+                                            // the sixth writer of it — the one
+                                            // the constant was introduced to
+                                            // abolish and then missed, on the
+                                            // client side of the same wire.
                                             if let Some(method) = value.get("method").and_then(|m| m.as_str()) {
-                                                if method == "event" {
+                                                if method == aleph_protocol::jsonrpc::TOPIC_EVENT_METHOD {
                                                     if let Some(params) = value.get("params") {
                                                         if let Some(topic) = params.get("topic").and_then(|t| t.as_str()) {
                                                             let data = params.get("data").cloned().unwrap_or(Value::Null);
