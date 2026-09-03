@@ -139,6 +139,15 @@ fi
 BIN="$TARGET_DIR/debug/aleph-server"
 [ -x "$BIN" ] || BIN="$BIN.exe"
 [ -x "$BIN" ] || { echo "no binary at $TARGET_DIR/debug/aleph-server" >&2; exit 1; }
+# `cargo clippy --all-targets` replaces every linked binary in this directory
+# with an EMPTY file (clippy-driver never links, but still writes the artifact).
+# The file is still executable, so `-x` above is satisfied and the run limps on
+# to "no config generated" — a message that reads like a server bug. Measured
+# on this host 2026-09-03, right after `cargo clippy --workspace --all-targets`.
+[ -s "$BIN" ] || {
+  echo "$BIN is 0 bytes — a clippy --all-targets run emptied it; rebuild with SKIP_BUILD=0" >&2
+  exit 1
+}
 
 say "generate a baseline config"
 timeout 25 "$BIN" start >"$QA_ROOT/gen.log" 2>&1 &
@@ -168,10 +177,11 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
   # How the dangle is MADE on this host — patch_r2.mjs's header, point 3, has
   # the two measurements that rule out a long-running command. `ask` parks the
   # dispatched call on a card nobody answers, which IS "dispatched, no
-  # receipt"; `deny` is the `denied` stage's subject; `allow` is what the burst
-  # stage wants (many fast event pairs).
+  # receipt"; `allow` is what the burst stage wants (many fast event pairs).
+  # `deny` is NOT the `denied` stage's instrument — a statically denied call is
+  # answered in the same turn, so it is never dangling; see
+  # `drive_r2.mjs::cmdForgeDenial`.
   BASH_POLICY="ask"
-  [ "$STAGE" = "denied" ] && BASH_POLICY="deny"
   [ "$STAGE" = "holes" ] && BASH_POLICY="allow"
   BURST="${QA_BURST:-40}"
 
@@ -211,15 +221,33 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
       fi
       ;;
     denied)
-      # `bash = "deny"` above: the dispatch crosses the line and the gate
-      # refuses it, so the log holds a dispatch with no receipt AND a denial.
+      # Resume OFF for the same reason as `claims`: the receipt below must be
+      # the only pass over this log. The denial itself is appended between the
+      # kill and the restart, with the server down — the one row a crash inside
+      # the denial window would have left, and the only half of this shape a
+      # fixture outside the process can produce (drive_r2.mjs::cmdForgeDenial
+      # carries the two measurements).
+      node "$HERE/patch_r2.mjs" "$CONFIG" "$GATEWAY_PORT" "$MOCK_PORT" false "$BASH_POLICY" >/dev/null || exit 1
       start_server || exit 1
-      drive dangle qa-dangle || RC=1
+      drive dangle qa-dangle || { echo "instrument failure: no dangle" >&2; RC=1; }
       hard_kill_server
+      [ "$RC" = "0" ] && { drive assert-dangling 1 || RC=1; }
+      [ "$RC" = "0" ] && { drive forge-denial || RC=1; }
       [ "$RC" = "0" ] && { start_server || exit 1; }
-      [ "$RC" = "0" ] && { drive denied || RC=1; }
+      [ "$RC" = "0" ] && { drive denied wire || RC=1; }
+      if [ "$RC" = "0" ]; then
+        say "aleph-server resume --json"
+        "$BIN" resume --json "$(cat "$SESSION_FILE")" >"$RECEIPT" 2>"$QA_ROOT/resume.err"
+        echo "resume rc=$? receipt:"; cat "$RECEIPT"
+        drive denied model || RC=1
+      fi
       ;;
     rewind)
+      # Resume OFF: a boot scan that repaired and re-ran the session would
+      # leave nothing open to rewind past, and `balance_run_markers_after_retire`
+      # deliberately leaves a RUNNING session's marker alone — the stage would
+      # then be green over a session it never tested.
+      node "$HERE/patch_r2.mjs" "$CONFIG" "$GATEWAY_PORT" "$MOCK_PORT" false "$BASH_POLICY" >/dev/null || exit 1
       start_server || exit 1
       drive dangle qa-dangle || RC=1
       hard_kill_server

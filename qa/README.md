@@ -78,6 +78,49 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                        # tree this must FAIL — both misattributed to "the server
                                        # restarted" — which is the falsifying arm for the design
                                        # spec's §1.4 claim.
+./qa/resume_boundary/run.sh claims     # ONE reduction, three faces, and they must agree: the wire
+                                       # (`chat.history` → `session.last_run`, the exact field the
+                                       # Panel sidebar and TUI picker render), the operator
+                                       # (`aleph-server resume --json` → every `ResumeReceipt`
+                                       # key), and the effect (`last_run` settles to `clean`).
+                                       # Boots with resume OFF so the receipt is the ONLY pass
+                                       # over the log — a boot scan that already repaired it
+                                       # makes every counter read zero, which looks like the
+                                       # feature working. Also prints the two uncapped reads
+                                       # A10 deferred (`load_all_events`, `load_run_markers`) as
+                                       # NUMBERS: a cost on record is not a cost until measured.
+./qa/resume_boundary/run.sh denied     # a dangling call the approval gate DENIED must be repaired
+                                       # "NOT EXECUTED", never "OUTCOME UNKNOWN" — the model must
+                                       # not go looking for side effects that cannot exist. The
+                                       # denial row is written by the fixture with the server
+                                       # down, because that is the only half of this shape
+                                       # reachable from outside: a statically denied call is
+                                       # answered in the same turn (never dangling), and the
+                                       # crash window between a denial and its receipt is inside
+                                       # one process. Everything downstream — reduction, the
+                                       # `denied` flag on the wire, the repair text, the receipt
+                                       # — is the product reading its own log.
+./qa/resume_boundary/run.sh rewind     # a rewind that takes a `RunStarted` away with it must
+                                       # leave the marker tail BALANCED. Without it the log says
+                                       # a run is still open, and every later boot re-classifies
+                                       # the session `Interrupted` and re-runs a turn the user
+                                       # deleted — forever, because nothing else closes that
+                                       # marker. Resume is OFF: `balance_run_markers_after_retire`
+                                       # deliberately leaves a RUNNING session alone, so a stage
+                                       # that let the boot scan resume first would be green over
+                                       # a session it never tested.
+./qa/resume_boundary/run.sh knobs      # the resumed run follows the SNAPSHOT its `RunStarted`
+                                       # carried, not the session's current row. The session is
+                                       # moved to model B after the crash; the request the
+                                       # resumed run puts in front of the provider must still say
+                                       # model A. One model on the provider could not tell those
+                                       # apart — the assertion would pass for a build that
+                                       # dropped the envelope entirely.
+./qa/resume_boundary/run.sh holes      # a burst of tool calls in one turn must not lose a row:
+                                       # after a restart, `chat.history` rows == projectable
+                                       # events in `session_events`. Set `QA_BURST` to push the
+                                       # projector queue; at the default the queue never fills,
+                                       # and the stage says so rather than reporting a green.
 ./qa/session_order/run.sh        # the transcript's order and `session.truncate`, on BOTH
                                  # backends. Drives one conversation into a file-backed
                                  # server and a sqlite-backed one (separate scratch

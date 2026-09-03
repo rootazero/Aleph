@@ -416,25 +416,115 @@ async function cmdClaimsReceipt(receiptFile) {
   conn.close();
 }
 
-/** Stage `denied`: a call the approval gate refused must not be reported as "unknown". */
-async function cmdDenied() {
+/**
+ * Write the ONE event a crash inside the denial window would have left.
+ *
+ * The `denied` stage's subject is `DanglingDeniedCall`: a dispatch that was
+ * denied and whose `ToolError` receipt never landed, which
+ * `boundary_repair_text` answers with "NOT EXECUTED" instead of "OUTCOME
+ * UNKNOWN". Producing that from OUTSIDE the process is not possible, and this
+ * is measured rather than assumed:
+ *
+ *   * with a static `bash = "deny"` policy the gate refuses, appends
+ *     `tool_call_denied` AND the tool's own `ToolError` receipt in the same
+ *     turn — so the call is answered and nothing is ever dangling (this is
+ *     what the first version of the stage hit: `cmdDangle` timed out with
+ *     "no dangling dispatch ever reached the durable log", because there was
+ *     correctly none);
+ *   * with `ask`, the denial only exists if a card is answered, and the
+ *     receipt follows it microseconds later inside the same process.
+ *
+ * A `kill -9` cannot be aimed between those two appends from a shell. So the
+ * fixture appends that row itself — with the server DOWN, at head+1, carrying
+ * the real dispatch's own `turn_id`/`call_id`, in the exact `#[serde(tag =
+ * "type")]` shape `SqliteEventStore::append` writes. Nothing downstream is
+ * simulated: the reduction, the `denied` flag on the wire, the repair text and
+ * the resume receipt are all the product reading its own log off disk.
+ */
+function cmdForgeDenial() {
+  const ids = danglingIds();
+  if (ids.length === 0) {
+    console.error("INSTRUMENT FAILURE: no dangling dispatch to deny");
+    process.exit(1);
+  }
+  const db = new DatabaseSync(EVENTS_DB);
+  try {
+    const row = db
+      .prepare(
+        "SELECT session_id, seq, turn_id, payload_json FROM session_events \
+         WHERE event_type = 'tool_call_requested' AND retired_at IS NULL \
+         ORDER BY seq DESC LIMIT 1",
+      )
+      .get();
+    if (!row) {
+      console.error("INSTRUMENT FAILURE: no tool_call_requested row in the log");
+      process.exit(1);
+    }
+    const dispatch = JSON.parse(row.payload_json);
+    if (!ids.includes(dispatch.call_id)) {
+      console.error(`INSTRUMENT FAILURE: newest dispatch ${dispatch.call_id} is not dangling`);
+      process.exit(1);
+    }
+    const head = db
+      .prepare("SELECT MAX(seq) AS m FROM session_events WHERE session_id = ?")
+      .get(row.session_id).m;
+    const at = Date.now();
+    const payload = JSON.stringify({
+      type: "tool_call_denied",
+      turn_id: dispatch.turn_id,
+      call_id: dispatch.call_id,
+      reason: "operator denied the card; the server died before the receipt",
+      at,
+    });
+    db.prepare(
+      "INSERT INTO session_events (session_id, seq, turn_id, event_type, payload_json, created_at) \
+       VALUES (?, ?, ?, ?, ?, ?)",
+    ).run(row.session_id, Number(head) + 1, row.turn_id, "tool_call_denied", payload, at);
+    log(`forged tool_call_denied for ${dispatch.call_id} at seq ${Number(head) + 1}`);
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Stage `denied`: a call the approval gate refused must not be reported as
+ * "unknown". `sub=wire` runs before the resume (the reducer's reading of the
+ * log); `sub=model` after it (what the repair actually put in front of the
+ * model).
+ */
+async function cmdDenied(sub) {
   const key = readSession();
-  const wanted = "denied by the approval gate and did not run";
-  const hit = await until(
-    () => requests().find((r) => userText(r.body).includes(wanted)) || null,
-    180_000,
-    1000,
-  );
-  check(Boolean(hit), "the model's next request says the call was DENIED, not `OUTCOME UNKNOWN`", () =>
-    requests().length + " requests logged",
-  );
+  if (sub === "model") {
+    const wanted = "denied by the approval gate and did not run";
+    const hit = await until(
+      () => requests().find((r) => userText(r.body).includes(wanted)) || null,
+      180_000,
+      1000,
+    );
+    check(
+      Boolean(hit),
+      "the model's next request says the call was DENIED, not `OUTCOME UNKNOWN`",
+      `${requests().length} requests logged, none carrying the phrase`,
+    );
+    const unknown = requests().some((r) => userText(r.body).includes("OUTCOME UNKNOWN"));
+    check(!unknown, "and no request calls that same denied call's outcome UNKNOWN", String(unknown));
+    return;
+  }
   const conn = new Conn("driver");
   await conn.open();
   const { lastRun } = await lastRunOf(conn, key);
   const denied = (lastRun?.dangling || []).some((d) => d.denied === true);
   check(denied, "the wire face flags the dangling call as denied", show(lastRun?.dangling));
+  check(
+    lastRun?.disposition === "interrupted",
+    "and still reads the run as interrupted — a denial does not close a run",
+    show(lastRun?.disposition),
+  );
   conn.close();
 }
+
+/** Live (non-retired) rows of the durable log. A rewind retires, never deletes. */
+const liveEvents = (key) => eventsOf(key).filter((r) => r.retired_at === null);
 
 /** Stage `rewind`: a rewind past a RunStarted must leave the marker tail balanced. */
 async function cmdRewind(sub) {
@@ -442,11 +532,32 @@ async function cmdRewind(sub) {
   const conn = new Conn("driver");
   await conn.open();
   if (sub === "do") {
-    const before = eventsOf(key).length;
-    const r = await conn.attempt("chat.rewind", { session_key: key, count: 1 });
+    // `RewindParams` is `{session_key, seq}` — `seq` is the FIRST event to
+    // retire, inclusive, not a count of messages. Aim it at the `RunStarted`
+    // of the run that was cut off: that is the whole point of the stage, a
+    // rewind that takes the marker's opening half away with it.
+    const live = liveEvents(key);
+    const started = [...live].reverse().find((r) => r.event_type === "run_started");
+    if (!started) {
+      console.error("INSTRUMENT FAILURE: no live run_started row to rewind past");
+      console.error(`  event types: ${live.map((r) => r.event_type).join(",")}`);
+      process.exit(1);
+    }
+    const before = live.length;
+    const r = await conn.attempt("chat.rewind", { session_key: key, seq: started.seq });
     check(!r.error, "chat.rewind is accepted on a session whose run was cut off", show(r.error));
-    const after = eventsOf(key).length;
-    log(`events ${before} -> ${after}`);
+    const after = liveEvents(key).length;
+    log(`live events ${before} -> ${after} (rewound at seq ${started.seq})`);
+    check(
+      after < before,
+      "the rewind actually retired the tail — otherwise the balance below is vacuous",
+      `${before} -> ${after}`,
+    );
+    check(
+      Number(r.result?.events_retired ?? 0) === before - after,
+      "and the reply's events_retired agrees with the log",
+      show(r.result),
+    );
     const { lastRun } = await lastRunOf(conn, key);
     check(
       lastRun?.disposition === "clean" || lastRun?.disposition === "never_ran",
@@ -584,8 +695,11 @@ const main = async () => {
     case "claims-receipt":
       await cmdClaimsReceipt(REST[0]);
       break;
+    case "forge-denial":
+      cmdForgeDenial();
+      break;
     case "denied":
-      await cmdDenied();
+      await cmdDenied(REST[0] ?? "wire");
       break;
     case "rewind":
       await cmdRewind(REST[0] ?? "do");
