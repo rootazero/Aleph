@@ -3218,10 +3218,16 @@ mod tests {
         assert!(
             missing.len() <= 132,
             "{} tools have no schema in the unconditionally-built registry map, up from the 132 \
-             recorded here, so `registry_schema_bytes_ratchet` does not bound them. Either a \
-             tool ships with no parameters at all (free, and fine), or it registers only once a \
-             dependency is live and its schema is unmeasured (not fine, just not cheap to fix). \
-             Raise this pin deliberately: {missing:?}",
+             recorded here, so `registry_schema_bytes_ratchet` does not bound them. Three ways in, \
+             and they are not equally fine. (a) The tool ships with no parameters at all — free, \
+             and fine. (b) It registers only once a dependency is live, so its schema is unmeasured \
+             — not fine, just not cheap to fix. (c) It registers UNCONDITIONALLY through the \
+             `extra_defs` back-fill in `builder/constructor/mod.rs`, which `unconditional_registry_map()` \
+             here does not call — the schema does ship in every deployment and this test simply \
+             cannot see it, so the residue is this test's blind spot rather than a production gap. \
+             Five tools are in (c) as of 2026-09-02; if yours is one, pin the production fact with \
+             its own wiring test (see `terminal_wiring_tests::terminal_registers_its_schema`) \
+             before raising this number. Raise this pin deliberately: {missing:?}",
             missing.len()
         );
     }
