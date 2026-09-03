@@ -1133,8 +1133,20 @@ mod tests {
         disable_for_test();
 
         let recovered = init_and_reconcile(tmp.path().to_path_buf());
+        // Scoped to the two ids the notice spoke for, NOT to "the directory is
+        // empty". The store's directory is process-global while it is enabled,
+        // and `gate()` only serialises the tests that take it — a test in
+        // another module that persists a run of its own (there is one:
+        // `subagent_tool::tests` writes a "background work" record) lands it in
+        // whichever directory happens to be installed. Asserting emptiness made
+        // this test report a foreign record as "the delivery failed to stamp",
+        // observed once in a full `--lib` run on 2026-09-03 and green under
+        // every module-filtered run. The claim is about the ids, so it is the
+        // ids that are asserted.
         assert!(
-            recovered.is_empty(),
+            !recovered
+                .iter()
+                .any(|r| ["req-a", "req-b"].contains(&r.record.request_id.as_str())),
             "both ids were stamped by the delivery: {recovered:?}"
         );
         disable_for_test();

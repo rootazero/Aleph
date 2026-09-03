@@ -39,7 +39,6 @@
 //! so a repair can never interleave with the live drain of the same session.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -192,10 +191,6 @@ pub struct MessageProjector {
     /// A pinned SSOT log, or `None` to read the process-wide slot at use time.
     events: Option<Arc<dyn SessionEventStore>>,
     missed: Arc<StdMutex<MissedSeqs>>,
-    /// Events the observer could not hand to the drain and that a heal has yet
-    /// to pick up. Surfaced so the real-machine QA burst stage can report a
-    /// number instead of an adjective.
-    deferred: AtomicU64,
 }
 
 impl MessageProjector {
@@ -238,7 +233,6 @@ impl MessageProjector {
             bus,
             events,
             missed,
-            deferred: AtomicU64::new(0),
         })
     }
 
@@ -247,13 +241,6 @@ impl MessageProjector {
     #[must_use]
     pub fn projection_store(&self) -> Arc<dyn SessionStore> {
         self.store.clone()
-    }
-
-    /// Events the observer could not enqueue and that no heal has yet picked
-    /// up. Monotonic: it counts arrivals at the gap, not the current backlog.
-    #[must_use]
-    pub fn deferred_count(&self) -> u64 {
-        self.deferred.load(Ordering::Relaxed)
     }
 
     /// Respawn the drain if it has stopped.
@@ -938,8 +925,10 @@ impl SessionEventObserver for MessageProjector {
             // from the log and writes the row. Nothing is lost while this
             // process lives; a crash before the heal leaves it to the next
             // boot's activity-window repair.
+            // One `warn!` per deferral is the observable — a counter with no
+            // reader was cut on 2026-09-03 (the real-machine burst stage counts
+            // these lines instead).
             Err(mpsc::error::TrySendError::Full(_)) => {
-                self.deferred.fetch_add(1, Ordering::Relaxed);
                 lock_missed(&self.missed).record(id, record.seq);
                 tracing::warn!(
                     session = ?id,
@@ -950,7 +939,6 @@ impl SessionEventObserver for MessageProjector {
             // The drain task has stopped/panicked — a real incident, not routine
             // back-pressure. Record the seq, then respawn the writer.
             Err(mpsc::error::TrySendError::Closed(_)) => {
-                self.deferred.fetch_add(1, Ordering::Relaxed);
                 lock_missed(&self.missed).record(id, record.seq);
                 tracing::error!(
                     session = ?id,
