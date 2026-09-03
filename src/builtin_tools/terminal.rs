@@ -17,14 +17,38 @@
 //! `terminal` is listed in [`method_authz::OPERATOR_TOOLS`]
 //! (`crate::gateway::method_authz`), which walls it from chat-tier channels
 //! and members at the tool-dispatch gate, AND checked again inline in
-//! [`TerminalTool::call`] the same way `select_model`'s `moa:` arm and
-//! `loop_manage`'s cross-session arm gate themselves — belt and suspenders,
-//! because a call that reaches here by some path other than
-//! `ScopedToolService` (a future dispatch route, a direct test) must not
-//! find the door unlocked. **Do not remove either half without re-deriving
-//! why the other one is enough on its own** — that removal is exactly how
-//! `plugin_manage` shipped ungated on one face while its RPC twin was closed
-//! (see `method_authz.rs`'s own module doc).
+//! [`TerminalTool::call`].
+//!
+//! Unlike `select_model`'s `moa:` arm and `loop_manage`'s cross-session arm —
+//! which gate their one sensitive action inline INSTEAD OF listing the whole
+//! tool in `OPERATOR_TOOLS` — `terminal` gates the WHOLE tool both ways, and
+//! the two halves do not agree on every path. Say that out loud rather than
+//! leaving the next reader to derive it:
+//!
+//! - On the `ScopedToolService` path (`tools/scoped/dispatch.rs`), a
+//!   chat-tier or member caller trips `OPERATOR_TOOLS` membership and
+//!   `check_operator_gate` raises a live operator-approval card. **Even when
+//!   a human approves that card, this tool still refuses anyway** — approval
+//!   only flips `authorized` for the dispatch pipeline; nothing re-stamps
+//!   [`crate::tools::turn_context::TurnContext`], so [`caller_is_operator`]
+//!   below reads the same unchanged `caller_role` and answers `false`
+//!   regardless. The refusal message that follows must not be read as "go
+//!   get an operator" — an operator may have just said yes.
+//! - On the `tools.invoke` path (`handlers/tools_invoke.rs`), no
+//!   `TurnContext` is ever set, so [`caller_is_operator`] returns `true`
+//!   unconditionally and contributes nothing there; `OPERATOR_TOOLS`
+//!   membership (checked directly against `caller_role` by that handler,
+//!   not through this tool) is the only thing closing that path.
+//!
+//! **Do not remove the inline check to "fix" the disagreement on the first
+//! path above** — the fix belongs in `gate_chain.rs`'s card text (see the
+//! `OPERATOR_TOOLS` entry's own comment in `method_authz.rs`), not here:
+//! dropping the inline check would make that (currently misleading) card
+//! actually grant a read of another principal's live terminal screen. This
+//! is also exactly how `plugin_manage` once shipped ungated on one face
+//! while its RPC twin stayed closed (see `method_authz.rs`'s own module
+//! doc) — removing either half without re-deriving why the other is enough
+//! on its own reopens that failure mode.
 //!
 //! Absent `caller_role` reads as operator (`role_is_operator`, "no identity
 //! was resolved" — internal wiring, cron, a test — not "a stranger"), the
@@ -121,7 +145,16 @@ impl AlephTool for TerminalTool {
         notify_tool_start(Self::NAME, action_label);
 
         if !caller_is_operator() {
-            let message = "terminal requires operator; refused.".to_string();
+            // Do not shorten this back to "requires operator; refused." — an
+            // operator-approval card for THIS call may have just been shown
+            // and answered "yes" (see the module doc's `ScopedToolService`
+            // paragraph). This message exists so that outcome does not read
+            // as "go get an operator", which is exactly what may have
+            // already happened.
+            let message = "terminal requires operator; refused, and an operator approving \
+                this call's own escalation card does not lift the refusal — nothing \
+                re-stamps the caller's role after approval."
+                .to_string();
             notify_tool_result(Self::NAME, &message, false);
             return Ok(TerminalOutput {
                 success: false,

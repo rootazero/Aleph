@@ -136,6 +136,18 @@ const OPERATOR_TOOLS: &[&str] = &[
     // bypass of a decision `pty.*`/`runtime.*` already made twice.
     // Before deleting this entry to "clean up" an apparent `*_read`
     // exception: re-read the paragraph above, not just this line.
+    //
+    // ⚠️ The escalation card membership here triggers
+    // (`gate_chain::GateRule::OperatorRequired::reason`, in
+    // `tools/scoped/gate_chain.rs`) reads "… which changes Aleph's own
+    // configuration. Approve to allow this change." That sentence is false
+    // for `terminal` — a read-only tool that changes nothing. Nothing is
+    // disclosed by it today only because `terminal`'s own inline gate
+    // refuses the call anyway even after a human approves that card
+    // (`caller_is_operator()` reads an unchanged `TurnContext` — see
+    // `terminal.rs`'s module doc). The card's TEXT is still wrong for a
+    // read-only tool, and the fix belongs in `gate_chain.rs`, not in this
+    // list or in `terminal.rs` (task-11 review F1).
     "terminal",
 ];
 
