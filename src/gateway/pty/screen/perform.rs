@@ -37,6 +37,17 @@ struct ScreenState {
     bg: Color,
     attrs: Attrs,
     title: Option<String>,
+    /// Latest ConEmu `OSC 9;4` progress payload -- everything after `9;`,
+    /// e.g. `"4;3;"` or `"4;0;0"`. That is the exact shape the detection
+    /// manifests' `osc_progress` region regexes are written against
+    /// (`crates/agent-detect/src/manifests/grok.toml` matches `^4;1;-1$`),
+    /// so this field's format is owned by those rules, not chosen here.
+    ///
+    /// A LEVEL, not an edge: a program sets it and leaves it until it sets
+    /// something else, and the manifests are written for exactly that --
+    /// Claude's rules assume `4;3` stays painted while it waits for
+    /// permission, which is why no rule reads `4;3` alone as working.
+    osc_progress: Option<String>,
     bell: bool,
 }
 
@@ -71,6 +82,18 @@ impl Screen {
     #[must_use]
     pub fn title(&self) -> Option<&str> {
         self.state.title.as_deref()
+    }
+
+    /// The latest ConEmu progress payload, or `None` when the program has
+    /// never reported one.
+    ///
+    /// `None` means "this program has told me nothing", never "there is no
+    /// progress" (判据 §8). The detection engine spells the same absence as
+    /// an empty string, so `unwrap_or_default()` at the call site is the
+    /// faithful conversion, not a shortcut.
+    #[must_use]
+    pub fn osc_progress(&self) -> Option<&str> {
+        self.state.osc_progress.as_deref()
     }
 
     /// Reads and clears the bell flag — a bell is an edge, not a level.
@@ -160,6 +183,12 @@ impl Screen {
         }
     }
 }
+
+/// Cap on a retained OSC payload, in chars. Same number and same reason as
+/// upstream herdr's `AGENT_OSC_MAX_CHARS` (`src/pane/osc.rs`): the payload is
+/// untrusted child-process output held for the lifetime of the session, so it
+/// is bounded before it is stored.
+const OSC_PAYLOAD_MAX_CHARS: usize = 256;
 
 /// Holds the whole `Screen`, not split `grid`/`state` borrows: `csi_dispatch`
 /// needs to swap `screen.grid` itself (entering/exiting the alternate
@@ -291,6 +320,37 @@ impl Performer<'_> {
             self.screen.grid.mark_all_dirty();
         }
     }
+
+    /// Retain a ConEmu `OSC 9;4` progress payload.
+    ///
+    /// `vte` splits an OSC on `;`, so `\e]9;4;3;50\a` arrives as
+    /// `["9", "4", "3", "50"]`; rejoining `params[1..]` reproduces the
+    /// `"4;3;50"` form the manifests match. Rejoining rather than reading
+    /// `params[1]` is also what keeps this correct if `vte` ever stops
+    /// splitting -- a single `"4;3;50"` element rejoins to itself.
+    ///
+    /// Only `9;4` is retained. OSC 9 is a shared namespace: `9;9;<path>` is
+    /// ConEmu's cwd report and a bare `9;<text>` is an iTerm2 notification.
+    /// Storing those here would overwrite a live progress level with a value
+    /// no rule can ever match -- turning "working" into "no evidence" with
+    /// nothing on screen to show for it (判据 §8). Upstream herdr does NOT
+    /// filter (`herdr src/pane/osc.rs` retains every OSC 9 payload); this
+    /// divergence is deliberate, not a porting slip.
+    fn retain_osc_progress(&mut self, rest: &[&[u8]]) {
+        let joined = rest
+            .iter()
+            .map(|p| String::from_utf8_lossy(p))
+            .collect::<Vec<_>>()
+            .join(";");
+        let payload: String = joined
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(OSC_PAYLOAD_MAX_CHARS)
+            .collect();
+        if payload == "4" || payload.starts_with("4;") {
+            self.screen.state.osc_progress = Some(payload);
+        }
+    }
 }
 
 impl vte::Perform for Performer<'_> {
@@ -412,6 +472,10 @@ impl vte::Perform for Performer<'_> {
             if let Some(raw) = params.get(1) {
                 self.screen.state.title = Some(String::from_utf8_lossy(raw).into_owned());
             }
+            return;
+        }
+        if *kind == b"9" {
+            self.retain_osc_progress(&params[1..]);
         }
     }
 }
@@ -463,6 +527,85 @@ mod tests {
         s.feed(b"\x1b]0;my-");
         s.feed(b"title\x07");
         assert_eq!(s.title(), Some("my-title"));
+    }
+
+    /// The payload's shape is not this module's choice -- it is what the
+    /// detection manifests' `osc_progress` regexes match. `grok.toml` keys on
+    /// `^4;1;-1$` and `qwen.toml` on `^4;3(?:;|$)`, so a payload that arrived
+    /// here as anything but "everything after `9;`" would read as no evidence.
+    #[test]
+    fn osc_nine_four_is_retained_in_the_shape_the_manifests_match() {
+        let mut s = Screen::new(2, 20);
+        s.feed(b"\x1b]9;4;3;50\x07");
+        assert_eq!(s.osc_progress(), Some("4;3;50"));
+    }
+
+    /// `\e]9;4;3;\a` -- the form Claude actually paints, with the percentage
+    /// field present but empty. The trailing `;` is load-bearing: it is the
+    /// literal `"4;3;"` the manifest tests are written against, and dropping
+    /// an empty trailing field would change which rules match.
+    #[test]
+    fn osc_nine_four_keeps_an_empty_trailing_field() {
+        let mut s = Screen::new(2, 20);
+        s.feed(b"\x1b]9;4;3;\x07");
+        assert_eq!(s.osc_progress(), Some("4;3;"));
+    }
+
+    /// OSC 9 is a shared namespace. A cwd report (`9;9;<path>`) or an iTerm2
+    /// notification (`9;<text>`) must not overwrite a live progress level with
+    /// a string no manifest rule can match -- that would silently downgrade
+    /// "working" to "no evidence" (判据 §8).
+    #[test]
+    fn a_non_progress_osc_nine_does_not_clobber_the_progress_level() {
+        let mut s = Screen::new(2, 20);
+        s.feed(b"\x1b]9;4;1;-1\x07");
+        s.feed(b"\x1b]9;9;/tmp/somewhere\x07");
+        s.feed(b"\x1b]9;a desktop notification\x07");
+        assert_eq!(s.osc_progress(), Some("4;1;-1"));
+    }
+
+    /// A session holds its progress payload for its whole life, and the child
+    /// process chooses the bytes. The cap has to be able to bite: vte's own
+    /// OSC accumulator is 1024 bytes, four times this limit, so a hostile or
+    /// buggy child can reach it.
+    #[test]
+    fn an_osc_nine_progress_payload_is_bounded() {
+        let mut s = Screen::new(2, 20);
+        let mut bytes = b"\x1b]9;4;3;".to_vec();
+        bytes.extend(std::iter::repeat_n(b'9', 600));
+        bytes.push(0x07);
+        s.feed(&bytes);
+
+        let kept = s.osc_progress().expect("progress payload never arrived");
+        assert!(
+            kept.starts_with("4;3;"),
+            "the retained payload is not the progress one: {kept:?}"
+        );
+        assert_eq!(
+            kept.chars().count(),
+            OSC_PAYLOAD_MAX_CHARS,
+            "payload was not capped at OSC_PAYLOAD_MAX_CHARS"
+        );
+    }
+
+    /// The control-char filter in `retain_osc_progress` is a LIVE guard, not
+    /// decoration -- which is a claim that has to name the bytes that reach it
+    /// (判据 §2).
+    ///
+    /// Measured against vte 0.14.1 on 2026-09-03 by dumping the raw
+    /// `osc_dispatch` params: a C0 byte (`\x01`) is swallowed by vte's own OSC
+    /// state machine and never arrives, but **DEL (`\x7f`) and C1 controls
+    /// (U+0080..U+009F, e.g. `\u{9b}` = CSI) are passed straight through** --
+    /// raw params came back as `[b"9", b"4", b"3", b"5\x7f5\xc2\x9b0"]`. So
+    /// the filter's only job is these, and this test is the case where it
+    /// bites: delete the filter and the retained payload keeps the DEL and the
+    /// C1 CSI, both of which are escape-sequence injection into a string an
+    /// untrusted child process chose.
+    #[test]
+    fn del_and_c1_controls_are_stripped_from_a_progress_payload() {
+        let mut s = Screen::new(2, 20);
+        s.feed(b"\x1b]9;4;3;5\x7f5\xc2\x9b0\x07");
+        assert_eq!(s.osc_progress(), Some("4;3;550"));
     }
 
     /// SGR params can arrive as separate iterator items ("38;2;r;g;b") or as

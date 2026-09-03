@@ -51,7 +51,7 @@ than filling the cell.
 
 Ordered by expected cost to Aleph (likelihood × severity), not by what herdr considers important.
 
-### A1 · OSC 9;4 progress — the only gap with a consumer already waiting
+### A1 · OSC 9;4 progress — the only gap with a consumer already waiting ✅ WIRED 2026-09-03
 
 | | |
 |---|---|
@@ -59,6 +59,7 @@ Ordered by expected cost to Aleph (likelihood × severity), not by what herdr co
 | **What Aleph does today** | `osc_dispatch` **has no branch for it**: the guard at `perform.rs:411` is `matches!(*kind, b"0" \| b"2")`, and the `if` has no `else` — OSC 9 falls out the bottom of the function at `perform.rs:415`. `vte` *does* hand `["9", "4;3;"]` to `osc_dispatch`, so unlike herdr, Aleph needs no second scanner. Downstream, `gateway/runtime/mod.rs:40` defines `pub const OSC_PROGRESS_UNAVAILABLE: &str = ""` and passes it at `:160`; a test at `:348` pins that it stays empty. |
 | **What breaks in practice** | **A severed wire, not a missing feature.** Aleph has already ported the manifest engine that consumes this. `crates/agent-detect/src/manifest.rs:980` routes `region = "osc_progress"`, and three shipped manifests key rules on it: `manifests/grok.toml:89-93` (`osc_progress_working`, **priority 1150 — the highest-priority rule in that file**), `grok.toml:119-124` (`osc_progress_idle`, priority 950), `qwen.toml:99-104` (`osc_tool_progress_working`, priority 850), `claude.toml:222-226` (`osc_progress_idle`, priority 250). Every one of them is unreachable today, so Grok falls all the way through to a priority-200 spinner regex and Qwen to a bottom-lines timer regex. Concretely: **a model reading the screen cannot tell a long build from a hung one** in exactly the case the manifest was written for — the agent painted no spinner this frame (mid-repaint, or output redirected) but did emit `\e]9;4;3;\a`, and Aleph reads that frame as "no evidence" instead of "working". |
 | **Cost to extend** | **Small.** One `match` arm in `osc_dispatch` next to the existing `b"0" \| b"2"` arm, one `Option<String>` on `ScreenState`, one accessor beside `Screen::title()`, and replacing the constant at `runtime/mod.rs:160`. herdr needed 70 lines of hand-rolled OSC scanning because libghostty does not surface OSC 9 to embedders; `vte` does, so Aleph gets it for a fraction of the cost. Note the payload convention the manifests expect: the part **after** `9;`, i.e. `"4;3;"` not `"3"` — see `src/pane/osc.rs:487-490` and `grok.toml:93`'s `^4;1;-1$`. Sanitise like `sanitize_agent_osc_string` (`src/pane/osc.rs:536-545`): strip control chars, cap length (herdr uses 256, `src/pane/osc.rs:448`). |
+| **SHIPPED** | Wired on 2026-09-03. `ScreenState.osc_progress` + `Performer::retain_osc_progress` + `Screen::osc_progress()` in `src/gateway/pty/screen/perform.rs`; `RuntimeAgents::sample` now reads it and `OSC_PROGRESS_UNAVAILABLE` is deleted. Five guards, each falsified by hand: the runtime wire (`the_osc_progress_wire_is_actually_connected` — cut the read and grok's `4;1;-1`/`4;0;0` collapse to one state), the namespace filter, the char cap, the control-char strip, and the payload shape. **Two claims in the rows above were wrong and are corrected here** (判据 §18 — my own instrument): (1) `vte` 0.14.1 does NOT hand over `["9", "4;3;"]` — it splits on every `;`, so `\e]9;4;3;50\a` arrives as `["9","4","3","50"]`. The code rejoins `params[1..]`, which is correct under either shape. (2) herdr's retention is **not** a model to copy verbatim: it stores every OSC 9 payload, so a ConEmu cwd report (`9;9;<path>`) or an iTerm2 notification (`9;<text>`) silently overwrites a live progress level with a string no rule matches. Aleph retains only `4`/`4;…`, deliberately. |
 
 ### A2 · Scroll regions — DECSTBM (`CSI r`), SU/SD (`CSI S` / `CSI T`), RI (`ESC M`)
 
@@ -368,7 +369,7 @@ A count living in prose next to the array that owns it is the 判据 §1 shape; 
 
 ## What I would extend first
 
-1. **A1 — OSC 9;4 progress.** The only gap whose consumer already exists and is already asking. One arm in
+1. ~~**A1 — OSC 9;4 progress.**~~ **DONE 2026-09-03** — see the ✅ row in A1. The only gap whose consumer already existed and was already asking. One arm in
    `osc_dispatch`, one field, one constant swap at `gateway/runtime/mod.rs:160`; it re-arms four dead manifest
    rules including the highest-priority rule in `grok.toml`.
 2. **A4 — RIS / DECSTR.** Cheapest fix with the worst failure mode: without it a crashed agent's last frame

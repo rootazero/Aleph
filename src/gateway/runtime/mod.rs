@@ -30,15 +30,6 @@ use aleph_protocol::runtime::{RuntimeAgentEntry, RuntimeAgentState};
 use crate::gateway::pty::screen::Screen;
 use crate::sync_primitives::Mutex;
 
-/// Aleph's `osc_dispatch` handles OSC 0/2 (title) but NOT OSC 9;4
-/// (ConEmu progress), so this phase has no producer for `osc_progress`.
-/// The detection engine treats an empty string as "unavailable" and falls
-/// back to its pre-OSC behaviour — correct, just weaker.
-///
-/// This is a DELIBERATE degradation, not an oversight. Wiring OSC 9;4 is
-/// registered in the phase 0-A gap list. Do not read this as "no progress".
-pub const OSC_PROGRESS_UNAVAILABLE: &str = "";
-
 /// How long a working -> plain-idle observation is held before it is believed.
 ///
 /// Not a new number: it is upstream's cap, herdr 0.8.2
@@ -158,13 +149,17 @@ impl RuntimeAgents {
     ) -> bool {
         let text = screen.visible_text();
         let title = screen.title().unwrap_or_default();
+        // `None` (this program never reported progress) and `""` (the engine's
+        // spelling of "no data") mean the same thing, so the conversion is
+        // faithful rather than a fail-open read of an absent answer.
+        let osc_progress = screen.osc_progress().unwrap_or_default();
 
         let agent = agent_detect::identify_agent(shell);
         let detection = agent_detect::screen_rules::detection_update_for_publish_with_osc(
             agent,
             &text,
             title,
-            OSC_PROGRESS_UNAVAILABLE,
+            osc_progress,
             process_exited,
         );
 
@@ -349,11 +344,40 @@ mod tests {
         assert_eq!(agents.snapshot()[0].label, "my-agent");
     }
 
-    /// osc_progress 本期没有生产者，必须是空串。
-    /// 空串只有资格说「我不知道」，不许被读成「没有进度」（判据 §8）。
+    /// 证伪守卫：剪断 osc_progress 的接线，两条载荷必须给出同一个状态。
+    ///
+    /// Falsifiable the same way the title wire above is, and for the same
+    /// reason: the two payloads differ ONLY in the `osc_progress` region, the
+    /// screen is empty in both, and `grok.toml` gives them opposite states
+    /// (`osc_progress_working` at priority 1150 on `^4;1;-1$`,
+    /// `osc_progress_idle` at 950 on `^4;0;0$`). Cut `screen.osc_progress()`
+    /// at the sample site and both fall to the same agent-known fallback, so
+    /// the inequality below is what proves the wire carries current.
+    ///
+    /// This replaces `osc_progress_has_no_producer_this_phase`, which pinned
+    /// the deliberate absence of this producer. The producer now exists
+    /// (`Screen::osc_progress`), so the old pin was asserting a fact that had
+    /// stopped being true.
     #[test]
-    fn osc_progress_has_no_producer_this_phase() {
-        assert_eq!(OSC_PROGRESS_UNAVAILABLE, "");
+    fn the_osc_progress_wire_is_actually_connected() {
+        let working = screen(b"\x1b]9;4;1;-1\x07");
+        let idle = screen(b"\x1b]9;4;0;0\x07");
+
+        let agents = RuntimeAgents::default();
+        agents.sample("s1", "grok", "", &working, false, 0);
+        agents.sample("s2", "grok", "", &idle, false, 0);
+        let rows = agents.snapshot();
+
+        assert_eq!(
+            rows[0].state,
+            RuntimeAgentState::Working,
+            "4;1;-1 is grok's highest-priority working rule"
+        );
+        assert_eq!(
+            rows[1].state,
+            RuntimeAgentState::Idle,
+            "4;0;0 is grok's osc_progress_idle rule"
+        );
     }
 
     /// `cwd` is the SPAWN directory, and it has to be able to DIFFER from
