@@ -1228,3 +1228,10 @@ grep 之后发现没有——它是 report-only 的纯归约渲染器，已按�
 CLAUDE.md 路由表的五个 r2 阶段、spec `2026-08-31` §8 的六条指针、FL §4.13a ⑩–⑯ 与 ⑨ 的四臂订正、
 以及计划点名的 L2309 / L2310 / L2315 / L3811 / L4043 / L345 —— 六处逐条比对过，都已改。
 
+**同一次清扫顺带撞出的第三笔 `76cc98d07`**：§0 的 Doctor & Auto-Fix 行写着「11 checks」。
+对着 `src/diagnostics/mod.rs` 数：13 条无条件进基础 vec，另 5 条经 `with_*` 在句柄存在时追加
+（`capability_wiring` / `providers_connectivity` / `projection_holes` / `session_log` / `idle_extensions`），
+合计 18，与 `src/diagnostics/checks/` 下的 18 个模块对得上；**其中两条是本轮加的**。
+没有换一个新数字——换成了形状（判据 #16：写进散文的数目是一张会腐烂的名单，而已经知道集合是什么的那张表是那个目录），
+与 CLAUDE.md 会话旋钮段当初把「三根」改掉的处理同款。
+
