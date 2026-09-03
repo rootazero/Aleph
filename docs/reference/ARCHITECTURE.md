@@ -301,9 +301,12 @@ Agent execution's authoritative session state lives in
 persists each event synchronously to the `session_events` table.
 `AgentHarness` reads and writes history exclusively through
 `SessionService`. Gateway `session.*` RPC methods continue to use the
-legacy `SessionManager`; every `SessionManager` append is mirrored into
-`SessionService` via a dual-write shim (`src/session/shim.rs`) until a
-future phase migrates Gateway RPC directly.
+legacy `SessionManager`. **There is no dual-write shim.** This paragraph
+used to name `src/session/shim.rs`: that file does not exist, and the
+mirroring it described was removed when `session_events` became the SSOT.
+The `messages` table has exactly one writer — `MessageProjector`
+(`src/gateway/session_projector.rs`), which materialises it from
+`session_events` asynchronously. See SESSION_SERVICE.md.
 
 ---
 
@@ -705,10 +708,10 @@ let result2 = executor.execute(&action2, &identity).await;
 | Component | Location | Responsibility |
 |-----------|----------|----------------|
 | **IdentityContext** | `shared/protocol/src/auth.rs` | Immutable identity snapshot |
-| **SessionIdentityMeta** | `src/gateway/session_manager.rs` | Persistent identity metadata |
+| **SessionIdentityMeta** | `src/gateway/session_manager/` | Persistent identity metadata |
 | **PolicyEngine** | `src/gateway/security/policy_engine.rs` | Stateless permission checker |
 | **InvitationManager** | `src/gateway/security/invitation_manager.rs` | Guest invitation lifecycle |
-| **SessionManager** | `src/gateway/session_manager.rs` | Identity construction |
+| **SessionManager** | `src/gateway/session_manager/` | Identity construction |
 | **Orchestrator** | `src/orchestrator/` | Identity injection into FlowRequest |
 | **AgentHarness** | `src/harness/` | Identity propagation through Think→Act loop |
 | **Engine** | `src/engine/` | Permission enforcement |
