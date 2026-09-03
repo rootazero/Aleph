@@ -1,5 +1,5 @@
-//! `TerminalTool` — read-only view of the terminal sessions this server owns
-//! (herdr runtime port, phase 1, Task 11).
+//! `TerminalTool` — read-only view of the terminal sessions the caller owns
+//! on this server (herdr runtime port, phase 1, Task 11).
 //!
 //! Three actions, no write verb: `list` (which PTY sessions exist),
 //! `status` (each session's detected agent state, the same table
@@ -128,10 +128,10 @@ pub struct TerminalTool;
 #[async_trait]
 impl AlephTool for TerminalTool {
     const NAME: &'static str = "terminal";
-    const DESCRIPTION: &'static str = "Read-only view of the terminal sessions this server owns. \
-        Lists sessions, reads the current visible screen, and reports each agent's detected \
-        state (working / blocked / idle / unknown). It cannot type into a terminal or run \
-        commands — a human does that.";
+    const DESCRIPTION: &'static str = "Read-only view of the terminal sessions you own on this \
+        server; empty when the embedded terminal is disabled in policy. Lists sessions, reads \
+        the current visible screen, and reports each agent's detected state (working / blocked \
+        / idle / unknown). It cannot type into a terminal or run commands — a human does that.";
 
     type Args = TerminalArgs;
     type Output = TerminalOutput;
