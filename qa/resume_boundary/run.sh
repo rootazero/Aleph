@@ -46,7 +46,8 @@ MOCK_PORT="${MOCK_PORT:-18832}"
 
 case "$STAGE" in
   crash|attribute) ;;
-  *) echo "unknown stage: $STAGE (crash|attribute)" >&2; exit 64 ;;
+  claims|denied|rewind|knobs|holes) ;;
+  *) echo "unknown stage: $STAGE (crash|attribute|claims|denied|rewind|knobs|holes)" >&2; exit 64 ;;
 esac
 
 # Build BEFORE HOME is redirected: cargo's registry/git-cache/toolchain all
@@ -120,10 +121,24 @@ if [ "${SKIP_BUILD:-0}" != "1" ]; then
 fi
 # `.cargo/config.toml` pins a shared absolute target dir, so `$REPO/target` is
 # wrong from any git worktree — ask cargo.
-TARGET_DIR="$(cd "$REPO" && HOME="$REAL_HOME" cargo metadata --format-version 1 --no-deps 2>/dev/null \
-  | python3 -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')"
+# Ask cargo, then parse with whichever of node/python3 this host actually has.
+# A `python3` that is the Windows `WindowsApps` shim exits 0 having printed
+# nothing, so the fixture would go looking for a binary at `/debug/aleph-server`
+# and report "no binary" — which reads like a build failure and is not one.
+META="$(cd "$REPO" && HOME="$REAL_HOME" cargo metadata --format-version 1 --no-deps 2>/dev/null)"
+if [ -n "${CARGO_TARGET_DIR:-}" ]; then
+  # An operator (or this repo's own build recipe) who pinned a shared target
+  # dir built the binary THERE; `cargo metadata` answers with the workspace's
+  # default and would send the fixture to an empty directory.
+  TARGET_DIR="$CARGO_TARGET_DIR"
+elif command -v node >/dev/null 2>&1; then
+  TARGET_DIR="$(printf '%s' "$META" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>console.log(JSON.parse(s).target_directory))')"
+else
+  TARGET_DIR="$(printf '%s' "$META" | python3 -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')"
+fi
 BIN="$TARGET_DIR/debug/aleph-server"
-[ -x "$BIN" ] || { echo "no binary at $BIN" >&2; exit 1; }
+[ -x "$BIN" ] || BIN="$BIN.exe"
+[ -x "$BIN" ] || { echo "no binary at $TARGET_DIR/debug/aleph-server" >&2; exit 1; }
 
 say "generate a baseline config"
 timeout 25 "$BIN" start >"$QA_ROOT/gen.log" 2>&1 &
@@ -131,6 +146,119 @@ GEN_PID=$!
 for _ in $(seq 1 50); do [ -f "$CONFIG" ] && break; sleep 0.5; done
 kill "$GEN_PID" 2>/dev/null; wait "$GEN_PID" 2>/dev/null
 [ -f "$CONFIG" ] || { echo "no config generated at $CONFIG" >&2; tail -20 "$QA_ROOT/gen.log" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# Round-2 stages. Node, not Python: this host has no usable `python3` (the
+# WindowsApps shim exits 0 having done nothing), and a fixture that reports
+# success while measuring nothing is the exact failure `qa/lib/build.sh` was
+# written for. The round-1 `crash` / `attribute` stages below stay Python —
+# they were measured on a host that had one, and rewriting a green fixture to
+# prove nothing new is churn.
+# ---------------------------------------------------------------------------
+if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
+  command -v node >/dev/null 2>&1 || { echo "node is required for the r2 stages" >&2; exit 1; }
+  # The native server and node both read Windows paths; the msys form reaches
+  # neither.
+  QA_ROOT_M="$QA_ROOT"
+  command -v cygpath >/dev/null 2>&1 && QA_ROOT_M="$(cygpath -m "$QA_ROOT")"
+  R2_REQUESTS="$QA_ROOT/requests.jsonl"
+  RECEIPT="$QA_ROOT/receipt.json"
+  : > "$R2_REQUESTS"
+  drive() { node "$HERE/drive_r2.mjs" "$GATEWAY_PORT" "$QA_ROOT_M" "$@"; }
+  # How the dangle is MADE on this host — patch_r2.mjs's header, point 3, has
+  # the two measurements that rule out a long-running command. `ask` parks the
+  # dispatched call on a card nobody answers, which IS "dispatched, no
+  # receipt"; `deny` is the `denied` stage's subject; `allow` is what the burst
+  # stage wants (many fast event pairs).
+  BASH_POLICY="ask"
+  [ "$STAGE" = "denied" ] && BASH_POLICY="deny"
+  [ "$STAGE" = "holes" ] && BASH_POLICY="allow"
+  BURST="${QA_BURST:-40}"
+
+  say "patch config (node)"
+  node "$HERE/patch_r2.mjs" "$CONFIG" "$GATEWAY_PORT" "$MOCK_PORT" true "$BASH_POLICY" || exit 1
+
+  say "start mock provider (node)"
+  QA_BURST="$BURST" node "$HERE/mock_r2.mjs" "$MOCK_PORT" "$R2_REQUESTS" >"$QA_ROOT/mock.log" 2>&1 &
+  MOCK_PID=$!
+  for _ in $(seq 1 40); do
+    curl -sf -o /dev/null -m 1 "http://127.0.0.1:$MOCK_PORT/v1/models" 2>/dev/null && break
+    kill -0 "$MOCK_PID" 2>/dev/null || break
+    sleep 0.25
+  done
+  kill -0 "$MOCK_PID" 2>/dev/null || { echo "mock died on startup — port $MOCK_PORT taken?" >&2; tail -5 "$QA_ROOT/mock.log" >&2; exit 70; }
+
+  RC=0
+  case "$STAGE" in
+    claims)
+      # Boot with resume OFF so the receipt below is the ONLY pass over this
+      # log: a boot scan that already repaired it would make every counter on
+      # the receipt read zero and the wire face read `clean`, and both would
+      # look like the feature working.
+      node "$HERE/patch_r2.mjs" "$CONFIG" "$GATEWAY_PORT" "$MOCK_PORT" false "$BASH_POLICY" >/dev/null || exit 1
+      start_server || exit 1
+      drive dangle qa-dangle || { echo "instrument failure: no dangle" >&2; RC=1; }
+      hard_kill_server
+      [ "$RC" = "0" ] && { drive assert-dangling 1 || RC=1; }
+      [ "$RC" = "0" ] && { start_server || exit 1; }
+      [ "$RC" = "0" ] && { drive claims-wire || RC=1; }
+      if [ "$RC" = "0" ]; then
+        say "aleph-server resume --json"
+        "$BIN" resume --json "$(cat "$SESSION_FILE")" >"$RECEIPT" 2>"$QA_ROOT/resume.err"
+        echo "resume rc=$? receipt:"; cat "$RECEIPT"; tail -5 "$QA_ROOT/resume.err"
+        drive claims-receipt "$RECEIPT" || RC=1
+        drive cost || RC=1
+      fi
+      ;;
+    denied)
+      # `bash = "deny"` above: the dispatch crosses the line and the gate
+      # refuses it, so the log holds a dispatch with no receipt AND a denial.
+      start_server || exit 1
+      drive dangle qa-dangle || RC=1
+      hard_kill_server
+      [ "$RC" = "0" ] && { start_server || exit 1; }
+      [ "$RC" = "0" ] && { drive denied || RC=1; }
+      ;;
+    rewind)
+      start_server || exit 1
+      drive dangle qa-dangle || RC=1
+      hard_kill_server
+      [ "$RC" = "0" ] && { start_server || exit 1; }
+      [ "$RC" = "0" ] && { drive rewind do || RC=1; }
+      hard_kill_server
+      [ "$RC" = "0" ] && { start_server || exit 1; }
+      [ "$RC" = "0" ] && { drive rewind after || RC=1; }
+      if [ "$RC" = "0" ]; then
+        "$BIN" resume --json "$(cat "$SESSION_FILE")" >"$RECEIPT" 2>"$QA_ROOT/resume.err"
+        echo "resume receipt after the rewind:"; cat "$RECEIPT"
+        grep -q "already_finished\|\"scanned\"" "$RECEIPT" || { echo "FAIL: the receipt does not report the rewound session as settled" >&2; RC=1; }
+      fi
+      ;;
+    knobs)
+      start_server || exit 1
+      drive dangle qa-dangle || RC=1
+      # The session is moved to model B AFTER the crashed run started under A.
+      [ "$RC" = "0" ] && drive knobs set qa-model-b
+      hard_kill_server
+      [ "$RC" = "0" ] && { start_server || exit 1; }
+      [ "$RC" = "0" ] && { "$BIN" resume --json "$(cat "$SESSION_FILE")" >"$RECEIPT" 2>"$QA_ROOT/resume.err"; cat "$RECEIPT"; }
+      [ "$RC" = "0" ] && { drive knobs assert qa-model-a || RC=1; }
+      ;;
+    holes)
+      start_server || exit 1
+      drive dangle qa-burst || RC=1
+      [ "$RC" = "0" ] && { drive holes "$QA_ROOT/server.log" || RC=1; }
+      hard_kill_server
+      [ "$RC" = "0" ] && { start_server || exit 1; }
+      [ "$RC" = "0" ] && { drive holes "$QA_ROOT/server.log" || RC=1; }
+      ;;
+  esac
+
+  say "mock provider log"; tail -20 "$QA_ROOT/mock.log"
+  say "server log tail"; tail -30 "$QA_ROOT/server.log"
+  say "verdict: rc=$RC"
+  exit "$RC"
+fi
 
 say "patch config"
 python3 "$BUSY/patch_config.py" "$CONFIG" --gateway-port "$GATEWAY_PORT" --mock-port "$MOCK_PORT" || exit 1
