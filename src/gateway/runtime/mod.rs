@@ -111,8 +111,15 @@ impl RuntimeAgents {
     /// client (the Panel's terminal view) sends `{rows, cols}` and nothing
     /// else. So `identify_agent` is handed `"zsh"`, returns `None`, and
     /// `detect_agent_with_osc` early-returns `Unknown` before any manifest
-    /// rule is consulted. The 29 manifests, the rule engine and the idle-hold
-    /// are all correct and all unreachable from here.
+    /// rule is consulted. The screen manifests
+    /// ([`agent_detect::Agent::SCREEN_MANIFEST_AGENTS`]), the rule engine and
+    /// the idle-hold are all correct and all unreachable from here.
+    ///
+    /// (This sentence used to carry a count. It said 29; that constant says
+    /// 21, and the crate holds a second count of 23 for agents with or
+    /// without a screen manifest — so the number was wrong and ambiguous at
+    /// once. A count written into a comment is a second copy of a fact the
+    /// type already owns. Name the constant and it cannot drift.)
     ///
     /// The gap is not "no caller passes `command`" — it is that agents are
     /// started INTERACTIVELY, after the spawn. A user who opens a terminal and
