@@ -78,7 +78,7 @@ fn all_permutations_of_four_entries() -> Vec<Vec<RuntimeAgentEntry>> {
         }
         for i in 0..k {
             heap(k - 1, indices, out);
-            if k % 2 == 0 {
+            if k.is_multiple_of(2) {
                 indices.swap(i, k - 1);
             } else {
                 indices.swap(0, k - 1);

@@ -201,7 +201,7 @@ pub fn AgentPanel() -> impl IntoView {
         drag_handles.update_value(|slot| *slot = Some((move_h, up_h, cancel_h)));
     };
 
-    on_cleanup(move || stop_drag());
+    on_cleanup(stop_drag);
 
     view! {
         <div
