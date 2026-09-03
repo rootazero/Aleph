@@ -1362,47 +1362,63 @@ impl FailoverProvider {
                 //    serve this request (no vision / no tools / over context
                 //    window), failing open so the chain is never emptied.
                 //
-                // The same match also answers "whose statement is this ladder?"
-                // — the boot CATALOG's, or one model the caller named. Only the
-                // catalog's answer can indict the provider (see the
-                // `NextModel` bookkeeping below), and deriving that here, where
-                // the list is actually chosen, is what keeps the pin exemption
-                // and the strike describing the same set.
-                let (models, ladder_from_catalog): (Vec<Option<String>>, bool) =
-                    match (slot, &req_model) {
-                        (SlotKind::Primary, Some(pinned)) => (
-                            retain_capable_models(vec![pinned.clone()], &reqs)
-                                .into_iter()
-                                .map(Some)
-                                .collect(),
-                            false,
-                        ),
-                        _ if cand.models.is_empty() => (vec![None], false),
-                        // rust-doctor-disable-next-line excessive-clone
-                        _ => (
-                            retain_capable_models(cand.models.clone(), &reqs)
-                                .into_iter()
-                                .map(Some)
-                                .collect(),
-                            true,
-                        ),
-                    };
+                // The same match also answers "whose statement is this ladder,
+                // and how many rungs did that statement have?" — the boot
+                // CATALOG's, or one model the caller named. Only the catalog's
+                // answer can indict the provider (see the `NextModel`
+                // bookkeeping below), and deriving it here — BEFORE the two
+                // request-shaped filters below narrow the list — is what keeps
+                // the pin exemption and the strike describing the same set.
+                //
+                // `catalog_rungs == 0` is the single spelling of "not the
+                // catalog's statement": the pinned-model arm and the
+                // empty-catalog arm both yield it, and the catalog arm cannot
+                // (its guard already proved `cand.models` non-empty). A count
+                // rather than a count-plus-flag, so the two can never disagree.
+                let (models, catalog_rungs): (Vec<Option<String>>, usize) = match (slot, &req_model)
+                {
+                    (SlotKind::Primary, Some(pinned)) => (
+                        retain_capable_models(vec![pinned.clone()], &reqs)
+                            .into_iter()
+                            .map(Some)
+                            .collect(),
+                        0,
+                    ),
+                    _ if cand.models.is_empty() => (vec![None], 0),
+                    // rust-doctor-disable-next-line excessive-clone
+                    _ => (
+                        retain_capable_models(cand.models.clone(), &reqs)
+                            .into_iter()
+                            .map(Some)
+                            .collect(),
+                        cand.models.len(),
+                    ),
+                };
                 // Sideline models still cooling from an earlier 429, preferring a
                 // healthy sibling (fail-open if all are cooling).
                 let models = self.drop_cooling_models(&cand.name, models).await;
-                // How many rungs this ladder has, and how many of them answered
-                // "no such model". Counted rather than latched on a flag,
-                // because the question after the loop is an *equality* between
-                // two numbers ("every rung 404'd") that no single boolean can
+                // How many rungs answered "no such model". Counted rather than
+                // latched on a flag, because the question after the loop is an
+                // *equality* against `catalog_rungs` that no single boolean can
                 // state honestly: an early `break 'model` leaves rungs untried,
                 // and a ladder that never ran must never read as exhausted.
-                let ladder_len = models.len();
                 let mut missing_models: usize = 0;
 
                 // Proactive rate-limit pacing, the *wait* half: this provider
                 // 429'd recently, is still inside its recorded cooldown, and is
-                // the last resort (the skip half above already yielded to every
-                // later candidate).
+                // the last resort.
+                //
+                // "Last resort" is read from the SAME `has_later_candidate` the
+                // skip half read — not inferred from having survived it. The
+                // two halves each re-read `pc.remaining()`, and between the
+                // reads sit the escalation gate (which can block on a human
+                // approval prompt for minutes) and model resolution;
+                // `ProviderCooldown` is shared `Arc` state that any concurrent
+                // walk parks on its own 429. So "it was not cooling at the skip
+                // gate" is not still true here, and without this guard a
+                // NON-last candidate could sleep out a window a concurrent turn
+                // opened while the human was being asked — exactly the wait the
+                // skip half exists to prevent.
                 //
                 // Waiting it out keeps a single paid primary (e.g. Kimi) in use
                 // instead of eating a fresh 429. (LiteLLM and Bifrost both drop
@@ -1423,25 +1439,27 @@ impl FailoverProvider {
                 // followed it never got to happen. When the wait cannot finish
                 // the job, dial now and let the provider's own answer (a fresh
                 // 429 re-parks it, a success clears it) settle the question.
-                if let Some(pc) = &self.provider_cooldown {
-                    if let Some(remaining) = pc.remaining(&cand.name).await {
-                        if remaining <= MAX_OVERLOAD_RETRY_DELAY {
-                            tracing::warn!(
-                                provider = %cand.name,
-                                wait_ms = remaining.as_millis() as u64,
-                                "failover: last candidate is cooling from a recent 429, \
-                                 pacing out the whole window before re-request",
-                            );
-                            tokio::time::sleep(remaining).await;
-                        } else {
-                            tracing::warn!(
-                                provider = %cand.name,
-                                remaining_secs = remaining.as_secs(),
-                                cap_secs = MAX_OVERLOAD_RETRY_DELAY.as_secs(),
-                                "failover: last candidate's 429 window outlasts the pacing \
-                                 cap; dialing inside it rather than spending the turn \
-                                 budget on a wait that cannot end it",
-                            );
+                if !has_later_candidate {
+                    if let Some(pc) = &self.provider_cooldown {
+                        if let Some(remaining) = pc.remaining(&cand.name).await {
+                            if remaining <= MAX_OVERLOAD_RETRY_DELAY {
+                                tracing::warn!(
+                                    provider = %cand.name,
+                                    wait_ms = remaining.as_millis() as u64,
+                                    "failover: last candidate is cooling from a recent 429, \
+                                     pacing out the whole window before re-request",
+                                );
+                                tokio::time::sleep(remaining).await;
+                            } else {
+                                tracing::warn!(
+                                    provider = %cand.name,
+                                    remaining_secs = remaining.as_secs(),
+                                    cap_secs = MAX_OVERLOAD_RETRY_DELAY.as_secs(),
+                                    "failover: last candidate's 429 window outlasts the pacing \
+                                     cap; dialing inside it rather than spending the turn \
+                                     budget on a wait that cannot end it",
+                                );
+                            }
                         }
                     }
                 }
@@ -1799,15 +1817,27 @@ impl FailoverProvider {
                 // a catalog that is briefly out of step with a redeploy is not
                 // shed on one walk.
                 //
-                // Read from the ladder's own provenance (`ladder_from_catalog`,
+                // Read from the ladder's own provenance (`catalog_rungs`,
                 // derived where the list was chosen): a single model the CALLER
                 // named — a `select_model` pick, an agent `model_hint`, a
                 // `BrainRef::Strict` id, or simply a typo — indicts that name,
                 // never the endpoint, so it must not shed a healthy provider.
-                if ladder_from_catalog && ladder_len > 0 && missing_models == ladder_len {
+                //
+                // The equality is against what the CATALOG stated, never
+                // against the survivor set the request narrowed it to. Both
+                // filters between the two can yield a proper subset — the
+                // capability floor fails open only when *every* model is
+                // dropped, `drop_cooling_models` only when *every* model is
+                // cooling — so a provider whose m1 is parked by a 429 and whose
+                // m2 404s would otherwise be indicted for "serving none of its
+                // catalog models" while m1 was never dialed and is healthy.
+                // Since the survivor set is a subset, `missing_models` can only
+                // reach `catalog_rungs` when nothing was withheld AND every
+                // rung answered 404 — one comparison covering both.
+                if catalog_rungs > 0 && missing_models == catalog_rungs {
                     tracing::warn!(
                         provider = %cand.name,
-                        models = ladder_len,
+                        models = catalog_rungs,
                         "failover: provider serves none of its catalog models; \
                          recording a strike against the provider",
                     );

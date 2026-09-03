@@ -453,7 +453,7 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 | provider 选择 | 一个枚举，默认 `cursor`，每会话三处各读一遍磁盘 | `RouteHandle`（ArcSwap）+ `effective_fallback_names` 单一派生，热重载 | **Aleph 领先**——那个三处重读正是 round-1/2 拆掉的形状 |
 | 候选链 / failover | **无**（单后端，无链、无跨 provider 推进） | 有序游走 + 四道闸 + 每 provider 模型梯 + 嵌套 pinned 链 | **Aleph 领先**（参考项目无对应物） |
 | 断路器 | **无** | `FailoverHealth` 三振 / `Permanent` 即开 + HalfOpen 加倍 + `MAX_COOLDOWN` 600s | **Aleph 领先**；但**已吐字**的两条出口此前零记账 → round-6 T3 补上（共用 `decision::strike_for` 一处派生） |
-| 冷却 / 节流 | 只有 MCP 重连常量（与推理无关） | 双层 `ModelCooldown` + `ProviderCooldown`，只延长、成功即清 | **Aleph 领先**；`ProviderCooldown` 窗口（≤600s）与最后一根候选的等待上限（120s）分头派生，留档 round-7 |
+| 冷却 / 节流 | 只有 MCP 重连常量（与推理无关） | 双层 `ModelCooldown` + `ProviderCooldown`，只延长、成功即清 | **Aleph 领先**；`ProviderCooldown` 窗口与等待上限此前分头派生 → **round-6 T8 已修**：等待只在 `remaining <= MAX_OVERLOAD_RETRY_DELAY`（120s）时**整段花掉**，超出就一秒不睡直接拨（`min()` 夹取买来的是一次等不完窗口的睡眠 + 花光的 120s 轮次看门狗）；「最后一根候选永远拨」不变 |
 | 重试 / 退避 | equal jitter `[exp/2, exp]`，interactive 3 次 / automation 4 次（`transient-stream-error.ts:50-99`） | `backoff_delay` + `apply_jitter(0.25)`，`OVERLOAD_RETRY_BUDGET 1`，上限 30s / 120s | **已对齐**；抖动形状属化妆，interactive-vs-automation 分档**拒绝**（新旋钮，零需求） |
 | 服务端节流提示 | 只认秒数（Connect trailer），加 0–50% 抖动，硬上限 30s | `retry_after_header_secs` 认秒数**与** HTTP-date，honour 到 `MAX_COOLDOWN` | **Aleph 领先**（超集）；给等待加抖动**不移植**（单用户无羊群） |
 | 错误分类 | errno / 子串表 + 递归 `cause`/`AggregateError` 遍历 + `terminal` 否决 | `classify` / `classify_exhausted` / `is_permanent_failure` + `has_status_code` 邻位守卫 + `ACCOUNT_SCOPE_PATTERNS` 否决 | **Aleph 领先**（HTTP 栈上）；Node errno 词表**不移植**（死模式） |

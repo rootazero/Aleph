@@ -1196,6 +1196,12 @@ async fn fallback_matching_primary_name_is_deduped() {
 struct MockApprover {
     approve: bool,
     calls: AtomicUsize,
+    /// Parks a provider in its 429 pacing window at the moment the human is
+    /// asked. Stands in for the only thing that can happen during a blocking
+    /// approval prompt: a *concurrent* walk writing the shared `Arc`-backed
+    /// `ProviderCooldown` while this walk is stopped between its two pacing
+    /// halves.
+    park_on_ask: Option<(ProviderCooldown, String, Duration)>,
 }
 
 impl MockApprover {
@@ -1203,6 +1209,19 @@ impl MockApprover {
         Arc::new(Self {
             approve,
             calls: AtomicUsize::new(0),
+            park_on_ask: None,
+        })
+    }
+    fn parking(
+        approve: bool,
+        pacing: ProviderCooldown,
+        provider: &str,
+        dur: Duration,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            approve,
+            calls: AtomicUsize::new(0),
+            park_on_ask: Some((pacing, provider.to_string(), dur)),
         })
     }
     fn call_count(&self) -> usize {
@@ -1217,6 +1236,9 @@ impl ApprovalRequester for MockApprover {
         _action: &crate::sandbox::exec_approval::ApprovalAction,
     ) -> crate::sandbox::exec_approval::ApprovalResponse {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some((pacing, provider, dur)) = &self.park_on_ask {
+            pacing.cool(provider, *dur).await;
+        }
         if self.approve {
             ApprovalOutcome::Approved.into()
         } else {
@@ -3449,5 +3471,164 @@ async fn a_pacing_window_longer_than_the_cap_is_not_waited_out_at_all() {
     assert!(
         elapsed < Duration::from_secs(1),
         "a window longer than the cap must not be slept on at all; waited {elapsed:?}"
+    );
+}
+
+// --- round-6 T8 follow-up: the three gaps the first pass left open -----------
+
+#[tokio::test(start_paused = true)]
+async fn a_provider_parked_while_the_human_is_asked_is_not_waited_out() {
+    // The pacing gate is two halves reading `pc.remaining()` separately, and
+    // between them sit the escalation gate — which blocks on a human prompt —
+    // and model resolution. `ProviderCooldown` is shared `Arc` state every
+    // concurrent walk writes, so "it was not cooling at the skip gate" is NOT
+    // still true at the wait. With the wait half unguarded, a concurrent turn's
+    // 429 landing while the operator reads the prompt makes a NON-last
+    // candidate sleep out a whole window — the exact behaviour the skip half
+    // exists to prevent. Both halves must read the one `has_later_candidate`.
+    let cloud_a = ScriptProvider::ok("cloud_a");
+    let cloud_b = ScriptProvider::ok("cloud_b");
+    let pacing = ProviderCooldown::default();
+    // Approving `cloud_a` is what parks `cloud_a`: the prompt returns, and the
+    // wait half now sees a 60s window that was empty two gates ago.
+    // rust-doctor-disable-next-line excessive-clone
+    let approver = MockApprover::parking(true, pacing.clone(), "cloud_a", Duration::from_secs(60));
+
+    let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
+        cloud_a.clone() as Arc<dyn AiProvider>,
+        vec![],
+        vec![tiered_node(
+            "cloud_b",
+            cloud_b as Arc<dyn AiProvider>,
+            EndpointTier::Cloud,
+        )],
+    )
+    // rust-doctor-disable-next-line excessive-clone
+    .with_route(RouteMode::AlwaysLocal, true, Some(approver.clone()))
+    .with_primary_tier(EndpointTier::Cloud)
+    .with_provider_cooldown(pacing);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let started = tokio::time::Instant::now();
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    let elapsed = started.elapsed();
+
+    assert_eq!(resp.text_content(), "cloud_a");
+    assert_eq!(
+        cloud_a.call_count(),
+        1,
+        "the approved candidate still dials"
+    );
+    assert_eq!(approver.call_count(), 1);
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "a candidate with a later sibling must never spend a pacing wait, whenever \
+         the window opened; waited {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_ladder_narrowed_by_a_cooling_sibling_does_not_indict_the_provider() {
+    // The exhaustion strike must compare against what the CATALOG stated, not
+    // against the survivor set the request narrowed it to. Here `m1` is parked
+    // by an earlier 429 and never dialed, `m2` 404s — reading the equality off
+    // the survivor list makes that one 404 say "this provider serves none of
+    // its catalog models", and three such walks open the breaker on an endpoint
+    // whose only real fault is one stale catalog entry plus a throttle.
+    let health = FailoverHealth::default();
+    let cd = ModelCooldown::default();
+    cd.cool("gw", "m1", Duration::from_secs(60)).await;
+    let primary = ScriptProvider::err("gw", "HTTP 404 model not found");
+
+    let fp = build_with_health(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![("gw", vec!["m1", "m2"])],
+        vec![],
+        // rust-doctor-disable-next-line excessive-clone
+        health.clone(),
+    )
+    .with_model_cooldown(cd);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let _ = fp.process(RequestPayload::new(&msgs)).await;
+
+    assert_eq!(
+        primary.models(),
+        vec![Some("m2".to_string())],
+        "the cooling rung is withheld, so only one of the two catalog models is dialed"
+    );
+    assert!(
+        !fp.circuit_open("gw").await,
+        "one 404 out of a two-rung catalog must not shed the endpoint"
+    );
+    // `circuit_allows` seeds a default entry for every candidate it gates, so
+    // the question is not "is there a row" but "did that row take a strike".
+    let counts: Vec<(String, u32)> = health
+        .snapshot()
+        .await
+        .into_iter()
+        .map(|v| (v.provider, v.failure_count))
+        .collect();
+    assert_eq!(
+        counts,
+        vec![("gw".to_string(), 0)],
+        "a rung the walk never dialed cannot testify that the provider serves nothing; \
+         no strike may be recorded"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_model_is_sidelined_so_the_next_walk_stops_paying_for_it() {
+    // The other half of the `NextModel` bookkeeping: besides the strike, the
+    // 404'd model is sidelined for `DEFAULT_MODEL_COOLDOWN`, which is the whole
+    // "60s, not 600s" justification. Without a `ModelCooldown` attached that
+    // write is unobservable, so this is the test that makes deleting the
+    // `cd.cool(...)` line go red.
+    let cd = ModelCooldown::default();
+    let primary = ScriptProvider::new(
+        "gw",
+        vec![Err("HTTP 404 model not found".to_string()), Ok(())],
+    );
+    let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![("gw", vec!["m1", "m2"])],
+        vec![],
+    )
+    // rust-doctor-disable-next-line excessive-clone
+    .with_model_cooldown(cd.clone());
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let first = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(first.text_content(), "gw");
+    assert_eq!(primary.call_count(), 2, "walk 1 pays for the 404, then m2");
+    assert!(
+        cd.is_cooling("gw", "m1").await,
+        "the model that answered 404 is sidelined"
+    );
+    assert!(
+        !cd.is_cooling("gw", "m2").await,
+        "the model that answered is not"
+    );
+
+    // rust-doctor-disable-next-line unwrap-in-production
+    let second = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(second.text_content(), "gw");
+    assert_eq!(
+        primary.call_count(),
+        3,
+        "walk 2 dials only the surviving rung — the saving the sideline buys"
+    );
+    assert_eq!(
+        primary.models(),
+        vec![
+            Some("m1".to_string()),
+            Some("m2".to_string()),
+            Some("m2".to_string())
+        ],
     );
 }

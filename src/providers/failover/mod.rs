@@ -132,8 +132,16 @@ const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// overload* (429 "please wait a moment", 529). Higher than [`MAX_RETRY_DELAY`]
 /// so a large server `Retry-After` is honored in full rather than silently
 /// clamped to 30s — a paid primary (e.g. Kimi) that says "wait 60s" should be
-/// waited out on, not abandoned to a fallback. Also caps the proactive
-/// per-provider cooldown wait. Matches hermes' 120s `Retry-After` cap.
+/// waited out on, not abandoned to a fallback. Matches hermes' 120s
+/// `Retry-After` cap.
+///
+/// It is also the *threshold* — no longer a `min()` cap — on the last-resort
+/// proactive [`ProviderCooldown`] wait: a window still within it is slept out
+/// in FULL, a window beyond it is judged un-outlastable and not slept on at
+/// all (the walk dials inside it and lets the provider's own answer settle the
+/// question). Capping that wait instead bought a sleep that provably could not
+/// end the window and then dialed inside it anyway — while spending the whole
+/// default 120s turn watchdog on the way.
 const MAX_OVERLOAD_RETRY_DELAY: Duration = Duration::from_secs(120);
 /// In-place retry budget for a *transient server overload* — a 429 whose body
 /// says "please wait a moment and try again", or a 529 `overloaded`. In a
