@@ -465,7 +465,7 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 | 用量记账（含 cache） | 五个计数、bigint→safe、饱和合并 | `TokenUsage` + 不相交不变量 + `billed_tokens`（TPM 计 cache） | **Aleph 领先**（超集 + 不变量） |
 | per-provider 终身台账 | `recordInferenceUsage` 落盘（请求数 + 四个 token 计数 + `lastUsedAt`），失败静默不计、有重复计数风险 | 无（只有 60s 加权滑窗 + 每请求 trace 事件） | **不做**（零消费者；理由见 §9 round-6） |
 | 路由配置热重载 | **无**——每会话从磁盘重读（那正是三处重读的由来） | `RouteHandle` ArcSwap + `route_config.update` + `live_apply` | **Aleph 领先**；round-6 前只有专用 RPC 那一面重算 `config_problems` → T2 收敛到执行器一处 |
-| 降级对用户可见 | `"retrying"` UI 状态 + `sand.retry_count` trace 属性 | `RouteWitness` → 四个面的 `ModelResolved{is_fallback}` 横幅 | **Aleph 领先**；witness 锚在第一次**拨号**上，拨号前被跳过读起来像"什么都没偏离"，留档 round-7 |
+| 降级对用户可见 | `"retrying"` UI 状态 + `sand.retry_count` trace 属性 | `RouteWitness` → 四个面的 `ModelResolved{is_fallback}` 横幅 | **Aleph 领先**；witness 锚在**候选计划的头**（`CandidatePlan::anchor`，round-6 T6 修）——断路器 / 限流让位 / pacing 都发生在拨号之前，锚在第一次拨号会让持续故障读成"什么都没偏离" |
 | 配置可达性 | env + `settings.json`，无 RPC | `route_config.get/update` + `update_config` 工具 + Panel 两张脸 | **Aleph 领先**；`health_probe_interval_secs` 曾是 server-only，Panel 每存一次就把它抹掉 → **round-6 T1 修**（整段替换语义 + 三条守卫） |
 | 韧性层的测试 | 分类器有单测，整条重试边界自述 dormant | 2429 行 walk / 排序测试（注入 mock）+ 快照 schema lock + wire 形状守卫 | **Aleph 决定性领先**——所以本轮把参考项目的设计一律当意图读 |
 

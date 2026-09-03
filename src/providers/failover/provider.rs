@@ -120,6 +120,53 @@ struct CandidatePlan {
     route: Arc<RouteState>,
 }
 
+impl CandidatePlan {
+    /// The endpoint this plan sets out for, as the route witness's anchor — or
+    /// `None` when the head is not an endpoint at all.
+    ///
+    /// The single unanchorable head is the nested-chain sentinel: it stands for
+    /// a whole chain, not a provider (see [`NESTED_CHAIN_NODE`]). There is no
+    /// fall-through for it — the dial-time anchor excludes the sentinel by the
+    /// same rule — so a walk whose head is the sentinel writes **nothing at
+    /// either point**, and the chain nested behind it becomes the run's writer.
+    ///
+    /// That head is reachable and the gap is real: a `provider_hint` pin builds
+    /// `[pin, NESTED_CHAIN_NODE]` carrying the pin's true tier, so a cloud pin
+    /// under `AlwaysLocal` with `allow_cloud_escalation = false` classifies the
+    /// pin [`Skip`](CandidateAction::Skip) and leaves the sentinel leading. The run
+    /// is then reported as whatever the *global* chain set out for, not as the
+    /// pin the caller asked for. Anchoring the dropped head instead is not
+    /// obviously right — the identical drop on an operator-configured primary
+    /// is that deployment's steady state under `AlwaysLocal`, and reporting it
+    /// would light the banner on every turn — so this round leaves the pin case
+    /// under-reported rather than guess (FEATURE_LOCATOR §3.6 round-6 T6,
+    /// deferred list).
+    ///
+    /// An approval-gated cross-tier head **is** anchored here, and the walk's
+    /// escalation arm withdraws the anchor
+    /// ([`route_witness::retract`](crate::providers::route_witness::retract)) if
+    /// the user actually declines. "Declined" and "skipped" are different
+    /// events and only the first must stay silent: the breaker and rate-ceiling
+    /// gates run *ahead* of the approval prompt, so a gated head whose provider
+    /// is dead or saturated is passed over without anyone being asked — and
+    /// being passed over for being dead is exactly the migration this anchor
+    /// exists to report.
+    ///
+    /// The model is left [`Unresolved`](crate::providers::route_witness::DialedModel::Unresolved)
+    /// on purpose: the walk settles which model this slot dials only after the
+    /// capability floor and the cooling sideline have run, so a seed derived
+    /// from the catalog head here could name a model that is then filtered out.
+    fn anchor(&self) -> Option<crate::providers::route_witness::Dialed> {
+        let (node, _, _) = self.candidates.first()?;
+        if node.name == super::NESTED_CHAIN_NODE {
+            return None;
+        }
+        Some(crate::providers::route_witness::Dialed::endpoint(
+            &node.name,
+        ))
+    }
+}
+
 /// One step of the chain the next request would walk, as rendered by
 /// `route_status` ([`FailoverProvider::preview_order`]).
 #[derive(Debug, Clone)]
@@ -1025,11 +1072,33 @@ impl FailoverProvider {
             let plan = self.candidates(true).await;
             let total = plan.candidates.len();
             let mut last_error: Option<AlephError> = None;
-            // The first endpoint this walk actually dials, for the route
-            // witness below. Attempted rather than succeeded: a primary that is
-            // down for the whole run has every *success* already on the
-            // fallback, and anchoring there would make the commonest migration
-            // of all read as "nothing deviated".
+            // The route witness's `session_id`, read once: the same
+            // `metadata["session_id"]` the metering provider and the OpenAI
+            // prompt-cache key already key on. Absent on every path that builds
+            // a payload without it (MoA advisor dials, non-gateway callers),
+            // which simply go unrecorded.
+            let witness_session = metadata.as_ref().and_then(|m| m.get("session_id"));
+            // Anchor the run on the endpoint this walk SET OUT FOR, before any
+            // gate below can pass it over. Every cheap reason to skip a
+            // candidate — open circuit, rate ceiling, 429 pacing park — is
+            // settled before the first request is built, so from the second run
+            // of an outage onward the first *dial* is already the fallback and
+            // anchoring there would report the outage as "nothing deviated".
+            //
+            // Model deliberately left unresolved: which model this slot would
+            // dial is only settled further down by the capability floor and the
+            // cooling sideline, so naming the catalog head here could publish a
+            // model the walk then filtered out. The dial below refines it.
+            if let Some(session) = witness_session {
+                if let Some(anchor) = plan.anchor() {
+                    crate::providers::route_witness::record_attempt(session, anchor);
+                }
+            }
+            // The first endpoint this walk actually dials. Refines the anchor
+            // above with the model that endpoint was really asked for, and is
+            // the run's only anchor when there is no plan-time one to refine:
+            // the head was a sentinel (no seed) or its anchor was withdrawn by
+            // a declined escalation.
             let mut first_attempt: Option<crate::providers::route_witness::Dialed> = None;
             // Records whether any candidate has already pushed content to the
             // caller's sink; see the note on `walk`.
@@ -1107,6 +1176,17 @@ impl FailoverProvider {
                             provider = %cand.name,
                             "route: cloud escalation denied, skipping candidate"
                         );
+                        // The one event that invalidates a plan-time anchor.
+                        // The head was anchored like any other (the gates above
+                        // pass a gated head over without ever asking, and that
+                        // IS a migration); an actual refusal is not, so the
+                        // anchor is withdrawn rather than never written — which
+                        // would have left the far commoner "skipped before the
+                        // prompt" case unanchored too. A no-op unless the
+                        // record is still this candidate's bare anchor.
+                        if let Some(session) = witness_session {
+                            crate::providers::route_witness::retract(session, &cand.name);
+                        }
                         last_error.get_or_insert_with(|| {
                             AlephError::provider(format!(
                                 "route: cloud escalation to '{}' not approved",
@@ -1238,12 +1318,31 @@ impl FailoverProvider {
                         // Same sentinel exclusion the load guard makes: it is
                         // not an endpoint, so it must not become the `original`
                         // half of a fallback notice either.
+                        //
+                        // This runs even when the plan already anchored the run:
+                        // the two writes answer different halves of the same
+                        // question. The plan-time anchor names the endpoint the
+                        // walk set out for (which a gate may then pass over);
+                        // this one names the model that endpoint was really
+                        // asked for, and is the only anchor at all for a walk
+                        // that had no seed to refine (a sentinel head, or a head
+                        // whose anchor a denied escalation withdrew). The witness
+                        // merges them (`RouteWitness::absorb`): the anchor's
+                        // model is refined only by a dial of that same endpoint.
                         if first_attempt.is_none() && cand.name != super::NESTED_CHAIN_NODE {
-                            first_attempt = Some(crate::providers::route_witness::Dialed::new(
+                            let dialed = crate::providers::route_witness::Dialed::new(
                                 &cand.name,
                                 // rust-doctor-disable-next-line excessive-clone
                                 model.clone(),
-                            ));
+                            );
+                            if let Some(session) = witness_session {
+                                // rust-doctor-disable-next-line excessive-clone
+                                crate::providers::route_witness::record_attempt(
+                                    session,
+                                    dialed.clone(),
+                                );
+                            }
+                            first_attempt = Some(dialed);
                         }
                         let attempt_result = match &emission {
                             Some(guard) => cand.provider.execute_streaming_dyn(inner, guard).await,
@@ -1300,14 +1399,7 @@ impl FailoverProvider {
                                 // endpoint, and the chain nested behind it
                                 // records the real provider itself.
                                 if cand.name != super::NESTED_CHAIN_NODE {
-                                    // Same `metadata["session_id"]` the metering
-                                    // provider and the OpenAI prompt-cache key
-                                    // already read; absent on paths that build a
-                                    // payload without it, which simply go
-                                    // unrecorded.
-                                    if let Some(session) =
-                                        metadata.as_ref().and_then(|m| m.get("session_id"))
-                                    {
+                                    if let Some(session) = witness_session {
                                         let served = crate::providers::route_witness::Dialed::new(
                                             &cand.name,
                                             // rust-doctor-disable-next-line excessive-clone

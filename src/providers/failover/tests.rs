@@ -195,6 +195,18 @@ fn build(
     catalog: Vec<(&str, Vec<&str>)>,
     fallbacks: Vec<FailoverNode>,
 ) -> FailoverProvider {
+    build_with_health(primary, catalog, fallbacks, FailoverHealth::default())
+}
+
+/// Same, with a caller-supplied breaker table, so a test can pre-open a circuit
+/// (`FailoverHealth::open_for_test`) instead of first driving a whole failing
+/// provider walk to trip it.
+fn build_with_health(
+    primary: Arc<dyn AiProvider>,
+    catalog: Vec<(&str, Vec<&str>)>,
+    fallbacks: Vec<FailoverNode>,
+    health: FailoverHealth,
+) -> FailoverProvider {
     let model_catalog = catalog
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.into_iter().map(String::from).collect()))
@@ -203,7 +215,7 @@ fn build(
         Arc::new(StaticDefault::new(primary)),
         fallbacks,
         model_catalog,
-        FailoverHealth::default(),
+        health,
         FailoverConfig::default(),
     )
 }
@@ -2740,8 +2752,8 @@ async fn the_witness_records_the_model_the_walk_actually_asked_for() {
     let _ = fp.process(witness_payload(&msgs, session)).await.unwrap();
 
     let w = crate::providers::route_witness::take(session).expect("witnessed");
-    assert_eq!(w.first.model.as_deref(), Some("model-a"));
-    assert_eq!(w.served.model.as_deref(), Some("model-b"));
+    assert_eq!(w.first.model_id(), Some("model-a"));
+    assert_eq!(w.served.model_id(), Some("model-b"));
     assert!(
         w.deviated(),
         "a sibling-model migration is still a deviation"
@@ -2793,5 +2805,299 @@ async fn the_nested_chain_sentinel_never_names_itself_as_the_endpoint() {
         "global-primary",
         "the real endpoint must be reported, never `{}`",
         super::NESTED_CHAIN_NODE
+    );
+}
+
+// --- round-6: the anchor is the plan's head, not the first dial -------------
+//
+// Every cheap reason to pass a candidate over — an open circuit, a rate
+// ceiling, a denied escalation, a 429 pacing park — is settled BEFORE the walk
+// builds its first request. `first_attempt` used to be assigned inside the
+// model loop, i.e. after all of those `continue`s, so from the second run of an
+// outage onward the first *dial* was already the fallback: `first == served`,
+// `deviated()` false, and the `ModelResolved{is_fallback}` banner — the only
+// user-visible fallback signal on all four surfaces — went dark for exactly the
+// case it exists for. A 429 parks a provider for a minute; three strikes open
+// its breaker for five.
+
+#[tokio::test]
+async fn an_open_primary_that_is_skipped_still_reads_as_a_migration() {
+    let session = "agent:witness-test:skipped-open-circuit";
+    crate::providers::route_witness::clear(session);
+
+    let primary = ScriptProvider::ok("primary");
+    let fb = ScriptProvider::ok("fallback");
+    let health = FailoverHealth::default();
+    // As if three strikes had already tripped it on an earlier run.
+    health.open_for_test("primary").await;
+    let fp = build_with_health(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![],
+        vec![node("fallback", fb as Arc<dyn AiProvider>)],
+        health,
+    );
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(witness_payload(&msgs, session)).await.unwrap();
+    assert_eq!(resp.text_content(), "fallback");
+    assert_eq!(
+        primary.call_count(),
+        0,
+        "the open circuit must skip the primary before any dial — which is the \
+         whole point of this test"
+    );
+
+    let w = crate::providers::route_witness::take(session).expect("witnessed");
+    assert_eq!(
+        w.first.provider, "primary",
+        "the run set out for the primary; being passed over pre-dial is not the \
+         same as never having chosen it"
+    );
+    assert_eq!(w.served.provider, "fallback");
+    assert!(
+        w.deviated(),
+        "an outage's second run is still a migration, and the banner is the only \
+         way the user learns which endpoint answered"
+    );
+}
+
+#[tokio::test]
+async fn a_paced_primary_that_is_skipped_still_reads_as_a_migration() {
+    // The twin of the breaker case, through the other pre-dial gate: a 429
+    // parks the provider for `DEFAULT_MODEL_COOLDOWN`, and the walk skips a
+    // cooling candidate outright while a later one remains.
+    let session = "agent:witness-test:skipped-paced";
+    crate::providers::route_witness::clear(session);
+
+    let primary = ScriptProvider::ok("primary");
+    let fb = ScriptProvider::ok("fallback");
+    let cooldown = ProviderCooldown::default();
+    cooldown
+        .cool("primary", std::time::Duration::from_secs(90))
+        .await;
+    let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![],
+        vec![node("fallback", fb as Arc<dyn AiProvider>)],
+    )
+    .with_provider_cooldown(cooldown);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(witness_payload(&msgs, session)).await.unwrap();
+    assert_eq!(resp.text_content(), "fallback");
+    assert_eq!(primary.call_count(), 0, "the parked primary is not dialed");
+
+    let w = crate::providers::route_witness::take(session).expect("witnessed");
+    assert_eq!(w.first.provider, "primary");
+    assert_eq!(w.served.provider, "fallback");
+    assert!(w.deviated());
+}
+
+#[tokio::test]
+async fn a_pinned_chain_reports_the_pin_as_the_original() {
+    // A `provider_hint` override chain is `[pin, <the whole global chain>]`.
+    // The outer walk cannot record the sentinel and the inner walk records its
+    // OWN first attempt, so before the plan-time anchor a failed pin plus a
+    // failed global primary published `original_model = global-primary` — an
+    // endpoint the user never selected. A wrong report, not an under-report.
+    let session = "agent:witness-test:pinned-original";
+    crate::providers::route_witness::clear(session);
+
+    let inner_primary = ScriptProvider::err("global-primary", "HTTP 429 too many requests");
+    let inner_fb = ScriptProvider::ok("global-fallback");
+    let global = Arc::new(build(
+        inner_primary,
+        vec![],
+        vec![node("global-fallback", inner_fb as Arc<dyn AiProvider>)],
+    ));
+
+    let pinned = ScriptProvider::err("pinned", "HTTP 429 too many requests");
+    let fp = build(
+        pinned,
+        vec![],
+        vec![node(
+            super::NESTED_CHAIN_NODE,
+            global as Arc<dyn AiProvider>,
+        )],
+    );
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(witness_payload(&msgs, session)).await.unwrap();
+    assert_eq!(resp.text_content(), "global-fallback");
+
+    let w = crate::providers::route_witness::take(session).expect("witnessed");
+    assert_eq!(
+        w.first.provider, "pinned",
+        "the run set out for the pin the caller chose, not for whatever the \
+         nested global chain happened to try first"
+    );
+    assert_eq!(w.served.provider, "global-fallback");
+    assert!(w.deviated());
+}
+
+#[tokio::test]
+async fn a_denied_escalation_head_does_not_anchor_the_witness() {
+    // A refused borrow is not a migration: telling someone who just DECLINED
+    // the cloud that their run was migrated away from it is a wrong report. The
+    // head is anchored at plan time like any other (see the twin below for why)
+    // and the escalation arm retracts that anchor on the denial, so what a
+    // reader sees is the same as if it had never been anchored.
+    let session = "agent:witness-test:denied-escalation";
+    crate::providers::route_witness::clear(session);
+
+    let cloud = ScriptProvider::ok("openai");
+    let local = ScriptProvider::ok("ollama");
+    let approver = MockApprover::new(false);
+    let fp = build_pinned(
+        // rust-doctor-disable-next-line excessive-clone
+        cloud.clone(),
+        EndpointTier::Cloud,
+        vec![tiered_node("ollama", local, EndpointTier::Local)],
+        RouteMode::AlwaysLocal,
+        true,
+        Some(approver),
+    );
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(witness_payload(&msgs, session)).await.unwrap();
+    assert_eq!(resp.text_content(), "ollama");
+    assert_eq!(cloud.call_count(), 0, "the denied pin never reached the wire");
+
+    let w = crate::providers::route_witness::take(session).expect("witnessed");
+    assert_eq!(
+        w.first.provider, "ollama",
+        "a declined escalation must not become the `original` half of a notice"
+    );
+    assert!(
+        !w.deviated(),
+        "the user asked for local and got local; there is nothing to announce"
+    );
+}
+
+#[tokio::test]
+async fn a_gated_head_skipped_before_the_prompt_still_reads_as_a_migration() {
+    // The twin of the test above, and the reason the gated head is anchored at
+    // all instead of simply never seeded. The breaker and rate-ceiling gates
+    // run BEFORE the escalation prompt, so a gated head whose provider is
+    // already open is passed over without anyone being asked — nobody declined
+    // anything, the operator's own primary was skipped for being dead, and that
+    // is the migration the banner exists to announce. Retracting only on a real
+    // denial is what keeps the two apart.
+    let session = "agent:witness-test:gated-head-open-circuit";
+    crate::providers::route_witness::clear(session);
+
+    let cloud = ScriptProvider::ok("openai");
+    let local = ScriptProvider::ok("ollama");
+    // Would approve if asked — the point is that it is never asked.
+    let approver = MockApprover::new(true);
+    let health = FailoverHealth::default();
+    health.open_for_test("openai").await;
+    let fp = build_with_health(
+        // rust-doctor-disable-next-line excessive-clone
+        cloud.clone() as Arc<dyn AiProvider>,
+        vec![],
+        vec![tiered_node("ollama", local, EndpointTier::Local)],
+        health,
+    )
+    // rust-doctor-disable-next-line excessive-clone
+    .with_route(RouteMode::AlwaysLocal, true, Some(approver.clone()))
+    .with_primary_tier(EndpointTier::Cloud);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(witness_payload(&msgs, session)).await.unwrap();
+    assert_eq!(resp.text_content(), "ollama");
+    assert_eq!(cloud.call_count(), 0, "the open circuit skipped it");
+    assert_eq!(
+        approver.call_count(),
+        0,
+        "the breaker gate runs ahead of the approval gate — this is the ordering \
+         that makes the plan-time anchor necessary"
+    );
+
+    let w = crate::providers::route_witness::take(session).expect("witnessed");
+    assert_eq!(
+        w.first.provider, "openai",
+        "the run set out for the cloud primary and never got there; nobody \
+         declined it"
+    );
+    assert_eq!(w.served.provider, "ollama");
+    assert!(
+        w.deviated(),
+        "a head skipped before the prompt is a migration, not a refusal"
+    );
+}
+
+#[tokio::test]
+async fn the_anchor_never_names_a_model_the_walk_filtered_out() {
+    // The anchor names the ENDPOINT and leaves the model unresolved on purpose.
+    // Seeding it from the catalog head would duplicate a derivation the walk
+    // performs later (the capability floor, then the cooling sideline): with
+    // `model-a` cooling, the seed would read `(primary, model-a)` while the walk
+    // serves `(primary, model-b)`, and `deviated()` — which compares the model
+    // too — would light a same-provider banner naming a model that was never
+    // dialed. The dial refines the anchor instead, so the two cannot disagree.
+    let session = "agent:witness-test:anchor-model";
+    crate::providers::route_witness::clear(session);
+
+    let primary = ScriptProvider::ok("primary");
+    let cd = ModelCooldown::default();
+    cd.cool("primary", "model-a", Duration::from_secs(300)).await;
+    let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![("primary", vec!["model-a", "model-b"])],
+        vec![],
+    )
+    .with_model_cooldown(cd);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let _ = fp.process(witness_payload(&msgs, session)).await.unwrap();
+    assert_eq!(
+        primary.models(),
+        vec![Some("model-b".to_string())],
+        "the cooling head is sidelined, so `model-b` is what actually got dialed"
+    );
+
+    let w = crate::providers::route_witness::take(session).expect("witnessed");
+    assert_eq!(
+        w.first.model_id(),
+        Some("model-b"),
+        "the anchor must adopt the model that was dialed, never the catalog head"
+    );
+    assert!(
+        !w.deviated(),
+        "the run got exactly what the walk chose; a banner here would be a wrong \
+         report naming a model nothing dialed"
+    );
+}
+
+#[tokio::test]
+async fn a_run_that_never_gets_an_answer_announces_nothing() {
+    // The anchor is written before any dial, so a walk that then fails outright
+    // leaves a record behind. It must read as "nothing deviated": a run that got
+    // no answer at all was not "served by a fallback".
+    let session = "agent:witness-test:anchored-then-failed";
+    crate::providers::route_witness::clear(session);
+
+    let primary = ScriptProvider::err("primary", "HTTP 500 upstream exploded");
+    let fp = build(primary, vec![], vec![]);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    assert!(fp.process(witness_payload(&msgs, session)).await.is_err());
+
+    let w = crate::providers::route_witness::take(session)
+        .expect("the anchor is written before the dial, so a record exists");
+    assert_eq!(w.first.provider, "primary");
+    assert!(
+        !w.deviated(),
+        "an anchored run with no answer must not manufacture a migration"
     );
 }

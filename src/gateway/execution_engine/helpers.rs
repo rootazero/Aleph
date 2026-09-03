@@ -773,6 +773,41 @@ mod route_correction_tests {
     }
 
     #[test]
+    fn a_head_that_was_never_dialed_names_its_kind_in_the_notice() {
+        // The HEADLINE case, not an edge one: a primary passed over pre-dial by
+        // an open breaker, a rate ceiling or a 429 pacing park is anchored with
+        // no model at all, so this label is what the four surfaces actually
+        // print in `original_model` from the second run of an outage onward.
+        // Three of them render that field as `"{original} → {model}"`, i.e.
+        // where a model id belongs — hence the explicit "provider" kind. This
+        // test pins the exact user-visible string, which the failover tests
+        // (they stop at the witness store) cannot.
+        let w = witness(
+            Dialed::endpoint("primary"),
+            Dialed::new("fallback", Some("gpt-4o".into())),
+        );
+        let info = correction_for(&w).expect("a skipped primary is a migration");
+        assert!(info.is_fallback);
+        assert_eq!(info.model, "gpt-4o");
+        assert_eq!(
+            info.original_model.as_deref(),
+            Some("provider primary (never dialed)"),
+            "reads as `model fallback: provider primary (never dialed) → gpt-4o`"
+        );
+    }
+
+    #[test]
+    fn an_anchored_run_that_never_got_an_answer_announces_nothing() {
+        // `record_attempt` mirrors the anchor into `served` until a real answer
+        // lands, so a run that failed outright must not render its own anchor
+        // as both halves of a notice.
+        let anchor = Dialed::endpoint("primary");
+        // rust-doctor-disable-next-line excessive-clone
+        let w = witness(anchor.clone(), anchor);
+        assert!(correction_for(&w).is_none());
+    }
+
+    #[test]
     fn the_same_model_on_another_provider_still_reports() {
         // Two providers serving the same model id (e.g. openai + azure). The
         // model labels match, so the three renderers that guard on
