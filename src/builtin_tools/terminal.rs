@@ -324,7 +324,16 @@ mod tests {
 
     /// No `TurnContext` at all reads as operator (cron/A2A/internal
     /// convention) — a caller with a scoped, non-operator role is refused.
+    ///
+    /// Reaches the process-global `PtyManager` via `list_sessions`, so it
+    /// carries the same `pty_global_manager` parallel key every other test
+    /// in the crate that touches the singleton does — see the module doc on
+    /// `gateway::handlers::pty::every_test_that_reaches_the_global_pty_manager_is_tagged`,
+    /// which cannot see this reacher itself (it lives behind a function
+    /// call from the production half of this file, not inside a
+    /// `#[cfg(test)]` block the census scans — task-11 review F7).
     #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
     async fn no_turn_context_is_treated_as_operator() {
         let out = TerminalTool
             .call(TerminalArgs {
@@ -368,6 +377,11 @@ mod tests {
             .unwrap();
         assert!(!out.success);
         assert!(out.message.contains("operator"), "{}", out.message);
+        // A refusal that still carried session data would be a gate that
+        // reports "no" and means "yes" (task-11 review F10) — discarding
+        // the `data: None` in the two arms of `TerminalTool::call` and
+        // keeping only the label check would leave this test green.
+        assert!(out.data.is_none(), "a refusal must not carry session data");
     }
 
     #[tokio::test]
@@ -383,7 +397,11 @@ mod tests {
         assert!(out.message.contains("session_id"), "{}", out.message);
     }
 
+    /// Reaches the global `PtyManager` via `read_session`'s
+    /// `owner_of`/`visible_text` calls — same F7 rationale as
+    /// `no_turn_context_is_treated_as_operator` above.
     #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
     async fn read_of_unknown_session_is_no_such_session() {
         let out = TerminalTool
             .call(TerminalArgs {
@@ -394,5 +412,37 @@ mod tests {
             .unwrap();
         assert!(!out.success);
         assert!(out.message.contains("no such session"), "{}", out.message);
+        // Same reasoning as `non_operator_caller_is_refused` (F10): the
+        // refusal's payload, not just its label, must be asserted.
+        assert!(out.data.is_none(), "a refusal must not carry session data");
+    }
+
+    /// A session that EXISTS but belongs to someone else must look
+    /// identical to one that does not exist at all — the assertion whose
+    /// absence let `read_session`'s ownership check (`terminal.rs:241`) be
+    /// deleted without reddening anything, since every existing test used an
+    /// id that never existed either way (task-11 review F8).
+    #[test]
+    #[serial_test::parallel(pty_global_manager)]
+    fn read_of_someone_elses_session_is_refused_like_unknown() {
+        use crate::gateway::pty::SpawnOptions;
+
+        let id = pty::manager()
+            .spawn(&SpawnOptions {
+                created_by: Some("u-owner".to_string()),
+                ..Default::default()
+            })
+            .expect("spawn")
+            .session_id;
+
+        let result = read_session(Some(&id), Some("u-someone-else"));
+        assert_eq!(
+            result,
+            Err(pty::no_such_session(&id)),
+            "an unowned session and a nonexistent one must produce byte-identical \
+             refusals, or `read` becomes an id-enumeration oracle"
+        );
+
+        let _ = pty::manager().close(&id);
     }
 }
