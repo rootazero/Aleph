@@ -216,17 +216,26 @@ impl SessionStore for SessionManager {
         // producer's stamp). One out-of-order projection is then enough for the
         // two to name different sets, and this is an irreversible delete.
         //
-        // Ordered by `id` — the order the rows were recorded, which is the
-        // transcript's order on both backends (`SessionStore::history_page`).
-        // The file store's `/undo` is `drain(keep_count..)` on the transcript
-        // as it sits on disk; this is the same cut, expressed in SQL.
+        // Ordered by the seq anchor — the transcript's order
+        // (`SessionStore::history_page`). The file store's `/undo` is
+        // `drain(keep_count..)` on what `read_transcript` returns, and that
+        // read now applies the same rule in Rust, so this stays the same cut
+        // expressed in SQL. Plain `ORDER BY id` was that cut until the
+        // projector learned to heal holes below the newest row it had written;
+        // from then on "the tail the user sees" and "the rows inserted last"
+        // name different sets, and the warning two paragraphs up is about
+        // exactly that — irreversibly.
         //
         // `keep_count == 0` needs no special case here — `OFFSET 0` names every
         // row, which is the "delete all messages, mirroring reset_session"
         // behaviour it used to be spelled out for. `LIMIT -1` is SQLite's "no
         // limit"; `OFFSET` requires a `LIMIT` beside it.
-        let doomed = "SELECT id FROM messages WHERE session_key = ?1
-             ORDER BY id ASC LIMIT -1 OFFSET ?2";
+        let doomed = &format!(
+            "SELECT id FROM ( \
+                SELECT id, {anchor} AS anchor FROM messages WHERE session_key = ?1 \
+             ) ORDER BY anchor ASC, id ASC LIMIT -1 OFFSET ?2",
+            anchor = crate::session::projection::TRANSCRIPT_ANCHOR_SQL,
+        );
         let keep = keep_count as i64;
 
         // Sum the tokens we are about to drop (best-effort; saturates on err).

@@ -919,6 +919,237 @@ mod delete_from_seq_tests {
     }
 }
 
+/// A transcript is read in the order the conversation HAPPENED, not the order
+/// its rows were appended. Both production backends must answer identically —
+/// one is a `Vec` sort and the other a window function, and two spellings of
+/// one rule is exactly the shape that drifts — so every case runs twice.
+///
+/// Distinct from [`transcript_order_tests`], which settles recording order
+/// against the producers' STAMPS and whose fixture carries no seqs at all:
+/// every anchor there is `None`, so this rule leaves that conversation
+/// byte-for-byte alone. Recording order still beats the stamp; the seq beats
+/// recording order only where a seq exists, which is exactly where recording
+/// order is known to be wrong.
+#[cfg(test)]
+mod healed_row_order_tests {
+    use super::*;
+    use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+    use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+    use crate::session::projection::row_id;
+    use crate::sync_primitives::Arc;
+    use tempfile::TempDir;
+
+    fn key() -> SessionKey {
+        SessionKey::Main {
+            agent_id: "main".into(),
+            main_key: "main".into(),
+            epoch: 0,
+        }
+    }
+
+    fn projected(seq: u64, role: &str, content: &str) -> MessageRecord {
+        MessageRecord {
+            id: row_id(&key().to_key_string(), seq),
+            role: role.into(),
+            content: content.into(),
+            timestamp: seq as i64,
+            metadata: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            tool_call_id: None,
+            tool_name: None,
+        }
+    }
+
+    fn foreign(id: &str, ts: i64, content: &str) -> MessageRecord {
+        MessageRecord {
+            id: id.into(),
+            role: "system".into(),
+            content: content.into(),
+            timestamp: ts,
+            metadata: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            tool_call_id: None,
+            tool_name: None,
+        }
+    }
+
+    fn file_store(temp: &TempDir) -> Arc<dyn SessionStore> {
+        Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: temp.path().to_path_buf(),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+    }
+
+    fn sqlite_store(temp: &TempDir) -> Arc<dyn SessionStore> {
+        Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: temp.path().join("sessions.db"),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+    }
+
+    async fn contents(store: &Arc<dyn SessionStore>, limit: Option<usize>) -> Vec<String> {
+        store
+            .get_history(&key(), limit)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.content)
+            .collect()
+    }
+
+    /// The crash shape: seq 3 never made it into the projection, an orphan
+    /// notice was appended at boot, the conversation continued, and only then
+    /// did the heal write seq 3 — LAST. Insert order is
+    /// `[u1, a1, orphan, u2, a2, healed]`.
+    async fn seed_healed(store: &Arc<dyn SessionStore>) {
+        let k = key();
+        store.get_or_create(&k).await.unwrap();
+        for msg in [
+            projected(1, "user", "u1"),
+            projected(2, "assistant", "a1"),
+            foreign("orphan-1", 3, "interrupted by restart"),
+            projected(4, "user", "u2"),
+            projected(5, "assistant", "a2"),
+            projected(3, "assistant", "healed"),
+        ] {
+            store.append_message(&k, msg).await.unwrap();
+        }
+    }
+
+    /// The defect: a message recovered after a crash was appended last, so it
+    /// READ last — surfacing at the bottom of the conversation instead of
+    /// between the two turns it was said between.
+    ///
+    /// The orphan notice is the other half. It has no seq of its own and must
+    /// NOT be swept to either end: it belongs after `a1`, where it was
+    /// inserted, which is what anchoring it to the newest seq before it buys.
+    async fn a_healed_row_reads_where_it_was_said(store: Arc<dyn SessionStore>) {
+        seed_healed(&store).await;
+        assert_eq!(
+            contents(&store, None).await,
+            vec![
+                "u1".to_string(),
+                "a1".to_string(),
+                "interrupted by restart".to_string(),
+                "healed".to_string(),
+                "u2".to_string(),
+                "a2".to_string(),
+            ]
+        );
+    }
+
+    /// "The last N of the conversation" and "the last N appended" are
+    /// different SETS once a heal has run — here they differ by two of three
+    /// rows. A window taken before the ordering answers the second question
+    /// and then sorts the answer into looking like the first.
+    async fn a_window_is_the_tail_of_the_conversation(store: Arc<dyn SessionStore>) {
+        seed_healed(&store).await;
+        assert_eq!(
+            contents(&store, Some(3)).await,
+            vec!["healed".to_string(), "u2".to_string(), "a2".to_string()],
+            "insert order would answer [u2, a2, healed]"
+        );
+    }
+
+    /// A legacy transcript upgraded mid-life: rows with no seq at the head,
+    /// event-sourced rows after. The unprojected prefix has no seq to anchor
+    /// to and must stay at the FRONT — the arm that sorts unprojected rows to
+    /// the end reverses this conversation.
+    async fn an_unprojected_prefix_stays_at_the_head(store: Arc<dyn SessionStore>) {
+        let k = key();
+        store.get_or_create(&k).await.unwrap();
+        for msg in [
+            foreign("legacy-1", 1, "old-1"),
+            foreign("legacy-2", 2, "old-2"),
+            projected(7, "user", "new-1"),
+            projected(8, "assistant", "new-2"),
+        ] {
+            store.append_message(&k, msg).await.unwrap();
+        }
+        assert_eq!(
+            contents(&store, None).await,
+            vec![
+                "old-1".to_string(),
+                "old-2".to_string(),
+                "new-1".to_string(),
+                "new-2".to_string(),
+            ]
+        );
+    }
+
+    /// A transcript nobody ever projected must come back exactly as appended.
+    /// Every anchor is `None`, so this is the case the ordering has to leave
+    /// alone — and the one that would go silently wrong if ties stopped being
+    /// resolved by insert order.
+    async fn a_transcript_with_no_seqs_at_all_is_untouched(store: Arc<dyn SessionStore>) {
+        let k = key();
+        store.get_or_create(&k).await.unwrap();
+        for (i, text) in ["c", "a", "b"].iter().enumerate() {
+            store
+                .append_message(&k, foreign(&format!("legacy-{i}"), i as i64, text))
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            contents(&store, None).await,
+            vec!["c".to_string(), "a".to_string(), "b".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn file_backend_reads_the_conversations_order() {
+        let temp = TempDir::new().unwrap();
+        a_healed_row_reads_where_it_was_said(file_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        a_window_is_the_tail_of_the_conversation(file_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        an_unprojected_prefix_stays_at_the_head(file_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        a_transcript_with_no_seqs_at_all_is_untouched(file_store(&temp)).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_backend_reads_the_conversations_order() {
+        let temp = TempDir::new().unwrap();
+        a_healed_row_reads_where_it_was_said(sqlite_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        a_window_is_the_tail_of_the_conversation(sqlite_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        an_unprojected_prefix_stays_at_the_head(sqlite_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        a_transcript_with_no_seqs_at_all_is_untouched(sqlite_store(&temp)).await;
+    }
+
+    /// The two backends do not merely each satisfy the cases above — they
+    /// return the SAME sequence for the same writes. A parity assertion is the
+    /// only thing that stays red when one spelling is changed and the other is
+    /// not, which is how these two last diverged.
+    #[tokio::test]
+    async fn both_backends_return_the_same_order_for_the_same_writes() {
+        let file_temp = TempDir::new().unwrap();
+        let file = file_store(&file_temp);
+        seed_healed(&file).await;
+
+        let sqlite_temp = TempDir::new().unwrap();
+        let sqlite = sqlite_store(&sqlite_temp);
+        seed_healed(&sqlite).await;
+
+        assert_eq!(contents(&file, None).await, contents(&sqlite, None).await);
+        assert_eq!(
+            contents(&file, Some(3)).await,
+            contents(&sqlite, Some(3)).await
+        );
+    }
+}
+
 /// P1 data isolation: session `owner_user_id`/`scope_id` stamping at
 /// creation + `SessionFilter::owner_visible_to` filtering. Both production
 /// backends must behave identically, so every case runs twice — same

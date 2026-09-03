@@ -141,20 +141,30 @@ impl SessionManager {
 
         let mut messages = Vec::new();
         if message_limit > 0 {
-            // `id` — the order rows were recorded, which is the transcript's
-            // order everywhere (`SessionStore::history_page`). The same
-            // spelling `history_sql` uses, and for the same reason: two
-            // spellings of "the trailing N rows" that order differently is a
-            // divergence between two views of one conversation.
+            // The seq anchor — the order the conversation happened, which is
+            // the transcript's order everywhere
+            // (`SessionStore::history_page`). The same spelling `history_sql`
+            // uses, and for the same reason: two spellings of "the trailing N
+            // rows" that order differently is a divergence between two views of
+            // one conversation. This one was `ORDER BY id` alongside its twin,
+            // and moving only the twin would have created exactly that.
+            //
+            // `source_seq` is not in this preview's column list and does not
+            // need to be — the window reads it off the table, and the outer
+            // projection drops it again.
+            let sql = format!(
+                "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
+                 tool_call_id, tool_name FROM ( \
+                    SELECT * FROM ( \
+                        SELECT id, role, content, timestamp, metadata, input_tokens, \
+                        output_tokens, tool_call_id, tool_name, {anchor} AS anchor \
+                        FROM messages WHERE session_key = ? \
+                    ) ORDER BY anchor DESC, id DESC LIMIT ? \
+                 ) ORDER BY anchor ASC, id ASC",
+                anchor = crate::session::projection::TRANSCRIPT_ANCHOR_SQL,
+            );
             let mut stmt = conn
-                .prepare(
-                    "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
-                     tool_call_id, tool_name FROM ( \
-                        SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
-                        tool_call_id, tool_name \
-                        FROM messages WHERE session_key = ? ORDER BY id DESC LIMIT ? \
-                    ) ORDER BY id ASC",
-                )
+                .prepare(&sql)
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
             messages = stmt
                 .query_map(params![&key_str, message_limit as i64], |row| {

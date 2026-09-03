@@ -453,37 +453,58 @@ impl SessionManager {
     /// [`stamp_millis_sql`], which is why `chat.history?before=…` answered
     /// `{count: 0}` for the largest sessions on a real install.
     ///
-    /// Rows come back in `id` order — the order they were recorded, which is
-    /// the transcript's order on both backends
-    /// ([`SessionStore::history_page`]). Only the cursor touches the stamp.
+    /// Rows come back in the order the conversation happened — the source
+    /// event's seq, with unprojected rows anchored to the neighbour they were
+    /// inserted after ([`crate::session::projection::TRANSCRIPT_ANCHOR_SQL`],
+    /// whose Rust twin the file backend runs on the same rows). Only the
+    /// cursor touches the stamp.
+    ///
+    /// This used to be `ORDER BY id` — insert order — and said so, claiming it
+    /// was "the transcript's order on both backends". That held only while the
+    /// projector appended above the newest seq it had written. It now heals
+    /// holes BELOW that, so insert order puts a message recovered from a crash
+    /// at the bottom of the conversation instead of back where it was said.
     ///
     /// [`SessionStore::history_page`]: crate::gateway::session_store::SessionStore::history_page
     /// [`stamp_millis_sql`]: Self::stamp_millis_sql
     fn history_sql(limit: Option<usize>, cursored: bool) -> String {
         const COLS: &str = "id, role, content, timestamp, metadata, input_tokens, \
                             output_tokens, tool_call_id, tool_name, source_seq";
+        let anchor = crate::session::projection::TRANSCRIPT_ANCHOR_SQL;
         // The cursor is a PREDICATE on the stamp, so it goes through the
-        // normalizer; the ORDER is `id`, and the two are no longer the same
+        // normalizer; the ORDER is the anchor, and the two are not the same
         // expression. `before` names an instant and the column holds two units,
         // so a raw comparison there would rank every millisecond row above
         // every seconds row regardless of when either happened.
+        //
+        // The cursor is applied in the SAME subquery the window runs over, and
+        // that is safe in one direction only: `before` drops NEWER rows, and an
+        // anchor only ever looks at OLDER ones. A cursor that dropped older
+        // rows would silently re-anchor whatever followed them.
         let cursor = if cursored {
             format!(" AND {stamp} < ?", stamp = Self::stamp_millis_sql())
         } else {
             String::new()
         };
         match limit {
-            // Take the most-recent `n` that satisfy the predicate (inner DESC),
-            // then re-sort ASC for chronological display.
+            // Take the most-recent `n` in the SAME order they will be shown in
+            // (inner DESC), then re-sort ASC for chronological display. Both
+            // halves order by the anchor: taking the trailing N by insert order
+            // and then re-sorting would return a different SET, not just a
+            // different arrangement.
             Some(n) => format!(
                 "SELECT {COLS} FROM ( \
-                    SELECT {COLS} FROM messages \
-                    WHERE session_key = ?{cursor} ORDER BY id DESC LIMIT {n} \
-                 ) ORDER BY id ASC"
+                    SELECT * FROM ( \
+                        SELECT {COLS}, {anchor} AS anchor FROM messages \
+                        WHERE session_key = ?{cursor} \
+                    ) ORDER BY anchor DESC, id DESC LIMIT {n} \
+                 ) ORDER BY anchor ASC, id ASC"
             ),
             None => format!(
-                "SELECT {COLS} FROM messages \
-                 WHERE session_key = ?{cursor} ORDER BY id ASC"
+                "SELECT {COLS} FROM ( \
+                    SELECT {COLS}, {anchor} AS anchor FROM messages \
+                    WHERE session_key = ?{cursor} \
+                 ) ORDER BY anchor ASC, id ASC"
             ),
         }
     }

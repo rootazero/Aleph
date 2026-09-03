@@ -453,6 +453,23 @@ impl FileSessionStore {
                 messages.push(msg);
             }
         }
+        // The file is an APPEND log, so what was just parsed is in insert
+        // order — which stopped being the conversation's order when the
+        // projector learned to heal holes below the newest row it had written.
+        // A message recovered after a crash is appended last; without this it
+        // reads last, at the bottom of the transcript rather than where it was
+        // said. Same rule the SQLite backend pushes down as
+        // `TRANSCRIPT_ANCHOR_SQL`; rows this backend did not project (legacy
+        // transcripts, boot-time orphan notices) carry no seq and keep the
+        // place they were inserted at.
+        let key_owned = key.to_string();
+        crate::session::projection::order_by_source_seq(&mut messages, |m| {
+            crate::session::projection::parse_source_seq(&m.id, &key_owned)
+        });
+        // AFTER the ordering, never before: "the last N of the conversation"
+        // and "the last N appended" are different SETS the moment a heal has
+        // run, and taking the window first would answer the second question
+        // and then sort it into looking like the first.
         if let Some(n) = limit {
             if messages.len() > n {
                 messages = messages.split_off(messages.len() - n);

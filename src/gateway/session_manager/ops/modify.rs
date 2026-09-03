@@ -57,14 +57,23 @@ impl SessionManager {
         // id 2 and `id < 2` deletes id 1 — the NEWEST message in the session,
         // while the oldest survives. Silently, with a success return.
         //
-        // Ordered by `id` — the order the rows were recorded, which is the
-        // transcript's order on both backends (`SessionStore::history_page`).
+        // Ordered by the seq anchor — the transcript's order
+        // (`SessionStore::history_page`). The worked example above is the
+        // stamp-vs-recording version of this hazard; the seq-vs-recording
+        // version is the same shape with a healed row standing in for the
+        // out-of-order stamp, and this DELETE keeps the NEWEST `keep`, so an
+        // ordering that puts a healed row last would keep it and drop a
+        // genuinely newer message instead.
         //
         // `LIMIT -1` is SQLite's "no limit"; `OFFSET` requires a `LIMIT` beside
         // it. The subquery is correlated to nothing — it re-states the
         // `session_key` predicate — so it is evaluated once.
-        let doomed = "SELECT id FROM messages WHERE session_key = ?1
-             ORDER BY id DESC LIMIT -1 OFFSET ?2";
+        let doomed = &format!(
+            "SELECT id FROM ( \
+                SELECT id, {anchor} AS anchor FROM messages WHERE session_key = ?1 \
+             ) ORDER BY anchor DESC, id DESC LIMIT -1 OFFSET ?2",
+            anchor = crate::session::projection::TRANSCRIPT_ANCHOR_SQL,
+        );
 
         // Sync FTS5: remove entries before deleting messages
         conn.execute(
