@@ -266,7 +266,9 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
       start_server || exit 1
       drive dangle qa-dangle || RC=1
       # The session is moved to model B AFTER the crashed run started under A.
-      [ "$RC" = "0" ] && drive knobs set qa-model-b
+      # Its rc counts: if the move did not happen, the assertion after the
+      # restart is green for a build that never carried the envelope at all.
+      [ "$RC" = "0" ] && { drive knobs set qa-model-b || RC=1; }
       hard_kill_server
       [ "$RC" = "0" ] && { start_server || exit 1; }
       [ "$RC" = "0" ] && { "$BIN" resume --json "$(cat "$SESSION_FILE")" >"$RECEIPT" 2>"$QA_ROOT/resume.err"; cat "$RECEIPT"; }

@@ -589,8 +589,44 @@ async function cmdKnobs(sub, arg) {
   const conn = new Conn("driver");
   await conn.open();
   if (sub === "set") {
+    // The move to model B has to be ASSERTED, not attempted. If this RPC is
+    // not the knob (wrong method, wrong param, rejected), the session never
+    // leaves model A and `assert` below then passes for the one reason it must
+    // never pass for: nothing ever changed the model, so "the resumed run
+    // still runs under A" is true of a build that dropped the envelope too.
+    //
+    // MEASURED 2026-09-03, and this stage is RED because of it: `session.update`
+    // does not exist — the server answers `-32601 Method not found: session.update`
+    // — so the green this stage reported before these two checks existed was
+    // exactly the vacuous one described above. Three facts for whoever wires it:
+    //
+    //   * there is no `session.*` RPC that sets a model; the registry has
+    //     artifact / compact / create / export_html / list / truncate / usage,
+    //     and the metadata modify path REFUSES `model_pin` on purpose
+    //     (`handlers/session/db_handlers/modify.rs:376` — "their legal writer
+    //     is elsewhere"), so no amount of param-guessing here will land it;
+    //   * the legal writer is the `select_model` TOOL (R8), which stamps
+    //     `identity_meta.custom["model_pin"]` (`gateway/session_model_pin.rs`;
+    //     the key is `providers::session_model_handle::MODEL_PIN_SESSION_KEY`).
+    //     A tool means the MOCK has to dispatch it;
+    //   * and it cannot simply be a second turn: the `ask` instrument leaves
+    //     the session BUSY on a parked approval card, so a pin turn sent after
+    //     the dangle turn queues behind it and dies with the server.
+    //
+    // Two routes are open, neither guessed at here: write
+    // `identity_meta.custom.model_pin` into the session row with the server
+    // down (the technique `cmdForgeDenial` already uses, for the same reason —
+    // the state is reachable, the in-process path to it is not), or make the
+    // dangle a different way so a `select_model` turn can precede the crash on
+    // a session that is not parked.
     const r = await conn.attempt("session.update", { session_key: key, model: arg });
-    log(`session.update model=${arg} -> ${show(r.result ?? r.error, 200)}`);
+    check(!r.error, `session.update moves the session to ${arg}`, show(r.error));
+    const { session } = await lastRunOf(conn, key);
+    check(
+      session?.model_pin === arg || session?.model === arg,
+      `and the session row now reads ${arg} — the crashed run's snapshot still says A`,
+      show({ model: session?.model ?? null, model_pin: session?.model_pin ?? null }),
+    );
   } else {
     const wanted = arg;
     const after = requests();

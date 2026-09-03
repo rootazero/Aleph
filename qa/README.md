@@ -115,7 +115,14 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                        # resumed run puts in front of the provider must still say
                                        # model A. One model on the provider could not tell those
                                        # apart — the assertion would pass for a build that
-                                       # dropped the envelope entirely.
+                                       # dropped the envelope entirely. CURRENTLY RED, and it
+                                       # is the stage that is wrong, not the server: the move
+                                       # to model B went through `session.update`, which does
+                                       # not exist (`-32601`), so the session never left A and
+                                       # the "still runs under A" green proved nothing. The
+                                       # two checks that now fail are the ones that say so;
+                                       # `drive_r2.mjs::cmdKnobs` carries what the legal
+                                       # writer is and why a second turn cannot be it.
 ./qa/resume_boundary/run.sh holes      # a burst of tool calls in one turn must not lose a row:
                                        # after a restart, `chat.history` rows == projectable
                                        # events in `session_events`. Set `QA_BURST` to push the

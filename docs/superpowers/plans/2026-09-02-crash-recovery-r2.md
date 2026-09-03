@@ -912,3 +912,49 @@ someone else's conversation」这一句写明的理由。换会话之后没有�
 
 **另一条顺手核实的**：phone 的 `cell-sub` 是 `format!("{count_text} · {badge}")`（`chat/history.rs` L187-190），
 **追加**在消息条数后面而不是替换它——徽标没有吃掉那一行原本承载的事实。
+
+### T8 — `0611e72d1`（真机五阶段 + Step 4 全量验证集）
+
+**Step 4 六条命令，全部实测于本 commit 的树**（`--exclude aleph-desktop-macos/linux`：本机是 Windows）：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo test -p alephcore --bins` | `EXIT=0` · `87 passed; 0 failed` |
+| `cargo test -p aleph-protocol -p aleph-tui -p aleph-cli` | `EXIT=0` · 每条 `test result:` 都是 ok，`0 failed` |
+| `cargo test -p aleph-panel --lib` | `EXIT=0` · `1225 passed; 0 failed`（没有在第一处失败处中止 ⇒ 不需要 `--skip`） |
+| `cargo check -p alephcore --features test-helpers --all-targets` | `EXIT=0` · `1m 46s`（按 target 点名的退路没用上） |
+| `cargo clippy --workspace --all-targets` | `EXIT=0` · `9m 40s` · 5 条 warning、0 error。**没有与 merge-base 对比**，所以这里不声称哪一条是本轮新增的 |
+| `just wasm` | OK · `42 wasm references resolve against 43 exports`；`dist/` 七个产物已 `git checkout` 还原，未进提交 |
+
+全量 `cargo test -p alephcore --lib` 与 `baseline_failures.txt` 的按名比对是 `802480cd6` 的记录，
+本次**没有重跑也不重复声称**。
+
+**一条本机新事实（会咬下一个 agent）**：`cargo clippy --all-targets` 把 `target/debug` 里
+**每一个链接产物变成 0 字节**（clippy-driver 不链接却照样写产出）。文件仍然可执行，于是 QA 装置的
+`-x` 闸放行、一路走到 `no config generated at …` ——一句读起来像服务端 bug 的话，本会话为此白跑了两次阶段。
+`run.sh` 现在加了 `-s` 闸并直接点名这个原因。**顺序上：先跑真机阶段，再跑 clippy；反过来要重新 `cargo build --bin aleph-server`**（重链接约 10s）。
+
+**五个阶段**（`SKIP_BUILD=1`，跑在重新链接过的 debug `aleph-server` 上）：
+
+| 阶段 | rc | 关键行 |
+|---|---|---|
+| `claims` | 0 | 13 条断言。**A10 推迟的两处无上限读，数字在此**：`chat.history` 的 `load_all_events` 对本会话 = **5 events**；`sessions.list(limit:1)` 取回 1 行、0ms，背后是一次不受 filter 收窄的 marker 全表读 = **3 markers out of 10 events** |
+| `denied` | 0 | 4 条断言（wire：`dangling[].denied == true` 且 run 仍读 `interrupted`；model：下一次请求说 DENIED，且没有任何请求把这次调用的结局称作 UNKNOWN）。收据 `"contradictions": 1` |
+| `rewind` | 0 | 5 条断言。live events `5 -> 2`，rewind 落在 `seq 3`，`events_retired` 与日志一致，重启前后 marker 尾都平衡，之后的收据 `"scanned": 0` |
+| `knobs` | **1（红）** | `session.update` **不存在**（`-32601`）⇒ 会话从未离开 model A ⇒ 旧的绿是空的。见下 |
+| `holes` | — | 本会话**没有重跑**；`802480cd6` 记的绿在 `QA_BURST=40` 下 deferral 那半是空的（队列根本没满，装置自己印了这句） |
+
+**`knobs` 是本次唯一把绿变红的一条，而且是装置错不是服务端错。** 旧版只 `attempt` 了那次改档、
+不断言回执，正好落在判据 #2「恒真的谓词等于没判」：改档若没发生，「重启后仍跑 A」对一个**根本没有
+envelope**的实现同样为真。新加的两条断言（回执无 error ＋ 会话行读回 B）把这半边照亮了，然后它红了。
+够不到的原因**已量出**，不必下一轮重挖：`session.*` 注册表里没有任何设模型的方法，
+`db_handlers/modify.rs:376` 明写 `model_pin` 被**故意**拒绝，合法写者是 `select_model` **工具**（R8），
+而工具意味着要 mock 去派发它——偏偏 `ask` 这个仪器让会话**卡在审批卡上忙着**，pin 的那一轮排在后面、
+随服务端一起死。两条可走的路写在 `cmdKnobs` 的注释里（服务端停机时直接写
+`identity_meta.custom.model_pin`，与 `cmdForgeDenial` 同一手法；或换一种造悬空的方式）。
+
+**`denied` 的形状为什么要由装置写下那一行**：静态 `bash = "deny"` 的调用在**同一轮里**既被拒又被答复，
+从来不悬空（旧版的红就是 `cmdDangle` 在一个正确的空集上超时）；而 `tool_call_denied` 与它的
+`ToolError` 回执之间那道缝在**同一个进程内**、相隔微秒，`kill -9` 瞄不进去。所以装置在服务端停机时
+按 `SqliteEventStore::append` 的字节形状补上那一行，**下游全是产品自己读盘**：归约、wire 上的
+`denied`、`boundary_repair_text`、收据、以及模型看到的下一次请求。
