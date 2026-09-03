@@ -1235,3 +1235,67 @@ CLAUDE.md 路由表的五个 r2 阶段、spec `2026-08-31` §8 的六条指针�
 没有换一个新数字——换成了形状（判据 #16：写进散文的数目是一张会腐烂的名单，而已经知道集合是什么的那张表是那个目录），
 与 CLAUDE.md 会话旋钮段当初把「三根」改掉的处理同款。
 
+### T9 续续 — `e11b694d6` / `12a14b9aa` / `8e7f5a14f`（同样不含 `.rs` 改动，故没跑 cargo，也不声称跑过）
+
+树到手是干净的（`git status --porcelain` 空），六个 T9 提交都在，计划里 T9 那个复选框已经是 `[x]`。
+所以这一笔的问题不是「还欠哪一步」，而是**换第三个输入再扫一遍**：前两笔的输入分别是
+**本轮改过的章节**（作者的地图）与**被删标识符的名字**（读者的地图）。这一笔用的是
+**本轮 `src/` `shared/` `interfaces/` 的整份 diff**——先问「这一轮加了什么」，再问「哪份文档该说而没说」，
+并且**第一件事是重测上一笔自己下的结论**（判据 #18：别人的仪器你重复测量，自己的仪器你先怀疑它）。
+
+**一、上一笔的一条「更正」把一个真名改成了假名（`e11b694d6`）。**
+续做 1 报告说：§4.11 写的 `init_and_announce` 从来没存在过，真名是 `init_and_reconcile`，
+并据此改了正文、写进附录 D.0.167、又写进本计划的验证记录。**三处都是假的**：
+
+| 事实 | 出处 |
+|---|---|
+| `process_journal::init_and_announce` 存在 | `src/builtin_tools/process_journal.rs:525` |
+| 它是 boot 路径真正调的那一个 | `src/bin/aleph-server/commands/start/mod.rs:1563` |
+| `init_and_reconcile` 写墓碑、认领人口、**一条广播都不发** | 同文件 `:415` 的 doc + 函数体 |
+| `announced_boot` 的**唯一**写者是 `record_announced`，且它在广播**返回之后**才跑 | 同文件 `:850` / `:540` |
+
+成因是**孪生**：`src/agents/background_persistence.rs`（子代理侧）与 `process_journal.rs`（bash 侧）
+两套 boot 对账的 API 是照着彼此写的，名字大半重合——子代理侧叫 `init_and_announce_orphans`，
+于是一次**全仓**的 `grep init_and_announce` 命中了孪生那一个，回答了「有没有」而没回答「这一句的那一个」。
+这恰好是 D.0.167 自己②的镜像：那一条讲的是 `SessionInfo` 因同名而**假阳性**，这一条是同族名字造成的**挑错孪生**。
+同一次编辑还写下「子代理侧有 `announce_attempts` 封顶，journal 侧靠时间窗」——journal 侧**两样都有**，
+`MAX_ANNOUNCE_ATTEMPTS = 3` 就在它自己文件的 `:170`，而漏掉的那一半正是本轮 D.0.166 给它加上去的。
+
+正文与 D.0.167 的收尾句都改了，新增**附录 D.0.168** + E.0 触发器。**CLAUDE.md 判据索引不加行**——落在既有 #1 / #2 / #16 下。
+记下的那一句：**一条更正比一条旧错误贵**，旧错误只是没人改，更正会被当成刚核对过的事实引用，而这一条还额外在附录里立了字据。
+
+**二、C 切片的分组开机通知已上线，而 `docs/` 一个字都没说（`12a14b9aa`）。**
+spec §7 第 7 条（C7/C10）落地了：开机孤儿通知现在是**一个父会话一条事件、带 N 个孩子**。
+MULTI_AGENT_SYSTEM.md 的 “Surviving a daemon restart” 仍只写墓碑那一半，FEATURE_LOCATOR §4.13a ⑭ 停在四种裁决。
+两处都补上了实测出来的事实（`subagent_announce.rs:86-140` · `background_persistence.rs:425-470` · `:640`）：
+`SubAgentCompletionEvent.success` 是**整批一个 bool**，当判决渲染就等于宣称这批孩子结局相同、并随手点一个 id 让模型去问
+（混合批里真跑完的那些结果跟着一起被扔）；现在 `request_ids: Vec<String>` 带整批（`serde(default)`，
+旧事件读作「没有逐孩列表」再退回 `request_id`——缺键只许读作「没有列表」，不许读作「这条事件读不出来」，判据 #8）；
+分组通知上 `request_id` **故意是 `None`**（去重问的是活 tracker 认不认这个 id，而它从没听说过重启前的 id）；
+`on_delivered(&request_ids)` 给**每一个**盖章，盖不上的那 N−1 个下次开机再交回来。
+同一段顺带补上它一直没写的 `announced: bool` → `announce_attempts` + `announced_boot` 拆分（D.0.166）。
+
+**三、本轮自己造出来的那份枚举，只列了它新建的文件里三个类型中的一个（`8e7f5a14f`）。**
+⑮ 写 `metrics.rs::RunConcurrencyMetrics`，而 `shared/protocol/src/metrics.rs` **整份**是 round-2 新增的，
+`gateway_metrics.rs:198/208/211` 三个类型都直接构造（`SessionQueueDepth` / `BusyQueueMetrics` 漏了）。
+一份枚举只列三分之一，读起来正是「另外两个还是服务端手搓的」——判据 #10 说的就是这件事。
+同笔另加两条：⑮ 补一句 **`SessionListRow` 这个名字换了指称**（round-2 之前指 `list_tool.rs` 的**工具面**行，
+现在指 `shared/protocol` 的 **wire 面**行，工具面已改名 `SessionsListToolRow`——正是让上一笔挑错 `SessionInfo` 的同一类陷阱，
+只不过这次是本轮**自己制造**又自己拆掉的）；⑯ 把「`with_session_log_check` 与它的兄弟」写成真名 `with_projection_holes_check`
+（一份 locator 用手势代替名字，就是它唯一那件事做不到）。
+
+**复核过、结论是「已经对了、不必改」的：** GATEWAY.md 的 `messages` 投影段（自愈 / seq-集合求差 / `ProjectionReconciler` /
+`core/projection-holes` / 按 seq 区间 stamp / 尾部排序那条未修后果，逐条对着 `session_projector.rs` 与 `projection_reconciler.rs` 看过）；
+§4.13a ③ 的十三个状态词**是逐个列出来的**（不是写一个数目——与 §0 doctor 行那次修法同款）；
+⑯ 的两条 doctor 检查用 finding id 锚定；§5.26 的 `stamp_last_assistant_metadata` 已删那一段（`grep` 全仓零命中，属实）；
+ARCHITECTURE.md / SESSION_SERVICE.md 上一笔改过的那几处。`FlushTimeout` / `ensure_drain` / `parse_history_last_run` 三个新名
+**刻意不写进文档**：前两个是关机与测试面的内部 API（§6.9 已用「per-session drain」概括），第三个是 Panel 的解析点而非渲染点，
+⑮ 说的是「四个渲染点」，不该把它算成第五个。
+
+**这一笔自己的验证纪律**：三个 patch 都走同一个 Node 脚本，每个锚点先验「恰好出现一次」，
+任一不满足就整批拒绝、一个字节都不写（三次都一次通过）；写完 `CR 数 == 行数` 仍成立（FEATURE_LOCATOR 5420 / MULTI_AGENT_SYSTEM 1753）。
+每一条写进文档的代码事实都在本次会话里对着源文件读过行号，**没有一条是从上一份报告里继承的**——
+这一笔的第一个发现正是「继承上一份报告的结论」的代价。
+**没有变异证伪、没有测试计数、没跑 cargo**：本任务不改 `.rs`，这三栏留空是如实。
+
+
