@@ -417,6 +417,23 @@ impl AlephTool for ProjectManageTool {
                 self.store
                     .add_member(id, user)
                     .map_err(|e| AlephError::tool(format!("failed to add member: {e}")))?;
+                // Authority-change audit (T04): the tool face wrote NONE of
+                // these before this round (`grep -c audit
+                // src/builtin_tools/project_manage.rs` == 0), while the RPC
+                // twin (`handlers/projects.rs`) always has. Unconditional —
+                // see `ProjectStore::add_member`'s doc for why a re-grant is
+                // worth a row even though a non-revocation is not. The actor
+                // is `visibility::ambient_actor()`, not `CALLER_USER`: this
+                // runs inside a spawned run where the latter is dead (see
+                // `agent_manage/update.rs:237`'s precedent). The
+                // `project_manage.` prefix is what makes this row
+                // distinguishable from the RPC face's `projects.member.add`.
+                if let Some(log) = crate::security::audit::global() {
+                    log.log(crate::security::audit::AuditEntry::authority_change(
+                        crate::gateway::visibility::ambient_actor(),
+                        format!("project_manage.member_add: {user} → {id}"),
+                    ));
+                }
                 // `affected_user` is set ONLY on removal (it is what lets a
                 // just-removed member still receive the frame telling their
                 // client to drop the room); an addition is visible to the
@@ -440,24 +457,45 @@ impl AlephTool for ProjectManageTool {
                 let project = self.room(id, actor)?;
                 self.require_owner(&project, actor)?;
                 Self::require_removable(&project, user)?;
-                self.store
+                let changed = self
+                    .store
                     .remove_member(id, user)
                     .map_err(|e| AlephError::tool(format!("failed to remove member: {e}")))?;
+                // Authority-change audit (T04), gated on `changed` the same
+                // way the RPC face is: naming somebody who was never seated
+                // is not a revocation. See `MemberAdd` above for why the
+                // actor is `ambient_actor()` and the `project_manage.`
+                // prefix distinguishes this from the RPC face's row.
+                if changed {
+                    if let Some(log) = crate::security::audit::global() {
+                        log.log(crate::security::audit::AuditEntry::authority_change(
+                            crate::gateway::visibility::ambient_actor(),
+                            format!("project_manage.member_remove: {user} ← {id}"),
+                        ));
+                    }
+                }
                 // Named here, and only here: by the time this frame is
                 // published the roster no longer admits them, so without
                 // `affected_user` the one person who most needs to learn they
                 // were removed is the one the visibility rule now refuses.
-                self.announce(id, ChangeKind::Updated, Some(user));
+                // Guarded on `changed`: a bystander who was never on the
+                // roster must not be told they were dropped from it.
+                self.announce(id, ChangeKind::Updated, changed.then_some(user));
                 let members = self
                     .store
                     .members(id)
                     .map_err(|e| AlephError::tool(format!("failed to read roster: {e}")))?;
+                let message = if changed {
+                    format!("removed {user} from '{}'", project.name)
+                } else {
+                    format!("{user} was not a member of '{}'", project.name)
+                };
                 Ok(ProjectManageOutput {
                     action,
                     project: None,
                     projects: Vec::new(),
                     member_ids: members,
-                    message: format!("removed {user} from '{}'", project.name),
+                    message,
                 })
             }
             ProjectAction::MemberList => {
@@ -712,6 +750,74 @@ mod tests {
             store.members(&project.id).unwrap(),
             before,
             "the roster must be unchanged by either refused attempt"
+        );
+    }
+
+    /// T04: the tool face was auditing NOTHING (`grep -c audit
+    /// src/builtin_tools/project_manage.rs` = 0). A successful `member_add`
+    /// and `member_remove` must each write exactly one AuthorityChange row,
+    /// and its detail must be distinguishable from the RPC face's string for
+    /// the same verb (`handlers/projects.rs`'s `projects.member.add` /
+    /// `projects.member.remove`) — otherwise `aleph audit` cannot tell which
+    /// face a grant or revocation came through.
+    #[tokio::test]
+    async fn member_add_and_remove_are_each_audited_once_and_distinguishably() {
+        let _serial = crate::security::audit::AUDIT_TEST_LOCK.lock().unwrap();
+        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(16);
+        crate::security::audit::replace_global_for_test(&log);
+
+        let (tool, project, _store, _g) = fixture();
+
+        as_user("u-alice", async {
+            tool.call(ProjectManageArgs {
+                action: ProjectAction::MemberAdd,
+                project_id: Some(project.id.clone()),
+                name: None,
+                user_id: Some("u-carol".into()),
+                path: None,
+            })
+            .await
+        })
+        .await
+        .expect("the owner may add");
+
+        as_user("u-alice", async {
+            tool.call(ProjectManageArgs {
+                action: ProjectAction::MemberRemove,
+                project_id: Some(project.id.clone()),
+                name: None,
+                user_id: Some("u-carol".into()),
+                path: None,
+            })
+            .await
+        })
+        .await
+        .expect("the owner may remove");
+
+        // The audit log is process-global and `cargo test` runs threads in
+        // parallel, so other tests exercising this same tool concurrently
+        // can write into the channel this test just installed. Filter to
+        // this test's own project id rather than assuming the channel holds
+        // only what this test produced.
+        let mut details = Vec::new();
+        while let Ok(entry) = rx.try_recv() {
+            assert_eq!(
+                entry.event_type,
+                crate::security::audit::AuditEventType::AuthorityChange
+            );
+            if entry.detail.contains(&project.id) {
+                details.push(entry.detail);
+            }
+        }
+        assert_eq!(
+            details.len(),
+            2,
+            "exactly one AuthorityChange row per verb, got: {details:?}"
+        );
+        assert!(
+            details.iter().all(|d| !d.starts_with("projects.member.")),
+            "the tool face's rows must read differently from the RPC face's \
+             `projects.member.*` strings, got: {details:?}"
         );
     }
 

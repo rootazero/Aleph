@@ -629,6 +629,18 @@ impl ProjectStore {
 
     // -- roster ------------------------------------------------------------
 
+    /// `INSERT OR IGNORE` makes this call idempotent the same way
+    /// `remove_member`'s `DELETE` is, but unlike removal it does not gate its
+    /// audit row on whether the row actually changed. Re-adding an
+    /// already-seated member is the caller asserting "this person belongs
+    /// here" again — recording that assertion is not a false claim the way
+    /// recording an unhappened revocation is, because nothing here tells a
+    /// bystander they lost access they never lost. `remove_member` cannot
+    /// make the same claim: it names the target in a push frame telling them
+    /// to drop the room, and doing that to someone who was never seated
+    /// would be actively wrong, not merely redundant. That asymmetry — one
+    /// side has a victim of a false claim, the other does not — is why only
+    /// `remove_member` returns whether it changed anything.
     pub fn add_member(&self, id: &str, user_id: &str) -> Result<(), ProjectError> {
         self.with_conn(|conn| {
             let exists: bool = conn
@@ -648,14 +660,22 @@ impl ProjectStore {
         })
     }
 
-    pub fn remove_member(&self, id: &str, user_id: &str) -> Result<(), ProjectError> {
+    /// Remove `user_id` from `id`'s roster. Returns whether a row was
+    /// actually deleted — the DELETE's affected-row count used to be
+    /// discarded here, so removing somebody who was never a member returned
+    /// the same `Ok(())` as a real revocation, and both call sites wrote an
+    /// audit row and named a bystander in a push frame for a revocation that
+    /// never happened. Mirrors [`Self::unbind_conversation`]'s `Ok(n > 0)`.
+    pub fn remove_member(&self, id: &str, user_id: &str) -> Result<bool, ProjectError> {
         self.with_conn(|conn| {
-            conn.execute(
-                "DELETE FROM project_members WHERE project_id = ?1 AND user_id = ?2",
-                rusqlite::params![id, user_id],
-            )
-            .map_err(db_err)?;
-            Self::republish_roster_locked(conn)
+            let changed = conn
+                .execute(
+                    "DELETE FROM project_members WHERE project_id = ?1 AND user_id = ?2",
+                    rusqlite::params![id, user_id],
+                )
+                .map_err(db_err)?;
+            Self::republish_roster_locked(conn)?;
+            Ok(changed > 0)
         })
     }
 
@@ -1629,6 +1649,27 @@ mod tests {
         assert!(
             !roster::is_member(&p.id, "u-bob"),
             "spec §10: removal revokes visibility immediately"
+        );
+    }
+
+    /// T04: `remove_member` must report whether the DELETE actually removed a
+    /// row, not a constant `Ok(())` — the caller (both the RPC and tool
+    /// faces) needs that to decide whether a revocation genuinely happened
+    /// before it writes an audit row or names a bystander in a push frame.
+    #[test]
+    fn removing_reports_whether_it_changed_anything() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = fresh_store();
+        let p = store.create("room", Some("u-alice"), None).unwrap();
+        store.add_member(&p.id, "u-bob").unwrap();
+
+        assert!(
+            store.remove_member(&p.id, "u-bob").unwrap(),
+            "a seated member was actually dropped"
+        );
+        assert!(
+            !store.remove_member(&p.id, "u-bob").unwrap(),
+            "the second call finds nobody to drop — it must say so, not repeat `true`"
         );
     }
 

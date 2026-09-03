@@ -846,26 +846,32 @@ pub async fn handle_member_remove(
         );
     }
     match store.remove_member(&params.id, &params.user_id) {
-        Ok(()) => {
-            // Authority-change audit (round-5 ⑦): removing a member revokes
-            // their view of the room — effective immediately, previously
-            // unrecorded.
-            if let Some(log) = crate::security::audit::global() {
-                log.log(crate::security::audit::AuditEntry::authority_change(
-                    crate::gateway::caller_identity::current_caller_user(),
-                    format!("projects.member.remove: {} ← {}", params.user_id, params.id),
-                ));
+        Ok(changed) => {
+            // Authority-change audit (round-5 ⑦, gated by `changed` in T04):
+            // removing a member revokes their view of the room — but only
+            // when a row was actually deleted. `params.user_id` naming
+            // somebody who was never on the roster is not a revocation and
+            // must not be recorded as one.
+            if changed {
+                if let Some(log) = crate::security::audit::global() {
+                    log.log(crate::security::audit::AuditEntry::authority_change(
+                        crate::gateway::caller_identity::current_caller_user(),
+                        format!("projects.member.remove: {} ← {}", params.user_id, params.id),
+                    ));
+                }
             }
             // `affected_user`: the roster projection no longer admits
             // `params.user_id` by the time this publishes
             // (`remove_member` republishes inside its own write lock), so
             // without naming them here they would never learn they were
-            // dropped — see `ProjectsChanged::affected_user`'s doc.
+            // dropped — see `ProjectsChanged::affected_user`'s doc. Named
+            // ONLY when `changed`: a bystander who was never seated must
+            // not be told they were dropped.
             projects::events::publish_changed(
                 &event_bus,
                 &params.id,
                 ChangeKind::Updated,
-                Some(&params.user_id),
+                changed.then_some(params.user_id.as_str()),
             );
             member_list_response(request.id, &store, &params.id)
         }
@@ -1501,6 +1507,66 @@ mod tests {
                 assert_eq!(project_id, project.id);
                 assert_eq!(change, ChangeKind::Updated);
                 assert_eq!(affected_user.as_deref(), Some("u-bob"));
+            }
+            other => panic!("expected a ProjectsChanged frame, got {other:?}"),
+        }
+    }
+
+    /// T04: removing somebody who was never on the roster must not report a
+    /// revocation that never happened — no AuthorityChange row (queried via
+    /// the audit log, not inferred from "the call returned Ok"), and the
+    /// push frame names nobody, because nobody was actually dropped.
+    #[tokio::test]
+    async fn removing_a_non_member_writes_no_audit_row_and_names_nobody() {
+        let _serial = crate::security::audit::AUDIT_TEST_LOCK.lock().unwrap();
+        let (log, mut rx_audit) = crate::security::audit::SecurityAuditLog::new(16);
+        crate::security::audit::replace_global_for_test(&log);
+
+        let (store, users, project, _guard) = room();
+        let bus = test_event_bus();
+        let mut rx = bus.subscribe_typed();
+
+        let removed = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_member_remove(
+                    rpc(
+                        "projects.member.remove",
+                        json!({ "id": project.id, "user_id": "u-mallory" }),
+                    ),
+                    store,
+                    users,
+                    Arc::clone(&bus),
+                ),
+            )
+            .await;
+        assert!(
+            removed.error.is_none(),
+            "removing a non-member is a no-op, not an error: {:?}",
+            removed.error
+        );
+
+        // The audit log is process-global and `cargo test` runs threads in
+        // parallel, so a concurrently-running test can also write into the
+        // channel this test just installed — filter to this test's own
+        // project id rather than assuming the channel is empty outright.
+        let mut leaked = Vec::new();
+        while let Ok(entry) = rx_audit.try_recv() {
+            if entry.detail.contains(&project.id) {
+                leaked.push(entry.detail);
+            }
+        }
+        assert!(
+            leaked.is_empty(),
+            "no member was actually dropped — this must not write an AuthorityChange row, got: {leaked:?}"
+        );
+
+        match rx.try_recv() {
+            Ok(GatewayEventFrame::ProjectsChanged { affected_user, .. }) => {
+                assert!(
+                    affected_user.is_none(),
+                    "nobody was actually removed — the push must not name a bystander"
+                );
             }
             other => panic!("expected a ProjectsChanged frame, got {other:?}"),
         }

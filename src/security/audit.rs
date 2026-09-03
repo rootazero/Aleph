@@ -385,7 +385,11 @@ mod tests {
         ),
         (
             "src/gateway/handlers/projects.rs",
-            "room roster add / remove",
+            "room roster add / remove (RPC)",
+        ),
+        (
+            "src/builtin_tools/project_manage.rs",
+            "room roster add / remove (tool)",
         ),
         (
             "src/gateway/handlers/projects_channel.rs",
