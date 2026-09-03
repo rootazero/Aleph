@@ -222,7 +222,7 @@ mod tests {
     #[tokio::test]
     async fn a_green_probe_resets_only_the_open_provider() {
         let health = FailoverHealth::default();
-        health.open_for_test("dead").await;
+        health.open_for_test("dead", Duration::from_secs(300)).await;
         let configs = HashMap::from([("dead".to_string(), ProviderConfig::test_config("m"))]);
         let probed = Arc::new(Mutex::new(Vec::new()));
         let probed2 = probed.clone();
@@ -251,7 +251,7 @@ mod tests {
     #[tokio::test]
     async fn a_failed_probe_leaves_the_circuit_open() {
         let health = FailoverHealth::default();
-        health.open_for_test("dead").await;
+        health.open_for_test("dead", Duration::from_secs(300)).await;
         let configs = HashMap::from([("dead".to_string(), ProviderConfig::test_config("m"))]);
 
         let outcomes = probe_open_circuits_once(&health, &configs, |_, _| async { false }).await;
@@ -269,7 +269,7 @@ mod tests {
     #[tokio::test]
     async fn a_disabled_provider_with_an_open_circuit_is_never_probed() {
         let health = FailoverHealth::default();
-        health.open_for_test("off").await;
+        health.open_for_test("off", Duration::from_secs(300)).await;
         let mut pc = ProviderConfig::test_config("m");
         pc.enabled = false;
         let configs = HashMap::from([("off".to_string(), pc)]);
@@ -297,7 +297,7 @@ mod tests {
             "this test is only meaningful while chatgpt opts out of /models probing"
         );
         let health = FailoverHealth::default();
-        health.open_for_test("chatgpt").await;
+        health.open_for_test("chatgpt", Duration::from_secs(300)).await;
         let configs = HashMap::from([("chatgpt".to_string(), ProviderConfig::test_config("m"))]);
 
         let outcomes = probe_open_circuits_once(&health, &configs, |_, _| async { true }).await;
@@ -341,7 +341,7 @@ mod tests {
         // Removed from the config since the trip: no probe, no reset, no panic.
         // (A *disabled* provider still has an entry — see the test above.)
         let health = FailoverHealth::default();
-        health.open_for_test("ghost").await;
+        health.open_for_test("ghost", Duration::from_secs(300)).await;
 
         let outcomes = probe_open_circuits_once(&health, &HashMap::new(), |_, _| async {
             panic!("an unconfigured provider must never be probed")

@@ -26,7 +26,7 @@ use crate::config::types::{LoadBalanceStrategy, ModelRouteConfig, RouteMode};
 use crate::providers::default_handle::DefaultProviderHandle;
 use crate::providers::failover::{FailoverHealth, ModelCooldown, ProviderCooldown};
 use crate::providers::load_stats::LoadStats;
-use crate::providers::route_handle::{RouteHandle, RouteState};
+use crate::providers::route_handle::RouteState;
 use crate::providers::route_policy::{route_problems, EndpointTier, RouteGate, RouteProblem};
 use crate::sync_primitives::Arc;
 
@@ -69,17 +69,16 @@ pub struct RouteObservability {
     pub provider_cooldown: ProviderCooldown,
     /// Shared in-flight / latency / rolling-usage registry.
     pub load: Arc<LoadStats>,
-    /// Live route handle (mode / strategy / pins / limits). The SAME handle
-    /// [`chain`](Self::chain) reads, so when a chain is attached the snapshot
-    /// renders the generation the chain ordered with and this field is only the
-    /// chain-less fallback. `None` in tests — the snapshot then reports
-    /// [`RouteState::unconfigured`] (auto / ordered / no pins).
-    pub route: Option<Arc<RouteHandle>>,
     /// The global chain itself, asked (read-only) for the order the next request
     /// will walk **and for the route generation that order was computed from**
-    /// ([`RoutePreview`](crate::providers::failover::RoutePreview)). `None` in
-    /// tests — the snapshot then omits `next_order` and falls back to
-    /// [`route`](Self::route) for the header.
+    /// ([`RoutePreview`](crate::providers::failover::RoutePreview)) — the chain
+    /// is the bundle's ONLY route generation. It used to carry a second copy of
+    /// the live [`RouteHandle`](crate::providers::route_handle::RouteHandle)
+    /// beside it; once the preview started supplying the header, that copy was
+    /// shadowed in every process that has a chain (which is every process:
+    /// `build_failover_chain` always attaches one) and only stood ready to
+    /// disagree with it. `None` in tests — the snapshot then omits `next_order`
+    /// and reports [`RouteState::unconfigured`] (auto / ordered / no pins).
     ///
     /// Holding the chain rather than re-deriving the order here is the whole
     /// point: the ordering is the product of the route mode, the pins, the
@@ -91,7 +90,8 @@ pub struct RouteObservability {
     /// ([`route_problems`]), computed at boot from the same provider/tier
     /// picture the chain was built from — and RE-computed on every `[route]`
     /// hot write ([`hot_apply_problems`](Self::hot_apply_problems)). An
-    /// `ArcSwap` (same RCU idiom as [`RouteHandle`]) because the boot value
+    /// `ArcSwap` (same RCU idiom as
+    /// [`RouteHandle`](crate::providers::route_handle::RouteHandle)) because the boot value
     /// alone went stale the moment the panel hot-applied a config: a typo'd
     /// pin written at runtime would never show up here, and `route_status`
     /// kept answering "why did my routing configuration do nothing" with the
@@ -181,16 +181,15 @@ impl RouteObservability {
             Some(chain) => Some(chain.preview_order().await),
             None => None,
         };
-        // One coherent generation for the whole status render, in this
-        // precedence: the one the order was computed from, else the live handle
-        // (chain-less tests), else the unconfigured defaults (no handle either).
-        // The first two are the SAME handle in production — `build_failover_chain`
-        // hands one `Arc<RouteHandle>` to both — so this picks which *load* is
-        // rendered, never a different source.
-        let route: Arc<RouteState> = match (&preview, &self.route) {
-            (Some(p), _) => Arc::clone(&p.route),
-            (None, Some(h)) => h.snapshot(),
-            (None, None) => Arc::new(RouteState::unconfigured()),
+        // One coherent generation for the whole status render, from a single
+        // source: the generation the order was computed from. The chain resolves
+        // that itself (`route_snapshot` — live handle if wired, else the boot
+        // route over `RouteState::unconfigured`), so there is no second load
+        // here to drift from it. Chain-less bundles exist only in tests and
+        // render the same shared spelling of "no `[route]` section".
+        let route: Arc<RouteState> = match &preview {
+            Some(p) => Arc::clone(&p.route),
+            None => Arc::new(RouteState::unconfigured()),
         };
         let (mode, allow_escalation, strategy) =
             (route.mode, route.allow_escalation, route.load_balance);
@@ -455,9 +454,10 @@ pub fn global_route_observability() -> Option<&'static RouteObservability> {
 ///
 /// Lives here, next to the struct, because three test modules need one
 /// (`route_observe`'s own, `config::live_apply`'s executor arm, and
-/// `gateway::handlers::route_config`'s handler face) and a twelve-field
-/// literal copied into each is twelve chances for the copies to disagree
-/// about what "no chain behind it" means. `primary` and `tiers` are the only
+/// `gateway::handlers::route_config`'s handler face) and a whole-struct
+/// literal copied into each is one chance per field for the copies to
+/// disagree about what "no chain behind it" means (the count is deliberately
+/// not written down here — it moved once already). `primary` and `tiers` are the only
 /// parts a caller cares about; everything else is the empty/default state a
 /// pre-boot process has.
 #[cfg(test)]
@@ -473,7 +473,6 @@ pub(crate) fn test_observability(
         model_cooldown: ModelCooldown::default(),
         provider_cooldown: ProviderCooldown::default(),
         load: Arc::new(LoadStats::new()),
-        route: None,
         chain: None,
         problems: Arc::new(ArcSwap::from_pointee(Vec::new())),
         tiers: Arc::new(tiers),
@@ -753,13 +752,12 @@ mod tests {
         // one generation (`CandidatePlan.route`) had never been carried to the
         // diagnostic face.
         //
-        // Production shares one `RouteHandle` between the bundle and the chain,
-        // so the divergence they can really exhibit is a timing one and not
-        // reproducible on demand. Here the two sources are deliberately given
-        // DIFFERENT policies — the chain carries a boot snapshot, the bundle no
-        // handle at all — which makes "which one does the header render" a
-        // deterministic question with one right answer: the chain's, because
-        // that is the generation `next_order` was ordered under.
+        // The bundle no longer keeps a route handle of its own to disagree
+        // with; the chain resolves the generation and the header must follow
+        // it. Deterministic here because the chain's boot route is NOT the
+        // unconfigured default this render falls back to without a chain, so a
+        // header built from anything other than `next_order`'s own generation
+        // reads `auto` and this goes red.
         let obs = observability_with_chain(Some((RouteMode::AlwaysCloud, true)));
 
         let snap = obs.snapshot().await;

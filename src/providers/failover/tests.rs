@@ -2831,7 +2831,7 @@ async fn an_open_primary_that_is_skipped_still_reads_as_a_migration() {
     let fb = ScriptProvider::ok("fallback");
     let health = FailoverHealth::default();
     // As if three strikes had already tripped it on an earlier run.
-    health.open_for_test("primary").await;
+    health.open_for_test("primary", Duration::from_secs(300)).await;
     let fp = build_with_health(
         // rust-doctor-disable-next-line excessive-clone
         primary.clone() as Arc<dyn AiProvider>,
@@ -2999,7 +2999,7 @@ async fn a_gated_head_skipped_before_the_prompt_still_reads_as_a_migration() {
     // Would approve if asked — the point is that it is never asked.
     let approver = MockApprover::new(true);
     let health = FailoverHealth::default();
-    health.open_for_test("openai").await;
+    health.open_for_test("openai", Duration::from_secs(300)).await;
     let fp = build_with_health(
         // rust-doctor-disable-next-line excessive-clone
         cloud.clone() as Arc<dyn AiProvider>,
@@ -3123,7 +3123,7 @@ async fn the_preview_flags_a_primary_the_walk_will_skip() {
     let primary = ScriptProvider::ok("primary");
     let fb = ScriptProvider::ok("fb");
     let health = FailoverHealth::default();
-    health.open_for_test("primary").await;
+    health.open_for_test("primary", Duration::from_secs(300)).await;
     let fp = build_with_health(
         // rust-doctor-disable-next-line excessive-clone
         primary.clone(),
@@ -3163,18 +3163,42 @@ async fn previewing_an_open_circuit_does_not_spend_its_probe() {
     // that admits probe traffic — that belongs to a real dial. (The rotation
     // half of the same invariant is pinned by
     // `the_order_preview_matches_the_walk_and_consumes_no_rotation`.)
+    //
+    // The state under test is Open **with its cooldown already elapsed**
+    // (`Duration::ZERO`) — the only state in which `circuit_allows` mutates
+    // anything. An Open breaker still cooling down makes this assertion
+    // unfailable: that gate answers `false` without touching the map, so the
+    // test would stay green even if the preview called it. `primary` is that
+    // second, cheaper case; `fb` is the one that can go red.
     let primary = ScriptProvider::ok("primary");
     let fb = ScriptProvider::ok("fb");
     let health = FailoverHealth::default();
-    health.open_for_test("primary").await;
+    health.open_for_test("primary", Duration::from_secs(300)).await;
+    health.open_for_test("fb", Duration::ZERO).await;
     let fp = build_with_health(primary, vec![], vec![node("fb", fb)], health);
 
-    for _ in 0..3 {
+    let steps = fp.preview_order().await.steps;
+    // The sideline flag derives from the same "open AND still cooling" test the
+    // walk applies: the elapsed one is a dialable half-open probe, not a skip.
+    assert_eq!(steps[0].provider, "primary");
+    assert!(steps[0].health_sidelined, "still inside its cooldown");
+    assert_eq!(steps[1].provider, "fb");
+    assert!(
+        !steps[1].health_sidelined,
+        "a cooled-down breaker is the walk's next probe, not a skipped step"
+    );
+
+    for _ in 0..2 {
         let _ = fp.preview_order().await;
     }
     assert!(
         fp.circuit_open("primary").await,
         "a preview must not half-open a circuit it looked at"
+    );
+    assert!(
+        fp.circuit_open("fb").await,
+        "three previews of a cooled-down breaker must leave the probe unspent \
+         — only a real dial may perform Open → HalfOpen"
     );
 }
 

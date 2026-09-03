@@ -280,8 +280,9 @@ pub fn build_failover_chain(
         provider_cooldown: provider_cooldown.clone(),
         // rust-doctor-disable-next-line excessive-clone
         load: load.clone(),
-        // rust-doctor-disable-next-line excessive-clone
-        route: route_handle.clone(),
+        // The chain carries the route handle (`with_route_live` above) and the
+        // snapshot reads its generation through the preview, so the bundle does
+        // not keep a second copy of the handle to drift from it.
         chain: Some(global_chain),
         // Boot generation of the inert-`[route]` list; the hot write path
         // republishes it through the shared `ArcSwap` (cloned handles share

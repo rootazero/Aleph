@@ -96,13 +96,21 @@ impl FailoverHealth {
         self.0.write().await.remove(name).is_some()
     }
 
-    /// Open `name`'s circuit directly, as if a failure had just tripped it.
+    /// Open `name`'s circuit directly, as if a failure had just tripped it,
+    /// with `cooldown` still to run from now.
     ///
-    /// Test-only (`gateway::health_prober`): the prober's recovery policy is
-    /// unit-tested against a genuinely open breaker without driving a whole
-    /// failing provider walk first.
+    /// Test-only (`gateway::health_prober`, `failover::tests`): the prober's
+    /// recovery policy is unit-tested against a genuinely open breaker without
+    /// driving a whole failing provider walk first.
+    ///
+    /// The cooldown is a PARAMETER because the two Open states behave
+    /// differently at the gate: with time left, `circuit_allows` refuses and
+    /// mutates nothing; with `Duration::ZERO` (or any elapsed window) it
+    /// performs the `Open -> HalfOpen` transition that spends the probe. A test
+    /// pinning "looking does not spend the probe" is unfailable unless it
+    /// constructs the second state.
     #[cfg(test)]
-    pub(crate) async fn open_for_test(&self, name: &str) {
+    pub(crate) async fn open_for_test(&self, name: &str, cooldown: Duration) {
         self.0.write().await.insert(
             name.to_string(),
             HealthState {
@@ -110,7 +118,7 @@ impl FailoverHealth {
                 last_failure: Some(Instant::now()),
                 failure_count: 1,
                 last_error: None,
-                cooldown: Duration::from_secs(300),
+                cooldown,
             },
         );
     }
