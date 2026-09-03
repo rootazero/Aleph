@@ -264,12 +264,19 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
       ;;
     knobs)
       start_server || exit 1
-      drive dangle qa-dangle || RC=1
-      # The session is moved to model B AFTER the crashed run started under A.
+      # The crashing turn carries an explicit per-turn directive for model A.
+      # Without one the marker's envelope records `model: None` (the agent's
+      # CONFIGURED model is not a routing directive — measured, see
+      # `sendTurn`), and this stage would be asserting over a run that has no
+      # snapshot to replay.
+      drive dangle qa-dangle qa-model-a || RC=1
+      hard_kill_server
+      # The session is moved to model B AFTER the crashed run started under A,
+      # and with the server DOWN — there is no in-process path to this write
+      # from outside (drive_r2.mjs::cmdKnobs carries the three measurements).
       # Its rc counts: if the move did not happen, the assertion after the
       # restart is green for a build that never carried the envelope at all.
-      [ "$RC" = "0" ] && { drive knobs set qa-model-b || RC=1; }
-      hard_kill_server
+      [ "$RC" = "0" ] && { drive knobs pin qa-model-b || RC=1; }
       [ "$RC" = "0" ] && { start_server || exit 1; }
       [ "$RC" = "0" ] && { "$BIN" resume --json "$(cat "$SESSION_FILE")" >"$RECEIPT" 2>"$QA_ROOT/resume.err"; cat "$RECEIPT"; }
       [ "$RC" = "0" ] && { drive knobs assert qa-model-a || RC=1; }
@@ -277,10 +284,15 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
     holes)
       start_server || exit 1
       drive dangle qa-burst || RC=1
-      [ "$RC" = "0" ] && { drive holes "$QA_ROOT/server.log" || RC=1; }
+      # The burst run must FINISH before the kill: `dangle` returns on the
+      # FIRST durable dispatch, and killing there would leave dangling calls
+      # whose resume adds a turn's worth of usage — the "billed once"
+      # comparison would then be red for a reason that is not the projector's.
+      [ "$RC" = "0" ] && { drive holes-settle || RC=1; }
+      [ "$RC" = "0" ] && { drive holes "$QA_ROOT/server.log" before || RC=1; }
       hard_kill_server
       [ "$RC" = "0" ] && { start_server || exit 1; }
-      [ "$RC" = "0" ] && { drive holes "$QA_ROOT/server.log" || RC=1; }
+      [ "$RC" = "0" ] && { drive holes "$QA_ROOT/server.log" after || RC=1; }
       ;;
   esac
 

@@ -110,24 +110,41 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                        # that let the boot scan resume first would be green over
                                        # a session it never tested.
 ./qa/resume_boundary/run.sh knobs      # the resumed run follows the SNAPSHOT its `RunStarted`
-                                       # carried, not the session's current row. The session is
-                                       # moved to model B after the crash; the request the
-                                       # resumed run puts in front of the provider must still say
-                                       # model A. One model on the provider could not tell those
-                                       # apart — the assertion would pass for a build that
-                                       # dropped the envelope entirely. CURRENTLY RED, and it
-                                       # is the stage that is wrong, not the server: the move
-                                       # to model B went through `session.update`, which does
-                                       # not exist (`-32601`), so the session never left A and
-                                       # the "still runs under A" green proved nothing. The
-                                       # two checks that now fail are the ones that say so;
-                                       # `drive_r2.mjs::cmdKnobs` carries what the legal
-                                       # writer is and why a second turn cannot be it.
-./qa/resume_boundary/run.sh holes      # a burst of tool calls in one turn must not lose a row:
-                                       # after a restart, `chat.history` rows == projectable
-                                       # events in `session_events`. Set `QA_BURST` to push the
-                                       # projector queue; at the default the queue never fills,
-                                       # and the stage says so rather than reporting a green.
+                                       # carried, not the session's current row. The crashing
+                                       # turn carries an explicit per-turn directive for model
+                                       # A (without one the marker records `model: None` — the
+                                       # agent's CONFIGURED model is not a routing directive —
+                                       # and there is no snapshot to replay); the session is
+                                       # then moved to model B with the server DOWN, because no
+                                       # RPC can move it (`session.update` does not exist, and
+                                       # the metadata modify path refuses `model_pin` on
+                                       # purpose — the legal writer is the `select_model` TOOL).
+                                       # Three anti-vacuity checks come first: the marker really
+                                       # snapshotted A, the row really moved to B, and the
+                                       # restarted server really reads B. One model on the
+                                       # provider could not tell those apart — the assertion
+                                       # would pass for a build that dropped the envelope
+                                       # entirely.
+./qa/resume_boundary/run.sh holes      # a burst of tool calls in one turn must not lose a row
+                                       # and must not bill the run twice: `chat.history`'s
+                                       # server-reported total >= projectable events in
+                                       # `session_events`, and the session's token total is
+                                       # UNCHANGED across a restart (a heal pass that re-stamps
+                                       # an already-stamped row bills the same run twice, and a
+                                       # counter that grew while nobody ran anything is the only
+                                       # outside evidence of it). The burst run is made to
+                                       # FINISH before the kill — `dangle` returns on the first
+                                       # durable dispatch, and killing there would leave dangling
+                                       # calls whose resume adds a turn's usage. Two measured
+                                       # bounds the stage prints rather than hides: the 4096
+                                       # projector queue never fills (0 deferrals at both 40 and
+                                       # 900 calls), and above the store's compaction bound the
+                                       # projection is trimmed ON PURPOSE — at `QA_BURST=900`,
+                                       # 1803 projectable events, history total 69,
+                                       # `compaction_count 34`. So the comparison is guarded by
+                                       # an explicit `compaction_count == 0` precondition:
+                                       # raising the burst turns THAT red, not the row count,
+                                       # which would otherwise read like data loss.
 ./qa/session_order/run.sh        # the transcript's order and `session.truncate`, on BOTH
                                  # backends. Drives one conversation into a file-backed
                                  # server and a sqlite-backed one (separate scratch

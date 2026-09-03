@@ -958,3 +958,70 @@ envelope**的实现同样为真。新加的两条断言（回执无 error ＋ �
 `ToolError` 回执之间那道缝在**同一个进程内**、相隔微秒，`kill -9` 瞄不进去。所以装置在服务端停机时
 按 `SqliteEventStore::append` 的字节形状补上那一行，**下游全是产品自己读盘**：归约、wire 上的
 `denied`、`boundary_repair_text`、收据、以及模型看到的下一次请求。
+
+### T8 收尾 — `knobs` 与 `holes` 两个阶段（续做 2/3，测于本次提交的树）
+
+**五个阶段现在全绿，`SKIP_BUILD=1` 跑在同一个 debug `aleph-server` 上**（先跑阶段再跑 clippy 的顺序仍然成立）：
+
+| 阶段 | rc | 断言数 | 关键行 |
+|---|---|---|---|
+| `claims` | 0 | 13 | `chat.history` 的 `load_all_events` = **5 events**；`sessions.list(limit:1)` 取回 1 行、**2ms**，背后是不受 filter 收窄的 marker 全表读 = **3 markers out of 10 events** |
+| `denied` | 0 | 5 | 收据 `"contradictions": 1` |
+| `rewind` | 0 | 5 | 之后的收据 `"scanned": 0` |
+| `knobs` | **0（本次由红转绿）** | 5 | mock 的第三轮 `model=qa-model-a`，而会话行读回 `qa-model-b` |
+| `holes` | **0（本次第一次真的跑）** | 12 | `history total 83 == projectable 83`、`compaction_count 0`、`total_tokens 44 -> 44` |
+
+#### `knobs`：上一轮"够不到"的两条路都走不通，第三条才是对的
+
+上一轮把红的原因记成「`session.update` 不存在，得让 mock 派发 `select_model` 工具」。**两条推测的路都不必要**：
+
+1. **写在哪里**——上一轮写的是「照 `cmdForgeDenial` 的手法写 `identity_meta.custom.model_pin`」，并推断它在 file backend 的
+   `data/sessions/<key>/metadata.json`。**实测：那个目录在真机上根本不存在**。pin 的读者是
+   `stored_model_pin`，它问的是 `self.session_manager`，而 session **manager** 无条件是 sqlite ——
+   行就在事件日志同一个 `sessions.db` 的 `sessions.metadata` 列里，内容是序列化的 `SessionIdentityMeta`，
+   `custom` 是 `#[serde(flatten)]` 所以 `model_pin` / `model_pin_provider` **平铺在顶层**，不在 `custom` 子对象里。
+   （`default_session_store_backend()` 返回 `"file"` 是**另一个** store 的旋钮，与这条 pin 走的路无关——
+   这正是判据 #9「一个动词有几张脸」：两张脸各有自己的持久化。）
+2. **崩溃那一轮必须自带 directive**——第一次改好写入之后阶段**仍然红**，而且红得很有价值：
+   会话已经是 B、恢复后的请求也是 B。原因不在恢复端：marker 的 envelope 是
+   `{"exec_tier":"auto","session_mode":"work","memory_mode":"off"}` ——**没有 `model`**。
+   envelope 的 model 半边取自 `runner_impl.rs:364` 的 `routing_directive`，它折叠的是 `select_model` 的 pick 与
+   agent 的 model_hint；**agent 配置里的 `model = "qa-model-a"` 不是 directive**，所以这一轮"走的是默认链"，
+   marker 照实记 `None`，恢复于是也走今天的默认链（也就是 B）。字段 doc 明写这就是 `None` 的含义，
+   **所以这不是缺陷，只是不是回放那条路**——要测回放，崩溃那一轮必须自带一个 directive 去冻结。
+   装置改成 `chat.send` 带 `model_override:{kind:"qualified",provider:"qa-mock",model:"qa-model-a"}`。
+
+**但它留下一个产品问题，本轮不改（T4 拥有生产者，且 R7 说归约不替模型做决定）**：一个**没有 directive** 的 run
+崩掉之后，若会话在这期间被 pin 到别的模型，恢复出来的那一轮会**静默地换一个模型跑**——
+`unsnapshotted` 不会 +1（envelope 在、只是 model 半边是 `None`），`degraded` 也不会，收据上看不见。
+是否要为「无 directive 的 run」也冻结 `gauge_model`，是一次产品裁决，不是 QA 能替它做的。
+
+阶段现在的五条断言里有**三条是反空判**（判据 #2）：marker 真的记了 A、行真的变成 B、重启后的服务端真的读回 B。
+少任何一条，「恢复后仍跑 A」对一个**根本没有 envelope** 的实现同样为真。
+
+#### `holes`：先让那一轮跑完，再问投影有没有洞
+
+上一轮记的绿是 `802480cd6` 的，且 deferral 那半是空的。本次**第一次真跑**，并补了三处：
+
+* **`holes-settle`**：`cmdDangle` 在**第一条**派发落盘就返回，burst 里那是几毫秒。在那里 `kill -9` 会留下悬空调用，
+  重启后的恢复自带一轮用量——「只计一次」那条断言就会因为一个跟投影无关的原因变红。现在等到
+  `run_started` 与 `run_finished` 数目相等再杀。
+* **「只计一次」**：`total_tokens` 跨重启 **44 -> 44**。heal 若把一条已 stamp 的行再 stamp 一次，就会把同一个 run 计费两次，
+  而一个"没人跑任何东西时却长大了的计数器"是它在外部唯一的证据（T5 review 转发给 T8 的第二条，其形状就是这个）。
+  另外补了 `[after] last_run.disposition == clean`。
+* **两个量出来的边界，印出来而不是藏起来**：
+  * **4096 队列填不满**：`QA_BURST=40` 与 `QA_BURST=900` 两次都是 `projector queue full` 0 次、`drain task stopped` 0 次。
+    计划 Step 2 写的「压满 4096 队列」在本机**从黑盒这一侧到不了**——一轮 900 个 `echo` 已经是 1803 条可投影事件，drain 仍然跟得上。
+  * **store 的 compaction 边界**：`QA_BURST=900` 时 **projectable 1803 / history total 69 / `compaction_count 34`**。
+    69 不是分页上限——那是服务端自己报的 `total`，且 `message_count` 也是 69；是 store **按设计**裁剪了投影 34 次。
+    所以「行数 == 可投影事件数」**只在 compaction 边界以下可断言**，阶段因此把
+    `compaction_count == 0` 作为**前置断言**放在它前面：以后谁把 burst 调大，红的是那一条并说明原因，
+    而不是行数那一条读起来像丢数据（判据 #18：数字要带着它测的谓词）。
+
+> `MessageProjector::deferred_count()` 已在 `df9171751` CUT（T5 review 转发的第一条：要么消费要么删）。
+> 本阶段读的是**日志行**，且把 `projector queue full` 与 `projector drain task stopped` **分开数**——
+> 上一版用一个 `seq deferred` 的 grep 同时命中两句，那是两件不同的事。
+
+**本次未重跑**：Step 4 的六条全量命令（记录在 `0611e72d1` 那一段，其后只有 `qa/` 与 docs 变更，无 `src/` 改动）；
+`cargo test -p alephcore --lib` 与 `baseline_failures.txt` 的按名比对（记录在 `802480cd6`，同理）。
+本次改动**只有 `qa/` 与 docs**，不进任何 cargo target。

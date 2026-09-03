@@ -275,9 +275,18 @@ const lastRunOf = async (conn, sessionKey) => {
 // ---------------------------------------------------------------------------
 
 /** Send `text` into (or minting) a session and return once the run is under way. */
-const sendTurn = async (conn, text, sessionKey) => {
+const sendTurn = async (conn, text, sessionKey, model) => {
   const params = { message: text, channel: CHANNEL };
   if (sessionKey) params.session_key = sessionKey;
+  // A per-turn directive, and the `knobs` stage cannot do without one.
+  // MEASURED 2026-09-03: the envelope's `model` half is `routing_directive`
+  // (runner_impl.rs:364), which folds the `select_model` pick and the agent's
+  // model_hint — the agent's CONFIGURED model is not a directive, so a turn
+  // sent without this records `model: None` on its marker ("this run walked
+  // the default chain"), and a resume then walks today's chain. That is the
+  // documented contract, not a defect; it is simply not the replay path, so a
+  // stage that wants to test replay has to give the run a directive to freeze.
+  if (model) params.model_override = { kind: "qualified", provider: "qa-mock", model };
   const started = await conn.ok("chat.send", params);
   log(`run ${started.run_id} on ${started.session_key}: ${text.slice(0, 48)}`);
   return started;
@@ -291,11 +300,11 @@ const sendTurn = async (conn, text, sessionKey) => {
  * short and every later assertion runs over an empty set, and an empty set
  * passes an "is there no X" question for the wrong reason.
  */
-async function cmdDangle(marker = "qa-dangle") {
+async function cmdDangle(marker = "qa-dangle", model = null) {
   const conn = new Conn("driver");
   await conn.open();
   const prior = fs.existsSync(SESSION_FILE) ? readSession() : null;
-  const started = await sendTurn(conn, `${marker} please run the long command`, prior);
+  const started = await sendTurn(conn, `${marker} please run the long command`, prior, model);
   fs.writeFileSync(SESSION_FILE, started.session_key);
   const landed = await until(() => danglingIds(started.session_key).length > 0, 180_000, 400);
   conn.close();
@@ -577,81 +586,178 @@ async function cmdRewind(sub) {
 }
 
 /**
+ * Write one key into a session row's identity metadata, with the server down.
+ *
+ * The row is `sessions.metadata` in the SAME `sessions.db` the event log lives
+ * in — NOT a `metadata.json` under `data/sessions/`. That was worth measuring
+ * rather than reading off `default_session_store_backend()` ("file"): the pin
+ * reader is `stored_model_pin`, which asks `self.session_manager`, and the
+ * session MANAGER is sqlite unconditionally. This fixture's first attempt went
+ * looking for the file backend's directory and found none on disk (measured
+ * 2026-09-03) — the `SessionStore` backend knob selects a different store than
+ * the one this pin travels through.
+ *
+ * The column holds a serialised `SessionIdentityMeta`, whose `custom` bag is
+ * `#[serde(flatten)]` — so the knob keys sit at the TOP level of that object,
+ * beside `role` / `identity_id` / `source_channel`, and a nested `custom`
+ * object would be read by nobody.
+ */
+const stampSessionMeta = (key, patch) => {
+  const db = new DatabaseSync(EVENTS_DB);
+  try {
+    const row = db.prepare("SELECT key, metadata FROM sessions WHERE key = ?").get(key);
+    if (!row) {
+      const keys = db.prepare("SELECT key FROM sessions").all().map((r) => r.key);
+      console.error(`INSTRUMENT FAILURE: no sessions row for ${key}; rows: ${keys.join(", ") || "none"}`);
+      process.exit(1);
+    }
+    let meta = {};
+    try {
+      meta = JSON.parse(row.metadata || "{}");
+    } catch {
+      console.error(`INSTRUMENT FAILURE: sessions.metadata for ${key} is not JSON: ${row.metadata}`);
+      process.exit(1);
+    }
+    const next = { ...meta, ...patch };
+    db.prepare("UPDATE sessions SET metadata = ? WHERE key = ?").run(JSON.stringify(next), key);
+    return JSON.parse(db.prepare("SELECT metadata FROM sessions WHERE key = ?").get(key).metadata);
+  } finally {
+    db.close();
+  }
+};
+
+/**
  * Stage `knobs`: the crashed run's SETTINGS come back, not today's.
  *
- * `sub=set` pins the session to model B and records what the session row says
- * now; `sub=assert` reads the request the resumed run put in front of the
- * provider and checks it carries the model the crashed run was executing
- * under — the envelope snapshot, not the session's current value.
+ * `sub=pin` moves the session to model B with the server DOWN; `sub=assert`
+ * reads what the resumed run actually put in front of the provider and checks
+ * it carries the model the crashed run was executing under — the envelope
+ * snapshot, not the session's current value.
  */
 async function cmdKnobs(sub, arg) {
   const key = readSession();
+  if (sub === "pin") {
+    // Why the fixture writes this row itself, with the server stopped.
+    //
+    // MEASURED 2026-09-03: there is no in-process path to it from outside.
+    // `session.update` does not exist (`-32601`); no `session.*` method sets a
+    // model (the registry has artifact / compact / create / export_html / list
+    // / truncate / usage); and the metadata modify path REFUSES `model_pin` on
+    // purpose (`handlers/session/db_handlers/modify.rs:376` — "their legal
+    // writer is elsewhere"). The legal writer is the `select_model` TOOL (R8),
+    // which needs the mock to dispatch it on a turn of its own — and the `ask`
+    // instrument leaves this session BUSY on a parked approval card, so a pin
+    // turn queues behind the dangle and dies with the server.
+    //
+    // So the pin is written where `StoreBackedPinSink` writes it
+    // (`identity_meta`, keys `model_pin` / `model_pin_provider`, both flattened
+    // to the top level of that object by `#[serde(flatten)] custom`) and every
+    // reader downstream is the product: `stored_model_pin` hydrates the process
+    // map from this row on the next turn, `snapshot_from_metadata` publishes it
+    // on the wire, and the resume replays the ENVELOPE against it.
+    // Instrument self-check, and it has to come first: if the crashed run's
+    // marker carries no envelope there is no snapshot to replay, and the
+    // assertion after the restart would be measuring the ABSENCE of a producer
+    // while reading like a resume that ignored one.
+    const marker = eventsOf(key)
+      .filter((r) => !r.retired_at && r.event_type.includes("run_started"))
+      .pop();
+    let env = null;
+    try {
+      env = JSON.parse(marker?.payload_json ?? "{}").envelope ?? null;
+    } catch {
+      env = null;
+    }
+    check(
+      env?.model === "qa-model-a",
+      "the crashed run's RunStarted marker snapshotted model qa-model-a",
+      show({ envelope: env, marker_seq: marker?.seq ?? null }),
+    );
+    const back = stampSessionMeta(key, { model_pin: arg, model_pin_provider: "qa-mock" });
+    check(back?.model_pin === arg, `the session row on disk now pins ${arg}`, show(back));
+    log(`pinned ${arg} on ${key}`);
+    return;
+  }
+  const wanted = arg;
   const conn = new Conn("driver");
   await conn.open();
-  if (sub === "set") {
-    // The move to model B has to be ASSERTED, not attempted. If this RPC is
-    // not the knob (wrong method, wrong param, rejected), the session never
-    // leaves model A and `assert` below then passes for the one reason it must
-    // never pass for: nothing ever changed the model, so "the resumed run
-    // still runs under A" is true of a build that dropped the envelope too.
-    //
-    // MEASURED 2026-09-03, and this stage is RED because of it: `session.update`
-    // does not exist — the server answers `-32601 Method not found: session.update`
-    // — so the green this stage reported before these two checks existed was
-    // exactly the vacuous one described above. Three facts for whoever wires it:
-    //
-    //   * there is no `session.*` RPC that sets a model; the registry has
-    //     artifact / compact / create / export_html / list / truncate / usage,
-    //     and the metadata modify path REFUSES `model_pin` on purpose
-    //     (`handlers/session/db_handlers/modify.rs:376` — "their legal writer
-    //     is elsewhere"), so no amount of param-guessing here will land it;
-    //   * the legal writer is the `select_model` TOOL (R8), which stamps
-    //     `identity_meta.custom["model_pin"]` (`gateway/session_model_pin.rs`;
-    //     the key is `providers::session_model_handle::MODEL_PIN_SESSION_KEY`).
-    //     A tool means the MOCK has to dispatch it;
-    //   * and it cannot simply be a second turn: the `ask` instrument leaves
-    //     the session BUSY on a parked approval card, so a pin turn sent after
-    //     the dangle turn queues behind it and dies with the server.
-    //
-    // Two routes are open, neither guessed at here: write
-    // `identity_meta.custom.model_pin` into the session row with the server
-    // down (the technique `cmdForgeDenial` already uses, for the same reason —
-    // the state is reachable, the in-process path to it is not), or make the
-    // dangle a different way so a `select_model` turn can precede the crash on
-    // a session that is not parked.
-    const r = await conn.attempt("session.update", { session_key: key, model: arg });
-    check(!r.error, `session.update moves the session to ${arg}`, show(r.error));
-    const { session } = await lastRunOf(conn, key);
-    check(
-      session?.model_pin === arg || session?.model === arg,
-      `and the session row now reads ${arg} — the crashed run's snapshot still says A`,
-      show({ model: session?.model ?? null, model_pin: session?.model_pin ?? null }),
-    );
-  } else {
-    const wanted = arg;
-    const after = requests();
-    const resumed = after.filter((r) => userText(r.body).includes("OUTCOME UNKNOWN"));
-    check(resumed.length > 0, "the resumed run reached the provider", `${after.length} requests logged`);
-    const models = resumed.map((r) => r.body?.model);
-    check(
-      models.every((m) => m === wanted),
-      `the resumed run runs under the SNAPSHOT model (${wanted}), not the session's current one`,
-      show(models),
-    );
-  }
+  // Anti-vacuity, and it is the whole stage: if the session never left model A
+  // then "the resumed run still runs under A" is equally true of a build that
+  // dropped the envelope on the floor (判据 #2). This asserts the SERVER read
+  // the moved row back — not that the fixture wrote a file.
+  const { session } = await lastRunOf(conn, key);
+  check(
+    session?.model_pin === "qa-model-b",
+    "the restarted server reads the session as pinned to qa-model-b",
+    show({ model_pin: session?.model_pin ?? null, model: session?.model ?? null }),
+  );
+  const resumed = await until(
+    () => {
+      const hits = requests().filter((r) => userText(r.body).includes("OUTCOME UNKNOWN"));
+      return hits.length > 0 ? hits : null;
+    },
+    180_000,
+    1000,
+  );
+  check(
+    Boolean(resumed),
+    "the resumed run reached the provider",
+    `${requests().length} requests logged, none carrying the repair text`,
+  );
+  const models = (resumed || []).map((r) => r.body?.model);
+  check(
+    models.length > 0 && models.every((m) => m === wanted),
+    `the resumed run runs under the SNAPSHOT model (${wanted}), not the session's current one`,
+    show(models),
+  );
   conn.close();
+}
+
+/**
+ * The burst run has to FINISH before the kill, or this stage measures the wrong
+ * thing: `cmdDangle` returns as soon as ONE dispatch is durable, which during a
+ * burst is a few milliseconds in. Killing there leaves dangling calls, the
+ * restart resumes them, and the extra turn's usage would make the
+ * "billed once" comparison below fail for a reason that has nothing to do with
+ * the projector.
+ *
+ * Settled = every `run_started` in this log has a `run_finished`. Counting the
+ * markers rather than watching a frame keeps the oracle on disk.
+ */
+async function cmdHolesSettle() {
+  const markers = () => {
+    const rows = eventsOf(null).filter((r) => !r.retired_at);
+    const started = rows.filter((r) => r.event_type.includes("run_started")).length;
+    const finished = rows.filter((r) => r.event_type.includes("run_finished")).length;
+    return { started, finished };
+  };
+  const done = await until(() => {
+    const m = markers();
+    return m.started > 0 && m.started === m.finished;
+  }, 300_000, 1000);
+  const m = markers();
+  check(Boolean(done), "the burst run finished before the kill", `run_started ${m.started}, run_finished ${m.finished}`);
+  log(`markers settled: started ${m.started}, finished ${m.finished}`);
 }
 
 /**
  * Stage `holes`: a burst that outruns the projector queue must not lose a
  * transcript row, and must not bill the same run twice.
  *
- * The equality is the claim; the deferral is an OBSERVATION and is printed
- * with its number, because a burst that never filled the queue makes the
- * "deferred" half vacuous and a vacuous green is the thing this repo keeps
- * paying for.
+ * Two claims, one per phase:
+ *   `before` — the transcript covers every projectable event, and the numbers
+ *              are recorded;
+ *   `after`  — the restart's heal pass did not lose a row AND did not add a
+ *              token. The second half is the one a heal can silently break:
+ *              re-stamping a row that was already stamped bills the same run
+ *              twice, and a token counter that grew while nobody ran anything
+ *              is the only outside evidence of it.
+ *
+ * The deferral is an OBSERVATION printed with its number, not a claim: a burst
+ * that never filled the queue makes the "deferred" half vacuous, and a vacuous
+ * green is what this repo keeps paying for.
  */
-async function cmdHoles(serverLog) {
+async function cmdHoles(serverLog, phase = "before") {
   const key = readSession();
   const conn = new Conn("driver");
   await conn.open();
@@ -667,24 +773,102 @@ async function cmdHoles(serverLog) {
   ).length;
   const h = await conn.attempt("chat.history", { session_key: key, limit: 100000 });
   const msgs = h.result?.messages ?? h.result?.history ?? [];
-  log(`history rows ${msgs.length}; projectable events ${projectable}; total events ${rows.length}`);
+  const session = h.result?.session ?? null;
+  const tokens = session?.total_tokens ?? null;
+  // `total` is the server's own count of the whole transcript, and the page
+  // above is a page. Absent, it is NOT read as zero (判据 #8) — the row count
+  // is used instead and the log says which answered.
+  const total = typeof h.result?.total === "number" ? h.result.total : null;
+  const held = total ?? msgs.length;
+  // `compaction_count` / `message_count` are printed beside the total because
+  // a transcript shorter than the log has TWO candidate mechanisms — a
+  // projector that lost rows, and the store's own compaction trimming them on
+  // purpose — and a number without the one that tells them apart cannot
+  // adjudicate between the two.
+  log(
+    `[${phase}] history total ${show(total)} (page carried ${msgs.length} rows); ` +
+      `session message_count ${show(session?.message_count)}, ` +
+      `compaction_count ${show(session?.compaction_count)}`,
+  );
+  log(
+    `[${phase}] history rows ${msgs.length}; projectable events ${projectable}; ` +
+      `total events ${rows.length}; total_tokens ${show(tokens)}`,
+  );
   check(
     Array.isArray(msgs) && msgs.length > 0,
-    "the burst session has a transcript at all",
+    `[${phase}] the burst session has a transcript at all`,
     show(h.result ?? h.error, 300),
   );
+  // The precondition, and it comes first so that raising the burst can never
+  // make the NEXT assertion read like data loss. MEASURED 2026-09-03 at
+  // `QA_BURST=900`: 1803 projectable events, a server-reported history total of
+  // 69 — and `compaction_count 34`. The store had trimmed the projection on
+  // purpose 34 times; nothing was lost. At the stage's burst the count is 0 and
+  // the two sides are comparable (83 == 83). So this claim is only assertable
+  // BELOW the store's compaction bound, and the fixture says which side of that
+  // bound it is on rather than letting one number stand for both mechanisms.
   check(
-    msgs.length >= projectable,
-    "no projectable event is missing from the transcript after the burst",
-    `history ${msgs.length} < projectable ${projectable}`,
+    session?.compaction_count === 0,
+    `[${phase}] the burst stayed under the store's compaction bound, so the transcript is comparable to the log`,
+    `compaction_count ${show(session?.compaction_count)} — above this bound the store trims the projection ON PURPOSE and the next check would be red for a designed behaviour, not a hole`,
   );
-  let deferred = 0;
-  try {
-    deferred = (fs.readFileSync(serverLog, "utf8").match(/seq deferred/g) || []).length;
-  } catch {
-    deferred = 0;
+  // `>=`, not `==`: the direction under test is LOSS (a hole), and the server
+  // legitimately carries rows the durable log does not project one-for-one
+  // (the boundary-repair line is one). An exact equality would go red for a
+  // row being ADDED, which is a different claim — the token check below is the
+  // one that catches an addition.
+  check(
+    held >= projectable,
+    `[${phase}] no projectable event is missing from the transcript`,
+    `held ${held} (${total === null ? "page rows — the reply carried no total" : "server total"}) < projectable ${projectable}`,
+  );
+
+  const stateFile = path.join(QA_ROOT, "holes_before.json");
+  if (phase === "before") {
+    check(
+      typeof tokens === "number",
+      "[before] the session row carries a token total to compare against",
+      show(session),
+    );
+    fs.writeFileSync(stateFile, JSON.stringify({ rows: msgs.length, projectable, tokens }));
+  } else {
+    const prior = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, "utf8")) : null;
+    check(Boolean(prior), "[after] the before-phase numbers were recorded", show(prior));
+    if (prior) {
+      check(
+        msgs.length >= prior.rows,
+        "[after] the restart did not drop a transcript row",
+        `after ${msgs.length} < before ${prior.rows}`,
+      );
+      check(
+        tokens === prior.tokens,
+        "[after] the finished run is billed exactly once — the heal pass added no tokens",
+        `before ${show(prior.tokens)} -> after ${show(tokens)}`,
+      );
+    }
+    const { lastRun } = await lastRunOf(conn, key);
+    check(
+      lastRun?.disposition === "clean",
+      "[after] a burst run that ended normally reads `clean` across the restart",
+      show(lastRun?.disposition),
+    );
   }
-  log(`OBSERVATION projector deferrals in this run: ${deferred}` + (deferred === 0 ? " (the queue never filled — the deferral half of this stage is vacuous at this burst size)" : ""));
+
+  let full = 0;
+  let stopped = 0;
+  try {
+    const text = fs.readFileSync(serverLog, "utf8");
+    full = (text.match(/projector queue full/g) || []).length;
+    stopped = (text.match(/projector drain task stopped/g) || []).length;
+  } catch {
+    /* no log to read is not a claim either way */
+  }
+  log(
+    `OBSERVATION [${phase}] projector queue-full deferrals: ${full}, drain-restart deferrals: ${stopped}` +
+      (full === 0
+        ? " (the queue never filled — the deferral half of this stage is vacuous at this burst size)"
+        : ""),
+  );
   conn.close();
 }
 
@@ -720,7 +904,7 @@ async function cmdCost() {
 const main = async () => {
   switch (CMD) {
     case "dangle":
-      await cmdDangle(REST[0]);
+      await cmdDangle(REST[0], REST[1]);
       break;
     case "assert-dangling":
       await cmdAssertDangling(REST[0] ?? 1);
@@ -743,8 +927,11 @@ const main = async () => {
     case "knobs":
       await cmdKnobs(REST[0], REST[1]);
       break;
+    case "holes-settle":
+      await cmdHolesSettle();
+      break;
     case "holes":
-      await cmdHoles(REST[0]);
+      await cmdHoles(REST[0], REST[1] ?? "before");
       break;
     case "cost":
       await cmdCost();
