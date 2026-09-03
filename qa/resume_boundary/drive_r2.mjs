@@ -277,9 +277,16 @@ const lastRunOf = async (conn, sessionKey) => {
 // ---------------------------------------------------------------------------
 
 /** Send `text` into (or minting) a session and return once the run is under way. */
-const sendTurn = async (conn, text, sessionKey, model) => {
+const sendTurn = async (conn, text, sessionKey, model, tier) => {
   const params = { message: text, channel: CHANNEL };
   if (sessionKey) params.session_key = sessionKey;
+  // The per-turn execution tier (`chat.send` → `ChatSendParams::exec_tier` →
+  // `request.metadata["exec_tier"]` → `resolve_exec_tier`'s `requested` rung).
+  // Unlike the model half this ALSO stamps the session row on a non-resume
+  // turn (`knob_to_stamp`), which is exactly what the `knobs` stage wants: the
+  // crashed run and the row it leaves behind start out agreeing, so the later
+  // divergence is one the fixture made on purpose.
+  if (tier) params.exec_tier = tier;
   // A per-turn directive, and the `knobs` stage cannot do without one.
   // MEASURED 2026-09-03: the envelope's `model` half is `routing_directive`
   // (runner_impl.rs:364), which folds the `select_model` pick and the agent's
@@ -302,11 +309,11 @@ const sendTurn = async (conn, text, sessionKey, model) => {
  * short and every later assertion runs over an empty set, and an empty set
  * passes an "is there no X" question for the wrong reason.
  */
-async function cmdDangle(marker = "qa-dangle", model = null) {
+async function cmdDangle(marker = "qa-dangle", model = null, tier = null) {
   const conn = new Conn("driver");
   await conn.open();
   const prior = fs.existsSync(SESSION_FILE) ? readSession() : null;
-  const started = await sendTurn(conn, `${marker} please run the long command`, prior, model);
+  const started = await sendTurn(conn, `${marker} please run the long command`, prior, model, tier);
   fs.writeFileSync(SESSION_FILE, started.session_key);
   const landed = await until(() => danglingIds(started.session_key).length > 0, 180_000, 400);
   conn.close();
@@ -636,7 +643,27 @@ const stampSessionMeta = (key, patch) => {
  * it carries the model the crashed run was executing under — the envelope
  * snapshot, not the session's current value.
  */
-async function cmdKnobs(sub, arg) {
+/**
+ * Every live `RunStarted` marker in this log, oldest first, with its envelope
+ * decoded. The envelope is what the turn was ACTUALLY running under —
+ * `run_envelope_snapshot` reads it off the same `TurnEnvelope` the turn used,
+ * so the resumed run's marker is a durable record of the tier `resolve_exec_
+ * tier_with_ceiling` returned for it, not of what anyone asked for.
+ */
+const runMarkers = (key) =>
+  eventsOf(key)
+    .filter((r) => !r.retired_at && r.event_type.includes("run_started"))
+    .map((r) => {
+      let env = null;
+      try {
+        env = JSON.parse(r.payload_json ?? "{}").envelope ?? null;
+      } catch {
+        env = null;
+      }
+      return { seq: r.seq, env };
+    });
+
+async function cmdKnobs(sub, arg, tier) {
   const key = readSession();
   if (sub === "pin") {
     // Why the fixture writes this row itself, with the server stopped.
@@ -661,22 +688,38 @@ async function cmdKnobs(sub, arg) {
     // marker carries no envelope there is no snapshot to replay, and the
     // assertion after the restart would be measuring the ABSENCE of a producer
     // while reading like a resume that ignored one.
-    const marker = eventsOf(key)
-      .filter((r) => !r.retired_at && r.event_type.includes("run_started"))
-      .pop();
-    let env = null;
-    try {
-      env = JSON.parse(marker?.payload_json ?? "{}").envelope ?? null;
-    } catch {
-      env = null;
-    }
+    const marker = runMarkers(key).pop();
+    const env = marker?.env ?? null;
     check(
       env?.model === "qa-model-a",
       "the crashed run's RunStarted marker snapshotted model qa-model-a",
       show({ envelope: env, marker_seq: marker?.seq ?? null }),
     );
-    const back = stampSessionMeta(key, { model_pin: arg, model_pin_provider: "qa-mock" });
+    // The second knob, and it is deliberately moved in the LOOSENING direction
+    // — the opposite of what the round's plan wrote down. 判据 #14: the two
+    // directions of this gate are not the same claim. Snapshot `full` + a
+    // session since pulled down to `ask` resolves to `ask` for a build with NO
+    // ceiling at all (the session rung already says `ask`), so that
+    // arrangement cannot tell `resolve_exec_tier_with_ceiling` from
+    // `resolve_exec_tier`. Snapshot `ask` + a session since opened to `full`
+    // can: without the ceiling the resumed run executes at `full`, unattended,
+    // at a tier nobody granted it for that run.
+    check(
+      env?.exec_tier === tier,
+      `the crashed run's RunStarted marker snapshotted exec tier ${tier}`,
+      show({ envelope: env, marker_seq: marker?.seq ?? null }),
+    );
+    const back = stampSessionMeta(key, {
+      model_pin: arg,
+      model_pin_provider: "qa-mock",
+      exec_tier: "full",
+    });
     check(back?.model_pin === arg, `the session row on disk now pins ${arg}`, show(back));
+    check(
+      back?.exec_tier === "full",
+      "the session row on disk has since been opened up to exec tier full",
+      show(back),
+    );
     log(`pinned ${arg} on ${key}`);
     return;
   }
@@ -711,6 +754,32 @@ async function cmdKnobs(sub, arg) {
     models.length > 0 && models.every((m) => m === wanted),
     `the resumed run runs under the SNAPSHOT model (${wanted}), not the session's current one`,
     show(models),
+  );
+
+  // The exec-tier half. Same shape, opposite direction (see `pin`): the row is
+  // now `full` and the snapshot was `ask`, so a resume that ignored the ceiling
+  // would run this turn at `full`.
+  check(
+    session?.exec_tier === "full",
+    "the restarted server reads the session as opened up to exec tier full",
+    show({ exec_tier: session?.exec_tier ?? null }),
+  );
+  // The oracle is the RESUMED run's own marker: `run_envelope_snapshot` stamps
+  // it from the `TurnEnvelope` that turn is executing under, so this is the
+  // tier the turn actually got — not a request, not a log line, and not the
+  // snapshot read back to itself (that value lives on the OLDER marker, and
+  // the count check below is what keeps these two from being the same row).
+  const markers = runMarkers(key);
+  check(
+    markers.length >= 2,
+    "the resume started a run of its own — otherwise the marker below is the crashed run's",
+    show(markers),
+  );
+  const resumedEnv = markers[markers.length - 1]?.env ?? null;
+  check(
+    resumedEnv?.exec_tier === tier,
+    `the resumed run runs under the SNAPSHOT exec tier (${tier}), not the session's looser one`,
+    show({ resumed_envelope: resumedEnv, markers: markers.map((m) => m.seq) }),
   );
   conn.close();
 }
@@ -906,7 +975,7 @@ async function cmdCost() {
 const main = async () => {
   switch (CMD) {
     case "dangle":
-      await cmdDangle(REST[0], REST[1]);
+      await cmdDangle(REST[0], REST[1], REST[2]);
       break;
     case "assert-dangling":
       await cmdAssertDangling(REST[0] ?? 1);
@@ -927,7 +996,7 @@ const main = async () => {
       await cmdRewind(REST[0] ?? "do");
       break;
     case "knobs":
-      await cmdKnobs(REST[0], REST[1]);
+      await cmdKnobs(REST[0], REST[1], REST[2]);
       break;
     case "holes-settle":
       await cmdHolesSettle();

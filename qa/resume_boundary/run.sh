@@ -235,7 +235,7 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
     claims) FLOOR=13 ;;
     denied) FLOOR=5 ;;
     rewind) FLOOR=5 ;;
-    knobs)  FLOOR=5 ;;
+    knobs)  FLOOR=10 ;;
     holes)  FLOOR=12 ;;
     *)      FLOOR=0 ;;
   esac
@@ -309,17 +309,23 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
       # CONFIGURED model is not a routing directive — measured, see
       # `sendTurn`), and this stage would be asserting over a run that has no
       # snapshot to replay.
-      drive dangle qa-dangle qa-model-a || RC=1
+      # …and an explicit per-turn exec tier, for the second knob. `ask` is the
+      # TIGHT end here: the row is opened up to `full` after the crash, so a
+      # resume that dropped the ceiling would execute at `full`. The plan for
+      # this round wrote the arrangement the other way round (snapshot `full`,
+      # session `ask`) — that one is green for a build with no ceiling at all,
+      # because the session rung already answers `ask` (判据 #2/#14).
+      drive dangle qa-dangle qa-model-a ask || RC=1
       hard_kill_server
       # The session is moved to model B AFTER the crashed run started under A,
       # and with the server DOWN — there is no in-process path to this write
       # from outside (drive_r2.mjs::cmdKnobs carries the three measurements).
       # Its rc counts: if the move did not happen, the assertion after the
       # restart is green for a build that never carried the envelope at all.
-      [ "$RC" = "0" ] && { drive knobs pin qa-model-b || RC=1; }
+      [ "$RC" = "0" ] && { drive knobs pin qa-model-b ask || RC=1; }
       [ "$RC" = "0" ] && { start_server || exit 1; }
       [ "$RC" = "0" ] && { "$BIN" resume --json "$(cat "$SESSION_FILE")" >"$RECEIPT" 2>"$QA_ROOT/resume.err"; cat "$RECEIPT"; }
-      [ "$RC" = "0" ] && { drive knobs assert qa-model-a || RC=1; }
+      [ "$RC" = "0" ] && { drive knobs assert qa-model-a ask || RC=1; }
       ;;
     holes)
       start_server || exit 1

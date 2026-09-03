@@ -125,6 +125,20 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                        # provider could not tell those apart — the assertion
                                        # would pass for a build that dropped the envelope
                                        # entirely.
+                                       # The stage carries the SECOND knob too, and in the
+                                       # opposite direction on purpose: the crashing turn runs
+                                       # at exec tier `ask`, the row is opened up to `full`
+                                       # with the server down, and the resumed run's OWN
+                                       # `RunStarted` envelope must still read `ask`. Snapshot
+                                       # `full` over a session since pulled down to `ask` —
+                                       # the arrangement that reads naturally — is green for a
+                                       # build with NO ceiling at all, because the session rung
+                                       # already answers `ask`. Only the loosening direction
+                                       # separates `resolve_exec_tier_with_ceiling` from
+                                       # `resolve_exec_tier`, and it is the direction that
+                                       # costs something when it is wrong: a resume that ran
+                                       # too loose executes, unattended, at a tier the operator
+                                       # revoked while the daemon was down.
 ./qa/resume_boundary/run.sh holes      # a burst of tool calls in one turn must not lose a row
                                        # and must not bill the run twice: `chat.history`'s
                                        # server-reported total >= projectable events in
@@ -150,7 +164,7 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 # also code that can stop working without saying so:
 #
 #   * **Every stage has an assertion FLOOR** (`claims` 13, `denied` 5, `rewind` 5,
-#     `knobs` 5, `holes` 12 — measured, not aspirational). Each `drive` call is
+#     `knobs` 10, `holes` 12 — measured, not aspirational). Each `drive` call is
 #     its own node process with its own counters, so the last line a green stage
 #     prints is whichever phase ran last; for `claims` that is the cost probe,
 #     which asserts nothing and prints `0 passed, 0 failed`. A phase whose
