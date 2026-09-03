@@ -54,8 +54,15 @@ pub(crate) use decision::{decide, Decision};
 pub use health::{
     CircuitState, FailoverHealth, ModelCooldown, ProviderCooldown, ProviderHealthView,
 };
+/// Chain membership, exported so the membership rule can be asserted directly.
+/// Test-only since round-6 T9: `route_status` used to call it to recompute
+/// membership for its own render, and that second call site is exactly what let
+/// the snapshot materialise members the walk would have materialised
+/// differently. Production now has one caller and it lives inside this module —
+/// re-exporting it again would re-offer the shortcut that caused the drift.
+#[cfg(test)]
 pub(crate) use provider::effective_fallback_names;
-pub use provider::{FailoverProvider, RoutePreview, RouteStep};
+pub use provider::{ChainMember, FailoverProvider, RoutePreview, RouteStep};
 
 /// Name of the sentinel node that wraps a whole *nested* chain rather than a
 /// real endpoint.

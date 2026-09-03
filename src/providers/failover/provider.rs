@@ -200,6 +200,24 @@ impl CandidatePlan {
     }
 }
 
+/// One member of the fallback chain, as rendered by `route_status`'s
+/// `fallback_chain` ([`FailoverProvider::chain_composition`]).
+///
+/// Distinct from [`RouteStep`] on purpose: this is *membership* (who is in the
+/// chain, with what ladder and tier), that is the *dial plan* (who gets tried
+/// first, behind which gate). Both are now materialised from one place, so they
+/// can differ in what they answer but not in what they say about a provider.
+#[derive(Debug, Clone)]
+pub struct ChainMember {
+    /// Provider name — the breaker / cooldown / load key.
+    pub name: String,
+    /// The model walk order for this provider, from the boot model catalog.
+    pub models: Vec<String>,
+    /// Endpoint locality, from the boot tier catalog (see the residual noted on
+    /// [`FailoverProvider::chain_composition`]).
+    pub tier: EndpointTier,
+}
+
 /// One step of the chain the next request would walk, as rendered by
 /// `route_status` ([`FailoverProvider::preview_order`]).
 #[derive(Debug, Clone)]
@@ -269,11 +287,13 @@ fn empty_chain_error(mode: RouteMode) -> AlephError {
 
 /// Fallback chain **membership** for the next request, in order.
 ///
-/// The single description of "who is in the chain", shared by the walk
-/// ([`FailoverProvider::candidates`]) and the `route_status` renderer
-/// ([`crate::providers::route_observe`]) so the diagnostic can never disagree
-/// with the chain it is describing. Three cases, matching how the chain was
-/// assembled:
+/// The single description of "who is in the chain". It has exactly one
+/// production caller, [`FailoverProvider::fallback_nodes`], which materialises
+/// these names into nodes; both faces that need membership — the walk
+/// ([`FailoverProvider::candidates`]) and the `route_status` composition
+/// ([`FailoverProvider::chain_composition`]) — go through *that*, so no
+/// diagnostic can disagree with the chain it is describing. Three cases,
+/// matching how the chain was assembled:
 ///
 /// * the handle exposes no live registry (tests / non-registry boot) → the
 ///   boot-time configured order verbatim;
@@ -739,44 +759,7 @@ impl FailoverProvider {
             provider: primary,
             tier: self.primary_tier,
         };
-        // Chain membership comes from the one shared description
-        // ([`effective_fallback_names`]) so `route_status` cannot describe a
-        // different chain than the one that is walked. Each name is then
-        // materialised into a node: a boot node when the operator configured
-        // the chain (it already carries the built provider, its model list and
-        // its tier), otherwise a live registry lookup whose model list and
-        // endpoint tier come from the same boot catalogs the static path uses —
-        // a live-derived candidate is a real chain member, not a placeholder.
-        let live_names = self.primary.provider_names();
-        let configured: Vec<String> = self.fallbacks.iter().map(|n| n.name.clone()).collect();
-        let member_names = effective_fallback_names(
-            &live_names,
-            &primary_name,
-            &configured,
-            self.derive_fallbacks_live,
-        );
-        let fallbacks: Vec<FailoverNode> = member_names
-            .into_iter()
-            .filter_map(|name| {
-                // An auto-derived chain dials the *live* provider instance, so
-                // one rebuilt at runtime (rotated key, edited base_url) is used
-                // without a restart; its model list and tier still come from the
-                // boot catalogs. An operator-configured chain uses its boot node
-                // verbatim (that node already carries all three).
-                if self.derive_fallbacks_live {
-                    if let Some(provider) = self.primary.provider_by_name(&name) {
-                        return Some(FailoverNode {
-                            models: self.model_catalog.get(&name).cloned().unwrap_or_default(),
-                            tier: self.node_tier(&name),
-                            name,
-                            provider,
-                        });
-                    }
-                }
-                // rust-doctor-disable-next-line excessive-clone
-                self.fallbacks.iter().find(|fb| fb.name == name).cloned()
-            })
-            .collect();
+        let fallbacks = self.fallback_nodes(&primary_name);
         // One coherent route snapshot for the whole ordering pass — mode,
         // targets, strategy and limits all read from a single config generation.
         let route = self.route_snapshot();
@@ -1017,6 +1000,87 @@ impl FailoverProvider {
             .get(name)
             .copied()
             .unwrap_or(EndpointTier::Cloud)
+    }
+
+    /// The fallback slots this chain would walk right now, materialised.
+    ///
+    /// Membership comes from the one shared description
+    /// ([`effective_fallback_names`]) so no diagnostic can describe a different
+    /// chain than the one that is walked. Each name is then materialised into a
+    /// node: a boot node when the operator configured the chain (it already
+    /// carries the built provider, its model list and its tier), otherwise a
+    /// live registry lookup whose model list and endpoint tier come from the
+    /// same boot catalogs the static path uses — a live-derived candidate is a
+    /// real chain member, not a placeholder.
+    ///
+    /// Both the walk ([`candidates`](Self::candidates)) and the read-only
+    /// composition ([`chain_composition`](Self::chain_composition)) go through
+    /// here. `route_status` used to materialise its own copy from a boot-time
+    /// vec and default an unfound name to `Cloud` with an empty ladder, which
+    /// one `providers.setDefault` was enough to expose: the ex-primary is a
+    /// member of the walked chain and was never in that vec.
+    fn fallback_nodes(&self, primary_name: &str) -> Vec<FailoverNode> {
+        let live_names = self.primary.provider_names();
+        let configured: Vec<String> = self.fallbacks.iter().map(|n| n.name.clone()).collect();
+        effective_fallback_names(
+            &live_names,
+            primary_name,
+            &configured,
+            self.derive_fallbacks_live,
+        )
+        .into_iter()
+        .filter_map(|name| {
+            // An auto-derived chain dials the *live* provider instance, so one
+            // rebuilt at runtime (rotated key, edited base_url) is used without
+            // a restart; its model list and tier still come from the boot
+            // catalogs. An operator-configured chain uses its boot node verbatim
+            // (that node already carries all three).
+            if self.derive_fallbacks_live {
+                if let Some(provider) = self.primary.provider_by_name(&name) {
+                    return Some(FailoverNode {
+                        models: self.model_catalog.get(&name).cloned().unwrap_or_default(),
+                        tier: self.node_tier(&name),
+                        name,
+                        provider,
+                    });
+                }
+            }
+            // rust-doctor-disable-next-line excessive-clone
+            self.fallbacks.iter().find(|fb| fb.name == name).cloned()
+        })
+        .collect()
+    }
+
+    /// Read-only composition of the fallback chain the next request would walk:
+    /// each member's name, its model ladder and its endpoint tier, in
+    /// configured order (no route gating, no load-balancing — that is
+    /// [`preview_order`](Self::preview_order)'s answer).
+    ///
+    /// Rendered as `route_status`'s `fallback_chain`. It is derived from
+    /// [`fallback_nodes`](Self::fallback_nodes) — the same materialisation the
+    /// walk uses — so the two faces of the snapshot cannot state two tiers or
+    /// two ladders for one provider.
+    ///
+    /// ⚠️ Residual, deliberately open: the tier comes from
+    /// [`node_tier`](Self::node_tier), whose catalog is the BOOT `[providers]`
+    /// picture. A provider registered after boot has no entry and reads
+    /// [`EndpointTier::Cloud`] on *both* faces — agreeing, and both possibly
+    /// wrong, for an on-machine endpoint added at runtime. Closing it means
+    /// hot-extending `tier_catalog` on provider creation (the RCU shape
+    /// `RouteObservability::hot_apply_problems` already uses for the problem
+    /// list); until then this agreement is not a claim that the tier is right
+    /// (FEATURE_LOCATOR §3.6 round-6 T9, deferred list).
+    #[must_use]
+    pub fn chain_composition(&self) -> Vec<ChainMember> {
+        let primary_name = self.primary.current().name().to_string();
+        self.fallback_nodes(&primary_name)
+            .into_iter()
+            .map(|node| ChainMember {
+                name: node.name,
+                models: node.models,
+                tier: node.tier,
+            })
+            .collect()
     }
 
     /// Whether `name` may be tried now. Transitions `Open → HalfOpen` once the

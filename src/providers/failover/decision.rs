@@ -38,8 +38,17 @@ pub(crate) enum Decision {
     NextModel,
     /// This model hit a *model-specific* 429. Record a per-model cooldown
     /// (`Some(d)` carries the server `Retry-After`), then prefer a sibling
-    /// model before advancing providers. Does **not** trip the provider
-    /// circuit — sibling models stay live.
+    /// model before advancing providers.
+    ///
+    /// "Model-specific" describes which model is *sidelined*, not how far the
+    /// consequences reach. The walk's arm also parks the whole provider
+    /// (`ProviderCooldown::cool`, so the NEXT turn paces itself before
+    /// re-dialing it) and arms `tripped = Transient`, so the circuit does trip
+    /// once every model of that provider is exhausted. Sibling models stay live
+    /// only *within this walk*: a later model that answers retires both effects
+    /// (`ProviderCooldown::clear` on success, and `tripped` is dropped). Pinned
+    /// by `failover::tests::a_model_429_parks_the_provider_and_arms_a_strike`
+    /// and its opposite half `a_successful_call_clears_the_provider_pacing_window`.
     RateLimited(Option<Duration>),
     /// Trip this provider's circuit and advance to the next provider.
     NextProvider(FailureKind),

@@ -7,8 +7,9 @@
 //! and the operator ("why did my request fall back / stall / which provider
 //! is throttled" was unanswerable). [`RouteObservability`] bundles cheap
 //! clones of those shared handles (cloning shares the same `Arc` maps, so a
-//! snapshot is always live) plus the boot-time chain composition, and renders
-//! one JSON snapshot for the `self_config` `route_status` tool action.
+//! snapshot is always live) plus the chain itself, which answers both the
+//! order of the next walk and its membership, and renders one JSON snapshot
+//! for the `self_config` `route_status` tool action.
 //!
 //! R7/R8 stance: this surfaces HARD runtime facts (circuit states, cooldown
 //! windows, in-flight counts, EWMA latency, rolling RPM/TPM usage) so the
@@ -22,23 +23,13 @@ use arc_swap::ArcSwap;
 use serde_json::json;
 
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
-use crate::config::types::{LoadBalanceStrategy, ModelRouteConfig, RouteMode};
+use crate::config::types::{ModelRouteConfig, RouteMode};
 use crate::providers::default_handle::DefaultProviderHandle;
 use crate::providers::failover::{FailoverHealth, ModelCooldown, ProviderCooldown};
 use crate::providers::load_stats::LoadStats;
 use crate::providers::route_handle::RouteState;
 use crate::providers::route_policy::{route_problems, EndpointTier, RouteGate, RouteProblem};
 use crate::sync_primitives::Arc;
-
-/// Boot-time composition of one fallback candidate: name, model walk order,
-/// and endpoint tier. The live per-request ordering additionally applies the
-/// route mode, pins, and load-balancing on top of this configured baseline.
-#[derive(Debug, Clone)]
-pub struct ChainCandidate {
-    pub name: String,
-    pub models: Vec<String>,
-    pub tier: EndpointTier,
-}
 
 /// Shared handles onto the failover chain's live runtime state.
 ///
@@ -50,16 +41,11 @@ pub struct RouteObservability {
     /// Live primary slot (hot-reload aware): `current().name()` is the
     /// provider the next request dials first.
     pub primary: Arc<dyn DefaultProviderHandle>,
-    /// Boot-time fallback chain composition, in configured order. Chain
-    /// *membership* for the rendered snapshot is recomputed through
-    /// [`effective_fallback_names`](crate::providers::failover::effective_fallback_names)
-    /// — the same function the walk uses — so the reported chain is the chain
-    /// that will actually be dialed. This vec supplies the per-name model list
-    /// and tier, and is the whole answer for an operator-configured chain.
-    pub fallbacks: Vec<ChainCandidate>,
     /// Whether the chain was *auto-derived* (no operator
     /// `[fallback_provider].chain`), in which case membership is re-derived
-    /// from the live registry on every request.
+    /// from the live registry on every request. Rendered as `chain_source`;
+    /// the composition itself comes from the chain
+    /// ([`FailoverProvider::chain_composition`](crate::providers::failover::FailoverProvider::chain_composition)).
     pub auto_derived: bool,
     /// Shared circuit-breaker map (same instance the chains mutate).
     pub health: FailoverHealth,
@@ -118,17 +104,6 @@ const fn mode_str(mode: RouteMode) -> &'static str {
         RouteMode::Auto => "auto",
         RouteMode::AlwaysLocal => "always_local",
         RouteMode::AlwaysCloud => "always_cloud",
-    }
-}
-
-const fn lb_str(strategy: LoadBalanceStrategy) -> &'static str {
-    match strategy {
-        LoadBalanceStrategy::Ordered => "ordered",
-        LoadBalanceStrategy::RoundRobin => "round_robin",
-        LoadBalanceStrategy::LeastBusy => "least_busy",
-        LoadBalanceStrategy::LatencyAware => "latency_aware",
-        LoadBalanceStrategy::UsageBased => "usage_based",
-        LoadBalanceStrategy::CostAware => "cost_aware",
     }
 }
 
@@ -197,32 +172,24 @@ impl RouteObservability {
         let limits = Arc::clone(&route.limits);
 
         let primary_name = self.primary.current().name().to_string();
-        // Chain membership for the *next* request, through the same function the
-        // walk uses. An auto-derived chain re-derives from the live registry
-        // every request, so the boot snapshot alone would report providers that
-        // have since been removed and hide ones added at runtime.
-        let configured: Vec<String> = self.fallbacks.iter().map(|c| c.name.clone()).collect();
-        let member_names = crate::providers::failover::effective_fallback_names(
-            &self.primary.provider_names(),
-            &primary_name,
-            &configured,
-            self.auto_derived,
-        );
-        let chain: Vec<ChainCandidate> = member_names
-            .into_iter()
-            .map(|name| {
-                let boot = self.fallbacks.iter().find(|c| c.name == name);
-                ChainCandidate {
-                    // rust-doctor-disable-next-line excessive-clone
-                    models: boot.map(|c| c.models.clone()).unwrap_or_default(),
-                    // Mirrors `FailoverProvider::node_tier`: a provider that
-                    // joined after boot has no catalog entry and is treated as
-                    // cloud — the conservative side of gating and cost ranking.
-                    tier: boot.map_or(EndpointTier::Cloud, |c| c.tier),
-                    name,
-                }
-            })
-            .collect();
+        // Chain composition for the *next* request, from the chain itself
+        // ([`FailoverProvider::chain_composition`]) — membership, model ladder
+        // and endpoint tier all materialised by the SAME code the walk runs.
+        //
+        // This used to be a second materialisation here: membership through the
+        // shared `effective_fallback_names` (correct), then each member looked
+        // up in a boot-time vec and defaulted to `Cloud` with an empty ladder
+        // when absent. The boot fallback vec excludes the boot primary, so one
+        // `providers.setDefault` made the ex-primary a chain member that vec had
+        // never held: `fallback_chain` called it cloud/`[]`/unpriced while
+        // `next_order`, asking the chain, called it local with its real ladder.
+        // Empty without a chain — a bundle nobody attached one to has no
+        // composition to report, and inventing one is how the two faces drifted.
+        let chain = self
+            .chain
+            .as_ref()
+            .map(|c| c.chain_composition())
+            .unwrap_or_default();
         let health = self.health.snapshot().await;
         let pacing = self.provider_cooldown.snapshot().await;
         let cooling = self.model_cooldown.snapshot().await;
@@ -271,7 +238,13 @@ impl RouteObservability {
                 let m = loads_by.get(name.as_str()).copied().unwrap_or_default();
                 let (util_permille, over_limit) =
                     limits.assess(name.as_str(), m.rpm_used, m.tpm_used);
-                let (rpm_limit, tpm_limit) = limits.ceiling(name.as_str()).unwrap_or((None, None));
+                // One read of the ceiling for all three fields it feeds: the two
+                // rendered numbers and the "does one bound anything" flag. It
+                // goes through `effective_ceiling`, the same rule `assess`
+                // (above) and `route_problems` (below, in this same payload)
+                // apply — a raw read here would print `rpm_limit: 0` beside an
+                // `over_limit: false` the engine derived by ignoring that zero.
+                let (rpm_limit, tpm_limit) = limits.effective_ceiling(name.as_str());
                 // Cost-routing sort key (milli-USD/Mtok); `null` when the
                 // provider's first model is unknown or unpriced.
                 let price = model_by
@@ -295,7 +268,16 @@ impl RouteObservability {
                     // operator would use to ask "why was this deprioritised"
                     // could not tell idle from unconfigured.
                     "utilization_permille": util_permille,
-                    "rate_limited": limits.ceiling(name.as_str()).is_some(),
+                    // A static config fact — "some dimension of this provider
+                    // is actually bounded" — sitting beside two LIVE ones
+                    // (`over_limit`, `rate_pacing_remaining_secs`). It was
+                    // called `rate_limited`, which in this neighbourhood reads
+                    // as "is being throttled right now" and is answered `true`
+                    // for every provider with a ceiling, idle or not. It is
+                    // derived from the two effective numbers rather than from
+                    // "is there an entry", so an inert entry (`rpm = 0`) reads
+                    // `false` here and shows up under `config_problems`.
+                    "has_rate_ceiling": rpm_limit.is_some() || tpm_limit.is_some(),
                     "over_limit": over_limit,
                     "price_milli_per_mtok": price,
                     "endpoint_tier": tier_by.get(name.as_str()).copied().map(tier_str),
@@ -336,7 +318,7 @@ impl RouteObservability {
         json!({
             "mode": mode_str(mode),
             "allow_cloud_escalation": allow_escalation,
-            "load_balance": lb_str(strategy),
+            "load_balance": strategy.as_str(),
             "pins": {
                 "local": targets.local_provider.clone(),
                 "cloud": targets.cloud_provider.clone(),
@@ -467,7 +449,6 @@ pub(crate) fn test_observability(
 ) -> RouteObservability {
     RouteObservability {
         primary,
-        fallbacks: Vec::new(),
         auto_derived: false,
         health: FailoverHealth::default(),
         model_cooldown: ModelCooldown::default(),
@@ -506,13 +487,15 @@ mod tests {
         }
     }
 
-    fn observability(fallbacks: Vec<ChainCandidate>) -> RouteObservability {
-        let mut obs = test_observability(
+    /// A bundle with no chain attached — the pre-boot / test-only shape. It has
+    /// no chain to ask, so it reports no composition at all; the tests that need
+    /// a `fallback_chain` build [`observability_with_chain`], which is what
+    /// production always is.
+    fn observability() -> RouteObservability {
+        test_observability(
             Arc::new(StaticDefault::new(Arc::new(NamedProvider("kimi")))),
             std::collections::HashMap::new(),
-        );
-        obs.fallbacks = fallbacks;
-        obs
+        )
     }
 
     #[tokio::test]
@@ -521,7 +504,7 @@ mod tests {
         // through the panel and `route_status` kept showing the boot-time
         // (empty) list — the one field that could explain "my routing
         // configuration did nothing" never saw the config that broke it.
-        let mut obs = observability(vec![]);
+        let mut obs = observability();
         obs.tiers = Arc::new(std::collections::HashMap::from([(
             "ollama".to_string(),
             EndpointTier::Local,
@@ -551,7 +534,7 @@ mod tests {
 
     #[tokio::test]
     async fn snapshot_reports_safe_defaults_without_route_handle() {
-        let obs = observability(vec![]);
+        let obs = observability();
         let snap = obs.snapshot().await;
         assert_eq!(snap["mode"], "auto");
         assert_eq!(snap["allow_cloud_escalation"], false);
@@ -565,11 +548,7 @@ mod tests {
 
     #[tokio::test]
     async fn snapshot_includes_chain_composition_and_live_load() {
-        let obs = observability(vec![ChainCandidate {
-            name: "x302".to_string(),
-            models: vec!["gpt-5".to_string()],
-            tier: EndpointTier::Cloud,
-        }]);
+        let obs = observability_with_chain(None);
         let _g = obs.load.begin("x302");
         let snap = obs.snapshot().await;
         let chain = snap["fallback_chain"].as_array().unwrap();
@@ -590,13 +569,21 @@ mod tests {
     /// `next_order` is present and the header renders the generation that
     /// chain ordered with. `route` is the chain's own boot route snapshot.
     fn observability_with_chain(route: Option<(RouteMode, bool)>) -> RouteObservability {
+        let mut obs = observability();
+        let chain = kimi_over_x302();
+        let chain = match route {
+            Some((mode, escalate)) => chain.with_route(mode, escalate, None),
+            None => chain,
+        };
+        obs.chain = Some(Arc::new(chain));
+        obs
+    }
+
+    /// The one chain shape these tests walk: primary `kimi`, one cloud fallback
+    /// `x302` on `gpt-5`.
+    fn kimi_over_x302() -> crate::providers::failover::FailoverProvider {
         use crate::providers::failover::{FailoverConfig, FailoverNode, FailoverProvider};
-        let mut obs = observability(vec![ChainCandidate {
-            name: "x302".to_string(),
-            models: vec!["gpt-5".to_string()],
-            tier: EndpointTier::Cloud,
-        }]);
-        let chain = FailoverProvider::new(
+        FailoverProvider::new(
             Arc::new(StaticDefault::new(Arc::new(NamedProvider("kimi")))),
             vec![FailoverNode::with_tier(
                 "x302".to_string(),
@@ -607,13 +594,218 @@ mod tests {
             std::collections::HashMap::new(),
             FailoverHealth::default(),
             FailoverConfig::default(),
-        );
-        let chain = match route {
-            Some((mode, escalate)) => chain.with_route(mode, escalate, None),
-            None => chain,
-        };
-        obs.chain = Some(Arc::new(chain));
+        )
+    }
+
+    /// The same chain reading a LIVE `[route]` generation — the production
+    /// wiring (`build_failover_chain` always calls `with_route_live`), and the
+    /// only shape that puts real `[route].rate_limits` in front of the render.
+    /// `config_problems` is primed from the same config, so one snapshot shows
+    /// what the render says about an entry *and* what the diagnostic says.
+    fn observability_with_route(cfg: &ModelRouteConfig) -> RouteObservability {
+        let mut obs = observability();
+        obs.tiers = Arc::new(std::collections::HashMap::from([
+            ("kimi".to_string(), EndpointTier::Local),
+            ("x302".to_string(), EndpointTier::Cloud),
+        ]));
+        obs.chain = Some(Arc::new(kimi_over_x302().with_route_live(Arc::new(
+            crate::providers::route_handle::RouteHandle::from_config(cfg),
+        ))));
+        obs.hot_apply_problems(cfg);
         obs
+    }
+
+    #[tokio::test]
+    async fn an_inert_ceiling_reads_false_and_renders_no_bound() {
+        // `has_rate_ceiling` was `limits.ceiling(name).is_some()` — "is there an
+        // entry" — read raw, beside `rpm_limit`/`tpm_limit` printed just as
+        // raw. Both `assess` (which produced the `over_limit` and the
+        // utilisation two lines away) and `route_problems` (which fills
+        // `config_problems` in the SAME payload) ignore a zero, so `rpm = 0`
+        // rendered `has_rate_ceiling: true, rpm_limit: 0, over_limit: false`
+        // next to a problem entry calling that very entry inert. Three
+        // derivations of one fact; the two on the provider row were the lying
+        // ones. All three now fold through `effective_ceiling`.
+        let entry = |rpm, tpm| crate::config::types::ProviderRateLimit { rpm, tpm };
+        let obs = observability_with_route(&ModelRouteConfig {
+            rate_limits: [
+                ("x302".to_string(), entry(Some(0), None)),
+                ("kimi".to_string(), entry(Some(60), Some(0))),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        });
+        let snap = obs.snapshot().await;
+
+        let inert = &snap["providers"]["x302"];
+        assert_eq!(inert["has_rate_ceiling"], false, "{snap}");
+        assert_eq!(inert["rpm_limit"], serde_json::Value::Null, "{snap}");
+        assert_eq!(inert["tpm_limit"], serde_json::Value::Null, "{snap}");
+
+        // A half-inert entry: the label is honest about the dimension that
+        // really binds, and silent about the one that does not.
+        let half = &snap["providers"]["kimi"];
+        assert_eq!(half["has_rate_ceiling"], true, "{snap}");
+        assert_eq!(half["rpm_limit"], 60, "{snap}");
+        assert_eq!(half["tpm_limit"], serde_json::Value::Null, "{snap}");
+
+        // …and the same payload says why, for BOTH zeroed dimensions.
+        let fields: Vec<&str> = snap["config_problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["field"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            fields,
+            vec!["rate_limits.kimi", "rate_limits.x302"],
+            "the render and the diagnostic must agree about which entries bind: {snap}"
+        );
+    }
+
+    /// A default handle whose `current()` can be swapped after construction,
+    /// backed by a live registry — the production shape. `providers.setDefault`
+    /// moves the primary at runtime, and the ex-primary becomes an ordinary
+    /// chain member that the BOOT fallback list never contained (a boot chain
+    /// excludes the boot primary by construction).
+    struct SwappableDefault {
+        current: std::sync::RwLock<Arc<dyn AiProvider>>,
+        registry: Vec<(&'static str, Arc<dyn AiProvider>)>,
+    }
+
+    impl SwappableDefault {
+        fn new(registry: Vec<(&'static str, Arc<dyn AiProvider>)>, default: &str) -> Self {
+            let current = registry
+                .iter()
+                .find(|(n, _)| *n == default)
+                .map(|(_, p)| Arc::clone(p))
+                .expect("default must be registered");
+            Self {
+                current: std::sync::RwLock::new(current),
+                registry,
+            }
+        }
+
+        fn set_default(&self, name: &str) {
+            let next = self
+                .registry
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, p)| Arc::clone(p))
+                .expect("new default must be registered");
+            *self.current.write().unwrap_or_else(|e| e.into_inner()) = next;
+        }
+    }
+
+    impl DefaultProviderHandle for SwappableDefault {
+        fn current(&self) -> Arc<dyn AiProvider> {
+            Arc::clone(&self.current.read().unwrap_or_else(|e| e.into_inner()))
+        }
+        fn provider_names(&self) -> Vec<String> {
+            self.registry
+                .iter()
+                .map(|(n, _)| (*n).to_string())
+                .collect()
+        }
+        fn provider_by_name(&self, name: &str) -> Option<Arc<dyn AiProvider>> {
+            self.registry
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, p)| Arc::clone(p))
+        }
+    }
+
+    /// `fallback_chain` and `next_order` must state ONE tier and ONE model
+    /// ladder per member, because that is one fact.
+    ///
+    /// They used not to. `fallback_chain` recomputed *membership* through the
+    /// shared `effective_fallback_names` (correct) and then materialised each
+    /// member out of the bundle's boot-time vec, defaulting a name it could not
+    /// find to `tier: Cloud, models: []`. The boot fallback vec excludes the
+    /// boot primary, so one `providers.setDefault` was enough: the ex-primary
+    /// came back as a member, missed that lookup, and was rendered `cloud` with
+    /// an empty ladder and a `null` price — while `next_order`, asking the
+    /// chain, reported the same provider `local` with its real ladder. Two
+    /// derivations of one fact, contradicting each other inside one payload.
+    ///
+    /// ⚠️ What this does NOT prove: that `local` is *true*. Both faces now read
+    /// `FailoverProvider::node_tier`, whose boot catalog has no entry for a
+    /// provider registered after boot and answers `Cloud` for it. That residual
+    /// is stated on `chain_composition` and deliberately left open — the point
+    /// here is that the two faces cannot disagree, not that the catalog is
+    /// complete.
+    #[tokio::test]
+    async fn both_faces_state_one_tier_and_ladder_for_a_swapped_primary() {
+        use crate::providers::failover::{FailoverConfig, FailoverNode, FailoverProvider};
+        use std::collections::HashMap;
+
+        let ollama: Arc<dyn AiProvider> = Arc::new(NamedProvider("ollama"));
+        let kimi: Arc<dyn AiProvider> = Arc::new(NamedProvider("kimi"));
+        let handle = Arc::new(SwappableDefault::new(
+            vec![("ollama", Arc::clone(&ollama)), ("kimi", Arc::clone(&kimi))],
+            "ollama",
+        ));
+        let tiers = HashMap::from([
+            ("ollama".to_string(), EndpointTier::Local),
+            ("kimi".to_string(), EndpointTier::Cloud),
+        ]);
+        let chain = FailoverProvider::new(
+            Arc::clone(&handle) as Arc<dyn DefaultProviderHandle>,
+            // The boot chain: everything except the boot primary (ollama).
+            vec![FailoverNode::with_tier(
+                "kimi".to_string(),
+                vec!["k2".to_string()],
+                Arc::clone(&kimi),
+                EndpointTier::Cloud,
+            )],
+            HashMap::from([
+                ("ollama".to_string(), vec!["qwen3".to_string()]),
+                ("kimi".to_string(), vec!["k2".to_string()]),
+            ]),
+            FailoverHealth::default(),
+            FailoverConfig::default(),
+        )
+        // rust-doctor-disable-next-line excessive-clone
+        .with_tier_catalog(tiers.clone())
+        .with_live_fallback_derivation();
+
+        let mut obs =
+            test_observability(Arc::clone(&handle) as Arc<dyn DefaultProviderHandle>, tiers);
+        obs.auto_derived = true;
+        obs.chain = Some(Arc::new(chain));
+
+        // The runtime swap. Nothing is rebuilt — this is what
+        // `providers.setDefault` does to a running process.
+        handle.set_default("kimi");
+
+        let snap = obs.snapshot().await;
+        let find = |face: &str, snap: &serde_json::Value| {
+            snap[face]
+                .as_array()
+                .unwrap_or_else(|| panic!("{face} must be an array: {snap}"))
+                .iter()
+                .find(|e| e["provider"] == "ollama")
+                .unwrap_or_else(|| panic!("the ex-primary must be a member of {face}: {snap}"))
+                .clone()
+        };
+        let member = find("fallback_chain", &snap);
+        let step = find("next_order", &snap);
+
+        assert_eq!(
+            member["tier"], step["tier"],
+            "fallback_chain and next_order must not state two tiers for one provider"
+        );
+        assert_eq!(member["tier"], "local", "the chain's own catalog says local");
+        assert_eq!(
+            member["models"],
+            json!(["qwen3"]),
+            "the ex-primary's ladder is the catalog's, not an empty default"
+        );
+        assert_eq!(
+            snap["providers"]["ollama"]["endpoint_tier"], "local",
+            "the per-provider block reads the same composition"
+        );
     }
 
     #[tokio::test]
@@ -626,17 +818,11 @@ mod tests {
         //
         // BOTH bundle shapes are pinned. The chain-less one is what most tests
         // in this crate build; the chain-attached one is what production
-        // always is, and it is the only one that renders `next_order` steps —
-        // locking only the first would document a shape production never emits.
+        // always is, and it is the only one that renders `next_order` steps and
+        // `fallback_chain` members — locking only the first would document a
+        // shape production never emits.
         for (label, obs) in [
-            (
-                "chain-less",
-                observability(vec![ChainCandidate {
-                    name: "x302".to_string(),
-                    models: vec!["gpt-5".to_string()],
-                    tier: EndpointTier::Cloud,
-                }]),
-            ),
+            ("chain-less", observability()),
             ("with chain", observability_with_chain(None)),
         ] {
             let snap = obs.snapshot().await;
@@ -667,7 +853,9 @@ mod tests {
                 "route_status top-level schema drifted ({label})"
             );
 
-            let provider: std::collections::BTreeSet<&str> = snap["providers"]["x302"]
+            // The primary, which every bundle shape reports (the chain-less one
+            // has no members to report besides it).
+            let provider: std::collections::BTreeSet<&str> = snap["providers"]["kimi"]
                 .as_object()
                 .unwrap()
                 .keys()
@@ -686,7 +874,7 @@ mod tests {
                 "rpm_limit",
                 "tpm_limit",
                 "utilization_permille",
-                "rate_limited",
+                "has_rate_ceiling",
                 "over_limit",
                 "price_milli_per_mtok",
                 "endpoint_tier",
@@ -698,18 +886,33 @@ mod tests {
                 "route_status per-provider schema drifted ({label})"
             );
 
-            let chain_step: std::collections::BTreeSet<&str> = snap["fallback_chain"][0]
-                .as_object()
-                .unwrap()
-                .keys()
-                .map(String::as_str)
-                .collect();
-            let expected_step: std::collections::BTreeSet<&str> =
-                ["provider", "tier", "models"].into_iter().collect();
-            assert_eq!(
-                chain_step, expected_step,
-                "route_status fallback_chain schema drifted ({label})"
-            );
+            // `fallback_chain` is the chain's own composition. A bundle with no
+            // chain has none to report and renders `[]` — it must not invent
+            // members out of a boot-time vec, which is exactly how this face
+            // and `next_order` came to state two tiers for one provider.
+            let members = snap["fallback_chain"]
+                .as_array()
+                .unwrap_or_else(|| panic!("fallback_chain must be an array ({label})"));
+            match &obs.chain {
+                None => assert!(
+                    members.is_empty(),
+                    "a chain-less bundle has no composition to report ({label})"
+                ),
+                Some(_) => {
+                    let chain_step: std::collections::BTreeSet<&str> = members[0]
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .map(String::as_str)
+                        .collect();
+                    let expected_step: std::collections::BTreeSet<&str> =
+                        ["provider", "tier", "models"].into_iter().collect();
+                    assert_eq!(
+                        chain_step, expected_step,
+                        "route_status fallback_chain schema drifted ({label})"
+                    );
+                }
+            }
 
             // `next_order` is absent (null), not empty, without a chain — a
             // consumer must be able to tell "nothing to walk" from "nobody

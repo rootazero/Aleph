@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::config::types::ProviderConfig;
 use crate::config::Config;
 use crate::providers::model_catalog::endpoint_kind_for_base_url;
-use crate::providers::route_observe::{ChainCandidate, RouteObservability};
+use crate::providers::route_observe::RouteObservability;
 use crate::providers::route_policy::EndpointTier;
 use crate::providers::{
     create_provider, AiProvider, DefaultProviderHandle, FailoverConfig, FailoverHealth,
@@ -46,8 +46,9 @@ pub struct ProviderChain {
     pub default: Arc<dyn DefaultProviderHandle>,
     pub agent_overrides: HashMap<String, Arc<dyn AiProvider>>,
     /// Live handles onto the chain's shared runtime state (breaker, cooldowns,
-    /// load) plus the boot-time chain composition. The production boot path
-    /// registers a clone as the process-global `route_observe` bundle so the
+    /// load) plus the chain itself, which is what answers composition — the
+    /// bundle carries no second copy of who is in the chain. The production
+    /// boot path registers a clone as the process-global `route_observe` bundle so the
     /// `self_config` `route_status` action can render live diagnostics.
     pub observability: RouteObservability,
 }
@@ -185,19 +186,6 @@ pub fn build_failover_chain(
         "failover chain assembled"
     );
 
-    // Chain composition for the read-only observability bundle, captured before
-    // `fallbacks` moves into the provider.
-    let chain_candidates: Vec<ChainCandidate> = fallbacks
-        .iter()
-        .map(|n| ChainCandidate {
-            // rust-doctor-disable-next-line excessive-clone
-            name: n.name.clone(),
-            // rust-doctor-disable-next-line excessive-clone
-            models: n.models.clone(),
-            tier: n.tier,
-        })
-        .collect();
-
     // `[route]` settings that are set but cannot take effect, resolved once from
     // the same provider/tier picture the chain is built from — so the diagnostic
     // and the engine can never describe different provider sets. Logged loudly
@@ -270,7 +258,9 @@ pub fn build_failover_chain(
     let observability = RouteObservability {
         // rust-doctor-disable-next-line excessive-clone
         primary: default_provider_for_observability,
-        fallbacks: chain_candidates,
+        // The chain's own composition answers `fallback_chain` (it materialises
+        // members exactly as the walk does), so the bundle no longer carries a
+        // boot-time copy to disagree with it.
         auto_derived,
         // rust-doctor-disable-next-line excessive-clone
         health: health.clone(),

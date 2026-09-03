@@ -77,12 +77,51 @@ pub enum LoadBalanceStrategy {
     /// (`lowest-cost`) and `RouteLLM`'s cheap-vs-strong cost axis onto Aleph's
     /// already-shipped price table — pure **infrastructure** (R7 enabling layer): the
     /// price is a static `(provider, model)` fact, never inferred from the
-    /// prompt. Unpriced candidates (on-machine / self-hosted models carry no
-    /// rate card) read price `0` and therefore sort *first* — local inference is
-    /// effectively free, so cost routing naturally prefers it before any paid
-    /// cloud endpoint. When no candidate is priced this degrades to
-    /// [`Ordered`](LoadBalanceStrategy::Ordered).
+    /// prompt.
+    ///
+    /// An *unpriced* candidate is ranked by its endpoint tier, not by a single
+    /// "free" default: a
+    /// [`Local`](crate::providers::route_policy::EndpointTier::Local) endpoint
+    /// carries no rate card because on-machine inference really is free, so it
+    /// reads `0` and sorts first; an unpriced
+    /// [`Cloud`](crate::providers::route_policy::EndpointTier::Cloud) or
+    /// [`Unknown`](crate::providers::route_policy::EndpointTier::Unknown) one
+    /// has *unknown* cost — a new or typo'd model — and reads [`u64::MAX`] so it
+    /// can never out-rank a price we can confirm. Both facts are the whole of
+    /// `failover::provider::unpriced_cost`, pinned by
+    /// `unpriced_local_is_free_and_sorts_first` /
+    /// `unpriced_cloud_is_unknown_cost_and_sorts_last`.
+    ///
+    /// So this is a no-op only over a pool that is *both* wholly unpriced and
+    /// tier-homogeneous (every member `MAX`, or every member `0`), where the
+    /// stable sort preserves the configured order. A pool mixing unpriced local
+    /// with unpriced cloud is still reordered — local first — which is the
+    /// intended answer, not a degradation.
     CostAware,
+}
+
+impl LoadBalanceStrategy {
+    /// The one spelling of this strategy: the serde name (`rename_all =
+    /// "snake_case"`), which is simultaneously the TOML value, the
+    /// `route_config` wire value and the `route_status` rendering.
+    ///
+    /// It exists because three modules each kept their own `match` over these
+    /// six variants — the RPC handler's, the observability snapshot's, and the
+    /// rejection message's — plus serde's, which is the one an operator's TOML
+    /// actually goes through. Four derivations of one table, free to disagree
+    /// about a seventh variant. `strategy_spelling_is_the_serde_name` pins this
+    /// one against serde.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ordered => "ordered",
+            Self::RoundRobin => "round_robin",
+            Self::LeastBusy => "least_busy",
+            Self::LatencyAware => "latency_aware",
+            Self::UsageBased => "usage_based",
+            Self::CostAware => "cost_aware",
+        }
+    }
 }
 
 /// Per-provider rate ceiling for usage-aware routing.
@@ -166,6 +205,38 @@ pub struct ModelRouteConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `as_str` must be serde's name, because an operator's `[route]
+    /// load_balance = "..."` is parsed by serde while every other face renders
+    /// through `as_str`. A disagreement here would let `route_status` print a
+    /// value the config file cannot contain.
+    ///
+    /// Derived by round-tripping through serde in BOTH directions, so a variant
+    /// added without an `as_str` arm is a compile error and one spelled
+    /// differently is a red test.
+    #[test]
+    fn strategy_spelling_is_the_serde_name() {
+        for strategy in [
+            LoadBalanceStrategy::Ordered,
+            LoadBalanceStrategy::RoundRobin,
+            LoadBalanceStrategy::LeastBusy,
+            LoadBalanceStrategy::LatencyAware,
+            LoadBalanceStrategy::UsageBased,
+            LoadBalanceStrategy::CostAware,
+        ] {
+            let spelling = strategy.as_str();
+            assert_eq!(
+                serde_json::to_value(strategy).unwrap(),
+                serde_json::Value::String(spelling.to_string()),
+                "`as_str` disagrees with serde for {strategy:?}"
+            );
+            assert_eq!(
+                serde_json::from_value::<LoadBalanceStrategy>(serde_json::json!(spelling)).unwrap(),
+                strategy,
+                "'{spelling}' does not parse back to {strategy:?}"
+            );
+        }
+    }
 
     #[test]
     fn default_is_auto_no_escalation() {

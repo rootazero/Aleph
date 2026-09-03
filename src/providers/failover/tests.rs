@@ -461,6 +461,42 @@ fn decide_model_rate_limit_falls_back_to_body_retry_after() {
     );
 }
 
+/// An account-scoped 429 is **not** propagated to the user, whatever
+/// `classify_rate_limit`'s `Fatal` looks like from inside `llm_retry`.
+///
+/// Three doc comments said it was ("propagate to user", "propagate
+/// immediately", "never reach the breaker"), and all three were wrong in the
+/// same way: `Fatal` only says *a sibling model will not help*. `decide`'s
+/// `Fatal` arm then reads the TYPED error, and both `RateLimitError` and
+/// `ProviderError` are `ErrorClass::Transient` — so the attempt rides out the
+/// in-place budget and then sheds the provider onto a sibling, whose account is
+/// a different account. This anchors that wording.
+#[test]
+fn an_account_scoped_429_is_retried_then_sheds_the_provider() {
+    let e = AlephError::RateLimitError {
+        message: "HTTP 429 rate limit exceeded for your organization".into(),
+        suggestion: None,
+    };
+    // Inside the budget: retried in place, at the plain transient delay (an
+    // account limit gets no server hint and earns no deeper overload budget).
+    assert_eq!(
+        decide_in_chain(&e, 0, 2),
+        Decision::RetrySame(Duration::from_millis(300))
+    );
+    // Budget spent: the chain advances and the breaker counts a strike. Not
+    // `Stop`, and not `Permanent` — the account recovers.
+    assert_eq!(
+        decide_in_chain(&e, 2, 2),
+        Decision::NextProvider(FailureKind::Transient)
+    );
+    // Same on the terminal candidate: only the typed-`Timeout` rule reads
+    // position, so a 429 keeps its in-place budget in a single-provider setup.
+    assert_eq!(
+        decide_terminal(&e, 0, 2),
+        Decision::RetrySame(Duration::from_millis(300))
+    );
+}
+
 #[test]
 fn decide_token_count_borrowing_400_digits_is_not_a_bad_request() {
     // `contains("400")` also fires inside a token count, and the Fatal arm used
@@ -787,6 +823,50 @@ async fn cooling_model_is_skipped_on_next_request() {
             Some("sonnet".to_string()),
             Some("sonnet".to_string()),
         ]
+    );
+}
+
+/// A `Decision::RateLimited` parks the whole PROVIDER and arms a circuit
+/// strike, not just the one model.
+///
+/// The variant's doc said the opposite — "does not trip the provider circuit"
+/// — while the walk's arm has always called `ProviderCooldown::cool` on the
+/// candidate and set `tripped = Transient`. Sibling models stay live only
+/// *within* the walk: a later model that succeeds retires both
+/// (`a_successful_call_clears_the_provider_pacing_window` is that half). Here
+/// nothing succeeds, so both effects survive the turn and shape the next one.
+#[tokio::test]
+async fn a_model_429_parks_the_provider_and_arms_a_strike() {
+    let primary = ScriptProvider::new("anthropic", vec![Err("HTTP 429 too many requests".into())]);
+    let pacing = ProviderCooldown::default();
+    let health = FailoverHealth::default();
+    let fp = build_with_health(
+        primary as Arc<dyn AiProvider>,
+        vec![("anthropic", vec!["opus"])],
+        vec![],
+        // rust-doctor-disable-next-line excessive-clone
+        health.clone(),
+    )
+    .with_model_cooldown(ModelCooldown::default())
+    // rust-doctor-disable-next-line excessive-clone
+    .with_provider_cooldown(pacing.clone());
+
+    let msgs = [UnifiedMessage::user("hi")];
+    assert!(fp.process(RequestPayload::new(&msgs)).await.is_err());
+
+    assert!(
+        pacing.remaining("anthropic").await.is_some(),
+        "the 429 must pace the whole provider, so the next turn waits instead \
+         of earning a fresh 429"
+    );
+    let view = health.snapshot().await;
+    let anthropic = view
+        .iter()
+        .find(|h| h.provider == "anthropic")
+        .expect("the breaker must have seen this provider");
+    assert_eq!(
+        anthropic.failure_count, 1,
+        "a ladder whose every model was rate-limited costs the provider a strike"
     );
 }
 

@@ -42,8 +42,10 @@ struct RouteModePayload {
     /// Preferred cloud provider name, same contract as `local_provider`.
     #[serde(default)]
     cloud_provider: Option<String>,
-    /// Load-balancing strategy for the same-tier fallback pool:
-    /// "ordered" | "`round_robin`" | "`least_busy`" | "`latency_aware`" | "`usage_based`".
+    /// Load-balancing strategy for the same-tier fallback pool. The accepted
+    /// spellings are [`LOAD_BALANCE_VALUES`] — do not restate them here; this
+    /// doc listed five of the six for the whole life of `cost_aware`, which is
+    /// the same drift the rejection message had.
     /// Absent → unchanged default ("ordered"), backward-compatible with the
     /// pre-balance payload.
     #[serde(default)]
@@ -79,17 +81,6 @@ fn mode_from_str(raw: &str) -> Option<RouteMode> {
         "always_local" => Some(RouteMode::AlwaysLocal),
         "always_cloud" => Some(RouteMode::AlwaysCloud),
         _ => None,
-    }
-}
-
-const fn lb_to_str(s: LoadBalanceStrategy) -> &'static str {
-    match s {
-        LoadBalanceStrategy::Ordered => "ordered",
-        LoadBalanceStrategy::RoundRobin => "round_robin",
-        LoadBalanceStrategy::LeastBusy => "least_busy",
-        LoadBalanceStrategy::LatencyAware => "latency_aware",
-        LoadBalanceStrategy::UsageBased => "usage_based",
-        LoadBalanceStrategy::CostAware => "cost_aware",
     }
 }
 
@@ -156,7 +147,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
         serde_json::json!({
             "mode": mode_to_str(cfg.route.mode),
             "allow_cloud_escalation": cfg.route.allow_cloud_escalation,
-            "load_balance": lb_to_str(cfg.route.load_balance),
+            "load_balance": cfg.route.load_balance.as_str(),
             "local_provider": cfg.route.local_provider,
             "cloud_provider": cfg.route.cloud_provider,
             "rate_limits": cfg.route.rate_limits,
@@ -264,7 +255,7 @@ pub async fn handle_update(
         value: serde_json::json!({
             "mode": mode_to_str(mode),
             "allow_cloud_escalation": new_route.allow_cloud_escalation,
-            "load_balance": lb_to_str(new_route.load_balance),
+            "load_balance": new_route.load_balance.as_str(),
             "local_provider": new_route.local_provider,
             "cloud_provider": new_route.cloud_provider,
             "rate_limits": new_route.rate_limits,
@@ -436,10 +427,19 @@ mod tests {
         }
     }
 
-    /// The rejection message must list exactly what the parser takes. These two
+    /// The rejection message must list exactly the strategies that exist. These
     /// drifted once — `cost_aware` was accepted but advertised as invalid — and
     /// the only symptom was users (and option-list-building clients) believing a
     /// shipped strategy did not exist.
+    ///
+    /// The "nothing is missing" half used to be a **third** hand-written list of
+    /// the same six strings, so a seventh variant would have been absent from
+    /// the constant, absent from the parser and absent from the list checking
+    /// them — three copies agreeing about a world that had moved (判据 §0:
+    /// 守卫的绿只覆盖它认得的那种形状). It is now derived from the type: the
+    /// enum's own serde spellings, read out of its `JsonSchema`, which is where
+    /// `[route].load_balance` is deserialised from in TOML anyway. Add a
+    /// variant and this goes red without anyone remembering to edit a list.
     #[test]
     fn advertised_load_balance_values_match_the_parser() {
         for value in LOAD_BALANCE_VALUES {
@@ -448,18 +448,40 @@ mod tests {
                 "advertised '{value}' is rejected by the parser"
             );
         }
-        // And nothing the parser takes is missing from the advertisement.
-        for value in [
-            "ordered",
-            "round_robin",
-            "least_busy",
-            "latency_aware",
-            "usage_based",
-            "cost_aware",
-        ] {
+
+        // Every variant of the enum, by its serde name (`rename_all =
+        // "snake_case"`), straight from the schema. schemars renders a
+        // documented unit enum as `oneOf: [{const: …}]` and a bare one as
+        // `enum: [...]`; both shapes are read so a schemars upgrade cannot
+        // quietly turn this into a vacuous pass.
+        let schema = serde_json::to_value(schemars::schema_for!(LoadBalanceStrategy))
+            .expect("schema serialises");
+        let mut variants: Vec<String> = Vec::new();
+        if let Some(values) = schema["enum"].as_array() {
+            variants.extend(values.iter().filter_map(|v| v.as_str().map(String::from)));
+        }
+        if let Some(branches) = schema["oneOf"].as_array() {
+            variants.extend(
+                branches
+                    .iter()
+                    .filter_map(|b| b["const"].as_str().map(String::from)),
+            );
+        }
+        assert!(
+            variants.len() >= LOAD_BALANCE_VALUES.len(),
+            "the schema yielded only {variants:?} — fewer spellings than the {} advertised, so \
+             this half is not reading the enum any more (schemars shape changed?)",
+            LOAD_BALANCE_VALUES.len()
+        );
+        for variant in &variants {
             assert!(
-                LOAD_BALANCE_VALUES.contains(&value),
-                "parser accepts '{value}' but the error message never mentions it"
+                LOAD_BALANCE_VALUES.contains(&variant.as_str()),
+                "the strategy '{variant}' exists but the rejection message never mentions it; \
+                 the parser will also refuse it"
+            );
+            assert!(
+                lb_from_str(variant).is_some(),
+                "the strategy '{variant}' exists but `lb_from_str` rejects it"
             );
         }
     }
@@ -537,20 +559,6 @@ mod tests {
         assert_eq!(p2.cloud_provider, None);
         // Old payloads omit load_balance entirely.
         assert_eq!(p2.load_balance, None);
-    }
-
-    #[test]
-    fn lb_string_round_trips() {
-        for s in [
-            LoadBalanceStrategy::Ordered,
-            LoadBalanceStrategy::RoundRobin,
-            LoadBalanceStrategy::LeastBusy,
-            LoadBalanceStrategy::LatencyAware,
-            LoadBalanceStrategy::UsageBased,
-        ] {
-            assert_eq!(lb_from_str(lb_to_str(s)), Some(s));
-        }
-        assert_eq!(lb_from_str("nope"), None);
     }
 
     #[test]
