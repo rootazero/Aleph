@@ -11,7 +11,7 @@ mod session_resolve;
 mod tls;
 
 pub use config::{CliConfig, ManifestConfig};
-pub use connection::{AlephClient, ClientEvent};
+pub use connection::{AlephClient, TopicEvent};
 pub use error::{CliError, CliResult};
 pub use gateway_client::{GatewayClient, DEFAULT_GATEWAY_URL, DEFAULT_TIMEOUT_MS};
 pub use session_resolve::resolve_last_session;

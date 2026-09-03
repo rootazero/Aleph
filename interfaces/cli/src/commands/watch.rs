@@ -19,7 +19,7 @@ use aleph_protocol::{AgentTraceEvent, RunSummary, StreamEvent};
 
 use crate::output::exec_echo;
 use crate::output::theme::{paint, Style};
-use aleph_client::{AlephClient, CliConfig, CliResult, ClientEvent};
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 /// Follow live agent activity until Ctrl-C or server disconnect.
 pub async fn run(
@@ -51,37 +51,26 @@ pub async fn run(
     loop {
         tokio::select! {
             _ = &mut ctrl_c => break,
-            ev = events.recv() => match ev {
-                // `aleph watch` is the intentional firehose consumer of the
-                // `stream.*` plane (see `run_follow`'s module doc); a topic
-                // frame (`events.subscribe`) is a different surface this
-                // command does not render. Explicit, not `_ =>` — the next
-                // `ClientEvent` variant added must make whoever extends this
-                // loop decide what it means here, not silently pass through.
-                Some(ClientEvent::Topic { .. }) => continue,
-                Some(ClientEvent::Stream(event)) => {
-                    let event = *event;
-                    if !board.admits(&event, session_filter) {
-                        continue;
-                    }
-                    if json {
-                        if let Ok(line) = serde_json::to_string(&event) {
-                            println!("{line}");
-                        }
-                        board.observe(&event);
-                        continue;
-                    }
-                    let lines = board.observe(&event);
-                    for body in lines {
-                        println!("{}{body}", feed_prefix(event.run_id()));
-                    }
+            ev = events.recv() => if let Some(event) = ev {
+                if !board.admits(&event, session_filter) {
+                    continue;
                 }
-                None => {
-                    if !json {
-                        eprintln!("{}", paint(Style::Warning, "server closed the connection"));
+                if json {
+                    if let Ok(line) = serde_json::to_string(&event) {
+                        println!("{line}");
                     }
-                    break;
+                    board.observe(&event);
+                    continue;
                 }
+                let lines = board.observe(&event);
+                for body in lines {
+                    println!("{}{body}", feed_prefix(event.run_id()));
+                }
+            } else {
+                if !json {
+                    eprintln!("{}", paint(Style::Warning, "server closed the connection"));
+                }
+                break;
             },
         }
     }

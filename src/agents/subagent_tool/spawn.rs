@@ -109,6 +109,15 @@ impl SubagentTool {
         let depth = child_chain.depth;
         let root_session = self.parent_session_id.clone().unwrap_or_default();
         let tree_agent_id = self.parent_agent_id.clone();
+        // The child's persisted transcript address — same derivation the
+        // spawner itself performs (`ephemeral_for(&req.agent_def.id,
+        // req.request_id)`), exposed once so tree consumers can open the
+        // transcript via `chat.history` without re-deriving the key shape.
+        let child_session = crate::agents::subagent_spawner::background_child_session_key(
+            &agent_def.id,
+            &request_id,
+        )
+        .to_string();
 
         self.background_tracker.register_with_meta(
             request_id.clone(),
@@ -119,6 +128,7 @@ impl SubagentTool {
                 depth,
                 root_session: root_session.clone(),
                 model: model.clone(),
+                child_session: Some(child_session.clone()),
             },
         );
         // W24 — mirror the registration into the cross-process sidecar so a
@@ -157,6 +167,8 @@ impl SubagentTool {
                     // surfaces `result_preview` once `mark_completed`
                     // folds the final text in.
                     result_preview: None,
+                    child_session: Some(child_session.clone()),
+                    total_tokens: None,
                 },
             },
         );
@@ -332,6 +344,10 @@ impl SubagentTool {
                     success,
                     error,
                     request_id: Some(rid.clone()),
+                    // One child, named explicitly rather than left to the
+                    // reader's fallback: the field means "everyone this notice
+                    // speaks for", and this notice speaks for exactly one.
+                    request_ids: vec![rid.clone()],
                 };
                 (sid, result)
             });

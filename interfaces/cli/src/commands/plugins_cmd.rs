@@ -171,7 +171,15 @@ pub async fn install(
 
         // Download to temp file
         let tmp_dir = std::env::temp_dir().join("aleph-plugin-download");
-        let _ = fs::create_dir_all(&tmp_dir);
+        fs::create_dir_all(&tmp_dir).map_err(|e| {
+            // Propagate with context: a failed dir create used to surface as
+            // "No such file or directory" from the next write, blaming the
+            // download instead of the directory it could not create.
+            CliError::Other(format!(
+                "cannot create download directory {}: {e}",
+                tmp_dir.display()
+            ))
+        })?;
         let filename = download_url.rsplit('/').next().unwrap_or("plugin.zip");
         let zip_path = tmp_dir.join(filename);
 

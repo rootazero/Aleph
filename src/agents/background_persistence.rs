@@ -130,17 +130,32 @@ pub enum RunPhase {
     Abandoned,
 }
 
-impl RunPhase {
-    /// Wire label handed to the model. `Abandoned` deliberately does not read
-    /// as a failure: nothing about the task was judged, the daemon simply
-    /// stopped existing underneath it.
-    #[must_use]
-    pub const fn status_label(self) -> &'static str {
-        match self {
-            Self::Running => "running",
-            Self::Settled => "completed",
-            Self::Abandoned => "interrupted_by_restart",
-        }
+/// Wire label handed to the model for one record.
+///
+/// Takes the **record**, not the phase, because `Settled` alone does not name
+/// an outcome: it says the run reached a terminal state in the process that
+/// owned it, and that state can be a timeout, a cancellation or a failure. The
+/// phase-only version answered `"completed"` for all four, so a child that
+/// timed out was rendered to the model with the same word as one that
+/// succeeded — and the accompanying note told it not to re-run the task.
+///
+/// `Abandoned` deliberately still does not read as a failure: nothing about
+/// the task was judged, the daemon simply stopped existing underneath it.
+#[must_use]
+pub fn settled_label(record: &PersistedRun) -> &'static str {
+    match record.phase {
+        RunPhase::Running => "running",
+        RunPhase::Abandoned => "interrupted_by_restart",
+        // The four words the tracker actually settles with. An unrecognised or
+        // absent outcome is `settled_unknown`, never `completed`: a label the
+        // model reads as success has to be earned by a producer that said so.
+        RunPhase::Settled => match record.outcome.as_deref() {
+            Some("completed") => "completed",
+            Some("failed") => "failed",
+            Some("timed_out") => "timed_out",
+            Some("cancelled") => "cancelled",
+            _ => "settled_unknown",
+        },
     }
 }
 
@@ -170,24 +185,49 @@ pub struct PersistedRun {
     /// moves; resolve it with [`Self::partial_result_path`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partial_result_file: Option<String>,
-    /// Whether the parent was ever told this run finished.
+    /// How many times a boot has *tried* to hand this completion to the parent.
     ///
-    /// `phase` answers "did it finish"; this answers "does anyone know". They
-    /// are different questions and the gap between them is a real window:
+    /// `phase` answers "did it finish"; [`Self::announced_boot`] answers "does
+    /// anyone know"; this answers "how often have we asked". They are three
+    /// different questions and the gap between the first two is a real window:
     /// `spawn` writes the tombstone, *then* announces, and `announce_one`
     /// retries at 0/30/120s when the parent session is busy. A daemon that dies
-    /// inside those two and a half minutes leaves a `Settled` record that the
-    /// boot reconcile skips (it only looks at `Running`), so the completion
-    /// promised to the model at spawn time — "its completion will be announced
-    /// to you" — is silently withdrawn while the result sits on disk.
+    /// inside those two and a half minutes leaves a `Settled` record whose
+    /// completion notice died with it.
     ///
-    /// `#[serde(default)]` makes every pre-existing record read as *not*
-    /// announced, which is the fail-safe direction: at worst the parent is told
-    /// once more about something it already saw, and the announce path is
-    /// already deduplicated by `is_consumed`.
+    /// It is a **count of attempts, not a receipt**, because the boot reconcile
+    /// used to stamp `announced = true` before the broadcast it was about to
+    /// make — so a notice that never landed was recorded as delivered, and the
+    /// promise made at spawn time was withdrawn in silence. Counting instead
+    /// lets the next boot try again while still bounding the retry: a record
+    /// whose parent session no longer exists would otherwise be re-announced at
+    /// every boot forever.
+    ///
+    /// `#[serde(default)]` reads every pre-existing record as zero attempts,
+    /// which is the fail-safe direction — at worst the parent hears once more
+    /// about something it already saw, and the announce path is deduplicated by
+    /// `is_consumed`.
     #[serde(default)]
-    pub announced: bool,
+    pub announce_attempts: u8,
+    /// The boot that actually delivered this completion, as that boot's
+    /// wall-clock ms. `None` means nobody has been told yet.
+    ///
+    /// Written only by [`record_announced`], and only from the three
+    /// chokepoints that *own* the fact — never in advance of the delivery it
+    /// describes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub announced_boot: Option<u64>,
 }
+
+/// How many boots may try to hand one completion to its parent before the
+/// record stops asking.
+///
+/// The bound exists because the attempt counter replaced a receipt: without it,
+/// a `Settled` record whose parent session is gone (deleted, renamed, an agent
+/// that no longer exists) would drive a fresh proactive turn at every boot for
+/// the whole retention window. Three is the same shape as `announce_one`'s
+/// 0/30/120s ladder — try, try again, then stop claiming.
+pub const MAX_ANNOUNCE_ATTEMPTS: u8 = 3;
 
 impl PersistedRun {
     /// Absolute path of this run's activity trail, given the sidecar root.
@@ -225,7 +265,7 @@ pub struct RecoveredRun {
 /// ran" from "ran and the write was lost".
 ///
 /// **Two kinds of run are recovered, not one.** `Running` is the orphan case
-/// above. `Settled && !announced` is the run that *finished* and whose
+/// above. `Settled` with no `announced_boot` is the run that *finished* and whose
 /// completion notice died with the process somewhere in `announce_one`'s
 /// 0/30/120s retry ladder: nothing is wrong with its result, but the parent was
 /// promised an announcement at spawn time and never got one. Reconciling only
@@ -273,22 +313,35 @@ pub fn init_and_reconcile(dir: PathBuf) -> Vec<RecoveredRun> {
             index.insert(tombstone.request_id.clone(), tombstone);
         } else {
             // Finished, but the parent was never told: hand the result over now
-            // rather than leaving it addressable-only-if-asked. Mark it
-            // announced as part of the same pass so a second restart before the
-            // parent turn lands does not repeat it forever.
-            if record.phase == RunPhase::Settled && !record.announced {
+            // rather than leaving it addressable-only-if-asked.
+            //
+            // This pass records an ATTEMPT, not a delivery. Stamping "announced"
+            // here — which is what it used to do — described a broadcast that
+            // had not happened yet, so a daemon that died between this write and
+            // the parent turn withdrew the promise in silence with the answer on
+            // disk. The stamp now belongs to `record_announced`, called from the
+            // delivery itself; this counter is what stops the retry from being
+            // unbounded.
+            if record.phase == RunPhase::Settled && record.announced_boot.is_none() {
+                if record.announce_attempts >= MAX_ANNOUNCE_ATTEMPTS {
+                    // Out of attempts. The record stays on disk and stays
+                    // addressable by `check_status` — giving up on the proactive
+                    // turn is not giving up on the answer.
+                    index.insert(record.request_id.clone(), record);
+                    continue;
+                }
                 let trail = read_trail(&dir, &record);
-                let delivered = PersistedRun {
-                    announced: true,
+                let attempted = PersistedRun {
+                    announce_attempts: record.announce_attempts.saturating_add(1),
                     ..record.clone()
                 };
-                write_state(&dir, &delivered);
+                write_state(&dir, &attempted);
                 recovered.push(RecoveredRun {
-                    last_activity_ms: trail.last_ms.unwrap_or(delivered.started_ms),
+                    last_activity_ms: trail.last_ms.unwrap_or(attempted.started_ms),
                     partial_result: trail.text,
-                    record: delivered.clone(),
+                    record: attempted.clone(),
                 });
-                index.insert(delivered.request_id.clone(), delivered);
+                index.insert(attempted.request_id.clone(), attempted);
                 continue;
             }
             index.insert(record.request_id.clone(), record);
@@ -339,34 +392,7 @@ pub async fn init_and_announce_orphans(dir: PathBuf) -> usize {
     for (session, runs) in by_session {
         let agent_id = crate::routing::session_key::SessionKey::from_key_string(&session)
             .map_or_else(|| "primary".to_string(), |k| k.agent_id().to_string());
-        let summary = summarize_orphans(&runs);
-        // `error` describes the *interruption*, so it must count only the runs
-        // that were actually interrupted. A batch where every child finished
-        // and merely went unannounced is not a failure, and saying it is would
-        // push the model to redo completed work.
-        let interrupted = runs
-            .iter()
-            .filter(|r| r.record.phase != RunPhase::Settled)
-            .count();
-        let event = crate::event::SubAgentCompletionEvent {
-            agent_id: agent_id.clone(),
-            child_session_id: runs
-                .first()
-                .map(|r| r.record.request_id.clone())
-                .unwrap_or_default(),
-            summary,
-            success: interrupted == 0,
-            error: (interrupted > 0).then(|| {
-                format!(
-                    "{interrupted} background sub-agent(s) were interrupted by a daemon restart"
-                )
-            }),
-            // Deliberately `None`: the announce path's dedup asks the live
-            // tracker whether this request_id was already consumed, and the
-            // tracker has never heard of a pre-restart id. Supplying one would
-            // pin the whole grouped notice to a single arbitrary child.
-            request_id: None,
-        };
+        let event = orphan_notice(&agent_id, &runs);
         crate::event::GlobalBus::global()
             .broadcast(
                 &agent_id,
@@ -378,15 +404,74 @@ pub async fn init_and_announce_orphans(dir: PathBuf) -> usize {
     total
 }
 
+/// The one boot notice a session's orphans earn, built in one place so the
+/// batch-wide verdict and the per-child paragraphs are derived from the same
+/// records.
+///
+/// `success` reads the **outcome**, not the phase count. The phase-count
+/// version (`interrupted == 0`) answered `true` for a batch whose every child
+/// had settled — including one that settled `failed`, `timed_out` or
+/// `cancelled` — and the announce head renders that bool as a word for a batch
+/// of one: `"Background subagent run <id> succeeded."` above a body that said
+/// "1 background sub-agent(s) ended without success". Two answers to one
+/// question, and the expensive one was on top.
+///
+/// `error` still counts the *interruption* only: a batch where every child
+/// finished and merely went unannounced is not an interruption, and saying it
+/// was would push the model to redo completed work.
+pub(crate) fn orphan_notice(
+    agent_id: &str,
+    runs: &[RecoveredRun],
+) -> crate::event::SubAgentCompletionEvent {
+    let interrupted = runs
+        .iter()
+        .filter(|r| r.record.phase != RunPhase::Settled)
+        .count();
+    crate::event::SubAgentCompletionEvent {
+        agent_id: agent_id.to_string(),
+        child_session_id: runs
+            .first()
+            .map(|r| r.record.request_id.clone())
+            .unwrap_or_default(),
+        summary: summarize_orphans(runs),
+        // Success is a claim about the WORK, so only a run that both reached a
+        // terminal state and recorded `completed` may make it. An absent or
+        // unrecognised outcome is not success (same stance as
+        // [`settled_label`]'s `settled_unknown`).
+        success: runs.iter().all(|r| {
+            r.record.phase == RunPhase::Settled && r.record.outcome.as_deref() == Some("completed")
+        }),
+        error: (interrupted > 0).then(|| {
+            format!("{interrupted} background sub-agent(s) were interrupted by a daemon restart")
+        }),
+        // Deliberately `None`: the announce path's dedup asks the live
+        // tracker whether this request_id was already consumed, and the
+        // tracker has never heard of a pre-restart id. Supplying one would
+        // pin the whole grouped notice to a single arbitrary child.
+        request_id: None,
+        // …and this is what it is instead. Every child in the batch, so the
+        // delivery callback can stamp all of them and the reader can render
+        // per-child pointers rather than one arbitrary id's verdict.
+        request_ids: runs.iter().map(|r| r.record.request_id.clone()).collect(),
+    }
+}
+
 /// One human/model-readable block describing every orphan of one session.
 fn summarize_orphans(runs: &[RecoveredRun]) -> String {
     // Two populations with genuinely different meanings, so two paragraphs.
     // Telling the model a finished run "did not fail — its process
     // disappeared" would invite it to re-delegate work whose answer is printed
     // directly underneath.
-    let (finished, interrupted): (Vec<&RecoveredRun>, Vec<&RecoveredRun>) = runs
+    // Three populations, not two: a `Settled` record whose outcome was NOT
+    // success is neither "its process disappeared" nor "this work is done, do
+    // not repeat it". Both of the old two paragraphs said something false
+    // about it, and the second said the expensive one.
+    let (settled, interrupted): (Vec<&RecoveredRun>, Vec<&RecoveredRun>) = runs
         .iter()
         .partition(|r| r.record.phase == RunPhase::Settled);
+    let (finished, unsuccessful): (Vec<&RecoveredRun>, Vec<&RecoveredRun>) = settled
+        .into_iter()
+        .partition(|r| r.record.outcome.as_deref() == Some("completed"));
 
     let render = |out: &mut String, group: &[&RecoveredRun]| {
         for run in group {
@@ -430,6 +515,18 @@ fn summarize_orphans(runs: &[RecoveredRun]) -> String {
         ));
         render(&mut out, &finished);
     }
+    if !unsuccessful.is_empty() {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&format!(
+            "{} background sub-agent(s) ended without success before the daemon stopped — \
+             see each one's outcome. Whatever they recorded is below; the task itself may \
+             still be undone, so read it and decide whether to re-run.\n",
+            unsuccessful.len()
+        ));
+        render(&mut out, &unsuccessful);
+    }
     out
 }
 
@@ -461,7 +558,8 @@ pub fn record_start(request_id: &str, root_session: &str, task: &str, agent: &st
         ended_ms: None,
         outcome: None,
         partial_result_file: Some(RESULT_FILE.to_string()),
-        announced: false,
+        announce_attempts: 0,
+        announced_boot: None,
     };
     write_state(&dir, &record);
     index_lock().insert(record.request_id.clone(), record);
@@ -511,7 +609,11 @@ pub fn record_settled(request_id: &str, outcome: &str, final_text: &str) {
 /// cancelled child — a completion nobody will ever be told about is
 /// indistinguishable on disk from one whose notice died in flight, and the boot
 /// reconcile would deliver it. Without this stamp, `phase == Settled` cannot
-/// tell those apart — see [`PersistedRun::announced`].
+/// tell those apart — see [`PersistedRun::announced_boot`].
+///
+/// Called **after** the delivery it records, never before. The boot reconcile
+/// used to stamp the flag in advance of the broadcast it was about to make,
+/// which is how a notice that never landed came to read as delivered.
 pub fn record_announced(request_id: &str) {
     let Some(dir) = store_dir() else { return };
     let record = {
@@ -519,13 +621,26 @@ pub fn record_announced(request_id: &str) {
         let Some(record) = index.get_mut(request_id) else {
             return;
         };
-        if record.announced {
+        if record.announced_boot.is_some() {
             return; // already durable; do not pay a write per poll
         }
-        record.announced = true;
+        record.announced_boot = Some(now_ms());
         record.clone()
     };
     write_state(&dir, &record);
+}
+
+/// Stamp every id a grouped announcement actually delivered.
+///
+/// The boot notice is one event per parent session carrying N children, so the
+/// delivery callback has N facts to record and the single `request_id` the
+/// event used to carry could only record one of them — leaving the other N-1
+/// to be re-announced at the next boot. `SubAgentCompletionEvent::request_ids`
+/// is the carrier; this is the writer.
+pub fn on_delivered(request_ids: &[String]) {
+    for id in request_ids {
+        record_announced(id);
+    }
 }
 
 // ============================================================================
@@ -863,10 +978,7 @@ mod tests {
         // ...and it is still answerable.
         let looked_up = lookup("req-orphan", Some("agent:a:peer:user")).expect("still on disk");
         assert_eq!(looked_up.record.phase, RunPhase::Abandoned);
-        assert_eq!(
-            looked_up.record.phase.status_label(),
-            "interrupted_by_restart"
-        );
+        assert_eq!(settled_label(&looked_up.record), "interrupted_by_restart");
         disable_for_test();
     }
 
@@ -956,8 +1068,13 @@ mod tests {
     /// parent is busy. A daemon that dies in between leaves a finished run
     /// nobody will ever mention again. Reconciling only `Running` (the shape
     /// before this) makes the first assertion fail.
+    ///
+    /// A boot records an ATTEMPT, not a delivery: the reconcile used to stamp
+    /// "announced" before the broadcast it was about to make, so a daemon that
+    /// died between the two withdrew the promise in silence with the answer
+    /// sitting on disk. Three boots may try; the fourth stops asking.
     #[test]
-    fn a_finished_run_whose_announce_never_landed_is_recovered_once_and_only_once() {
+    fn a_finished_run_whose_announce_never_landed_is_retried_then_bounded() {
         let _g = gate();
         let tmp = tempfile::tempdir().unwrap();
         enable_for_test(tmp.path().to_path_buf());
@@ -965,18 +1082,72 @@ mod tests {
         record_settled("req-silent", "completed", "done, nobody heard");
         disable_for_test();
 
-        let first = init_and_reconcile(tmp.path().to_path_buf());
+        for attempt in 1..=usize::from(MAX_ANNOUNCE_ATTEMPTS) {
+            let boot = init_and_reconcile(tmp.path().to_path_buf());
+            let row = boot
+                .iter()
+                .find(|r| r.record.request_id == "req-silent")
+                .unwrap_or_else(|| {
+                    panic!("attempt {attempt}: an undelivered completion must be handed back")
+                });
+            assert_eq!(
+                row.record.announce_attempts, attempt as u8,
+                "the boot counts the attempt it is about to make"
+            );
+            assert_eq!(
+                row.record.announced_boot, None,
+                "nothing has been delivered yet — that stamp belongs to the delivery"
+            );
+            disable_for_test();
+        }
+
+        let exhausted = init_and_reconcile(tmp.path().to_path_buf());
         assert!(
-            first.iter().any(|r| r.record.request_id == "req-silent"),
-            "a finished run whose completion notice died must be handed back"
+            !exhausted
+                .iter()
+                .any(|r| r.record.request_id == "req-silent"),
+            "past the attempt bound the record stops asking for a proactive turn"
+        );
+        assert!(
+            lookup("req-silent", None).is_some(),
+            "…but it stays on disk and stays addressable: giving up on the turn \
+             is not giving up on the answer"
         );
         disable_for_test();
+    }
 
-        // Second boot: it is now stamped announced, so it must stay quiet.
-        let second = init_and_reconcile(tmp.path().to_path_buf());
+    /// A completion the announce path actually delivered is stamped by the
+    /// delivery, and every id in a grouped batch is stamped — not just the
+    /// first. Stamping one of N left the other N-1 to come back at every later
+    /// boot.
+    #[test]
+    fn on_delivered_stamps_every_id_the_notice_spoke_for() {
+        let _g = gate();
+        let tmp = tempfile::tempdir().unwrap();
+        enable_for_test(tmp.path().to_path_buf());
+        for id in ["req-a", "req-b"] {
+            record_start(id, "agent:a:peer:user", "t", "default");
+            record_settled(id, "completed", "done");
+        }
+        on_delivered(&["req-a".to_string(), "req-b".to_string()]);
+        disable_for_test();
+
+        let recovered = init_and_reconcile(tmp.path().to_path_buf());
+        // Scoped to the two ids the notice spoke for, NOT to "the directory is
+        // empty". The store's directory is process-global while it is enabled,
+        // and `gate()` only serialises the tests that take it — a test in
+        // another module that persists a run of its own (there is one:
+        // `subagent_tool::tests` writes a "background work" record) lands it in
+        // whichever directory happens to be installed. Asserting emptiness made
+        // this test report a foreign record as "the delivery failed to stamp",
+        // observed once in a full `--lib` run on 2026-09-03 and green under
+        // every module-filtered run. The claim is about the ids, so it is the
+        // ids that are asserted.
         assert!(
-            !second.iter().any(|r| r.record.request_id == "req-silent"),
-            "recovering it stamps `announced`; a later boot must not repeat it"
+            !recovered
+                .iter()
+                .any(|r| ["req-a", "req-b"].contains(&r.record.request_id.as_str())),
+            "both ids were stamped by the delivery: {recovered:?}"
         );
         disable_for_test();
     }

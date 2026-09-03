@@ -28,7 +28,7 @@ use aleph_protocol::{AgentTraceEvent, StreamEvent};
 use tokio::sync::mpsc;
 
 use crate::output::{exec_echo, markdown, stream_md::MarkdownStream, Spinner};
-use aleph_client::{CliResult, ClientEvent};
+use aleph_client::CliResult;
 
 /// How long to wait for the `RunComplete` receipt after the final response
 /// chunk. The drain emits it immediately after the run settles, so this only
@@ -61,7 +61,7 @@ pub struct FollowOutcome {
 /// the run settles (`RunComplete` / `RunError`), the channel closes, or the
 /// post-final grace period elapses.
 pub async fn follow_run(
-    events: &mut mpsc::Receiver<ClientEvent>,
+    events: &mut mpsc::Receiver<StreamEvent>,
     opts: &FollowOptions,
 ) -> CliResult<FollowOutcome> {
     let mut streamed_raw = String::new();
@@ -69,15 +69,7 @@ pub async fn follow_run(
     let mut tool_count = 0usize;
     let mut agent_trace_seen = false;
     let mut footer_rendered = false;
-    // `Some` once the final `ResponseChunk` is seen — a single ABSOLUTE
-    // deadline set once, not a relative duration re-armed on every inner-loop
-    // iteration. A relative `timeout(FINAL_GRACE, …)` recomputed each time
-    // the inner drain loops back (which it does for every `ClientEvent::Topic`
-    // frame) would let a sustained drip of topic frames postpone this
-    // function's return indefinitely — the grace period would never actually
-    // elapse as long as *something* kept arriving before the previous
-    // relative window expired.
-    let mut final_deadline: Option<tokio::time::Instant> = None;
+    let mut saw_final_chunk = false;
     let mut printed_body = false;
     let mut md = MarkdownStream::new();
 
@@ -90,37 +82,18 @@ pub async fn follow_run(
         Some(Spinner::start("thinking…"))
     };
 
-    'outer: loop {
-        // A `ClientEvent` off the wire is either this run's `stream.*` plane
-        // (what the rest of this loop renders) or a topic frame from
-        // `events.subscribe` — the Panel's/TUI's surface, not something
-        // `ask`/`chat --stream` consume. The inner loop keeps draining until
-        // it has a `StreamEvent` to hand the renderer, or the channel
-        // closes/times out, in which case it breaks the OUTER loop exactly
-        // like the un-split code below used to `break` directly.
-        let event = loop {
-            let ev = if let Some(deadline) = final_deadline {
-                // Body complete — wait briefly for the RunComplete receipt
-                // (single-source emission) without hanging on a dead server.
-                // `timeout_at` an ABSOLUTE instant fixed when the final chunk
-                // arrived, so re-entering this inner loop for a topic frame
-                // does not push the deadline back out.
-                match tokio::time::timeout_at(deadline, events.recv()).await {
-                    Ok(Some(ev)) => ev,
-                    Ok(None) | Err(_) => break 'outer,
-                }
-            } else {
-                match events.recv().await {
-                    Some(ev) => ev,
-                    None => break 'outer,
-                }
-            };
-            match ev {
-                ClientEvent::Stream(se) => break *se,
-                // Explicit, not `_ =>`: the next `ClientEvent` variant added
-                // must make whoever extends this loop decide what it means
-                // here, not silently fall through with everything else.
-                ClientEvent::Topic { .. } => {}
+    loop {
+        let event = if saw_final_chunk {
+            // Body complete — wait briefly for the RunComplete receipt
+            // (single-source emission) without hanging on a dead server.
+            match tokio::time::timeout(FINAL_GRACE, events.recv()).await {
+                Ok(Some(ev)) => ev,
+                Ok(None) | Err(_) => break,
+            }
+        } else {
+            match events.recv().await {
+                Some(ev) => ev,
+                None => break,
             }
         };
 
@@ -205,7 +178,7 @@ pub async fn follow_run(
                     }
                 }
                 if is_final {
-                    final_deadline.get_or_insert_with(|| tokio::time::Instant::now() + FINAL_GRACE);
+                    saw_final_chunk = true;
                 }
             }
             // Fallback path: coarse tool events when no AgentTrace stream is

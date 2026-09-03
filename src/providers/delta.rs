@@ -85,6 +85,32 @@ pub enum ProviderDelta {
     Error(String),
 }
 
+impl ProviderDelta {
+    /// Whether this delta puts model-authored content into the user's
+    /// transcript as it streams.
+    ///
+    /// Strictly narrower than "carries content". Tool-call deltas
+    /// ([`ToolCallStart`](Self::ToolCallStart),
+    /// [`ToolCallArgDelta`](Self::ToolCallArgDelta), their siblings) and
+    /// [`ThinkingSignatureDelta`](Self::ThinkingSignatureDelta) are structural:
+    /// a live sink folds them away and the user learns of a tool call only once
+    /// it has *executed*, which a truncated one never does.
+    ///
+    /// The set is derived from the only production [`DeltaSink`] —
+    /// `harness::agent::think::CallbackSink`, which forwards a non-empty
+    /// `TextDelta` to `on_delta` and a non-empty `ThinkingDelta` to
+    /// `on_reasoning` and drops every other variant. The empty-string guard is
+    /// part of that derivation, not a nicety: an empty delta forwards nothing,
+    /// so it shows nothing.
+    ///
+    /// ⚠️ Twin: `CallbackSink` still spells this set out itself (`src/harness/`
+    /// is under R10's file/line ratchet, so it cannot be made to call this).
+    /// Whoever next edits either one must edit both.
+    pub(crate) fn is_user_visible(&self) -> bool {
+        matches!(self, Self::TextDelta(t) | Self::ThinkingDelta(t) if !t.is_empty())
+    }
+}
+
 /// True when the queue holds a terminal delta — a successful [`ProviderDelta::Done`]
 /// or a provider-reported [`ProviderDelta::Error`].
 ///
@@ -218,7 +244,14 @@ impl DeltaCollector {
             }
             ProviderDelta::Done(reason) => self.stop_reason = reason,
             ProviderDelta::Error(_) => {
-                // Error deltas are observed by DeltaSink consumers; collector ignores them
+                // Error deltas are observed by DeltaSink consumers; the collector
+                // ignores them because a fault is not content. The owner of the
+                // stream (`HttpProvider::execute_once`) captures the first one and
+                // decides its fate in one place (`TerminalFrames::classify`): a
+                // hard `Err` when nothing usable arrived, a park on
+                // `ProviderResponse::provider_error` when it ended a stream that
+                // had already emitted content, or nothing at all when a `Done`
+                // followed it. It is never simply dropped.
             }
         }
     }
@@ -319,6 +352,9 @@ impl DeltaCollector {
             usage: self.usage,
             stop_reason: self.stop_reason,
             truncated_tool_call,
+            // The collector drops `ProviderDelta::Error` (see `push`); the
+            // caller that owns the stream captures it and sets this field.
+            provider_error: None,
         }
     }
 
@@ -1201,6 +1237,7 @@ mod tests {
             }),
             thinking: None,
             truncated_tool_call: None,
+            provider_error: None,
         };
 
         let deltas: Vec<_> = response_to_delta_stream(resp).collect::<Vec<_>>().await;

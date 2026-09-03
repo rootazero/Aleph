@@ -170,6 +170,20 @@ pub struct SubAgentCompletionEvent {
     /// Request ID for result correlation (optional for backwards compatibility)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    /// Every child this event speaks for.
+    ///
+    /// One-element for the ordinary per-child completion; N-element for the
+    /// grouped boot notice `background_persistence::init_and_announce_orphans`
+    /// sends (one event per parent session, N children). `request_id` cannot
+    /// carry that: it is a single value, so the delivery callback could stamp
+    /// only one of the N as delivered and the other N-1 came back at the next
+    /// boot, while the header passed one child's verdict off as the batch's.
+    ///
+    /// `#[serde(default)]` so an event written before this field existed
+    /// decodes as "no per-child list", which readers fall back from to
+    /// `request_id`.
+    #[serde(default)]
+    pub request_ids: Vec<String>,
 }
 
 // ============================================================================
@@ -223,10 +237,39 @@ mod tests {
             success: true,
             error: None,
             request_id: None,
+            request_ids: Vec::new(),
         });
 
         assert_eq!(event.event_type(), EventType::SubAgentCompleted);
         assert_eq!(event.name(), "SubAgentCompleted");
+    }
+
+    /// A completion written by a daemon that predates `request_ids` — the JSON
+    /// below is that writer's whole output, not a round-trip of today's struct.
+    ///
+    /// The field is the batch a notice speaks for, and the announcer falls back
+    /// to the single `request_id` when the list is empty. Without
+    /// `#[serde(default)]` this payload fails to decode and the announce for a
+    /// run that survived the upgrade is dropped on the floor — a missing key
+    /// must read as "no per-child list", never as "unreadable event".
+    #[test]
+    fn a_completion_written_before_request_ids_existed_decodes_as_no_list() {
+        let old_payload = r#"{
+            "agent_id": "main",
+            "child_session_id": "child-sid",
+            "summary": "result text",
+            "success": true,
+            "request_id": "req-1"
+        }"#;
+
+        let decoded: SubAgentCompletionEvent =
+            serde_json::from_str(old_payload).expect("an event written before the field decodes");
+
+        assert!(
+            decoded.request_ids.is_empty(),
+            "an absent list is no list, and the announcer falls back to request_id"
+        );
+        assert_eq!(decoded.request_id.as_deref(), Some("req-1"));
     }
 
     #[test]

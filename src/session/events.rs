@@ -147,6 +147,74 @@ pub enum RunOutcome {
     Abandoned,
 }
 
+/// The session-knob envelope a run started under, frozen onto its
+/// `RunStarted` marker so a resume replays the crashed run's configuration
+/// instead of re-deriving it from whatever the knobs say now.
+///
+/// Every field is a **String**, spelled with the same literal word the
+/// `identity_meta.custom` bag uses, so the snapshot, the session row and the
+/// client-facing `SessionSnapshot` share one vocabulary rather than three
+/// enums that have to be kept convertible. The key set is pinned against
+/// [`crate::gateway::session_snapshot::RUN_ENVELOPE_KNOB_KEYS`] by a census
+/// test: a seventh knob has to appear in both places or that test fails.
+///
+/// `model` / `model_provider` are the pair the run was **actually bound to**
+/// after provider validation — not the pin that was asked for. A resume that
+/// replayed the unvalidated hint would re-derive a route the crashed run never
+/// took.
+///
+/// Absent from the wire when `None` — a legacy log deserialises to `None`,
+/// which `ResumeReport::unsnapshotted` counts rather than papers over.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct RunEnvelopeSnapshot {
+    /// `ExecTier::id()` — the tier the run was executing under. On resume this
+    /// is a **ceiling**, never a request: recovery may only tighten.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exec_tier: Option<String>,
+    /// `SessionMode::id()` — chat / work / code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_mode: Option<String>,
+    /// `ThinkLevel::id()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub think_level: Option<String>,
+    /// `MemoryMode::id()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_mode: Option<String>,
+    /// Model id the run was **served by** — the directive's model when it
+    /// carried one, else what the provider chain said it was about to serve.
+    ///
+    /// `None` means the writer could not name the model AT ALL, not "the run
+    /// carried no pin". The narrower reading is load-bearing: a resume that
+    /// finds `None` here re-derives the model from today's session, which is a
+    /// different model than the crashed run used whenever the session was
+    /// re-pinned in between — so `plan_resume` treats `None` as a degrade and
+    /// says so, rather than answering on a substitute in silence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Provider the model above was pinned to, or `None` for an unqualified
+    /// pin (the resolver picks the provider by model-name heuristic).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<String>,
+}
+
+impl RunEnvelopeSnapshot {
+    /// True when the writer resolved nothing at all.
+    ///
+    /// Distinct from a `None` envelope: `None` means *no writer captured one*
+    /// (a legacy marker, or a producer — split / compaction / sub-agent — that
+    /// has no envelope to capture), while an empty one means the capture
+    /// happened and the gateway had resolved nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.exec_tier.is_none()
+            && self.session_mode.is_none()
+            && self.think_level.is_none()
+            && self.memory_mode.is_none()
+            && self.model.is_none()
+            && self.model_provider.is_none()
+    }
+}
+
 // NOTE: `PartialEq` is intentionally omitted from `SessionEvent` because
 // some variants carry types that do not implement it.
 // Tests that need comparison should compare on the serialized JSON form.
@@ -172,6 +240,13 @@ pub enum SessionEvent {
         /// stays platform-portable.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         project_root: Option<String>,
+        /// The knob envelope this run started under (see
+        /// [`RunEnvelopeSnapshot`]). `None` on every marker written before
+        /// the snapshot existed and on markers whose writer did not capture
+        /// one; omitted from the wire when `None` so the legacy forms stay
+        /// byte-identical.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        envelope: Option<RunEnvelopeSnapshot>,
     },
     /// A harness run reached a terminal state on this session.
     RunFinished {
@@ -415,14 +490,16 @@ mod tests {
             run_id: "run-abc".into(),
             at: 1_700_000_000_000,
             project_root: None,
+            envelope: None,
         };
         let json = serde_json::to_string(&ev).unwrap();
         let back: SessionEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(serde_json::to_string(&back).unwrap(), json);
         assert!(json.contains("\"type\":\"run_started\""));
-        // Optional field is omitted on the wire when None so the legacy
+        // Optional fields are omitted on the wire when None so the legacy
         // 2-field form stays byte-identical for old event-log readers.
         assert!(!json.contains("project_root"));
+        assert!(!json.contains("envelope"));
     }
 
     /// New optional `project_root` field round-trips and survives the
@@ -434,6 +511,7 @@ mod tests {
             run_id: "run-pr".into(),
             at: 1_700_000_000_000,
             project_root: Some("/Users/alice/proj".into()),
+            envelope: None,
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert!(json.contains("\"project_root\":\"/Users/alice/proj\""));
@@ -447,17 +525,149 @@ mod tests {
     }
 
     /// Backward compatibility: deserialising a legacy 2-field RunStarted
-    /// (no `project_root` key) yields `None` thanks to `#[serde(default)]`.
+    /// (no `project_root` key, no `envelope` key) and the 3-field form that
+    /// predates `envelope` both yield `None` for every absent optional field
+    /// thanks to `#[serde(default)]`.
     #[test]
     fn run_started_legacy_log_deserialises_with_none() {
-        let legacy = r#"{"type":"run_started","run_id":"old","at":1700000000000}"#;
-        let back: SessionEvent = serde_json::from_str(legacy).unwrap();
+        let two_field = r#"{"type":"run_started","run_id":"old","at":1700000000000}"#;
+        let three_field =
+            r#"{"type":"run_started","run_id":"old","at":1700000000000,"project_root":"/p"}"#;
+        for (legacy, expected_root) in [(two_field, None), (three_field, Some("/p"))] {
+            let back: SessionEvent = serde_json::from_str(legacy).unwrap();
+            match back {
+                SessionEvent::RunStarted {
+                    project_root,
+                    envelope,
+                    ..
+                } => {
+                    assert_eq!(project_root.as_deref(), expected_root);
+                    assert!(
+                        envelope.is_none(),
+                        "legacy log {legacy} must carry no envelope"
+                    );
+                }
+                other => panic!("expected RunStarted, got {other:?}"),
+            }
+        }
+    }
+
+    /// Third generation: a marker written by a build that captures the ④
+    /// envelope. Round-trips, and every field survives.
+    #[test]
+    fn run_started_with_an_envelope_round_trips() {
+        let ev = SessionEvent::RunStarted {
+            run_id: "run-env".into(),
+            at: 1_700_000_000_000,
+            project_root: Some("/p".into()),
+            envelope: Some(RunEnvelopeSnapshot {
+                exec_tier: Some("full".into()),
+                session_mode: Some("code".into()),
+                think_level: Some("high".into()),
+                memory_mode: Some("off".into()),
+                model: Some("m-old".into()),
+                model_provider: Some("p-old".into()),
+            }),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: SessionEvent = serde_json::from_str(&json).unwrap();
         match back {
-            SessionEvent::RunStarted { project_root, .. } => {
-                assert!(project_root.is_none());
+            SessionEvent::RunStarted { envelope, .. } => {
+                let env = envelope.expect("envelope survives the round trip");
+                assert_eq!(env.exec_tier.as_deref(), Some("full"));
+                assert_eq!(env.session_mode.as_deref(), Some("code"));
+                assert_eq!(env.think_level.as_deref(), Some("high"));
+                assert_eq!(env.memory_mode.as_deref(), Some("off"));
+                assert_eq!(env.model.as_deref(), Some("m-old"));
+                assert_eq!(env.model_provider.as_deref(), Some("p-old"));
+                assert!(!env.is_empty());
             }
             other => panic!("expected RunStarted, got {other:?}"),
         }
+    }
+
+    /// A captured-but-empty envelope is NOT the same answer as an absent one:
+    /// it serialises as `{}` and deserialises back to `Some`, which is what
+    /// lets `ResumeReport::unsnapshotted` mean "no writer captured one"
+    /// instead of "the gateway had resolved nothing".
+    #[test]
+    fn an_empty_envelope_is_still_some() {
+        let ev = SessionEvent::RunStarted {
+            run_id: "run-empty".into(),
+            at: 1,
+            project_root: None,
+            envelope: Some(RunEnvelopeSnapshot::default()),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("\"envelope\":{}"), "{json}");
+        match serde_json::from_str::<SessionEvent>(&json).unwrap() {
+            SessionEvent::RunStarted { envelope, .. } => {
+                let env = envelope.expect("an empty object is Some, not None");
+                assert!(env.is_empty());
+            }
+            other => panic!("expected RunStarted, got {other:?}"),
+        }
+    }
+
+    /// Census: the envelope's key set IS the knob vocabulary
+    /// `session_snapshot` publishes. A seventh knob added to one side and not
+    /// the other fails here — which is the whole reason the array exists.
+    #[test]
+    fn the_envelope_carries_exactly_the_published_knob_keys() {
+        let all = RunEnvelopeSnapshot {
+            exec_tier: Some("a".into()),
+            session_mode: Some("b".into()),
+            think_level: Some("c".into()),
+            memory_mode: Some("d".into()),
+            model: Some("e".into()),
+            model_provider: Some("f".into()),
+        };
+        let value = serde_json::to_value(&all).unwrap();
+        let mut got: Vec<String> = value
+            .as_object()
+            .expect("the envelope serialises as an object")
+            .keys()
+            .cloned()
+            .collect();
+        got.sort();
+        let mut want: Vec<String> =
+            crate::gateway::session_snapshot::RUN_ENVELOPE_KNOB_KEYS
+                .iter()
+                .map(|k| (*k).to_string())
+                .collect();
+        want.sort();
+        assert_eq!(got, want);
+    }
+
+    /// The four `custom`-bag names in that array are the ones the session
+    /// snapshot's decoder actually reads — not just four strings that happen
+    /// to match the struct. Feeds a metadata bag keyed by the array itself and
+    /// asserts each value comes back out.
+    #[test]
+    fn the_custom_bag_names_in_the_array_are_the_ones_the_decoder_reads() {
+        use crate::gateway::session_manager::SessionIdentityMeta;
+        use crate::gateway::session_snapshot::{snapshot_from_metadata, RUN_ENVELOPE_KNOB_KEYS};
+        use crate::gateway::session_store::types::SessionMetadata;
+
+        let mut identity = SessionIdentityMeta::default();
+        for (i, value) in ["full", "code", "high", "off"].iter().enumerate() {
+            identity
+                .custom
+                .insert(RUN_ENVELOPE_KNOB_KEYS[i].to_string(), (*value).into());
+        }
+        let meta = SessionMetadata {
+            identity_meta: Some(identity),
+            model: Some("m".to_string()),
+            model_provider: Some("p".to_string()),
+            ..SessionMetadata::default()
+        };
+        let snap = snapshot_from_metadata(&meta);
+        assert_eq!(snap.exec_tier.as_deref(), Some("full"));
+        assert_eq!(snap.mode.as_deref(), Some("code"));
+        assert_eq!(snap.think_level.as_deref(), Some("high"));
+        assert_eq!(snap.memory_mode.as_deref(), Some("off"));
+        assert_eq!(snap.model.as_deref(), Some("m"));
+        assert_eq!(snap.model_provider.as_deref(), Some("p"));
     }
 
     #[test]

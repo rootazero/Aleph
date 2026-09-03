@@ -7,4 +7,6 @@ RULES:
 4. Classify into: preference | project | plan | personal | learning | other.
 5. Preserve verbatim greppable handles — file paths, exact command/tool names, error codes; never paraphrase identifiers. Where the user's exact wording carries the decision, keep the quote: when <situation>, the user said "<verbatim quote>" → future default: <rule>.
 6. Convert relative time ("yesterday", "next Friday") to absolute dates.
-7. Gate every fact: will a future agent plausibly act better for having it? Do not record environment-dependent transient failures as permanent truths, and do not record that a tool is broken (it gets fixed) — record the remedy, not the failure narrative. If nothing clears the bar, emit an empty plan.
+7. Do not package an unresolved failure sequence as a recommended workflow: record nothing, or record only an independently verified alternative — never a dead end.
+8. Redirect environment or configuration failures into the fix: record the troubleshooting remedy, never an incapability claim like "I cannot do X".
+9. Gate every fact: will a future agent plausibly act better for having it? Do not record environment-dependent transient failures as permanent truths, and do not record that a tool is broken (it gets fixed) — record the remedy, not the failure narrative. If nothing clears the bar, emit an empty plan.

@@ -354,6 +354,14 @@ impl HarnessRunner for AgentHarnessRunner {
         // model_hint (with its provider_hint); the dynamic pick_llm(brain) path uses
         // BrainRef::Strict's pinned model when present, else "(dynamic)" (genuinely
         // unresolved at run-start — never the meaningless wrapper name "failover").
+        // ④ crash-recovery snapshot of the model half, taken here because the
+        // directive is consumed by the match below. Post-validation: the
+        // unconfigured-provider filter above has already run, so this is the
+        // pair the run is actually bound to. This is only the DIRECTIVE half —
+        // the run that carried none still served on some model, and
+        // `snapshot_model` below completes the pair from the provider chain.
+        // rust-doctor-disable-next-line excessive-clone
+        let directive_model: Option<(Option<String>, String)> = routing_directive.clone();
         let (routing_model_id, routing_provider_id): (String, Option<String>) =
             match routing_directive {
                 Some((provider_opt, model)) => (model, provider_opt),
@@ -376,10 +384,27 @@ impl HarnessRunner for AgentHarnessRunner {
         // only when even that is unknown. Resolved ONCE here — pre-loop — so
         // the same window rides on both per-turn gauge events and the final
         // `FlowOutcome`.
-        let gauge_model: String = if moa_active || routing_model_id == "(dynamic)" {
-            llm.serving_model_hint()
+        //
+        // The hint is kept as an `Option` instead of being collapsed straight
+        // into `gauge_model`, because the two consumers need different halves
+        // of it: the gauge wants a string it can always print, and takes
+        // `provider_name` when nothing better exists; the ④ snapshot below
+        // wants the model this run SERVED ON, and `provider_name` is the
+        // literal `"failover"` for every production `llm` (see the
+        // `cost_provider` note below). Writing that into the marker would
+        // record a model id no catalog has ever heard of — a resume would then
+        // "recover" a model that never existed, which is worse than recording
+        // nothing (判据 #17: a wrong label costs more than a missing one).
+        let dynamic_route = moa_active || routing_model_id == "(dynamic)";
+        let serving_hint: Option<String> = dynamic_route
+            .then(|| llm.serving_model_hint().map(std::borrow::Cow::into_owned))
+            .flatten();
+        let gauge_model: String = if dynamic_route {
+            // rust-doctor-disable-next-line excessive-clone
+            serving_hint
+                .clone()
                 // rust-doctor-disable-next-line excessive-clone
-                .map_or_else(|| provider_name.clone(), std::borrow::Cow::into_owned)
+                .unwrap_or_else(|| provider_name.clone())
         } else {
             // rust-doctor-disable-next-line excessive-clone
             routing_model_id.clone()
@@ -418,6 +443,36 @@ impl HarnessRunner for AgentHarnessRunner {
         // `provider.name()` and told every turn it was running on `failover`.
         // rust-doctor-disable-next-line excessive-clone
         envelope.serving_model = Some(gauge_model.clone());
+
+        // ④ The model half of the snapshot: a FACT ("this run served on X"),
+        // never a RECIPE ("this run carried no pin, so walk the default
+        // chain"). The two agree only while the chain resolves the same way it
+        // did at crash time — and the session's model pin is exactly the thing
+        // an operator changes while a crashed run sits unresumed. Recording
+        // the recipe made that resume silently answer on a different model,
+        // with no counter able to say so: `unsnapshotted` is false (the
+        // envelope IS here) and nothing was degraded.
+        //
+        // A directive-less run falls back to what the provider chain says it
+        // is about to serve, recorded UNQUALIFIED (`None` provider): the
+        // provider half is only honest when the directive named it. Guessing
+        // it from `cost_provider` would re-introduce the `"failover"` lie for
+        // any run whose chain could not name a provider either, and
+        // `validate_snapshot_model` would then Drop the pin for a reason
+        // ("provider `failover` is no longer configured") that describes this
+        // code rather than the operator's server.
+        let snapshot_model: Option<(Option<String>, String)> =
+            snapshot_model_pair(directive_model, serving_hint.as_deref());
+
+        // The knob envelope this run is executing under, frozen for the
+        // `RunStarted` marker below. Built from the SAME values the turn is
+        // about to use — `envelope` is what the prompt renders, `think_level`
+        // is what wraps the provider — so a resume replays what happened, not
+        // a re-derivation of it. Always `Some` from this writer: an empty
+        // snapshot means "the gateway resolved nothing", which is a different
+        // fact from the `None` a legacy marker carries.
+        let run_envelope_snapshot =
+            run_envelope_snapshot(&envelope, think_level, snapshot_model.as_ref());
 
         // Gauge denominator: authoritative per-model context window (R7 — the
         // lookup is core's, not the panel's), honoring the configured
@@ -853,11 +908,14 @@ impl HarnessRunner for AgentHarnessRunner {
         // equivalent to the retiring AgentLoop StreamingSink.
         // rust-doctor-disable-next-line excessive-clone
         let mut cb = callback::BroadcastCallback::new(events.clone(), context_window);
-        // Resume run markers. `run_id` is a locally-minted UUID — the marker
-        // pair only needs to correlate within one session log, so the
-        // gateway scheduler's run id is not required here. A crash between
-        // these two emits leaves a trailing `RunStarted` with no
-        // `RunFinished`, which is exactly what `ResumeCoordinator` detects.
+        // Resume run markers. `run_id` is a locally-minted UUID, and it is a
+        // DIFFERENT id from the gateway scheduler's `RunRequest.run_id` for
+        // the same run: the two are never joined, in either direction. The
+        // marker pair only has to correlate within one session log, which it
+        // does; what nothing can currently answer is "which scheduler run
+        // wrote this marker" — reading a marker id as a scheduler run id (or
+        // the reverse) finds nothing. Recorded rather than fixed (ruling A5):
+        // joining them is its own contract, with its own writers.
         let run_marker_id = uuid::Uuid::new_v4().to_string();
         // `project_root` rides on RunStarted so `ResumeCoordinator` can
         // re-trigger a crashed run in the same user-picked folder. The
@@ -873,6 +931,7 @@ impl HarnessRunner for AgentHarnessRunner {
                     run_id: run_marker_id.clone(),
                     at: crate::session::events::now_ms(),
                     project_root: project_root_str,
+                    envelope: Some(run_envelope_snapshot),
                 },
             )
             .await
@@ -1459,6 +1518,223 @@ fn acting_provider_id(
         .or(serving_hint)
         .unwrap_or(provider_name)
         .to_string()
+}
+
+/// ④ Freeze the knob envelope a run is executing under, for its `RunStarted`
+/// marker.
+///
+/// Every field is read from a value the turn is ALREADY using — `envelope` is
+/// what the prompt renders, `think_level` is what wraps the provider, and
+/// `model` is the `(provider, model)` directive the run is bound to, captured
+/// after the unconfigured-provider filter rather than the hint it was asked
+/// for. Nothing here re-derives: a resume must replay what happened, and a
+/// second derivation is exactly how it would come back on something else.
+///
+/// Extracted from the emit site so that agreement is testable. Inline, the
+/// only way to check that `think_level` (and not, say, `envelope`'s absent
+/// notion of it) reaches the marker was to read the call.
+/// The ④ snapshot's model half: the pair a resume replays, or `None` when this
+/// run cannot be said to have served on any nameable model.
+///
+/// Extracted so the precedence is a value one test can drive, rather than a
+/// line inside a 400-line function that only an end-to-end resume could
+/// falsify. Two rules, and both are about honesty rather than completeness:
+///
+/// 1. A directive wins outright — it names the provider too, and a pin the
+///    operator wrote down is a stronger fact than what a chain happened to
+///    pick.
+/// 2. Without one, the chain's own hint is recorded UNQUALIFIED. The provider
+///    is left `None` on purpose: the only provider spelling available at this
+///    point that is guaranteed non-empty is the wrapper name, which is
+///    `"failover"` in production, and a snapshot naming it would be dropped on
+///    resume for a reason that describes this code instead of the server.
+fn snapshot_model_pair(
+    directive: Option<(Option<String>, String)>,
+    serving_hint: Option<&str>,
+) -> Option<(Option<String>, String)> {
+    directive.or_else(|| {
+        serving_hint
+            .map(str::trim)
+            .filter(|hint| !hint.is_empty())
+            .map(|hint| (None, hint.to_string()))
+    })
+}
+
+fn run_envelope_snapshot(
+    envelope: &crate::thinker::TurnEnvelope,
+    think_level: Option<crate::agents::thinking::ThinkLevel>,
+    model: Option<&(Option<String>, String)>,
+) -> crate::session::events::RunEnvelopeSnapshot {
+    crate::session::events::RunEnvelopeSnapshot {
+        exec_tier: envelope.exec_tier.map(|t| t.id().to_string()),
+        session_mode: envelope.session_mode.map(|m| m.id().to_string()),
+        think_level: think_level.map(|l| l.id().to_string()),
+        memory_mode: envelope.memory_mode.map(|m| m.id().to_string()),
+        model: model.map(|(_, m)| m.clone()),
+        model_provider: model.and_then(|(p, _)| p.clone()),
+    }
+}
+
+#[cfg(test)]
+mod run_envelope_snapshot_tests {
+    use super::{run_envelope_snapshot, snapshot_model_pair};
+    use crate::agents::thinking::ThinkLevel;
+    use crate::config::types::policies::{ExecTier, SessionMode};
+    use crate::memory::session_memory_mode::MemoryMode;
+    use crate::thinker::TurnEnvelope;
+
+    fn pair(provider: Option<&str>, model: &str) -> (Option<String>, String) {
+        (provider.map(str::to_string), model.to_string())
+    }
+
+    /// The operator's pin outranks whatever the chain happened to pick, and
+    /// keeps its provider — that is the one case where the provider half is a
+    /// fact rather than a guess.
+    #[test]
+    fn a_directive_outranks_the_chains_hint_and_keeps_its_provider() {
+        assert_eq!(
+            snapshot_model_pair(Some(pair(Some("openai"), "gpt-5")), Some("deepseek-chat")),
+            Some(pair(Some("openai"), "gpt-5"))
+        );
+    }
+
+    /// The defect this ruling closes: a run with no directive used to record
+    /// NOTHING, so a resume re-derived the model from a session that may have
+    /// been re-pinned since. It now records what actually served — and records
+    /// it unqualified, because the only provider spelling in reach here is the
+    /// wrapper name.
+    #[test]
+    fn a_directiveless_run_records_what_the_chain_says_it_serves() {
+        assert_eq!(
+            snapshot_model_pair(None, Some("deepseek-chat")),
+            Some(pair(None, "deepseek-chat"))
+        );
+    }
+
+    /// The remaining `None`. It must stay reachable: this is the input that
+    /// makes `plan_resume` say "the model was not recorded" instead of
+    /// substituting one in silence, and a fallback that always produced a pair
+    /// would delete that sentence's only trigger.
+    #[test]
+    fn a_run_whose_chain_cannot_name_a_model_records_none() {
+        assert_eq!(snapshot_model_pair(None, None), None);
+        // A chain that answers with blanks has not named a model either. Empty
+        // is not a model id; recorded as one it would resume onto a pin no
+        // catalog can resolve.
+        assert_eq!(snapshot_model_pair(None, Some("   ")), None);
+    }
+
+    /// What the turn is running under is what the marker records — each of the
+    /// six read off the value the turn itself uses, spelled with the same
+    /// `id()` the resume parses back.
+    #[test]
+    fn the_marker_records_the_envelope_the_turn_is_running_under() {
+        let env = TurnEnvelope {
+            exec_tier: Some(ExecTier::Ask),
+            session_mode: Some(SessionMode::Code),
+            memory_mode: Some(MemoryMode::Off),
+            ..TurnEnvelope::default()
+        };
+        let snap = run_envelope_snapshot(
+            &env,
+            Some(ThinkLevel::High),
+            Some(&(Some("openai".to_string()), "gpt-5.6".to_string())),
+        );
+        assert_eq!(snap.exec_tier.as_deref(), Some(ExecTier::Ask.id()));
+        assert_eq!(snap.session_mode.as_deref(), Some(SessionMode::Code.id()));
+        assert_eq!(snap.think_level.as_deref(), Some(ThinkLevel::High.id()));
+        assert_eq!(snap.memory_mode.as_deref(), Some(MemoryMode::Off.id()));
+        assert_eq!(snap.model.as_deref(), Some("gpt-5.6"));
+        assert_eq!(snap.model_provider.as_deref(), Some("openai"));
+    }
+
+    /// A dispatch path that resolved nothing writes an EMPTY snapshot, not a
+    /// guessed one. The distinction the resume reads is `Some(empty)` — "the
+    /// gateway resolved nothing" — against the `None` a pre-envelope marker
+    /// carries, which is "no writer captured one at all".
+    #[test]
+    fn a_turn_that_resolved_nothing_snapshots_nothing_rather_than_a_default() {
+        let snap = run_envelope_snapshot(&TurnEnvelope::default(), None, None);
+        assert!(snap.is_empty());
+        assert_eq!(snap.exec_tier, None);
+        assert_eq!(snap.model, None);
+    }
+
+    /// An unqualified pin keeps its model half. Dropping the pair for want of
+    /// a provider would resume on the default chain while the log said the run
+    /// had a pin.
+    #[test]
+    fn a_model_with_no_provider_still_reaches_the_marker() {
+        let snap = run_envelope_snapshot(
+            &TurnEnvelope::default(),
+            None,
+            Some(&(None, "kimi-k2".to_string())),
+        );
+        assert_eq!(snap.model.as_deref(), Some("kimi-k2"));
+        assert_eq!(snap.model_provider, None);
+        assert!(!snap.is_empty());
+    }
+
+    /// The three tests above prove the snapshot BUILDER is right. They say
+    /// nothing about whether its result reaches the marker — and that gap is
+    /// measured, not assumed: replacing the emit with `envelope: None` and
+    /// running `orchestrator::harness_bridge session::reduction
+    /// gateway::resume_coordinator gateway::execution_engine` left
+    /// **456 passed; 0 failed**. Every resume would then read `unsnapshotted`,
+    /// which is the word for "an old log", so the failure would look like
+    /// history rather than a regression.
+    ///
+    /// A behavioural test would have to drive `AgentHarnessRunner::run`, which
+    /// needs a provider, a store, an emitter and a live harness. This is the
+    /// cheaper half of that: the one `RunStarted` this file constructs must
+    /// hand the marker the helper's result, not a literal. It fails on the
+    /// exact edit the mutation made.
+    #[test]
+    fn the_run_started_this_file_writes_carries_the_snapshot_it_built() {
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/orchestrator/harness_bridge/runner_impl.rs"
+        ))
+        .expect("runner_impl.rs is readable")
+        .replace('\r', "");
+        let production = crate::utils::source_scan::production_prefix(&src);
+        // `code_text`, not the raw prefix: the first draft of this guard split
+        // on the raw text, counted a comment and a `matches!` pattern as
+        // constructions, and reported three. A guard that miscounts in the
+        // direction of MORE is the lucky half — it went red and said so.
+        let code = crate::utils::source_scan::code_text(&production);
+
+        // A pattern (`RunStarted { run_id, .. }`) names no `envelope` field, so
+        // the emit is the site that does.
+        let sites: Vec<&str> = code.split("SessionEvent::RunStarted {").skip(1).collect();
+        assert!(
+            !sites.is_empty(),
+            "no `SessionEvent::RunStarted {{` in this file's production half — \
+             the emit moved, and with zero sites this guard cannot fail"
+        );
+        let emits: Vec<&str> = sites
+            .iter()
+            .filter_map(|body| {
+                let end = body.find('}')?;
+                let fields = &body[..end];
+                fields.contains("envelope:").then_some(fields)
+            })
+            .collect();
+        assert_eq!(
+            emits.len(),
+            1,
+            "expected exactly one RunStarted CONSTRUCTION (the one naming an \
+             `envelope` field) in this file; found {}. A second writer is a \
+             second answer to what a run started under.",
+            emits.len()
+        );
+        assert!(
+            emits[0].contains("envelope: Some(run_envelope_snapshot)"),
+            "the RunStarted this file writes must carry the snapshot built by \
+             `run_envelope_snapshot`; got fields:\n{}",
+            emits[0]
+        );
+    }
 }
 
 #[cfg(test)]

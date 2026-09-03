@@ -16,7 +16,8 @@ use aleph_protocol::providers::{
 };
 use aleph_protocol::{
     AgentRunAccepted, AgentRunRequest, AgentRunStatusReport, AgentRunStatusRequest,
-    AgentTraceListPage, AgentTraceReplay, RunPhase, SessionSnapshot,
+    AgentTraceListPage, AgentTraceReplay, LastRunDisposition, LastRunState, RunPhase,
+    SessionListRow, SessionSnapshot,
 };
 
 use aleph_client::{AlephClient, CliError, CliResult};
@@ -393,7 +394,7 @@ pub(super) async fn execute_local_command(
         LocalCommand::Knob { knob, value } => execute_knob(state, client, knob, value).await,
         LocalCommand::Sessions => execute_sessions(state, client).await,
         LocalCommand::Providers { query } => execute_providers(state, client, query).await,
-        LocalCommand::Agents => {
+        LocalCommand::AgentPanel => {
             state.toggle_agent_panel();
             let mode = if state.agent_panel_visible {
                 "shown"
@@ -401,6 +402,16 @@ pub(super) async fn execute_local_command(
                 "hidden"
             };
             state.add_system_message(format!("Agent panel: {mode}"));
+        }
+        LocalCommand::Agents => execute_agents(state, client).await,
+        LocalCommand::Todo => {
+            state.tasks_panel_visible = !state.tasks_panel_visible;
+            let notice = match (state.tasks_panel_visible, &state.plan) {
+                (true, Some(plan)) if plan.has_content() => "Tasks panel shown.",
+                (true, _) => "Tasks panel shown (it appears once this conversation has a plan).",
+                (false, _) => "Tasks panel hidden. /todo to bring it back.",
+            };
+            state.add_system_message(notice.to_string());
         }
     }
 }
@@ -435,17 +446,59 @@ async fn execute_sessions(state: &mut AppState, client: &AlephClient) {
 }
 
 /// Map one `sessions.list` row into a `SessionEntry`, or `None` if it has no key.
+///
+/// Parsed through [`SessionListRow`], the type the server constructs the row
+/// from, rather than key by key. The hand-read version asked for `name` — a key
+/// this row has never carried — so `topic` and `label` rode the wire unread and
+/// every conversation in the picker was titled by its session key. A subset
+/// reader can only ever prove it is a superset of whatever happens to arrive
+/// (criterion #10); a shared type makes the same rename a compile error here.
 fn session_entry_from_json(v: &Value) -> Option<app::SessionEntry> {
-    let key = v.get("key").and_then(Value::as_str)?.to_string();
-    let name = v.get("name").and_then(Value::as_str).unwrap_or("");
-    let count = v.get("message_count").and_then(Value::as_u64);
-    let label = match (name.is_empty(), count) {
-        (false, Some(c)) => format!("{name}  ({c} msgs)"),
-        (false, None) => name.to_string(),
-        (true, Some(c)) => format!("{key}  ({c} msgs)"),
-        (true, None) => key.clone(),
-    };
-    Some(app::SessionEntry { key, label })
+    let row: SessionListRow = serde_json::from_value(v.clone()).ok()?;
+    if row.key.is_empty() {
+        return None;
+    }
+    let title = row
+        .topic
+        .as_deref()
+        .or(row.label.as_deref())
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .unwrap_or(row.key.as_str())
+        .to_string();
+    let mut label = format!("{title}  ({} msgs)", row.message_count);
+    // The list face answers with a word and nothing else, so the mark is the
+    // word — the counts belong to the attach face (`chat.history`), which is
+    // where `apply_history` renders them.
+    if let Some(mark) = row.last_run.as_ref().and_then(last_run_mark) {
+        label.push_str(mark);
+    }
+    Some(app::SessionEntry {
+        key: row.key,
+        label,
+    })
+}
+
+/// The picker's suffix for a conversation whose newest run needs attention, or
+/// `None` when it does not.
+///
+/// One rule, shared with [`last_run_notice`]: "interrupted" is not the only
+/// state worth marking. A log that holds dangling tool calls but no run marker
+/// at all reduces to `never_ran`, and a log the reducer refused reduces to
+/// `log_inconsistent` — both are runs whose outcome nobody can vouch for, and a
+/// mark keyed on the word `interrupted` alone would leave them looking
+/// finished.
+fn last_run_mark(last_run: &LastRunState) -> Option<&'static str> {
+    let dangling = last_run.dangling().is_some_and(|d| !d.is_empty());
+    match last_run.disposition() {
+        LastRunDisposition::Interrupted => Some("  [interrupted]"),
+        LastRunDisposition::LogInconsistent => Some("  [log inconsistent]"),
+        LastRunDisposition::Unrecognized => Some("  [unknown]"),
+        LastRunDisposition::Clean | LastRunDisposition::NeverRan if dangling => {
+            Some("  [interrupted]")
+        }
+        LastRunDisposition::Clean | LastRunDisposition::NeverRan => None,
+    }
 }
 
 /// Confirm the highlighted session: load its history and re-point the session.
@@ -460,6 +513,131 @@ pub(super) async fn confirm_session_switch(state: &mut AppState, client: &AlephC
     // banner; `attach_session` then restores the incoming conversation's own.
     state.switch_session(&key);
     attach_session(state, client, &key, AttachMode::Append).await;
+}
+
+// ---------------------------------------------------------------------------
+// Agents overlay (`/agents`).
+// ---------------------------------------------------------------------------
+
+/// Refresh this session's sub-agent snapshot from `subagent.tree`, then open
+/// the overlay. The snapshot is merged through the shared protocol
+/// `apply_event` (a `Spawned` upsert per node — the Panel's cold-start rule),
+/// so a spawn that raced ahead on the live topic survives.
+async fn execute_agents(state: &mut AppState, client: &AlephClient) {
+    refresh_agents(state, client).await;
+    if state.agents.is_empty() {
+        state.add_system_message(
+            "No background sub-agents in this session yet. They appear here (and in the \
+             docked panel) when the agent delegates work with the `subagent` tool."
+                .to_string(),
+        );
+        return;
+    }
+    state.open_agents_overlay();
+}
+
+/// One `subagent.tree` fetch, merged into `AppState.agents`.
+pub(super) async fn refresh_agents(state: &mut AppState, client: &AlephClient) {
+    if state.session_key.is_empty() {
+        return;
+    }
+    let params = json!({ "root_session": state.session_key });
+    match client.call::<_, Value>("subagent.tree", Some(params)).await {
+        Ok(result) => {
+            let nodes: Vec<aleph_protocol::subagent_tree::SubagentNode> = result
+                .get("nodes")
+                .cloned()
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_default();
+            for node in nodes {
+                aleph_protocol::subagent_tree::apply_event(
+                    &mut state.agents,
+                    aleph_protocol::subagent_tree::SubagentTreeEvent::Spawned { node },
+                );
+            }
+        }
+        Err(e) => state.add_system_message(format!("Sub-agent tree error: {e}")),
+    }
+}
+
+/// Enter on an overlay row: open that agent's run view. The transcript is the
+/// child's own persisted session (`SubagentNode.child_session`), served by the
+/// same `chat.history` RPC as any conversation — no dedicated endpoint.
+pub(super) async fn open_agent_detail(state: &mut AppState, client: &AlephClient) {
+    let Some(node) = state.selected_agent().cloned() else {
+        return;
+    };
+    let mut lines = agent_meta_lines(&node);
+    match node.child_session.as_deref() {
+        Some(child_key) => {
+            let params = json!({ "session_key": child_key });
+            match client.call::<_, Value>("chat.history", Some(params)).await {
+                Ok(result) => {
+                    lines.push(String::new());
+                    lines.extend(transcript_lines(&result));
+                }
+                Err(e) => {
+                    lines.push(String::new());
+                    lines.push(format!("Transcript unavailable: {e}"));
+                }
+            }
+        }
+        None => {
+            lines.push(String::new());
+            lines.push(
+                "No child transcript address for this agent (spawned before this build, \
+                 or a sync fan-out child whose result was returned inline)."
+                    .to_string(),
+            );
+        }
+    }
+    if let Some(overlay) = &mut state.agents_overlay {
+        overlay.detail = Some(app::AgentDetailState {
+            title: node.task.clone(),
+            lines,
+            scroll: 0,
+        });
+    }
+}
+
+/// Metadata header for the agent run view — everything the node itself knows.
+fn agent_meta_lines(node: &aleph_protocol::subagent_tree::SubagentNode) -> Vec<String> {
+    let mut lines = vec![format!("\u{2500}\u{2500} {}", node.task)];
+    let mut meta = format!("  \u{00b7} {:?}", node.lifecycle).to_lowercase();
+    if let Some(model) = node.model.as_deref() {
+        meta.push_str(&format!(" \u{00b7} {model}"));
+    }
+    meta.push_str(&format!(" \u{00b7} {} tools", node.tool_count));
+    if let Some(tokens) = node.total_tokens {
+        meta.push_str(&format!(" \u{00b7} {tokens} tokens"));
+    }
+    lines.push(meta);
+    if let Some(preview) = node.result_preview.as_deref() {
+        lines.push(format!("  \u{00b7} result: {preview}"));
+    }
+    lines
+}
+
+/// Flatten a `chat.history` response into displayable lines: a `── role ──`
+/// separator per row, then the content verbatim (the widget wraps).
+fn transcript_lines(result: &Value) -> Vec<String> {
+    let rows = result
+        .get("messages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if rows.is_empty() {
+        return vec!["(the child transcript is empty)".to_string()];
+    }
+    let mut lines = Vec::new();
+    for row in &rows {
+        let role = row.get("role").and_then(Value::as_str).unwrap_or("?");
+        let content = row.get("content").and_then(Value::as_str).unwrap_or("");
+        lines.push(format!("\u{2500}\u{2500} {role}"));
+        lines.extend(content.lines().map(str::to_string));
+        lines.push(String::new());
+    }
+    lines
 }
 
 // ---------------------------------------------------------------------------
@@ -677,7 +855,13 @@ pub(super) async fn attach_session(
 ) {
     let params = json!({ "session_key": key });
     match client.call::<_, Value>("chat.history", Some(params)).await {
-        Ok(result) => apply_history(state, &result, mode),
+        Ok(result) => {
+            apply_history(state, &result, mode);
+            // The sub-agent tree is per-session state the transcript does not
+            // carry; seed it from the tracker snapshot the same way the plan
+            // was seeded from the history response above.
+            refresh_agents(state, client).await;
+        }
         Err(e) => state.add_system_message(format!("History error: {e}")),
     }
 }
@@ -732,6 +916,26 @@ fn apply_history(state: &mut AppState, result: &Value, mode: AttachMode) {
         ),
     }
 
+    // The conversation's execution list — the disk markdown is the truth the
+    // model, the prompt layer and the stop guard all read, and this field is
+    // its only cold-load carrier. A THREE-state read (the same one the Panel
+    // does): absent = older gateway, learn nothing; `null` = asked and
+    // answered, no plan; object = the plan. Collapsing absent into "no plan"
+    // would clear a checklist on the say-so of a server that never spoke.
+    match result.get("plan") {
+        None => {}
+        Some(Value::Null) => state.plan = None,
+        Some(v) => {
+            // Unreadable is "I have no answer", not "there is none" — the
+            // failed parse keeps whatever this screen already knew.
+            if let Ok(plan) =
+                serde_json::from_value::<aleph_protocol::plan::PlanSnapshot>(v.clone())
+            {
+                state.plan = Some(plan);
+            }
+        }
+    }
+
     // Which run — if any — is in flight on this session right now.
     //
     // The field is always emitted by a core that has it (`null` when
@@ -746,7 +950,71 @@ fn apply_history(state: &mut AppState, result: &Value, mode: AttachMode) {
         state.adopt_active_run(active);
     }
 
+    // What the conversation's PREVIOUS run did, once the live one (if any) has
+    // been adopted — the two are different questions and this one is only
+    // answerable from the snapshot: the transcript of a run that was cut off
+    // looks exactly like the transcript of a run that finished.
+    //
+    // Read off the snapshot this screen just applied rather than off `result`
+    // a second time, so the notice and the status bar can only ever describe
+    // the same answer. Absent (an older gateway, or a core with no event store
+    // to ask) says nothing at all — never "it was fine".
+    if let Some(notice) = state
+        .session_snapshot
+        .as_ref()
+        .and_then(|s| s.last_run.as_ref())
+        .and_then(last_run_notice)
+    {
+        state.add_system_message(notice);
+    }
+
     state.scroll_to_bottom();
+}
+
+/// The one sentence this client says about a conversation's newest run, or
+/// `None` when there is nothing to say.
+///
+/// The numbers come from the reduction the server already did
+/// (`RunProgressView` and the dangling list) — this screen never recounts them
+/// from the transcript, because two derivations of "how far did it get" are two
+/// answers and the wrong one is unfalsifiable from here.
+///
+/// `inspected == false` is the list face's answer: the word and nothing else.
+/// The counts are withheld then rather than printed as zeroes, which would read
+/// as "nothing was lost" off a face that never looked.
+fn last_run_notice(last_run: &LastRunState) -> Option<String> {
+    let dangling = last_run.dangling().map(<[_]>::len);
+    match last_run.disposition() {
+        LastRunDisposition::LogInconsistent => {
+            let tags = if last_run.contradictions.is_empty() {
+                "未报告".to_string()
+            } else {
+                last_run.contradictions.join("、")
+            };
+            Some(format!(
+                "会话日志不一致（{tags}）— 恢复已拒绝，请运行 aleph doctor"
+            ))
+        }
+        LastRunDisposition::Interrupted => Some(match (last_run.progress, dangling) {
+            (Some(p), Some(n)) => format!(
+                "上一轮运行被中断 — {}/{} 次工具回执已落盘，{n} 次结果未知",
+                p.tool_calls_answered, p.tool_calls_dispatched
+            ),
+            _ => "上一轮运行被中断".to_string(),
+        }),
+        LastRunDisposition::Unrecognized => Some(format!(
+            "上一轮运行状态未知（{}）— 本客户端无法判断",
+            last_run.disposition
+        )),
+        // A log can hold dispatched calls that never came back and still carry
+        // no run marker at all, which reduces to `never_ran`. Keying the notice
+        // on the word alone would leave those calls produced by the server and
+        // rendered by nobody (criterion #17).
+        LastRunDisposition::Clean | LastRunDisposition::NeverRan => match dangling {
+            Some(n) if n > 0 => Some(format!("上一轮留下 {n} 次未回执的工具调用 — 结果未知")),
+            _ => None,
+        },
+    }
 }
 
 /// Which run `chat.history` reports in flight on this session — a THREE-way
@@ -1785,8 +2053,13 @@ mod attach_mode_tests {
             "attach_session must not touch the transcript itself — the clear \
              belongs in `apply_history`, which only runs on a successful fetch"
         );
+        // Normalize line endings first: `include_str!` preserves the checkout's
+        // bytes, and a CRLF checkout would turn a `\n`-carrying needle into a
+        // guard that can never match (the "guard only recognizes the shape it
+        // was written on" defect, CRLF edition).
+        let body = body.replace("\r\n", "\n");
         assert!(
-            body.contains("Ok(result) => apply_history(state, &result, mode)"),
+            body.contains("Ok(result) => {\n            apply_history(state, &result, mode);"),
             "the applier must be reached only from the success arm"
         );
     }
@@ -1939,5 +2212,236 @@ mod side_run_verdict_tests {
                 "{label} says nothing about the run"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod last_run_face_tests {
+    use super::{apply_history, last_run_mark, session_entry_from_json, AttachMode};
+    use crate::tui::app::{AppState, ChatMessage};
+    use aleph_protocol::{
+        DanglingCallView, LastRunState, RunProgressView, SessionListRow, SessionSnapshot,
+    };
+    use serde_json::{json, Value};
+
+    fn system_rows(state: &AppState) -> Vec<String> {
+        state
+            .messages
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::System { content } => Some(content.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Build the response the way the server does — by serialising the shared
+    /// snapshot type. A hand-written literal here would only prove that serde
+    /// round-trips bytes this test wrote itself (criterion #10).
+    fn history_with(session: Option<Option<LastRunState>>) -> Value {
+        let mut result = json!({ "messages": [], "active_run": Value::Null });
+        if let Some(last_run) = session {
+            result["session"] = serde_json::to_value(SessionSnapshot {
+                session_key: "agent:main:main:s1".into(),
+                last_run,
+                ..SessionSnapshot::default()
+            })
+            .expect("the snapshot serialises");
+        }
+        result
+    }
+
+    fn interrupted() -> LastRunState {
+        LastRunState {
+            disposition: LastRunState::INTERRUPTED.into(),
+            run_id: Some("run-9".into()),
+            trailing_starts: 1,
+            dangling: vec![DanglingCallView {
+                call_id: "call-1".into(),
+                tool_name: "shell".into(),
+                provenance: DanglingCallView::THIS_RESTART.into(),
+                denied: false,
+            }],
+            progress: Some(RunProgressView {
+                tool_calls_dispatched: 3,
+                tool_calls_answered: 2,
+                assistant_messages: 1,
+                last_activity_ms: Some(1_750_000_000_000),
+            }),
+            contradictions: Vec::new(),
+            inspected: true,
+        }
+    }
+
+    fn notices(history: &Value) -> Vec<String> {
+        let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
+        apply_history(&mut state, history, AttachMode::Replace);
+        system_rows(&state)
+            .into_iter()
+            .filter(|r| r.contains("上一轮") || r.contains("会话日志不一致"))
+            .collect()
+    }
+
+    /// The counts are the server's reduction, rendered — not recounted here.
+    #[test]
+    fn apply_history_emits_interrupted_line() {
+        let lines = notices(&history_with(Some(Some(interrupted()))));
+        assert_eq!(lines.len(), 1, "exactly one line about the previous run");
+        assert!(
+            lines[0].contains("2/3") && lines[0].contains("1 次结果未知"),
+            "the landed/dispatched pair and the unknown count both ride: {}",
+            lines[0]
+        );
+    }
+
+    /// The three states of the field, and only the third says anything: absent
+    /// is an older gateway, `null` is "asked, and there is nothing to report".
+    /// Reading either as "the run was fine" is the failure the field exists to
+    /// remove.
+    #[test]
+    fn an_unanswered_last_run_says_nothing() {
+        assert!(
+            notices(&history_with(None)).is_empty(),
+            "no `session` at all — this client was told nothing"
+        );
+        assert!(
+            notices(&history_with(Some(None))).is_empty(),
+            "`session` without `last_run` — asked, not answered"
+        );
+    }
+
+    /// A run that finished is not news.
+    #[test]
+    fn a_clean_last_run_says_nothing() {
+        let clean = LastRunState {
+            disposition: LastRunState::CLEAN.into(),
+            inspected: true,
+            ..LastRunState::default()
+        };
+        assert!(notices(&history_with(Some(Some(clean)))).is_empty());
+    }
+
+    /// A refused log is not a clean one, and the tag is what an operator takes
+    /// to `aleph doctor`.
+    #[test]
+    fn a_refused_log_points_at_doctor() {
+        let refused = LastRunState {
+            disposition: LastRunState::LOG_INCONSISTENT.into(),
+            contradictions: vec!["session-log-duplicate-dispatch".into()],
+            inspected: true,
+            ..LastRunState::default()
+        };
+        let lines = notices(&history_with(Some(Some(refused))));
+        assert_eq!(lines.len(), 1);
+        assert!(
+            lines[0].contains("session-log-duplicate-dispatch") && lines[0].contains("doctor"),
+            "the tag and where to take it: {}",
+            lines[0]
+        );
+    }
+
+    /// A log can carry dispatched calls that never came back and no run marker
+    /// at all — that reduces to `never_ran`, not to `interrupted`. Keying the
+    /// notice on the word alone would leave those calls rendered by nobody.
+    #[test]
+    fn dangling_calls_are_reported_even_when_the_word_is_not_interrupted() {
+        let unmarked = LastRunState {
+            disposition: LastRunState::NEVER_RAN.into(),
+            dangling: vec![DanglingCallView {
+                call_id: "call-2".into(),
+                tool_name: "file_write".into(),
+                provenance: DanglingCallView::EARLIER_RUN.into(),
+                denied: false,
+            }],
+            inspected: true,
+            ..LastRunState::default()
+        };
+        let lines = notices(&history_with(Some(Some(unmarked))));
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("1 次未回执"), "{}", lines[0]);
+    }
+
+    /// The picker's title is the row's own `topic`. It used to read `name` — a
+    /// key `sessions.list` has never sent — so every row was titled by its key.
+    #[test]
+    fn session_entry_label_uses_topic_not_name() {
+        let row = SessionListRow {
+            key: "agent:main:main:s4".into(),
+            topic: Some("Ship the resume receipt".into()),
+            message_count: 12,
+            ..SessionListRow::default()
+        };
+        let entry = session_entry_from_json(&serde_json::to_value(&row).expect("row serialises"))
+            .expect("a keyed row makes an entry");
+        assert_eq!(entry.key, "agent:main:main:s4");
+        assert!(
+            entry.label.starts_with("Ship the resume receipt") && entry.label.contains("12 msgs"),
+            "{}",
+            entry.label
+        );
+    }
+
+    /// No topic, no label — the key is the honest fallback, and it is not a
+    /// title this client invented.
+    #[test]
+    fn a_row_with_no_title_falls_back_to_its_key() {
+        let row = SessionListRow {
+            key: "agent:main:main:s5".into(),
+            ..SessionListRow::default()
+        };
+        let entry = session_entry_from_json(&serde_json::to_value(&row).expect("row serialises"))
+            .expect("a keyed row makes an entry");
+        assert!(
+            entry.label.starts_with("agent:main:main:s5"),
+            "{}",
+            entry.label
+        );
+    }
+
+    /// The list face carries the word and nothing else, and the word is enough
+    /// to mark the row.
+    #[test]
+    fn picker_marks_interrupted() {
+        let row = SessionListRow {
+            key: "agent:main:main:s6".into(),
+            topic: Some("Crashed mid-tool".into()),
+            last_run: Some(LastRunState::from_markers(
+                LastRunState::INTERRUPTED,
+                Some("run-3".into()),
+                2,
+            )),
+            ..SessionListRow::default()
+        };
+        let entry = session_entry_from_json(&serde_json::to_value(&row).expect("row serialises"))
+            .expect("a keyed row makes an entry");
+        assert!(entry.label.contains("[interrupted]"), "{}", entry.label);
+    }
+
+    /// A row the server said nothing about, and a row it said was clean, are
+    /// both unmarked — a mark that appeared on every row would stop meaning
+    /// anything.
+    #[test]
+    fn a_clean_or_unanswered_row_is_unmarked() {
+        assert_eq!(
+            last_run_mark(&LastRunState::from_markers(LastRunState::CLEAN, None, 0)),
+            None
+        );
+        let row = SessionListRow {
+            key: "agent:main:main:s7".into(),
+            ..SessionListRow::default()
+        };
+        let entry = session_entry_from_json(&serde_json::to_value(&row).expect("row serialises"))
+            .expect("a keyed row makes an entry");
+        assert!(!entry.label.contains('['), "{}", entry.label);
+    }
+
+    /// The list face never looked for dangling calls, so its empty list is not
+    /// evidence of anything — and `dangling()` refuses to hand it over. A mark
+    /// derived from it would read "clean" off a face that never asked.
+    #[test]
+    fn the_list_face_marks_from_the_word_never_from_an_empty_dangling_list() {
+        let listed = LastRunState::from_markers(LastRunState::INTERRUPTED, None, 1);
+        assert!(listed.dangling().is_none(), "the list face withholds it");
+        assert_eq!(last_run_mark(&listed), Some("  [interrupted]"));
     }
 }

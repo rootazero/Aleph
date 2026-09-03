@@ -148,6 +148,13 @@ pub struct ContextEstimateResponse {
 /// it in one go. `None` means the server did not answer (a core that predates
 /// the field, or a count that failed): the caller must treat that as "I do not
 /// know", never as "nothing above".
+///
+/// `last_run` is what the conversation's PREVIOUS run did, which the transcript
+/// also cannot express: a run that was cut off mid-tool leaves rows that look
+/// exactly like a run that finished. The server reduces the event log once and
+/// hands the answer over; this client renders it and never re-derives it.
+/// `None` means the server did not answer — an older core, or one with no event
+/// store to ask — and never "the run was fine".
 #[derive(Debug, Clone)]
 pub struct SessionHistory {
     pub messages: Vec<ChatMessage>,
@@ -155,6 +162,7 @@ pub struct SessionHistory {
     pub plan: Option<aleph_protocol::plan::PlanSnapshot>,
     pub pending: Vec<PendingRun>,
     pub total: Option<usize>,
+    pub last_run: Option<aleph_protocol::LastRunState>,
 }
 
 /// A file attachment to send with a chat message.
@@ -219,6 +227,27 @@ pub fn parse_history_pending(result: &Value) -> Vec<PendingRun> {
         .iter()
         .filter_map(|v| serde_json::from_value::<PendingRun>(v.clone()).ok())
         .collect()
+}
+
+/// Read what the session's newest run did off a `chat.history` response.
+///
+/// Free function so the skew cases are testable without a socket, like its
+/// three neighbours. It reads `session.last_run` — the field rides the settings
+/// snapshot because it is one more durable fact about the conversation, not a
+/// row in the transcript.
+///
+/// Absent, `null` and unparseable all collapse to `None`, and `None` is
+/// "nobody answered": the caller must render nothing rather than a clean run
+/// (criterion #8 — a fail-closed answer may only say "I do not know"). The
+/// asymmetry with `plan` next door is deliberate in the same direction: there,
+/// silence keeps a checklist on screen; here, silence keeps a warning off it.
+#[must_use]
+pub fn parse_history_last_run(result: &Value) -> Option<aleph_protocol::LastRunState> {
+    let raw = result
+        .get("session")?
+        .get("last_run")
+        .filter(|v| !v.is_null())?;
+    serde_json::from_value(raw.clone()).ok()
 }
 
 pub struct ChatApi;
@@ -365,6 +394,7 @@ impl ChatApi {
             plan: parse_history_plan(&result),
             pending: parse_history_pending(&result),
             total: parse_history_total(&result),
+            last_run: parse_history_last_run(&result),
         })
     }
 

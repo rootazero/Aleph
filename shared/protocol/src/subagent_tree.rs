@@ -16,6 +16,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Gateway topic the live tree events are published under. One constant for
+/// the producer (`gateway::subagent_tree_relay`), the visibility scoper, and
+/// every client filter — a topic string is a wire key, and wire keys kept as
+/// per-crate literals cancel each other out silently when one side moves.
+pub const TOPIC: &str = "run.subagent_tree";
+
 /// Typed node lifecycle — replaces hermes's stringly-typed status. Illegal
 /// states are unrepresentable; transitions are monotonic (Running → terminal).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +87,20 @@ pub struct SubagentNode {
     /// panels see a real preview and use it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_preview: Option<String>,
+    /// Session key of the child's own persisted transcript
+    /// (`agent:{agent}:ephemeral:sub-bg-{request_id}`), when the spawn minted
+    /// one (background children only). This is the address a client hands to
+    /// the existing `chat.history` RPC to open the agent's run view — carried
+    /// here so the derivation lives in ONE place (the tracker, which owns the
+    /// spawn) instead of every client re-deriving the key format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_session: Option<String>,
+    /// Total tokens the child consumed, known only at settlement (the same
+    /// figure the `Settled` event reports). `None` while running and for
+    /// nodes that settled before this field existed — a cold-start snapshot
+    /// can now show per-agent tokens instead of only live watchers seeing it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
 }
 
 /// Live wire event — every variant carries enough identity (`node_id` +
@@ -110,6 +130,103 @@ pub enum SubagentTreeEvent {
         tool_calls_made: usize,
         total_tokens: usize,
     },
+}
+
+/// Merge one live event into a flat node list (keyed by `node_id`). Spawned
+/// upserts; Progress / Settled patch an existing node (ignored if unknown —
+/// the cold-start snapshot or an earlier Spawned will have created it).
+///
+/// Promoted from the Panel's view state so the Panel and the TUI run ONE merge
+/// algorithm (same argument as [`build_tree`]: one implementation, two ends).
+pub fn apply_event(nodes: &mut Vec<SubagentNode>, ev: SubagentTreeEvent) {
+    match ev {
+        SubagentTreeEvent::Spawned { node } => {
+            match nodes.iter_mut().find(|n| n.node_id == node.node_id) {
+                Some(existing) => *existing = node,
+                None => nodes.push(node),
+            }
+        }
+        SubagentTreeEvent::Progress {
+            node_id,
+            activity,
+            tool_name,
+            tool_count,
+            ..
+        } => {
+            if let Some(n) = nodes.iter_mut().find(|n| n.node_id == node_id) {
+                n.tool_count = tool_count;
+                n.last_activity = Some(activity);
+                if tool_name.is_some() {
+                    n.last_tool = tool_name;
+                }
+            }
+        }
+        SubagentTreeEvent::Settled {
+            node_id,
+            lifecycle,
+            duration_ms,
+            tool_calls_made,
+            total_tokens,
+            ..
+        } => {
+            if let Some(n) = nodes.iter_mut().find(|n| n.node_id == node_id) {
+                n.lifecycle = lifecycle;
+                n.elapsed_ms = duration_ms;
+                // The activity word describes what a RUNNING node is doing
+                // right now; left in place it captions a finished node with
+                // its last progress tick — a ✓ row reading "thinking…" in
+                // the real Panel (2026-09-02). `last_tool` stays: "last tool:
+                // grep" is still true of a settled node, "thinking" is not.
+                n.last_activity = None;
+                let final_tools = u32::try_from(tool_calls_made).unwrap_or(u32::MAX);
+                n.tool_count = n.tool_count.max(final_tools);
+                // 0 means "unreported", not "zero tokens" (a real run always
+                // consumes tokens) — mirror the tracker's snapshot rule so the
+                // live path and the cold path agree.
+                if total_tokens > 0 {
+                    n.total_tokens = Some(u64::try_from(total_tokens).unwrap_or(u64::MAX));
+                }
+            }
+        }
+    }
+}
+
+/// Header summary stats over a flat node list — drives the Panel's rollup
+/// line and the TUI's "N running agents" status segment.
+pub struct Summary {
+    pub agents: usize,
+    pub tools: u32,
+    pub active: u32,
+    pub max_depth: u32,
+    pub total_duration_ms: u64,
+    /// `depth_counts[i]` = nodes at depth `i` (drives the sparkline).
+    pub depth_counts: Vec<u32>,
+}
+
+#[must_use]
+pub fn summarize(nodes: &[SubagentNode]) -> Summary {
+    let mut s = Summary {
+        agents: nodes.len(),
+        tools: 0,
+        active: 0,
+        max_depth: 0,
+        total_duration_ms: 0,
+        depth_counts: Vec::new(),
+    };
+    for n in nodes {
+        s.tools += n.tool_count;
+        if n.lifecycle == NodeLifecycle::Running {
+            s.active += 1;
+        }
+        s.max_depth = s.max_depth.max(n.depth);
+        s.total_duration_ms += n.elapsed_ms;
+        let d = n.depth as usize;
+        if s.depth_counts.len() <= d {
+            s.depth_counts.resize(d + 1, 0);
+        }
+        s.depth_counts[d] += 1;
+    }
+    s
 }
 
 /// Recursive subtree rollup — drives the panel's heatmap, sparkline, and
@@ -251,6 +368,8 @@ mod tests {
             last_tool: None,
             last_activity: None,
             result_preview: None,
+            child_session: None,
+            total_tokens: None,
         }
     }
 
@@ -330,6 +449,85 @@ mod tests {
         let tree = build_tree(&[a, b]);
         // Neither is a root (both have present parents) → empty forest, no hang.
         assert!(tree.is_empty());
+    }
+
+    #[test]
+    fn apply_spawned_then_progress_then_settled() {
+        let mut nodes = Vec::new();
+        apply_event(
+            &mut nodes,
+            SubagentTreeEvent::Spawned {
+                node: node("a", None, 1, 10),
+            },
+        );
+        assert_eq!(nodes.len(), 1);
+        apply_event(
+            &mut nodes,
+            SubagentTreeEvent::Progress {
+                node_id: "a".into(),
+                root_session: "agent:sess".into(),
+                step: 2,
+                activity: "tool_called".into(),
+                tool_name: Some("grep".into()),
+                tool_count: 5,
+            },
+        );
+        assert_eq!(nodes[0].tool_count, 5);
+        assert_eq!(nodes[0].last_tool.as_deref(), Some("grep"));
+        assert_eq!(nodes[0].last_activity.as_deref(), Some("tool_called"));
+        apply_event(
+            &mut nodes,
+            SubagentTreeEvent::Settled {
+                node_id: "a".into(),
+                root_session: "agent:sess".into(),
+                lifecycle: NodeLifecycle::Completed,
+                duration_ms: 4200,
+                iterations: 3,
+                tool_calls_made: 9,
+                total_tokens: 100,
+            },
+        );
+        assert_eq!(nodes[0].lifecycle, NodeLifecycle::Completed);
+        assert_eq!(nodes[0].elapsed_ms, 4200);
+        assert_eq!(nodes[0].tool_count, 9);
+        assert_eq!(nodes[0].total_tokens, Some(100));
+        // A settled node has no "current activity" — the last progress tick's
+        // word captioned a ✓ row with "thinking…" in the real Panel. The last
+        // tool is still a fact about the node and stays.
+        assert_eq!(nodes[0].last_activity, None);
+        assert_eq!(nodes[0].last_tool.as_deref(), Some("grep"));
+    }
+
+    #[test]
+    fn settled_zero_tokens_stays_unknown_not_zero() {
+        let mut nodes = vec![node("a", None, 1, 10)];
+        apply_event(
+            &mut nodes,
+            SubagentTreeEvent::Settled {
+                node_id: "a".into(),
+                root_session: "agent:sess".into(),
+                lifecycle: NodeLifecycle::Failed,
+                duration_ms: 10,
+                iterations: 0,
+                tool_calls_made: 0,
+                total_tokens: 0,
+            },
+        );
+        assert_eq!(nodes[0].total_tokens, None);
+    }
+
+    #[test]
+    fn summarize_counts_active_and_depth() {
+        let mut running = node("a", None, 1, 10);
+        running.lifecycle = NodeLifecycle::Running;
+        let mut done = node("b", None, 1, 20);
+        done.lifecycle = NodeLifecycle::Completed;
+        let s = summarize(&[running, done]);
+        assert_eq!(s.agents, 2);
+        assert_eq!(s.active, 1);
+        assert_eq!(s.tools, 2);
+        assert_eq!(s.max_depth, 1);
+        assert_eq!(s.depth_counts.get(1).copied(), Some(2));
     }
 
     #[test]

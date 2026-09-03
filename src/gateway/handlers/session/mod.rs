@@ -9,5 +9,5 @@ pub use db_handlers::{
     handle_delete_db_with_capture, handle_history_db, handle_list_checkpoints_db, handle_list_db,
     handle_new_session_db, handle_patch_db, handle_preview_db, handle_reset_db,
     handle_restore_checkpoint_db, handle_set_project_root_db, handle_set_topic_db,
-    handle_truncate_db, handle_usage_db, HistoryMessage, SessionInfo,
+    handle_truncate_db, handle_usage_db, HistoryMessage,
 };

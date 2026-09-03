@@ -958,7 +958,7 @@ pub async fn build_run_request(
                 // which is the exact property the line above promises. The
                 // path a human reads is a different carrier —
                 // `identity_meta.custom["project_root"]`, surfaced as
-                // `SessionInfo.project_root` — and the `\\?\` prefix is kept
+                // `SessionListRow.project_root` — and the `\\?\` prefix is kept
                 // off it at the boundary that serves it.
                 metadata.insert("project_root".to_string(), path.display().to_string());
                 Ok(path)

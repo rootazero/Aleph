@@ -638,6 +638,28 @@ pub trait CoordTaskStore: Send + Sync {
     /// Returns the number of rows closed.
     async fn abandon_orphaned_runs(&self, live_task_ids: &[String]) -> crate::error::Result<usize>;
 
+    /// Write what a crash-interrupted attempt managed to produce onto its own
+    /// run row.
+    ///
+    /// The row the crash left behind carries an `error` (the janitor's) and,
+    /// until this existed, never a `summary` — so `build_recovery_section`'s
+    /// "partial output (incomplete)" slot was empty for exactly the population
+    /// it was built for, and the next attempt was told to "resume from where
+    /// they left off; reuse work already done" while being shown nothing to
+    /// resume from.
+    ///
+    /// Targets the most recent unfinished-or-janitor-closed row of `task_id`
+    /// that has no summary yet: a completed attempt already wrote its own, and
+    /// overwriting it would replace a deliverable with a fragment.
+    ///
+    /// Returns whether a row was stamped. `false` is an answer ("no crashed
+    /// attempt was waiting for one"), not a failure.
+    async fn stamp_abandoned_run_summary(
+        &self,
+        task_id: &str,
+        summary: &str,
+    ) -> crate::error::Result<bool>;
+
     /// Record a step-level review verdict against the most recent
     /// completed run of `task_id`. Phase C (workflow parity).
     async fn record_run_review(

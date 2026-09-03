@@ -43,7 +43,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .and_then(normalize_think_level);
         let stored = self.session_think_level(&request.session_key).await;
 
-        if let Some(level) = requested.filter(|l| stored != Some(*l)) {
+        if let Some(level) = super::knob_to_stamp(requested, stored, request.is_resume()) {
             self.persist_session_think_level(&request.session_key, level)
                 .await;
         }

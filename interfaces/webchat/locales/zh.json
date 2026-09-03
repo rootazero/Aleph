@@ -265,6 +265,24 @@
       "usage": "用量"
     }
   },
+  "subagent_tree": {
+    "title": "后台子代理",
+    "empty": "还没有后台子代理。子代理一被派生就会出现在这里。",
+    "no_match": "没有符合此过滤条件的子代理。",
+    "sort": "排序：",
+    "filter": "过滤：",
+    "tools_suffix": "工具",
+    "tokens_suffix": "tok",
+    "subtree_agents": "子树代理数",
+    "heat_title": "活跃度（工具/秒）",
+    "preview_title": "结果预览",
+    "thinking": "思考中……",
+    "last_tool": "最近工具：",
+    "transcript_empty": "（子代理对话为空）",
+    "transcript_loading": "正在加载对话……",
+    "transcript_unavailable": "对话不可用：",
+    "no_child_session": "此子代理没有可寻址的对话（在此版本之前派生，或结果内联返回的同步子代理）。"
+  },
   "chat": {
     "new": "+ 新建",
     "team_chat": "团队群聊",
@@ -283,6 +301,9 @@
     "history_load_failed": "无法加载会话",
     "untitled_conversation": "未命名",
     "message_count": "{{ count }} 条消息",
+    "run_badge_interrupted": "中断",
+    "run_badge_log_inconsistent": "日志异常",
+    "run_badge_unknown": "未知",
     "new_chat": "新对话",
     "new_group_chat": "新群聊",
     "confirm_delete": "确认删除？",
@@ -1044,7 +1065,6 @@
       "enable_memory": "启用记忆模块",
       "vector_db": "向量数据库",
       "vector_db_hint": "sqlite-vec 是当前使用的向量数据库后端",
-      "similarity_threshold": "相似度阈值（0.0-1.0）",
       "ai_retrieval": "AI 智能检索",
       "enable_ai_retrieval": "启用 AI 智能记忆检索",
       "timeout_ms": "超时（毫秒）",
@@ -1118,9 +1138,6 @@
       "legacy_warn_threshold": "接近上限预警比例（0.0-1.0）",
       "legacy_warn_threshold_hint": "占用率达到此值时给该块加 [NEAR LIMIT] 标记，让模型知道最旧的条目即将被挤掉。0.95 表示占满 95% 时预警。",
       "restart_required_hint": "保存会写入 config.toml，但本页配置的是 [memory] 整节——读取它的子系统在启动时就捕获了配置，因此改动要等 aleph-server 重启后才生效。",
-      "storage_backup": "存储",
-      "dedup_similarity_threshold": "去重相似度阈值（0.0-1.0）",
-      "dedup_similarity_hint": "相似度超过此值的记忆被视为重复",
       "retrieval_debug": "检索调试面板",
       "click_to_expand": "（点击展开）",
       "test_query_placeholder": "输入测试查询...",
@@ -1794,6 +1811,9 @@
       "mode_cloud_desc": "优先使用公共 API 旗舰模型。本地作为不设门槛的最后兜底降级保留。",
       "allow_escalation": "允许借用云端（需审批）",
       "allow_escalation_desc": "若没有本地提供商成功，在尝试云端提供商作为最后手段前先征求确认。关闭时：此模式下绝不使用云端。",
+      "health_probe": "后台健康探测",
+      "health_probe_desc": "对熔断打开的提供商重新拨号的间隔秒数。默认关闭——一次探测是一次真实的付费请求。留空（或填 0）保持关闭。健康的提供商永不被探测，你停用的提供商也永不被拨号。",
+      "health_probe_off": "关闭",
       "apply": "应用",
       "saving": "保存中…",
       "applied": "已应用——你的下一条消息将使用此路由。",
@@ -2671,7 +2691,12 @@
     "moa_aggregator": "聚合器",
     "moa_spend": "顾问开销",
     "moa_billed": "位计费",
-    "moa_turn_trace_preset": "MoA 单轮追踪 — 预设"
+    "moa_turn_trace_preset": "MoA 单轮追踪 — 预设",
+    "last_run_interrupted": "上一轮运行被中断 — {{ answered }}/{{ dispatched }} 次工具回执已落盘，{{ unknown }} 次结果未知",
+    "last_run_interrupted_plain": "上一轮运行被中断",
+    "last_run_log_inconsistent": "会话日志不一致（{{ tags }}）— 恢复已拒绝，请运行 aleph doctor",
+    "last_run_unknown_state": "上一轮运行状态未知（{{ word }}）— 本客户端无法判断",
+    "last_run_dangling": "上一轮留下 {{ count }} 次未回执的工具调用 — 结果未知"
   },
   "appearance": {
     "mode": {

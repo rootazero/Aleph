@@ -265,6 +265,24 @@
       "usage": "Usage"
     }
   },
+  "subagent_tree": {
+    "title": "Background Sub-agents",
+    "empty": "No background sub-agents yet. They appear here the moment one is spawned.",
+    "no_match": "No sub-agents match this filter.",
+    "sort": "sort:",
+    "filter": "filter:",
+    "tools_suffix": "tools",
+    "tokens_suffix": "tok",
+    "subtree_agents": "agents in subtree",
+    "heat_title": "activity heat (tools/sec)",
+    "preview_title": "result preview",
+    "thinking": "thinking…",
+    "last_tool": "last tool:",
+    "transcript_empty": "(child transcript is empty)",
+    "transcript_loading": "Loading transcript…",
+    "transcript_unavailable": "Transcript unavailable:",
+    "no_child_session": "No child transcript address (spawned before this build, or a sync child whose result was returned inline)."
+  },
   "chat": {
     "new": "+ New",
     "team_chat": "Team Chat",
@@ -283,6 +301,9 @@
     "history_load_failed": "Couldn't load conversations",
     "untitled_conversation": "Untitled",
     "message_count": "{{ count }} messages",
+    "run_badge_interrupted": "interrupted",
+    "run_badge_log_inconsistent": "log inconsistent",
+    "run_badge_unknown": "unknown",
     "new_chat": "New Chat",
     "new_group_chat": "New group chat",
     "confirm_delete": "Confirm delete?",
@@ -1044,7 +1065,6 @@
       "enable_memory": "Enable Memory Module",
       "vector_db": "Vector Database",
       "vector_db_hint": "sqlite-vec is the current vector database backend",
-      "similarity_threshold": "Similarity Threshold (0.0-1.0)",
       "ai_retrieval": "AI-Based Retrieval",
       "enable_ai_retrieval": "Enable AI-Based Memory Retrieval",
       "timeout_ms": "Timeout (ms)",
@@ -1118,9 +1138,6 @@
       "legacy_warn_threshold": "Near-Limit Warning Ratio (0.0-1.0)",
       "legacy_warn_threshold_hint": "Occupancy at which a block is labelled [NEAR LIMIT] so the model knows it is about to lose the oldest entries. 0.95 warns at 95% full.",
       "restart_required_hint": "Saved settings are written to config.toml, but this whole page configures [memory] — the subsystems reading it capture their configuration at startup, so changes take effect after aleph-server restarts.",
-      "storage_backup": "Storage",
-      "dedup_similarity_threshold": "Dedup Similarity Threshold (0.0-1.0)",
-      "dedup_similarity_hint": "Memories above this similarity are considered duplicates",
       "retrieval_debug": "Retrieval Debug Panel",
       "click_to_expand": "(click to expand)",
       "test_query_placeholder": "Enter a test query...",
@@ -1794,6 +1811,9 @@
       "mode_cloud_desc": "Prefer public-API flagship models. Local stays as an ungated last-resort degrade.",
       "allow_escalation": "Allow borrowing cloud (approval-gated)",
       "allow_escalation_desc": "If no local provider succeeds, ask before trying a cloud provider as a last resort. Off: cloud is never used in this mode.",
+      "health_probe": "Background health probe",
+      "health_probe_desc": "Seconds between re-dials of a provider whose circuit is open. Off by default — a probe is a real, paid request. Leave blank (or 0) to keep it off. A healthy provider is never probed, and a provider you disabled is never dialled.",
+      "health_probe_off": "Off",
       "apply": "Apply",
       "saving": "Saving…",
       "applied": "Applied — your next message uses this route.",
@@ -2671,7 +2691,12 @@
     "moa_aggregator": "Aggregator",
     "moa_spend": "Advisor spend",
     "moa_billed": "billed",
-    "moa_turn_trace_preset": "MoA turn trace — preset"
+    "moa_turn_trace_preset": "MoA turn trace — preset",
+    "last_run_interrupted": "The previous run was interrupted — {{ answered }}/{{ dispatched }} tool receipts landed, {{ unknown }} outcomes unknown",
+    "last_run_interrupted_plain": "The previous run was interrupted",
+    "last_run_log_inconsistent": "This conversation's log is inconsistent ({{ tags }}) — recovery refused it; run aleph doctor",
+    "last_run_unknown_state": "The previous run's state is a word this client does not know ({{ word }}) — it cannot vouch for it",
+    "last_run_dangling": "The previous run left {{ count }} tool calls with no receipt — their outcomes are unknown"
   },
   "appearance": {
     "mode": {

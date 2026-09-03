@@ -80,6 +80,15 @@ async fn announce_one(
         .clone()
         .unwrap_or_else(|| result.child_session_id.clone());
 
+    // Every child this notice speaks for. The grouped boot notice carries N;
+    // the ordinary per-child completion carries none and falls back to the one
+    // id above.
+    let batch: Vec<String> = if result.request_ids.is_empty() {
+        vec![request_id.clone()]
+    } else {
+        result.request_ids.clone()
+    };
+
     let status = if result.success {
         "succeeded"
     } else {
@@ -102,14 +111,41 @@ async fn announce_one(
         (_, Some(err)) => err,
         _ => "(no detail)".to_string(),
     };
+    // A batch of N children has N outcomes, and `success` is a single bool
+    // computed by the producer over the whole batch. Rendering it as one
+    // verdict ("run <one id> succeeded") told the model that every child in the
+    // batch had that outcome, and named one arbitrary child as the one to ask
+    // about — while the detail underneath said something different per child.
+    // The grouped header counts instead of judging; the per-child verdicts stay
+    // where the producer wrote them, in `detail`.
+    let head = if batch.len() > 1 {
+        format!(
+            "[system] {} background subagent runs settled while the daemon was down. \
+             Each one's own outcome is listed below — they are not all the same.",
+            batch.len()
+        )
+    } else {
+        format!("[system] Background subagent run {request_id} {status}.")
+    };
+    let pointer = if batch.len() > 1 {
+        format!(
+            "Use the subagent tool's 'check_status' action with any of these \
+             request_ids if you need the full output: {}.",
+            batch.join(", ")
+        )
+    } else {
+        format!(
+            "Use the subagent tool's 'check_status' action with \
+             request_id='{request_id}' if you need the full output."
+        )
+    };
     let input = format!(
-        "[system] Background subagent run {request_id} {status}.\n\
+        "{head}\n\
          Result summary:\n{detail}\n\n\
          Process this result now: report the outcome to the user in your \
          reply (or to your team leader via team messaging when you work as a \
          team member), and take any follow-up actions the original task \
-         implies. Use the subagent tool's 'check_status' action with \
-         request_id='{request_id}' if you need the full output.",
+         implies. {pointer}",
     );
 
     // Dedup with the on-demand paths: a result the parent already saw via a
@@ -119,7 +155,7 @@ async fn announce_one(
     // busy is very often that it is parked in the `wait` that consumes this
     // exact result.
     let dedup_id = request_id.clone();
-    let stamp_id = request_id.clone();
+    let stamp_ids = batch;
 
     announce_delivery::deliver(
         adapter,
@@ -137,11 +173,12 @@ async fn announce_one(
                     .is_consumed(&dedup_id)
             }),
             on_delivered: Box::new(move || {
-                // Durable "the parent knows". Without this stamp, a restart
-                // inside the retry ladder leaves a `Settled` sidecar record
-                // that the boot reconcile skips, and the announcement promised
-                // at spawn time is withdrawn in silence.
-                crate::agents::background_persistence::record_announced(&stamp_id);
+                // Durable "the parent knows", for EVERY child this notice spoke
+                // for. Without the stamp, a restart inside the retry ladder
+                // leaves a `Settled` sidecar record whose promised announcement
+                // is withdrawn in silence; with only the first id stamped, the
+                // other N-1 of a grouped notice come back at the next boot.
+                crate::agents::background_persistence::on_delivered(&stamp_ids);
             }),
         },
     )
@@ -261,6 +298,26 @@ mod tests {
                 success: true,
                 error: None,
                 request_id: Some(request_id.into()),
+                request_ids: vec![request_id.into()],
+            }),
+        )
+    }
+
+    /// The grouped boot notice `background_persistence::init_and_announce_orphans`
+    /// sends: ONE event per parent session speaking for N children, with the
+    /// per-child verdicts inside `summary` and a single batch-wide `success`.
+    fn grouped_event(ids: &[String]) -> GlobalEvent {
+        GlobalEvent::for_test(
+            "agent:main:peer:user",
+            Some("main".into()),
+            AlephEvent::SubAgentCompleted(SubAgentCompletionEvent {
+                agent_id: "main".into(),
+                child_session_id: "child-sid".into(),
+                summary: "- one: completed\n- two: interrupted by a daemon restart".into(),
+                success: true,
+                error: None,
+                request_id: ids.first().cloned(),
+                request_ids: ids.to_vec(),
             }),
         )
     }
@@ -348,6 +405,141 @@ mod tests {
         assert!(
             recorded.input.contains(&request_id),
             "announce input must reference the request_id so the parent can fetch via check_status"
+        );
+    }
+
+    /// A notice that speaks for N children counts them; it does not pass one
+    /// child's verdict off as the batch's.
+    ///
+    /// `success` is a single bool the producer computed over the whole batch,
+    /// and `request_id` is one arbitrary member of it. The old head rendered
+    /// both as a judgement — "Background subagent run <first id> succeeded" —
+    /// above a `summary` that said something different per child, and it named
+    /// that one id as the thing to ask `check_status` about while the other
+    /// N-1 results went unmentioned.
+    ///
+    /// RED before the batch head: the input opened with a single-run verdict
+    /// and the pointer carried one id.
+    #[tokio::test]
+    async fn a_grouped_notice_counts_its_children_instead_of_judging_one() {
+        let first = format!("grouped-a-{}", uuid::Uuid::new_v4());
+        let second = format!("grouped-b-{}", uuid::Uuid::new_v4());
+        seed_completed(&first);
+        seed_completed(&second);
+
+        let (registry, _tmp) = registry_with_main_agent().await;
+        let adapter = RecordingAdapter::new(0);
+        let event_bus = Arc::new(GatewayEventBus::new());
+
+        announce_one(
+            adapter.clone(),
+            registry,
+            event_bus,
+            grouped_event(&[first.clone(), second.clone()]),
+        )
+        .await;
+
+        assert_eq!(adapter.call_count(), 1);
+        let input = adapter
+            .calls
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pop()
+            .expect("one call recorded")
+            .input;
+
+        assert!(
+            input.contains("2 background subagent runs settled"),
+            "the grouped head counts the batch: {input}"
+        );
+        assert!(
+            !input.contains("Background subagent run "),
+            "no single child's verdict may stand in for the batch's: {input}"
+        );
+        assert!(
+            input.contains(&first) && input.contains(&second),
+            "every child the notice speaks for stays addressable: {input}"
+        );
+    }
+
+    /// The other half of the same defect: a boot notice that speaks for exactly
+    /// ONE child keeps the single-run head, so the head's verdict word must be
+    /// true of that child.
+    ///
+    /// The batch bool used to be `interrupted == 0`, i.e. "no run is still
+    /// `Running`" — which is `true` for a lone record that settled `failed`.
+    /// The head then read "Background subagent run <id> succeeded." directly
+    /// above a body reading "1 background sub-agent(s) ended without success
+    /// before the daemon stopped". The `batch.len() > 1` guard above never
+    /// covered this: at N == 1 there is no count to fall back on.
+    ///
+    /// Built through `orphan_notice`, the producer that owns the verdict, so a
+    /// regression there is what goes red — a hand-written `success: false`
+    /// event would only test this file's `if`.
+    #[tokio::test]
+    async fn a_lone_child_that_settled_unsuccessfully_is_not_called_succeeded() {
+        use crate::agents::background_persistence::{
+            orphan_notice, PersistedRun, RecoveredRun, RunPhase,
+        };
+
+        let request_id = format!("lone-failed-{}", uuid::Uuid::new_v4());
+        seed_completed(&request_id);
+
+        let run = RecoveredRun {
+            record: PersistedRun {
+                request_id: request_id.clone(),
+                root_session: "agent:main:peer:user".into(),
+                task: "check the migration".into(),
+                agent: "researcher".into(),
+                started_ms: 1,
+                phase: RunPhase::Settled,
+                ended_ms: Some(2),
+                outcome: Some("failed".into()),
+                partial_result_file: None,
+                announce_attempts: 1,
+                announced_boot: None,
+            },
+            partial_result: String::new(),
+            last_activity_ms: 2,
+        };
+        let event = orphan_notice("main", std::slice::from_ref(&run));
+        assert!(
+            !event.success,
+            "a record that settled `failed` is not a success"
+        );
+
+        let (registry, _tmp) = registry_with_main_agent().await;
+        let adapter = RecordingAdapter::new(0);
+        let event_bus = Arc::new(GatewayEventBus::new());
+
+        announce_one(
+            adapter.clone(),
+            registry,
+            event_bus,
+            GlobalEvent::for_test(
+                "agent:main:peer:user",
+                Some("main".into()),
+                AlephEvent::SubAgentCompleted(event),
+            ),
+        )
+        .await;
+
+        assert_eq!(adapter.call_count(), 1);
+        let input = adapter
+            .calls
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pop()
+            .expect("one call recorded")
+            .input;
+
+        assert!(
+            !input.contains("succeeded"),
+            "the head must not call an unsuccessful child a success: {input}"
+        );
+        assert!(
+            input.contains(&format!("Background subagent run {request_id} failed")),
+            "the lone-child head still names the child and its real verdict: {input}"
         );
     }
 

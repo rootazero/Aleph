@@ -78,6 +78,118 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                        # tree this must FAIL — both misattributed to "the server
                                        # restarted" — which is the falsifying arm for the design
                                        # spec's §1.4 claim.
+./qa/resume_boundary/run.sh claims     # ONE reduction, three faces, and they must agree: the wire
+                                       # (`chat.history` → `session.last_run`, the exact field the
+                                       # Panel sidebar and TUI picker render), the operator
+                                       # (`aleph-server resume --json` → every `ResumeReceipt`
+                                       # key), and the effect (`last_run` settles to `clean`).
+                                       # Boots with resume OFF so the receipt is the ONLY pass
+                                       # over the log — a boot scan that already repaired it
+                                       # makes every counter read zero, which looks like the
+                                       # feature working. Also prints the two uncapped reads
+                                       # A10 deferred (`load_all_events`, `load_run_markers`) as
+                                       # NUMBERS: a cost on record is not a cost until measured.
+./qa/resume_boundary/run.sh denied     # a dangling call the approval gate DENIED must be repaired
+                                       # "NOT EXECUTED", never "OUTCOME UNKNOWN" — the model must
+                                       # not go looking for side effects that cannot exist. The
+                                       # denial row is written by the fixture with the server
+                                       # down, because that is the only half of this shape
+                                       # reachable from outside: a statically denied call is
+                                       # answered in the same turn (never dangling), and the
+                                       # crash window between a denial and its receipt is inside
+                                       # one process. Everything downstream — reduction, the
+                                       # `denied` flag on the wire, the repair text, the receipt
+                                       # — is the product reading its own log.
+./qa/resume_boundary/run.sh rewind     # a rewind that cuts a run's tail away and leaves its
+                                       # `RunStarted` behind must end with the marker tail
+                                       # BALANCED. Without it the log SAYS a run is still open, and
+                                       # every later boot re-classifies the session `Interrupted`,
+                                       # re-runs a turn the user deleted, and does it forever —
+                                       # nothing else ever closes that marker. The rewind is aimed
+                                       # ONE ROW PAST the open `RunStarted` on purpose: aimed AT it,
+                                       # the opening half is retired too, `close_open_run_after_retire`
+                                       # returns `Ok(None)` without appending anything, and the stage
+                                       # is green on a build with no balancer at all (that was the
+                                       # first-round arrangement; the tail then read `never_ran` and
+                                       # the receipt `no_runs`). So the stage asserts the effects the
+                                       # balancer alone can produce: the `RunStarted` still live, a
+                                       # `RunFinished{cancelled}` appended after it, the wire face
+                                       # reading `clean` before AND after a restart, and a parsed
+                                       # `aleph-server resume --json` receipt reading
+                                       # `already_finished` with `scanned > 0` (parsed, not grepped:
+                                       # every counter of `ResumeReceipt` is serialised
+                                       # unconditionally, so grepping for one of their keys matches
+                                       # any well-formed receipt). Resume is OFF:
+                                       # `balance_run_markers_after_retire` deliberately leaves a
+                                       # RUNNING session alone, so a stage that let the boot scan
+                                       # resume first would be green over a session it never tested.
+./qa/resume_boundary/run.sh knobs      # the resumed run follows the SNAPSHOT its `RunStarted`
+                                       # carried, not the session's current row. The crashing
+                                       # turn carries an explicit per-turn directive for model
+                                       # A (without one the marker records `model: None` — the
+                                       # agent's CONFIGURED model is not a routing directive —
+                                       # and there is no snapshot to replay); the session is
+                                       # then moved to model B with the server DOWN, because no
+                                       # RPC can move it (`session.update` does not exist, and
+                                       # the metadata modify path refuses `model_pin` on
+                                       # purpose — the legal writer is the `select_model` TOOL).
+                                       # Three anti-vacuity checks come first: the marker really
+                                       # snapshotted A, the row really moved to B, and the
+                                       # restarted server really reads B. One model on the
+                                       # provider could not tell those apart — the assertion
+                                       # would pass for a build that dropped the envelope
+                                       # entirely.
+                                       # The stage carries the SECOND knob too, and in the
+                                       # opposite direction on purpose: the crashing turn runs
+                                       # at exec tier `ask`, the row is opened up to `full`
+                                       # with the server down, and the resumed run's OWN
+                                       # `RunStarted` envelope must still read `ask`. Snapshot
+                                       # `full` over a session since pulled down to `ask` —
+                                       # the arrangement that reads naturally — is green for a
+                                       # build with NO ceiling at all, because the session rung
+                                       # already answers `ask`. Only the loosening direction
+                                       # separates `resolve_exec_tier_with_ceiling` from
+                                       # `resolve_exec_tier`, and it is the direction that
+                                       # costs something when it is wrong: a resume that ran
+                                       # too loose executes, unattended, at a tier the operator
+                                       # revoked while the daemon was down.
+./qa/resume_boundary/run.sh holes      # a burst of tool calls in one turn must not lose a row
+                                       # and must not bill the run twice: `chat.history`'s
+                                       # server-reported total >= projectable events in
+                                       # `session_events`, and the session's token total is
+                                       # UNCHANGED across a restart (a heal pass that re-stamps
+                                       # an already-stamped row bills the same run twice, and a
+                                       # counter that grew while nobody ran anything is the only
+                                       # outside evidence of it). The burst run is made to
+                                       # FINISH before the kill — `dangle` returns on the first
+                                       # durable dispatch, and killing there would leave dangling
+                                       # calls whose resume adds a turn's usage. Two measured
+                                       # bounds the stage prints rather than hides: the 4096
+                                       # projector queue never fills (0 deferrals at both 40 and
+                                       # 900 calls), and above the store's compaction bound the
+                                       # projection is trimmed ON PURPOSE — at `QA_BURST=900`,
+                                       # 1803 projectable events, history total 69,
+                                       # `compaction_count 34`. So the comparison is guarded by
+                                       # an explicit `compaction_count == 0` precondition:
+                                       # raising the burst turns THAT red, not the row count,
+                                       # which would otherwise read like data loss.
+#
+# Two things hold the five r2 stages themselves honest, because a QA fixture is
+# also code that can stop working without saying so:
+#
+#   * **Every stage has an assertion FLOOR** (`claims` 13, `denied` 5, `rewind` 5,
+#     `knobs` 10, `holes` 12 — measured, not aspirational). Each `drive` call is
+#     its own node process with its own counters, so the last line a green stage
+#     prints is whichever phase ran last; for `claims` that is the cost probe,
+#     which asserts nothing and prints `0 passed, 0 failed`. A phase whose
+#     assertions all vanished prints the SAME line and still exits 0. run.sh sums
+#     the counts and turns a stage RED when it passes while measuring less than
+#     its floor. Adding an assertion raises the floor in the same commit.
+#   * **The round-1 `crash` / `attribute` stages refuse to run without a real
+#     python3** (exit 78, with the reason named). On this Windows host `python3`
+#     and `python` are both the `WindowsApps` stub — no output, exit 49 — so they
+#     have NOT been re-measured this round; the r2 stages above are the coverage
+#     that exists here. Do not read their absence as a pass.
 ./qa/session_order/run.sh        # the transcript's order and `session.truncate`, on BOTH
                                  # backends. Drives one conversation into a file-backed
                                  # server and a sqlite-backed one (separate scratch
@@ -118,6 +230,22 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # project-page tab has a server-side effect. Same 0.0.0.0 + LAN-leg
                                  # reason as `multiuser_audit`. Node, not Python — see its run.sh
                                  # header.
+
+./qa/agents_viz/run.sh claims    # §4.11 / §5.13 / §3.13 tasks+agents visualization: the two
+                                 # severed wires the round fixed, each asserted by effect on a
+                                 # real socket. `run.subagent_tree` reaches an UNFILTERED (TUI-
+                                 # shaped) connection in its double-nested envelope; a filtered
+                                 # connection gets it only after subscribing (a filtered-but-not-
+                                 # subscribed socket gets NOTHING — the negative arm); the node
+                                 # carries child_session and chat.history opens it. Plus the plan's
+                                 # three carriers (live frames / RunSummary.plan / chat.history).
+                                 # First run found RunSummary.plan had never left the server —
+                                 # FEATURE_LOCATOR 附录 D.4.35. Reuses teamchat_rooms' mock
+                                 # (QA-DELEGATE-BG / QA-PLAN arms) and config patcher. No pty:
+                                 # aleph-tui is never launched (same call as btw_tui).
+./qa/agents_viz/run.sh panel     # boot + hold with a minted session, prints the browser URL and
+                                 # the one-line `delegate` / `plan` commands — the tree is a LIVE
+                                 # projection, attach the browser BEFORE triggering.
 
 ./qa/channels/run.sh             # both phases below
 ./qa/channels/run.sh reach       # feishu / line / qq really come up; msteams is the control.
@@ -720,6 +848,10 @@ refuses to boot with `invalid type: sequence, expected a map`.
 - **`browser_managed`** — 改 `src/browser/` 或 `src/builtin_tools/browser_tools/` 前跑。
   `{open,ambient,headed,tools,frames,reap,pdf,existing,exec-offload}`——**两个 driver 的每个动词都有效果断言**。
 - **`btw_tui`** — 改 `/btw` 的到达顺序或退休面前先读 FEATURE_LOCATOR §4.14 的机制图，再跑 `{frames,promote}`。
+- **`agents_viz`** — 改 `run.subagent_tree` 的产地 / relay / 可见性分类、`events.subscribe` 的过滤语义、
+  执行清单三载体（`tool_call_completed` snapshot · `RunSummary.plan` · `chat.history.plan`）或 TUI/Panel
+  的 tasks/agents 面板前跑 `claims`；改 Panel `/dashboard/subagents` 的渲染再跑 `panel` 并挂上浏览器。
+  三个 socket 三种订阅形状，D5 是负向臂——少了它 D4 对「订阅才是载体」什么也证明不了。
 - **`picker_nav`** — 改 `interfaces/webchat/` 的键盘导航/渐隐前跑：键盘 walk · 条件渐隐 · 手机端加 provider，
   三档宽度各带效果断言。
 - **`canvas`** — 改 `src/canvas/` 或 Panel canvas 视图前跑：九项清单每条带效果断言。

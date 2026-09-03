@@ -120,6 +120,7 @@ fn register_subagent(request_id: &str, root_session: &str) -> RegisteredAgent {
             depth: 1,
             root_session: root_session.to_string(),
             model: None,
+            child_session: None,
         },
     );
     RegisteredAgent {

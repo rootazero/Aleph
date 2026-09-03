@@ -30,6 +30,7 @@ pub mod extension_usage;
 mod ids;
 pub mod json_canvas;
 pub mod jsonrpc;
+pub mod metrics;
 pub mod paths;
 pub mod plan;
 pub mod plugins;
@@ -38,10 +39,12 @@ pub mod providers;
 pub mod pty;
 pub mod queue;
 pub mod receipt;
+pub mod resume;
 pub mod runtime;
 pub mod scope;
 pub mod search;
 pub mod session_thread;
+pub mod sessions;
 pub mod spend;
 pub mod subagent_tree;
 pub mod team_topic;
@@ -65,10 +68,15 @@ pub use events::{
 pub use jsonrpc::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolCallContext, ToolCallParams, ToolCallResult,
 };
-pub use session_thread::{
-    AgentRunAccepted, AgentRunRequest, AgentRunStatusReport, AgentRunStatusRequest, RunPhase,
-    SessionSnapshot,
+pub use metrics::{
+    AgentSlotUsage, BusyQueueMetrics, RunConcurrency, RunConcurrencyMetrics, SessionQueueDepth,
 };
+pub use resume::{RefusedEntry, ResumeReceipt, ResumeStatus};
+pub use session_thread::{
+    AgentRunAccepted, AgentRunRequest, AgentRunStatusReport, AgentRunStatusRequest,
+    DanglingCallView, LastRunDisposition, LastRunState, RunPhase, RunProgressView, SessionSnapshot,
+};
+pub use sessions::SessionListRow;
 pub use subagent_tree::{
     build_tree, NodeLifecycle, Rollup, SubagentNode, SubagentTreeEvent, TreeNode,
 };

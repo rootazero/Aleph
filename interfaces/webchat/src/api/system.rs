@@ -67,60 +67,19 @@ impl SystemApi {
     // copy — it has three call sites).
 }
 
-/// Combined payload of `gateway.metrics.run_concurrency`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RunConcurrencyMetrics {
-    #[serde(default)]
-    pub run_concurrency: RunConcurrency,
-    /// Backend session keys with a run currently in flight.
-    #[serde(default)]
-    pub running_sessions: Vec<String>,
-    /// Messages parked in the per-session busy wait lanes — the backlog
-    /// *behind* the run slots. Absent on servers predating the field.
-    #[serde(default)]
-    pub busy_queue: BusyQueue,
-}
-
-/// Mirror of the server-side `busy_queue::BusyQueueSnapshot`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct BusyQueue {
-    #[serde(default)]
-    pub total_waiting: usize,
-    /// Deepest lane first; idle sessions omitted.
-    #[serde(default)]
-    pub per_session: Vec<SessionQueueDepth>,
-}
-
-/// One session's queued-message backlog.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionQueueDepth {
-    pub session_key: String,
-    pub depth: usize,
-}
-
-/// Mirror of server-side `ConcurrencySnapshot` (`execution_engine/concurrency.rs`).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RunConcurrency {
-    #[serde(default)]
-    pub global_in_use: usize,
-    #[serde(default)]
-    pub global_total: usize,
-    #[serde(default)]
-    pub per_agent_cap: usize,
-    #[serde(default)]
-    pub waiting: usize,
-    #[serde(default)]
-    pub per_agent: Vec<AgentSlotUsage>,
-}
-
-/// Mirror of server-side `AgentSlotUsage` — one agent's live run-slot usage.
-/// The agent id is the memory/storage isolation boundary (distinct from the
-/// per-session parallelism unit).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentSlotUsage {
-    pub agent_id: String,
-    pub in_use: usize,
-}
+/// The `gateway.metrics.run_concurrency` payload, as one shape shared with the
+/// server that builds it.
+///
+/// These were five hand-written mirrors of a `serde_json::json!` envelope. A
+/// mirror can only ever prove it reads a superset of what the literal happens
+/// to emit, so a key renamed server-side degraded to a `#[serde(default)]`
+/// zero here — a saturated engine rendering as an idle one (criterion #10).
+/// `RunConcurrency::per_agent` is the sharpest case: it is `Option` on the
+/// wire because "withheld from this caller" and "no agent is busy" are
+/// different answers, and the mirror collapsed both into an empty `Vec`.
+pub use aleph_protocol::metrics::{
+    AgentSlotUsage, BusyQueueMetrics, RunConcurrency, RunConcurrencyMetrics, SessionQueueDepth,
+};
 
 /// Mirror of server-side `LaneOccupancy`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,3 +98,56 @@ pub struct LaneOccupancy {
 // The wire shape they described still exists server-side — see
 // `gateway/handlers/gateway_metrics.rs` and `agents/background_tracker.rs::
 // subagent_snapshot`, which are the authoritative definitions.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Built from the shared type and read back through it — the round trip the
+    /// old literal-versus-mirror test could not perform, because both halves of
+    /// it were written in this file.
+    #[test]
+    fn run_concurrency_decodes_the_protocol_type() {
+        let sent = RunConcurrencyMetrics {
+            run_concurrency: RunConcurrency {
+                global_in_use: 3,
+                global_total: 8,
+                per_agent_cap: 2,
+                waiting: 1,
+                per_agent: Some(vec![AgentSlotUsage {
+                    agent_id: "main".into(),
+                    in_use: 2,
+                }]),
+            },
+            running_sessions: vec!["agent:main:main:s1".into()],
+            busy_queue: BusyQueueMetrics {
+                total_waiting: 4,
+                per_session: vec![SessionQueueDepth {
+                    session_key: "agent:main:main:s1".into(),
+                    depth: 4,
+                }],
+            },
+        };
+        let wire = serde_json::to_value(&sent).expect("the server's envelope serialises");
+        let parsed: RunConcurrencyMetrics =
+            serde_json::from_value(wire).expect("and the Panel parses it");
+        assert_eq!(parsed, sent);
+    }
+
+    /// The two answers this gauge must not confuse. `None` is "not shown to
+    /// you"; `Some([])` is "no agent holds a slot". A reader that rendered the
+    /// first as the second would report an idle server off a fact it was simply
+    /// not given (criterion #17).
+    #[test]
+    fn a_withheld_per_agent_breakdown_is_not_an_idle_one() {
+        let withheld: RunConcurrency =
+            serde_json::from_value(serde_json::json!({ "global_total": 8 }))
+                .expect("a member's view parses");
+        assert!(withheld.per_agent.is_none());
+
+        let idle: RunConcurrency =
+            serde_json::from_value(serde_json::json!({ "global_total": 8, "per_agent": [] }))
+                .expect("an operator's view parses");
+        assert_eq!(idle.per_agent, Some(Vec::new()));
+    }
+}

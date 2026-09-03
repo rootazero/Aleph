@@ -1043,14 +1043,9 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 let hit_limit = harness.hit_limit();
 
                 let total_tokens = harness.total_tokens();
-                let result = extract_run_result(
-                    base.session.as_ref(),
-                    &child_id,
-                    hit_limit,
-                    total_tokens,
-                    turn,
-                )
-                .await?;
+                let result =
+                    extract_run_result(base.session.as_ref(), &child_id, hit_limit, total_tokens)
+                        .await?;
 
                 // Emit SubagentReturned to the parent session. Same
                 // rationale as SubagentSpawned above: durably-recovered
@@ -1198,7 +1193,6 @@ async fn extract_run_result(
     child_id: &SessionId,
     hit_limit: bool,
     total_tokens: u64,
-    own_turn: crate::session::events::TurnId,
 ) -> Result<LoopRunResult, String> {
     let all = session
         .get_events(child_id, None, None)
@@ -1218,15 +1212,13 @@ async fn extract_run_result(
     // question back as its result, with a success shape, is worse than an
     // error.
     //
-    // `own_turn` is the turn id the spawner minted for the seeded task, so the
-    // first event carrying it is the exact boundary. Nothing forked can share
-    // it (parent turns carry their own uuids), and with no fork the boundary is
-    // index 0 — byte-identical to the previous behaviour.
-    let start = all
-        .iter()
-        .position(|r| turn_id_of(&r.event) == Some(own_turn))
-        .unwrap_or(0);
-    let events = &all[start..];
+    // `reduction::own_work_start` is that boundary, shared with the recovery
+    // read path (`subagent_tool::recovery::resolve_forgotten`) so the two faces
+    // of "what did this child itself do" cannot drift apart. It reads the
+    // `SessionForked` marker `fork::seed` writes plus the `TurnStarted` this
+    // module emits right after it; with no fork the boundary is index 0 —
+    // byte-identical to the previous behaviour.
+    let events = &all[crate::session::reduction::own_work_start(&all)..];
 
     let mut iterations: usize = 0;
     let mut tool_calls_made: usize = 0;
@@ -1299,6 +1291,16 @@ fn ephemeral_for(agent_id: &str, request_id: Option<&str>) -> SessionKey {
         agent_id: agent_id.to_string(),
         ephemeral_id,
     }
+}
+
+/// Public face of the background half of [`ephemeral_for`]: the session key a
+/// background child's transcript persists under. The tracker stamps this into
+/// `SubagentNode.child_session` so clients receive the address instead of
+/// re-deriving its shape — a client-side derivation would be a second source
+/// of truth that rots the day this format moves.
+#[must_use]
+pub fn background_child_session_key(agent_id: &str, request_id: &str) -> SessionKey {
+    ephemeral_for(agent_id, Some(request_id))
 }
 
 /// Prefix for a **background** child's session key, whose suffix is the
@@ -1438,36 +1440,6 @@ fn build_context_triple(
 }
 
 /// Whether `target` is the last `AssistantMessage` in `events` (by seq).
-/// The turn an event belongs to, for the events that carry one.
-///
-/// Broader than `fork::turn_of`, which answers the same question only for
-/// prompt-bearing events: the boundary [`extract_run_result`] needs is the
-/// seeded `TurnStarted`, which never reaches the model and so is not in that
-/// set. Two questions, two predicates — merging them would make one of the two
-/// call sites quietly wrong.
-fn turn_id_of(event: &SessionEvent) -> Option<crate::session::events::TurnId> {
-    match event {
-        SessionEvent::TurnStarted { turn_id, .. }
-        | SessionEvent::UserMessage { turn_id, .. }
-        | SessionEvent::AssistantMessage { turn_id, .. }
-        | SessionEvent::AssistantRunMeta { turn_id, .. }
-        | SessionEvent::SystemMessage { turn_id, .. }
-        | SessionEvent::ToolCallRequested { turn_id, .. }
-        | SessionEvent::ToolCallApproved { turn_id, .. }
-        | SessionEvent::ToolCallDenied { turn_id, .. }
-        | SessionEvent::ToolResult { turn_id, .. }
-        | SessionEvent::ToolError { turn_id, .. }
-        | SessionEvent::SubagentSpawned { turn_id, .. }
-        | SessionEvent::SubagentReturned { turn_id, .. } => Some(*turn_id),
-        SessionEvent::Error { turn_id, .. } => *turn_id,
-        SessionEvent::SessionWoken { .. }
-        | SessionEvent::RunStarted { .. }
-        | SessionEvent::RunFinished { .. }
-        | SessionEvent::CompactionPerformed { .. }
-        | SessionEvent::SessionForked { .. } => None,
-    }
-}
-
 fn is_last_assistant(events: &[SessionEventRecord], target: &SessionEventRecord) -> bool {
     events
         .iter()

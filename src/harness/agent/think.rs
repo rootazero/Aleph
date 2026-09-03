@@ -933,10 +933,8 @@ impl AgentHarness {
                 args_hash: hash_tool_args(&tc.arguments),
             });
         }
-        let stop_reason = response
-            .tool_calls
-            .is_empty()
-            .then_some(STOP_REASON_END_TURN);
+        let no_tool_calls = response.tool_calls.is_empty();
+        let stop_reason = no_tool_calls.then_some(STOP_REASON_END_TURN);
         let session_key = session_id.to_key_string();
         let verdict = self
             .run_verifiers(

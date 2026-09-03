@@ -290,7 +290,15 @@ pub(crate) fn query_with_bootstrap_ticket(search: &str, ticket: &str) -> String 
 #[cfg(target_arch = "wasm32")]
 fn persist_device_token(token: &str) {
     if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        let _ = s.set_item(GATEWAY_DEVICE_TOKEN_KEY, token);
+        if let Err(e) = s.set_item(GATEWAY_DEVICE_TOKEN_KEY, token) {
+            // Silent failure here used to surface as the user logging back in
+            // on every reload ("Aleph keeps forgetting my token"). Log so
+            // the dev console shows the real cause (full / private mode /
+            // disabled storage) and the boot flow can react.
+            web_sys::console::warn_1(
+                &format!("localStorage write failed for device token: {e:?}").into(),
+            );
+        }
     }
 }
 
@@ -298,7 +306,11 @@ fn persist_device_token(token: &str) {
 #[cfg(target_arch = "wasm32")]
 fn persist_legacy_token(token: &str) {
     if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        let _ = s.set_item(GATEWAY_LEGACY_TOKEN_KEY, token);
+        if let Err(e) = s.set_item(GATEWAY_LEGACY_TOKEN_KEY, token) {
+            web_sys::console::warn_1(
+                &format!("localStorage write failed for legacy token: {e:?}").into(),
+            );
+        }
     }
 }
 
@@ -1106,8 +1118,12 @@ impl DashboardState {
         {
             let rpc_tx = self.rpc_tx.with_value(std::clone::Clone::clone);
             if let Some(tx) = rpc_tx {
-                tx.unbounded_send(request)
-                    .map_err(|_| RpcFailure::local("Failed to send RPC request"))?;
+                tx.unbounded_send(request).map_err(|e| {
+                    // Keep the source error so triage can tell a closed channel
+                    // from a full one (the old "Failed to send RPC request"
+                    // string lumped every failure mode together).
+                    RpcFailure::local(format!("Failed to send RPC request: {e}"))
+                })?;
             } else {
                 return Err(RpcFailure::local("Not connected"));
             }
@@ -1120,9 +1136,8 @@ impl DashboardState {
         // converting an infinite spinner into a surfaced, retryable error.
         use futures::future::{select, Either};
         match select(response_rx, TimeoutFuture::new(30_000)).await {
-            Either::Left((res, _)) => {
-                res.map_err(|_| RpcFailure::local("Response channel closed"))?
-            }
+            Either::Left((res, _)) => res
+                .map_err(|e| RpcFailure::local(format!("Response channel closed: {e}")))?,
             Either::Right(((), _)) => Err(RpcFailure::local("Request timed out")),
         }
     }

@@ -523,6 +523,14 @@ pub async fn execute_member_task(
             // after N seconds". A ten-minute research step therefore restarted
             // from zero on every retry until it burned `max_retries`.
             //
+            // This arm is one of TWO producers of that "here is what it had"
+            // slot, and it is the one that gets to run: a timeout leaves the
+            // dispatcher alive. The other is `schedule::reclaim`, which stamps
+            // the same slot (`stamp_abandoned_run_summary`) for the attempt
+            // whose whole daemon died — the case where no arm here executes at
+            // all. Read them together: "no partial" means neither producer had
+            // one, not that this one is the only way a partial can exist.
+            //
             // `error` is deliberately left alone rather than merged: "it did
             // not finish" and "here is what it had" are different facts, and
             // `run_task` only writes `task.result` on Completed, so a partial

@@ -390,7 +390,10 @@ impl SelfConfigTool {
                  load, latency, rolling rpm/tpm usage) and the failover chain \
                  are in data.runtime. data.runtime.next_order is the order the \
                  NEXT request will dial, gates included — read it before \
-                 guessing why a provider was chosen. data.runtime.config_problems \
+                 guessing why a provider was chosen; a step flagged \
+                 health_sidelined (breaker open or pacing) or rate_sidelined \
+                 (at its configured ceiling, unpinned) is passed over while a \
+                 later candidate remains. data.runtime.config_problems \
                  lists [route] settings that are set but cannot take effect."
             }
             None => "",

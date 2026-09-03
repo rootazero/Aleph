@@ -8,34 +8,36 @@
 //! `aleph-cli` because `aleph-tui` cannot depend on that crate — both depend on
 //! this one.
 
+use aleph_protocol::SessionListRow;
 use serde::Deserialize;
 
 use crate::connection::AlephClient;
 use crate::error::{CliError, CliResult};
 
-/// One row of `sessions.list`, reduced to the two fields this decision needs.
+/// The reply, as one type shared with the server.
 ///
-/// Parsed into a type rather than poked at with `get("key")`: the field names
-/// are a wire contract with the server, and a typo in a string literal degrades
-/// to "no sessions available" — a message that reads like an empty install.
-#[derive(Debug, Deserialize)]
-struct SessionRow {
-    key: String,
-    #[serde(default)]
-    last_active_at: String,
-}
-
+/// This module used to declare its own two-field `SessionRow`. It parsed
+/// correctly, which is the trap: a private struct naming a subset of a wire
+/// contract can only ever prove it is a superset reader of what arrives, so a
+/// server-side rename degrades to `#[serde(default)]` — "no sessions
+/// available", a message that reads like an empty install (criterion #10).
+/// [`SessionListRow`] is the type the server constructs, so the same rename is
+/// a compile error here.
+///
+/// Only `key` and `last_active_at` are read; the rest ride along, which costs
+/// nothing and means the next caller that needs `topic` does not write a third
+/// partial copy.
 #[derive(Debug, Deserialize)]
 struct SessionListReply {
     #[serde(default)]
-    sessions: Vec<SessionRow>,
+    sessions: Vec<SessionListRow>,
 }
 
 /// The key of the most recently active conversation.
 ///
 /// RFC 3339 timestamps sort lexicographically, so a string comparison is the
 /// chronological one as long as every row uses the same offset — which
-/// `SessionInfo` guarantees by rendering them all through `to_rfc3339`.
+/// `SessionListRow` guarantees by rendering them all through `to_rfc3339`.
 ///
 /// # Errors
 ///
@@ -45,7 +47,7 @@ struct SessionListReply {
 pub async fn resolve_last_session(client: &AlephClient) -> CliResult<String> {
     let listed: SessionListReply = client.call("sessions.list", None::<()>).await?;
 
-    let mut best: Option<&SessionRow> = None;
+    let mut best: Option<&SessionListRow> = None;
     for row in &listed.sessions {
         if row.key.is_empty() {
             continue;
@@ -69,13 +71,14 @@ mod tests {
         let reply = SessionListReply {
             sessions: rows
                 .iter()
-                .map(|(k, ts)| SessionRow {
+                .map(|(k, ts)| SessionListRow {
                     key: (*k).to_string(),
                     last_active_at: (*ts).to_string(),
+                    ..SessionListRow::default()
                 })
                 .collect(),
         };
-        let mut best: Option<&SessionRow> = None;
+        let mut best: Option<&SessionListRow> = None;
         for row in &reply.sessions {
             if row.key.is_empty() {
                 continue;

@@ -433,11 +433,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // (`GatewayEventFrame::SessionUserMessage`): a room member's message
     // reaches the other members the moment it becomes a transcript row,
     // instead of only when the turn it started finishes.
+    let message_projector = alephcore::gateway::session_projector::MessageProjector::new(
+        session_store.clone(),
+        Some(event_bus.clone()),
+    );
+    // Published so the `core/projection-holes` doctor check can reach the
+    // write path from the two registries that build it — neither of which has
+    // ever held a session store. Without it that check reports UNKNOWN.
+    alephcore::gateway::session_projector::set_global_message_projector(message_projector.clone());
     let projector: Arc<dyn alephcore::session::observer::SessionEventObserver> =
-        alephcore::gateway::session_projector::MessageProjector::new(
-            session_store.clone(),
-            Some(event_bus.clone()),
-        );
+        message_projector.clone();
     let session_service_and_store = build_sqlite_session_service(
         &alephcore::gateway::SessionManagerConfig::default().db_path,
         Some(projector),
@@ -1898,7 +1903,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.generation_registry.clone(),
     );
 
-    register_session_handlers(&mut server, &session_store, &memory_db, args.daemon);
+    register_session_handlers(
+        &mut server,
+        &session_store,
+        &memory_db,
+        Some(agent_result.run_manager.clone()),
+        args.daemon,
+    );
     // Artifact metadata (`artifacts.list`, `session.export_html`). The byte
     // route itself is plain HTTP on the axum router; these RPCs are what mint
     // the capability that authorises it.
@@ -1996,9 +2007,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Background health prober for circuit-open providers (LiteLLM/Bifrost
     // parity). The loop self-gates on `[route] health_probe_interval_secs`
-    // (0/absent = off, the default — probing spends real requests), read fresh
-    // from the live route handle every tick so `route_config.update` hot-tunes
-    // it. Spawned unconditionally: with the knob off it idles probe-free.
+    // (0/absent = off, the default — probing spends real requests), re-read
+    // from the live route handle at every 30s slice of the wait so
+    // `route_config.update` hot-tunes it in both directions. Spawned
+    // unconditionally: with the knob off it idles probe-free.
     alephcore::gateway::health_prober::spawn_background(
         app_config_for_oauth.clone(),
         oauth_vault.clone(),
@@ -2865,6 +2877,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             let reconciler = alephcore::gateway::ProjectionReconciler::new(
                 event_store.clone(),
                 session_store_for_reconcile.clone(),
+                message_projector.clone(),
+                resume_cfg.max_age_secs,
             );
             let resume_collaborators = (
                 agent_result.execution_adapter.clone(),
@@ -2878,13 +2892,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // nothing and hands out no run_id, so no UI can follow or stop it.
             let bus_for_resume = event_bus.clone();
             tokio::spawn(async move {
-                let rr = reconciler.reconcile_interrupted().await;
+                let rr = reconciler.reconcile_candidates().await;
                 tracing::info!(
                     scanned = rr.scanned,
-                    reconciled = rr.reconciled,
-                    rows_filled = rr.rows_filled,
-                    skipped_clean = rr.skipped_clean,
+                    holes_filled = rr.holes_filled,
+                    stamps_reapplied = rr.stamps_reapplied,
+                    usage_rebilled = rr.usage_rebilled,
+                    skipped_up_to_date = rr.skipped_up_to_date,
                     skipped_legacy = rr.skipped_legacy,
+                    errored = rr.errored,
                     "ProjectionReconciler boot scan finished"
                 );
                 if let (Some(exec_adapter), Some(registry)) = resume_collaborators {
@@ -3542,6 +3558,25 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let reaped = alephcore::builtin_tools::bash_exec::kill_all_running_background();
     if reaped > 0 {
         tracing::info!(count = reaped, "reaped background bash jobs on shutdown");
+    }
+    // The projection barrier. Everything that could append an event has stopped
+    // by now, but the drain is asynchronous: without this the process can exit
+    // (and drop the store) with rows still queued — a projection gap
+    // manufactured by the ORDERLY path, which the next boot's activity-window
+    // repair then has to clean up. Placed after the background reap for the
+    // same reason that reap is here: a background job's last tool result is an
+    // event too. Timeout rather than an unbounded wait, so a wedged drain
+    // cannot hold the shutdown open; a timeout is reported, never swallowed.
+    match message_projector
+        .flush(std::time::Duration::from_secs(5))
+        .await
+    {
+        Ok(()) => tracing::debug!("message projector drained before shutdown"),
+        Err(e) => tracing::warn!(
+            error = %e,
+            "message projector did not drain before shutdown; the next boot's \
+             activity-window repair will fill whatever was still queued"
+        ),
     }
     memory_monitor.shutdown().await;
     channel_health_monitor.shutdown().await;

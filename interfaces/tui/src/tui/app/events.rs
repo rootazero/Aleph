@@ -453,12 +453,21 @@ impl AppState {
                 // arrival would un-complete a finished tool — and the trace
                 // mirror's `summarize_tool_input` params render better than the
                 // raw ones here.
+                // Live plan projection BEFORE the display-mode gate: `/tools
+                // off` hides tool rows, not the todo panel. The frame carries
+                // no tool name; the row learned it at ToolStart.
+                let output_value = serde_json::json!(result.output);
+                if result.success {
+                    if let Some(name) = self.tool_name_of(&tool_id) {
+                        self.maybe_apply_plan_from_tool(&name, &output_value);
+                    }
+                }
                 if matches!(self.tool_progress_mode, ToolProgressMode::Off) {
                     return Action::None;
                 }
                 let result = if result.success {
                     AgentTraceToolResult::Success {
-                        output: serde_json::json!(result.output),
+                        output: output_value,
                     }
                 } else {
                     AgentTraceToolResult::Error {
@@ -501,6 +510,13 @@ impl AppState {
                 // first, then settle whatever it did not mention.
                 self.reconcile_tools_from_summary(&summary.tool_summaries, &summary.errors);
                 self.settle_orphan_tools();
+                // Same invariant, second object: the todo panel's live frames
+                // ride the same lossy mirror. `RunSummary.plan` is present iff
+                // scratchpad ran this run — a `clear` arrives as an EMPTY
+                // snapshot, never as absence, so absence means "leave it".
+                if let Some(plan) = &summary.plan {
+                    self.plan = Some(plan.clone());
+                }
                 // The terminal answer, when this run produced no other copy of
                 // it. On an ordinary streamed turn the text is already on
                 // screen (twice on the wire, de-duped by `turn_streamed_len`)
@@ -736,37 +752,6 @@ impl AppState {
                 }
                 Action::None
             }
-        }
-    }
-
-    // -- Topic event handling (Task 8a) -----------------------------------
-
-    /// Handle a `{"method":"event","params":{"topic":…,"data":…}}` topic
-    /// frame, surfaced by `aleph-client` as `ClientEvent::Topic` and routed
-    /// here from the main loop's `select!` arm.
-    ///
-    /// Returns nothing, unlike [`Self::handle_gateway_event`]: whether a
-    /// re-fetch is due is recorded as STATE
-    /// (`AppState::runtime_agents_refetch_due`), not an `Action` — see that
-    /// field's own doc for why. It cannot itself await the re-fetch RPC
-    /// either way; the main loop performs it once per iteration after
-    /// checking the flag.
-    ///
-    /// Only one topic is understood this phase: `runtime.agents.changed`.
-    /// Every other topic is a no-op — this client subscribes to nothing
-    /// else (R8-5), so an unrecognised topic here means a future feature
-    /// has not wired its handler yet, not a defect, and must not be read as
-    /// license to set the one flag that IS wired.
-    pub fn handle_topic_event(&mut self, topic: &str, _data: serde_json::Value) {
-        if topic == aleph_protocol::runtime::RUNTIME_AGENTS_CHANGED_TOPIC {
-            // Deliberately does NOT reset `self.runtime_agents` to `Loading`
-            // here: the notification carries no agent data, only word that
-            // the table changed, and clobbering still-valid data on every
-            // notification would flash the panel to "loading" over data
-            // that has not actually gone stale from the viewer's
-            // perspective. The re-fetch this triggers replaces it once the
-            // answer is in hand.
-            self.runtime_agents_refetch_due = true;
         }
     }
 }

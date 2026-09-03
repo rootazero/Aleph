@@ -58,7 +58,7 @@ pub use helpers::{
     classify_session_kind, derive_channel, parse_session_key, resolve_display_key, SessionKind,
 };
 
-pub use list_tool::{SessionListRow, SessionsListArgs, SessionsListOutput, SessionsListTool};
+pub use list_tool::{SessionsListArgs, SessionsListOutput, SessionsListTool, SessionsListToolRow};
 
 pub use send_tool::{SessionsSendArgs, SessionsSendOutput, SessionsSendStatus, SessionsSendTool};
 

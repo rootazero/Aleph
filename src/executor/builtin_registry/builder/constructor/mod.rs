@@ -667,7 +667,6 @@ impl BuiltinToolRegistry {
             let search_tool = MemorySearchTool::new_with_config(
                 db.clone(),
                 Arc::clone(embedder),
-                config.memory_similarity_threshold,
                 rerank_cfg.as_ref(),
                 scoring_cfg.as_ref(),
                 expansion_cfg.as_ref(),

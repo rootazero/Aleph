@@ -11,8 +11,10 @@ pub struct MemoryConfig {
     pub enabled: bool,
     #[serde(default)]
     pub vector_db: String,
-    #[serde(default)]
-    pub similarity_threshold: f32,
+
+    // A `similarity_threshold` field is deliberately ABSENT: the server cut
+    // the top-level key (it was a never-wired retrieval no-op), so a mirror
+    // here would be an editable knob that does nothing.
 
     // Compression scheduling — bridged from `policies.memory.compression` by the
     // server handler (these knobs do not live in the backend `MemoryConfig`).
@@ -74,14 +76,12 @@ pub struct MemoryConfig {
     #[serde(default)]
     pub curated: CuratedSettings,
 
-    // Storage — write-time semantic dedup gate
-    #[serde(default = "default_dedup_threshold")]
-    pub dedup_similarity_threshold: f32,
+    // A top-level `dedup_similarity_threshold` is deliberately ABSENT: the
+    // server cut that key (zero readers). The live write-time dedup knob is
+    // `[memory.compound_ingest] dedup_similarity_threshold`, which this page
+    // does not own or edit.
 }
 
-const fn default_dedup_threshold() -> f32 {
-    0.95
-}
 const fn default_rrf_k() -> u32 {
     60
 }

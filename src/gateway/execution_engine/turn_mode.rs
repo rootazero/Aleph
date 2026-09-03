@@ -57,7 +57,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .and_then(SessionMode::from_id);
         let stored = self.session_mode(&request.session_key).await;
 
-        if let Some(mode) = requested.filter(|m| stored != Some(*m)) {
+        if let Some(mode) = super::knob_to_stamp(requested, stored, request.is_resume()) {
             self.persist_session_mode(&request.session_key, mode).await;
         }
         resolve_session_mode(global, requested, stored)

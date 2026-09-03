@@ -210,6 +210,7 @@ mod tests {
             success: true,
             error: None,
             request_id: None,
+            request_ids: Vec::new(),
         })
     }
 

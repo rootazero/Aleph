@@ -20,6 +20,10 @@ pub enum ToolKind {
     FileRead,
     Bash,
     Search,
+    /// The `subagent` delegation tool. Its own kind because the generic
+    /// headline scan knows none of its keys — a spawned background fleet used
+    /// to render as a bare `• subagent ▸` row with a JSON-dump body.
+    Subagent,
     Default,
 }
 
@@ -33,6 +37,7 @@ impl ToolKind {
             "file_write" => Self::FileWrite,
             "apply_patch" => Self::ApplyPatch,
             "file_read" => Self::FileRead,
+            "subagent" => Self::Subagent,
             _ => {
                 if n.starts_with("bash")
                     || n.starts_with("shell")
@@ -357,6 +362,7 @@ const fn kind_icon(kind: ToolKind) -> &'static str {
         ToolKind::FileRead => "📄",
         ToolKind::Bash => "❯",
         ToolKind::Search => "🔍",
+        ToolKind::Subagent => "🤖",
         ToolKind::Default => "•",
     }
 }
@@ -412,6 +418,28 @@ pub fn tool_headline(kind: ToolKind, payload: &Option<ToolPayload>) -> Option<St
     match kind {
         ToolKind::FileEdit | ToolKind::FileWrite | ToolKind::FileRead | ToolKind::ApplyPatch => {
             file_path_of(payload).map(|p| collapse_ws(&p))
+        }
+        // Delegation rows: the task IS the headline. A batch spawn carries
+        // `tasks: [...]` instead, and the count is more legible than the
+        // first task pretending to be the whole fan-out; the poll/cancel
+        // shapes (`action` + request ids) fall back to the action verb.
+        ToolKind::Subagent => {
+            let args = payload.as_ref()?.args.as_ref()?;
+            if let Some(s) = args.get("task").and_then(|v| v.as_str()) {
+                let one = collapse_ws(s);
+                if !one.is_empty() {
+                    return Some(one);
+                }
+            }
+            if let Some(arr) = args.get("tasks").and_then(|v| v.as_array()) {
+                if !arr.is_empty() {
+                    return Some(format!("{} parallel tasks", arr.len()));
+                }
+            }
+            args.get("action")
+                .and_then(|v| v.as_str())
+                .map(collapse_ws)
+                .filter(|s| !s.is_empty())
         }
         _ => {
             let args = payload.as_ref()?.args.as_ref()?;
@@ -558,7 +586,7 @@ pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl Into
             ToolKind::FileRead => t_string!(i18n, tool_card.cat_read).to_string(),
             ToolKind::Bash => t_string!(i18n, tool_card.cat_run).to_string(),
             ToolKind::Search => t_string!(i18n, tool_card.cat_search).to_string(),
-            ToolKind::Default => tn.clone(),
+            ToolKind::Subagent | ToolKind::Default => tn.clone(),
         }
     };
 
@@ -693,7 +721,7 @@ fn render_body(
         ToolKind::Bash => shell_body(p, expanded, labels, on_toggle),
         ToolKind::FileRead => read_body(p, expanded, labels, on_toggle),
         ToolKind::Search => search_body(p, expanded, labels, on_toggle),
-        ToolKind::Default => default_body(p, expanded, labels, on_toggle),
+        ToolKind::Subagent | ToolKind::Default => default_body(p, expanded, labels, on_toggle),
     }
 }
 
@@ -1067,6 +1095,7 @@ mod tests {
         assert_eq!(ToolKind::from_name("web_search"), ToolKind::Search);
         assert_eq!(ToolKind::from_name("hybrid_search"), ToolKind::Search);
         assert_eq!(ToolKind::from_name("memory_recall"), ToolKind::Default);
+        assert_eq!(ToolKind::from_name("subagent"), ToolKind::Subagent);
     }
 
     fn payload(args: Value) -> Option<ToolPayload> {
@@ -1142,6 +1171,32 @@ mod tests {
         assert_eq!(tool_icon("some_tool", ToolKind::Default), "•");
         // search keeps the magnifier from its kind
         assert_eq!(tool_icon("ctx_search", ToolKind::Search), "🔍");
+    }
+
+    #[test]
+    fn subagent_headline_prefers_task_then_batch_count_then_action() {
+        assert_eq!(
+            tool_headline(
+                ToolKind::Subagent,
+                &payload(serde_json::json!({"task": "Review builtin_tools a-m"}))
+            ),
+            Some("Review builtin_tools a-m".to_string())
+        );
+        assert_eq!(
+            tool_headline(
+                ToolKind::Subagent,
+                &payload(serde_json::json!({"tasks": ["a", "b", "c"]}))
+            ),
+            Some("3 parallel tasks".to_string())
+        );
+        assert_eq!(
+            tool_headline(
+                ToolKind::Subagent,
+                &payload(serde_json::json!({"action": "wait", "request_id": "r-1"}))
+            ),
+            Some("wait".to_string())
+        );
+        assert_eq!(tool_icon("subagent", ToolKind::Subagent), "🤖");
     }
 
     #[test]

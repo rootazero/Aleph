@@ -413,25 +413,6 @@ impl AgentInstance {
         }
     }
 
-    /// Get or create a session (delegated to session store)
-    pub async fn get_or_create_session(&self, key: &SessionKey) -> SessionInfo {
-        match self.session_store.get_or_create(key).await {
-            Ok(meta) => SessionInfo::from_metadata(&meta),
-            Err(e) => {
-                warn!("Failed to get_or_create session: {}", e);
-                // Return a minimal fallback so callers don't break
-                let now = chrono::Utc::now();
-                SessionInfo {
-                    key: key.to_key_string(),
-                    agent_id: self.config.agent_id.clone(),
-                    message_count: 0,
-                    created_at: now,
-                    last_active_at: now,
-                }
-            }
-        }
-    }
-
     /// Ensure a session exists.
     pub async fn ensure_session(&self, key: &SessionKey) {
         if let Err(e) = self.session_store.get_or_create(key).await {
@@ -598,24 +579,6 @@ impl AgentInstance {
         }
     }
 
-    /// List all sessions for this agent (delegated to session store)
-    pub async fn list_sessions(&self) -> Vec<SessionInfo> {
-        match self
-            .session_store
-            .list_sessions(crate::gateway::session_store::types::SessionFilter {
-                agent_id: Some(self.config.agent_id.clone()),
-                ..Default::default()
-            })
-            .await
-        {
-            Ok(metas) => metas.iter().map(SessionInfo::from_metadata).collect(),
-            Err(e) => {
-                warn!("Failed to list sessions: {}", e);
-                Vec::new()
-            }
-        }
-    }
-
     /// Check if a tool is allowed for this agent
     #[must_use]
     pub fn is_tool_allowed(&self, tool_name: &str) -> bool {
@@ -680,31 +643,6 @@ pub fn tool_allowed_by(tool_name: &str, whitelist: &[String], blacklist: &[Strin
 
     // Check whitelist (supports glob prefix like "fs_*")
     whitelist.iter().any(&matches)
-}
-
-/// Session information (public view)
-#[derive(Debug, Clone)]
-pub struct SessionInfo {
-    pub key: String,
-    pub agent_id: String,
-    pub message_count: usize,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub last_active_at: chrono::DateTime<chrono::Utc>,
-}
-
-impl SessionInfo {
-    /// Construct from `SessionMetadata`
-    fn from_metadata(meta: &super::session_store::types::SessionMetadata) -> Self {
-        Self {
-            key: meta.key.clone(),
-            agent_id: meta.agent_id.clone(),
-            message_count: meta.message_count as usize,
-            created_at: chrono::DateTime::from_timestamp(meta.created_at, 0)
-                .unwrap_or_else(chrono::Utc::now),
-            last_active_at: chrono::DateTime::from_timestamp(meta.last_active_at, 0)
-                .unwrap_or_else(chrono::Utc::now),
-        }
-    }
 }
 
 impl SessionMessage {
@@ -1078,8 +1016,8 @@ mod tests {
         let key = SessionKey::main("test");
 
         // Create session
-        let info = instance.get_or_create_session(&key).await;
-        assert_eq!(info.message_count, 0);
+        instance.ensure_session(&key).await;
+        assert!(instance.get_history(&key, None).await.is_empty());
 
         // Add messages
         instance.add_message(&key, MessageRole::User, "Hello").await;

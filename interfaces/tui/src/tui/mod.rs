@@ -39,15 +39,16 @@ use aleph_protocol::providers::ProviderListResult;
 use aleph_protocol::runtime::{
     RuntimeAgentsListResponse, RUNTIME_AGENTS_CHANGED_TOPIC, RUNTIME_AGENTS_LIST_METHOD,
 };
+use aleph_protocol::StreamEvent;
 
-use aleph_client::{AlephClient, CliConfig, CliError, CliResult, ClientEvent};
+use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 
 use app::{Action, AgentPanelData, AppState, Focus};
 use commands::{
     attach_session, btw_abort_or_close, confirm_provider_pick, confirm_session_switch,
     dispatch_gateway_text, execute_local_command, fetch_gateway_commands, fetch_my_user_id,
-    reconcile_side_question, refresh_picker_provider, send_to_agent, shadowed_gateway_commands,
-    AttachMode,
+    open_agent_detail, reconcile_side_question, refresh_picker_provider, send_to_agent,
+    shadowed_gateway_commands, AttachMode,
 };
 use slash::ParsedInput;
 
@@ -182,7 +183,7 @@ async fn subscribe_runtime_agents(state: &mut AppState, client: &AlephClient) {
 /// Returns an error if terminal setup, the gateway handshake, or the main loop fails.
 pub async fn run(
     client: AlephClient,
-    mut gateway_events: mpsc::Receiver<ClientEvent>,
+    mut gateway_events: mpsc::Receiver<StreamEvent>,
     config: &CliConfig,
     session_key: Option<String>,
     verbose: bool,
@@ -353,6 +354,18 @@ fn next_backoff(current: Duration) -> Duration {
     }
 }
 
+/// Await the next topic notification, or never when the plane was already
+/// claimed elsewhere (`take_topic_events` is one-shot per client). The `None`
+/// branch must never resolve — same rule as [`awaiting_reconnect`].
+async fn next_topic_event(
+    rx: &mut Option<mpsc::Receiver<aleph_client::TopicEvent>>,
+) -> Option<aleph_client::TopicEvent> {
+    match rx {
+        Some(rx) => rx.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
 /// Whether a pure `Action::Tick` (no gateway/terminal event) needs a redraw.
 ///
 /// A tick that only bumped the spinner counter with nothing on screen
@@ -368,25 +381,6 @@ fn should_redraw_after_tick(has_active_run: bool, connection_state_changed: bool
     has_active_run || connection_state_changed
 }
 
-/// Route one item off the gateway-event receiver to the right sync handler.
-///
-/// `ClientEvent::Stream` is the run/session plane every arm below this one
-/// already existed to handle, and can return any `Action`. `ClientEvent::Topic`
-/// is Task 8a's addition and always returns `Action::None`: whether it names
-/// a re-fetch this screen understands is recorded as state
-/// (`AppState::runtime_agents_refetch_due`), not returned as an `Action` —
-/// see that field's own doc for why an `Action` here would be unsafe to
-/// coalesce away in the burst-drain below.
-fn dispatch_client_event(state: &mut AppState, event: ClientEvent) -> Action {
-    match event {
-        ClientEvent::Stream(se) => state.handle_gateway_event(*se),
-        ClientEvent::Topic { topic, data } => {
-            state.handle_topic_event(&topic, data);
-            Action::None
-        }
-    }
-}
-
 /// The main event loop. Separated from `run()` so terminal restoration
 /// happens even if this function returns an error.
 async fn main_loop<'c>(
@@ -395,13 +389,17 @@ async fn main_loop<'c>(
     textarea: &mut TextArea<'_>,
     client: &'c AlephClient,
     config: &'c CliConfig,
-    gateway_events: &mut mpsc::Receiver<ClientEvent>,
+    gateway_events: &mut mpsc::Receiver<StreamEvent>,
     term_events: &mut mpsc::Receiver<event::TermEvent>,
 ) -> CliResult<()> {
     // Owned here rather than passed in: nothing outside this loop reads it, and
     // a parameter that only one caller can supply is a parameter that only
     // spends the argument budget.
     let mut tick_interval = tokio::time::interval(Duration::from_millis(50));
+    // The topic plane (`{"method":"event"}` frames — `run.subagent_tree` and
+    // friends), claimed once. `shared/client` used to drop these frames with a
+    // `debug!` line; now they drive the agents panel/overlay live.
+    let mut topic_events = client.take_topic_events();
     // At most one reconnect attempt is ever outstanding, and the loop owns the
     // policy: `shared/client` supplies only the mechanism, deliberately, so
     // that a socket cannot come back without this screen learning of it and
@@ -444,7 +442,7 @@ async fn main_loop<'c>(
                 // the AskUser dialog, a streamed chunk) while returning
                 // Action::None.
                 needs_redraw = true;
-                let mut action = dispatch_client_event(state, ge);
+                let mut action = state.handle_gateway_event(ge);
                 // Coalesce a burst: chunks already queued behind this one
                 // are state mutations that need ONE draw, not one draw
                 // each. Draining costs zero added latency (these events
@@ -453,12 +451,24 @@ async fn main_loop<'c>(
                 // first frame of a run is unaffected: the loop-top draw
                 // fires immediately after this branch either way.
                 while let Ok(queued) = gateway_events.try_recv() {
-                    let next = dispatch_client_event(state, queued);
+                    let next = state.handle_gateway_event(queued);
                     if !matches!(next, Action::None) {
                         action = next;
                     }
                 }
                 action
+            }
+            Some(topic) = next_topic_event(&mut topic_events) => {
+                needs_redraw = true;
+                state.handle_topic_event(&topic.topic, topic.data);
+                // Coalesce a burst the same way the gateway-event arm does.
+                while let Some(rx) = topic_events.as_mut() {
+                    match rx.try_recv() {
+                        Ok(queued) => state.handle_topic_event(&queued.topic, queued.data),
+                        Err(_) => break,
+                    }
+                }
+                Action::None
             }
             _ = tick_interval.tick() => {
                 Action::Tick
@@ -805,6 +815,29 @@ async fn main_loop<'c>(
             }
             Action::SessionPickerConfirm => {
                 confirm_session_switch(state, client).await;
+            }
+
+            // -- Agents overlay --
+            Action::AgentsUp => {
+                if let Some(overlay) = &mut state.agents_overlay {
+                    if overlay.selected > 0 {
+                        overlay.selected -= 1;
+                    }
+                }
+            }
+            Action::AgentsDown => {
+                let count = state.agents.len();
+                if let Some(overlay) = &mut state.agents_overlay {
+                    if overlay.selected + 1 < count {
+                        overlay.selected += 1;
+                    }
+                }
+            }
+            Action::AgentsConfirm => {
+                open_agent_detail(state, client).await;
+            }
+            Action::AgentsBack => {
+                state.agents_overlay_back();
             }
 
             // -- Provider picker --

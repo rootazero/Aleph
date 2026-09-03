@@ -127,7 +127,7 @@ where
         tokio::task::JoinHandle<Option<crate::strategy::Strategy>>,
     )> {
         let provider = self.planner_provider.clone()?;
-        let is_resume = request.metadata.get("resume").map(String::as_str) == Some("true");
+        let is_resume = request.is_resume();
         if !naked_loop_planner_should_fire(
             &request.session_key,
             is_first_message,

@@ -72,7 +72,7 @@
    mode/think 解析（取值弃用、只为 stamp-on-carry 副作用——快路径就是这一 turn，骑在 slash 消息上的
    模式选择不得静默丢失）；
 4. 会话持久：`identity_meta.custom["session_mode"]`；`sessions.patch` 配对校验
-   （`db_handlers/modify.rs`，null=清除跟随全局）+ 列表投影 `SessionInfo.mode`
+   （`db_handlers/modify.rs`，null=清除跟随全局）+ 列表投影 `aleph_protocol::SessionListRow.mode`（2026-09-02 起；alephcore 自己的 `SessionInfo` 已删）
    （`db_handlers/{query,types}.rs`）。
 
 **分区落点**（`run_loop/inner.rs`）：`mode_core_tools = session_mode.effective_core_tools(...)`

@@ -174,10 +174,16 @@ pub(super) fn register_common_handlers(
         async move { chat_handlers::handle_clear(req, manager).await }
     });
 
+    // `run_manager` rides on this one for the same reason it rides on
+    // `chat.history`: the handler has to ask "is a turn in flight on this
+    // session right now" — here so that closing the run marker the rewind left
+    // open cannot land in the middle of a live run.
     let sm_rewind = session_store.clone();
+    let rm_rewind = run_manager.clone();
     server.handlers_mut().register("chat.rewind", move |req| {
         let manager = sm_rewind.clone();
-        async move { chat_handlers::handle_rewind(req, manager).await }
+        let runs = rm_rewind.clone();
+        async move { chat_handlers::handle_rewind(req, manager, runs).await }
     });
 
     // agent.resume — the on-demand half of the boot resume scan. Registered

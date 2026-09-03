@@ -8,9 +8,11 @@
 //! See `docs/superpowers/specs/2026-04-18-session-service-actor-design.md`.
 
 pub mod actor;
+pub mod boundary_repair;
 pub mod epoch_registrar;
 pub mod events;
 pub mod in_process;
+pub mod marker_balance;
 pub mod observer;
 pub mod projection;
 pub mod reduction;
@@ -24,11 +26,15 @@ pub use events::{
     ApprovalSource, ErrorKind, EventSeq, MessageContent, SessionEvent, SessionEventRecord,
     Timestamp, ToolOutput, TurnId, TurnTrigger,
 };
+pub use boundary_repair::{
+    boundary_repair_text, repair_boundary, repairs_for, DegradeNote, RepairReport,
+};
 pub use in_process::InProcessActorSessionService;
+pub use marker_balance::close_open_run_after_retire;
 pub use projection::project_row;
 pub use reduction::{
-    reduce_disposition, reduce_run, DanglingCall, DanglingProvenance, RunDisposition, RunProgress,
-    RunReduction,
+    reduce_disposition, reduce_run, validate_slice, DanglingCall, DanglingProvenance,
+    LogContradiction, RunDisposition, RunProgress, RunReduction, RunStartFacts,
 };
 pub use service::{SessionError, SessionHandle, SessionId, SessionService};
 pub use store::SessionEventStore;

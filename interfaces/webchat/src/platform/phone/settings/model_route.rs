@@ -5,7 +5,9 @@
 //! save closure, same `parse_limit` helper. Only the presentation changes to iOS
 //! list/cell/toggle/inline-input idioms (R4 pure I/O, R2 single UI truth).
 
-use crate::api::{RateLimit, RouteConfigApi, RouteConfigUpdate, RouteProviderInfo};
+use crate::api::{
+    parse_probe_interval, RateLimit, RouteConfigApi, RouteConfigUpdate, RouteProviderInfo,
+};
 use crate::context::DashboardState;
 use crate::components::route_labels::{lb_label, mode_label, LB_KEYS, MODE_KEYS};
 use crate::i18n::{t, t_string};
@@ -38,6 +40,9 @@ pub fn PhoneModelRoute() -> impl IntoView {
     let providers = RwSignal::new(Vec::<RouteProviderInfo>::new());
     let load_balance = RwSignal::new(String::from("ordered"));
     let rate_limits = RwSignal::new(BTreeMap::<String, RateLimit>::new());
+    // Health-probe interval as typed text; empty == off. Sent on every save for
+    // the same reason as `rate_limits`: the backend full-replaces `[route]`.
+    let probe_interval = RwSignal::new(String::new());
     let loading = RwSignal::new(true);
     let saving = RwSignal::new(false);
     let saved = RwSignal::new(false);
@@ -66,6 +71,11 @@ pub fn PhoneModelRoute() -> impl IntoView {
                         providers.set(view.providers);
                         load_balance.set(view.load_balance.unwrap_or_else(|| "ordered".into()));
                         rate_limits.set(view.rate_limits);
+                        probe_interval.set(
+                            view.health_probe_interval_secs
+                                .map(|s| s.to_string())
+                                .unwrap_or_default(),
+                        );
                         ever_loaded.set(true);
                         loading.set(false);
                     }
@@ -97,6 +107,7 @@ pub fn PhoneModelRoute() -> impl IntoView {
                 cloud_provider: to_pin(cloud_provider.get()),
                 load_balance: Some(load_balance.get()),
                 rate_limits: rate_limits.get(),
+                health_probe_interval_secs: parse_probe_interval(&probe_interval.get()),
             };
             match RouteConfigApi::update(&state, update).await {
                 Ok(()) => {
@@ -225,6 +236,30 @@ pub fn PhoneModelRoute() -> impl IntoView {
                     selected=cloud_provider
                     on_change=move |_| saved.set(false)
                 />
+
+                // ④b Background health probe — seconds between re-dials of a
+                // circuit-open provider; blank/0 = off (a probe is a paid request).
+                <div>
+                    <div class="list-header">{t!(i18n, settings.route.health_probe)}</div>
+                    <div class="list">
+                        <div class="cell" style="flex-direction:column; align-items:stretch; gap:6px; padding:10px 16px;">
+                            <div class="cell-title" style="font-size:13px; color:var(--color-text-secondary);">
+                                {t!(i18n, settings.route.health_probe_desc)}
+                            </div>
+                            <input
+                                type="number"
+                                min="0"
+                                style="background:var(--color-surface); border:1px solid var(--color-border); border-radius:8px; padding:6px 10px; font-size:13px; color:var(--color-text-primary);"
+                                placeholder=move || t_string!(i18n, settings.route.health_probe_off).to_string()
+                                prop:value=move || probe_interval.get()
+                                on:input=move |ev| {
+                                    probe_interval.set(event_target_value(&ev));
+                                    saved.set(false);
+                                }
+                            />
+                        </div>
+                    </div>
+                </div>
 
                 // ⑤ Rate Limit — per-provider rpm/tpm inline number inputs
                 <Show when=move || !providers.get().is_empty()>

@@ -189,6 +189,35 @@ pub(super) fn resolve_exec_tier(
     }
 }
 
+/// [`resolve_exec_tier`] plus a crash-recovery ceiling.
+///
+/// The ceiling is the tier the crashed run was executing under, read off its
+/// `RunStarted` envelope. It composes through `most_restrictive` **after** the
+/// three rungs, so a resume can only ever TIGHTEN: the snapshot cannot raise a
+/// conversation the operator has since pulled down to `ask`, and a snapshot of
+/// `plan` still holds over a session that has since gone to `full`.
+///
+/// The asymmetry is the point (判据 #14): the two directions of this gate are
+/// not equally safe. A resume that runs too tight costs an approval prompt; a
+/// resume that runs too loose executes, unattended, at a tier the operator
+/// revoked while the daemon was down.
+///
+/// One function rather than two composed at the call site so the production
+/// path and the tests derive the answer the same way.
+pub(super) fn resolve_exec_tier_with_ceiling(
+    global: ExecTier,
+    requested: Option<ExecTier>,
+    stored: Option<ExecTier>,
+    caller_role: Option<&str>,
+    ceiling: Option<ExecTier>,
+) -> ExecTier {
+    let tier = resolve_exec_tier(global, requested, stored, caller_role);
+    match ceiling {
+        Some(c) => ExecTier::most_restrictive(tier, c),
+        None => tier,
+    }
+}
+
 /// The tier a planning conversation hands back to once a human approves.
 ///
 /// The SAME resolution the turn just ran, with the plan picks taken out of the
@@ -258,15 +287,21 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .map(String::as_str)
             .and_then(ExecTier::from_id);
         let stored = self.session_exec_tier(&request.session_key).await;
-        if let Some(t) = requested.filter(|t| stored != Some(*t)) {
+        if let Some(t) = super::knob_to_stamp(requested, stored, request.is_resume()) {
             self.persist_session_exec_tier(&request.session_key, t)
                 .await;
         }
-        let tier = resolve_exec_tier(
+        let resume_ceiling = request
+            .metadata
+            .get(super::RESUME_TIER_CEILING_KEY)
+            .map(String::as_str)
+            .and_then(ExecTier::from_id);
+        let tier = resolve_exec_tier_with_ceiling(
             global_tier,
             requested,
             stored,
             request.metadata.get("caller_role").map(String::as_str),
+            resume_ceiling,
         );
 
         let mut merged =
@@ -427,8 +462,59 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
 #[cfg(test)]
 mod tests {
-    use super::{plan_restore_tier, resolve_exec_tier};
+    use super::{plan_restore_tier, resolve_exec_tier, resolve_exec_tier_with_ceiling};
     use crate::config::types::policies::ExecTier;
+
+    // -------------------------------------------------------------------
+    // Crash recovery: the ceiling that may only tighten.
+    // -------------------------------------------------------------------
+
+    /// ④ The crash-recovery ceiling only tightens. A `full` snapshot over a
+    /// session the operator has since pulled to `ask` resumes at `ask` — the
+    /// direction that costs an approval prompt, not the one that executes
+    /// unattended at a tier that was revoked.
+    #[test]
+    fn a_resume_ceiling_never_raises_the_resolved_tier() {
+        assert_eq!(
+            resolve_exec_tier_with_ceiling(
+                ExecTier::Auto,
+                None,
+                Some(ExecTier::Ask),
+                None,
+                Some(ExecTier::Full),
+            ),
+            ExecTier::Ask,
+        );
+    }
+
+    /// …and it does tighten when the snapshot is the stricter of the two: a
+    /// run that crashed while planning comes back planning, even though the
+    /// session has since been opened up.
+    #[test]
+    fn a_resume_ceiling_tightens_when_the_snapshot_is_stricter() {
+        assert_eq!(
+            resolve_exec_tier_with_ceiling(
+                ExecTier::Full,
+                None,
+                Some(ExecTier::Full),
+                None,
+                Some(ExecTier::Plan),
+            ),
+            ExecTier::Plan,
+        );
+    }
+
+    /// No ceiling ⇒ byte-identical to the three-rung resolution. Guards the
+    /// carve-out that every non-resume turn takes.
+    #[test]
+    fn no_resume_ceiling_leaves_the_resolution_alone() {
+        for stored in [None, Some(ExecTier::Plan), Some(ExecTier::Full)] {
+            assert_eq!(
+                resolve_exec_tier_with_ceiling(ExecTier::Auto, None, stored, None, None),
+                resolve_exec_tier(ExecTier::Auto, None, stored, None),
+            );
+        }
+    }
 
     // -------------------------------------------------------------------
     // Plan mode: what a conversation hands back to.

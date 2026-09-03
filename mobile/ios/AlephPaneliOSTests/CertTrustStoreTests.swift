@@ -106,5 +106,5 @@ import WebKit
 final class InMemoryCertStore: CertStore {
     private var pinned: [String: String] = [:]
     func lookup(_ host: String) -> String? { pinned[host] }
-    func pin(_ host: String, _ fp: String) { pinned[host] = fp }
+    func pin(_ host: String, _ fp: String) throws { pinned[host] = fp }
 }

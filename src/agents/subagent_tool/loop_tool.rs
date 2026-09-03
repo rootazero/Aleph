@@ -1027,6 +1027,9 @@ impl LoopTool for SubagentTool {
                             depth: child_chain.depth,
                             root_session: self.parent_session_id.clone().unwrap_or_default(),
                             model: model.clone(),
+                            // Sync fan-out children mint anonymous `sub-<nonce>`
+                            // keys that address nothing after the call returns.
+                            child_session: None,
                         },
                     );
                     let runtime_config = AgentRuntimeConfig {
@@ -1255,6 +1258,7 @@ impl LoopTool for SubagentTool {
                             depth: child_chain.depth,
                             root_session: self.parent_session_id.clone().unwrap_or_default(),
                             model: args.aggregator_model.clone().or_else(|| args.model.clone()),
+                            child_session: None,
                         },
                     );
                     let runtime = self.build_runtime(child_chain.clone(), agg_cancel.clone());

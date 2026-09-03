@@ -126,6 +126,78 @@ pub fn parse_source_seq(id: &str, session_key: &str) -> Option<u64> {
     suffix.parse::<u64>().ok()
 }
 
+/// The order a transcript is READ in, given rows stored in INSERT order.
+///
+/// # Why insert order stopped being the answer
+///
+/// A projected row's place in the conversation is its source event's seq; the
+/// row's position in the store is the order it was appended. The two agreed
+/// for as long as the projector only ever appended ABOVE the newest seq it had
+/// written — an agreement by coincidence, not by construction. The seq-set
+/// heal (`session_projector`) fills holes BELOW the newest row, so a message
+/// recovered after a crash appended last and read last: it surfaced at the
+/// bottom of the transcript instead of where it was said.
+///
+/// So order by the seq, in the one index space that owns the fact.
+///
+/// # Rows that have no seq
+///
+/// Not every row is projected. Legacy (pre-SSOT) transcripts have no seqs at
+/// all, and boot-time orphan notices are appended directly into a live
+/// session. Those rows have no position in seq space — the only position they
+/// ever had is where they landed among their neighbours, so each takes the seq
+/// of the newest projected row that PRECEDED it. A row with nothing projected
+/// before it anchors to `None`, which sorts first and keeps a legacy prefix at
+/// the head of a session that was later event-sourced.
+///
+/// Ties keep insert order: the sort is stable, deliberately, because that is
+/// the only ordering two rows sharing an anchor ever had.
+///
+/// # The SQL spelling of this same rule
+///
+/// [`TRANSCRIPT_ANCHOR_SQL`] is this function pushed down into SQLite, and it
+/// lives in this file for exactly that reason — two spellings of one rule in
+/// two files drift, and the last time these two backends answered differently
+/// about a row id it cost a whole class of readers their source seq. The
+/// cross-backend equivalence is pinned by a test, not by this paragraph.
+pub fn order_by_source_seq<T>(rows: &mut Vec<T>, seq_of: impl Fn(&T) -> Option<u64>) {
+    let mut newest_before: Option<u64> = None;
+    let mut anchored: Vec<(Option<u64>, T)> = std::mem::take(rows)
+        .into_iter()
+        .map(|row| {
+            let anchor = match seq_of(&row) {
+                Some(seq) => {
+                    newest_before = newest_before.max(Some(seq));
+                    Some(seq)
+                }
+                // `newest_before`, NOT this row's absent seq: an unprojected
+                // row inherits the position it was inserted at.
+                None => newest_before,
+            };
+            (anchor, row)
+        })
+        .collect();
+    // Stable: equal anchors stay in insert order, matching the `, id` tail of
+    // the SQL below. `None` sorts before `Some`, matching SQLite's NULLS FIRST
+    // on an ASC ordering.
+    anchored.sort_by_key(|(anchor, _)| *anchor);
+    rows.extend(anchored.into_iter().map(|(_, row)| row));
+}
+
+/// [`order_by_source_seq`]'s anchor, as a SQL expression over `messages`.
+///
+/// Selected as `anchor` by the transcript reads, which then `ORDER BY anchor,
+/// id` (ASC) or `ORDER BY anchor DESC, id DESC` (taking the trailing N). The
+/// window frame is STRICTLY PRECEDING on purpose: an unbounded frame that
+/// included the current row would return the running maximum, which for a
+/// healed row — the whole reason this exists — is some later seq rather than
+/// its own.
+///
+/// No `PARTITION BY`: every reader applies `WHERE session_key = ?` first, so
+/// the window already sees exactly one session's rows.
+pub const TRANSCRIPT_ANCHOR_SQL: &str = "COALESCE(source_seq, MAX(source_seq) OVER (\
+     ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING))";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,5 +275,87 @@ mod tests {
         .expect("a refusal receipt must be visible to the user");
         assert_eq!(row.role, "system");
         assert_eq!(row.text, "Input blocked: blocked by pii guardrail");
+    }
+}
+
+#[cfg(test)]
+mod transcript_order_tests {
+    use super::order_by_source_seq;
+
+    /// `(seq, label)` in the order the rows were appended.
+    fn ordered(rows: &[(Option<u64>, &str)]) -> Vec<String> {
+        let mut v: Vec<(Option<u64>, String)> =
+            rows.iter().map(|(s, l)| (*s, (*l).to_string())).collect();
+        order_by_source_seq(&mut v, |(seq, _)| *seq);
+        v.into_iter().map(|(_, l)| l).collect()
+    }
+
+    /// The heal shape: a row for seq 3 appended after seqs 4 and 5 belongs
+    /// back between them, not at the end where it was written.
+    #[test]
+    fn a_seq_appended_out_of_order_sorts_back_into_place() {
+        assert_eq!(
+            ordered(&[
+                (Some(1), "a"),
+                (Some(2), "b"),
+                (Some(4), "d"),
+                (Some(5), "e"),
+                (Some(3), "c"),
+            ]),
+            vec!["a", "b", "c", "d", "e"]
+        );
+    }
+
+    /// An unprojected row anchors to the newest seq BEFORE it — the position
+    /// it was inserted at — so it neither drifts to the end nor jumps to the
+    /// front. The frame is strictly preceding for this reason: a running
+    /// maximum that included the current row would place the healed row of the
+    /// previous test at the tail, exactly where the defect had it.
+    #[test]
+    fn an_unprojected_row_keeps_the_place_it_was_inserted_at() {
+        assert_eq!(
+            ordered(&[
+                (Some(1), "a"),
+                (Some(2), "b"),
+                (None, "notice"),
+                (Some(3), "c"),
+            ]),
+            vec!["a", "b", "notice", "c"]
+        );
+    }
+
+    /// Nothing projected yet: the anchor is `None`, which sorts first and so
+    /// keeps a legacy prefix at the head of a session that was event-sourced
+    /// later. Sorting unprojected rows to the END would reverse this
+    /// conversation.
+    #[test]
+    fn an_unprojected_prefix_sorts_before_everything_seq_bearing() {
+        assert_eq!(
+            ordered(&[(None, "old-1"), (None, "old-2"), (Some(9), "new")]),
+            vec!["old-1", "old-2", "new"]
+        );
+    }
+
+    /// No seqs at all is a legacy transcript, and the only order it ever had
+    /// is the one it is already in. Every anchor ties, so this is the case
+    /// that fails the moment the sort stops being stable.
+    #[test]
+    fn a_transcript_with_no_seqs_is_left_exactly_as_it_came() {
+        assert_eq!(
+            ordered(&[(None, "c"), (None, "a"), (None, "b")]),
+            vec!["c", "a", "b"]
+        );
+    }
+
+    /// Two rows sharing an anchor — the row that owns the seq, and the
+    /// unprojected row that inherited it — stay in insert order. This is the
+    /// `, id` tail of the SQL, and the reason the sort is stable rather than
+    /// merely correct on distinct keys.
+    #[test]
+    fn rows_sharing_an_anchor_keep_insert_order() {
+        assert_eq!(
+            ordered(&[(Some(2), "owner"), (None, "first"), (None, "second")]),
+            vec!["owner", "first", "second"]
+        );
     }
 }

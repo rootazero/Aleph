@@ -148,12 +148,26 @@ const OUTPUT_TAIL_BYTES: usize = 8 * 1024;
 /// The notice opens a real model turn, so its value decays: "your build
 /// finished" is worth a turn minutes later and is noise a day later, when the
 /// row is still readable through `poll` / `list` anyway. The window also bounds
-/// the one-off cost of the `announced` flag being `#[serde(default)]` — without
-/// it, the first boot after this field shipped would announce every completed
-/// job inside the whole 7-day retention window. Rows older than this are left
-/// **unstamped**: claiming they were announced would be a lie, and the age test
-/// only ever gets truer, so they cannot come round again.
+/// the one-off cost of [`JobRecord::announced_boot`] being `#[serde(default)]`
+/// — without it, the first boot after that field shipped would announce every
+/// completed job inside the whole 7-day retention window. Rows older than this
+/// are left **unstamped and uncounted**: claiming they were announced would be
+/// a lie, spending an attempt on a notice nobody sent would be another, and the
+/// age test only ever gets truer, so they cannot come round again.
 const ANNOUNCE_HANDBACK_MAX_AGE_MS: u64 = 60 * 60 * 1000;
+
+/// How many boots may try to hand one completion to its owner before the row
+/// stops asking.
+///
+/// The freshness window above bounds *how long* the retry may go on; this
+/// bounds *how often* inside that window. Both are needed: a daemon that
+/// crash-loops inside the hour would otherwise re-queue the same notice on
+/// every boot, and the row cannot tell a delivery that failed from one whose
+/// broadcast landed on a session that had already gone away. Three is the same
+/// shape as `process_announce`'s 0/30/120s ladder — try, try again, then stop
+/// claiming. Giving up on the proactive notice is not giving up on the answer:
+/// the row stays readable through `poll` / `list` for its whole retention.
+const MAX_ANNOUNCE_ATTEMPTS: u8 = 3;
 
 /// Hard cap on one appended trail line.
 const MAX_LINE_CHARS: usize = 4_000;
@@ -216,21 +230,38 @@ pub enum JobPhase {
     Interrupted,
 }
 
-impl JobPhase {
-    /// Wire label handed to the model.
-    ///
-    /// `Interrupted` says more than the sub-agent sidecar's
-    /// `interrupted_by_restart` on purpose: a `bash` child is a real OS process
-    /// that can outlive a `SIGKILL`ed daemon, and this module records no pid,
-    /// so it cannot and does not probe whether the process is still alive.
-    /// Neither label reads as a failure.
-    #[must_use]
-    pub const fn status_label(self) -> &'static str {
-        match self {
-            Self::Running => "running_unconfirmed",
-            Self::Settled => "recorded",
-            Self::Interrupted => "interrupted_by_restart_liveness_unknown",
-        }
+/// Wire label handed to the model for one journal row.
+///
+/// Takes the **record**, not the phase, for the same reason
+/// [`crate::agents::background_persistence::settled_label`] does — the twin
+/// question, answered in the same shape with this module's own words.
+/// `Settled` alone names no outcome: it says the job reached a terminal state
+/// in the daemon that owned it, and that state is either a completion or a
+/// `kill` Aleph performed. The phase-only label answered `"recorded"` for both,
+/// so the one word the model reads first could not tell "your build finished"
+/// from "you stopped it half way", and the `outcome` key that could was
+/// optional and easy to miss beside it.
+///
+/// An unrecognised or absent outcome is `settled_unknown`, never a success
+/// word: a label the model reads as "it finished" has to be earned by a
+/// producer that wrote one. The words come from [`Verdict::label`] rather than
+/// from literals here, so the writer's vocabulary and the reader's cannot drift.
+///
+/// `Interrupted` says more than the sub-agent sidecar's `interrupted_by_restart`
+/// on purpose: a `bash` child is a real OS process that can outlive a
+/// `SIGKILL`ed daemon, and this module records no pid, so it cannot and does
+/// not probe whether the process is still alive. Neither non-terminal label
+/// reads as a failure.
+#[must_use]
+pub(crate) fn settled_label(record: &JobRecord) -> &'static str {
+    match record.phase {
+        JobPhase::Running => "running_unconfirmed",
+        JobPhase::Interrupted => "interrupted_by_restart_liveness_unknown",
+        JobPhase::Settled => match record.outcome.as_deref() {
+            Some(o) if o == Verdict::Completed.label() => "completed",
+            Some(o) if o == Verdict::Killed.label() => "killed",
+            _ => "settled_unknown",
+        },
     }
 }
 
@@ -286,22 +317,37 @@ pub struct JobRecord {
     /// row must keep loading, it simply has no capture to offer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partial_file: Option<String>,
-    /// Whether the owning session was ever *told* this job finished.
+    /// How many boots have *tried* to hand this completion to its owner.
     ///
-    /// `phase` answers "did it finish"; this answers "does anyone know". The
-    /// gap between them is a real window: `bash_exec` broadcasts the completion
+    /// `phase` answers "did it finish"; [`Self::announced_boot`] answers "does
+    /// anyone know"; this answers "how often have we asked". The gap between
+    /// the first two is a real window: `bash_exec` broadcasts the completion
     /// after the row is settled, and `gateway::process_announce` retries at
     /// 0/30/120s while the session is busy. A daemon that dies inside those two
     /// and a half minutes leaves a `Settled` row nobody was told about, and the
     /// promise the spawn receipt makes is withdrawn in silence with the result
     /// sitting on disk. [`take_undelivered_settled`] is the reader.
     ///
-    /// `#[serde(default)]` makes every pre-existing row read as *not*
-    /// announced, which is the fail-safe direction (duplicate-visible beats
+    /// A **count of attempts, not a receipt** — the same split the sub-agent
+    /// sidecar's `announce_attempts` makes, for the same reason: only the
+    /// delivery may say a notice landed, so everything before it can record no
+    /// more than that it was tried. Counting is also what bounds the retry: a
+    /// row whose owning session no longer resolves would otherwise be re-queued
+    /// at every boot for as long as it stays fresh.
+    ///
+    /// `#[serde(default)]` reads every pre-existing row as zero attempts /
+    /// nobody-told, which is the fail-safe direction (duplicate-visible beats
     /// loss-silent); the boot handback's freshness window keeps that from
     /// turning an upgrade into a week of stale notices.
     #[serde(default)]
-    pub announced: bool,
+    pub announce_attempts: u8,
+    /// The boot that actually delivered this completion, as that boot's
+    /// wall-clock ms. `None` means nobody has been told yet.
+    ///
+    /// Written only by [`record_announced`], and only after the broadcast it
+    /// describes has returned — never in advance of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub announced_boot: Option<u64>,
 }
 
 impl JobRecord {
@@ -359,7 +405,7 @@ pub struct RecoveredJob {
 /// proactive turn, it is simply there the next time the model polls, so this
 /// half has no ordering dependency on any event subscriber. It does claim the
 /// second recovered population on the way past: a row that reached `Settled`
-/// with `announced` still false is a completion whose notice died with the
+/// with no `announced_boot` is a completion whose notice died with the
 /// previous daemon, and [`take_undelivered_settled`] hands those to
 /// [`init_and_announce`], which is the half that does have an ordering
 /// dependency.
@@ -411,20 +457,24 @@ pub fn init_and_reconcile(dir: PathBuf) -> usize {
             tombstoned += 1;
             index.insert(tombstone.id, tombstone);
         } else if is_undelivered_completion(&record, now) {
-            // BT-D-R4-16: stamp the row announced=true only AFTER the
-            // boot-time broadcast succeeds, not in this reconcile pass.
-            // Previously we stamped here "so a second restart before the
-            // parent turn lands repeats it forever", but the stamp ran
-            // BEFORE the actual broadcast in init_and_announce. If this
-            // daemon crashed between the stamp and the broadcast, the
-            // completion was marked delivered on disk but never delivered
-            // — silent loss. Now we leave announced=false on disk, push
-            // the record to the handback queue, and let init_and_announce
-            // call record_announced() after broadcast returns Ok. A
-            // crash mid-broadcast leaves the row stamped=false, and the
-            // next boot retries the handback (no silent loss).
-            undelivered.push(record.clone());
-            index.insert(record.id, record);
+            // BT-D-R4-16: the delivery stamp belongs to `record_announced`,
+            // called by `init_and_announce` AFTER the broadcast returns — never
+            // to this pass. Stamping here marked a notice delivered that a
+            // crash in the gap then never sent: silent loss. What this pass may
+            // record is that it *tried*, which is what bounds the retry.
+            if record.announce_attempts >= MAX_ANNOUNCE_ATTEMPTS {
+                // Out of attempts. The row stays on disk and stays poll-able;
+                // only the proactive notice is given up on.
+                index.insert(record.id, record);
+                continue;
+            }
+            let attempted = JobRecord {
+                announce_attempts: record.announce_attempts.saturating_add(1),
+                ..record
+            };
+            write_state(&dir, &attempted);
+            undelivered.push(attempted.clone());
+            index.insert(attempted.id, attempted);
         } else {
             index.insert(record.id, record);
         }
@@ -493,11 +543,11 @@ pub async fn init_and_announce(dir: PathBuf) -> usize {
             "process_journal: announcing a background job that finished before the previous daemon stopped"
         );
         super::process_completion::broadcast(&session, event).await;
-        // BT-D-R4-16: stamp announced=true AFTER broadcast returns. A
-        // crash mid-broadcast leaves the row stamped=false on disk so
-        // the next boot retries the handback. Previously the stamp ran
-        // in init_and_reconcile (before this broadcast was reached),
-        // which silently lost completions on a crash in the gap.
+        // BT-D-R4-16: the delivery stamp goes on AFTER the broadcast
+        // returns. A crash mid-broadcast leaves the row unstamped on disk
+        // (with one attempt spent), so the next boot retries the handback.
+        // Previously the stamp ran in init_and_reconcile, before this
+        // broadcast was reached, which silently lost completions.
         record_announced(job.record.id);
     }
     tombstoned
@@ -522,11 +572,14 @@ pub(crate) fn id_floor() -> u64 {
 /// * `outcome == completed` — a killed job is the owner's own action, so its
 ///   outcome is not news (the same stance `subagent_tool::spawn` takes for a
 ///   cancelled child). Without this test every `kill` would queue an announce
-///   for the next boot, since nothing ever stamps those rows announced.
+///   for the next boot, since nothing ever stamps those rows delivered.
 /// * fresh — see [`ANNOUNCE_HANDBACK_MAX_AGE_MS`].
+///
+/// A fourth condition lives in the caller rather than here, because it is about
+/// this boot and not about the row's contents: [`MAX_ANNOUNCE_ATTEMPTS`].
 fn is_undelivered_completion(record: &JobRecord, now: u64) -> bool {
     record.phase == JobPhase::Settled
-        && !record.announced
+        && record.announced_boot.is_none()
         && record.outcome.as_deref() == Some(Verdict::Completed.label())
         && record
             .ended_ms
@@ -536,11 +589,12 @@ fn is_undelivered_completion(record: &JobRecord, now: u64) -> bool {
 /// Drain the completions [`init_and_reconcile`] found undelivered, hydrated
 /// with whatever output was recorded for them.
 ///
-/// Destructive: within a boot this is the one chance to deliver them. The
-/// rows are stamped `announced` on disk only by `init_and_announce` AFTER the
-/// broadcast succeeds (BT-D-R4-16), so a boot that drains without announcing
-/// hands the completion back again next boot. Empty for every boot that had
-/// nothing to hand back, which is the overwhelming majority.
+/// Destructive: within a boot this is the one chance to deliver them. The rows
+/// are stamped delivered on disk only by `init_and_announce` AFTER the
+/// broadcast returns (BT-D-R4-16), so a boot that drains without announcing
+/// hands the completion back again next boot — up to [`MAX_ANNOUNCE_ATTEMPTS`]
+/// times, which is the bound on "again". Empty for every boot that had nothing
+/// to hand back, which is the overwhelming majority.
 pub(crate) fn take_undelivered_settled() -> Vec<RecoveredJob> {
     let Some(dir) = store_dir() else {
         return Vec::new();
@@ -641,7 +695,8 @@ pub(crate) fn record_spawn(id: u64, command: &str, owner: Option<&str>) {
         exit_code: None,
         output_file: Some(OUTPUT_FILE.to_string()),
         partial_file: Some(PARTIAL_FILE.to_string()),
-        announced: false,
+        announce_attempts: 0,
+        announced_boot: None,
     };
     write_state(&dir, &record);
     index_lock().insert(id, record);
@@ -789,14 +844,18 @@ pub(crate) fn record_settled(
     write_state(&dir, &record);
 }
 
-/// Stamp "the owning session was told about this job".
+/// Stamp "the owning session was told about this job", with the boot that told
+/// it.
 ///
-/// Written by the announcer's success arm (and by the boot handback, in the
-/// same pass that hands a row over). Without it, a restart inside the retry
-/// ladder re-delivers a notice the session already received — forever, since
-/// nothing else ever clears the condition.
+/// The **only** writer of [`JobRecord::announced_boot`], and it is called only
+/// from a delivery that has already returned: the announcer's success arm and
+/// the boot handback's post-broadcast line. Nothing that is merely *about to*
+/// announce may write this — that is what `announce_attempts` is for. Without
+/// the stamp, a restart inside the retry ladder re-delivers a notice the
+/// session already received.
 ///
-/// No-op for an id this process never journaled.
+/// No-op for an id this process never journaled, and for a row already stamped
+/// — the first boot that delivered it is the true answer to "who told them".
 pub(crate) fn record_announced(id: u64) {
     let Some(dir) = store_dir() else { return };
     let record = {
@@ -804,10 +863,10 @@ pub(crate) fn record_announced(id: u64) {
         let Some(record) = index.get_mut(&id) else {
             return;
         };
-        if record.announced {
+        if record.announced_boot.is_some() {
             return;
         }
-        record.announced = true;
+        record.announced_boot = Some(now_ms());
         record.clone()
     };
     write_state(&dir, &record);
@@ -1230,7 +1289,7 @@ mod tests {
 
         let found = lookup(3, Some(OWNER)).expect("the row must survive the restart");
         assert_eq!(found.record.phase, JobPhase::Interrupted);
-        let label = found.record.phase.status_label();
+        let label = settled_label(&found.record);
         assert_eq!(label, "interrupted_by_restart_liveness_unknown");
         assert!(
             !label.contains("fail"),
@@ -1250,13 +1309,86 @@ mod tests {
     }
 
     // ========================================================================
-    // The `announced` stamp and the boot handback
+    // The label the model reads first
     // ========================================================================
 
-    /// Write a terminal row directly, so a test can choose its age and verdict
-    /// — the two things the handback filter reads and neither of which the
-    /// normal write path lets you pick.
-    fn seed_settled(dir: &std::path::Path, id: u64, outcome: &str, ended_ms: u64) {
+    fn labelled(phase: JobPhase, outcome: Option<&str>) -> &'static str {
+        settled_label(&JobRecord {
+            id: 1,
+            owner: OWNER.to_string(),
+            command: "cargo build".to_string(),
+            started_ms: 1,
+            phase,
+            ended_ms: Some(2),
+            outcome: outcome.map(str::to_string),
+            exit_code: None,
+            output_file: None,
+            partial_file: None,
+            announce_attempts: 0,
+            announced_boot: None,
+        })
+    }
+
+    /// C2's twin question, asked of this vocabulary: `phase == Settled` is not
+    /// `outcome == completed`. The phase-only label answered `"recorded"` for a
+    /// job that finished and for one the owner killed half way, so the first
+    /// word the model reads could not tell them apart.
+    ///
+    /// An outcome word this daemon does not recognise reads `settled_unknown`,
+    /// never a success word: a label that says "it finished" has to be earned
+    /// by a producer that wrote one.
+    #[test]
+    fn a_settled_label_reads_the_outcome_not_just_the_phase() {
+        assert_eq!(labelled(JobPhase::Settled, Some("completed")), "completed");
+        assert_eq!(labelled(JobPhase::Settled, Some("killed")), "killed");
+        assert_eq!(labelled(JobPhase::Settled, None), "settled_unknown");
+        assert_eq!(
+            labelled(JobPhase::Settled, Some("something-newer")),
+            "settled_unknown"
+        );
+        // And the two non-terminal phases still refuse to read as verdicts.
+        assert_eq!(
+            labelled(JobPhase::Interrupted, None),
+            "interrupted_by_restart_liveness_unknown"
+        );
+        assert_eq!(labelled(JobPhase::Running, None), "running_unconfirmed");
+        for phase in [JobPhase::Running, JobPhase::Interrupted] {
+            assert!(
+                !labelled(phase, None).contains("fail"),
+                "a restart is not a verdict on the command"
+            );
+        }
+    }
+
+    /// The words are the writer's, not a second spelling of them: a verdict
+    /// this module can record must be a verdict the label can name.
+    #[test]
+    fn every_verdict_the_writer_records_has_its_own_label() {
+        for verdict in [Verdict::Completed, Verdict::Killed] {
+            let label = labelled(JobPhase::Settled, Some(verdict.label()));
+            assert_eq!(
+                label,
+                verdict.label(),
+                "a verdict with no label of its own falls into settled_unknown"
+            );
+        }
+    }
+
+    // ========================================================================
+    // The delivery stamp and the boot handback
+    // ========================================================================
+
+    /// Write a terminal row directly, so a test can choose its age, its verdict
+    /// and how many boots have already tried to hand it back — the three things
+    /// the handback filter reads and none of which the normal write path lets
+    /// you pick.
+    fn seed_settled_attempted(
+        dir: &std::path::Path,
+        id: u64,
+        outcome: &str,
+        ended_ms: u64,
+        announce_attempts: u8,
+    ) {
         write_state(
             dir,
             &JobRecord {
@@ -1270,15 +1402,21 @@ mod tests {
                 exit_code: Some(0),
                 output_file: Some(OUTPUT_FILE.to_string()),
                 partial_file: Some(PARTIAL_FILE.to_string()),
-                announced: false,
+                announce_attempts,
+                announced_boot: None,
             },
         );
     }
 
+    /// A terminal row nobody has tried to announce yet.
+    fn seed_settled(dir: &std::path::Path, id: u64, outcome: &str, ended_ms: u64) {
+        seed_settled_attempted(dir, id, outcome, ended_ms, 0);
+    }
+
     /// The promise the spawn receipt makes is "you will hear when it finishes".
     /// A daemon that dies inside the announcer's 0/30/120s ladder leaves a
-    /// `Settled` row nobody was told about, and before the `announced` field
-    /// that promise was withdrawn in silence with the answer sitting on disk.
+    /// `Settled` row nobody was told about, and before the handback that
+    /// promise was withdrawn in silence with the answer sitting on disk.
     ///
     /// RED without the handback arm in `init_and_reconcile`: nothing is claimed.
     #[test]
@@ -1297,10 +1435,23 @@ mod tests {
             take_undelivered_settled().is_empty(),
             "one delivery per boot, however many callers ask"
         );
-        // BT-D-R4-16: reconcile no longer stamps `announced` on disk — the
-        // stamp moved to `init_and_announce`, AFTER the broadcast succeeds,
-        // so a crash mid-broadcast retries the handback instead of silently
-        // losing it. Simulate that successful announce here...
+        // The reconcile that queued it recorded an ATTEMPT, not a delivery.
+        assert_eq!(
+            lookup(21, Some(OWNER)).expect("row").record.announce_attempts,
+            1,
+            "queueing a handback is an attempt"
+        );
+        assert!(
+            lookup(21, Some(OWNER))
+                .expect("row")
+                .record
+                .announced_boot
+                .is_none(),
+            "and nothing may claim delivery before the broadcast returns"
+        );
+        // BT-D-R4-16: the stamp lives in `init_and_announce`, AFTER the
+        // broadcast succeeds, so a crash mid-broadcast retries the handback
+        // instead of silently losing it. Simulate that successful announce...
         record_announced(21);
         // ...and with the stamp landed on disk, the NEXT boot stays quiet. A
         // handback that repeated forever would be worse than the silence it
@@ -1311,7 +1462,55 @@ mod tests {
             take_undelivered_settled().is_empty(),
             "a restart must not re-announce a completion it already handed back"
         );
-        assert!(lookup(21, Some(OWNER)).expect("row").record.announced);
+        assert!(lookup(21, Some(OWNER))
+            .expect("row")
+            .record
+            .announced_boot
+            .is_some());
+        disable_for_test();
+    }
+
+    /// The bound on "the next boot retries it". A row the last three boots all
+    /// failed to deliver stops asking for a proactive turn — it stays on disk
+    /// and stays poll-able, which is the difference between giving up on the
+    /// notice and giving up on the answer.
+    ///
+    /// RED without the [`MAX_ANNOUNCE_ATTEMPTS`] arm: a crash-looping daemon
+    /// re-queues the same completion at every boot for the whole freshness
+    /// window.
+    #[test]
+    fn a_completion_stops_being_offered_after_three_attempts() {
+        let _g = gate();
+        let tmp = tempfile::tempdir().unwrap();
+        seed_settled_attempted(
+            tmp.path(),
+            26,
+            "completed",
+            now_ms(),
+            MAX_ANNOUNCE_ATTEMPTS - 1,
+        );
+
+        // One attempt left: handed back, and the attempt is spent on disk.
+        init_and_reconcile(tmp.path().to_path_buf());
+        assert_eq!(take_undelivered_settled().len(), 1);
+        assert_eq!(
+            lookup(26, Some(OWNER)).expect("row").record.announce_attempts,
+            MAX_ANNOUNCE_ATTEMPTS
+        );
+        disable_for_test();
+
+        // None left: the next boot leaves it alone...
+        init_and_reconcile(tmp.path().to_path_buf());
+        assert!(
+            take_undelivered_settled().is_empty(),
+            "an undeliverable completion may not drive a turn at every boot forever"
+        );
+        // ...without pretending it was ever delivered, and without becoming
+        // unreadable: `poll` still answers for it.
+        let row = lookup(26, Some(OWNER)).expect("the row is still readable");
+        assert!(row.record.announced_boot.is_none());
+        assert_eq!(row.record.announce_attempts, MAX_ANNOUNCE_ATTEMPTS);
+        assert_eq!(row.record.phase, JobPhase::Settled);
         disable_for_test();
     }
 
@@ -1324,14 +1523,26 @@ mod tests {
         enable_for_test(tmp.path().to_path_buf());
         record_spawn(22, "make", Some(OWNER));
         record_settled(22, Verdict::Completed, Some(0), "done\n", "");
-        assert!(!lookup(22, Some(OWNER)).expect("row").record.announced);
+        assert!(lookup(22, Some(OWNER))
+            .expect("row")
+            .record
+            .announced_boot
+            .is_none());
         record_announced(22);
-        assert!(lookup(22, Some(OWNER)).expect("row").record.announced);
+        assert!(lookup(22, Some(OWNER))
+            .expect("row")
+            .record
+            .announced_boot
+            .is_some());
         disable_for_test();
 
         init_and_reconcile(tmp.path().to_path_buf());
         assert!(
-            lookup(22, Some(OWNER)).expect("row").record.announced,
+            lookup(22, Some(OWNER))
+                .expect("row")
+                .record
+                .announced_boot
+                .is_some(),
             "the stamp is durable or it is useless"
         );
         assert!(take_undelivered_settled().is_empty());
@@ -1352,10 +1563,15 @@ mod tests {
             take_undelivered_settled().is_empty(),
             "you asked for it to stop; a restart does not make that news"
         );
+        let row = lookup(23, Some(OWNER)).expect("row");
         assert!(
-            !lookup(23, Some(OWNER)).expect("row").record.announced,
+            row.record.announced_boot.is_none(),
             "and it must not be stamped either — claiming it was announced \
              would be a lie about a notice nobody sent"
+        );
+        assert_eq!(
+            row.record.announce_attempts, 0,
+            "nor may an attempt be spent on a notice this boot never intended to send"
         );
         disable_for_test();
     }
@@ -1382,7 +1598,8 @@ mod tests {
             "yesterday is not news"
         );
         let row = lookup(24, Some(OWNER)).expect("the row is still readable");
-        assert!(!row.record.announced);
+        assert!(row.record.announced_boot.is_none());
+        assert_eq!(row.record.announce_attempts, 0);
         assert_eq!(row.record.phase, JobPhase::Settled, "and still poll-able");
         disable_for_test();
     }

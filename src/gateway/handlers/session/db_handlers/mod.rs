@@ -18,4 +18,4 @@ pub use modify::{
     handle_reset_db, handle_set_project_root_db, handle_set_topic_db, handle_truncate_db,
 };
 pub use query::{handle_history_db, handle_list_db, handle_preview_db, handle_usage_db};
-pub use types::{HistoryMessage, SessionInfo};
+pub use types::HistoryMessage;

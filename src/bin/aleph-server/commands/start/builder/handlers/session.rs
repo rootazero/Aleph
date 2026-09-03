@@ -9,6 +9,7 @@ pub(in crate::commands::start) fn register_session_handlers(
     server: &mut GatewayServer,
     session_store: &Arc<dyn alephcore::gateway::session_store::SessionStore>,
     memory_db: &MemoryBackend,
+    run_manager: Option<Arc<alephcore::gateway::handlers::agent::AgentRunManager>>,
     daemon: bool,
 ) {
     register_handler!(
@@ -67,12 +68,20 @@ pub(in crate::commands::start) fn register_session_handlers(
         session_handlers::handle_compact_db,
         session_store
     );
-    register_handler!(
-        server,
-        "session.truncate",
-        session_handlers::handle_truncate_db,
-        session_store
-    );
+    // Not `register_handler!`: `session.truncate` also needs the run manager,
+    // to answer "is a turn in flight on this session" before it closes the run
+    // marker its cut left open. The twin of `chat.rewind`'s registration.
+    {
+        let store = Arc::clone(session_store);
+        let runs = run_manager.clone();
+        server
+            .handlers_mut()
+            .register("session.truncate", move |req| {
+                let store = Arc::clone(&store);
+                let runs = runs.clone();
+                async move { session_handlers::handle_truncate_db(req, store, runs).await }
+            });
+    }
     register_handler!(
         server,
         "sessions.new",

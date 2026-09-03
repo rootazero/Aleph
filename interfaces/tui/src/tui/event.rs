@@ -198,7 +198,13 @@ mod tests {
         let osc52 = "\x1b]52;c;Zm9vYmFy\x07plain";
         assert_eq!(sanitize_pasted_text(osc52), "plain", "OSC 52 must be stripped");
 
+        // (The expected literal here once dropped the 'b' by typo, shipping a
+        // red test: the sanitizer drops NUL and CR, and keeps every printable.)
         let nul = "a\x00b\rc\td\ne";
-        assert_eq!(sanitize_pasted_text(nul), "ac\td\ne", "NUL/CR dropped, tab/newline kept");
+        assert_eq!(
+            sanitize_pasted_text(nul),
+            "abc\td\ne",
+            "NUL/CR dropped, tab/newline kept"
+        );
     }
 }

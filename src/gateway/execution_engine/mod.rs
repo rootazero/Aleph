@@ -51,7 +51,7 @@ mod tests;
 
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use agent_trace_emit_sink::AgentTraceEmitSink;
-pub use concurrency::ConcurrencySnapshot;
+pub use concurrency::{AgentSlotUsage, ConcurrencySnapshot};
 pub use engine::{ContinuationDeps, ExecutionEngine};
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use scratchpad_progress_sink::ScratchpadProgressSink;
@@ -351,6 +351,83 @@ pub struct RunRequest {
     /// requested model with auto-resolved provider (Raw). `None` keeps the
     /// agent's configured default + fallback chain.
     pub model_override: Option<crate::gateway::model_override::ModelOverride>,
+}
+
+/// `metadata` key: an execution-tier **ceiling** for this run.
+///
+/// Written only by [`crate::gateway::resume_coordinator`], carrying the tier
+/// the crashed run was executing under. It is deliberately NOT
+/// [`crate::config::types::policies::EXEC_TIER_SESSION_KEY`], for two reasons
+/// that are the same reason twice:
+///
+/// 1. that key is the *request* rung, which outranks the session and the
+///    global value — so replaying a `full` snapshot through it would let a
+///    crash recovery RAISE a conversation the operator has since tightened.
+///    This one composes through `ExecTier::most_restrictive` **after** the
+///    three rungs resolve, so it can only tighten, whatever they said; and
+/// 2. the request rung stamps itself onto the session
+///    (`resolve_turn_permissions`), and a resume must not rewrite the knobs
+///    the user changed *after* the crash to tame the run.
+pub const RESUME_TIER_CEILING_KEY: &str = "resume_tier_ceiling";
+
+impl RunRequest {
+    /// True when this request re-drives an existing session log rather than
+    /// seeding a new user message: the boot/on-demand resume
+    /// ([`crate::gateway::resume_coordinator`]) and the post-run steering
+    /// rescue (`steering::build_steering_rescue_request`) both set it.
+    ///
+    /// The one reader of `metadata["resume"]`. It had three hand-written
+    /// comparisons against that literal, and the fourth thing that needed to
+    /// ask — "may this turn stamp its knobs onto the session?" — is exactly
+    /// the kind of question that gets a fourth copy.
+    #[must_use]
+    pub fn is_resume(&self) -> bool {
+        self.metadata.get("resume").map(String::as_str) == Some("true")
+    }
+}
+
+/// The knob value a turn should stamp onto its session, if any.
+///
+/// The one derivation behind four faces (`turn_permissions`, `turn_mode`,
+/// `turn_thinking`, `turn_memory`). It was four inline copies of
+/// `requested.filter(|v| stored != Some(*v))`, and the fifth thing they all
+/// had to learn — that a **resume** carries an envelope rather than a user's
+/// choice — is exactly the kind of rule that gets learned by three of four.
+///
+/// A resume replays the crashed run's settings. Stamping them would overwrite
+/// whatever the user changed *after* the crash, which is most likely the
+/// change they made to tame the run that is now coming back (④-D8).
+#[must_use]
+pub(super) fn knob_to_stamp<T: PartialEq + Copy>(
+    requested: Option<T>,
+    stored: Option<T>,
+    is_resume: bool,
+) -> Option<T> {
+    requested.filter(|v| stored != Some(*v) && !is_resume)
+}
+
+#[cfg(test)]
+mod knob_stamp_tests {
+    use super::knob_to_stamp;
+
+    #[test]
+    fn a_fresh_request_carrying_a_new_value_is_stamped() {
+        assert_eq!(knob_to_stamp(Some(2), Some(1), false), Some(2));
+        assert_eq!(knob_to_stamp(Some(2), None, false), Some(2));
+    }
+
+    #[test]
+    fn a_value_the_session_already_holds_is_not_rewritten() {
+        assert_eq!(knob_to_stamp(Some(1), Some(1), false), None);
+    }
+
+    /// ④ The one this exists for: a resume replays an envelope, so it must
+    /// leave the session row exactly as the user left it after the crash.
+    #[test]
+    fn a_resume_stamps_nothing_however_far_the_snapshot_differs() {
+        assert_eq!(knob_to_stamp(Some(2), Some(1), true), None);
+        assert_eq!(knob_to_stamp(Some(2), None, true), None);
+    }
 }
 
 impl std::fmt::Debug for RunRequest {

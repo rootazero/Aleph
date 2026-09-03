@@ -66,7 +66,9 @@ recursion), token budget, and timeout. It returns a result and is destroyed.
 - `…/result.txt` — an append-only `<unix_ms>\t<text>` activity trail. `last_activity` is the timestamp of its last line, single-sourced rather than duplicated into `state.json` (a field rewritten on every progress event would cost one fsync per tool call).
 - Boot reconcile writes a **terminal tombstone** for orphans instead of deleting the row — a mechanism that only records "it finished" cannot tell "it never ran" apart from "it ran and the write was lost". Without this, `check_status` on a child that died with the previous daemon returned `retryable: false` and the text `"No background sub-agent found with request_id '…'"`, which is indistinguishable from a typo and throws away whatever the child had produced.
 - **Every byte written here goes through `SecretMasker`, unconditionally.** `result.txt` is the first place a sub-agent's output crosses a process boundary onto disk, and it is re-injected into a fresh parent turn at the next boot (which can fan out to a chat channel). An artifact that outlives the process cannot be gated on the run's attendedness, because the reader is a later process.
-- Persistence is **opt-in**: until `init_and_reconcile` runs, every entry point is a zero-I/O no-op and the tracker behaves exactly as before. The boot orphan announcement is `await`ed after `spawn_subagent_announce` (also now `async`) — a subscriber that is merely *scheduled* is not listening yet.
+- Persistence is **opt-in**: until `init_and_reconcile` runs, every entry point is a zero-I/O no-op and the tracker behaves exactly as before. The boot orphan announcement (`init_and_announce_orphans`, the half that broadcasts) is `await`ed after `spawn_subagent_announce` (also now `async`) — a subscriber that is merely *scheduled* is not listening yet.
+- **Boot reconcile claims two populations, not one (2026-09-02).** Tombstoning the orphans is one half; the other is every record that reached `Settled` with no `announced_boot` — a completion whose notice died with the previous daemon. The old `announced: bool` answered both "was it delivered" and "how many times have we tried", and it was written *before* the delivery, so a failed delivery had already stamped itself a success. It is now `announce_attempts: u8` (incremented on the way out, and the cap that stops an undeliverable record from being handed back forever) plus `announced_boot: Option<u64>`, written only after the broadcast returns.
+- **The boot notice is one event per parent session carrying N children, and it counts instead of judging (2026-09-02).** `SubAgentCompletionEvent.success` is a single bool computed over the whole batch, so rendering it as a verdict told the model that every child shared one outcome and named one arbitrary child as the id to ask about — on a mixed batch (some finished, some interrupted) the finished children's results were discarded with it. The event now carries `request_ids: Vec<String>`, the whole batch (`#[serde(default)]`, so an event written before the field decodes as "no per-child list" and the announcer falls back to `request_id` — a missing key must read as "no list", never as "unreadable event"). `request_id` is deliberately `None` on a grouped notice: announce dedup asks the live tracker whether an id was already consumed, and the tracker has never heard of a pre-restart id. The header states the count, the per-child verdicts stay in `summary` where the producer wrote them, and `on_delivered(&request_ids)` stamps every id the delivery actually reached rather than one of N — the N-1 it could not stamp came back at the next boot.
 
 ### Fan-out width (`[execution] max_concurrent_subagents`)
 
@@ -206,13 +208,26 @@ nonce, `sub-<uuid>`.
 
 **The reader** (`src/agents/subagent_tool/recovery.rs`) is lazy: it runs only
 when the tracker reports an id it has never seen, and one `get_events` serves
-every unknown id in that call. Three verdicts — `SubagentReturned` present →
-`completed_recovered` carrying the real summary; only `SubagentSpawned` →
-`interrupted` plus a `child_session` pointer to the partial transcript;
-neither → the pre-existing `unknown`. Wired into `check_status`, `wait`
-(single and `wait_any`), `cancel`, `wait_cancelled` and `list`.
+every unknown id in that call. **Four** verdicts, not three — the sidecar
+(`background_persistence`) is a second durable source covering a set the event
+log cannot see, and it earns its own arm:
 
-Both verdicts are `ToolResult::Success`, including `interrupted`: a restart is
+1. `SubagentReturned` present → `completed_recovered` carrying the real summary;
+2. only `SubagentSpawned` → `interrupted`, plus a `child_session` pointer, the
+   progress counters, the named in-flight calls and the transcript tail;
+3. a sidecar record → its **outcome's** word (`completed` / `failed` /
+   `timed_out` / `cancelled` / `interrupted_by_restart` / `settled_unknown`,
+   from `background_persistence::settled_label`), merged with whatever the child
+   log adds rather than replacing it — only `completed` carries the "do NOT
+   re-run it" seal;
+4. neither source → the pre-existing `unknown`.
+
+Wired into `check_status`, `wait` (single and `wait_any`), `cancel`,
+`wait_cancelled` and `list`. The detail faces pay one child-log read per
+unfinished row; the directory face (`list`) does not, and renders
+`progress: null` — "did not ask", never "no progress".
+
+Every verdict is `ToolResult::Success`, including `interrupted`: a restart is
 not a verdict on the call the model is making now.
 
 `list` gained a `from_durable_log` array. It documents itself as the way to

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Aleph Control Plane UI",
   "scripts": {
-    "build:css": "npx @tailwindcss/cli -i styles/tailwind.css -o dist/tailwind.css --minify"
+    "build:css": "tailwindcss -i styles/tailwind.css -o dist/tailwind.css --minify"
   },
   "keywords": [],
   "author": "",
