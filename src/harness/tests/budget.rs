@@ -650,7 +650,34 @@ const BUDGETED: [&str; 12] = [
 ///     and not fourteen; (3) **consumers** — the error counter feeds the
 ///     consecutive-failure guardrail, and `tool_use_blocks` is the only writer
 ///     of the `thought_signature` field `parse_tool_use_block` reads back.
-const CEILING: usize = 5237;
+/// +2 (5237 → 5239, 2026-09-03): the harness reads `STOP_REASON_END_TURN`
+///     instead of spelling `"end_turn"` a second time, and the two lines are
+///     the formatter's price for that name — not new cognition.
+///
+///     Raw growth measured 5241 (+4), every line of it wrapping. The constant
+///     is 10 chars longer than the literal it replaces, which is enough to
+///     cross two different rustfmt limits: the `crate::verification` import
+///     list reaches 115 chars (a second item line, +1) and the receiver chain
+///     `response.tool_calls.is_empty().then_some(…)` reaches 62, past
+///     `chain_width` 60, which explodes one line into four (+3).
+///
+///     Two of those four are recovered here: binding
+///     `let no_tool_calls = response.tool_calls.is_empty();` first drops the
+///     chain to 45 and puts `stop_reason` back on one line. The other two are
+///     irreducible — the import list does not fit one 100-char line, and the
+///     receiver binding is itself a line. Inlining the single-use local into
+///     the `run_verifiers` argument was *measured*, not assumed: `chain_width`
+///     splits it into four there too, so it buys nothing.
+///
+///     Three questions: (1) **neither scaffolding nor cognition** — a shared
+///     constant is a name, and it decides nothing about the turn; (2) **yes** —
+///     a stronger model does not keep two modules from drifting on the same
+///     wire string, which is the entire job of having one spelling; (3) **two
+///     consumers** — this site and `verification`'s stop-hook verifier, which
+///     compares the turn's stop reason against the same constant. Spelling
+///     `"end_turn"` here again would be 判据 §1「同一事实的两份表述」, and the
+///     ratchet is not allowed to price that shape back in.
+const CEILING: usize = 5239;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
