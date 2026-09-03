@@ -180,8 +180,15 @@ pub struct RunEnvelopeSnapshot {
     /// `MemoryMode::id()`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_mode: Option<String>,
-    /// Model id the run was bound to, or `None` when the run carried no
-    /// directive at all and walked the default chain.
+    /// Model id the run was **served by** — the directive's model when it
+    /// carried one, else what the provider chain said it was about to serve.
+    ///
+    /// `None` means the writer could not name the model AT ALL, not "the run
+    /// carried no pin". The narrower reading is load-bearing: a resume that
+    /// finds `None` here re-derives the model from today's session, which is a
+    /// different model than the crashed run used whenever the session was
+    /// re-pinned in between — so `plan_resume` treats `None` as a degrade and
+    /// says so, rather than answering on a substitute in silence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Provider the model above was pinned to, or `None` for an unqualified

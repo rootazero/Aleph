@@ -448,6 +448,25 @@ pub(crate) fn plan_resume(
                 plan.degraded = true;
             }
         }
+    } else {
+        // The envelope is here and the model half is not: the writer could not
+        // name what served this run (a dynamic route whose provider chain had
+        // no `serving_model_hint`, or a marker from before that fallback
+        // existed). The resume proceeds on today's chain — but that chain is
+        // free to have moved, and this is the ONLY place that knows it might
+        // have.
+        //
+        // `unsnapshotted` cannot carry this: it means "no envelope was
+        // captured", and one was. `degraded` is the field whose definition
+        // already fits — "this resume gave something up" — so the fact travels
+        // on the existing wire instead of a new counter that four faces would
+        // then have to learn to render (判据 #9).
+        sentences.push(
+            "The model that served this run was not recorded; it resumes on this \
+             session's current model, which may not be the same one."
+                .to_string(),
+        );
+        plan.degraded = true;
     }
 
     plan.degrade = degrade_note(sentences);
@@ -1568,14 +1587,83 @@ mod tests {
         names.iter().map(|n| (*n).to_string()).collect()
     }
 
+    /// An envelope that never recorded which model served is a DEGRADE, not a
+    /// clean resume.
+    ///
+    /// This is the silent substitution the ruling closes: the resume walks
+    /// today's chain, and if the session was re-pinned while the crashed run
+    /// sat unresumed, that chain answers with a different model. `unsnapshotted`
+    /// cannot report it — the envelope is right here — so before this the fact
+    /// had no carrier at all and every face showed a clean recovery.
+    #[test]
+    fn an_envelope_that_never_named_the_model_resumes_degraded_and_says_so() {
+        let plan = plan_resume(
+            Some(&facts(None, Some(envelope_with(None, None, Some("full"))))),
+            None,
+            &|_| true,
+        );
+        assert!(
+            !plan.unsnapshotted,
+            "the envelope is present; only its model half is missing"
+        );
+        assert!(plan.degraded, "an unrecoverable model is something given up");
+        let note = plan
+            .degrade
+            .as_ref()
+            .expect("a degrade must carry the sentence the model reads");
+        assert!(
+            note.sentence.contains("was not recorded"),
+            "the note must say the model is unknown, not invent one: {}",
+            note.sentence
+        );
+        assert!(
+            plan.model_override.is_none(),
+            "nothing was recorded, so there is nothing to pin"
+        );
+    }
+
+    /// The other half of the same gate: a snapshot that DID name a model must
+    /// not collect that sentence. Without this, the branch above could be made
+    /// unconditional and every test here would stay green.
+    #[test]
+    fn a_recorded_model_resumes_without_the_unknown_model_sentence() {
+        // A LIVE model, deliberately: `deepseek-chat` is deprecated in the
+        // catalog (the Successor test below depends on that), and a degrade
+        // from the lifecycle arm would have made this test pass for the wrong
+        // reason — it would no longer separate "recorded" from "not recorded".
+        let plan = plan_resume(
+            Some(&facts(
+                None,
+                Some(envelope_with(Some("gpt-5.6"), Some("openai"), None)),
+            )),
+            Some(&pinnable(&["openai"])),
+            &|_| true,
+        );
+        assert!(!plan.degraded, "a model that is still valid gives nothing up");
+        assert!(plan.degrade.is_none());
+        assert_eq!(
+            plan.model_override
+                .as_ref()
+                .map(crate::gateway::model_override::ModelOverride::model),
+            Some("gpt-5.6")
+        );
+    }
+
     /// The three replayable knobs ride on their own metadata keys, and the
     /// tier rides on the CEILING key — never on `exec_tier`, which is the
     /// request rung and would let a resume raise a tightened conversation.
     #[test]
     fn the_snapshot_knobs_reach_the_request_and_the_tier_rides_the_ceiling_key() {
+        // The model half is filled in so this stays a test about KNOBS: an
+        // envelope with no model is now a degrade in its own right, and the
+        // `!plan.degraded` assertion at the bottom would be answering that
+        // question instead of this one.
         let plan = plan_resume(
-            Some(&facts(None, Some(envelope_with(None, None, Some("full"))))),
-            None,
+            Some(&facts(
+                None,
+                Some(envelope_with(Some("gpt-5.6"), Some("openai"), Some("full"))),
+            )),
+            Some(&pinnable(&["openai"])),
             &|_| true,
         );
         assert_eq!(
