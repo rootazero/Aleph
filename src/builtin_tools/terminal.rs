@@ -22,33 +22,47 @@
 //! Unlike `select_model`'s `moa:` arm and `loop_manage`'s cross-session arm —
 //! which gate their one sensitive action inline INSTEAD OF listing the whole
 //! tool in `OPERATOR_TOOLS` — `terminal` gates the WHOLE tool both ways, and
-//! the two halves do not agree on every path. Say that out loud rather than
-//! leaving the next reader to derive it:
+//! the two halves do not agree on every path today. Say that out loud rather
+//! than leaving the next reader to derive it:
 //!
 //! - On the `ScopedToolService` path (`tools/scoped/dispatch.rs`), a
 //!   chat-tier or member caller trips `OPERATOR_TOOLS` membership and
 //!   `check_operator_gate` raises a live operator-approval card. **Even when
-//!   a human approves that card, this tool still refuses anyway** — approval
-//!   only flips `authorized` for the dispatch pipeline; nothing re-stamps
+//!   a human approves that card, this tool refuses anyway** — approval only
+//!   flips `authorized` for the dispatch pipeline; nothing re-stamps
 //!   [`crate::tools::turn_context::TurnContext`], so [`caller_is_operator`]
 //!   below reads the same unchanged `caller_role` and answers `false`
-//!   regardless. The refusal message that follows must not be read as "go
-//!   get an operator" — an operator may have just said yes.
+//!   regardless.
 //! - On the `tools.invoke` path (`handlers/tools_invoke.rs`), no
 //!   `TurnContext` is ever set, so [`caller_is_operator`] returns `true`
 //!   unconditionally and contributes nothing there; `OPERATOR_TOOLS`
 //!   membership (checked directly against `caller_role` by that handler,
 //!   not through this tool) is the only thing closing that path.
 //!
-//! **Do not remove the inline check to "fix" the disagreement on the first
-//! path above** — the fix belongs in `gate_chain.rs`'s card text (see the
-//! `OPERATOR_TOOLS` entry's own comment in `method_authz.rs`), not here:
-//! dropping the inline check would make that (currently misleading) card
-//! actually grant a read of another principal's live terminal screen. This
-//! is also exactly how `plugin_manage` once shipped ungated on one face
-//! while its RPC twin stayed closed (see `method_authz.rs`'s own module
-//! doc) — removing either half without re-deriving why the other is enough
-//! on its own reopens that failure mode.
+//! **The `ScopedToolService` outcome above is a KNOWN GAP, not the intended
+//! design — do not read it as correct and build on it.** An operator who
+//! was interrupted, looked at the call, and said yes is overridden by a
+//! check that never learns their answer. The decided fix (R11-14,
+//! 2026-09-03) is a SEAM: `check_operator_gate` already computes
+//! `approved_by_operator_gate` for exactly this call; carrying that verdict
+//! through to this tool — so an operator-approved member call is let
+//! through instead of refused a second time — is the direction, but that
+//! seam does not exist yet. Building it is out of scope for this task and
+//! deliberately unscheduled; this refusal stands until it lands.
+//!
+//! **Do not "fix" the gap above by deleting the inline check** — that is
+//! NOT the decided fix, and it makes things worse: `gate_chain.rs`'s
+//! approval card currently reads "…which changes Aleph's own
+//! configuration. Approve to allow this change", which is false for a
+//! read-only tool. Dropping the inline check would make that mislabeled
+//! card actually grant a read of another principal's live terminal screen
+//! — right now, before the seam above exists to make that grant correct.
+//! (The card's text is shared by every operator tool and is a separate
+//! review's problem, not this one — see the `OPERATOR_TOOLS` entry's own
+//! comment in `method_authz.rs`; leave `gate_chain.rs` alone here.) This is
+//! also exactly how `plugin_manage` once shipped ungated on one face while
+//! its RPC twin stayed closed (see `method_authz.rs`'s own module doc) —
+//! removing either half without the seam above reopens that failure mode.
 //!
 //! Absent `caller_role` reads as operator (`role_is_operator`, "no identity
 //! was resolved" — internal wiring, cron, a test — not "a stranger"), the
