@@ -876,27 +876,70 @@ pub enum DmScope {
 
 ## Session Manager
 
-**Location**: `src/gateway/session_manager.rs`
+**Location**: `src/gateway/session_manager/` (a directory, not the single
+`session_manager.rs` this line used to name).
 
 ### Storage Schema
 
+Abridged from `session_manager/mod.rs`; that file is the source, this is the
+shape. There is no `messages TEXT` JSON column and no `session_metadata`
+table — both were in this document long after they stopped existing.
+
 ```sql
 CREATE TABLE sessions (
-    session_key TEXT PRIMARY KEY,
-    messages TEXT,           -- JSON array
-    created_at INTEGER,
-    updated_at INTEGER,
-    message_count INTEGER,
-    token_count INTEGER
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    key            TEXT UNIQUE NOT NULL,
+    agent_id       TEXT NOT NULL,
+    session_type   TEXT NOT NULL,
+    created_at     INTEGER NOT NULL,
+    last_active_at INTEGER NOT NULL,
+    message_count  INTEGER DEFAULT 0,
+    total_tokens   INTEGER DEFAULT 0,
+    state          TEXT DEFAULT 'created',
+    metadata       TEXT,      -- JSON: identity_meta, knobs, owner/scope
+    label          TEXT,
+    model          TEXT,
+    model_provider TEXT
+    -- plus auto_reset_at, input_tokens, output_tokens
 );
 
-CREATE TABLE session_metadata (
-    session_key TEXT PRIMARY KEY,
-    agent_id TEXT,
-    channel TEXT,
-    last_compaction INTEGER
+CREATE TABLE messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_key TEXT NOT NULL,
+    role        TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    timestamp   INTEGER NOT NULL,
+    metadata    TEXT,
+    source_seq  INTEGER,      -- the `session_events.seq` this row came from
+    FOREIGN KEY (session_key) REFERENCES sessions(key) ON DELETE CASCADE
 );
 ```
+
+### `messages` is a projection, not a source
+
+The SSOT is `session_events` ([SESSION_SERVICE.md](SESSION_SERVICE.md)).
+`MessageProjector` (`src/gateway/session_projector.rs`) is the **only** writer
+of `messages`, and it is asynchronous: an append lands in the log first and
+reaches the transcript on a per-session drain.
+
+The projection is **self-healing, never lossy**. Back-pressure or a stopped
+drain records the event's `seq` in `missed` (the payload is already durable in
+the SSOT) and a later heal re-reads it; a heal is a **seq-set difference**
+against the rows the transcript already has, so a hole *below* the newest row
+is filled too — before 2026-09-02 a watermark suppressed everything at or
+under `max(seq)` and those holes were permanent. `missed` is process memory,
+so a crash between an append and its drain is repaired at the NEXT boot:
+`ProjectionReconciler` repairs every session in the activity window
+(`[resume] max_age_secs`) plus every session whose markers read as
+interrupted, and the `core/projection-holes` doctor check does the unbounded
+sweep for anything older. `RunMeta` is stamped onto the last assistant row
+**in the run's seq range** (not by position) and bills usage once, so a replay
+cannot charge a run twice.
+
+⚠️ One consequence is recorded and unfixed: a healed row is a fresh INSERT, so
+its `AUTOINCREMENT id` sorts it at the **tail** of the transcript rather than
+at its `seq` position — and `id` is the authoritative transcript order
+([FEATURE_LOCATOR](FEATURE_LOCATOR.md) §6.9 round-8 · 附录 D.4.38).
 
 ### Compaction
 

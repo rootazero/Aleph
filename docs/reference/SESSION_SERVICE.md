@@ -35,7 +35,7 @@ CREATE TABLE session_events (
 );
 ```
 
-Plus two supporting indexes (`idx_session_events_session_turn`, `idx_session_events_session_type`). Writes are synchronous; SQLite runs in WAL mode; the `(session_id, seq)` primary key enforces monotonic ordering per session.
+Plus two supporting indexes (`idx_session_events_session_turn`, `idx_session_events_session_type`). Writes are synchronous and SQLite runs in WAL mode. The `(session_id, seq)` primary key enforces **uniqueness** of a seq within a session — it does not enforce monotonicity, and no index could: a primary key accepts 5, 3, 4 in that insertion order without complaint. Monotonicity is the allocator's promise, and the reducer does not take it on faith: `session::reduction::validate_slice` REJECTS a slice whose `seq` decreases (`LogContradiction::OutOfOrderSlice`), because a reducer that proceeded would derive the run anchor and the disposition from a false order.
 
 ## Event schema
 
