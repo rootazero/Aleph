@@ -470,8 +470,11 @@ impl HttpProvider {
         // upstream returns response headers; the streaming idle guard
         // (`wrap_idle_timeout`) only covers gaps *between* SSE events *after*
         // that. Without this, a provider that accepts the connection but stalls
-        // before responding hangs the whole turn until the harness 300s
-        // per-turn watchdog kills the run — too late to fail over. Reuse
+        // before responding hangs the whole turn until the per-turn watchdog
+        // kills the run — the operator-configured `[stability]
+        // turn_timeout_secs`, which the library leaves unset and `aleph-server`
+        // defaults to 120s (`build_stability_triple`). Either way that is far
+        // too late to fail over. Reuse
         // `stream_idle_timeout_secs` (same "max gap with no upstream bytes"
         // semantics; `0` disables). On elapse, surface the typed `Timeout` that
         // the failover/retry path already classifies as transient, so the next
@@ -1205,7 +1208,9 @@ mod tests {
 
     /// Reproduces the production hang: an upstream that accepts the TCP
     /// connection but never sends response headers. Before the TTFB guard,
-    /// `execute` blocked until the harness 300s watchdog; now it must surface
+    /// `execute` blocked until the per-turn watchdog (if one is configured at
+    /// all — `[stability] turn_timeout_secs` is unset by default in the
+    /// library); now it must surface
     /// `AlephError::Timeout` within `stream_idle_timeout_secs`.
     #[tokio::test]
     async fn ttfb_timeout_fires_when_upstream_never_responds() {

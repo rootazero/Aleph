@@ -101,6 +101,55 @@ impl AiProvider for ScriptProvider {
     }
 }
 
+/// A provider that has gone silent: every call yields the typed
+/// `AlephError::Timeout` that both stream watchdogs raise once an idle window
+/// has elapsed with no upstream bytes. `ScriptProvider` cannot stand in — it
+/// only ever produces `AlephError::provider`, and the whole point of the
+/// spent-window rule is that it reads the *typed variant*, not the wording.
+struct SilentProvider {
+    name: String,
+    calls: AtomicUsize,
+}
+
+impl SilentProvider {
+    fn new(name: &str) -> Arc<Self> {
+        Arc::new(Self {
+            name: name.to_string(),
+            calls: AtomicUsize::new(0),
+        })
+    }
+
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl AiProvider for SilentProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {
+            Err(AlephError::Timeout {
+                suggestion: Some(
+                    "Provider sent no response for 60s after the request was dispatched \
+                     (time-to-first-byte timeout)."
+                        .into(),
+                ),
+            })
+        })
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn color(&self) -> &str {
+        "#000"
+    }
+}
+
 /// Primary whose behavior-resolution fields are configurable, so the
 /// failover wrapper's pass-through can be asserted.
 struct BehaviorProvider {
@@ -338,10 +387,24 @@ async fn explicit_chain_skips_providers_removed_from_live_registry() {
 
 // --- decide() unit tests ----------------------------------------------
 
+/// `decide` for the common shape: a later candidate still remains in the
+/// chain, so advancing is a real option. Named rather than a bare `true` at
+/// two dozen call sites, where the flag would read as noise.
+fn decide_in_chain(err: &AlephError, attempt: u32, max_retries: u32) -> Decision {
+    decide(err, attempt, max_retries, true)
+}
+
+/// `decide` on the *terminal* candidate — a single-provider deployment, or the
+/// last link of a chain. Advancing here means failing the request outright, so
+/// every in-place budget must survive unchanged.
+fn decide_terminal(err: &AlephError, attempt: u32, max_retries: u32) -> Decision {
+    decide(err, attempt, max_retries, false)
+}
+
 #[test]
 fn decide_bad_request_stops() {
     let e = AlephError::provider("HTTP 400 bad request: invalid param");
-    assert_eq!(decide(&e, 0, 2), Decision::Stop);
+    assert_eq!(decide_in_chain(&e, 0, 2), Decision::Stop);
 }
 
 #[test]
@@ -352,7 +415,7 @@ fn decide_model_rate_limit_returns_rate_limited() {
     // provider's circuit is considered. The server gave no Retry-After, so
     // the cooldown hint is None.
     let e = AlephError::provider("HTTP 429 too many requests");
-    assert_eq!(decide(&e, 0, 2), Decision::RateLimited(None));
+    assert_eq!(decide_in_chain(&e, 0, 2), Decision::RateLimited(None));
 }
 
 #[test]
@@ -365,7 +428,7 @@ fn decide_model_rate_limit_honors_typed_retry_after() {
         suggestion: Some("Rate limited. Retry after 42 seconds.".into()),
     };
     assert_eq!(
-        decide(&e, 0, 2),
+        decide_in_chain(&e, 0, 2),
         Decision::RateLimited(Some(Duration::from_secs(42)))
     );
 }
@@ -381,7 +444,7 @@ fn decide_model_rate_limit_falls_back_to_body_retry_after() {
         suggestion: None,
     };
     assert_eq!(
-        decide(&e, 0, 2),
+        decide_in_chain(&e, 0, 2),
         Decision::RateLimited(Some(Duration::from_secs(30)))
     );
 }
@@ -393,13 +456,13 @@ fn decide_token_count_borrowing_400_digits_is_not_a_bad_request() {
     // `has_status_code` confines the match to a real status token.
     let e = AlephError::provider("upstream hiccup: used 400123 tokens; invalid response");
     assert!(
-        matches!(decide(&e, 0, 2), Decision::RetrySame(_)),
+        matches!(decide_in_chain(&e, 0, 2), Decision::RetrySame(_)),
         "a token count must not read as HTTP 400, got {:?}",
-        decide(&e, 0, 2)
+        decide_in_chain(&e, 0, 2)
     );
     // …while a genuine 400 still stops the walk immediately.
     let e = AlephError::provider("HTTP 400 Bad Request: invalid parameter");
-    assert_eq!(decide(&e, 0, 2), Decision::Stop);
+    assert_eq!(decide_in_chain(&e, 0, 2), Decision::Stop);
 }
 
 #[test]
@@ -412,7 +475,7 @@ fn decide_overload_429_honors_typed_retry_after() {
         suggestion: Some("Retry after 7 seconds.".into()),
     };
     assert_eq!(
-        decide(&e, 0, 2),
+        decide_in_chain(&e, 0, 2),
         Decision::RetrySame(Duration::from_secs(7))
     );
 }
@@ -421,12 +484,12 @@ fn decide_overload_429_honors_typed_retry_after() {
 fn decide_auth_advances_provider_as_permanent() {
     let e = AlephError::provider("HTTP 401 Unauthorized");
     assert_eq!(
-        decide(&e, 0, 2),
+        decide_in_chain(&e, 0, 2),
         Decision::NextProvider(FailureKind::Permanent)
     );
     let e = AlephError::provider("HTTP 403 Forbidden: invalid api key");
     assert_eq!(
-        decide(&e, 0, 2),
+        decide_in_chain(&e, 0, 2),
         Decision::NextProvider(FailureKind::Permanent)
     );
 }
@@ -434,22 +497,22 @@ fn decide_auth_advances_provider_as_permanent() {
 #[test]
 fn decide_model_not_found_advances_model() {
     let e = AlephError::provider("HTTP 404 model gpt-9 not found");
-    assert_eq!(decide(&e, 0, 2), Decision::NextModel);
+    assert_eq!(decide_in_chain(&e, 0, 2), Decision::NextModel);
 }
 
 #[test]
 fn decide_413_stops_for_compactor() {
     let e = AlephError::provider("HTTP 413 prompt is too long: 200000 tokens > 100000 maximum");
-    assert_eq!(decide(&e, 0, 2), Decision::Stop);
+    assert_eq!(decide_in_chain(&e, 0, 2), Decision::Stop);
 }
 
 #[test]
 fn decide_transient_retries_then_advances() {
     let e = AlephError::provider("connection reset by peer");
-    assert!(matches!(decide(&e, 0, 2), Decision::RetrySame(_)));
-    assert!(matches!(decide(&e, 1, 2), Decision::RetrySame(_)));
+    assert!(matches!(decide_in_chain(&e, 0, 2), Decision::RetrySame(_)));
+    assert!(matches!(decide_in_chain(&e, 1, 2), Decision::RetrySame(_)));
     assert_eq!(
-        decide(&e, 2, 2),
+        decide_in_chain(&e, 2, 2),
         Decision::NextProvider(FailureKind::Transient)
     );
 }
@@ -472,9 +535,9 @@ fn decide_transient_overload_429_gets_limited_retry_budget() {
             .into(),
         suggestion: None,
     };
-    assert!(matches!(decide(&e, 0, 2), Decision::RetrySame(_)));
+    assert!(matches!(decide_in_chain(&e, 0, 2), Decision::RetrySame(_)));
     assert_eq!(
-        decide(&e, 1, 2),
+        decide_in_chain(&e, 1, 2),
         Decision::NextProvider(FailureKind::Transient)
     );
 }
@@ -491,9 +554,9 @@ fn decide_kimi_overloaded_429_fails_over_after_one_retry() {
          {\"error\":{\"type\":\"rate_limit_error\",\"message\":\"The engine is currently \
          overloaded, please try again later\"},\"type\":\"error\"}",
     );
-    assert!(matches!(decide(&e, 0, 2), Decision::RetrySame(_)));
+    assert!(matches!(decide_in_chain(&e, 0, 2), Decision::RetrySame(_)));
     assert_eq!(
-        decide(&e, 1, 2),
+        decide_in_chain(&e, 1, 2),
         Decision::NextProvider(FailureKind::Transient)
     );
 }
@@ -509,9 +572,9 @@ fn decide_overload_429_budget_is_independent_of_max_retries() {
             .into(),
         suggestion: None,
     };
-    assert!(matches!(decide(&e, 0, 10), Decision::RetrySame(_)));
+    assert!(matches!(decide_in_chain(&e, 0, 10), Decision::RetrySame(_)));
     assert_eq!(
-        decide(&e, 1, 10),
+        decide_in_chain(&e, 1, 10),
         Decision::NextProvider(FailureKind::Transient)
     );
 }
@@ -523,9 +586,9 @@ fn decide_plain_network_transient_keeps_shallow_budget() {
     // better next bet than hammering a flaky socket. Guards the overload
     // budget from leaking into ordinary transient errors.
     let e = AlephError::provider("connection reset by peer");
-    assert!(matches!(decide(&e, 1, 2), Decision::RetrySame(_)));
+    assert!(matches!(decide_in_chain(&e, 1, 2), Decision::RetrySame(_)));
     assert_eq!(
-        decide(&e, 2, 2),
+        decide_in_chain(&e, 2, 2),
         Decision::NextProvider(FailureKind::Transient)
     );
 }
@@ -539,20 +602,57 @@ fn decide_account_quota_429_excluded_from_deep_budget() {
     // attempt 1.
     let e = AlephError::provider("429 account quota exceeded; please wait a moment");
     assert_eq!(
-        decide(&e, 2, 2),
+        decide_in_chain(&e, 2, 2),
         Decision::NextProvider(FailureKind::Transient)
     );
 }
 
 #[test]
-fn decide_typed_timeout_with_no_http_code_still_fails_over() {
+fn decide_typed_timeout_advances_at_once_but_only_off_a_terminal_candidate() {
     // `Timeout` Display is "Request timed out" — no HTTP keyword — but the
-    // typed class is Transient, so the walk must still advance.
+    // typed class is Transient, so the walk must advance rather than stop.
+    //
+    // Both branches are pinned here on purpose. The rule is narrow: a typed
+    // `Timeout` is the one transient error that proves a whole silence window
+    // (TTFB / SSE gap / connect) was ALREADY spent on this attempt, so an
+    // in-place retry buys a second full window against an endpoint that has
+    // demonstrated silence. When a later candidate exists that is a bad bet and
+    // the chain advances immediately — no retry at all. When this is the last
+    // candidate, advancing means failing the request with zero attempts left,
+    // so the ordinary `max_retries` in-place budget must survive untouched.
+    // Asserting only the first half would let the rule silently widen into the
+    // single-provider shape, which is the commonest personal-runtime setup.
     let e = AlephError::Timeout { suggestion: None };
-    assert!(matches!(decide(&e, 0, 2), Decision::RetrySame(_)));
+
     assert_eq!(
-        decide(&e, 2, 2),
-        Decision::NextProvider(FailureKind::Transient)
+        decide_in_chain(&e, 0, 2),
+        Decision::NextProvider(FailureKind::Transient),
+        "a spent idle window must move to the next candidate on the first failure",
+    );
+
+    assert!(
+        matches!(decide_terminal(&e, 0, 2), Decision::RetrySame(_)),
+        "the terminal candidate keeps its in-place retry — there is nowhere to advance to",
+    );
+    assert!(matches!(decide_terminal(&e, 1, 2), Decision::RetrySame(_)));
+    assert_eq!(
+        decide_terminal(&e, 2, 2),
+        Decision::NextProvider(FailureKind::Transient),
+        "and once that budget is exhausted it still escalates as a transient strike",
+    );
+}
+
+#[test]
+fn decide_untyped_timed_out_wording_keeps_its_in_place_retry() {
+    // The spent-window rule keys on the typed variant, never on the words
+    // "timed out" — which also reach `classify` from untyped provider bodies
+    // through `llm_retry`'s network word list. There nothing tells us a
+    // watchdog window elapsed, so the ordinary retry budget still applies even
+    // with a fallback waiting.
+    let e = AlephError::provider("upstream proxy: the request timed out");
+    assert!(
+        matches!(decide_in_chain(&e, 0, 2), Decision::RetrySame(_)),
+        "a provider *body* saying 'timed out' is not a watchdog verdict",
     );
 }
 
@@ -990,6 +1090,61 @@ async fn permanently_dead_fallback_skipped_on_next_request() {
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "healthy");
     assert_eq!(dead.call_count(), 1);
+}
+
+#[tokio::test]
+async fn a_silent_primary_reaches_the_fallback_within_one_idle_window() {
+    // A black-holing endpoint (proxy accepts the connection and never answers)
+    // surfaces as a typed `Timeout` only AFTER a full TTFB/idle window has been
+    // paid. Re-dialing it in place paid that window again, twice more, before
+    // the chain moved — long enough for a configured per-turn watchdog to kill
+    // the run first, so the healthy fallback was never reached, no strike was
+    // ever recorded, and `route_status` kept reporting the dead endpoint closed.
+    let silent = SilentProvider::new("silent");
+    let fb = ScriptProvider::ok("fb");
+    // rust-doctor-disable-next-line excessive-clone
+    let fp = build(silent.clone(), vec![], vec![node("fb", fb.clone())]);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "fb");
+    assert_eq!(
+        silent.call_count(),
+        1,
+        "the spent window must not be paid a second time in place",
+    );
+    assert_eq!(fb.call_count(), 1);
+
+    // …and the attempt was charged to the breaker, so the silent endpoint is
+    // shed on the ordinary schedule instead of being re-dialed every turn.
+    // One walk = one strike, so the remaining walks reach the threshold.
+    for _ in 1..CIRCUIT_OPEN_THRESHOLD {
+        // rust-doctor-disable-next-line unwrap-in-production
+        let _ = fp.process(RequestPayload::new(&msgs)).await;
+    }
+    assert!(fp.circuit_open("silent").await);
+    assert_eq!(silent.call_count(), CIRCUIT_OPEN_THRESHOLD as usize);
+}
+
+#[tokio::test]
+async fn a_lone_silent_provider_still_spends_its_in_place_retries() {
+    // The other direction of the same gate: with no later candidate, advancing
+    // the chain means failing the request with zero attempts left. A
+    // single-provider deployment — the commonest personal-runtime shape — must
+    // keep the full `max_retries` in-place budget on a timeout, exactly as it
+    // did before the spent-window rule existed.
+    let solo = SilentProvider::new("solo");
+    // rust-doctor-disable-next-line excessive-clone
+    let fp = build(solo.clone(), vec![], vec![]);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    assert!(fp.process(RequestPayload::new(&msgs)).await.is_err());
+    assert_eq!(
+        solo.call_count(),
+        FailoverConfig::default().max_retries as usize + 1,
+        "a lone provider keeps its in-place retries; the rule must not widen here",
+    );
 }
 
 #[tokio::test]

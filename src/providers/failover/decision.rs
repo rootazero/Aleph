@@ -132,8 +132,20 @@ pub(crate) fn strike_for(err: &AlephError) -> Strike {
 /// provider-level failover when the *typed* error is transient — covering
 /// errors whose `Display` carried no HTTP code (e.g. `Timeout` →
 /// "Request timed out").
+///
+/// `has_later_candidate` states whether the walk still has somewhere to go.
+/// It is the walk's own `idx + 1 < total`, threaded in rather than re-derived
+/// here, so the circuit-breaker gate, the rate-ceiling gate, the 429 pacing
+/// gate and this classifier all read the *same* fact (criterion: a boundary
+/// is derived in one place). It only ever narrows a verdict towards the
+/// chain — when it is `false` every path behaves exactly as it did before.
 // rust-doctor-disable-next-line high-cyclomatic-complexity
-pub(crate) fn decide(err: &AlephError, attempt: u32, max_retries: u32) -> Decision {
+pub(crate) fn decide(
+    err: &AlephError,
+    attempt: u32,
+    max_retries: u32,
+    has_later_candidate: bool,
+) -> Decision {
     let msg = err.to_string();
     let lower = msg.to_lowercase();
 
@@ -181,6 +193,46 @@ pub(crate) fn decide(err: &AlephError, attempt: u32, max_retries: u32) -> Decisi
     } else {
         Decision::NextProvider(FailureKind::Transient)
     };
+
+    // A typed `Timeout` says a *silence window has already been spent* on this
+    // attempt, which no other transient error tells us. Every producer of the
+    // variant that reaches this walk is a watchdog that fires only after a
+    // whole window of nothing:
+    //   * the TTFB guard (`HttpProvider::execute_once`) and the SSE gap guard
+    //     (`protocols::stream_idle`) — `effective_idle_secs`, 60s by default;
+    //   * reqwest's own `is_timeout` on `send()` in the `HttpProvider` family
+    //     (every protocol adapter builds its client through
+    //     `protocols::http_client`, via `protocols::registry` or
+    //     `protocols::loader`) — that builder sets only a 10s `connect_timeout`
+    //     and deliberately no overall request timeout, so there this is the
+    //     handshake, not the body;
+    //   * reqwest's `is_timeout` in the native `providers::ollama` path, which
+    //     is *not* an `HttpProvider`: it builds its own client with an overall
+    //     `.timeout(config.timeout_seconds)` and no `connect_timeout`, 300s by
+    //     default (`config::types::provider::default_timeout_seconds`). A spent
+    //     window a fortiori — the whole request budget elapsed with nothing
+    //     returned, so re-dialing in place would buy another 300s of silence;
+    //   * a stream the adapter saw cut before its terminal frame
+    //     (`openai_chat` / `openai_responses` / `gemini`), and the
+    //     truncated-tool-call diagnostic, where re-dialing re-truncates the
+    //     same oversized output.
+    // In every one of those an in-place retry buys a second full window against
+    // an endpoint that has already demonstrated silence, while the per-turn
+    // watchdog above us keeps running. The chain, not the socket, is the next
+    // bet — so advance and let the breaker count the strike.
+    //
+    // Keyed on the *typed variant*, never on the words "timed out": that phrase
+    // also reaches `classify` from untyped provider bodies via `llm_retry`'s
+    // network word list, and there nothing tells us a window was spent.
+    //
+    // Guarded by `has_later_candidate` because advancing off the terminal
+    // candidate is not "try elsewhere", it is "fail the request with zero
+    // retries" — the single-provider shape the overload budget already reasons
+    // about. There the ordinary `max_retries` in-place budget still applies,
+    // unchanged.
+    if has_later_candidate && matches!(err, AlephError::Timeout { .. }) {
+        return next_provider;
+    }
 
     match classify_exhausted(&msg) {
         // 413 — the turn driver owns this recovery path via

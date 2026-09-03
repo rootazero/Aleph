@@ -1036,6 +1036,13 @@ impl FailoverProvider {
             let emission = sink.map(EmissionGuard::new);
 
             for (idx, (cand, action, slot)) in plan.candidates.into_iter().enumerate() {
+                // "Is there somewhere else to go?" — derived once per candidate
+                // and read by every gate below plus `decide`. Four rules yield
+                // to a later candidate and insist on the last one (breaker,
+                // rate ceiling, 429 pacing, spent-timeout-window); each having
+                // spelled out `idx + 1 < total` for itself is how one of them
+                // silently ends up describing a different set.
+                let has_later_candidate = idx + 1 < total;
                 // The circuit breaker may skip a candidate only while a later
                 // one remains; the final candidate is always attempted so a
                 // transient outage cannot hard-fail every request behind an
@@ -1048,7 +1055,7 @@ impl FailoverProvider {
                 // being dead is a prompt that buys nothing. Every cheap,
                 // local reason to pass over a candidate is settled first.
                 let circuit_ok = self.circuit_allows(&cand.name).await;
-                if !circuit_ok && idx + 1 < total {
+                if !circuit_ok && has_later_candidate {
                     tracing::debug!(provider = %cand.name, "failover: circuit open, skipping");
                     continue;
                 }
@@ -1076,7 +1083,7 @@ impl FailoverProvider {
                 // except a number in `route_status`.
                 if plan.saturated.contains(&cand.name)
                     && !plan.route.targets.is_pinned(&cand.name)
-                    && idx + 1 < total
+                    && has_later_candidate
                 {
                     tracing::debug!(
                         provider = %cand.name,
@@ -1168,7 +1175,7 @@ impl FailoverProvider {
                 // still gets its request served.)
                 if let Some(pc) = &self.provider_cooldown {
                     if let Some(remaining) = pc.remaining(&cand.name).await {
-                        if idx + 1 < total {
+                        if has_later_candidate {
                             tracing::debug!(
                                 provider = %cand.name,
                                 remaining_ms = remaining.as_millis() as u64,
@@ -1386,7 +1393,12 @@ impl FailoverProvider {
                                 }
                                 return Err(e);
                             }
-                            Err(e) => match decide(&e, attempt, self.config.max_retries) {
+                            Err(e) => match decide(
+                                &e,
+                                attempt,
+                                self.config.max_retries,
+                                has_later_candidate,
+                            ) {
                                 Decision::RetrySame(delay) => {
                                     // Grow the wait exponentially per in-place
                                     // attempt (capped at MAX_RETRY_DELAY), then
