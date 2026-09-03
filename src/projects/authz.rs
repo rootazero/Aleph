@@ -205,4 +205,28 @@ mod tests {
         assert!(!is_active_principal(&users, "u-never"), "absent reads as unknown");
         assert!(!is_active_principal(&users, ""), "the empty id is nobody");
     }
+
+    /// The `Err` arm specifically (criterion #8): none of the cases above
+    /// reach it — an absent or deactivated row is `Ok`, not `Err`. Drop the
+    /// backing table so `get_user` genuinely errors, and confirm the
+    /// predicate still refuses rather than reading the failure as
+    /// permission. Without this test the fail-closed comment on the `Err`
+    /// arm is unverified prose: flipping that arm to `true` passes every
+    /// other test in this module untouched.
+    #[test]
+    fn a_store_error_is_not_read_as_permission() {
+        use crate::gateway::security::store::SecurityStore;
+        let users = SecurityStore::in_memory().unwrap();
+        users
+            .conn
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .execute("DROP TABLE users", [])
+            .unwrap();
+
+        assert!(
+            !is_active_principal(&users, "u-anyone"),
+            "a store error must fail closed, not open"
+        );
+    }
 }

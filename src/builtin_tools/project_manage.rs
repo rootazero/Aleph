@@ -681,6 +681,11 @@ mod tests {
     #[tokio::test]
     async fn the_tool_face_also_refuses_to_remove_the_owner() {
         let (tool, project, store, _g) = fixture();
+        // carol is an org admin but, like the RPC face
+        // (`the_owner_and_an_org_admin_may_both_add_a_member`), admin is not
+        // a bypass of the roster visibility gate: she must be seated before
+        // `room()` will resolve the project for her at all.
+        store.add_member(&project.id, "u-carol").unwrap();
         let before = store.members(&project.id).unwrap();
 
         for actor in ["u-alice", "u-carol"] {
