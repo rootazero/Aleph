@@ -102,7 +102,35 @@ impl RuntimeAgents {
     ///
     /// `shell` is [`crate::gateway::pty::PtySession::shell`] — the
     /// human-readable program label, which is what
-    /// `agent_detect::identify_agent` matches against. `cwd` is
+    /// `agent_detect::identify_agent` matches against.
+    ///
+    /// ⚠️ **KNOWN GAP, phase 1: in production this never identifies anything,
+    /// so every row publishes `Unknown`.** `shell` is the SPAWN-TIME label:
+    /// [`crate::gateway::pty::session::SpawnOptions`] with no `command` sets
+    /// it to the platform default shell, and the only production `pty.spawn`
+    /// client (the Panel's terminal view) sends `{rows, cols}` and nothing
+    /// else. So `identify_agent` is handed `"zsh"`, returns `None`, and
+    /// `detect_agent_with_osc` early-returns `Unknown` before any manifest
+    /// rule is consulted. The 29 manifests, the rule engine and the idle-hold
+    /// are all correct and all unreachable from here.
+    ///
+    /// The gap is not "no caller passes `command`" — it is that agents are
+    /// started INTERACTIVELY, after the spawn. A user who opens a terminal and
+    /// types `claude` leaves this label at `"zsh"` while the screen fills with
+    /// Claude's UI, so passing `command` at spawn would fix only the case
+    /// nobody uses. What identification actually needs is the PTY's current
+    /// foreground process, which nothing in this codebase tracks yet.
+    ///
+    /// This ships deliberately: the panels render `Unknown` as its own `?`
+    /// glyph, never Idle's, so the shipped surface says "I cannot tell" rather
+    /// than claiming a state it does not have. Closing the gap is phase-2
+    /// work (it needs per-platform foreground-process lookup, which R1 makes a
+    /// decision rather than a detail) and is what step 0-A is for. Do not
+    /// "fix" it by deleting the `agent: None` early return — that would turn
+    /// "I do not know" into "it is idle", which is the one thing the panels
+    /// are careful not to say.
+    ///
+    /// `cwd` is
     /// [`crate::gateway::pty::PtySession::cwd`], the SPAWN directory.
     /// `process_exited` is the session's `is_closed()`: a session killed but
     /// not yet reaped by its reader thread is still in the registry for up to
