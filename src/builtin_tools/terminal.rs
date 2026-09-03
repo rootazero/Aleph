@@ -162,11 +162,13 @@ impl AlephTool for TerminalTool {
             // Do not shorten this back to "requires operator; refused." — an
             // operator-approval card for THIS call may have just been shown
             // and answered "yes" (see the module doc's `ScopedToolService`
-            // paragraph). This message exists so that outcome does not read
-            // as "go get an operator", which is exactly what may have
-            // already happened.
-            let message = "terminal requires operator; refused, and an operator approving \
-                this call's own escalation card does not lift the refusal — nothing \
+            // paragraph). Worded as a fact about TODAY ("does not currently
+            // lift"), not a permanent property of the tool: R11-14 decided
+            // the fix is a seam carrying the gate's own verdict here, and
+            // once that lands this sentence must change — "this tool can
+            // never be approved" would become a lie the day it does.
+            let message = "terminal requires operator; refused. An operator approving this \
+                call's own escalation card does not currently lift this refusal — nothing \
                 re-stamps the caller's role after approval."
                 .to_string();
             notify_tool_result(Self::NAME, &message, false);
