@@ -52,8 +52,9 @@ pub fn project_for(store: &ProjectStore, id: &str, actor: Option<&str>) -> Optio
 ///
 /// Org admins pass for any room (spec §6.3: owner changes are an admin
 /// operation); resolving *whether* the actor is an admin needs the security
-/// store, which stays with the caller so this module depends on nothing but
-/// the project row.
+/// store, which stays with the caller so this module holds no store of its
+/// own — [`is_active_principal`] below takes one by parameter for the same
+/// reason.
 #[must_use]
 pub fn is_owner(project: &Project, actor: Option<&str>, actor_is_admin: bool) -> bool {
     let Some(caller) = actor else {
@@ -61,6 +62,68 @@ pub fn is_owner(project: &Project, actor: Option<&str>, actor_is_admin: bool) ->
     };
     caller == crate::gateway::visibility::owner_or_legacy(project.owner_user_id.as_deref())
         || actor_is_admin
+}
+
+/// The refusal both faces give for removing a room's owner, verbatim.
+///
+/// The text is shared rather than re-typed because the rule is one rule: the
+/// RPC handler and `project_manage`'s `member_remove` arm are two surfaces on
+/// it, and two spellings become two rules the first time one is edited
+/// (criterion #1).
+pub const OWNER_REMOVAL_REFUSAL: &str = "cannot remove the project owner from its own roster";
+
+/// Whether `target` may be dropped from `project`'s roster.
+///
+/// The owner is the one member who cannot be removed: the roster IS the
+/// visibility predicate, so dropping them leaves the room addressable by
+/// nobody — not even the org admin who could archive it. Hand the room over
+/// first (an admin operation), then remove.
+///
+/// **Target-based, deliberately not caller-based.** [`is_owner`] answers a
+/// question about the CALLER and returns `true` for `actor: None`, the
+/// unattributed run every spawned tool call is. A caller-shaped spelling of
+/// this rule would therefore leave that arm open on the one mutation that can
+/// make a room invisible to everyone.
+#[must_use]
+pub fn may_remove_member(project: &Project, target: &str) -> bool {
+    target != crate::gateway::visibility::owner_or_legacy(project.owner_user_id.as_deref())
+}
+
+/// The refusal both faces give for a roster mutation naming somebody who is
+/// not an active principal. Shared for the same reason as
+/// [`OWNER_REMOVAL_REFUSAL`].
+#[must_use]
+pub fn unknown_user_refusal(user_id: &str) -> String {
+    format!("unknown user: {user_id}")
+}
+
+/// Whether `user_id` names a principal a roster may currently name.
+///
+/// A deactivated user reads as unknown on purpose: seating one grants access
+/// that materialises if they are ever reactivated, which is a decision
+/// `users.update` owns, not a roster verb. Fails closed on a store error — an
+/// id that could not be verified is not a verified id (criterion #8).
+///
+/// The store arrives by parameter: this module holds none, so the rule can be
+/// asked by a face that has one and stays unasked by a face that does not.
+#[must_use]
+pub fn is_active_principal(
+    users: &crate::gateway::security::store::SecurityStore,
+    user_id: &str,
+) -> bool {
+    use crate::gateway::security::store::UserStatus;
+    match users.get_user(user_id) {
+        Ok(Some(u)) => u.status == UserStatus::Active,
+        Ok(None) => false,
+        Err(e) => {
+            tracing::warn!(
+                user_id = %user_id,
+                error = %e,
+                "projects: principal check failed closed"
+            );
+            false
+        }
+    }
 }
 
 #[cfg(test)]
@@ -109,5 +172,37 @@ mod tests {
             "a plain member may not reconfigure"
         );
         assert!(is_owner(&project, None, false), "unrestricted passes");
+    }
+
+    #[test]
+    fn the_owner_is_the_one_member_who_cannot_be_dropped() {
+        let (_store, project, _g) = store_with_room();
+        assert!(!may_remove_member(&project, "u-alice"), "the owner stays");
+        assert!(may_remove_member(&project, "u-bob"), "a plain member goes");
+
+        let legacy = Project {
+            owner_user_id: None,
+            ..project
+        };
+        assert!(
+            !may_remove_member(&legacy, crate::gateway::security::store::OWNER_USER_ID),
+            "a pre-P1 row's owner is the legacy owner, not nobody"
+        );
+    }
+
+    #[test]
+    fn a_deactivated_or_absent_principal_is_not_one_a_roster_may_name() {
+        use crate::gateway::security::store::{SecurityStore, UserRole, UserStatus};
+        let users = SecurityStore::in_memory().unwrap();
+        users.create_user("u-live", "u-live", UserRole::Member).unwrap();
+        users.create_user("u-gone", "u-gone", UserRole::Member).unwrap();
+        users
+            .update_user("u-gone", None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+
+        assert!(is_active_principal(&users, "u-live"));
+        assert!(!is_active_principal(&users, "u-gone"), "deactivated reads as unknown");
+        assert!(!is_active_principal(&users, "u-never"), "absent reads as unknown");
+        assert!(!is_active_principal(&users, ""), "the empty id is nobody");
     }
 }
