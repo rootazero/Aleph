@@ -460,8 +460,12 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 | token 上限分类 | ~18 条 `includesAll` + typed 标志优先；另有 `OutputTokensLimitExceededError` | `CONTEXT_OVERFLOW_PATTERNS` + 413 → `CompactAndRetry` | **已对齐**；剩余模式与输出上限判决**不做**（窄表闸着 `CompactAndRetry`；后者零消费者） |
 | HTTP 200 里的带内错误 | codex 路 `throw` 裸 JSON；proto 客户端把 `responseInfo.errorMessage` 当**值**返回、流照样 "ok" 结束（`chat-inference-proto/client.ts:257-271`） | 适配器映射成 `ProviderDelta::Error`；`HttpProvider` 只在**无内容**时升级为 `Err`，有半截内容时返回 `Ok` | **同款 bug，且 Aleph 这半更贵**（多一层健康表 / 冷却 / witness 被擦干净）→ **round-6 T3 修**（`provider_error` 字段 + walk 成功臂先读它；三判决收在 `TerminalFrames::classify`——无内容 `Fatal` / 故障收尾 `Charged` / 故障后还来 `Done` 的 `Advisory` 不记账） |
 | 吐字后掉线 | 同后端断点续传，generation 门控的持久化（`stream-attempt.ts:18-86`） | `EmissionGuard` 两根位：**任何内容** → 链路终局；**用户可见文本**（`ProviderDelta::is_user_visible`）→ 才盖章 | **Aleph 层次更对**；断点续传**不移植**（R10）；用户已看到半截时终局 `Err` **带着**「已吐字」事实（`failover::PARTIAL_OUTPUT_EMITTED` 写进渲染出的 message，`classify_harness_error` 第一道就读它 → `FlowError::Internal`），网关不再重投；只吐了 tool-call delta（截断的 tool call）屏幕仍是空的 → **不盖章**，保留网关重投 → **round-6 T4 修** |
+| 原地重试 vs 已花光的窗口 | 首字停顿 deadline 按重试次数 `×2^retries` 加宽，明确说每次重试是一个**新窗口** | typed `Timeout`（TTFB 60s / SSE 间隔 60s / 原生 ollama 的整体 300s）此前经报文串 `"timed out"` 落进网络词表 ⇒ `RetrySame(300ms)`，两个窗口就吃光默认 120s 的轮次看门狗 | **原则采纳、策略反转** → **round-6 T5 修**：把停顿**显式记账**这条对，但对单用户正确的做法是换 provider 而不是加宽窗口——`decide` 按 **typed 变体**（永不按词面）短路成 `NextProvider(Transient)`，只在还有后续候选时；末位候选保留 `max_retries` 原地预算 |
+| 负载均衡 | **无** | 六种策略，全部只吃硬信号（`route_policy.rs`） | **Aleph 领先**；加权随机维持 round-4 裁决（不做） |
+| 状态 / 诊断面 | 推理侧**无**；`errors/registry.ts` 只有有界遥测标签 | `route_status`（链 / `next_order` / 每 provider 健康与负载 / 冷却中的模型 / `config_problems`） | **Aleph 领先**；但这一面此前**与 walk 不同源** → **round-6 T7/T9 修**：`preview_order` 返回 `RoutePreview{steps, route}`（表头与顺序同一代），两个跳过标记从 `CandidatePlan` 派生，链上类型收窄成 `RouteGate`（不可达渲染臂变编译错误）；链成员只有 `chain_composition` 一处具现（此前从 boot fallback 向量 `find`，一次 `providers.setDefault` 就让两张脸对同一个 provider 说两个 tier）；`rate_limited` 更名 `has_rate_ceiling` 并与 `assess`/`config_problems` 共用 `effective_ceiling` |
+| 分层纪律 | 韧性住在 turn runner（checkpoint / resume / transcript） | C 层（链 / 健康 / 节流）与 harness（压缩 / 轮次预算）由 R10 分开 | **Aleph 领先**；唯一漏点是 walk 的睡眠不看调用方的轮次预算——T5/T8 拆掉了两个具体饿死点，原则版（把剩余预算带进 walk）见 FEATURE_LOCATOR §3.6 round-6 未落地 ⑦ |
 | 可安全重试的谓词 | `!outputProduced ‖ resumable` | `EmissionGuard::has_emitted` | **已对齐**（概念早已采纳） |
-| 时钟偏斜守卫 | 不可信的跨时钟时长打标丢弃、绝不夹取（`clock-skew-guard.ts`） | C 层只用单调 `Instant`（`load_stats.rs:31-45`） | **不移植**——没有跨时钟接缝可挂；原则本来就成立 |
+| 时钟偏斜守卫 | 不可信的跨时钟时长打标丢弃、绝不夹取（`clock-skew-guard.ts`） | C 层只用单调 `Instant`（`load_stats.rs:32-45`） | **不移植**——没有跨时钟接缝可挂；原则本来就成立 |
 | 用量记账（含 cache） | 五个计数、bigint→safe、饱和合并 | `TokenUsage` + 不相交不变量 + `billed_tokens`（TPM 计 cache） | **Aleph 领先**（超集 + 不变量） |
 | per-provider 终身台账 | `recordInferenceUsage` 落盘（请求数 + 四个 token 计数 + `lastUsedAt`），失败静默不计、有重复计数风险 | 无（只有 60s 加权滑窗 + 每请求 trace 事件） | **不做**（零消费者；理由见 §9 round-6） |
 | 路由配置热重载 | **无**——每会话从磁盘重读（那正是三处重读的由来） | `RouteHandle` ArcSwap + `route_config.update` + `live_apply` | **Aleph 领先**；round-6 前只有专用 RPC 那一面重算 `config_problems` → T2 收敛到执行器一处 |
@@ -469,7 +473,7 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 | 配置可达性 | env + `settings.json`，无 RPC | `route_config.get/update` + `update_config` 工具 + Panel 两张脸 | **Aleph 领先**；`health_probe_interval_secs` 曾是 server-only，Panel 每存一次就把它抹掉 → **round-6 T1 修**（整段替换语义 + 三条守卫） |
 | 韧性层的测试 | 分类器有单测，整条重试边界自述 dormant | 2429 行 walk / 排序测试（注入 mock）+ 快照 schema lock + wire 形状守卫 | **Aleph 决定性领先**——所以本轮把参考项目的设计一律当意图读 |
 
-本轮新裁决（同款判据追加进 §9）：**per-provider 终身用量台账不做**、**resume-from-checkpoint 不移植**、**首字停顿窗口指数加宽不采纳**（与 Aleph「60s TTFB + 换 provider」正相反）、**interactive/automation 重试分档不加**、**`Retry-After` 抖动不加**、**Node errno 词表不并入**、**输出 token 上限判决与 `StopReason::ProviderError` 变体不加**、**故障报文不喂给模型**（属 harness 的错误压缩侧，R10）、**clock-skew 守卫无接缝可挂**。
+本轮新裁决（同款判据追加进 §9）：**per-provider 终身用量台账不做**、**resume-from-checkpoint 不移植**、**首字停顿窗口指数加宽不采纳**（与 Aleph「60s TTFB + 换 provider」正相反）、**interactive/automation 重试分档不加**、**`Retry-After` 抖动不加**、**Node errno 词表不并入**、**输出 token 上限判决与 `StopReason::ProviderError` 变体不加**、**故障报文不喂给模型**（属 harness 的错误压缩侧，R10）、**clock-skew 守卫无接缝可挂**、**借云审批不做每会话记忆**（T8 拿掉的是白弹的那一次；拉长一次已授权的作用域是安全相邻的裁决）、**EWMA 不改用首字延迟采样**（要给 `EmissionGuard` 挂时间戳，且流式/非流式两张脸得先裁定怎么共用一个排序键而不变成一个字段两种单位）、**pacing 窗口等不完时不改成拒绝**（没有任何 handler/工具能清 `ProviderCooldown`，拒绝就是一道没人能开的闸；改成的是"不花那次花不完的等待"）。
 
 ---
 
@@ -560,9 +564,12 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 - **把参考项目剩余的 token-limit 模式并进 `CONTEXT_OVERFLOW_PATTERNS`**（`payload too large` / `request size cannot exceed` / `maximum prompt length`）— 那张表闸的是 `CompactAndRetry`，一次误报废掉一整条 walk；没有观测到的漏判就不加。
 - **单独的 output-token-limit 判决**（`OutputTokensLimitExceededError` → "请求短一点的输出"）— 今天零消费者；真正的消费者在 harness 压缩那侧（R10 三问）。
 - **`StopReason::ProviderError` 新变体** — `StopReason` 在 15 个非测试文件里被 match，含 R10 锁住的 harness 侧；`Unknown` 已经就是"无法担保的收尾"。等到有消费者需要把"故障"与"不认识的厂商词"分开再立项。
-- **把 provider 的故障报文喂给模型** — 那是 turn 面/harness 的决定（12-factor A2 落在 harness 的错误压缩侧，R10 不许 failover 层写模型读的东西）；C 层这一侧的诚实信号是把默认 `EndTurn` 降级成 `Unknown`。
+- **把 provider 的故障报文喂给模型** — 那是 turn 面/harness 的决定（12-factor A2 落在 harness 的错误压缩侧，R10 不许 failover 层写模型读的东西）。⚠️ **本条原先给出的第二个理由（「C 层这一侧的诚实信号是把默认 `EndTurn` 降级成 `Unknown`」）已撤回，两半都不成立**：(a) 三个判决里只有「`Charged` 且从没有 `Done` 到过」那一格会降级，`Charged` 跟在 provider 亲口说出的 `Done` 之后保留原停止原因，`Advisory` 与一次干净轮次完全无法区分；(b) `StopReason::Unknown` 今天**不是模型可见的**——全部消费者是 `ProviderResponse::validate` 里一句 `tracing::warn` 与 OpenAI 兼容面把它映射成 `"stop"`。现状是**账全记在 operator 面**，模型侧没有信号；「要不要造一个」是独立一轮的题，别再引用这句当已有事实。
 - **中间件 / 装饰器链**（`PromptExecutor` + `BaseMiddleware`）— Aleph 已有同构的 `ThinkLevel→Metering→ModelOverride→Failover→Http`（R10/P6）；链里那个 continuation-injector 属 prompt 侧（R9）。
 - **clock-skew 守卫**（`sanitizeCrossClockDurationMs`）— C 层只用单调 `Instant`，没有跨时钟的接缝可挂；"绝不把不可信时长夹进 EWMA"这条原则已经成立。
+- **给借云审批做每会话 / 每轮记忆** — 审批闸今天每候选、每请求各弹一次；round-6 T8 拿掉的是**白弹的那一次**（正在冷却的候选先被跳过闸让位，不再先问人）。把一次已授权的作用域拉长会改变审批的语义边界（SECURITY.md 的 ApprovalGate），是安全相邻的裁决，要单独评审，不搭车。
+- **把 EWMA 的延迟采样改成首字延迟**（而不是整轮往返）— `LatencyAware` 今天按调用方决定的输出长度排序，偏差是真的；但改法要给 `EmissionGuard` 挂时间戳，并先裁定流式与非流式两张脸怎么共用一个排序键而不变成「一个字段两种单位」。`latency_aware` 是 opt-in、默认 `Ordered`，等能把它当独立一轮做完时再做。
+- **pacing 窗口等不完时改成一次拒绝**（round-6 T8 的原方案）— `ProviderCooldown` 上限 600s，而 `src/gateway/handlers` 与 `src/builtin_tools` 里没有任何动词能清它（`FailoverHealth::reset` 刻意不碰限流窗口），拒绝就是**一道没人能开的闸**；何况那句错误文案含 "rate limit" / "retry in"，会被 `is_transient_harness_message` 读成瞬态、由网关重投三次外加两条横幅——一次诚实的拒绝变成三次。落地的是「只在睡得完时才睡」，且「最后一根候选永远拨」这条不变量不动。
 
 ---
 
