@@ -113,6 +113,26 @@ pub(super) fn apply_ops(doc: &mut CanvasDoc, ops: &[CanvasOp]) -> Result<(), Can
             "{post_shape_count} shapes would exceed the {MAX_SHAPES}-shape document cap"
         )));
     }
+    apply_mutations(doc, ops);
+    Ok(())
+}
+
+/// The mutation loop itself, extracted so it has a NAME to anchor on.
+///
+/// The Panel mirrors this loop verbatim in `apply_local`, and the guard that
+/// pins the two together (`views/canvas/ops.rs`'s
+/// `apply_local_matches_the_server_apply_ops_loop_verbatim`) locates it by
+/// finding a function and then taking the first `for op in ops` inside it.
+/// While this lived inline in [`apply_ops`], the shape-cap simulation added
+/// above ALSO iterates `ops`, and it comes first — so the guard silently began
+/// comparing the Panel's mutation loop against the cap simulation and went on
+/// reporting green. Three readers then quoted that green as evidence for a
+/// fact about the Panel that was not true.
+///
+/// Keeping the loop in its own function makes the anchor structural rather
+/// than positional: a new pre-pass in `apply_ops` cannot capture it again.
+/// If this function is renamed, the guard fails loudly rather than drifting.
+fn apply_mutations(doc: &mut CanvasDoc, ops: &[CanvasOp]) {
     for op in ops {
         match op {
             CanvasOp::UpsertShape { shape } => {
@@ -130,7 +150,6 @@ pub(super) fn apply_ops(doc: &mut CanvasDoc, ops: &[CanvasOp]) -> Result<(), Can
             CanvasOp::DeleteDeck { id } => doc.decks.retain(|d| &d.id != id),
         }
     }
-    Ok(())
 }
 
 fn shape_is_well_formed(shape: &Shape) -> Result<(), CanvasError> {
