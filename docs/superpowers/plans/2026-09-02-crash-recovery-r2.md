@@ -1256,7 +1256,7 @@ CLAUDE.md 路由表的五个 r2 阶段、spec `2026-08-31` §8 的六条指针�
 
 成因是**孪生**：`src/agents/background_persistence.rs`（子代理侧）与 `process_journal.rs`（bash 侧）
 两套 boot 对账的 API 是照着彼此写的，名字大半重合——子代理侧叫 `init_and_announce_orphans`，
-于是一次**全仓**的 `grep init_and_announce` 命中了孪生那一个，回答了「有没有」而没回答「这一句的那一个」。
+而 §4.11 这一节**同时**在讲这两套，所以「这个名字属于哪一半」要靠读而不是靠命中——这一笔没有留下它跑过哪条命令，可复核的只有结论本身，而结论指错了孪生。
 这恰好是 D.0.167 自己②的镜像：那一条讲的是 `SessionInfo` 因同名而**假阳性**，这一条是同族名字造成的**挑错孪生**。
 同一次编辑还写下「子代理侧有 `announce_attempts` 封顶，journal 侧靠时间窗」——journal 侧**两样都有**，
 `MAX_ANNOUNCE_ATTEMPTS = 3` 就在它自己文件的 `:170`，而漏掉的那一半正是本轮 D.0.166 给它加上去的。
