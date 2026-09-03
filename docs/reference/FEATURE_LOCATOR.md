@@ -98,7 +98,7 @@
 | TUI | 回答显示了两遍 / 工具行一直转圈停不下来 | TUI Dual-Projection Fix | `interfaces/tui/src/tui/app/{events,trace}.rs`（`turn_streamed_len` + `reconcile_tools_from_summary`）| ✅ (§5.13, 2026-08-07) |
 | Loop | 重启后会话在跑但停不掉 / 侧栏红点亮着没内容 | Resumed-Run Visibility | `src/gateway/resume_coordinator.rs`（`event_bus` 必填参）| ✅ (§4.8, 2026-08-07) |
 | Loop | 重启后子代理结果没了 / subagent 查不到 / No background sub-agent found / 已经跑完的白跑 | Subagent Durable Recovery | `src/agents/subagent_tool/recovery.rs` + `subagent_spawner::ephemeral_for`（`sub-bg-<request_id>` 契约）| ✅ (§4.11 round-11, 2026-08-08) |
-| Loop | 手动恢复中断的 run / 重启后没接上 / 重启后工具被当成失败又跑一遍 | On-Demand Resume & Boundary Semantics | `src/gateway/resume_coordinator.rs`（`resume_session` + `boundary_repair_text`）+ `handlers/resume.rs` + `aleph-server resume` | ✅ (§4.13, 2026-08-08) |
+| Loop | 手动恢复中断的 run / 重启后没接上 / 重启后工具被当成失败又跑一遍 / 被拒的调用被告知「可能已落地」 | On-Demand Resume & Boundary Semantics | `src/session/boundary_repair.rs`（`boundary_repair_text` 三臂）+ `src/gateway/resume_coordinator.rs`（`resume_session`）+ `handlers/resume.rs` + `aleph-server resume` | ✅ (§4.13a round-2, 2026-09-02) |
 | 安全 | 无人值守把密钥发到 Telegram / 脱敏只挡了一半 | Emitter-Leg Redaction | `src/gateway/event_emitter/redacting.rs` + `src/exec/masker.rs::mask_json_strings` | ✅ (§5.1, 2026-08-07) |
 | Harness | 子代理每次 spawn 都全价重付缓存 / 账单变高但没报错 | Subagent Prefix Warmth | `src/thinker/layers/chain_context.rs` + `prompt_contract::basic_path_prefix_is_stable_across_spawns` | ✅ (§2.18, 2026-08-07) |
 | Context | kimi 20w vs claude 100w 压缩时机 + per-model 阈值 | Model-Aware Compaction Timing | `src/context/budget/pressure.rs` · `deps_builder.rs::build_context_budget_config` | ✅ |
@@ -4745,6 +4745,8 @@ round-2 结尾留了三条，本轮全部收掉。共同形状：**三条都不�
 
 **附录 D.0.168** · **按名字 grep 的清扫，落在一句同时描述两个孪生子系统的话上时，会替这一句挑错那一个孪生——而孪生的 API 本来就是照着彼此写的，名字大半重合，所以 grep 必然命中** —— §4.11 一节里坐着两套 boot 对账：子代理侧 `agents/background_persistence.rs`（`init_and_reconcile` + `init_and_announce_orphans`）与 bash 侧 `builtin_tools/process_journal.rs`（`init_and_reconcile` + `init_and_announce`）。D.0.167 那一笔清扫得出的结论是「裸名不存在、真名是 `init_and_reconcile`」，于是把 bash 那一句改成了**只写墓碑、一条广播都不发**的那一半（真正逐条补发并盖 `announced_boot` 的是 `init_and_announce`），并把这条结论写进了附录。同一次编辑还顺手写下「子代理侧有 `announce_attempts` 封顶，journal 侧靠时间窗」——journal 侧**两样都有**，`MAX_ANNOUNCE_ATTEMPTS = 3` 就在它自己的文件里，漏掉的那一半正是本轮 D.0.166 给它加上去的。三句：① **孪生之间名字重合不是巧合是设计**（第二个实现照着第一个写），所以「这个名字在仓里」这个谓词在孪生话题下**恒真**——判据 #2 的第三张脸（不可失败的谓词），而清扫恰恰把它当判据用了；② 一句话里出现两个孪生时，grep **必须带上这一句指的那个文件**（`grep -n init_and_announce src/builtin_tools/process_journal.rs`）：全仓结果里两个孪生的命中混在一起，谁属于这一句要靠读，而「读的时候脑子里装着另一个孪生」正是这一条的失效方式；③ **一条更正比一条旧错误贵**——旧错误只是没人改，更正会被当成刚核对过的事实引用，而这一条还额外在附录里立了字据。⚠️ 三代同堂：D.0.166 是那个戳、D.0.167 是没扫到它的那次清扫、本条是扫错孪生的那次更正 → 附录 E.0 · §4.11
 
+**附录 D.0.169** · **一次删除删掉的不只是名字，还有一句「为什么」——而按名字扫的清扫对后者完全失明，因为复述那句「为什么」的文档里可以一个被删标识符都不含** —— 本轮从 `resume_coordinator.rs` 删掉的除了几个标识符，还有一句**断言**：两个并发 resume 给同一个 `call_id` 写下两条应答，「provider 会在此后每一轮拒绝这个会话」——自 7929bbda6 起为假（`harness::agent::prompt` 学会把重复/孤儿 `tool_result` 降级成一条普通用户笔记，代价从 API 拒绝变成模型要自己调和的重复散文）。spec §6 把它逐字列进了熵减清单。三次文档 pass 的输入分别是**本轮改过的章节** / **被删标识符的名字** / **本轮的整份 diff**，三次都没碰到它：GATEWAY.md 用**自己的话**复述同一句假话（"the provider rejects on every later turn of that session"），不含任何一个被删的名字，也不在本轮编辑过的章里，更不是本轮**加**的东西。第四个输入是**把 spec 的熵减清单当断言读，而不是当名字读**。三句：① **删除清单有两栏，名字那栏能 grep，断言那栏只能读**——而最贵的拷贝一向在后者（判据 #1：最贵的那份在注释、在文档数字里）；② **一段从枚举出发的推理，在枚举被扩容时不会报错，它只是继续正确地从一个不再成立的前提往下推**——同一页的「派发后只有两件事能拦住调用（guardrail `Block`、审批拒绝），各自都写自己的应答事件，所以『有 Requested 无应答』意味着调用已越过派发线」，其成立与否不取决于枚举全不全，而取决于**那些应答事件是不是保证已经落盘**；本轮加的第三臂 `denied` 正是「没落盘」的那个窗口（判据 #5）；③ **速查索引表不属于任何一章**，所以以「章节 / 名字 / diff」为输入的清扫都不会打开它，而它是读者**第一个** grep 的东西——FL §0 那一行把 `boundary_repair_text` 指向它这一轮**搬走**的那个文件，与同一份文件里的 ⑪ 直接矛盾（判据 #1 落在一份文档**内部**）→ 附录 E.0 · §4.13a ①⑪ · [GATEWAY.md](GATEWAY.md)
+
 ### 附录 D.1 · Prompt · 前缀缓存 · 上下文
 
 **附录 D.1.10** · **提示词散文里点名的工具，是那个工具名的第二份拷贝，而且是模型真正照做的那一份** —— 它没有编译器也没有调用点，所以工具改名 / 从来就没有过这个名字，两种都不会红：`agent_catalog` 的引导句让**每一个** Full 模式提示词去调 `delegate`（那是 `groups.rs` 的一个工具**分类 id**，真名 `subagent`），住在 Stable 块里，代价是模型每次照做都换来一次 tool-not-found。守卫要**解析句中每一个反引号名字逐个对真工具表求解**，不是断言"句子里含 subagent"——后者是列举法，加第二个工具引用当天就失明 → §4.11 round-12
@@ -5133,6 +5135,7 @@ round-2 结尾留了三条，本轮全部收掉。共同形状：**三条都不�
 
 - **一次删除的文档清扫，输入必须是「被删的名字」而不是「本轮改过的章节」** —— 最贵的拷贝住在别的子系统那一节里；而**名字冲突会让存在性 grep 答「还在」**（`SessionInfo` 仍在，但那是 `pty::SessionInfo`），所以要问的是「这一句指的那一个还在不在」 → 附录 D.0.167
 - **孪生的名字是照着彼此起的，所以「这个名字在仓里」在孪生话题下是个恒真谓词** —— 一句话同时描述两个孪生时，按名字 grep 会替它挑错那一个（找 `init_and_announce` 命中了子代理侧的 `init_and_announce_orphans`，被改错的是 bash journal 那一半）。grep **带上文件路径**；并且**一条更正比一条旧错误贵**，它会被当成刚核对过的事实引用 → 附录 D.0.168
+- **删除清单有两栏：名字那栏能 grep，断言那栏只能读** —— 复述一句被删断言的文档可以一个被删标识符都不含（GATEWAY.md 用自己的话留着「provider 会在此后每一轮拒绝」，三次以「章节 / 名字 / diff」为输入的清扫都扫不到）。另两条同源：**一段从枚举出发的推理，在枚举被扩容时不会报错**，它继续正确地从一个不再成立的前提往下推；**速查索引表不属于任何一章**，却是读者第一个 grep 的东西 → 附录 D.0.169 · §4.13a ①⑪
 
 ### 附录 E.1 · Prompt · 前缀缓存 · 上下文（`src/thinker/` `src/context/`）
 

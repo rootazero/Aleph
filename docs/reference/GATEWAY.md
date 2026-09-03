@@ -152,10 +152,18 @@ Four things worth knowing before touching it:
   singleton, so `aleph-server resume` uses `run_no_lock` + `forward_to_server`
   and says so when no server is running.
 
-- **One resume per session at a time.** `repair_boundary` is a read-then-append,
-  so two concurrent resumes of one session both compute the same repair set and
-  both append it — leaving one `call_id` answered by two `tool_result`s, which
-  the provider rejects on every later turn of that session. The boot scan never
+- **One resume per session at a time.** `repair_boundary`
+  (`src/session/boundary_repair.rs` since round-2; the coordinator keeps only
+  the `in_flight` slot) is a read-then-append, so two concurrent resumes of one
+  session both compute the same repair set and both append it — leaving one
+  `call_id` answered by **two synthetic `ToolError`s**. What that costs is worth
+  stating exactly, because this page said the wrong thing about it until
+  2026-09-02: since `harness::agent::prompt` learned to downgrade an
+  orphaned/duplicate `tool_result` to a plain user note (7929bbda6) it is **no
+  longer a provider rejection**. The model reads the same "outcome unknown"
+  sentence twice, the second time as prose that no longer references the call it
+  answers — duplicated text it must reconcile, not an API error that bricks
+  every later turn. The boot scan never
   exposed this (it walks sessions in a sequential loop); the on-demand face
   does, and it can collide with the boot scan itself, which is spawned while the
   gateway is already serving requests. `ResumeCoordinator.in_flight` claims the
@@ -173,14 +181,44 @@ crash-loop cap tripped) · `not_resumed` (interrupted, but the boundary repair
 or the re-trigger failed; the server log has the reason).
 
 **Crash-boundary wording is part of this contract.** A dangling
-`ToolCallRequested` is answered with `boundary_repair_text`, which states that
-the outcome is **unknown** — not that the call failed. `ToolCallRequested` is
-persisted immediately before dispatch, and the two things that can still stop a
-call after that point (a guardrail `Block`, an approval denial) each write
-their own answer event, so "requested, never answered" means the call reached
-or passed the dispatch line and its side effects may have landed. The previous
-text read as a verdict, and the rational response to a failed call is to issue
-it again.
+`ToolCallRequested` is answered by `boundary_repair_text(tool, provenance,
+denied, degrade)`, which has **three arms because there are three true
+sentences**, all sharing one closing instruction (`VERIFY_CLOSE`, a constant, so
+the sentences cannot drift apart on the one point that tells the model what to
+*do*):
+
+- `OUTCOME UNKNOWN — the server restarted after this <tool> call was dispatched
+  but before its result was recorded` (`DanglingProvenance::ThisRestart`);
+- the same verdict with the other lead, `an earlier run in this session ended
+  without recording the result` (`EarlierRun`) — the attribution matters because
+  saying "the server restarted" about a dangle left by an interrupted earlier
+  run is false about *when*;
+- `NOT EXECUTED — this <tool> call was denied by the approval gate and did not
+  run` (`denied`), which explicitly lists what has therefore **not** happened.
+
+None of the three says the call *failed*: the rational response to a failed call
+is to issue it again. The first two say its side effects may already have
+landed; the third says they cannot exist.
+
+**Why there is a third arm — the two-item enumeration above it was not enough.**
+`ToolCallRequested` is persisted immediately before dispatch, and the two things
+that can still stop a call after that point (a guardrail `Block`, an approval
+denial) each write their own answer event — from which this page used to
+conclude that "requested, never answered" *always* means the call reached or
+passed the dispatch line. That inference holds only while those answer events
+are guaranteed to be on disk. A statically denied call is answered in the same
+turn and never dangles, but the window between a denial and its receipt is a
+crash window like any other, and a call that crashed inside it **never ran**.
+Telling that call "this may have completed and its side effects have already
+landed" is a fabrication, and the model's likely reaction is to go hunting for
+state that does not exist — which is why `denied` is a field on
+`session::reduction::DanglingCall` rather than a detail of the approval path.
+Real-machine stage: `qa/resume_boundary/run.sh denied`.
+
+Deliberately **not** a safety-level classifier: `ToolSafetyLevel` exists and
+could sort read-only calls from destructive ones, but deciding "is this safe to
+redo?" from a tool name and its arguments is the reasoning R7 reserves for the
+model. State the fact; let it judge.
 
 ### Session Methods
 
