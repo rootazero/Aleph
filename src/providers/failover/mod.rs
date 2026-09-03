@@ -55,11 +55,10 @@ pub use health::{
     CircuitState, FailoverHealth, ModelCooldown, ProviderCooldown, ProviderHealthView,
 };
 /// Chain membership, exported so the membership rule can be asserted directly.
-/// Test-only since round-6 T9: `route_status` used to call it to recompute
-/// membership for its own render, and that second call site is exactly what let
-/// the snapshot materialise members the walk would have materialised
-/// differently. Production now has one caller and it lives inside this module —
-/// re-exporting it again would re-offer the shortcut that caused the drift.
+/// Test-only: production has ONE caller and it lives inside this module. A
+/// render face that recomputes membership from here is a second call site, and
+/// that is exactly what lets a snapshot materialise members the walk would
+/// have materialised differently — re-exporting it offers that shortcut back.
 #[cfg(test)]
 pub(crate) use provider::effective_fallback_names;
 pub use provider::{ChainMember, FailoverProvider, RoutePreview, RouteStep};

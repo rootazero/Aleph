@@ -236,12 +236,10 @@ pub async fn handle_update(
         }
         // Hot-apply through the shared executor, NOT by hand: `[route]` has
         // two live faces (the chain's `RouteHandle` and `route_status`'s
-        // `config_problems`), and this handler used to poke both itself while
-        // the generic path (`config.patch` / `ConfigPatcher::rollback` /
-        // `config.reload`) poked only the first — so a route write through the
-        // very RPC `route_status`'s own tool text recommends left
-        // `config_problems` describing the previous generation. One arm, one
-        // derivation, every write face.
+        // `config_problems`), and the generic path (`config.patch` /
+        // `ConfigPatcher::rollback` / `config.reload`) reaches them through
+        // this one arm. Poking them here as well would be a second derivation
+        // that can fall behind it. One arm, one derivation, every write face.
         //
         // Called while the write guard is still held: `apply_live_sections` is
         // synchronous and only pokes process-global handles, so it never
@@ -432,14 +430,14 @@ mod tests {
     /// the only symptom was users (and option-list-building clients) believing a
     /// shipped strategy did not exist.
     ///
-    /// The "nothing is missing" half used to be a **third** hand-written list of
-    /// the same six strings, so a seventh variant would have been absent from
-    /// the constant, absent from the parser and absent from the list checking
-    /// them — three copies agreeing about a world that had moved (判据 §0:
-    /// 守卫的绿只覆盖它认得的那种形状). It is now derived from the type: the
-    /// enum's own serde spellings, read out of its `JsonSchema`, which is where
-    /// `[route].load_balance` is deserialised from in TOML anyway. Add a
-    /// variant and this goes red without anyone remembering to edit a list.
+    /// The "nothing is missing" half is derived from the type — the enum's own
+    /// serde spellings, read out of its `JsonSchema`, which is where
+    /// `[route].load_balance` is deserialised from in TOML anyway. A
+    /// hand-written list here would be a third copy of the same six strings,
+    /// so a seventh variant could be absent from the constant, the parser and
+    /// the list checking them, all three agreeing about a world that had moved
+    /// (判据 §0: 守卫的绿只覆盖它认得的那种形状). Add a variant and this goes
+    /// red without anyone remembering to edit a list.
     #[test]
     fn advertised_load_balance_values_match_the_parser() {
         for value in LOAD_BALANCE_VALUES {
@@ -612,10 +610,9 @@ mod tests {
     /// A successful update must reach BOTH live faces of `[route]`, through
     /// the shared executor.
     ///
-    /// This handler used to poke the route handle and `config_problems` by
-    /// hand; the generic path (`config.patch` / rollback / `config.reload`)
-    /// poked only the first, so `config_problems` went stale on every write
-    /// that did not come through here. Both now run `apply_live_sections`.
+    /// This handler and the generic path (`config.patch` / rollback /
+    /// `config.reload`) both run `apply_live_sections`, so neither face can
+    /// leave `config_problems` describing the previous generation.
     ///
     /// `apply_live_sections` returns which targets landed, but this handler
     /// does not surface that vec (the RPC answers `{"success": true}` either

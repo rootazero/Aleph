@@ -139,11 +139,10 @@ impl CandidatePlan {
     ///
     /// The ONE spelling of that rule. Its two callers are the walk's gate and
     /// `route_status`'s [`preview_order`](FailoverProvider::preview_order) —
-    /// the preview used to restate the first half only, so a pinned saturated
-    /// provider was rendered "skipped" and then dialed first (the pin exemption
-    /// is `order_candidates_balanced`'s promise, and the preview was the half
-    /// that had not been told). Both callers must read this, never
-    /// `saturated` directly.
+    /// a preview restating only the first half renders a pinned saturated
+    /// provider as "skipped" and then watches the walk dial it first (the pin
+    /// exemption is `order_candidates_balanced`'s promise). Both callers must
+    /// read this, never `saturated` directly.
     ///
     /// Position is deliberately NOT part of it: whether a deferral actually
     /// happens also needs "is there a later candidate", which is a fact about
@@ -1015,10 +1014,11 @@ impl FailoverProvider {
     ///
     /// Both the walk ([`candidates`](Self::candidates)) and the read-only
     /// composition ([`chain_composition`](Self::chain_composition)) go through
-    /// here. `route_status` used to materialise its own copy from a boot-time
-    /// vec and default an unfound name to `Cloud` with an empty ladder, which
-    /// one `providers.setDefault` was enough to expose: the ex-primary is a
-    /// member of the walked chain and was never in that vec.
+    /// here. A second copy materialised from a boot-time vec cannot answer
+    /// this: one `providers.setDefault` is enough to make the ex-primary a
+    /// member of the walked chain that was never in that vec, and defaulting
+    /// an unfound name to `Cloud` with an empty ladder renders a member the
+    /// walk would never gate that way.
     fn fallback_nodes(&self, primary_name: &str) -> Vec<FailoverNode> {
         let live_names = self.primary.provider_names();
         let configured: Vec<String> = self.fallbacks.iter().map(|n| n.name.clone()).collect();
@@ -1299,11 +1299,11 @@ impl FailoverProvider {
                 // All THREE cheap, local reasons to pass over a candidate are
                 // settled before that prompt, and this is the whole list:
                 // breaker (here), rate ceiling (next), 429 pacing (the skip
-                // half below). The claim used to be stated here while the
-                // pacing skip actually sat *after* the prompt, so under
-                // `always_local + allow_cloud_escalation` a cooling cloud
-                // candidate cost a real human interruption and was then passed
-                // over anyway — one interruption per cooling candidate.
+                // half below). Order is the whole point: a pacing skip placed
+                // *after* the prompt means that under `always_local +
+                // allow_cloud_escalation` a cooling cloud candidate costs a
+                // real human interruption and is then passed over anyway —
+                // one interruption per cooling candidate.
                 let circuit_ok = self.circuit_allows(&cand.name).await;
                 if !circuit_ok && has_later_candidate {
                     tracing::debug!(provider = %cand.name, "failover: circuit open, skipping");
@@ -1492,7 +1492,7 @@ impl FailoverProvider {
                 // the last candidate ALWAYS dials.)
                 //
                 // The wait is spent only when it can actually end the window.
-                // It used to be `remaining.min(MAX_OVERLOAD_RETRY_DELAY)`, so a
+                // `remaining.min(MAX_OVERLOAD_RETRY_DELAY)` would not be: a
                 // window longer than the cap — a server `Retry-After` of 300s,
                 // capped by `cooldown_window` at `MAX_COOLDOWN` = 600s — bought
                 // a 120s sleep that provably could not outlast it and then
@@ -1709,11 +1709,11 @@ impl FailoverProvider {
                                     .await;
                                 // The gateway's outer dispatch loop asks a
                                 // *narrower* question than the one this arm just
-                                // answered, and used to answer it from the
+                                // answered, and must not answer it from the
                                 // provider's own wording: a proxy that cuts a
                                 // long stream says "connection reset" / "timed
-                                // out", which `harness_bridge::error` read as
-                                // `FlowError::Transient` and re-dispatched on
+                                // out", which `harness_bridge::error` reads as
+                                // `FlowError::Transient` and re-dispatches on
                                 // the same run_id — appending a whole second
                                 // answer under the half-written one. State the
                                 // fact instead of leaving it to be re-derived.
@@ -1871,12 +1871,12 @@ impl FailoverProvider {
                 // the endpoint is up, authenticated and answering, and serves
                 // nothing we know how to ask it for (a base_url pointed at the
                 // wrong gateway, a proxy whose model set was renamed, a local
-                // server with no models pulled). `NextModel` used to be the one
-                // failure exit that recorded no strike at all, so the answer to
-                // "in what state does this breaker go red for a provider that
-                // 404s everything?" was *never*: circuit closed forever,
-                // `cooling` false forever, LeastBusy/LatencyAware still ranking
-                // it first, and every turn paying N wasted round-trips.
+                // server with no models pulled). A `NextModel` exit that
+                // recorded no strike would leave "in what state does this
+                // breaker go red for a provider that 404s everything?" with
+                // the answer *never*: circuit closed forever, `cooling` false
+                // forever, LeastBusy/LatencyAware still ranking it first, and
+                // every turn paying N wasted round-trips.
                 // `Transient` (not `Permanent`) keeps the 3-strike threshold, so
                 // a catalog that is briefly out of step with a redeploy is not
                 // shed on one walk.

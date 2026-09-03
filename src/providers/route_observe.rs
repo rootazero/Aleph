@@ -58,13 +58,13 @@ pub struct RouteObservability {
     /// The global chain itself, asked (read-only) for the order the next request
     /// will walk **and for the route generation that order was computed from**
     /// ([`RoutePreview`](crate::providers::failover::RoutePreview)) — the chain
-    /// is the bundle's ONLY route generation. It used to carry a second copy of
-    /// the live [`RouteHandle`](crate::providers::route_handle::RouteHandle)
-    /// beside it; once the preview started supplying the header, that copy was
-    /// shadowed in every process that has a chain (which is every process:
-    /// `build_failover_chain` always attaches one) and only stood ready to
-    /// disagree with it. `None` in tests — the snapshot then omits `next_order`
-    /// and reports [`RouteState::unconfigured`] (auto / ordered / no pins).
+    /// is the bundle's ONLY route generation. A second copy of the live
+    /// [`RouteHandle`](crate::providers::route_handle::RouteHandle) beside it
+    /// would be shadowed in every process that has a chain (which is every
+    /// process: `build_failover_chain` always attaches one) and stand ready
+    /// only to disagree with it. `None` in tests — the snapshot then omits
+    /// `next_order` and reports [`RouteState::unconfigured`] (auto / ordered /
+    /// no pins).
     ///
     /// Holding the chain rather than re-deriving the order here is the whole
     /// point: the ordering is the product of the route mode, the pins, the
@@ -176,15 +176,16 @@ impl RouteObservability {
         // ([`FailoverProvider::chain_composition`]) — membership, model ladder
         // and endpoint tier all materialised by the SAME code the walk runs.
         //
-        // This used to be a second materialisation here: membership through the
-        // shared `effective_fallback_names` (correct), then each member looked
-        // up in a boot-time vec and defaulted to `Cloud` with an empty ladder
-        // when absent. The boot fallback vec excludes the boot primary, so one
-        // `providers.setDefault` made the ex-primary a chain member that vec had
-        // never held: `fallback_chain` called it cloud/`[]`/unpriced while
-        // `next_order`, asking the chain, called it local with its real ladder.
-        // Empty without a chain — a bundle nobody attached one to has no
-        // composition to report, and inventing one is how the two faces drifted.
+        // Materialising it a second time here is what must not happen:
+        // membership through the shared `effective_fallback_names` (correct),
+        // then each member looked up in a boot-time vec and defaulted to
+        // `Cloud` with an empty ladder when absent. The boot fallback vec
+        // excludes the boot primary, so one `providers.setDefault` makes the
+        // ex-primary a chain member that vec never held — `fallback_chain`
+        // would call it cloud/`[]`/unpriced while `next_order`, asking the
+        // chain, called it local with its real ladder. Empty without a chain —
+        // a bundle nobody attached one to has no composition to report, and
+        // inventing one is how the two faces drift apart.
         let chain = self
             .chain
             .as_ref()

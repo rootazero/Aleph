@@ -455,14 +455,12 @@ mod tests {
 
     /// The `route` arm republishes `config_problems`, not just the handle.
     ///
-    /// `hot_apply_problems` had exactly ONE caller — the dedicated
-    /// `route_config.update` handler — while this executor, reached by the
-    /// `update_config` tool / `config.patch` RPC, `ConfigPatcher::rollback`
-    /// and `config.reload`, only stored the route handle. So after the very
-    /// write path `route_status`'s own tool text recommends, `config_problems`
+    /// This executor is reached by the `update_config` tool / `config.patch`
+    /// RPC, `ConfigPatcher::rollback` and `config.reload`. `config_problems`
     /// — the one field that answers "why did my routing config do nothing" —
-    /// kept describing the previous generation, and a typo'd pin patched at
-    /// runtime never showed up in it.
+    /// must therefore be recomputed here and not only in the dedicated
+    /// `route_config.update` handler, or a pin patched at runtime is judged
+    /// against the previous generation.
     ///
     /// Asserted through the **process-global** bundle `route_status` reads,
     /// because that is what the arm looks up: a local `RouteObservability`
@@ -573,9 +571,7 @@ mod tests {
     /// A list that only named files would rot into a licence: the day someone
     /// gives `behavior` a real runtime handle, the exemption must go — and it
     /// goes red instead of quietly vouching for a handler that has become
-    /// non-compliant. `route_config` used to hold the second exemption (it
-    /// hot-applied `route` by hand); it converged onto this executor, so the
-    /// exemption died with the hand-inlined pokes, exactly as written.
+    /// non-compliant.
     #[test]
     fn every_dedicated_config_handler_that_saves_a_live_section_calls_apply_live_sections() {
         // `strip_comment_lines`, NOT `code_text`: the thing being searched for
