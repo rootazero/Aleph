@@ -650,7 +650,32 @@ const BUDGETED: [&str; 12] = [
 ///     and not fourteen; (3) **consumers** — the error counter feeds the
 ///     consecutive-failure guardrail, and `tool_use_blocks` is the only writer
 ///     of the `thought_signature` field `parse_tool_use_block` reads back.
-const CEILING: usize = 5237;
+/// +4 (5237 → 5241, 2026-09-03): a de-duplication in `agent/think.rs`, and the
+///     four lines rustfmt charged for it.
+///
+///     Upstream 782f67ad7 replaced the bare literal `"end_turn"` with
+///     `crate::verification::STOP_REASON_END_TURN` — the constant the verifier
+///     compares against. The literal was a second, hand-written copy of a fact
+///     the verification layer owns: the two could drift and the loop would
+///     silently stop reporting end-of-turn, with nothing red. No branch, no
+///     decision, and no prose were added; the whole +4 is formatting:
+///
+///     +1 in the `use crate::verification::{…}` block — the added name pushes
+///     the list past `max_width`, so it takes a fourth line.
+///     +3 at the call site — `response.tool_calls.is_empty()
+///     .then_some(STOP_REASON_END_TURN)` is a 63-character chain, over
+///     rustfmt's default `chain_width` of 60, so a one-line statement becomes
+///     four. Rejoining it is not rustfmt-stable, and introducing a local
+///     binding to get back under the count would be cosmetic churn in the one
+///     directory R10 protects — paying a number instead of a cost.
+///
+///     Three questions: (1) **neither** — the change *removes* a fact rather
+///     than adding one; judgment §1, two representations of the same thing;
+///     (2) **yes** — a stronger model does not make a duplicated wire literal
+///     safe; the constant is a verification key, not guidance to the model;
+///     (3) **two ends, one constant** — `run_verifiers` reads it, `think.rs`
+///     produces it, and agreeing by hand is exactly what drifted.
+const CEILING: usize = 5241;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
