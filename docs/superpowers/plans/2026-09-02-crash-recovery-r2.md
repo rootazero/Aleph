@@ -226,7 +226,7 @@ prompt，不知道那些改动存在**。三次的死因各不相同，形状完
 
 **Files:** `docs/reference/FEATURE_LOCATOR.md`（§4.13a 增 ⑩–⑯：闭集 / 搬家 / refused / 快照回放 / 委托修复 / 三张脸；§6.9 投影段改写；§4.11 子 agent 恢复段；附录 D 叙事 + 附录 E.0/E.4/E.7 触发器：「sidecar 盖过日志」「按位置 stamp」「先盖 announced 后投递」「会拒掉自家 closer 的闭集」「恢复只能收紧」；L345 与代码一致；L2309/L2310/L2315/L3811/L4043 逐条改），`SESSION_KNOBS.md`（T4 已加段；复核），`SESSION_SERVICE.md`（L38 PK 说法、L77 路径），`GATEWAY.md`（投影段），`MULTI_AGENT_SYSTEM.md`（四种裁决），`qa/README.md`，`CLAUDE.md` 路由表 `src/gateway/` 行加 `qa/resume_boundary/run.sh {claims,denied,rewind,knobs,holes}`，spec `2026-08-31` §8 每项加「→ 2026-09-02 已做」指针。**只在出现新形状时**给 CLAUDE.md 判据索引加行（本轮候选：无——五个形状都落在既有 #3/#5/#8/#9/#14/#16/#17 下，触发器进附录 E）。
 
-- [ ] 逐文件改写；每一处「说谎的文档」都对应 spec §6 的清单；提交 `docs: FEATURE_LOCATOR crash-recovery r2 (projection heal, log contradictions, envelope replay, subagent facts, faces)`。
+- [x] 逐文件改写；每一处「说谎的文档」都对应 spec §6 的清单；提交 `docs: FEATURE_LOCATOR crash-recovery r2 (projection heal, log contradictions, envelope replay, subagent facts, faces)`。
 
 ---
 
@@ -1165,3 +1165,31 @@ FAIL  after the rewind the marker tail is balanced — the log no longer claims 
 ```
 
 即：旧排布现在**红**，且红在 `never_ran` 上——正是它当初被当成绿的那个值。已还原。
+
+### T9 — `18dcb9a84`（文档；本任务不含 `.rs` 改动，故没跑 cargo，也不声称跑过）
+
+| 文件 | 改了什么 |
+|---|---|
+| FEATURE_LOCATOR §4.13a | 新增 ⑩–⑯；并改掉本轮让它们变假的四处旧文：代码锚点仍把 `boundary_repair_text` 记在 `resume_coordinator.rs` 名下、③ 的状态词表只有六个词（现在是十三个 `ResumeReceipt` 常量）、④ 把 `repair_boundary` 当协调器函数、⑨ 说读者只有两臂 |
+| FEATURE_LOCATOR §4.11 | 两条仍在描述 `announced: bool` 与三臂 `resolve_forgotten` 的旧文，各补一句「2026-09-02 起」|
+| FEATURE_LOCATOR §6.9 | 两条客户端锚点行**一个 `last_run` 渲染点都没有**（Panel 两个 / TUI 两个，现已补）；L345 的「已知遗留 ①」（project 目录消失 ⇒ 永久重试失败）已被 T4 修掉 |
+| FEATURE_LOCATOR 附录 | D.0.164 / D.0.165 / D.0.166 / D.4.38 / D.4.39 / D.7.29，触发器进 E.0 / E.4 / E.7。**CLAUDE.md 判据索引不加行**——六条都落在既有 #1 / #3 / #8 / #14 / #15 / #17 下 |
+| CLAUDE.md | 路由表 `src/gateway/` 行补五个 r2 阶段 |
+| SESSION_SERVICE.md | 主键保证的是**唯一**不是**单调**；单调是分配者的承诺，而归约不当它是事实（`validate_slice` 的 `OutOfOrderSlice` 是 REJECT）|
+| GATEWAY.md | Session Manager 那段 schema 整个是虚构的（`messages TEXT` JSON 列 + `session_metadata` 表，两者都不存在），`Location` 指的文件其实是目录。换成真的删节 schema + 一节「`messages` 是投影不是真源」|
+| spec 2026-08-31 §8 | 六条刻意不做各补一条「→ 2026-09-02」指针；8.1 记下它当初开的方子（持久化水位）最后并不需要 |
+
+**本轮唯一一条「写文档写出来的」缺陷 — 附录 D.4.38**：§6.9 round-8 那条「追加序是权威序」的裁决，
+三条理由的第三条把**另一个子系统今天恰好不做的事**写进了自己的前提（回填器只补 `max(seq)` 以上的尾巴，
+所以补行永远在尾部、两序不会分家）。T5 把水位换成 seq 集合求差之后这条前提失效：
+一条被补回来的行是一次新的 INSERT，`AUTOINCREMENT id` 把它排在转录**尾巴**上而不是它 `seq` 该在的位置。
+**裁决不翻，翻的是它的成立范围**；两端都记了（裁决那一侧 + 附录），**刻意不在本任务里修**——
+修法是 `history_sql` 在 `source_seq` 非 NULL 时按它排序，那是代码不是文档。
+
+**没有变异证伪、没有测试计数**：本任务不改代码，这两栏留空是如实，不是漏做。
+写下的每个代码锚点都在本次会话里 grep 过：`RESUME_TIER_CEILING_KEY` · `RUN_ENVELOPE_KNOB_KEYS`（`[&str; 6]`）·
+`MAX_ANNOUNCE_ATTEMPTS` · `LogContradiction::tag()` 九臂 · `ResumeReceipt` 十三个状态常量 ·
+`close_open_run_after_retire` 的两个调用点（`chat.rewind` / `session.truncate`）· `knob_to_stamp` 的四个 `turn_*.rs` ·
+locales 的 5 + 3 条文案键 · `last-run-notice` · 以及五处「已删」的确实 grep 不到。
+`core/session-log` 的描述**改过一次**：初稿照计划写它还带一条 store 面查询「活 `RunStarted` 之后有退休的 `RunFinished`」，
+grep 之后发现没有——它是 report-only 的纯归约渲染器，已按代码改写。
