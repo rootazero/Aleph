@@ -305,7 +305,7 @@ pub struct ClarificationQuestionView {
     pub header: Option<String>,
     pub prompt: String,
     #[serde(default)]
-    pub options: Vec<ClarificationOptionView>,
+    pub(crate) options: Vec<ClarificationOptionView>,
     #[serde(default)]
     pub multi_select: bool,
     #[serde(default)]
