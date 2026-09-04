@@ -18,9 +18,6 @@ use thiserror::Error;
 /// Discovery errors
 #[derive(Debug, Error)]
 pub enum DiscoveryError {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-
     #[error("Invalid path: {0}")]
     InvalidPath(String),
 

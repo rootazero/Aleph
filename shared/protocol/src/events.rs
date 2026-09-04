@@ -869,7 +869,7 @@ pub struct ToolErrorItem {
 
 /// One option offered inside an [`StreamEvent::AskUser`] question.
 ///
-/// Mirrors `alephcore::clarification::ClarificationOptionView`. The option's
+/// Mirrors the option view inside `alephcore::clarification`. The option's
 /// internal `value` is deliberately absent from the wire: a client answers by
 /// 1-based index or free text, so the core's `interpret_reply` stays the only
 /// place a reply becomes a value.

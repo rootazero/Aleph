@@ -138,7 +138,8 @@ impl AcpSession {
         cmd.args(&config.args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
 
         if let Some(ref cwd) = config.cwd {
             cmd.current_dir(cwd);

@@ -52,11 +52,26 @@ impl ApprovalCallbackSink for ManagerCallbackSink {
             }
         }
 
+        // Snapshot the allowed_decisions BEFORE resolve; the record may be
+        // moved out of the live set during resolve, after which get_pending
+        // would return None. The allowed list is immutable post-create so
+        // this read is race-free for our purposes.
+        let allowed_for_clamp = self
+            .manager
+            .get_pending(&id)
+            .map(|p| p.record.allowed_decisions.clone())
+            .unwrap_or_default();
         let resolved = self
             .manager
             .resolve(&id, decision, Some(user_id.to_string()));
         let response_text = if resolved {
-            ApprovalBridge::decision_response_text(&decision).to_string()
+            // Pass the POST-clamp decision to decision_response_text. The
+            // manager internally clamps `decision` against allowed_decisions;
+            // echoing the pre-clamp value would tell the user "Allowed
+            // (always)" when their persistent grant was actually narrowed to
+            // a session grant. APPROVAL-R4-02.
+            let effective_decision = decision.clamped_for(&allowed_for_clamp);
+            ApprovalBridge::decision_response_text(&effective_decision).to_string()
         } else {
             "This approval has expired or already been processed.".to_string()
         };

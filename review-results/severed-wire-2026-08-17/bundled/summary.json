@@ -1,0 +1,110 @@
+{
+  "audit": "severed-wire-audit",
+  "date": "2026-08-17",
+  "module": "src/bundled",
+  "files_scanned": [
+    "src/bundled/mod.rs",
+    "src/bundled/extractor.rs",
+    "src/bundled/manifest.rs",
+    "src/bundled/sync.rs"
+  ],
+  "method": "PRODUCED - CONSUMED symbol parity (rg across src/, src/bin/, interfaces/, shared/), read-before-write triage",
+  "findings": [
+    {
+      "id": "sw-bundled-01",
+      "module": "src/bundled/manifest.rs",
+      "files": [
+        "src/bundled/manifest.rs:54"
+      ],
+      "severity": "low",
+      "form": 3,
+      "produced": "SkillEntry::installed_at: Option<String>",
+      "produced_location": "src/bundled/manifest.rs:54",
+      "consumer_location": "none found",
+      "decision": "DECIDE",
+      "rationale": "Field is set to None at all 8 producer sites. Combined with #[serde(skip_serializing_if = \"Option::is_none\")], the field is never serialized to manifest.json and never read from it either. Survives only as inert struct shape; never observed by Rust code. Round-r4 audit did not flag it.",
+      "proposed_change": "Option A (recommended): CUT the field. Option B: CONNECT — stamp Utc::now().to_rfc3339() on Github installs and add a doctor check. Option C: leave with FIXME comment.",
+      "risk": "low — field is None everywhere, removing it cannot change runtime behavior. Only observable difference: operators reading manifest.json no longer see the field (which they cannot today because skip_serializing_if already excludes it).",
+      "verification": "rg -n installed_at src/ → all hits either declaration or None initializer. rg -n \"\\.installed_at\" src/ → both hits are on hub::origin::OriginEntry, not SkillEntry. After CUT: rg -n installed_at src/bundled/ returns zero.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-bundled-02",
+      "module": "src/bundled/manifest.rs",
+      "files": [
+        "src/bundled/manifest.rs:48"
+      ],
+      "severity": "low",
+      "form": 6,
+      "produced": "SkillEntry::version: Option<String>",
+      "produced_location": "src/bundled/manifest.rs:48",
+      "consumer_location": "none found",
+      "decision": "DECIDE",
+      "rationale": "Field IS set to Some(BUNDLED_VERSION) for Official skills (extractor.rs:299, 654) and Some(entry.version) for Github-installed skills (hub/install.rs:254). Round-trips through serde. But every .version read across src/ is on a different type (MarketplacePluginEntry or OriginEntry). No Rust code reads bundled::manifest::SkillEntry.version. Doc comment claims intent 'matches bundled_version' which suggests the field was foundation for a never-implemented per-skill upgrade detection.",
+      "proposed_change": "Option A: DECIDE/leave — keep for future upgrade detection. Option B: CONNECT — add a quick-exit in extract_skills using entry.version == Some(BUNDLED_VERSION). Option C: CUT.",
+      "risk": "low — field is alive in wire format but inert at behavioral layer. Removing changes on-disk shape of manifest.json only for operators with existing manifests (serde silently drops the field via skip_serializing_if).",
+      "verification": "rg -n \"entry\\.version|e\\.version|skill\\.version\" src/ → all hits are on MarketplacePluginEntry or OriginEntry, not SkillEntry. rg -n \"\\.version\" src/bundled/ returns only producer-side construction calls and tests.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-bundled-03",
+      "module": "src/bundled/manifest.rs",
+      "files": [
+        "src/bundled/manifest.rs:39-49",
+        "src/hub/install.rs:253",
+        "src/hub/install.rs:677"
+      ],
+      "severity": "low",
+      "form": 5,
+      "produced": "SkillOrigin::Github variant",
+      "produced_location": "src/bundled/manifest.rs:39-49",
+      "consumer_location": "none found",
+      "decision": "DECIDE",
+      "rationale": "Variant is set in hub/install.rs:253 (production) and hub/install.rs:677 (test). Every behavioral comparison on SkillOrigin either matches Official or constructs Local/Official — no code branch distinguishes Github from Local. Round-r4 BUNDLED-R4-12 noted the same conflation as 'api-design / correctness'. This audit confirms the runtime layer truly never distinguishes them; Github survives only as a serde round-trip label for operators reading manifest.json.",
+      "proposed_change": "Option A: DECIDE/leave — on-disk distinction has documentary value. Option B: CUT with serde(alias = 'github') on Local so existing manifests still load. Option C: CONNECT — give the variant a behavioral meaning (e.g. skill_manage requires explicit confirmation before removing a Github-sourced skill).",
+      "risk": "low for A and B (with migration), medium for C (changes user-facing behavior).",
+      "verification": "rg -n \"SkillOrigin::Github\" src/ → only writes (hub/install.rs:253, 677), no behavioral match. After CUT with alias: roundtrip test that loads '\"source\": \"github\"' deserializes to SkillOrigin::Local.",
+      "existing_review_ref": "round-r4 BUNDLED-R4-12 (api-design / correctness framing; this audit confirms the behavioral absence)"
+    },
+    {
+      "id": "sw-bundled-04",
+      "module": "src/bundled/mod.rs",
+      "files": [
+        "src/bundled/mod.rs:40",
+        "src/hub/catalog_client.rs:152"
+      ],
+      "severity": "low",
+      "form": 5,
+      "produced": "pub use extractor::SyncReport (name collision with hub::catalog_client::SyncReport)",
+      "produced_location": "src/bundled/mod.rs:40",
+      "consumer_location": "src/gateway/handlers/bundled_sync.rs:53-56 (bundled::SyncReport); src/hub/catalog_client.rs:293 (catalog::SyncReport)",
+      "decision": "DECIDE",
+      "rationale": "Two distinct types share the name SyncReport across module boundaries. bundled::SyncReport is the official-content sync result (bool, bool); hub::catalog_client::SyncReport is the Hub catalog ingestion result (different fields). All call sites use qualified paths so the collision does not produce a compile error, but a reader grepping for SyncReport sees both.",
+      "proposed_change": "Option A: DECIDE/leave — note the collision in a code comment on each type. Option B: rename bundled::SyncReport → BundledSyncReport and catalog::SyncReport → CatalogSyncReport.",
+      "risk": "low — collision is cosmetic; either type can coexist with the other.",
+      "verification": "rg -n \"\\bSyncReport\\b\" src/ shows two definitions in disjoint modules. After rename: one definition per module. cargo check -p alephcore compiles.",
+      "existing_review_ref": null
+    }
+  ],
+  "sanity_check_notes": "Cross-checked every pub/pub(crate) item in src/bundled/ against src/, src/bin/, interfaces/, shared/. Every function, struct, enum, and constant has at least one production consumer (documented in REPORT.md cross-checked call sites table). The 4 findings above are the only severed wires in this module — all at the field/variant level, all low-severity, all DECIDE rather than CUT because they round-trip through serde.",
+  "total_findings": 4,
+  "by_severity": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 4
+  },
+  "by_decision": {
+    "CUT": 0,
+    "CONNECT": 0,
+    "DECIDE": 4
+  },
+  "by_form": {
+    "1": 0,
+    "2": 0,
+    "3": 1,
+    "4": 0,
+    "5": 2,
+    "6": 1
+  }
+}

@@ -38,13 +38,22 @@ pub struct NodeManageArgs {
 pub struct NodeManageTool {
     node_registry: Arc<NodeRegistry>,
     security_store: Arc<SecurityStore>,
+    /// Bus for emitting lifecycle events (currently `node.disconnected` from
+    /// operator-initiated `deregister`). Absent in headless / partially-booted
+    /// processes; the deregister still takes effect, it just does not publish.
+    events: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
 }
 
 impl NodeManageTool {
-    pub const fn new(node_registry: Arc<NodeRegistry>, security_store: Arc<SecurityStore>) -> Self {
+    pub const fn new(
+        node_registry: Arc<NodeRegistry>,
+        security_store: Arc<SecurityStore>,
+        events: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
+    ) -> Self {
         Self {
             node_registry,
             security_store,
+            events,
         }
     }
 }
@@ -81,7 +90,12 @@ Returns {action, node_id, ...}. Deregistering is destructive to fleet membership
                 }))
             }
             "deregister" => {
-                match deregister_node(&self.node_registry, &self.security_store, &args.node) {
+                match deregister_node(
+    &self.node_registry,
+    &self.security_store,
+    &args.node,
+    self.events.as_deref(),
+) {
                     Ok(o) => Ok(json!({
                         "action": "deregister",
                         "node": args.node,
@@ -116,7 +130,7 @@ mod tests {
     fn tool() -> (NodeManageTool, Arc<NodeRegistry>, Arc<SecurityStore>) {
         let reg = Arc::new(NodeRegistry::new());
         let store = Arc::new(SecurityStore::in_memory().expect("in-memory store"));
-        (NodeManageTool::new(reg.clone(), store.clone()), reg, store)
+        (NodeManageTool::new(reg.clone(), store.clone(), None), reg, store)
     }
 
     fn register(reg: &NodeRegistry, id: &str, name: &str) {

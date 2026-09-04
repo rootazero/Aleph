@@ -497,7 +497,7 @@ impl ToolRegistry for BuiltinToolRegistry {
                 let store = self.node_security_store.get().ok_or_else(|| {
                     AlephError::tool("node_manage not available: SecurityStore not injected")
                 })?;
-                let tool = crate::builtin_tools::NodeManageTool::new(reg.clone(), store.clone());
+                let tool = crate::builtin_tools::NodeManageTool::new(reg.clone(), store.clone(), None);
                 tool.call_json(arguments).await
             }),
 

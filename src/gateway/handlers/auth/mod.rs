@@ -47,6 +47,11 @@ pub struct AuthContext {
     pub shared_token_mgr: Arc<SharedTokenManager>,
     pub security_store: Arc<SecurityStore>,
     pub node_registry: Arc<crate::cluster::NodeRegistry>,
+    /// Bus for emitting lifecycle events from the cluster RPC handlers
+    /// (currently `node.disconnected` from `cluster.deregister`). Absent in
+    /// probe-mode / partially-booted processes; the handler still takes
+    /// effect, it just does not publish.
+    pub event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
 }
 
 #[cfg(test)]
@@ -72,6 +77,7 @@ pub(crate) mod tests {
                 shared_token_mgr,
                 security_store: store,
                 node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
+                event_bus: None,
             }),
         )
     }
