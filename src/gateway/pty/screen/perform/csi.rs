@@ -165,7 +165,37 @@ impl Performer<'_> {
                     self.restore_cursor();
                 }
             }
-            1049 => self.toggle_alt_screen(enable, AltBuffer::Cleared),
+            // xterm defines 1049 as 1047 + 1048, so the save/restore pair
+            // above runs around the swap.
+            //
+            // What it actually adds is the STYLE, not the position: the whole
+            // primary `Grid` is parked across the swap and its cursor travels
+            // with it, but `fg`/`bg`/`attrs` live on `ScreenState` and do not.
+            // Without this, a program that changes colour on the alternate
+            // screen leaves the shell painting its next prompt in that
+            // colour. A test that asserted only the cursor position would
+            // pass either way, which is why the guard asserts the cell's
+            // colour.
+            //
+            // Both halves are gated on the swap ACTUALLY happening --
+            // `toggle_alt_screen` is a no-op for a nested `?1049h` and for an
+            // exit with nothing parked, and firing the restore anyway would
+            // move a cursor no program asked to move. `alt_screen()` is the
+            // same predicate `toggle_alt_screen` decides on.
+            1049 => {
+                let on_alt = self.screen.alt_screen();
+                if enable {
+                    if !on_alt {
+                        self.save_cursor();
+                    }
+                    self.toggle_alt_screen(true, AltBuffer::Cleared);
+                } else {
+                    self.toggle_alt_screen(false, AltBuffer::Cleared);
+                    if on_alt {
+                        self.restore_cursor();
+                    }
+                }
+            }
             // Bracketed paste. Same posture as DECTCEM: the server never
             // pastes, so the only point of tracking it is that a client
             // cannot -- the sequence that sets it never leaves this process.

@@ -1782,6 +1782,227 @@
         assert_eq!(wire.cwd.as_deref(), Some("/srv"));
     }
 
+    // ----------------------------------------------------------------
+    // Review fix round 1: what a reset must also drop, 1049's cursor, the
+    // parked alternate buffer's dimensions, and making a CLEAR reach the
+    // wire.
+    // ----------------------------------------------------------------
+
+    /// A reset exists to stop a dead program's last frame being read as
+    /// current, so it has to reach the evidence that is NOT on the grid. The
+    /// `OSC 9;4` level is the one channel the erase does not touch, and the
+    /// detection manifests read it as "work in progress" -- left standing, it
+    /// keeps the runtime table publishing `Working` for a process that is
+    /// gone.
+    #[test]
+    fn ris_clears_the_progress_level_and_the_two_mode_bits() {
+        let setup: &[u8] = b"\x1b]9;4;3;50\x07\x1b[?25l\x1b[?2004h";
+        let mut with = Screen::new(3, 10);
+        with.feed(setup);
+        assert_eq!(
+            with.osc_progress(),
+            Some("4;3;50"),
+            "the setup must land, or every assertion below measures nothing"
+        );
+        assert!(!with.cursor_visible());
+        assert!(with.bracketed_paste());
+
+        let mut without = Screen::new(3, 10);
+        without.feed(setup);
+
+        with.feed(b"\x1bc");
+
+        assert_eq!(
+            with.osc_progress(),
+            None,
+            "a stale `working` level is the same false evidence the cleared \
+             grid removes"
+        );
+        assert!(with.cursor_visible(), "the cursor comes back");
+        assert!(!with.bracketed_paste(), "and paste bracketing goes off");
+
+        assert_eq!(without.osc_progress(), Some("4;3;50"), "without RIS it stands");
+        assert!(!without.cursor_visible());
+        assert!(without.bracketed_paste());
+    }
+
+    /// DECSTR restores the same two mode bits -- they are modes, which is
+    /// exactly what a soft reset is for -- but leaves the progress level and
+    /// the grid alone.
+    #[test]
+    fn decstr_restores_the_two_mode_bits_but_keeps_the_progress_level() {
+        let mut s = Screen::new(3, 10);
+        s.feed(b"keep\x1b]9;4;3;50\x07\x1b[?25l\x1b[?2004h");
+        s.feed(b"\x1b[!p");
+
+        assert!(s.cursor_visible(), "DECTCEM is a mode, so the soft reset restores it");
+        assert!(!s.bracketed_paste(), "so is bracketed paste");
+        assert_eq!(
+            s.osc_progress(),
+            Some("4;3;50"),
+            "the progress level is not a mode and not on DECSTR's list"
+        );
+        assert_eq!(s.grid.row_text(0), "keep", "and the cells stay");
+    }
+
+    /// xterm defines 1049 as 1047 + 1048, so entering saves the cursor and
+    /// exiting restores it.
+    ///
+    /// **The assertion is on the COLOUR, and that is the finding.** The whole
+    /// primary `Grid` is parked across the swap and its cursor row/column
+    /// travel with it, so a test that asserted only the position would be
+    /// green with or without the save/restore -- a guard with no case in
+    /// which it goes red (判据 §2). What 1048 actually adds here is the SGR
+    /// state, which lives on `ScreenState` and does NOT travel with the grid:
+    /// without it, a program that changes colour on the alternate screen
+    /// leaves the shell painting its next prompt in that colour.
+    #[test]
+    fn mode_1049_saves_and_restores_the_cursor_and_style() {
+        let mut with = Screen::new(3, 10);
+        with.feed(b"\x1b[31mab\x1b[?1049h\x1b[32mALT\x1b[?1049lZ");
+
+        assert_eq!(with.grid.row_text(0), "abZ", "the primary comes back and Z appends");
+        assert_eq!(
+            with.grid.row_cells(0)[2].fg,
+            Color::Indexed(1),
+            "the style saved on entry came back on exit -- without the \
+             restore, Z is painted in the colour the alternate screen left"
+        );
+
+        let mut without = Screen::new(3, 10);
+        without.feed(b"\x1b[31mab\x1b[32mZ");
+        assert_ne!(
+            with.grid.row_cells(0)[2].fg,
+            without.grid.row_cells(0)[2].fg,
+            "the without-case keeps the second colour, which is exactly what \
+             an unrestored exit looks like"
+        );
+
+        // A nested enter must not clobber the slot, and an exit with nothing
+        // parked must not move a cursor no program asked to move.
+        let mut nested = Screen::new(3, 10);
+        nested.feed(b"\x1b[31mab\x1b[?1049h\x1b[32mX\x1b[?1049h\x1b[?1049lZ");
+        assert_eq!(
+            nested.grid.row_cells(0)[2].fg,
+            Color::Indexed(1),
+            "the second `?1049h` did not swap, so it must not have re-saved \
+             the alternate screen's own style over the primary's"
+        );
+
+        let mut stray_exit = Screen::new(3, 10);
+        stray_exit.feed(b"abc\x1b[?1049lZ");
+        assert_eq!(
+            stray_exit.grid.row_text(0),
+            "abcZ",
+            "an exit with nothing parked swaps nothing and restores nothing"
+        );
+    }
+
+    /// The parked ALTERNATE buffer is the mirror of the parked primary, and
+    /// it has to follow a resize for the same reason: it comes back through
+    /// `?47`/`?1047` as the current grid, and a grid at the old size makes
+    /// `attach_snapshot` report the old dimensions while `take_patch` emits
+    /// row indices past the new height.
+    #[test]
+    fn a_parked_alternate_buffer_follows_resize_and_the_scrollback_limit() {
+        let mut s = Screen::new(3, 10);
+        s.feed(b"primary\x1b[?47halt\x1b[?47l");
+        assert!(!s.alt_screen(), "the setup leaves the alternate buffer parked");
+
+        s.resize(6, 20);
+        s.set_scrollback_limit(7);
+
+        s.feed(b"\x1b[?47h");
+        assert!(s.alt_screen(), "and re-entering takes the parked buffer back");
+        assert_eq!(
+            s.grid.dims(),
+            (6, 20),
+            "a parked buffer that missed the resize comes back at the old size"
+        );
+        assert_eq!(
+            s.full_patch().rows.len(),
+            6,
+            "which is what a re-attaching client would be told, so the \
+             snapshot is asserted rather than only the field"
+        );
+        assert_eq!(s.scrollback_limit(), 7, "the ceiling followed it too");
+    }
+
+    /// RIS clears the title on the server, and that clear has to be
+    /// DISTINGUISHABLE from "nothing to say about the title" on a wire where
+    /// an absent field already means unchanged.
+    ///
+    /// The JSON assertion is the one that matters: `Option<String>` with
+    /// `skip_serializing_if` means a `None` occupies no bytes at all, so a
+    /// clear sent as `None` is a frame that reports success and changes
+    /// nothing -- the Panel tab keeps the pre-RIS title for the life of the
+    /// session (判据 §11).
+    #[test]
+    fn a_title_cleared_by_ris_reaches_the_wire_as_an_empty_string() {
+        let mut s = Screen::new(3, 10);
+        s.feed(b"\x1b]0;before\x07");
+        assert_eq!(
+            s.take_patch().expect("a new title is news").title.as_deref(),
+            Some("before"),
+            "the setup must land, or the clear below has nothing to clear"
+        );
+
+        s.feed(b"\x1bc");
+        let after = s.take_patch().expect("RIS is news");
+        assert_eq!(s.title(), None, "the server really did drop the title");
+        assert_eq!(
+            after.title.as_deref(),
+            Some(""),
+            "and the patch says so with a value, not with an absence"
+        );
+
+        let wire = crate::gateway::pty::screen::convert::patch(&after);
+        let json = serde_json::to_value(&wire).expect("the patch is serialisable");
+        assert_eq!(
+            json.get("title").and_then(serde_json::Value::as_str),
+            Some(""),
+            "the cleared title must OCCUPY a wire field; sent as `None` it is \
+             skipped entirely and the client cannot tell it from a frame that \
+             says nothing about the title"
+        );
+    }
+
+    /// `cwd` shares the rule through `published_clear` rather than repeating
+    /// it, and this drives that helper directly on purpose: **no sequence
+    /// clears `cwd` today** (a rejected `OSC 7` deliberately leaves the last
+    /// known-good value standing), so an end-to-end version would assert a
+    /// transition nothing can produce and would pass no matter what the
+    /// helper did. Sharing the rule is what stops the twin recurring; this
+    /// pins the rule itself, for both fields, in one place.
+    #[test]
+    fn a_cleared_value_reaches_the_wire_as_an_empty_string() {
+        assert_eq!(
+            published_clear(true, &None),
+            Some(String::new()),
+            "a clear travels as a value"
+        );
+        assert_eq!(
+            published_clear(true, &Some("/tmp".to_string())),
+            Some("/tmp".to_string()),
+            "an ordinary change travels as itself"
+        );
+        assert_eq!(
+            published_clear(false, &Some("/tmp".to_string())),
+            None,
+            "and `None` keeps its one meaning: nothing changed"
+        );
+
+        // The `cwd` field is wired to it, which the helper test alone cannot
+        // show. A change still rides the patch; only the CLEAR is unreachable.
+        let mut s = Screen::new(3, 10);
+        let _ = s.take_patch();
+        s.feed(b"\x1b]7;file:///tmp\x07");
+        assert_eq!(
+            s.take_patch().expect("a new cwd is news").cwd.as_deref(),
+            Some("/tmp")
+        );
+    }
+
     /// HT is a MOVE, not a write of spaces. The two are identical on a
     /// fresh row and differ the moment a tab crosses text that is already
     /// there -- which is exactly what a shell does when it redraws a line,

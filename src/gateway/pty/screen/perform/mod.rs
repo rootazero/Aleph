@@ -196,10 +196,21 @@ impl Screen {
     /// saved primary underneath it too — so a resize made while inside e.g.
     /// `vim` is not silently lost, and the primary comes back at the right
     /// dimensions once the program exits and restores it.
+    ///
+    /// `retained_alt` is the mirror of that case and gets the same treatment:
+    /// a parked ALTERNATE buffer that missed a resize comes back at the old
+    /// size through `?47`/`?1047`, and then `attach_snapshot` reports the old
+    /// dimensions while `take_patch` emits row indices past the new height —
+    /// the stale-row-index failure `Grid::resize`'s own dirty-set comment
+    /// warns about, arriving through a different door. Nothing downstream
+    /// triggers a corrective resize, so it has to happen here.
     pub fn resize(&mut self, rows: u16, cols: u16) {
         self.grid.resize(rows, cols);
-        if let Some(saved) = &mut self.saved {
-            saved.resize(rows, cols);
+        for parked in [self.saved.as_mut(), self.retained_alt.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            parked.resize(rows, cols);
         }
         // Belt and suspenders: `Grid::resize` already marks everything dirty
         // when the dimensions actually change, but a resize call is also the
@@ -215,8 +226,13 @@ impl Screen {
     /// once it exits and restores.
     pub fn set_scrollback_limit(&mut self, lines: usize) {
         self.grid.set_scrollback_limit(lines);
-        if let Some(saved) = &mut self.saved {
-            saved.set_scrollback_limit(lines);
+        // Both parked buffers, for the same reason `resize` handles both:
+        // whichever one comes back must not come back stale.
+        for parked in [self.saved.as_mut(), self.retained_alt.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            parked.set_scrollback_limit(lines);
         }
     }
 
@@ -245,10 +261,10 @@ impl Screen {
             rows: super::diff::patch_rows(&self.grid, dirty),
             cursor: Some(self.grid.cursor()),
             alt_screen: alt_changed.then_some(alt),
-            title: title_changed.then(|| self.state.title.clone()).flatten(),
+            title: published_clear(title_changed, &self.state.title),
             cursor_visible: cursor_visible_changed.then_some(cursor_visible),
             bracketed_paste: bracketed_paste_changed.then_some(bracketed_paste),
-            cwd: cwd_changed.then(|| self.state.cwd.clone()).flatten(),
+            cwd: published_clear(cwd_changed, &self.state.cwd),
             bell,
         };
         // Cursor is always present above, so emptiness is decided on the
@@ -285,6 +301,12 @@ impl Screen {
             cursor: Some(self.grid.cursor()),
             alt_screen: Some(self.alt_screen()),
             title: self.state.title.clone(),
+            // A full snapshot has no "unchanged", so `None` here is
+            // unambiguous: it means the server holds no title. A DIFF cannot
+            // say that with `None` (see `published_clear`) and spells it
+            // `Some("")` instead, so one client rule covers both: an empty
+            // OR absent title means there is none.
+            //
             // CURRENT values, not "changed" ones: this is the attach path,
             // and a client that was not here for the change has to be told
             // the level. `PtySession::attach_snapshot` reaches the wire by
@@ -356,26 +378,40 @@ impl Performer<'_> {
         self.screen.state.fg = Color::Default;
         self.screen.state.bg = Color::Default;
         self.screen.state.attrs = Attrs::NONE;
+        // The two observable mode bits go back to the terminal's defaults,
+        // not to whatever the program that just died left them at. A `?2004h`
+        // surviving a reset keeps a client wrapping pastes for a shell that
+        // never asked for it, and a `?25l` surviving one hides the cursor for
+        // the life of the session -- both are the stale-evidence shape that
+        // makes a reset worth having.
+        self.screen.state.cursor_visible = true;
+        self.screen.state.bracketed_paste = false;
         self.screen.saved_cursor = None;
         self.exit_alt_screen_for_reset();
         self.screen.grid.reset_modes();
         self.screen.grid.goto(0, 0);
     }
 
-    /// RIS (`ESC c`) -- the full reset. The soft reset plus the erase and the
-    /// title.
+    /// RIS (`ESC c`) -- the full reset. The soft reset plus the erase, the
+    /// title, and the retained `OSC 9;4` progress level.
     ///
     /// **Scrollback is deliberately kept** (the reason is at
-    /// [`Grid::reset`]). The progress level from `OSC 9;4` is deliberately
-    /// NOT cleared either: this round's contract enumerates what RIS drops
-    /// and the level is not on it. That is a real edge -- a crashed agent's
-    /// wrapper running `reset` leaves a stale `working` level behind -- and
-    /// it is reported as a concern rather than fixed here, because widening
-    /// a reset past its specification is how a reset starts erasing things
-    /// its callers still need.
+    /// [`Grid::reset`]): `visible_text` never reads it, so clearing it would
+    /// take away what the user scrolled back to and give no consumer
+    /// anything.
+    ///
+    /// **The progress level IS cleared**, and it is the one piece of state
+    /// here that is not a terminal mode. It is cleared because of what a
+    /// reset is FOR: the case RIS exists to fix is a crashed agent whose
+    /// wrapper runs `reset`, and the detection manifests read that level as
+    /// evidence of work in progress. A level left standing keeps the runtime
+    /// table publishing `Working` for a process that is gone -- the same
+    /// stale-evidence failure the cleared grid removes, arriving through the
+    /// one channel the erase does not touch.
     fn full_reset(&mut self) {
         self.soft_reset();
         self.screen.state.title = None;
+        self.screen.state.osc_progress = None;
         self.screen.grid.reset();
     }
 
@@ -387,6 +423,32 @@ impl Performer<'_> {
             self.toggle_alt_screen(false, AltBuffer::Legacy);
         }
     }
+}
+
+/// One publishable optional string on a diff: `None` when it did not
+/// change, and a CLEAR sent as an empty string rather than as `None`.
+///
+/// `None` on this wire already means "unchanged" -- `PtyScreenPatch`'s fields
+/// are `Option<String>` with `skip_serializing_if`, so a `None` occupies no
+/// bytes and says nothing. Sending a Some-to-None transition as `None` is
+/// therefore a report of success that changes nothing at the client: RIS
+/// clears the title on the server, the change is consumed into
+/// `last_sent_title`, and the Panel tab keeps the pre-RIS title for the life
+/// of the session (判据 §11 -- a no-op that reports success).
+///
+/// `shared/protocol` is frozen this round, so a clear travels as `Some("")`.
+/// An empty string is already this codebase's spelling of "no title": an
+/// empty `OSC 0` payload is not treated as a title, and a tab label falls
+/// through to the program or shell name when it is empty. **The client rule
+/// is therefore one rule -- empty OR absent means none** -- which also covers
+/// the `None` a full snapshot sends (see `full_patch`).
+///
+/// Shared by `title` and `cwd` rather than written twice: `cwd` has no
+/// producer that clears it today, so a duplicated rule there would be a
+/// second expression of one fact with only one of them exercised, and the
+/// two would drift the moment a later round gives `cwd` a clear (判据 §1).
+fn published_clear(changed: bool, value: &Option<String>) -> Option<String> {
+    changed.then(|| value.clone().unwrap_or_default())
 }
 
 /// Which spelling of the alternate screen asked for the swap. The two
